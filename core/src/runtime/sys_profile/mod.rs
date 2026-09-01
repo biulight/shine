@@ -2,6 +2,11 @@ use anyhow::{Context, Result, bail};
 use similar::{DiffTag, TextDiff};
 use std::path::{Path, PathBuf};
 
+use super::sys_action_executor::SysReceiptTransitionV1;
+use crate::action::{
+    ActionIrV1, DeclarativeActionV1, ShellFileIdentityV1, SysProfileBlockFileV1,
+    managed_file_rollback_path,
+};
 use crate::install::{eol_eq, normalize_eol};
 use crate::runtime::{
     CoreRuntime, FileSystemHost, LoadedSysPreset, PresetSnapshot, ProcessHost, ProcessIo,
@@ -12,6 +17,8 @@ use crate::trust::TrustCapabilityV1;
 
 mod blocks;
 mod compose;
+
+pub(crate) use blocks::{restore_sys_owned_blocks, sys_owned_blocks_hash};
 
 use blocks::update_sys_shell_profiles;
 use compose::ComposedSysProfiles;
@@ -149,10 +156,25 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
     }
 }
 
-impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
+impl<H> CoreRuntime<H>
+where
+    H: FileSystemHost
+        + ProcessHost
+        + crate::runtime::PrivilegedFileSystemHost
+        + crate::runtime::SplitDnsHost,
+{
     pub(crate) async fn set_sys_profile_state(
         &self,
         request: SysProfileStateRequest,
+    ) -> Result<SysProfileStateReport> {
+        self.set_sys_profile_state_with_approval(request, None)
+            .await
+    }
+
+    pub(crate) async fn set_sys_profile_state_with_approval(
+        &self,
+        request: SysProfileStateRequest,
+        approval: Option<(&crate::plan::PlanV1, &crate::plan::PlanApprovalV1)>,
     ) -> Result<SysProfileStateReport> {
         let loaded = self.load_sys_preset(&request.os_id).await?;
         let item = loaded
@@ -194,6 +216,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         }
         let mut manifest =
             super::sys::load_manifest_with_host(self.host(), &self.context().shine_dir).await?;
+        let previous_manifest = manifest.clone();
         let existing = manifest.entries.iter_mut().find(|entry| {
             entry.os_id == request.os_id && entry.item_id == request.item_id && !entry.managed
         });
@@ -218,15 +241,239 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             return Ok(SysProfileStateReport { outcome: None });
         }
         let shell: &'static str = self.context().shell.into();
-        let outcome = self
-            .install_composed_sys_profile(&request.os_id, &loaded, &enabled, shell, false)
-            .await?;
-        super::sys::save_manifest_with_host(self.host(), &self.context().shine_dir, &manifest)
-            .await?;
+        let outcome = if let Some((plan, approval)) = approval {
+            self.install_composed_sys_profile_transactional(
+                &request.os_id,
+                &loaded,
+                &enabled,
+                shell,
+                &mut manifest,
+                &previous_manifest,
+                &request.item_id,
+                plan,
+                approval,
+            )
+            .await?
+        } else {
+            let outcome = self
+                .install_composed_sys_profile(&request.os_id, &loaded, &enabled, shell, false)
+                .await?;
+            super::sys::save_manifest_with_host(self.host(), &self.context().shine_dir, &manifest)
+                .await?;
+            outcome
+        };
         Ok(SysProfileStateReport {
             outcome: Some(outcome),
         })
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn install_composed_sys_profile_transactional(
+        &self,
+        os_id: &str,
+        loaded: &LoadedSysPreset,
+        enabled: &std::collections::BTreeSet<String>,
+        sys_shell: &str,
+        manifest: &mut crate::runtime::SysRunManifest,
+        previous_manifest: &crate::runtime::SysRunManifest,
+        item_id: &str,
+        plan: &crate::plan::PlanV1,
+        approval: &crate::plan::PlanApprovalV1,
+    ) -> Result<SysItemOutcome> {
+        let config =
+            self.sys_profile_config(self.sys_profile_code_trusted(os_id, loaded, enabled)?);
+        let templates =
+            compose::compose_sys_profiles(&config, os_id, loaded, enabled, sys_shell).await?;
+        // The user-editable active/base/new/merge profile set retains its
+        // existing explicit, non-transactional three-way-merge classification.
+        let file_update = install_sys_profile_files_with_templates(
+            self.host(),
+            &config,
+            os_id,
+            &loaded.root,
+            false,
+            Some(&templates),
+        )
+        .await?;
+        let previous_entry = previous_manifest
+            .entries
+            .iter()
+            .find(|entry| entry.os_id == os_id && entry.item_id == item_id && !entry.managed)
+            .cloned();
+        let desired_entry = manifest
+            .entries
+            .iter_mut()
+            .find(|entry| entry.os_id == os_id && entry.item_id == item_id && !entry.managed)
+            .map(|entry| {
+                entry.updated_at = self.context().captured_unix_time.to_string();
+                entry.clone()
+            });
+        let changes =
+            planned_sys_profile_block_changes(self.host(), &config, os_id, sys_shell).await?;
+        if changes.is_empty() {
+            super::sys::save_manifest_with_host(self.host(), &self.context().shine_dir, manifest)
+                .await?;
+            return Ok(SysItemOutcome {
+                item_id: "profile".to_string(),
+                label: "profile".to_string(),
+                status: if file_update.needs_action {
+                    SysItemStatus::NeedsAction
+                } else if file_update.updated {
+                    SysItemStatus::Updated
+                } else {
+                    SysItemStatus::Skipped
+                },
+                detail: file_update.detail,
+                logs: Vec::new(),
+            });
+        }
+        let files = changes
+            .iter()
+            .map(|change| change.file.clone())
+            .collect::<Vec<_>>();
+        let desired_contents = changes
+            .into_iter()
+            .map(|change| change.desired)
+            .collect::<Vec<_>>();
+        let action = DeclarativeActionV1::reconcile_sys_profile_blocks(
+            format!("sys-profile:{os_id}:{item_id}"),
+            "sys/profile",
+            sys_shell,
+            os_id,
+            files,
+        );
+        let execution = self
+            .execute_sys_profile_blocks_approved(
+                plan,
+                approval,
+                ActionIrV1::new(
+                    format!(
+                        "sys-profile:{}:{os_id}:{item_id}",
+                        self.context().captured_unix_time
+                    ),
+                    vec![action],
+                ),
+                SysReceiptTransitionV1 {
+                    previous: previous_entry.map(Box::new),
+                    desired: desired_entry.map(Box::new),
+                },
+                &desired_contents,
+            )
+            .await?;
+        super::sys::save_manifest_with_host(self.host(), &self.context().shine_dir, manifest)
+            .await?;
+        self.commit_sys_operation(&execution).await?;
+        Ok(SysItemOutcome {
+            item_id: "profile".to_string(),
+            label: "profile".to_string(),
+            status: if file_update.needs_action {
+                SysItemStatus::NeedsAction
+            } else {
+                SysItemStatus::Updated
+            },
+            detail: file_update.detail,
+            logs: Vec::new(),
+        })
+    }
+}
+
+struct PlannedSysProfileBlockChange {
+    file: SysProfileBlockFileV1,
+    desired: Option<Vec<u8>>,
+}
+
+async fn planned_sys_profile_block_changes(
+    host: &impl FileSystemHost,
+    config: &SysProfileRuntimeConfig,
+    os_id: &str,
+    sys_shell: &str,
+) -> Result<Vec<PlannedSysProfileBlockChange>> {
+    let plans = match os_id {
+        "macos" => vec![(config.home_dir.join(".zshrc"), None, true)],
+        "ubuntu" if config.shell_type == ShellType::Bash => vec![
+            (config.home_dir.join(".bashrc"), Some("bash"), true),
+            (config.home_dir.join(".zshrc"), None, false),
+        ],
+        "ubuntu" if config.shell_type == ShellType::Zsh => vec![
+            (config.home_dir.join(".zshrc"), Some("zsh"), true),
+            (config.home_dir.join(".bashrc"), None, false),
+        ],
+        "windows" => vec![
+            (
+                config
+                    .home_dir
+                    .join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+                None,
+                true,
+            ),
+            (
+                config
+                    .home_dir
+                    .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+                None,
+                true,
+            ),
+        ],
+        _ => {
+            let _ = sys_shell;
+            Vec::new()
+        }
+    };
+    let mut changes = Vec::new();
+    for (destination, shell_name, install) in plans {
+        let (previous_bytes, previous_mode) = match host.metadata(&destination).await {
+            Ok(metadata) if metadata.kind == crate::runtime::FileKind::File => (
+                Some(
+                    host.read(&destination)
+                        .await
+                        .map_err(|error| error.into_anyhow("reading Sys profile blocks"))?,
+                ),
+                metadata.unix_mode,
+            ),
+            Ok(_) => bail!(
+                "Sys profile path {} is not a regular file",
+                destination.display()
+            ),
+            Err(error) if error.is_not_found() => (None, None),
+            Err(error) => return Err(error.into_anyhow("inspecting Sys profile blocks")),
+        };
+        let previous_content = previous_bytes
+            .as_deref()
+            .map(std::str::from_utf8)
+            .transpose()
+            .context("Sys profile is not UTF-8")?
+            .unwrap_or_default();
+        let desired_content =
+            blocks::desired_sys_profile_content(previous_content, os_id, shell_name, install);
+        let desired = (!desired_content.trim().is_empty()).then(|| desired_content.into_bytes());
+        if previous_bytes.as_deref() == desired.as_deref() {
+            continue;
+        }
+        let previous_identity = previous_bytes.as_ref().map(|bytes| ShellFileIdentityV1 {
+            content_hash: crate::install::hash_content(bytes),
+            unix_mode: previous_mode,
+        });
+        let desired_identity = desired.as_ref().map(|bytes| ShellFileIdentityV1 {
+            content_hash: crate::install::hash_content(bytes),
+            unix_mode: previous_mode.or(Some(0o644)),
+        });
+        changes.push(PlannedSysProfileBlockChange {
+            file: SysProfileBlockFileV1 {
+                rollback: managed_file_rollback_path(&destination),
+                destination,
+                previous: previous_identity,
+                desired: desired_identity,
+                previous_owned_hash: blocks::sys_owned_blocks_hash(previous_content, os_id),
+                desired_owned_hash: desired.as_deref().and_then(|bytes| {
+                    std::str::from_utf8(bytes)
+                        .ok()
+                        .and_then(|content| blocks::sys_owned_blocks_hash(content, os_id))
+                }),
+            },
+            desired,
+        });
+    }
+    Ok(changes)
 }
 
 fn require_external_code_permission(

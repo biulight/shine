@@ -286,7 +286,7 @@ bugs. Check this list before changing the modules named in each entry.
   absence instead requires explicit recovery to reconstruct the complete old receipt before
   restoring exact resources. Any conflicting receipt, changed destination or rollback identity, or
   occupied rollback path blocks and preserves state. Foreign and modified launchers do not inherit
-  this proof; shared snapshot/render state and profile sentinel blocks remain separate actions.
+  this proof; shared snapshot/render state and profile sentinel blocks use separate actions.
 - **An external Shell snapshot is category-owned, and receipt presence is not its commit marker.**
   `ReplaceShellSnapshot` applies only to approved snapshot-mode selections whose selected commands
   require no rendering. It binds the whole sorted category tree, deterministic sibling stage and
@@ -306,8 +306,8 @@ bugs. Check this list before changing the modules named in each entry.
   created/moved/replaced files in reverse order; afterward it preserves exact desired files and
   removes only exact rollback. Non-file destinations, occupied or aliased rollback paths, changed
   files, or conflicting receipts block the whole action. Skipped existing and unrelated cache files
-  are never transaction material. Cache uninstall, rendered/live output, snapshot uninstall, and
-  profile sentinel blocks do not inherit this proof.
+  are never transaction material. Cache removal, rendered/live output, snapshot removal, and
+  profile sentinel blocks use separate proofs.
 - **A lifecycle-rendered Shell file commits at a file and receipt-set boundary.**
   `ReplaceShellRenderedFile` binds the optional previous and required desired hash/mode identity,
   canonical same-directory `.shine.rollback`, every selected command receipt transition consuming
@@ -316,8 +316,8 @@ bugs. Check this list before changing the modules named in each entry.
   removing an exact transaction-created file; afterward it preserves the exact desired file and
   cleans only exact rollback. Changed or non-file destinations, occupied/changed rollback paths, or
   conflicting receipts block all recovery. Embedded cache uses its separate file-patch action;
-  rendered uninstall, execution-time live rendering, snapshot uninstall, and profile sentinel
-  blocks do not inherit this proof.
+  rendered removal, execution-time live rendering, snapshot removal, and profile sentinel blocks
+  do not inherit this proof.
 - **Rendered Shell removal owns exact bytes only after the last consumer is selected.**
   `RemoveShellRenderedFile` binds the current regular-file hash/mode, canonical same-directory
   rollback, and every exact previous command receipt consuming that path. The journal precedes the
@@ -329,6 +329,25 @@ bugs. Check this list before changing the modules named in each entry.
   Invocation-time live rendering remains atomic rather than journaled, but it holds the same
   cross-process operation lock, refuses to run with a pending Shell journal, and re-reads its
   manifest receipt under that lock.
+- **Shell cache and snapshot removal commit through their receipt set.** `RemoveShellCache` owns
+  only exact receipt-owned cache files selected for removal; `RemoveShellSnapshot` owns the exact
+  selected category tree. Both bind previous receipt transitions and positive commit evidence.
+  Before the marker, recovery reconstructs missing receipts and restores only exact rollback
+  material; afterward it preserves removal and cleans exact rollback. Unselected consumers,
+  unrelated files, changed trees, and changed rollback material are preserved or block mutation.
+- **Shell profile recovery owns sentinel blocks, never the whole current file.**
+  `ReconcileShellProfile` binds the previous and desired Shine-owned sentinel subset for every
+  affected profile. Recovery re-reads the current file, verifies only the owned-block transition,
+  and restores or removes those blocks in place. Unrelated content written before or after the
+  interrupted operation is preserved; a changed Shine block blocks recovery.
+- **Managed Sys recovery is receipt-positive and domain-scoped.**
+  `sys-operation-journal.toml` precedes managed-file, split-DNS, or explicit profile-sentinel
+  mutation and binds the exact previous and desired `SysRunEntry`. `shine sys recover [--yes]`
+  regenerates its Plan under the operation lock. Before receipt commit it restores only exact
+  prior file/DNS/sentinel state; after the desired receipt is durable it preserves desired state
+  and removes exact rollback material. A conflicting receipt or changed resource blocks all
+  recovery mutation. Profile active/base/new/merge composition and bootstrap execution do not
+  inherit this proof and must remain visibly non-transactional or opaque in their Plan.
 - **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
   generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
   privilege, permission and unsupported-rollback classification until a narrower typed action

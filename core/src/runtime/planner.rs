@@ -2024,79 +2024,231 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     }),
                 );
             }
-            if !self.context().is_external_presets {
-                for category in categories_removed {
-                    let roots = [
-                        self.context().presets_dir.join("shell").join(category),
-                        self.context()
-                            .shine_dir
-                            .join("installed/shell")
-                            .join(category),
-                    ];
-                    let mut category_state_exists = false;
-                    for (kind, root) in ["cache", "snapshot"].into_iter().zip(roots) {
-                        let exists = path_exists(self.host(), &root).await?;
-                        category_state_exists |= exists;
-                        capture_tree_state(
+            let global_cache_purge =
+                !self.context().is_external_presets && request.purge && selection.is_none();
+            if request.purge && !self.context().is_external_presets {
+                let mut purge_roots = categories_removed
+                    .iter()
+                    .map(|category| self.context().presets_dir.join("shell").join(category))
+                    .collect::<Vec<_>>();
+                purge_roots.push(self.context().presets_dir.join("shell"));
+                purge_roots.push(self.context().bin_dir.clone());
+                purge_roots.sort();
+                purge_roots.dedup();
+                for (index, path) in purge_roots.iter().enumerate() {
+                    capture_path_state(
+                        self.host(),
+                        &mut state,
+                        format!("shell-purge-root:{index}"),
+                        path,
+                    )
+                    .await?;
+                    if path_exists(self.host(), path).await? {
+                        permissions.implicit(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Remove,
+                            path: review_path(self.context(), path),
+                        });
+                    }
+                }
+            }
+            if global_cache_purge {
+                let root = self.context().presets_dir.join("shell");
+                capture_tree_state(
+                    self.host(),
+                    &mut state,
+                    "shell-cache:all".to_string(),
+                    &root,
+                )
+                .await?;
+                let mut file_count = 0usize;
+                let mut blocked = false;
+                if let Some(files) =
+                    super::shell_action_executor::collect_shell_tree_for_action(self.host(), &root)
+                        .await?
+                {
+                    for file in files {
+                        let destination = root.join(file.relative_path);
+                        let rollback = managed_file_rollback_path(&destination);
+                        capture_path_state(
                             self.host(),
                             &mut state,
-                            format!("shell-{kind}:{category}"),
-                            &root,
+                            format!("shell-cache-purge:{file_count}"),
+                            &destination,
                         )
                         .await?;
-                        if exists {
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("shell-cache-purge-rollback:{file_count}"),
+                            &rollback,
+                        )
+                        .await?;
+                        blocked |= path_exists(self.host(), &rollback).await?;
+                        file_count += 1;
+                        if !blocked {
+                            for (access, path) in [
+                                (FilesystemAccessV1::Remove, &destination),
+                                (FilesystemAccessV1::Write, &rollback),
+                                (FilesystemAccessV1::Remove, &rollback),
+                            ] {
+                                permissions.implicit(PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), path),
+                                });
+                            }
+                        }
+                    }
+                }
+                if file_count > 0 && !blocked {
+                    typed_launcher_transaction = true;
+                }
+                steps.push(
+                    PlanStepV1::new(
+                        "shell",
+                        Some("preset-cache"),
+                        if blocked {
+                            PlanActionV1::Blocked
+                        } else if file_count > 0 {
+                            PlanActionV1::Remove
+                        } else {
+                            PlanActionV1::None
+                        },
+                    )
+                    .with_diagnostic_code(if blocked {
+                        "shell_cache_removal_rollback_occupied"
+                    } else {
+                        "shell_cache_remove_transaction"
+                    }),
+                );
+            }
+            for category in &categories_removed {
+                if !self.context().is_external_presets && !global_cache_purge {
+                    let prefix = format!("shell/{category}/");
+                    let mut file_count = 0usize;
+                    let mut blocked = false;
+                    for logical in self
+                        .presets()
+                        .files()
+                        .keys()
+                        .filter(|logical| logical.starts_with(&prefix))
+                    {
+                        let destination = self.context().presets_dir.join(logical);
+                        let metadata = self.host().metadata(&destination).await;
+                        match metadata {
+                            Err(error) if error.is_not_found() => continue,
+                            Ok(metadata) if metadata.kind == FileKind::File => {}
+                            Ok(_) => {
+                                blocked = true;
+                                continue;
+                            }
+                            Err(error) => {
+                                return Err(error.into_anyhow("inspecting Shell cache removal"));
+                            }
+                        }
+                        let rollback = managed_file_rollback_path(&destination);
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("shell-cache-remove:{category}:{file_count}"),
+                            &destination,
+                        )
+                        .await?;
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("shell-cache-remove-rollback:{category}:{file_count}"),
+                            &rollback,
+                        )
+                        .await?;
+                        blocked |= path_exists(self.host(), &rollback).await?;
+                        file_count += 1;
+                        for (access, path) in [
+                            (FilesystemAccessV1::Remove, &destination),
+                            (FilesystemAccessV1::Write, &rollback),
+                            (FilesystemAccessV1::Remove, &rollback),
+                        ] {
                             permissions.implicit(PermissionV1::Filesystem {
-                                access: FilesystemAccessV1::Remove,
-                                path: review_path(self.context(), &root),
+                                access,
+                                path: review_path(self.context(), path),
                             });
                         }
+                    }
+                    if file_count > 0 && !blocked {
+                        typed_launcher_transaction = true;
                     }
                     steps.push(
                         PlanStepV1::new(
                             format!("shell/{category}"),
-                            Some("shared-category-state"),
-                            if category_state_exists {
+                            Some("preset-cache"),
+                            if blocked {
+                                PlanActionV1::Blocked
+                            } else if file_count > 0 {
                                 PlanActionV1::Remove
                             } else {
                                 PlanActionV1::None
                             },
                         )
-                        .with_diagnostic_code(if request.purge {
-                            "shell_category_state_purge"
+                        .with_diagnostic_code(if blocked {
+                            "shell_cache_removal_conflict"
                         } else {
-                            "shell_category_state_remove"
+                            "shell_cache_remove_transaction"
                         }),
                     );
                 }
-                if request.purge && selection.is_none() {
-                    let root = self.context().presets_dir.join("shell");
-                    let exists = path_exists(self.host(), &root).await?;
-                    capture_tree_state(
-                        self.host(),
-                        &mut state,
-                        "shell-cache:all".to_string(),
-                        &root,
-                    )
-                    .await?;
-                    if exists {
+
+                let snapshot = self
+                    .context()
+                    .shine_dir
+                    .join("installed/shell")
+                    .join(category);
+                let rollback = shell_snapshot_rollback_path(&snapshot);
+                capture_tree_state(
+                    self.host(),
+                    &mut state,
+                    format!("shell-snapshot-remove:{category}"),
+                    &snapshot,
+                )
+                .await?;
+                capture_tree_state(
+                    self.host(),
+                    &mut state,
+                    format!("shell-snapshot-remove-rollback:{category}"),
+                    &rollback,
+                )
+                .await?;
+                let exists = path_exists(self.host(), &snapshot).await?;
+                let rollback_occupied = path_exists(self.host(), &rollback).await?;
+                if exists && !rollback_occupied {
+                    typed_launcher_transaction = true;
+                    for (access, path) in [
+                        (FilesystemAccessV1::Remove, &snapshot),
+                        (FilesystemAccessV1::Write, &rollback),
+                        (FilesystemAccessV1::Remove, &rollback),
+                    ] {
                         permissions.implicit(PermissionV1::Filesystem {
-                            access: FilesystemAccessV1::Remove,
-                            path: review_path(self.context(), &root),
+                            access,
+                            path: review_path(self.context(), path),
                         });
                     }
-                    steps.push(
-                        PlanStepV1::new(
-                            "shell",
-                            Some("preset-cache"),
-                            if exists {
-                                PlanActionV1::Remove
-                            } else {
-                                PlanActionV1::None
-                            },
-                        )
-                        .with_diagnostic_code("shell_preset_cache_purge"),
-                    );
                 }
+                steps.push(
+                    PlanStepV1::new(
+                        format!("shell/{category}"),
+                        Some("shared-snapshot"),
+                        if rollback_occupied {
+                            PlanActionV1::Blocked
+                        } else if exists {
+                            PlanActionV1::Remove
+                        } else {
+                            PlanActionV1::None
+                        },
+                    )
+                    .with_diagnostic_code(if rollback_occupied {
+                        "shell_snapshot_removal_rollback_occupied"
+                    } else {
+                        "shell_snapshot_remove_transaction"
+                    }),
+                );
             }
         } else {
             let overwrite_embedded_cache =
@@ -2691,12 +2843,33 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             } else {
                 PlanActionV1::Update
             };
-            add_shell_profile_permissions(self.context(), &mut permissions, profile_action);
-            steps.push(PlanStepV1::new(
-                "shell/profile",
-                None::<String>,
-                profile_action,
-            ));
+            let managed_profile =
+                super::managed_shell_profile_path(&self.context().shine_dir, self.context().shell);
+            for (index, path) in std::iter::once(&managed_profile)
+                .chain(self.context().shell_config_paths.iter())
+                .enumerate()
+            {
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("shell-profile:{index}"),
+                    path,
+                )
+                .await?;
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("shell-profile-rollback:{index}"),
+                    &managed_file_rollback_path(path),
+                )
+                .await?;
+            }
+            add_shell_profile_permissions(self.context(), &mut permissions);
+            typed_launcher_transaction = true;
+            steps.push(
+                PlanStepV1::new("shell/profile", None::<String>, profile_action)
+                    .with_diagnostic_code("shell_profile_reconcile_transaction"),
+            );
         }
         if typed_launcher_transaction {
             add_shell_journal_permissions(self.context(), &mut permissions);
@@ -2717,6 +2890,13 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
         let mut state = StateCapture::new("sys", request.operation)?;
         capture_request_mode(&mut state, request.target.as_deref(), false, false, false)?;
         capture_context(&mut state, self.context())?;
+        let interrupted_operation =
+            if let Some(journal_bytes) = self.sys_operation_journal_bytes().await? {
+                state.bytes("journal:sys-operation", Some(&journal_bytes))?;
+                true
+            } else {
+                false
+            };
         state.public("os-id", &request.os_id)?;
         let (manifest, manifest_bytes) =
             load_sys_manifest(self.host(), &self.context().shine_dir).await?;
@@ -2745,6 +2925,22 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
         )?;
         let mut permissions = PermissionAccumulator::default();
         let mut steps = Vec::new();
+
+        if interrupted_operation {
+            steps.push(
+                PlanStepV1::new(
+                    request
+                        .target
+                        .as_ref()
+                        .map(|target| format!("sys/{target}"))
+                        .unwrap_or_else(|| "sys".to_string()),
+                    Some("operation-journal"),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code("sys_recovery_required"),
+            );
+            return finish_plan(self, request.operation, state, permissions, steps);
+        }
 
         let mut candidates = Vec::<(Option<SysItem>, Option<SysRunEntry>)>::new();
         if request.operation == LifecycleOperation::Uninstall {
@@ -2830,6 +3026,51 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
                     receipt,
                     request.operation,
                 );
+            }
+            let mut managed_paths = Vec::new();
+            if let Some(SystemReceipt::ManagedFile(receipt)) = previous {
+                managed_paths.push(receipt.destination.clone());
+            }
+            if let Some(item) = &item
+                && item.driver == SysDriverKind::ManagedFile
+            {
+                managed_paths.push(captured_sys_path(
+                    &sys_config_string(&item.config, "target")?,
+                    &self.context().home_dir,
+                )?);
+            }
+            managed_paths.sort();
+            managed_paths.dedup();
+            for (index, path) in managed_paths.iter().enumerate() {
+                let rollback = crate::action::managed_file_rollback_path(path);
+                let backup = crate::install::backup_path(path);
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("transaction:{target}:{index}:rollback"),
+                    &rollback,
+                )
+                .await?;
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("transaction:{target}:{index}:backup"),
+                    &backup,
+                )
+                .await?;
+                for (access, transaction_path) in [
+                    (FilesystemAccessV1::Write, path.as_path()),
+                    (FilesystemAccessV1::Remove, path.as_path()),
+                    (FilesystemAccessV1::Write, rollback.as_path()),
+                    (FilesystemAccessV1::Remove, rollback.as_path()),
+                    (FilesystemAccessV1::Write, backup.as_path()),
+                    (FilesystemAccessV1::Remove, backup.as_path()),
+                ] {
+                    permissions.implicit(PermissionV1::Filesystem {
+                        access,
+                        path: review_path(self.context(), transaction_path),
+                    });
+                }
             }
             let action = if request.operation == LifecycleOperation::Uninstall {
                 match previous {
@@ -2924,6 +3165,18 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
                 "sys-manifest.toml",
                 request.operation,
             );
+            for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+                permissions.implicit(PermissionV1::Filesystem {
+                    access,
+                    path: review_path(
+                        self.context(),
+                        &self
+                            .context()
+                            .shine_dir
+                            .join(super::SYS_OPERATION_JOURNAL_FILE),
+                    ),
+                });
+            }
         }
         finish_plan(self, request.operation, state, permissions, steps)
     }
@@ -2963,6 +3216,23 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         };
         let mut state = StateCapture::new("sys-profile", operation)?;
         capture_context(&mut state, self.context())?;
+        if let Some(journal_bytes) = self.sys_operation_journal_bytes().await? {
+            state.bytes("journal:sys-operation", Some(&journal_bytes))?;
+            return finish_specialized_plan(
+                self,
+                operation,
+                state,
+                PermissionAccumulator::default(),
+                vec![
+                    PlanStepV1::new(
+                        format!("sys/{}", request.item_id),
+                        Some("operation-journal"),
+                        PlanActionV1::Blocked,
+                    )
+                    .with_diagnostic_code("sys_recovery_required"),
+                ],
+            );
+        }
         state.public("os-id", &request.os_id)?;
         state.public("item-id", &request.item_id)?;
         state.public("enabled", request.enabled.to_string())?;
@@ -3033,6 +3303,47 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             &mut permissions,
         )
         .await?;
+        let sys_profile_paths = sys_profile_block_paths(self.context(), &request.os_id);
+        for (index, path) in sys_profile_paths.iter().enumerate() {
+            let rollback = crate::action::managed_file_rollback_path(path);
+            capture_path_state(
+                self.host(),
+                &mut state,
+                format!("sys-profile-block:{index}"),
+                path,
+            )
+            .await?;
+            capture_path_state(
+                self.host(),
+                &mut state,
+                format!("sys-profile-block-rollback:{index}"),
+                &rollback,
+            )
+            .await?;
+            for (access, transaction_path) in [
+                (FilesystemAccessV1::Write, path.as_path()),
+                (FilesystemAccessV1::Remove, path.as_path()),
+                (FilesystemAccessV1::Write, rollback.as_path()),
+                (FilesystemAccessV1::Remove, rollback.as_path()),
+            ] {
+                permissions.implicit(PermissionV1::Filesystem {
+                    access,
+                    path: review_path(self.context(), transaction_path),
+                });
+            }
+        }
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            permissions.implicit(PermissionV1::Filesystem {
+                access,
+                path: review_path(
+                    self.context(),
+                    &self
+                        .context()
+                        .shine_dir
+                        .join(super::SYS_OPERATION_JOURNAL_FILE),
+                ),
+            });
+        }
         let external_code_blocked =
             sys_profile_code_blocked_for_enabled(self, &request.os_id, &loaded.manifest, &enabled)?
                 || !self.sys_capability_trusted(
@@ -3066,6 +3377,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         );
         if external_code_blocked {
             profile_step = profile_step.with_diagnostic_code("sys_external_code_not_allowed");
+        } else {
+            profile_step = profile_step
+                .with_diagnostic_code("sys_profile_block_transaction")
+                .with_diagnostic_code("sys_profile_merge_recovery_unsupported");
         }
         finish_specialized_plan(
             self,
@@ -3099,6 +3414,19 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
 
         let mut state = StateCapture::new("sys-bootstrap", PlanOperationV1::SysBootstrap)?;
         capture_context(&mut state, self.context())?;
+        if let Some(journal_bytes) = self.sys_operation_journal_bytes().await? {
+            state.bytes("journal:sys-operation", Some(&journal_bytes))?;
+            return finish_specialized_plan(
+                self,
+                PlanOperationV1::SysBootstrap,
+                state,
+                PermissionAccumulator::default(),
+                vec![
+                    PlanStepV1::new("sys", Some("operation-journal"), PlanActionV1::Blocked)
+                        .with_diagnostic_code("sys_recovery_required"),
+                ],
+            );
+        }
         state.public("os-id", &request.os_id)?;
         state.public("items", serde_json::to_vec(&request.item_ids)?)?;
         state.public("sys-shell", &request.sys_shell)?;
@@ -3218,6 +3546,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 profile = profile.with_diagnostic_code("sys_external_code_not_allowed");
                 profile.action = PlanActionV1::Blocked;
             }
+            profile = profile.with_diagnostic_code("sys_bootstrap_profile_recovery_unsupported");
             steps.push(profile);
         }
 
@@ -4192,13 +4521,14 @@ where
         interaction: &mut impl RuntimeInteraction,
         observer: &mut impl RuntimeObserver,
     ) -> Result<SysManagedReport> {
-        approval.validate(&self.plan_managed_sys(request.clone()).await?)?;
+        let plan = self.plan_managed_sys(request.clone()).await?;
+        approval.validate(&plan)?;
         let action = if request.operation == LifecycleOperation::Uninstall {
             SysManagedAction::Remove
         } else {
             SysManagedAction::Apply
         };
-        self.run_managed_sys(
+        self.run_managed_sys_with_approval(
             SysManagedRequest {
                 os_id: request.os_id,
                 target: request.target,
@@ -4208,6 +4538,7 @@ where
             },
             interaction,
             observer,
+            Some((&plan, approval)),
         )
         .await
     }
@@ -4215,7 +4546,7 @@ where
 
 impl<H> CoreRuntime<H>
 where
-    H: FileSystemHost + ProcessHost,
+    H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost + ProcessHost,
 {
     pub async fn preview_sys_profile(
         &self,
@@ -4232,13 +4563,17 @@ where
         request: SysProfilePlanRequest,
         approval: &PlanApprovalV1,
     ) -> Result<SysProfileStateReport> {
-        approval.validate(&self.plan_sys_profile(request.clone()).await?)?;
-        self.set_sys_profile_state(SysProfileStateRequest {
-            os_id: request.os_id,
-            item_id: request.item_id,
-            enabled: request.enabled,
-            dry_run: false,
-        })
+        let plan = self.plan_sys_profile(request.clone()).await?;
+        approval.validate(&plan)?;
+        self.set_sys_profile_state_with_approval(
+            SysProfileStateRequest {
+                os_id: request.os_id,
+                item_id: request.item_id,
+                enabled: request.enabled,
+                dry_run: false,
+            },
+            Some((&plan, approval)),
+        )
         .await
     }
 
@@ -4835,6 +5170,25 @@ async fn capture_sys_profile_state<H: FileSystemObservationHost>(
     Ok(())
 }
 
+fn sys_profile_block_paths(context: &super::RuntimeContext, os_id: &str) -> Vec<PathBuf> {
+    match os_id {
+        "macos" => vec![context.home_dir.join(".zshrc")],
+        "ubuntu" => vec![
+            context.home_dir.join(".bashrc"),
+            context.home_dir.join(".zshrc"),
+        ],
+        "windows" => vec![
+            context
+                .home_dir
+                .join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+            context
+                .home_dir
+                .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+        ],
+        _ => context.shell_config_paths.clone(),
+    }
+}
+
 fn add_shine_write_permission(
     context: &super::RuntimeContext,
     permissions: &mut PermissionAccumulator,
@@ -5199,17 +5553,21 @@ fn add_shell_typed_permissions(
 fn add_shell_profile_permissions(
     context: &super::RuntimeContext,
     permissions: &mut PermissionAccumulator,
-    action: PlanActionV1,
 ) {
-    for path in &context.shell_config_paths {
-        permissions.implicit(PermissionV1::Filesystem {
-            access: if action == PlanActionV1::Remove {
-                FilesystemAccessV1::Remove
-            } else {
-                FilesystemAccessV1::Write
-            },
-            path: review_path(context, path),
-        });
+    let managed_profile = super::managed_shell_profile_path(&context.shine_dir, context.shell);
+    for path in std::iter::once(&managed_profile).chain(context.shell_config_paths.iter()) {
+        let rollback = managed_file_rollback_path(path);
+        for (access, effect) in [
+            (FilesystemAccessV1::Write, path),
+            (FilesystemAccessV1::Remove, path),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            permissions.implicit(PermissionV1::Filesystem {
+                access,
+                path: review_path(context, effect),
+            });
+        }
     }
 }
 
@@ -8809,6 +9167,87 @@ path = '$HOME/.tool/bin'
     }
 
     #[tokio::test]
+    async fn sys_profile_recovery_restores_owned_blocks_and_preserves_later_user_edits() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/ubuntu/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'tool'
+label = 'Tool'
+permissions = { schema_version = 1 }
+detect = { kind = 'path', path = '$HOME/.tool-present' }
+install = { kind = 'package', provider = 'homebrew', package = 'tool' }
+[[items.shell]]
+shells = ['bash', 'zsh']
+phase = 'post'
+path = '$HOME/.tool/bin'
+"#
+                .to_vec(),
+            )
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime.context_mut_for_cli().shell = super::super::ShellType::Bash;
+        let profile = runtime.context().home_dir.join(".bashrc");
+        runtime.host().put_file(
+            runtime.context().home_dir.join(".tool-present"),
+            b"present".to_vec(),
+        );
+        runtime.host().put_file(&profile, b"before\n".to_vec());
+        let request = SysProfilePlanRequest {
+            os_id: "ubuntu".to_string(),
+            item_id: "tool".to_string(),
+            enabled: true,
+        };
+        let plan = runtime.plan_sys_profile(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.target == "sys/profile"
+                && step
+                    .diagnostic_codes
+                    .contains(&"sys_profile_block_transaction".to_string())
+                && step
+                    .diagnostic_codes
+                    .contains(&"sys_profile_merge_recovery_unsupported".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("sys-manifest.toml"), 0);
+        assert!(
+            runtime
+                .set_sys_profile_approved(request, &approval)
+                .await
+                .is_err()
+        );
+        let interrupted = String::from_utf8(runtime.host().read(&profile).await.unwrap()).unwrap();
+        assert!(interrupted.contains("shine ubuntu sys pre"));
+        runtime.host().put_file(
+            &profile,
+            format!("{interrupted}\nuser-after-interruption\n").into_bytes(),
+        );
+
+        let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_sys_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        let restored = String::from_utf8(runtime.host().read(&profile).await.unwrap()).unwrap();
+        assert!(restored.contains("before"));
+        assert!(restored.contains("user-after-interruption"));
+        assert!(!restored.contains("shine ubuntu sys pre"));
+        assert!(
+            SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn bulk_managed_sys_upgrade_plans_only_profile_enabled_items() {
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
@@ -9422,6 +9861,8 @@ target = '$HOME/.config/disabled.txt'
             .shine_dir
             .join("rendered/shell/demo/demo.sh");
         let rollback = managed_file_rollback_path(&rendered);
+        let cache = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        let cache_rollback = managed_file_rollback_path(&cache);
         runtime
             .host()
             .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
@@ -9432,6 +9873,8 @@ target = '$HOME/.config/disabled.txt'
             .expect("Shell receipt removal should fail");
         assert!(runtime.host().metadata(&rendered).await.is_err());
         assert!(runtime.host().metadata(&rollback).await.is_ok());
+        assert!(runtime.host().metadata(&cache).await.is_err());
+        assert!(runtime.host().metadata(&cache_rollback).await.is_ok());
 
         let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
         assert!(recovery.is_ready());
@@ -9449,6 +9892,11 @@ target = '$HOME/.config/disabled.txt'
             b"#!/bin/sh\necho rendered\n"
         );
         assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert_eq!(
+            runtime.host().read(&cache).await.unwrap(),
+            b"#!/bin/sh\necho rendered\n"
+        );
+        assert!(runtime.host().metadata(&cache_rollback).await.is_err());
         assert!(
             ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
                 .await
@@ -9456,6 +9904,90 @@ target = '$HOME/.config/disabled.txt'
                 .find("shell/demo/demo")
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn shell_profile_recovery_preserves_unrelated_post_interruption_edits() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let config = runtime.context().shell_config_paths[0].clone();
+        runtime.host().put_file(&config, b"before\n".to_vec());
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8(runtime.host().read(&config).await.unwrap())
+                .unwrap()
+                .contains(super::super::profile::SHELL_SENTINEL_START)
+        );
+
+        let mut request = shell_uninstall_request();
+        request.target = None;
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.steps.iter().any(|step| {
+            step.target == "shell/profile"
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_profile_reconcile_transaction".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        runtime
+            .host()
+            .put_file(&config, b"before\nuser-after-interruption\n".to_vec());
+        let journal_text = String::from_utf8(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::SHELL_OPERATION_JOURNAL_FILE),
+                )
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            journal_text.contains("reconcile-shell-profile"),
+            "journal: {journal_text}"
+        );
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(
+            recovery.steps.iter().any(|step| {
+                step.diagnostic_codes
+                    .contains(&"shell_recovery_restore_profile".to_string())
+            }),
+            "recovery diagnostics: {:?}",
+            recovery
+                .steps
+                .iter()
+                .flat_map(|step| step.diagnostic_codes.iter())
+                .collect::<Vec<_>>()
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        let restored = String::from_utf8(runtime.host().read(&config).await.unwrap()).unwrap();
+        assert!(restored.contains("before"));
+        assert!(restored.contains("user-after-interruption"));
+        assert!(restored.contains(super::super::profile::SHELL_SENTINEL_START));
+        assert!(restored.contains(super::super::profile::SHELL_SENTINEL_END));
     }
 
     #[tokio::test]
@@ -9519,7 +10051,7 @@ target = '$HOME/.config/disabled.txt'
             .context()
             .shine_dir
             .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
-        runtime.host().fail_write_after(&journal, 3);
+        runtime.host().fail_write_after(&journal, 4);
         runtime
             .uninstall_shells_approved(request, &approval)
             .await
@@ -9784,7 +10316,7 @@ target = '$HOME/.config/disabled.txt'
             .context()
             .shine_dir
             .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
-        runtime.host().fail_write_after(&journal, 3);
+        runtime.host().fail_write_after(&journal, 4);
         assert!(
             runtime
                 .install_shells_approved(request, &approval)
@@ -9836,6 +10368,106 @@ target = '$HOME/.config/disabled.txt'
                 .unwrap()
                 .find("shell/demo/demo")
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn external_shell_snapshot_uninstall_receipt_failure_restores_tree_and_receipt() {
+        let metadata = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n";
+        let script = b"#!/bin/sh\necho external\n";
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("shell/demo/shine.toml", metadata.to_vec())
+            .file("shell/demo/demo.sh", script.to_vec())
+            .build();
+        let runtime = external_shell_runtime(snapshot);
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/shine.toml"),
+            metadata.to_vec(),
+        );
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/demo.sh"),
+            script.to_vec(),
+        );
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("shared-snapshot")
+                && step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_snapshot_remove_transaction".to_string())
+        }));
+        let destination = runtime.context().shine_dir.join("installed/shell/demo");
+        let rollback = shell_snapshot_rollback_path(&destination);
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, &destination),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), path),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        assert!(runtime.host().metadata(&destination).await.is_err());
+        assert_eq!(
+            runtime
+                .host()
+                .read(&rollback.join("demo.sh"))
+                .await
+                .unwrap(),
+            script
+        );
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_snapshot".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime
+                .host()
+                .read(&destination.join("demo.sh"))
+                .await
+                .unwrap(),
+            script
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_some()
         );
     }
 
@@ -10052,7 +10684,7 @@ target = '$HOME/.config/disabled.txt'
             .recover_shell_operation_approved(&recovery_approval)
             .await
             .unwrap();
-        assert_eq!(report.rolled_back_actions.len(), 2);
+        assert_eq!(report.rolled_back_actions.len(), 3);
         assert!(runtime.host().metadata(&launcher).await.is_err());
         assert!(runtime.host().read(&journal).await.is_err());
     }
@@ -10628,7 +11260,7 @@ target = '$HOME/.config/disabled.txt'
             .context()
             .shine_dir
             .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
-        runtime.host().fail_write_after(&journal, 2);
+        runtime.host().fail_write_after(&journal, 3);
         runtime
             .uninstall_shells_approved(request, &approval)
             .await
@@ -11116,6 +11748,170 @@ target = '$HOME/.config/disabled.txt'
             plan.steps
                 .iter()
                 .any(|step| step.action == PlanActionV1::Remove)
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_recovery() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("app/placeholder/file", b"placeholder".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/managed.txt");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        let previous_entry = SysRunEntry {
+            os_id: "test".to_string(),
+            item_id: "managed".to_string(),
+            label: "Managed".to_string(),
+            status: super::super::SysItemStatus::Installed,
+            detail: String::new(),
+            updated_at: "1".to_string(),
+            managed: true,
+            profile_enabled: false,
+            receipt: Some(SystemReceipt::ManagedFile(
+                super::super::ManagedFileReceipt {
+                    version: super::super::RECEIPT_VERSION,
+                    destination: destination.clone(),
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"managed"),
+                    privileged: false,
+                    restart_hint: None,
+                },
+            )),
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("sys-manifest.toml"),
+            toml::to_string(&SysRunManifest {
+                schema_version: super::super::SYS_MANIFEST_SCHEMA_VERSION,
+                entries: vec![previous_entry.clone()],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = SysManagedPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            os_id: "test".to_string(),
+            target: Some("managed".to_string()),
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("sys-manifest.toml"), 0);
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .run_managed_sys_approved(request, &approval, &mut Interaction, &mut observer,)
+                .await
+                .is_err()
+        );
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"managed");
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::SYS_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_ok()
+        );
+
+        let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_sys_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.entries, vec![previous_entry]);
+    }
+
+    #[tokio::test]
+    async fn split_dns_manifest_failure_removes_created_resource_on_explicit_recovery() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/macos/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'split-dns'
+label = 'Split DNS'
+mode = 'managed'
+driver = 'split-dns'
+requires_admin = true
+required_env = ['PRIVATE_DNS_DOMAIN', 'PRIVATE_DNS_SERVERS']
+permissions = { schema_version = 1, administrator = true, environment = [{ name = 'PRIVATE_DNS_DOMAIN', sensitivity = 'plain' }, { name = 'PRIVATE_DNS_SERVERS', sensitivity = 'plain' }], system = [{ capability = 'split-dns', resource = 'private-domain' }] }
+[items.config]
+domain_env = 'PRIVATE_DNS_DOMAIN'
+servers_env = 'PRIVATE_DNS_SERVERS'
+"#
+                .to_vec(),
+            )
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("PRIVATE_DNS_DOMAIN".to_string(), "corp.test".to_string());
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.53".to_string());
+        let request = SysManagedPlanRequest {
+            operation: LifecycleOperation::Install,
+            os_id: "macos".to_string(),
+            target: Some("split-dns".to_string()),
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("sys-manifest.toml"), 0);
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .run_managed_sys_approved(request, &approval, &mut Interaction, &mut observer,)
+                .await
+                .is_err()
+        );
+        let receipt = split_dns_receipt(&super::super::SplitDnsDomainRequest {
+            os_id: "macos".to_string(),
+            item_id: "split-dns".to_string(),
+            domain: "corp.test".to_string(),
+            servers: "10.0.0.53".to_string(),
+            dry_run: false,
+        })
+        .unwrap();
+        let resource = PathBuf::from(receipt.resource);
+        assert!(runtime.host().read(&resource).await.is_ok());
+
+        let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_sys_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&resource).await.is_err());
+        assert!(
+            SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
         );
     }
 

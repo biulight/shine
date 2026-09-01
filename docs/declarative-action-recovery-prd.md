@@ -1,37 +1,11 @@
 # Declarative Action and Recovery PRD
 
-> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
-> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, 4C.3, 4C.4a, 4C.4b,
-> 4C.4c, 4D.4a, 4D.4b, and 4D.4c are
-> implemented: approved App install uses managed-file creation IR for absent or backup-eligible
-> unowned static Copy destinations, and the explicit CLI recovery path can remove an
-> unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
-> upgrade also journal in-place replacement of an unchanged, receipt-owned static
-> Copy and retain its previous bytes only as same-directory transaction rollback material. Ordinary
-> uninstall uses the same material for an unchanged, receipt-owned, unprivileged static Copy with
-> no persistent backup until receipt removal and its journal commit marker are durable. Additional
-> removal paths journal restoration of an unchanged fixed persistent backup and forced
-> removal of a user-modified destination at the same static Copy boundary. Administrator removal
-> reuses the same actions with a persisted privilege flag, administrator permission, locked
-> privileged moves, and recovery authorization only when a protected path will change.
-> Administrator static Copy creation, backup-aware creation, and in-place update now reuse the
-> same actions, privileged mutation port, lock-spanning execution capability, and recovery rules.
-> JSON merge now uses key-owned typed transactions that preserve unrelated current values during
-> recovery without serializing prior or desired JSON payloads. App upgrade stale pruning reuses
-> those receipt-gated static Copy and JSON removal transactions while preserving modified stale
-> state. Static Copy relocation now replaces its source-keyed receipt through one action spanning
-> the old path/backup/rollback and absent new destination.
-> JSON relocation now performs the same receipt replacement through a distinct key-owned action:
-> recovery removes/restores only the separate desired/previous key sets and preserves unrelated
-> current values at both destinations.
-> Raw external Shell snapshot selections now replace their category tree through one action with
-> deterministic stage/rollback directories, selected command receipt transitions, and positive
-> commit evidence shared with dependent launcher recovery.
-> Lifecycle-rendered Shell files now use file-scoped replacement actions with exact hash/mode
-> identities, same-directory rollback, consuming receipt transitions, and independent positive
-> commit evidence.
-> Embedded Shell cache writes now use category-scoped file-patch actions with per-file identities
-> and rollback, selected receipt transitions, and positive commit evidence.
+> **Status:** Roadmap Phase 4 complete. App static Copy and key-owned JSON lifecycle effects, Shell
+> launcher/cache/snapshot/rendered/profile-sentinel effects, and managed Sys file/split-DNS/
+> profile-sentinel effects use typed Action IR, domain journals, receipt or positive-marker commit,
+> and explicitly approved recovery. Opaque App code, installed Shell command bodies, Sys
+> package/providers and bootstrap scripts, and non-transactional Sys profile composition are
+> classified before execution rather than inheriting rollback claims.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -69,7 +43,7 @@ prepared journal → rename original to fixed backup → atomic managed write �
        └──────────── explicit recovery restores only an exact safe state ────────────┘
 ```
 
-Remaining Shell/Sys actions and automatic resume remain later slices.
+Automatic resume remains a non-goal; recovery is explicit and always requires a fresh Plan.
 
 ## Goals
 
@@ -421,23 +395,23 @@ cleans only exact rollback material.
 - Keep invocation-time live rendering atomic and non-journaled, but serialize it with Shell
   lifecycle/recovery on the same cross-process lock and refuse to render while a journal is pending.
 
-### Slice 4D — Other domains and opaque inventory
+### Slice 4D.5 — Shell removal/profile and managed Sys closure (implemented)
 
-- Shell launcher/profile declarative actions. First-time launcher creation and explicit recovery are
-  implemented as Slice 4D.1. Unchanged receipt-owned launcher update is implemented as Slice 4D.2;
-  unchanged receipt-owned launcher removal with positive receipt-commit evidence is implemented as
-  Slice 4D.3. Raw external snapshot replacement is implemented as Slice 4D.4a and lifecycle-rendered
-  replacement as Slice 4D.4b, embedded cache replacement as Slice 4D.4c, and rendered removal plus
-  live-render serialization as Slice 4D.4d; cache uninstall, snapshot uninstall, and profile
-  sentinel blocks remain.
-- Managed Sys files and split-DNS typed actions.
-- Sys package/provider and executable code classification.
-- Migrate or explicitly classify every built-in executable Preset listed in
-  `docs/kb/executable-preset-inventory.md`.
+- Journal embedded-cache and external-snapshot uninstall with exact receipt transitions and
+  positive commit evidence.
+- Reconcile only Shine-owned Shell profile sentinel blocks; recovery restores the recorded owned
+  subset in the current file and preserves unrelated edits made after interruption.
+- Add a separate managed Sys journal and `shine sys recover` Plan for managed-file
+  create/update/relocate/remove, split-DNS state, and explicit Sys profile sentinel reconciliation.
+- Bind the exact previous and desired Sys receipt and require positive receipt commit before
+  cleanup; block changed resources, rollback material, owned profile blocks, or receipt conflicts.
+- Classify package/providers, bootstrap scripts, installed Shell command bodies, App executable
+  extensions, and Sys profile composition outputs by execution, privilege, provenance, and rollback
+  support in `docs/kb/executable-preset-inventory.md`.
 
 ## Acceptance for Phase 4 completion
 
-The Roadmap Phase 4 gate remains stricter than Slice 4A:
+The Roadmap Phase 4 gate is satisfied by the implemented slices and executable inventory:
 
 - fully declarative Presets produce stable actions and Plan semantics for identical inputs;
 - every integrated action journals before mutation and can safely resume or roll back;
@@ -470,4 +444,6 @@ exact hash/mode rollback and receipt restoration before dependent launcher recov
 Slice 4D.4c extends it to embedded category cache creation and `--replace-managed` replacement,
 including per-file rollback while preserving skipped and unrelated cache files.
 Slice 4D.4d extends it to rendered-file uninstall, exact consumer-receipt reconstruction, and
-live-render serialization with lifecycle/recovery in both locales.
+live-render serialization with lifecycle/recovery in both locales. Slice 4D.5 covers cache and
+snapshot uninstall, sentinel-owned Shell profile recovery, managed Sys recovery, and the explicit
+non-transactional profile/bootstrap boundary in both locales.

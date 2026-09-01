@@ -51,8 +51,10 @@ their category tree through a typed action with deterministic stage/rollback dir
 receipt transitions, and positive commit evidence. Embedded cache writes now use category-scoped
 file-patch actions, and lifecycle-rendered output uses file-scoped replacement/removal actions.
 Invocation-time live rendering is atomic, serialized with lifecycle/recovery, and blocked by a
-pending journal without creating its own persistent transaction. Cache and snapshot uninstall plus
-profile sentinel blocks remain to migrate.
+pending journal without creating its own persistent transaction. Cache and snapshot uninstall use
+typed removal actions with receipt transitions and positive commit evidence. Shell profile
+reconciliation is sentinel-owned: recovery restores only Shine blocks in the current file and
+preserves unrelated edits.
 
 | Category | Targets | Runtime/class | Privilege | Built-in provenance | Rollback classification |
 |---|---|---|---|---|---|
@@ -74,8 +76,10 @@ the target ran but does not own third-party package uninstall or version rollbac
 | Ubuntu | `rust`, `astronvim`, `atuin`, `yazi`, `starship`, `zoxide`, `bat`, `eza`, `bun`, `pnpm`, `mise`, `homebrew`, `zerotier` | opaque scripts | script/provider dependent | embedded | unsupported |
 | Ubuntu | APT/Homebrew package items | opaque typed provider invocation | provider dependent | embedded | package uninstall/rollback unsupported |
 | Windows | WinGet package items | opaque typed provider invocation | provider/elevation dependent | embedded | package uninstall/rollback unsupported |
-| all supported platforms | `split-dns` | typed managed system action | administrator | embedded | receipt/fingerprint guarded removal; Phase 4 action migration pending |
-| all supported platforms | generated shell profile integrations and other `mode = "managed"` resources | typed managed file/profile actions | item dependent | embedded | receipt/sentinel guarded removal; Phase 4 action migration pending |
+| all supported platforms | `split-dns` | typed managed system action | administrator | embedded | journaled exact-state create/update/remove with receipt-gated recovery |
+| all supported platforms | other `mode = "managed"` resources | typed managed-file action | item dependent | embedded | journaled create/update/relocate/remove with fingerprint and receipt recovery |
+| all supported platforms | explicit `sys profile enable/disable` shell sentinels | typed owned-subset profile action | item dependent | embedded | journaled sentinel recovery preserves unrelated current content |
+| all supported platforms | generated active/base/new/merge profile files and bootstrap profile composition | typed composition plus three-way merge | item dependent | embedded | explicitly non-transactional; conflict/force behavior is reviewed before execution |
 
 ## Phase 4 migration order
 
@@ -88,13 +92,12 @@ the target ran but does not own third-party package uninstall or version rollbac
    merge install/update/removal (implemented).
 6. App upgrade stale-prune removal for unchanged static Copy and JSON receipts plus static Copy and
    key-owned JSON relocation (implemented).
-7. Shell first-time launcher creation plus unchanged receipt-owned launcher update and removal
-   (implemented); raw external snapshot replacement, embedded cache replacement, and lifecycle-
-   rendered output replacement/removal are also implemented; live rendering is explicitly
-   invocation-scoped and serialized with lifecycle recovery, while cache/snapshot uninstall and
-   profile blocks remain.
-8. Managed Sys files/profile blocks and split DNS.
+7. Shell launcher creation/update/removal, snapshot/cache replacement and removal, rendered-output
+   replacement/removal, and sentinel-owned profile reconciliation (implemented). Live rendering is
+   explicitly invocation-scoped and serialized with lifecycle recovery.
+8. Managed Sys files, explicit profile sentinel blocks, and split DNS (implemented).
 9. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
-   opaque escape hatches unless a narrower typed action replaces them.
+   opaque escape hatches, and profile composition as explicitly non-transactional, unless a narrower
+   typed action replaces them (classified).
 
 Any new built-in executable capability must enter this inventory in the same change.

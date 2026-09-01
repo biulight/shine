@@ -1,4 +1,4 @@
-use crate::commands::{AppCommands, Commands, ShellCommands, TaskCommands};
+use crate::commands::{AppCommands, Commands, ShellCommands, SysCommands, TaskCommands};
 use crate::{config::Config, version};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueEnum;
@@ -169,6 +169,12 @@ fn skip_background_update_check(command: &Commands) -> bool {
             command,
             Commands::Shell {
                 command: ShellCommands::Recover { .. }
+            }
+        )
+        || matches!(
+            command,
+            Commands::Sys {
+                command: SysCommands::Recover { .. }
             }
         )
         || matches!(
@@ -367,6 +373,14 @@ mod tests {
     fn explicit_shell_recovery_skips_background_update_gate() {
         let command = Commands::Shell {
             command: ShellCommands::Recover { yes: false },
+        };
+        assert!(skip_background_update_check(&command));
+    }
+
+    #[test]
+    fn explicit_sys_recovery_skips_background_update_gate() {
+        let command = Commands::Sys {
+            command: SysCommands::Recover { yes: false },
         };
         assert!(skip_background_update_check(&command));
     }

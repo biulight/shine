@@ -17,6 +17,7 @@ mod profile;
 mod shell;
 mod shell_action_executor;
 mod sys;
+mod sys_action_executor;
 mod sys_bootstrap;
 mod sys_manifest;
 mod sys_model;
@@ -78,6 +79,9 @@ pub use sys::{
     SYS_MANIFEST_SCHEMA_VERSION, SplitDnsDomainRequest, SplitDnsReceipt, SysDriverKind,
     SysItemStatus, SysManagedAction, SysManagedReport, SysManagedRequest, SysRunEntry,
     SysRunManifest, SystemReceipt, remove_split_dns_with_host, split_dns_receipt,
+};
+pub use sys_action_executor::{
+    SYS_OPERATION_JOURNAL_FILE, SysOperationExecutionV1, SysRecoveryReportV1,
 };
 pub use sys_bootstrap::{
     SysBootstrapBatchReport, SysBootstrapBatchRequest, SysBootstrapReport, SysBootstrapRequest,

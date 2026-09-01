@@ -126,11 +126,24 @@ shine sys apply split-dns
 shine sys apply split-dns --yes # Non-interactive approval
 shine sys uninstall split-dns --dry-run
 shine sys uninstall split-dns
+shine sys recover              # Review an interrupted managed operation
+shine sys recover --yes        # Non-interactive approval
 ```
 
 Non-dry-run managed operations display a snapshot-bound Plan and default to No. `--yes` skips only
 the prompt, not Plan rendering, permission blockers, or fresh validation. Administrator access, if
 required, is requested separately after Plan approval.
+
+Managed files and split DNS are journaled before mutation and committed only after the exact Sys
+receipt is durable. Explicit `sys profile enable/disable` also journals the Shine-owned shell
+sentinel changes. If interruption leaves a pending journal, later mutating Sys commands stop and
+ask you to run `shine sys recover`. Recovery restores only fingerprint-matching previous state
+before receipt commit; afterward it keeps desired state and cleans exact rollback. It never
+overwrites a changed resource or unrelated shell-profile content.
+
+Generated active/base/new/merge profile files keep their existing three-way merge behavior and are
+shown as non-transactional. Bootstrap scripts and package/provider calls are opaque effects and are
+not rolled back by `sys recover`.
 
 For routing private domains across remote LANs to ZeroTier DNS, see the Chinese Biulight guide
 [使用 ZeroTier、CoreDNS 和 Shine 搭建异地私有域名网络](https://blog.biulight.top/timeline/knowledge/zerotier-coredns-split-dns).

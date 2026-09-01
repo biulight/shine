@@ -104,10 +104,21 @@ shine sys apply split-dns
 shine sys apply split-dns --yes # 非交互批准
 shine sys uninstall split-dns --dry-run
 shine sys uninstall split-dns
+shine sys recover              # 审阅中断的受管操作
+shine sys recover --yes        # 非交互批准
 ```
 
 非 dry-run 的 managed 操作会显示绑定快照的 Plan，确认默认是 No。`--yes` 只跳过提示，不能
 跳过 Plan 展示、权限 blocker 或执行前复核。若项目需要管理员权限，会在 Plan 批准后另行请求。
+
+受管文件与 split DNS 会在 mutation 前写入 journal，并且只有精确 Sys receipt 持久化后才提交。显式
+`sys profile enable/disable` 也会记录 Shine-owned shell sentinel 的变化。如果中断留下 pending
+journal，后续修改型 Sys 命令会停止并提示运行 `shine sys recover`。receipt commit 前，恢复只还原
+fingerprint 仍匹配的旧状态；commit 后保留 desired 状态并清理精确 rollback。它不会覆盖已变化的
+resource 或无关 shell-profile 内容。
+
+生成的 active/base/new/merge profile 文件继续使用现有三方合并，并会显示为非事务化。bootstrap
+script 与 package/provider 调用属于 opaque effect，不会由 `sys recover` 回滚。
 
 需要把异地局域网中的私有域名定向到 ZeroTier DNS 时，可参考
 [使用 ZeroTier、CoreDNS 和 Shine 搭建异地私有域名网络](https://blog.biulight.top/timeline/knowledge/zerotier-coredns-split-dns)。

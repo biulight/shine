@@ -79,6 +79,15 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   Recovery reconstructs missing consumer receipts and restores only exact rollback material before
   the positive commit marker; live rendering now shares the lifecycle/recovery lock and refuses a
   pending journal.
+- Journaled Shell cache and external snapshot uninstall plus Shine-owned profile sentinel
+  reconciliation. `shine shell recover` restores only exact rollback material or owned blocks and
+  preserves unrelated cache files, receipts, and profile edits made after interruption.
+- Added `shine sys recover` for interrupted managed-file and split-DNS operations. Managed Sys
+  actions now journal exact receipt transitions and recover only fingerprint-matching resource and
+  rollback state.
+- Journaled the shell sentinel changes made by explicit `sys profile enable/disable`. Recovery
+  restores only Shine-owned blocks; generated profile composition keeps its explicit
+  non-transactional three-way-merge boundary.
 
 ### Breaking changes
 

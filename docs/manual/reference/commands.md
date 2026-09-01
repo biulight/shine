@@ -121,7 +121,7 @@ category sibling stage/rollback directories and a positive commit marker indepen
 equality. Before that marker, `shine shell recover` restores the previous selected receipt set
 before assessing dependent launchers, then restores the exact old tree. After the marker it keeps
 the desired tree and removes only exact rollback. Changed active, stage, or rollback trees block
-recovery. Snapshot uninstall and profile edits retain their existing lifecycle behavior.
+recovery. Snapshot uninstall uses its own removal action with the same receipt/marker boundary.
 
 For embedded presets, install journals actual category cache writes before dependent rendered-file
 or launcher changes. Missing files and differing files changed by upgrade or `--replace-managed` each bind
@@ -129,7 +129,8 @@ previous/desired hash and mode plus same-directory rollback; skipped and unrelat
 outside the action. Before its positive marker, recovery restores previous receipts and exact old
 files or removes exact created files. Afterward it keeps desired files and cleans exact rollback.
 A non-file destination, occupied/modified rollback, modified cache file, or receipt conflict blocks
-the whole cache action. Cache uninstall retains its existing lifecycle behavior.
+the whole cache action. Cache uninstall uses a removal action that restores only exact selected
+files and receipts before its positive marker.
 
 When install or upgrade creates or changes transformed output, Shine also journals the rendered
 file before dependent launcher changes. An existing file moves to its canonical same-directory
@@ -143,8 +144,9 @@ receipt removal, and receipt absence requires a positive marker before cleanup. 
 recovery reconstructs missing receipts and restores the exact file; afterward it preserves absence
 and cleans exact rollback. Unselected consumers and unrelated rendered files remain untouched.
 Execution-time live rendering shares the lifecycle/recovery lock and refuses a pending journal while
-remaining invocation-scoped and atomic. Snapshot uninstall and profile edits retain their existing
-lifecycle behavior.
+remaining invocation-scoped and atomic. Profile reconciliation uses a separate sentinel-owned
+action. Recovery merges only the recorded `# >>> shine >>>` block transition into the current
+profile and preserves unrelated edits.
 
 Without `--dry-run`, App and Shell lifecycle mutations, App refresh, and artifact apply/remove
 display a snapshot-bound security Plan and ask once with a default answer of No. `--yes` still
@@ -267,6 +269,7 @@ evaluation failures are reported after the remaining selected generators run.
 shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
+shine sys recover [--yes]
 shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes]
 shine sys profile enable <ITEM> [--dry-run] [--yes]
 shine sys profile disable <ITEM> [--dry-run] [--yes]
@@ -282,6 +285,16 @@ shell integration; rerunning it never upgrades the software. `sys profile enable
 same Plan approval contract and changes only Shine-owned integration content. Use the
 software's own package manager or upstream tool for upgrades; `shine upgrade sys/<ITEM>` converges
 an independent managed item.
+
+Managed-file and split-DNS mutations, plus the shell sentinel changes made by explicit
+`sys profile enable/disable`, are journaled before resource mutation and committed only after the
+exact Sys receipt is durable. A pending journal blocks later mutating Sys commands. Run
+`shine sys recover` to review a fresh recovery Plan; it restores only fingerprint-matching previous
+state before receipt commit, or keeps desired state and cleans exact rollback afterward. Changed
+resources, rollback material, owned sentinel blocks, or receipts block recovery and are preserved.
+Generated active/base/new/merge profile files retain their three-way merge behavior and are shown
+as non-transactional; bootstrap scripts and package/provider calls remain explicitly opaque and
+outside this recovery boundary.
 
 ## Preset sources and customization
 

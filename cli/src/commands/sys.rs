@@ -26,6 +26,12 @@ pub enum SysProfileCommands {
 
 #[derive(Subcommand, Debug)]
 pub enum SysCommands {
+    /// Review and recover an interrupted managed system operation
+    Recover {
+        /// Approve the displayed recovery Plan without prompting
+        #[arg(long)]
+        yes: bool,
+    },
     /// List available system items
     List {
         /// Show items for every supported operating system

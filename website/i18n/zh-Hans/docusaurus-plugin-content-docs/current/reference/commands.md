@@ -101,15 +101,15 @@ launcher、rollback 路径或 receipt 冲突发生变化时，恢复会阻塞并
 category snapshot 的变化写入 journal。Action 使用确定性的 category 同级 stage/rollback 目录，
 以及独立于 receipt 是否相等的正向 commit marker。marker 前，`shine shell recover` 会先恢复旧的
 选中 receipt 集合，再评估依赖 launcher，随后还原精确旧树；marker 后保留 desired 树，只移除精确
-rollback。active、stage 或 rollback 树被修改都会阻塞恢复。snapshot uninstall 与 profile 编辑仍沿用
-现有 lifecycle 行为。
+rollback。active、stage 或 rollback 树被修改都会阻塞恢复。snapshot uninstall 使用独立 removal
+Action，并遵循相同的 receipt/marker 边界。
 
 对于内置预设，install 会在依赖它的 rendered 文件或 launcher 变化前，把本次实际 category cache
 写入记录到 journal。缺失文件与 upgrade 或 `--replace-managed` 将要更新的差异文件会分别绑定前后 hash/mode 和同目录
 rollback；跳过及无关 cache 文件不属于本 Action。正向 marker 前，恢复会还原旧 receipt 与精确旧文件，
 或移除精确匹配的事务新建文件；marker 后保留 desired 文件，只清理精确 rollback。destination 不是普通
 文件、rollback 被占用或修改、cache 文件被修改、或 receipt 冲突时，整个 cache Action 都会阻塞。
-cache 卸载仍沿用现有 lifecycle 行为。
+cache 卸载使用独立 removal Action；正向 marker 前只还原精确匹配的选中文件与 receipt。
 
 install 或 upgrade 创建或更新 transformed output 时，Shine 也会先把 rendered 文件写入 journal，
 再处理依赖它的 launcher。已有文件会移到同目录的规范 `.shine.rollback`；journal 绑定文件前后的
@@ -120,8 +120,9 @@ hash/mode、所有消费该路径的 command receipt transition，以及独立�
 rollback，再删除 receipt；receipt 缺失只有在正向 marker 持久化后才代表可清理。marker 前，恢复会
 重建缺失 receipt 并还原精确文件；marker 后保持删除结果，只清理精确 rollback。未选择的 consumer
 与无关 rendered 文件保持不变。执行期 live rendering 与 lifecycle/recovery 使用同一 lock，pending
-journal 存在时拒绝运行，同时继续保持 invocation-scoped atomic write。snapshot 卸载与 profile 编辑
-仍沿用原有 lifecycle 行为。
+journal 存在时拒绝运行，同时继续保持 invocation-scoped atomic write。profile reconciliation 使用
+独立的 sentinel-owned Action；恢复只把记录的 `# >>> shine >>>` block transition 合并到当前 profile，
+并保留无关编辑。
 
 不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation、App refresh 和 artifact apply/remove
 都会先显示绑定快照的安全 Plan，并以默认 No 询问一次。`--yes` 仍会完整显示并重新校验 Plan，
@@ -225,6 +226,7 @@ enrollment，不会批准之后的 lifecycle Plan。
 shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
+shine sys recover [--yes]
 shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes]
 shine sys profile enable <ITEM> [--dry-run] [--yes]
 shine sys profile disable <ITEM> [--dry-run] [--yes]
@@ -238,6 +240,14 @@ Plan，且不能与 `--dry-run` 同时使用。Bootstrap 只确保选中的软�
 集成；重复运行不会升级软件。`sys profile enable/disable` 使用同一套 Plan 批准契约，并且只修改
 Shine 自己管理的集成内容。第三方软件升级请使用其包管理器或上游工具；独立受管系统项可通过
 `shine upgrade sys/<ITEM>` 收敛到当前预设状态。
+
+受管文件与 split-DNS mutation，以及显式 `sys profile enable/disable` 修改的 shell sentinel，都会在
+资源变化前写入 journal，并且只有精确 Sys receipt 持久化后才提交。pending journal 会阻塞后续修改型
+Sys 命令。运行 `shine sys recover` 可审阅新的 recovery Plan：receipt commit 前只还原 fingerprint
+仍匹配的旧状态，commit 后保留 desired 状态并清理精确 rollback。resource、rollback material、
+owned sentinel block 或 receipt 被修改时，恢复会阻塞并保留现场。生成的 active/base/new/merge
+profile 文件继续使用三方合并，并会明确显示为非事务化；bootstrap script 与 package/provider 调用仍
+明确属于 opaque effect，不在这套恢复边界内。
 
 ## 预设来源与定制
 

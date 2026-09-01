@@ -144,6 +144,12 @@ afterward it preserves absence and cleans exact rollback. Unselected consumers a
 rendered files are preserved. Invocation-time live rendering takes the same cross-process lock,
 refuses a pending journal, and re-reads its receipt before atomically replacing last-known-good
 output.
+When the final selected receipts release embedded cache files or an external snapshot category,
+Core derives `RemoveShellCache` or `RemoveShellSnapshot`. Exact files/trees move to rollback before
+receipt removal, and a positive marker distinguishes committed absence from an interruption that
+must reconstruct old receipts and restore exact material. Shell profile reconciliation uses
+`ReconcileShellProfile`; recovery merges only the recorded Shine sentinel transition into the
+current profile so unrelated later edits survive.
 Status treats a manifest receipt or a compatible legacy launcher as installed; extracted source
 files alone are only cache state. Command uninstall removes only the selected managed launcher,
 rendered output, and receipt, rebuilds source-command profile wrappers from the remaining launchers,
@@ -517,6 +523,27 @@ mode and a combined content hash. Snapshot changes are applied by upgrade. Live 
 current package files immediately, while status reports that its receipt and launcher need refresh.
 A transformed live launcher calls the manifest-constrained internal renderer on each
 invocation, then executes or sources the atomically refreshed file under `rendered/`.
+
+## Managed Sys apply and recovery
+
+Managed-file and split-DNS apply/update/uninstall first derive typed actions and an exact previous
+and desired `SysRunEntry`. Core writes `sys-operation-journal.toml` before the first resource
+mutation, persists the desired receipt, records receipt commit, and then removes exact rollback
+material and the journal. Managed files reuse the create/update/relocate/remove state machines;
+split DNS binds the complete previous and desired typed state rather than shelling out during
+recovery.
+
+A pending journal blocks later mutating Sys Plans. `shine sys recover` captures the journal,
+manifest, resource, and rollback observations in a fresh `sys-recovery` Plan, revalidates approval
+under the operation lock, and restores only fingerprint-matching previous state before receipt
+commit. After commit it keeps the desired resource and cleans exact rollback. Explicit
+`sys profile enable/disable` also journals its shell rc changes, but owns only per-phase Shine
+sentinel blocks; recovery preserves unrelated current file content.
+
+Profile active/base/new/merge file reconciliation retains the established three-way merge and is
+marked non-transactional in its Plan. Bootstrap profile composition, package/provider calls, and
+bootstrap scripts are likewise outside managed Sys recovery and retain their explicit opaque or
+unsupported-rollback classification.
 
 ## Workspace environment export
 

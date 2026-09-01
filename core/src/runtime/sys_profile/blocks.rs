@@ -138,21 +138,30 @@ async fn update_sys_shell_profile_blocks_with_host(
         Err(error) if error.is_not_found() => String::new(),
         Err(error) => return Err(error.into_anyhow("reading sys shell profile")),
     };
+    let updated = desired_sys_profile_content(&content, os_id, shell_name, true);
+    if updated == content {
+        return Ok(false);
+    }
+
+    host.write_atomic(path, updated.as_bytes())
+        .await
+        .map_err(|error| error.into_anyhow("writing sys shell profile"))?;
+    Ok(true)
+}
+
+pub(crate) fn desired_sys_profile_content(
+    content: &str,
+    os_id: &str,
+    shell_name: Option<&str>,
+    install: bool,
+) -> String {
     let had_utf8_bom = content.contains('\u{feff}');
     let bom_was_at_start = content.starts_with('\u{feff}');
-    let content = content.replace('\u{feff}', "");
+    let content_without_bom = content.replace('\u{feff}', "");
     let pre_block = sys_shell_profile_block(os_id, SysProfilePhase::Pre, shell_name);
     let post_block = sys_shell_profile_block(os_id, SysProfilePhase::Post, shell_name);
     let pre_sentinel = sys_sentinel(os_id, SysProfilePhase::Pre);
     let post_sentinel = sys_sentinel(os_id, SysProfilePhase::Post);
-
-    // Compare the installed block against the expected one ignoring line-ending
-    // style, so a CRLF profile (e.g. one a Windows editor re-saved) whose block
-    // is otherwise up to date short-circuits here — leaving the user's file
-    // untouched instead of reporting a spurious update and rewriting it to LF.
-    // `extract_sentinel_block` only reattaches a trailing `\n` (never `\r\n`), so
-    // a CRLF block extracts without its terminator while `expected` ends in `\n`;
-    // trim the trailing line break on both sides before the ending-agnostic compare.
     let block_matches = |extracted: Option<&str>, expected: &str| {
         extracted.is_some_and(|block| {
             eol_eq(
@@ -161,29 +170,77 @@ async fn update_sys_shell_profile_blocks_with_host(
             )
         })
     };
-    if extract_sentinel_block(&content, legacy_sys_sentinel(os_id)).is_none()
-        && block_matches(extract_sentinel_block(&content, pre_sentinel), &pre_block)
-        && block_matches(extract_sentinel_block(&content, post_sentinel), &post_block)
-        && sentinel_order_is_valid(&content, pre_sentinel, post_sentinel)
+    if install
+        && extract_sentinel_block(&content_without_bom, legacy_sys_sentinel(os_id)).is_none()
+        && block_matches(
+            extract_sentinel_block(&content_without_bom, pre_sentinel),
+            &pre_block,
+        )
+        && block_matches(
+            extract_sentinel_block(&content_without_bom, post_sentinel),
+            &post_block,
+        )
+        && sentinel_order_is_valid(&content_without_bom, pre_sentinel, post_sentinel)
         && (!had_utf8_bom || bom_was_at_start)
     {
-        return Ok(false);
+        return content.to_string();
     }
-
-    let mut updated = remove_sentinel_block(&content, legacy_sys_sentinel(os_id));
-    updated = remove_sentinel_block(&updated, pre_sentinel);
-    updated = remove_sentinel_block(&updated, post_sentinel);
+    let mut updated = remove_all_sys_blocks(&content_without_bom, os_id);
     updated = trim_outer_blank_lines(&updated);
-    updated = insert_shell_profile_block(&updated, &pre_block, ShellProfileBlockPosition::Start);
-    updated = insert_shell_profile_block(&updated, &post_block, ShellProfileBlockPosition::End);
+    if install {
+        updated =
+            insert_shell_profile_block(&updated, &pre_block, ShellProfileBlockPosition::Start);
+        updated = insert_shell_profile_block(&updated, &post_block, ShellProfileBlockPosition::End);
+    }
     if had_utf8_bom {
         updated.insert(0, '\u{feff}');
     }
+    updated
+}
 
-    host.write_atomic(path, updated.as_bytes())
-        .await
-        .map_err(|error| error.into_anyhow("writing sys shell profile"))?;
-    Ok(true)
+pub(crate) fn sys_owned_blocks_hash(content: &str, os_id: &str) -> Option<u64> {
+    let blocks = std::iter::once(legacy_sys_sentinel(os_id))
+        .chain(
+            SYS_PROFILE_PHASES
+                .into_iter()
+                .map(|phase| sys_sentinel(os_id, phase)),
+        )
+        .filter_map(|sentinel| extract_sentinel_block(content, sentinel))
+        .collect::<Vec<_>>();
+    (!blocks.is_empty()).then(|| crate::install::hash_content(blocks.join("\n").as_bytes()))
+}
+
+pub(crate) fn restore_sys_owned_blocks(current: &str, previous: &str, os_id: &str) -> String {
+    let had_utf8_bom = current.starts_with('\u{feff}');
+    let current = current.replace('\u{feff}', "");
+    let previous = previous.replace('\u{feff}', "");
+    let mut restored = trim_outer_blank_lines(&remove_all_sys_blocks(&current, os_id));
+    if let Some(legacy) = extract_sentinel_block(&previous, legacy_sys_sentinel(os_id)) {
+        restored = insert_shell_profile_block(&restored, legacy, ShellProfileBlockPosition::End);
+    } else {
+        if let Some(pre) =
+            extract_sentinel_block(&previous, sys_sentinel(os_id, SysProfilePhase::Pre))
+        {
+            restored = insert_shell_profile_block(&restored, pre, ShellProfileBlockPosition::Start);
+        }
+        if let Some(post) =
+            extract_sentinel_block(&previous, sys_sentinel(os_id, SysProfilePhase::Post))
+        {
+            restored = insert_shell_profile_block(&restored, post, ShellProfileBlockPosition::End);
+        }
+    }
+    if had_utf8_bom {
+        restored.insert(0, '\u{feff}');
+    }
+    restored
+}
+
+fn remove_all_sys_blocks(content: &str, os_id: &str) -> String {
+    let mut updated = remove_sentinel_block(content, legacy_sys_sentinel(os_id));
+    for phase in SYS_PROFILE_PHASES {
+        updated = remove_sentinel_block(&updated, sys_sentinel(os_id, phase));
+    }
+    updated
 }
 
 async fn remove_sys_shell_profile_blocks(

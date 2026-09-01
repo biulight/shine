@@ -3,6 +3,42 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-01 — File identity compares permission bits, not Unix file-type bits
+
+- **Symptom**: normal CLI Shell installs wrote the exact new profile bytes and mode, but receipt
+  commit rejected the file as non-durable; the same transaction passed on `InMemoryHost`.
+- **Root cause**: `RealHost` observations carry the full Unix `st_mode` (for example `0100644`),
+  while a newly desired file declares permission bits (`0644`). Exact integer equality therefore
+  disagreed across host adapters even though both described the same regular-file permissions.
+- **Fix**: Shell regular-file identity first requires a regular-file observation and equal content,
+  then compares only the low Unix permission/special bits.
+- **Rule**: when resource kind is represented separately, fingerprint mode comparison must exclude
+  duplicate file-type bits and behave identically across real and in-memory hosts.
+
+## 2026-09-01 — Transactional file removal must finish its empty-directory contract
+
+- **Symptom**: `shell uninstall --purge` removed every managed cache file transactionally but left
+  the empty category directories, regressing its documented purge result.
+- **Root cause**: migration treated cache files and receipts as the complete operation while the
+  legacy lifecycle also owned empty-directory cleanup.
+- **Fix**: include possible empty category/root removals in Plan state and permissions, then remove
+  only directory trees proven to contain no files after the journaled file transaction commits.
+- **Rule**: when migrating a mutation to typed actions, inventory post-commit structural cleanup as
+  well as byte writes; never restore only the main-path effect and silently drop its lifecycle tail.
+
+## 2026-09-01 — Force does not manufacture a profile ownership transition
+
+- **Symptom**: a forced Shell reinstall generated `ReconcileShellProfile` even when the existing
+  Shine sentinel block already matched the desired block, producing an invalid Action IR and
+  breaking otherwise unrelated interrupted-cache coverage.
+- **Root cause**: `--force` was allowed to bypass the no-op check used to decide whether an owned
+  subset actually changes. Force authorizes replacement of conflicting managed state; it is not a
+  state transition by itself.
+- **Fix**: always skip profile reconciliation when the exact owned sentinel is already present,
+  independent of force, and keep Action validation strict about previous/desired identity changes.
+- **Rule**: authorization flags may widen an eligible mutation, but must never manufacture an
+  Action when the resource ownership projection is unchanged.
+
 ## 2026-09-01 — Rendered-file removal and live rendering share one mutation boundary
 
 - **Symptom**: Shell uninstall committed command receipt removal before directly deleting the last

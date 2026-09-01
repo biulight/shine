@@ -559,6 +559,9 @@ async fn run(cli: Cli) -> Result<()> {
             },
         },
         Commands::Sys { command } => match command {
+            SysCommands::Recover { yes } => {
+                Box::pin(sys::handle_recover_approved(&config, yes)).await
+            }
             SysCommands::List { all } => Box::pin(sys::handle_list(&config, all)).await,
             SysCommands::Info { item } => Box::pin(sys::handle_info(&config, &item)).await,
             SysCommands::Status => Box::pin(sys::handle_status(&config)).await,
@@ -2167,6 +2170,25 @@ mod tests {
             cli.command,
             Commands::Shell {
                 command: ShellCommands::Recover { yes: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_explicit_sys_recovery() {
+        let cli = Cli::try_parse_from(["shine", "sys", "recover"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Recover { yes: false }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "recover", "--yes"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Recover { yes: true }
             }
         ));
     }

@@ -24,43 +24,16 @@
 - Read-oriented App status/update 默认不运行 generator；开发者可通过 `--run-generators` 显式执行并
   在内存中检查最终内容，写入仍只发生在显式 refresh 或已批准 mutation。GPG/age portable
   secrets 和 machine-local env 已存在。
-- Phase 4 已开始：Core 已有独立于安全 Plan 的版本化 Action IR、App operation journal 与显式
-  recovery Plan；真实 App install 已将“目标缺失或可安全备份的静态 Copy”接入
-  create/receipt/commit 链路，`shine app recover` 能显式、重新批准地移除未提交创建或恢复未修改的
-  固定 backup；原地、receipt-owned 静态 Copy update 也使用同目录 transaction rollback
-  material，并能在旧/新 receipt 边界安全恢复。无 persistent backup、未修改、非管理员静态 Copy 的
-  普通 uninstall 也已使用 transaction rollback material，并在旧 receipt/receipt 缺失边界安全恢复；
-  若 receipt 还拥有固定 `.shine.bak`，同一事务会恢复用户原文件，并在任一 rename 或 receipt commit
-  中断后按双路径 fingerprint 安全回滚。对同一非管理员静态 Copy 边界，`--force` 移除用户修改内容
-  也已有独立 Action：修改后内容会先成为同目录、fingerprint-bound rollback material，并在 receipt
-  commit 前连同可选 persistent backup 一起安全反转。管理员静态 Copy create、update 与 uninstall
-  复用这些 Action，在完整检查/write/move/commit/recovery 期间持有 administrator lock 并使用
-  privileged path mutation；仅 receipt 修复或 journal 清理不会请求提权。JSON merge 的
-  install、原地 update、普通/强制 uninstall 也已迁移到 key-owned Action；恢复只还原声明的
-  顶层 key，保留中断后发生的其它设置修改。App upgrade 的 `--prune-stale` 对未修改的 stale 静态
-  Copy 与 JSON receipt 复用相同 removal Action，在 receipt commit 前可显式恢复；用户修改内容继续
-  保留，目标缺失时仅原子清理 receipt。静态 Copy 的 destination relocation 也已成为单一 Action：
-  旧 destination、可选 backup、rollback、新 destination 与新旧 receipt 在同一 journal 中提交，
-  中断时可恢复旧状态。JSON relocation 也已使用独立的 key-owned 双端 Action：新 receipt 前只移除
-  新路径的 desired keys、还原旧路径的 previous keys，并保留两端其它当前设置；receipt 提交后只清理
-  精确旧 rollback material。Shell 首次 launcher
-  创建也已接入独立 journal：Unix
-  symlink、Unix Bun/live launcher 和 Windows 双 shim 都在 command receipt commit 前可按精确
-  target/hash/mode 回滚，`shine shell recover` 负责显式恢复。未修改、receipt-owned launcher 的
-  install/upgrade 更新也已迁移：旧资源先进入同目录 rollback material，新 receipt 前可恢复，commit
-  后仅清理精确旧资源。未修改、receipt-owned launcher 的卸载也已迁移：所有平台资源先进入同目录
-  rollback material，receipt 删除后必须持久化正向 commit marker；若只写入了 receipt 删除而 marker
-  未写入，显式恢复会先重建旧 receipt 再还原精确资源。外部 snapshot 模式中无需 render 的选中
-  category 共享树也已迁移：确定性 stage/rollback、全部选中 command receipt transition 与正向 commit
-  marker 由同一 Action 绑定，恢复会先投影旧 receipt 边界再处理依赖 launcher。install/upgrade 期间
-  缺失或变化的 transformed rendered output 也已迁移：文件 hash/mode、同目录 rollback、全部消费方
-  receipt transition 与独立 marker 由文件级 Action 绑定。内置 Shell cache 的实际创建与
-  `--replace-managed` 覆盖也已迁移：category Action 只绑定本次写入文件、逐文件 rollback、所选 command
-  receipt transition 与正向 marker，未触碰文件保持在事务之外。最后一个 consumer 被选中时，rendered
-  output 的卸载也使用独立文件级 Action：精确旧文件先进入 rollback，全部 consumer receipt 删除并写入
-  正向 marker 后才清理；live render 使用同一跨进程 lock，pending journal 存在时拒绝运行，但继续保持
-  invocation-scoped atomic write。cache uninstall、snapshot uninstall、profile block 与 Sys action 尚未
-  迁移，也不代表 Phase 4 exit criteria 已满足。
+- Phase 4 已收口：App 静态 Copy 与 key-owned JSON 的 create/update/relocate/remove，Shell 的
+  launcher、cache、snapshot、rendered output 与 profile sentinel，以及 managed Sys file、split-DNS
+  与显式 Sys profile sentinel 均已接入版本化 Action IR、domain operation journal、receipt/positive
+  marker commit 与重新批准的显式 recovery Plan。`shine app recover`、`shine shell recover` 和
+  `shine sys recover` 只在 destination、rollback、receipt 和 owned subset 的 fingerprint 仍匹配时
+  回滚或清理；用户在中断后写入的其它 JSON key、profile 内容或文件状态会被保留并阻塞越界恢复。
+  App hook/generator/artifact、已安装 Shell command body、Sys package/provider/bootstrap script、
+  bootstrap profile composition 与 active/base/new/merge 三方合并文件已按 execution、privilege、
+  provenance 和 rollback support 明确分类，并在执行前标记为 opaque 或不可事务恢复。Phase 4 不承诺
+  package manager、network、跨 target 或命令处理过的用户数据的全局 rollback。
 
 ## Guiding Principles
 
@@ -124,7 +97,7 @@ permissions；所有 mutation 都经过可审查、绑定输入 snapshot 的 Pla
 安全 Plan 不运行 generator、hook、artifact 或 bootstrap script；read-oriented status/update 仅在
 显式 `--run-generators` 时执行 generator，且不得写入目标或 manifest。
 
-## Phase 4 — Declarative Actions and Recovery
+## Phase 4 — Declarative Actions and Recovery (Complete)
 
 **Outcome:** 建立版本化 Declarative Action IR、permission derivation、operation journal、crash
 recovery 和 per-target rollback，同时保留明确标记的 opaque code escape hatch。

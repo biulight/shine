@@ -182,7 +182,7 @@ pub fn remove_shell_sentinel(content: &str) -> String {
     crate::sentinel::remove_block_bytewise(content, &sentinel())
 }
 
-fn shell_sentinel_block(content: &str) -> Option<&str> {
+pub(crate) fn shell_sentinel_block(content: &str) -> Option<&str> {
     crate::sentinel::find_block(content, &sentinel())
 }
 

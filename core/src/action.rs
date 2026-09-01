@@ -375,6 +375,69 @@ impl ActionIrV1 {
                         }
                     }
                 }
+                ActionKindV1::RemoveShellCache { files, .. } => {
+                    for file in files {
+                        for (access, path) in [
+                            (FilesystemAccessV1::Remove, file.destination.as_path()),
+                            (FilesystemAccessV1::Write, file.rollback.as_path()),
+                            (FilesystemAccessV1::Remove, file.rollback.as_path()),
+                        ] {
+                            required.insert(PermissionV1::Filesystem {
+                                access,
+                                path: path_identity(path),
+                            });
+                        }
+                    }
+                }
+                ActionKindV1::RemoveShellSnapshot {
+                    destination,
+                    rollback,
+                    ..
+                } => {
+                    for (access, path) in [
+                        (FilesystemAccessV1::Remove, destination.as_path()),
+                        (FilesystemAccessV1::Write, rollback.as_path()),
+                        (FilesystemAccessV1::Remove, rollback.as_path()),
+                    ] {
+                        required.insert(PermissionV1::Filesystem {
+                            access,
+                            path: path_identity(path),
+                        });
+                    }
+                }
+                ActionKindV1::ReconcileShellProfile { files, .. } => {
+                    for file in files {
+                        for (access, path) in [
+                            (FilesystemAccessV1::Write, file.destination.as_path()),
+                            (FilesystemAccessV1::Remove, file.destination.as_path()),
+                            (FilesystemAccessV1::Write, file.rollback.as_path()),
+                            (FilesystemAccessV1::Remove, file.rollback.as_path()),
+                        ] {
+                            required.insert(PermissionV1::Filesystem {
+                                access,
+                                path: path_identity(path),
+                            });
+                        }
+                    }
+                }
+                ActionKindV1::ReconcileSysSplitDns { .. } => {
+                    required.insert(PermissionV1::Administrator);
+                }
+                ActionKindV1::ReconcileSysProfileBlocks { files, .. } => {
+                    for file in files {
+                        for (access, path) in [
+                            (FilesystemAccessV1::Write, file.destination.as_path()),
+                            (FilesystemAccessV1::Remove, file.destination.as_path()),
+                            (FilesystemAccessV1::Write, file.rollback.as_path()),
+                            (FilesystemAccessV1::Remove, file.rollback.as_path()),
+                        ] {
+                            required.insert(PermissionV1::Filesystem {
+                                access,
+                                path: path_identity(path),
+                            });
+                        }
+                    }
+                }
                 ActionKindV1::ReplaceShellRenderedFile {
                     destination,
                     rollback,
@@ -777,6 +840,99 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn remove_shell_cache(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ShellCacheRemovalSpecV1,
+    ) -> Self {
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::RemoveShellCache {
+                files: spec.files,
+                receipts: spec.receipts,
+            },
+            rollback: RollbackSupportV1::RestoreRemovedShellCacheIfUnchanged,
+        }
+    }
+
+    pub fn remove_shell_snapshot(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ShellSnapshotRemovalSpecV1,
+    ) -> Self {
+        let rollback = shell_snapshot_rollback_path(&spec.destination);
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::RemoveShellSnapshot {
+                destination: spec.destination,
+                rollback,
+                previous_files: spec.previous_files,
+                receipts: spec.receipts,
+            },
+            rollback: RollbackSupportV1::RestoreRemovedShellSnapshotIfUnchanged,
+        }
+    }
+
+    pub fn reconcile_shell_profile(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ShellProfileReconciliationSpecV1,
+    ) -> Self {
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::ReconcileShellProfile {
+                files: spec.files,
+                receipt_transitions: spec.receipt_transitions,
+                receipt_removals: spec.receipt_removals,
+            },
+            rollback: RollbackSupportV1::RestorePreviousShellProfileIfUnchanged,
+        }
+    }
+
+    pub fn reconcile_sys_split_dns(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        previous: Option<SysSplitDnsStateV1>,
+        desired: Option<SysSplitDnsStateV1>,
+    ) -> Self {
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::ReconcileSysSplitDns { previous, desired },
+            rollback: RollbackSupportV1::RestorePreviousSysSplitDnsIfUnchanged,
+        }
+    }
+
+    pub fn reconcile_sys_profile_blocks(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        os_id: impl Into<String>,
+        files: Vec<SysProfileBlockFileV1>,
+    ) -> Self {
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::ReconcileSysProfileBlocks {
+                os_id: os_id.into(),
+                files,
+            },
+            rollback: RollbackSupportV1::RestorePreviousSysProfileBlocksIfUnchanged,
+        }
+    }
+
     pub fn replace_shell_rendered_file(
         action_id: impl Into<String>,
         target: impl Into<String>,
@@ -1115,6 +1271,69 @@ impl DeclarativeActionV1 {
                     .to_string(),
             )),
             (
+                ActionKindV1::RemoveShellCache { files, receipts },
+                RollbackSupportV1::RestoreRemovedShellCacheIfUnchanged,
+            ) if valid_shell_cache_removal_files(files)
+                && valid_shell_receipt_removal_set(receipts) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::RemoveShellCache { .. }, _) => Err(ActionIrError::Invalid(
+                "Shell cache removal requires exact file identities, canonical rollback paths, valid previous receipts, and restore-removed-shell-cache-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::RemoveShellSnapshot {
+                    destination,
+                    rollback,
+                    previous_files,
+                    receipts,
+                },
+                RollbackSupportV1::RestoreRemovedShellSnapshotIfUnchanged,
+            ) if !destination.as_os_str().is_empty()
+                && *rollback == shell_snapshot_rollback_path(destination)
+                && valid_shell_tree_files(previous_files, true)
+                && valid_shell_receipt_removal_set(receipts) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::RemoveShellSnapshot { .. }, _) => Err(ActionIrError::Invalid(
+                "Shell snapshot removal requires an exact tree identity, canonical rollback path, valid previous receipts, and restore-removed-shell-snapshot-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::ReconcileShellProfile {
+                    files,
+                    receipt_transitions,
+                    receipt_removals,
+                },
+                RollbackSupportV1::RestorePreviousShellProfileIfUnchanged,
+            ) if valid_shell_profile_files(files)
+                && valid_shell_profile_receipts(receipt_transitions, receipt_removals) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::ReconcileShellProfile { .. }, _) => Err(ActionIrError::Invalid(
+                "Shell profile reconciliation requires valid whole-file or sentinel identities, canonical rollback paths, one receipt-boundary kind, and restore-previous-shell-profile-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::ReconcileSysSplitDns { previous, desired },
+                RollbackSupportV1::RestorePreviousSysSplitDnsIfUnchanged,
+            ) if valid_sys_split_dns_transition(previous.as_ref(), desired.as_ref()) => Ok(()),
+            (ActionKindV1::ReconcileSysSplitDns { .. }, _) => Err(ActionIrError::Invalid(
+                "Sys split-DNS reconciliation requires one distinct previous/desired owned state and restore-previous-sys-split-dns-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::ReconcileSysProfileBlocks { os_id, files },
+                RollbackSupportV1::RestorePreviousSysProfileBlocksIfUnchanged,
+            ) if !os_id.trim().is_empty() && valid_sys_profile_block_files(files) => Ok(()),
+            (ActionKindV1::ReconcileSysProfileBlocks { .. }, _) => Err(ActionIrError::Invalid(
+                "Sys profile block reconciliation requires distinct owned-block identities, canonical rollback paths, and restore-previous-sys-profile-blocks-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
                 ActionKindV1::ReplaceShellRenderedFile {
                     destination,
                     rollback,
@@ -1447,6 +1666,36 @@ pub enum ActionKindV1 {
         files: Vec<ShellCacheFileReplacementV1>,
         receipts: Vec<ShellReceiptTransitionV1>,
     },
+    RemoveShellCache {
+        files: Vec<ShellCacheFileRemovalV1>,
+        #[serde(default)]
+        receipts: Vec<ShellReceiptRemovalV1>,
+    },
+    RemoveShellSnapshot {
+        destination: PathBuf,
+        rollback: PathBuf,
+        #[serde(default)]
+        previous_files: Vec<ShellTreeFileV1>,
+        #[serde(default)]
+        receipts: Vec<ShellReceiptRemovalV1>,
+    },
+    ReconcileShellProfile {
+        files: Vec<ShellProfileFileV1>,
+        #[serde(default)]
+        receipt_transitions: Vec<ShellReceiptTransitionV1>,
+        #[serde(default)]
+        receipt_removals: Vec<ShellReceiptRemovalV1>,
+    },
+    ReconcileSysSplitDns {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous: Option<SysSplitDnsStateV1>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        desired: Option<SysSplitDnsStateV1>,
+    },
+    ReconcileSysProfileBlocks {
+        os_id: String,
+        files: Vec<SysProfileBlockFileV1>,
+    },
     ReplaceShellRenderedFile {
         destination: PathBuf,
         rollback: PathBuf,
@@ -1493,6 +1742,11 @@ pub enum RollbackSupportV1 {
     RestoreRemovedLauncherIfUnchanged,
     RestorePreviousShellSnapshotIfUnchanged,
     RestorePreviousShellCacheIfUnchanged,
+    RestoreRemovedShellCacheIfUnchanged,
+    RestoreRemovedShellSnapshotIfUnchanged,
+    RestorePreviousShellProfileIfUnchanged,
+    RestorePreviousSysSplitDnsIfUnchanged,
+    RestorePreviousSysProfileBlocksIfUnchanged,
     RestorePreviousShellRenderedFileIfUnchanged,
     RestoreRemovedShellRenderedFileIfUnchanged,
     Unsupported { reason_code: String },
@@ -1539,10 +1793,80 @@ pub struct ShellCacheFileReplacementV1 {
     pub desired: ShellFileIdentityV1,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellCacheFileRemovalV1 {
+    pub destination: PathBuf,
+    pub rollback: PathBuf,
+    pub previous: ShellFileIdentityV1,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellProfileFileOwnershipV1 {
+    WholeFile,
+    SentinelBlock,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellProfileFileV1 {
+    pub destination: PathBuf,
+    pub rollback: PathBuf,
+    pub ownership: ShellProfileFileOwnershipV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<ShellFileIdentityV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desired: Option<ShellFileIdentityV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_block_hash: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desired_block_hash: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SysSplitDnsStateV1 {
+    pub os_id: String,
+    pub item_id: String,
+    pub domain: String,
+    pub servers: Vec<String>,
+    pub resource: PathBuf,
+    pub content_hash: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SysProfileBlockFileV1 {
+    pub destination: PathBuf,
+    pub rollback: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<ShellFileIdentityV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desired: Option<ShellFileIdentityV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_owned_hash: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desired_owned_hash: Option<u64>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShellCacheReplacementSpecV1 {
     pub files: Vec<ShellCacheFileReplacementV1>,
     pub receipts: Vec<ShellReceiptTransitionV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShellCacheRemovalSpecV1 {
+    pub files: Vec<ShellCacheFileRemovalV1>,
+    pub receipts: Vec<ShellReceiptRemovalV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShellProfileReconciliationSpecV1 {
+    pub files: Vec<ShellProfileFileV1>,
+    pub receipt_transitions: Vec<ShellReceiptTransitionV1>,
+    pub receipt_removals: Vec<ShellReceiptRemovalV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1567,6 +1891,13 @@ pub struct ShellSnapshotReplacementSpecV1 {
     pub previous_files: Vec<ShellTreeFileV1>,
     pub desired_files: Vec<ShellTreeFileV1>,
     pub receipts: Vec<ShellReceiptTransitionV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShellSnapshotRemovalSpecV1 {
+    pub destination: PathBuf,
+    pub previous_files: Vec<ShellTreeFileV1>,
+    pub receipts: Vec<ShellReceiptRemovalV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1752,6 +2083,22 @@ fn valid_shell_receipt_removals(receipts: &[ShellReceiptRemovalV1], destination:
             == receipts.len()
 }
 
+fn valid_shell_receipt_removal_set(receipts: &[ShellReceiptRemovalV1]) -> bool {
+    receipts.iter().all(|removal| {
+        removal.previous.is_valid()
+            && removal.target
+                == format!(
+                    "shell/{}/{}",
+                    removal.previous.category, removal.previous.command
+                )
+    }) && receipts
+        .iter()
+        .map(|removal| &removal.target)
+        .collect::<BTreeSet<_>>()
+        .len()
+        == receipts.len()
+}
+
 fn valid_shell_cache_files(files: &[ShellCacheFileReplacementV1]) -> bool {
     let destinations = files
         .iter()
@@ -1766,6 +2113,100 @@ fn valid_shell_cache_files(files: &[ShellCacheFileReplacementV1]) -> bool {
             !file.destination.as_os_str().is_empty()
                 && file.rollback == managed_file_rollback_path(&file.destination)
                 && file.previous.as_ref() != Some(&file.desired)
+        })
+        && destinations.len() == files.len()
+        && rollbacks.len() == files.len()
+        && destinations.is_disjoint(&rollbacks)
+}
+
+fn valid_shell_cache_removal_files(files: &[ShellCacheFileRemovalV1]) -> bool {
+    let destinations = files
+        .iter()
+        .map(|file| &file.destination)
+        .collect::<BTreeSet<_>>();
+    let rollbacks = files
+        .iter()
+        .map(|file| &file.rollback)
+        .collect::<BTreeSet<_>>();
+    !files.is_empty()
+        && files.iter().all(|file| {
+            !file.destination.as_os_str().is_empty()
+                && file.rollback == managed_file_rollback_path(&file.destination)
+        })
+        && destinations.len() == files.len()
+        && rollbacks.len() == files.len()
+        && destinations.is_disjoint(&rollbacks)
+}
+
+fn valid_shell_profile_files(files: &[ShellProfileFileV1]) -> bool {
+    let destinations = files
+        .iter()
+        .map(|file| &file.destination)
+        .collect::<BTreeSet<_>>();
+    let rollbacks = files
+        .iter()
+        .map(|file| &file.rollback)
+        .collect::<BTreeSet<_>>();
+    !files.is_empty()
+        && files.iter().all(|file| {
+            !file.destination.as_os_str().is_empty()
+                && file.rollback == managed_file_rollback_path(&file.destination)
+                && file.previous != file.desired
+                && match file.ownership {
+                    ShellProfileFileOwnershipV1::WholeFile => {
+                        file.previous_block_hash.is_none() && file.desired_block_hash.is_none()
+                    }
+                    ShellProfileFileOwnershipV1::SentinelBlock => {
+                        file.previous_block_hash != file.desired_block_hash
+                    }
+                }
+        })
+        && destinations.len() == files.len()
+        && rollbacks.len() == files.len()
+        && destinations.is_disjoint(&rollbacks)
+}
+
+fn valid_shell_profile_receipts(
+    transitions: &[ShellReceiptTransitionV1],
+    removals: &[ShellReceiptRemovalV1],
+) -> bool {
+    (!transitions.is_empty() || !removals.is_empty())
+        && (transitions.is_empty() || valid_shell_receipt_transitions(transitions))
+        && (removals.is_empty() || valid_shell_receipt_removal_set(removals))
+}
+
+fn valid_sys_split_dns_transition(
+    previous: Option<&SysSplitDnsStateV1>,
+    desired: Option<&SysSplitDnsStateV1>,
+) -> bool {
+    let valid = |state: &SysSplitDnsStateV1| {
+        !state.os_id.trim().is_empty()
+            && !state.item_id.trim().is_empty()
+            && !state.domain.trim().is_empty()
+            && !state.servers.is_empty()
+            && !state.resource.as_os_str().is_empty()
+    };
+    (previous.is_some() || desired.is_some())
+        && previous != desired
+        && previous.is_none_or(valid)
+        && desired.is_none_or(valid)
+}
+
+fn valid_sys_profile_block_files(files: &[SysProfileBlockFileV1]) -> bool {
+    let destinations = files
+        .iter()
+        .map(|file| &file.destination)
+        .collect::<BTreeSet<_>>();
+    let rollbacks = files
+        .iter()
+        .map(|file| &file.rollback)
+        .collect::<BTreeSet<_>>();
+    !files.is_empty()
+        && files.iter().all(|file| {
+            !file.destination.as_os_str().is_empty()
+                && file.rollback == managed_file_rollback_path(&file.destination)
+                && file.previous != file.desired
+                && file.previous_owned_hash != file.desired_owned_hash
         })
         && destinations.len() == files.len()
         && rollbacks.len() == files.len()

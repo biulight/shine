@@ -1,8 +1,9 @@
 use super::launcher::{prepare_launcher_resources, prepared_launcher_resource_is_exact};
 use super::shell_action_executor::{
-    ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation, ShellLauncherRemoval,
-    ShellLauncherUpdate, ShellRenderedFileRemoval, ShellRenderedFileReplacement,
-    ShellSharedReplacements, ShellSnapshotReplacement,
+    ShellCacheRemoval, ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation,
+    ShellLauncherRemoval, ShellLauncherUpdate, ShellProfilePreparedFile,
+    ShellProfileReconciliation, ShellRenderedFileRemoval, ShellRenderedFileReplacement,
+    ShellSharedReplacements, ShellSnapshotRemoval, ShellSnapshotReplacement,
 };
 use super::{
     CoreRuntime, FileKind, FileSystemHost, InspectionChange, InspectionFileStatus, LinkConflict,
@@ -11,7 +12,10 @@ use super::{
     command_path_for_name, link_executables_with_host, link_is_current_with_host,
     unlink_managed_command_with_host,
 };
-use crate::action::{ShellFileIdentityV1, managed_file_rollback_path};
+use crate::action::{
+    ShellFileIdentityV1, ShellProfileFileOwnershipV1, managed_file_rollback_path,
+    shell_snapshot_rollback_path,
+};
 use crate::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
 };
@@ -1169,6 +1173,48 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         } else {
             Vec::new()
         };
+        let profile_reconciliations = if approval.is_some() {
+            let mut planned_manifest = manifest_before.clone();
+            let mut planned_entries = Vec::new();
+            for category in &manifest_categories {
+                for file in &category.files {
+                    let target = format!("shell/{}/{}", category.name, file.command_name);
+                    let entry = if let Some(receipt) = cache_receipts.get(&target) {
+                        receipt.clone()
+                    } else if transactional_snapshot_categories.contains(&category.name) {
+                        self.desired_shell_manifest_entry(category, file)?
+                    } else {
+                        self.shell_manifest_entry(category, file).await?
+                    };
+                    planned_entries.push(entry);
+                }
+            }
+            let selected_categories = manifest_categories
+                .iter()
+                .map(|category| category.name.clone())
+                .collect::<BTreeSet<_>>();
+            let selected_targets = planned_entries
+                .iter()
+                .map(|entry| format!("shell/{}/{}", entry.category, entry.command))
+                .collect::<BTreeSet<_>>();
+            match scope {
+                ShellManifestUpdateScope::Categories => {
+                    planned_manifest.replace_categories(&selected_categories, planned_entries)
+                }
+                ShellManifestUpdateScope::Commands => {
+                    planned_manifest.replace_targets(&selected_targets, planned_entries)
+                }
+            }
+            self.prepare_shell_profile_reconciliation(
+                &manifest_before,
+                &planned_manifest,
+                false,
+                operation == LifecycleOperation::Install && request.force,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         let shell_execution = if let Some(approval) = approval {
             self.reconcile_shell_launchers_approved(
                 ShellSharedReplacements {
@@ -1176,6 +1222,9 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     snapshots: &snapshot_replacements,
                     rendered_files: &rendered_replacements,
                     rendered_removals: &[],
+                    cache_removals: &[],
+                    snapshot_removals: &[],
+                    profiles: &profile_reconciliations,
                 },
                 &launcher_creation_refs,
                 &launcher_update_refs,
@@ -1215,13 +1264,34 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             .collect::<Vec<_>>();
         source_commands.sort();
         let profile_force = operation == LifecycleOperation::Install && request.force;
-        let profile = self
-            .install_shell_profile(
+        let profile = if approval.is_some() {
+            let managed =
+                super::managed_shell_profile_path(&self.context().shine_dir, self.context().shell);
+            let managed_changed = profile_reconciliations
+                .iter()
+                .any(|profile| profile.files.iter().any(|file| file.destination == managed));
+            let updated_config = profile_reconciliations.iter().find_map(|profile| {
+                profile
+                    .files
+                    .iter()
+                    .find(|file| file.ownership == ShellProfileFileOwnershipV1::SentinelBlock)
+                    .map(|file| file.destination.clone())
+            });
+            ShellConfigUpdate {
+                profile_updated: managed_changed,
+                config_status: updated_config.map_or(
+                    PathUpdateStatus::AlreadyConfigured,
+                    PathUpdateStatus::Updated,
+                ),
+            }
+        } else {
+            self.install_shell_profile(
                 &self.context().shell_config_paths,
                 profile_force,
                 &source_commands,
             )
-            .await?;
+            .await?
+        };
         let cache_changed = !cache.created.is_empty() || !cache.overwritten.is_empty();
         let profile_changed = profile.profile_updated
             || matches!(profile.config_status, PathUpdateStatus::Updated(_));
@@ -1455,6 +1525,16 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         }
 
         let selected = targets.clone();
+        let categories_removed = targets
+            .iter()
+            .map(|(category, _)| category.clone())
+            .filter(|category| {
+                !manifest.entries.iter().any(|entry| {
+                    entry.category == *category
+                        && !selected.contains(&(entry.category.clone(), entry.command.clone()))
+                })
+            })
+            .collect::<BTreeSet<_>>();
         let mut launcher_removals = Vec::new();
         if approval.is_some() && !request.dry_run {
             for (category, command) in &targets {
@@ -1565,6 +1645,150 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 });
             }
         }
+        let mut cache_removals = Vec::new();
+        let mut snapshot_removals = Vec::new();
+        if approval.is_some() && !request.dry_run {
+            let receipt_removals_for = |category: Option<&str>| {
+                manifest
+                    .entries
+                    .iter()
+                    .filter(|entry| {
+                        category.is_none_or(|category| entry.category == category)
+                            && selected.contains(&(entry.category.clone(), entry.command.clone()))
+                    })
+                    .map(|entry| {
+                        (
+                            format!("shell/{}/{}", entry.category, entry.command),
+                            entry.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            if !self.context().is_external_presets {
+                if request.purge && selection.is_none() {
+                    let root = self.context().presets_dir.join("shell");
+                    let mut files = Vec::new();
+                    if let Some(tree) = super::shell_action_executor::collect_shell_tree_for_action(
+                        self.host(),
+                        &root,
+                    )
+                    .await?
+                    {
+                        for file in tree {
+                            let destination = root.join(&file.relative_path);
+                            let metadata =
+                                self.host().metadata(&destination).await.map_err(|error| {
+                                    error.into_anyhow("inspecting Shell cache purge file")
+                                })?;
+                            files.push((
+                                destination,
+                                ShellFileIdentityV1 {
+                                    content_hash: file.content_hash,
+                                    unix_mode: metadata.unix_mode,
+                                },
+                            ));
+                        }
+                    }
+                    if !files.is_empty() {
+                        cache_removals.push(ShellCacheRemoval {
+                            target: "shell".to_string(),
+                            files,
+                            previous_receipts: receipt_removals_for(None),
+                        });
+                    }
+                } else {
+                    for category in &categories_removed {
+                        let prefix = format!("shell/{category}/");
+                        let mut files = Vec::new();
+                        for logical in self
+                            .presets()
+                            .files()
+                            .keys()
+                            .filter(|logical| logical.starts_with(&prefix))
+                        {
+                            let destination = self.context().presets_dir.join(logical);
+                            let metadata = match self.host().metadata(&destination).await {
+                                Ok(metadata) if metadata.kind == FileKind::File => metadata,
+                                Ok(_) => bail!(
+                                    "Shell cache removal target is not a regular file: {}",
+                                    destination.display()
+                                ),
+                                Err(error) if error.is_not_found() => continue,
+                                Err(error) => {
+                                    return Err(
+                                        error.into_anyhow("inspecting Shell cache removal target")
+                                    );
+                                }
+                            };
+                            let bytes = self.host().read(&destination).await.map_err(|error| {
+                                error.into_anyhow("reading Shell cache removal target")
+                            })?;
+                            files.push((
+                                destination,
+                                ShellFileIdentityV1 {
+                                    content_hash: crate::install::hash_content(&bytes),
+                                    unix_mode: metadata.unix_mode,
+                                },
+                            ));
+                        }
+                        if !files.is_empty() {
+                            cache_removals.push(ShellCacheRemoval {
+                                target: format!("shell/{category}"),
+                                files,
+                                previous_receipts: receipt_removals_for(Some(category)),
+                            });
+                        }
+                    }
+                }
+            }
+            for category in &categories_removed {
+                let destination = self
+                    .context()
+                    .shine_dir
+                    .join("installed/shell")
+                    .join(category);
+                let rollback = shell_snapshot_rollback_path(&destination);
+                match self.host().metadata(&rollback).await {
+                    Err(error) if error.is_not_found() => {}
+                    Ok(_) => bail!(
+                        "Shell snapshot removal rollback path is occupied: {}",
+                        rollback.display()
+                    ),
+                    Err(error) => {
+                        return Err(error.into_anyhow("inspecting Shell snapshot removal rollback"));
+                    }
+                }
+                if let Some(previous_files) =
+                    super::shell_action_executor::collect_shell_tree_for_action(
+                        self.host(),
+                        &destination,
+                    )
+                    .await?
+                {
+                    snapshot_removals.push(ShellSnapshotRemoval {
+                        target: format!("shell/{category}"),
+                        destination,
+                        previous_files,
+                        previous_receipts: receipt_removals_for(Some(category)),
+                    });
+                }
+            }
+        }
+        let profile_reconciliations = if approval.is_some() && !request.dry_run {
+            let mut planned_manifest = manifest.clone();
+            for (category, command) in &targets {
+                planned_manifest.remove_target(category, command);
+            }
+            self.prepare_shell_profile_reconciliation(
+                &manifest,
+                &planned_manifest,
+                selection.is_none(),
+                false,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         let shell_execution = if let Some(approval) = approval {
             self.reconcile_shell_launchers_approved(
                 ShellSharedReplacements {
@@ -1572,6 +1796,9 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     snapshots: &[],
                     rendered_files: &[],
                     rendered_removals: &rendered_removals,
+                    cache_removals: &cache_removals,
+                    snapshot_removals: &snapshot_removals,
+                    profiles: &profile_reconciliations,
                 },
                 &[],
                 &[],
@@ -1642,18 +1869,8 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 self.commit_shell_launcher_operation(execution).await?;
             }
         }
-        let categories_removed = targets
-            .iter()
-            .map(|(category, _)| category.clone())
-            .filter(|category| {
-                !manifest.entries.iter().any(|entry| {
-                    entry.category == *category
-                        && !selected.contains(&(entry.category.clone(), entry.command.clone()))
-                })
-            })
-            .collect::<BTreeSet<_>>();
         let mut cache = ShellCacheReport::default();
-        if !self.context().is_external_presets {
+        if approval.is_none() && !self.context().is_external_presets {
             for category in &categories_removed {
                 let report = self
                     .reconcile_shell_cache(ShellCacheRequest {
@@ -1679,16 +1896,47 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 merge_shell_cache_report(&mut cache, report);
             }
         }
-        if !request.dry_run {
+        if approval.is_none() && !request.dry_run {
             for category in &categories_removed {
                 self.remove_shell_snapshot_tree(category).await?;
             }
             if request.purge && !self.context().is_external_presets {
-                self.remove_empty_shell_roots().await?;
+                self.remove_empty_shell_roots(&categories_removed).await?;
+            }
+        } else if approval.is_some() && !request.dry_run {
+            cache.removed.extend(
+                cache_removals
+                    .iter()
+                    .flat_map(|removal| removal.files.iter().map(|(path, _)| path.clone())),
+            );
+            if request.purge && !self.context().is_external_presets {
+                self.remove_empty_shell_roots(&categories_removed).await?;
             }
         }
         let profile = if request.dry_run {
             None
+        } else if approval.is_some() {
+            if selection.is_none() {
+                let managed = super::managed_shell_profile_path(
+                    &self.context().shine_dir,
+                    self.context().shell,
+                );
+                Some(ShellProfileRemoval {
+                    config_paths: profile_reconciliations
+                        .iter()
+                        .flat_map(|profile| profile.files.iter())
+                        .filter(|file| file.ownership == ShellProfileFileOwnershipV1::SentinelBlock)
+                        .map(|file| file.destination.clone())
+                        .collect(),
+                    managed_profile: profile_reconciliations
+                        .iter()
+                        .flat_map(|profile| profile.files.iter())
+                        .any(|file| file.destination == managed)
+                        .then_some(managed),
+                })
+            } else {
+                None
+            }
         } else if selection.is_none() {
             Some(
                 self.remove_shell_profile(&self.context().shell_config_paths)
@@ -2385,18 +2633,39 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(())
     }
 
-    pub async fn remove_empty_shell_roots(&self) -> Result<()> {
-        for path in [&self.context().presets_dir, &self.context().bin_dir] {
-            match self.host().read_dir(path).await {
-                Ok(entries) if entries.is_empty() => self
-                    .host()
-                    .remove_dir_all(path)
+    pub async fn remove_empty_shell_roots(&self, categories: &BTreeSet<String>) -> Result<()> {
+        let shell_root = self.context().presets_dir.join("shell");
+        for category in categories {
+            let path = shell_root.join(category);
+            if super::shell_action_executor::collect_shell_tree_for_action(self.host(), &path)
+                .await?
+                .is_some_and(|files| files.is_empty())
+            {
+                self.host()
+                    .remove_dir_all(&path)
                     .await
-                    .map_err(|error| error.into_anyhow("removing empty Shell root"))?,
-                Ok(_) => {}
-                Err(error) if error.is_not_found() => {}
-                Err(error) => return Err(error.into_anyhow("inspecting empty Shell root")),
+                    .map_err(|error| error.into_anyhow("removing empty Shell category"))?;
             }
+        }
+        if super::shell_action_executor::collect_shell_tree_for_action(self.host(), &shell_root)
+            .await?
+            .is_some_and(|files| files.is_empty())
+        {
+            self.host()
+                .remove_dir_all(&shell_root)
+                .await
+                .map_err(|error| error.into_anyhow("removing empty Shell preset root"))?;
+        }
+        let bin_dir = &self.context().bin_dir;
+        match self.host().read_dir(bin_dir).await {
+            Ok(entries) if entries.is_empty() => self
+                .host()
+                .remove_dir_all(bin_dir)
+                .await
+                .map_err(|error| error.into_anyhow("removing empty Shell root"))?,
+            Ok(_) => {}
+            Err(error) if error.is_not_found() => {}
+            Err(error) => return Err(error.into_anyhow("inspecting empty Shell root")),
         }
         Ok(())
     }
@@ -2537,6 +2806,150 @@ impl<H> CoreRuntime<H> {
 }
 
 impl<H: FileSystemHost> CoreRuntime<H> {
+    async fn prepare_shell_profile_reconciliation(
+        &self,
+        manifest_before: &ShellManifest,
+        manifest_after: &ShellManifest,
+        remove_all: bool,
+        _force: bool,
+    ) -> Result<Vec<ShellProfileReconciliation>> {
+        let mut files = Vec::new();
+        let source_commands = manifest_after
+            .entries
+            .iter()
+            .filter(|entry| entry.needs_source)
+            .map(|entry| entry.command.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let managed_profile =
+            super::managed_shell_profile_path(&self.context().shine_dir, self.context().shell);
+        let desired_profile = (!remove_all).then(|| {
+            super::managed_profile_snippet(
+                self.context().shell,
+                &self.context().bin_dir,
+                &self.context().home_dir,
+                &source_commands,
+            )
+            .into_bytes()
+        });
+        let current_profile = match self.host().read(&managed_profile).await {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.is_not_found() => None,
+            Err(error) => return Err(error.into_anyhow("reading managed Shell profile")),
+        };
+        if current_profile != desired_profile {
+            let mode = self
+                .host()
+                .metadata(&managed_profile)
+                .await
+                .ok()
+                .and_then(|metadata| metadata.unix_mode)
+                .or_else(|| cfg!(unix).then_some(0o644));
+            files.push(ShellProfilePreparedFile {
+                destination: managed_profile.clone(),
+                desired: desired_profile,
+                unix_mode: mode,
+                ownership: ShellProfileFileOwnershipV1::WholeFile,
+                previous_block_hash: None,
+                desired_block_hash: None,
+            });
+        }
+
+        if remove_all || !manifest_after.entries.is_empty() {
+            let profile = managed_profile.clone();
+            let snippet = super::profile::shell_config_snippet(
+                self.context().shell,
+                &profile,
+                &self.context().home_dir,
+            );
+            for path in &self.context().shell_config_paths {
+                let existing = match self.host().read(path).await {
+                    Ok(bytes) => {
+                        String::from_utf8(bytes).context("Shell configuration is not UTF-8")?
+                    }
+                    Err(error) if error.is_not_found() => String::new(),
+                    Err(error) => {
+                        return Err(error.into_anyhow("reading Shell configuration"));
+                    }
+                };
+                let previous_block_hash = super::profile::shell_sentinel_block(&existing)
+                    .map(|block| crate::install::hash_content(block.as_bytes()));
+                let desired = if remove_all {
+                    if previous_block_hash.is_none() {
+                        continue;
+                    }
+                    super::profile::remove_shell_sentinel(&existing)
+                } else {
+                    if super::profile::shell_sentinel_block(&existing)
+                        == Some(snippet.trim_end_matches('\n'))
+                    {
+                        continue;
+                    }
+                    let cleaned = super::profile::remove_shell_sentinel(&existing);
+                    format!("{cleaned}\n{snippet}")
+                };
+                let desired_block_hash = super::profile::shell_sentinel_block(&desired)
+                    .map(|block| crate::install::hash_content(block.as_bytes()));
+                let mode = self
+                    .host()
+                    .metadata(path)
+                    .await
+                    .ok()
+                    .and_then(|metadata| metadata.unix_mode)
+                    .or_else(|| cfg!(unix).then_some(0o644));
+                files.push(ShellProfilePreparedFile {
+                    destination: path.clone(),
+                    desired: Some(desired.into_bytes()),
+                    unix_mode: mode,
+                    ownership: ShellProfileFileOwnershipV1::SentinelBlock,
+                    previous_block_hash,
+                    desired_block_hash,
+                });
+            }
+        }
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let before = manifest_before
+            .entries
+            .iter()
+            .map(|entry| (format!("shell/{}/{}", entry.category, entry.command), entry))
+            .collect::<BTreeMap<_, _>>();
+        let after = manifest_after
+            .entries
+            .iter()
+            .map(|entry| (format!("shell/{}/{}", entry.category, entry.command), entry))
+            .collect::<BTreeMap<_, _>>();
+        let mut receipt_transitions = Vec::new();
+        let mut receipt_removals = Vec::new();
+        for target in before
+            .keys()
+            .chain(after.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+        {
+            match (before.get(&target), after.get(&target)) {
+                (previous, Some(desired)) => receipt_transitions.push((
+                    target,
+                    previous.map(|entry| (*entry).clone()),
+                    (*desired).clone(),
+                )),
+                (Some(previous), None) => {
+                    receipt_removals.push((target, (*previous).clone()));
+                }
+                (None, None) => unreachable!(),
+            }
+        }
+        Ok(vec![ShellProfileReconciliation {
+            target: "shell/profile".to_string(),
+            files,
+            receipt_transitions,
+            receipt_removals,
+        }])
+    }
+
     async fn planned_embedded_shell_source(
         &self,
         category: &ShellCategory,

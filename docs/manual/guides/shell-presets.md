@@ -98,8 +98,12 @@ Before its positive marker, recovery reconstructs missing receipts and restores 
 file; afterward it keeps the path absent and cleans exact rollback. An unselected consumer or an
 unrelated rendered file is preserved. Execution-time live rendering uses the same lifecycle lock
 and refuses to run while recovery is pending, but remains an atomic invocation-time write rather
-than a persistent transaction. Cache uninstall and profile edits remain outside these proofs;
-recovery never edits your shell profile.
+than a persistent transaction. Cache and snapshot uninstall journal the exact files or tree plus
+their receipt transition; recovery restores unchanged rollback material before the positive commit
+marker and preserves completed removal afterward. Shell profile reconciliation is also journaled,
+but owns only the `# >>> shine >>>` sentinel block: recovery merges that recorded block transition
+into the current profile and preserves unrelated edits made after interruption. A changed
+Shine-owned block blocks recovery instead of being overwritten.
 
 Uninstall uses this transaction only for an unchanged, receipt-owned launcher. It moves every
 platform launcher resource to same-directory rollback material before removing the receipt, then

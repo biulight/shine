@@ -47,5 +47,5 @@ atomic last-known-good replacement semantics.
 - Receipt absence alone never authorizes rollback cleanup.
 - A running live renderer cannot modify transaction or rollback state during lifecycle apply or
   recovery, and an interrupted transaction must be recovered before another live render.
-- Cache uninstall, snapshot uninstall, and profile sentinel edits remain separate Phase 4 actions
-  with different ownership proofs.
+- Cache uninstall, snapshot uninstall, and profile sentinel edits require separate ownership proofs;
+  their later completion is recorded by [ADR 0068](0068-complete-declarative-shell-and-sys-recovery.md).

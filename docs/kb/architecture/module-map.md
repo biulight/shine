@@ -24,12 +24,13 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, process, privileged, and system mutation ports |
 | `core/src/runtime/planner.rs` | Pure App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
 | `core/src/runtime/action_executor.rs` | Phase 4 App static Copy and key-owned JSON create/update/relocate/ordinary-or-forced-remove journal, manifest-receipt-gated commit, lock-spanning privileged/unprivileged path dispatch, persistent backup restoration, same-directory rollback material, explicit recovery Plan, and fingerprint/key-guarded remove/restore |
-| `core/src/runtime/shell_action_executor.rs` | Phase 4 Shell launcher create/update/remove, embedded category cache patch, raw external category snapshot, and lifecycle-rendered file replacement/removal actions; per-platform/tree/file rollback journal, receipt/positive-marker-gated commit, and explicit fingerprint-guarded recovery |
+| `core/src/runtime/shell_action_executor.rs` | Phase 4 Shell launcher, embedded cache, external snapshot, rendered file, and profile-sentinel create/update/remove actions; per-resource rollback journal, receipt/positive-marker-gated commit, and explicit fingerprint/owned-subset recovery |
+| `core/src/runtime/sys_action_executor.rs` | Phase 4 managed Sys file, split-DNS, and explicit profile-sentinel actions; Sys receipt transition journal, exact rollback cleanup, and explicit recovery Plan/apply |
 | `core/src/runtime/trust.rs` | Derivation of App/Sys external-code requirements from immutable logical code inputs and declared permissions |
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence and `shine trust` workflows |
 | `core/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
 | `core/src/runtime/shell.rs` | Complete Shell assessment/install/upgrade/uninstall/live render, launcher, cache, profile, and manifest orchestration |
-| `core/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS orchestration, and run-manifest persistence |
+| `core/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS transactional orchestration, and run-manifest persistence |
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
 | `core/src/runtime/sys_profile/` | Sys profile composition, three-way reconciliation, phase sentinels, BOM and CRLF behavior |
 | `core/src/runtime/validation.rs` | Host-backed preset discovery from a captured cwd, V1 diagnostics, and App/Shell/Sys schema validation |
@@ -80,7 +81,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `app artifact apply/remove <app-id>` | `cli/src/apps/build.rs` |
 | `app refresh <app-id> [file]` | `cli/src/apps/refresh.rs` |
 | `app recover` | `cli/src/apps/recovery.rs` → Core explicit recovery Plan/apply |
-| `shell recover` | `cli/src/shells/recovery.rs` → Core explicit launcher recovery Plan/apply |
+| `shell recover` | `cli/src/shells/recovery.rs` → Core explicit Shell transaction recovery Plan/apply |
+| `sys recover` | `cli/src/sys/recovery.rs` → Core explicit managed Sys recovery Plan/apply |
 | `sys list/bootstrap/profile/...` | `cli/src/sys/` |
 | `theme sync` | `cli/src/theme/` |
 | `env ...` | `cli/src/env/` plus `cli/src/secret/` |
@@ -148,6 +150,7 @@ logic.
 | `cli/src/sys/execution.rs` | Bootstrap reporting and proxy environment |
 | `cli/src/sys/render.rs` | System command presentation helpers |
 | `cli/src/sys/profile_commands.rs` | Core profile enable/disable adapter and rendering |
+| `cli/src/sys/recovery.rs` | Core explicit managed Sys operation recovery Plan/apply adapter |
 
 ## Configuration, presets, and runtime state
 

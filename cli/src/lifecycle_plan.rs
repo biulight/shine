@@ -22,6 +22,7 @@ pub(crate) enum LifecyclePlanRequest {
     Shell(ShellPlanRequest),
     ShellRecovery,
     Sys(SysManagedPlanRequest),
+    SysRecovery,
     SysProfile(SysProfilePlanRequest),
     SysBootstrap {
         request: SysBootstrapPlanRequest,
@@ -63,6 +64,10 @@ impl LifecyclePlanRequest {
         Self::Sys(request)
     }
 
+    pub(crate) fn sys_recovery() -> Self {
+        Self::SysRecovery
+    }
+
     pub(crate) fn sys_profile(request: SysProfilePlanRequest) -> Self {
         Self::SysProfile(request)
     }
@@ -94,6 +99,7 @@ impl LifecyclePlanRequest {
             Self::Shell(request) => runtime.plan_shells(request.clone()).await,
             Self::ShellRecovery => runtime.plan_shell_operation_recovery().await,
             Self::Sys(request) => runtime.plan_managed_sys(request.clone()).await,
+            Self::SysRecovery => runtime.plan_sys_operation_recovery().await,
             Self::SysProfile(request) => runtime.plan_sys_profile(request.clone()).await,
             Self::SysBootstrap { request, .. } => runtime.plan_sys_bootstrap(request.clone()).await,
         }
@@ -180,6 +186,12 @@ fn blocked_plan_message(diagnostics: &std::collections::BTreeSet<String>) -> &'s
         "security Plan is blocked by an interrupted App operation; run `shine app recover` to review and resolve it"
     } else if diagnostics.contains("shell_recovery_required") {
         "security Plan is blocked by an interrupted Shell operation; run `shine shell recover` to review and resolve it"
+    } else if diagnostics.contains("sys_recovery_required") {
+        "security Plan is blocked by an interrupted Sys operation; run `shine sys recover` to review and resolve it"
+    } else if diagnostics.contains("sys_recovery_receipt_conflict") {
+        "Sys recovery is blocked because Sys ownership receipts conflict with the interrupted operation; resources and the operation journal were preserved"
+    } else if diagnostics.contains("sys_recovery_resource_changed") {
+        "Sys recovery is blocked because a managed Sys resource changed after the interrupted operation; the resource and operation journal were preserved"
     } else if diagnostics.contains("shell_recovery_launcher_changed") {
         "Shell recovery is blocked because a transaction-created launcher changed after the interrupted operation; the launcher and operation journal were preserved"
     } else if diagnostics.contains("shell_recovery_receipt_conflict") {

@@ -1536,6 +1536,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 | ActionKindV1::RemoveShellLauncher { .. }
                 | ActionKindV1::ReplaceShellSnapshot { .. }
                 | ActionKindV1::ReplaceShellCache { .. }
+                | ActionKindV1::RemoveShellCache { .. }
+                | ActionKindV1::RemoveShellSnapshot { .. }
+                | ActionKindV1::ReconcileShellProfile { .. }
+                | ActionKindV1::ReconcileSysSplitDns { .. }
+                | ActionKindV1::ReconcileSysProfileBlocks { .. }
                 | ActionKindV1::ReplaceShellRenderedFile { .. }
                 | ActionKindV1::RemoveShellRenderedFile { .. }
                 | ActionKindV1::OpaqueExecution { .. } => {
@@ -4052,6 +4057,11 @@ where
                 | ActionKindV1::RemoveShellLauncher { .. }
                 | ActionKindV1::ReplaceShellSnapshot { .. }
                 | ActionKindV1::ReplaceShellCache { .. }
+                | ActionKindV1::RemoveShellCache { .. }
+                | ActionKindV1::RemoveShellSnapshot { .. }
+                | ActionKindV1::ReconcileShellProfile { .. }
+                | ActionKindV1::ReconcileSysSplitDns { .. }
+                | ActionKindV1::ReconcileSysProfileBlocks { .. }
                 | ActionKindV1::ReplaceShellRenderedFile { .. }
                 | ActionKindV1::RemoveShellRenderedFile { .. }
                 | ActionKindV1::OpaqueExecution { .. } => {
@@ -4362,6 +4372,11 @@ fn matching_app_receipt(
             ActionKindV1::RemoveShellLauncher { .. } => false,
             ActionKindV1::ReplaceShellSnapshot { .. } => false,
             ActionKindV1::ReplaceShellCache { .. } => false,
+            ActionKindV1::RemoveShellCache { .. } => false,
+            ActionKindV1::RemoveShellSnapshot { .. } => false,
+            ActionKindV1::ReconcileShellProfile { .. } => false,
+            ActionKindV1::ReconcileSysSplitDns { .. } => false,
+            ActionKindV1::ReconcileSysProfileBlocks { .. } => false,
             ActionKindV1::ReplaceShellRenderedFile { .. } => false,
             ActionKindV1::RemoveShellRenderedFile { .. } => false,
             ActionKindV1::OpaqueExecution { .. } => false,
@@ -4783,6 +4798,11 @@ fn conflicting_app_receipt(
         | ActionKindV1::RemoveShellLauncher { .. }
         | ActionKindV1::ReplaceShellSnapshot { .. }
         | ActionKindV1::ReplaceShellCache { .. }
+        | ActionKindV1::RemoveShellCache { .. }
+        | ActionKindV1::RemoveShellSnapshot { .. }
+        | ActionKindV1::ReconcileShellProfile { .. }
+        | ActionKindV1::ReconcileSysSplitDns { .. }
+        | ActionKindV1::ReconcileSysProfileBlocks { .. }
         | ActionKindV1::ReplaceShellRenderedFile { .. }
         | ActionKindV1::RemoveShellRenderedFile { .. }
         | ActionKindV1::OpaqueExecution { .. } => false,

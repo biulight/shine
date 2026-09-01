@@ -80,8 +80,11 @@ rendered 文件事务在 marker 前中断时，恢复会还原旧 receipt 与精
 移动精确旧文件，再删除全部 consumer receipt。正向 marker 前，恢复会重建缺失 receipt 并只还原
 精确旧文件；marker 后保持路径缺失，只清理精确 rollback。未选中的 consumer 与无关 rendered 文件
 保持不变。执行期 live rendering 使用相同 lifecycle lock，pending journal 存在时拒绝运行，但仍是
-invocation-scoped atomic write，而非持久事务。cache 卸载与 profile 编辑仍不属于这些 proof；
-recovery 不会编辑用户的 shell profile。
+invocation-scoped atomic write，而非持久事务。cache 与 snapshot 卸载会把精确文件或目录树及其 receipt
+transition 写入 journal；正向 marker 前，恢复只还原未修改的 rollback material，marker 后保留已完成
+的移除。Shell profile reconciliation 也会记入事务，但只拥有 `# >>> shine >>>` sentinel block：恢复会
+把记录的 block transition 合并到当前 profile，并保留中断后出现的无关编辑。Shine-owned block 本身
+发生变化时，恢复会阻塞而不是覆盖它。
 
 uninstall 只会对未修改、已有 receipt 的 launcher 使用这项事务。它会先把每个平台 launcher
 resource 移到同目录 rollback material，再删除 receipt，随后另行记录持久化 commit marker。如果
