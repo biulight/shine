@@ -78,13 +78,21 @@ pub(crate) fn from_embedded_presets_for_platform(
 ) -> CoreRuntime<RealHost> {
     let snapshot = capture_embedded_preset_snapshot(embedded_preset_files());
     let root = std::path::PathBuf::from(".shine-core-embedded");
-    let context = RuntimeContext::isolated(
+    let mut context = RuntimeContext::isolated(
         root.join("home"),
         root.join("home/.shine"),
         root.join("presets"),
         root.join("home/.shine/bin"),
         platform,
     );
+    context.shell = if platform == RuntimePlatform::Windows {
+        shine_core::runtime::ShellType::PowerShell
+    } else {
+        shine_core::runtime::ShellType::Zsh
+    };
+    context.shell_config_paths =
+        crate::shells::shell_config_paths_for_core(&context.shell, &context.home_dir)
+            .expect("built-in shell config paths");
     CoreRuntime::new(RealHost, context, snapshot)
 }
 

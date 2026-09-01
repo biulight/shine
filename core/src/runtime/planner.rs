@@ -2285,16 +2285,16 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             for category in selected_categories.unwrap_or_default() {
                 if !self.context().is_external_presets {
                     let prefix = format!("shell/{}/", category.name);
+                    let effective_logicals = self.effective_shell_cache_logicals(&category)?;
                     let mut cache_mutations = Vec::new();
                     let mut cache_created = false;
                     let mut cache_updated = false;
                     let mut cache_conflict = false;
                     let mut cache_rollback_occupied = false;
-                    for (logical, desired) in self
-                        .presets()
-                        .files()
-                        .iter()
-                        .filter(|(logical, _)| logical.starts_with(&prefix))
+                    for (logical, desired) in
+                        self.presets().files().iter().filter(|(logical, _)| {
+                            logical.starts_with(&prefix) && effective_logicals.contains(*logical)
+                        })
                     {
                         let destination = self.context().presets_dir.join(logical);
                         let mutation = match self.host().metadata(&destination).await {
@@ -9509,6 +9509,70 @@ target = '$HOME/.config/disabled.txt'
             purge: false,
             input_versions: PlanningInputVersions::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn shell_plan_and_cache_exclude_inactive_platform_sources() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\nplatforms = ['unix']\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = 'demo.ps1'\ntarget = 'demo'\nplatforms = ['windows']\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\necho demo\n".to_vec())
+            .file("shell/demo/demo.ps1", b"Write-Output demo\n".to_vec())
+            .file("shell/demo/helper.txt", b"shared helper\n".to_vec())
+            .file(
+                "shell/syntax/shine.toml",
+                b"[[files]]\nsource = 'native.sh'\ntarget = 'native'\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = 'native.ps1'\ntarget = 'native'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/syntax/native.sh", b"#!/bin/sh\necho native\n".to_vec())
+            .file(
+                "shell/syntax/native.ps1",
+                b"Write-Output native\n".to_vec(),
+            )
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime.context_mut_for_cli().platform = RuntimePlatform::Linux;
+        runtime.context_mut_for_cli().shell = super::super::ShellType::Zsh;
+        let request = shell_install_request();
+
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+
+        assert!(plan.is_ready());
+        assert!(
+            plan.permissions
+                .required
+                .iter()
+                .all(|permission| { !format!("{permission:?}").contains("demo.ps1") })
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        let cache = runtime.context().presets_dir.join("shell/demo");
+        assert!(runtime.host().read(&cache.join("demo.sh")).await.is_ok());
+        assert!(runtime.host().read(&cache.join("helper.txt")).await.is_ok());
+        assert!(runtime.host().read(&cache.join("demo.ps1")).await.is_err());
+
+        runtime.context_mut_for_cli().platform = RuntimePlatform::Windows;
+        runtime.context_mut_for_cli().shell = super::super::ShellType::Bash;
+        let categories = runtime.shell_categories(Some("demo")).unwrap();
+        assert_eq!(categories.len(), 1);
+        assert!(categories[0].files.is_empty());
+        let effective = runtime
+            .effective_shell_cache_logicals(&categories[0])
+            .unwrap();
+        assert!(!effective.contains("shell/demo/demo.ps1"));
+
+        let syntax = runtime.shell_categories(Some("syntax")).unwrap();
+        assert_eq!(syntax[0].files.len(), 1);
+        assert_eq!(syntax[0].files[0].source_rel, PathBuf::from("native.sh"));
+        let effective = runtime.effective_shell_cache_logicals(&syntax[0]).unwrap();
+        assert!(effective.contains("shell/syntax/native.sh"));
+        assert!(!effective.contains("shell/syntax/native.ps1"));
     }
 
     #[tokio::test]

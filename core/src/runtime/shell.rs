@@ -2699,6 +2699,57 @@ impl<H> CoreRuntime<H> {
             .collect()
     }
 
+    pub(crate) fn effective_shell_cache_logicals(
+        &self,
+        category: &ShellCategory,
+    ) -> Result<BTreeSet<String>> {
+        let prefix = format!("shell/{}/", category.name);
+        let mut selected = self
+            .presets()
+            .files()
+            .keys()
+            .filter(|logical| logical.starts_with(&prefix))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let metadata_path = format!("{prefix}shine.toml");
+        let active_sources = category
+            .files
+            .iter()
+            .map(|file| format!("{prefix}{}", shell_logical_path(&file.source_rel)))
+            .collect::<BTreeSet<_>>();
+        let declared_files = self
+            .presets()
+            .get(&metadata_path)
+            .map(|metadata| {
+                toml::from_slice::<ShellCategoryToml>(metadata)
+                    .with_context(|| format!("failed to parse {metadata_path}"))
+                    .map(|parsed| parsed.files)
+            })
+            .transpose()?
+            .flatten();
+        if let Some(entries) = declared_files {
+            for entry in entries {
+                let runtime = match entry.runtime.as_deref() {
+                    None | Some("native") => LinkRuntime::Native,
+                    Some("bun") => LinkRuntime::Bun,
+                    Some(other) => bail!("unsupported runtime `{other}` (expected `bun`)"),
+                };
+                let source = normalize_shell_metadata_source(&entry.source, runtime)
+                    .with_context(|| format!("invalid source in {metadata_path}"))?;
+                let logical = format!("{prefix}{}", shell_logical_path(&source));
+                if !active_sources.contains(&logical) {
+                    selected.remove(&logical);
+                }
+            }
+        } else {
+            selected.retain(|logical| {
+                let relative = logical.strip_prefix(&prefix).unwrap_or(logical);
+                !is_native_shell_script(Path::new(relative)) || active_sources.contains(logical)
+            });
+        }
+        Ok(selected)
+    }
+
     fn parse_shell_category(&self, name: &str) -> Result<ShellCategory> {
         let prefix = format!("shell/{name}/");
         let metadata_path = format!("{prefix}shine.toml");
@@ -2726,6 +2777,9 @@ impl<H> CoreRuntime<H> {
                 };
                 let source_rel = normalize_shell_metadata_source(&entry.source, runtime)
                     .with_context(|| format!("invalid source in {metadata_path}"))?;
+                if !shell_source_matches(runtime, self.context().shell, &source_rel) {
+                    continue;
+                }
                 let command_name = shell_command_name(&source_rel, entry.target.as_deref())?;
                 let needs_source = entry.needs_source.unwrap_or(false);
                 if runtime == LinkRuntime::Bun && needs_source {
@@ -2777,6 +2831,9 @@ impl<H> CoreRuntime<H> {
                     continue;
                 }
                 let source_rel = normalize_shell_metadata_source(relative, LinkRuntime::Native)?;
+                if !shell_source_matches(LinkRuntime::Native, self.context().shell, &source_rel) {
+                    continue;
+                }
                 let bytes = self.presets().get(path).unwrap_or_default();
                 files.push(ShellFile {
                     command_name: shell_command_name(&source_rel, None)?,
@@ -3023,13 +3080,11 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         let mut report = ShellCacheReport::default();
         for category in categories {
             let prefix = format!("shell/{}/", category.name);
+            let effective_logicals = self.effective_shell_cache_logicals(category)?;
             let mut files = Vec::new();
-            for (logical, bytes) in self
-                .presets()
-                .files()
-                .iter()
-                .filter(|(logical, _)| logical.starts_with(&prefix))
-            {
+            for (logical, bytes) in self.presets().files().iter().filter(|(logical, _)| {
+                logical.starts_with(&prefix) && effective_logicals.contains(*logical)
+            }) {
                 let destination = self.context().presets_dir.join(logical);
                 let previous = match self.host().metadata(&destination).await {
                     Ok(metadata) if metadata.kind == FileKind::File => {
@@ -3423,6 +3478,14 @@ fn is_native_shell_script(path: &Path) -> bool {
         path.extension().and_then(|value| value.to_str()),
         Some("sh" | "ps1")
     )
+}
+
+fn shell_source_matches(runtime: LinkRuntime, shell: ShellType, source: &Path) -> bool {
+    if runtime == LinkRuntime::Bun {
+        return true;
+    }
+    let is_powershell = source.extension().and_then(|value| value.to_str()) == Some("ps1");
+    is_powershell == (shell == ShellType::PowerShell)
 }
 
 fn shell_logical_path(path: &Path) -> String {

@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-02 — Shell cache permissions follow the effective shell source set
+
+- **Symptom**: a Bash or Zsh Shell Plan requested embedded-cache write and rollback permissions for
+  PowerShell `.ps1` command sources that could not be selected in that environment.
+- **Root cause**: command loading applied each file's OS platform selector but did not reject native
+  source syntax for another shell, while embedded cache planning and execution independently walked
+  every file in the category snapshot.
+- **Fix**: derive one effective embedded-cache file set from the selected category: retain metadata
+  and unbound shared resources, and exclude sources referenced only by inactive OS/shell entries.
+  Native `.ps1` entries are selectable only for PowerShell; native `.sh` entries are not selectable
+  for PowerShell.
+- **Rule**: a security Plan must not authorize alternate-platform command sources when execution
+  does not select them; Plan construction and approved cache mutation must share the same filter.
+
 ## 2026-09-02 — Shell upgrade selection precedes shared deployment planning
 
 - **Symptom**: untargeted upgrade planned embedded cache or external snapshot writes for available

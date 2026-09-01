@@ -249,7 +249,10 @@ evaluation failures are reported after the remaining selected generators run.
   available Presets that have not been installed do not contribute to the Plan. Shell category
   cache or snapshot work is included only when that category has a selected installed command or
   compatible legacy managed launcher, and a fully current command contributes no command-local
-  mutation permissions.
+  mutation permissions. Embedded Shell cache permissions follow the current OS and shell's
+  effective command sources: Bash/Zsh plans do not request writes for native `.ps1` sources, and
+  PowerShell plans do not request writes for native `.sh` sources. Category metadata and unbound
+  shared helper files remain cached.
 - `upgrade --prune-stale` removes unchanged managed App entries no longer present in the source
   through the App operation journal. User-modified stale content remains preserved; interrupted
   removal is handled by `app recover`.
