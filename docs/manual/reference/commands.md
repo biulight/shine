@@ -244,7 +244,9 @@ evaluation failures are reported after the remaining selected generators run.
 - `update/upgrade --pull` synchronizes Git-managed sources and reloads configuration first.
 - Untargeted `upgrade` reviews Shell, App, and enabled managed-system Plans together, confirms once,
   and revalidates all of them before applying changes. It no longer changes Sys profile enablement
-  or composition implicitly.
+  or composition implicitly. Its required permissions and missing-declaration checks include only
+  installed App categories, installed Shell commands, and enabled managed-system items; merely
+  available Presets that have not been installed do not contribute to the Plan.
 - `upgrade --prune-stale` removes unchanged managed App entries no longer present in the source
   through the App operation journal. User-modified stale content remains preserved; interrupted
   removal is handled by `app recover`.

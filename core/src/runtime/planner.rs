@@ -354,6 +354,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             .collect::<BTreeSet<_>>();
 
         for category in categories {
+            let installed_category = installed_categories.contains(&category.name);
+            if request.operation != LifecycleOperation::Install && !installed_category {
+                continue;
+            }
             permissions.declaration(
                 category.permissions.as_ref(),
                 "app_permission_declaration_missing",
@@ -373,13 +377,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 let direct = manifest.find_by_dest(&destination);
                 let by_source = manifest.find_by_source(&source);
                 let entry = by_source.or_else(|| direct.filter(|entry| entry.source == source));
-                let installed_category = installed_categories.contains(&category.name);
-                if request.operation != LifecycleOperation::Install
-                    && entry.is_none()
-                    && !installed_category
-                {
-                    continue;
-                }
 
                 capture_path_state(
                     self.host(),
@@ -6721,6 +6718,55 @@ install = {{ kind = 'package', provider = 'homebrew', package = 'tool' }}
                 | super::super::HostOperation::Run { .. }
                 | super::super::HostOperation::ApplySplitDns { .. }
         )));
+    }
+
+    #[tokio::test]
+    async fn app_upgrade_ignores_permissions_from_uninstalled_presets() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .file(
+                "app/admin/shine.toml",
+                b"dest = '/etc/admin'\n[permissions]\nschema_version = 1\nadministrator = true\n[[files]]\nsource = 'config.toml'\nrequires_admin = true\n".to_vec(),
+            )
+            .file("app/admin/config.toml", b"managed".to_vec())
+            .file(
+                "app/legacy/shine.toml",
+                b"dest = '~/.config/legacy'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/legacy/config.toml", b"managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        seed_static_copy_app(&runtime, b"managed", None).await;
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.is_ready());
+        assert!(
+            !plan
+                .permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        assert!(plan.permissions.uncomputable_codes.is_empty());
+        assert!(
+            plan.steps
+                .iter()
+                .all(|step| step.target != "app/admin" && step.target != "app/legacy")
+        );
     }
 
     #[tokio::test]

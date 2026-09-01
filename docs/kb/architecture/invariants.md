@@ -62,6 +62,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **A Preset permission declaration is not a grant.** App categories, Shell commands, and Sys items
   may declare schema-v1 capability identities, but those declarations do not create scoped
   external-code trust or bypass administrator authorization, ownership checks, or Plan approval.
+  Untargeted upgrade includes declarations only from installed App categories, installed Shell
+  commands, and enabled managed Sys items; merely available embedded, external, or overlay Presets
+  cannot contribute required permissions or missing-declaration blockers.
   Filesystem declarations use logical bases and never embed a physical Preset
   checkout path; command entries contain no argv and environment entries contain names and
   sensitivity only. Pure planners merge explicit declarations with Core-bounded typed metadata and

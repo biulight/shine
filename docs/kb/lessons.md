@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-02 — Available Presets are not upgrade permission targets
+
+- **Symptom**: an untargeted App upgrade requested administrator and opaque-code capabilities from
+  built-in Presets that were available in the snapshot but had never been installed; a legacy
+  uninstalled Preset could also block the entire Plan for a missing permission declaration.
+- **Root cause**: App convergence merged each category declaration before checking the App manifest,
+  while file planning performed the installed-category check later.
+- **Fix**: filter non-install App categories by manifest ownership before merging declarations,
+  cache work, file permissions, or blockers.
+- **Rule**: availability in the effective Preset snapshot is not lifecycle selection; collect
+  permissions only after the operation has established that the target is installed or explicitly
+  selected for installation.
+
 ## 2026-09-01 — File identity compares permission bits, not Unix file-type bits
 
 - **Symptom**: normal CLI Shell installs wrote the exact new profile bytes and mode, but receipt
