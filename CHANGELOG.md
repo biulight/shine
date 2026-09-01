@@ -9,6 +9,19 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
+- Added `shine preset plan <CATEGORY> --platform <macos|linux|windows>` with versioned text/JSON
+  authoring reports. It reuses static validation and Core lifecycle planners against deterministic
+  empty in-memory state, exposing semantic steps, permissions, and blockers without loading active
+  configuration, touching real HOME, executing Preset code, or producing a mutation approval.
+- Added `shine preset lint [PATH]` with versioned text/JSON quality diagnostics for missing
+  descriptions, legacy metadata, broad network scopes, and private-machine absolute paths.
+  Validation errors always fail; `--deny-warnings` provides opt-in strict CI behavior.
+- Added declarative `shine.test.toml` fixtures and `shine preset test <CATEGORY>`. Fixture cases
+  assert platform-specific authoring validity, readiness, Plan sections, actions, and diagnostic
+  codes against in-memory state without setup/teardown scripts or Preset code execution.
+- Added deterministic `shine preset pack <CATEGORY> --output <FILE>` tar.gz bundles with a versioned
+  hash/mode manifest. Packing rejects plaintext private-key candidates, private HOME paths,
+  `node_modules`, symlinks, and undeclared executable files; fixture files are not distributed.
 - Added snapshot-bound lifecycle Plan review and one-shot approval for App, Shell, and managed Sys
   install, upgrade, and uninstall. Protected commands now support `--yes` for automation while
   still rendering and revalidating the complete Plan before mutation.

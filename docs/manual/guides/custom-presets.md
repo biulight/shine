@@ -40,6 +40,9 @@ cd my-presets/app/my-editor
 shine preset new app
 # Add config files and edit shine.toml.
 shine preset validate . --format json
+shine preset lint . --format json
+shine preset plan . --platform macos --format json
+shine preset test . --format json
 ```
 
 Use `shell` or `sys` in `preset new` for the other kinds. To customize an embedded category, enter
@@ -55,6 +58,31 @@ check for updates, write files, access the network, or execute preset code.
 
 The default output is text. `--format json` emits the stable `schema_version: 1` report used by the
 skill; validation errors exit with status 1, while warnings do not.
+
+Run `preset lint` after validation. Its separate schema-v1 report flags author-quality and
+portability concerns without redefining what the runtime accepts. Warnings are advisory by default;
+CI can use `--deny-warnings` after consciously accepting or fixing all current findings.
+
+After validation, run `preset plan` once for each target platform. It accepts only one category or
+its manifest and models a first install against deterministic empty in-memory state. Review its
+semantic steps, permissions, opaque actions, and blockers. A blocked report commonly means the
+empty assumptions omit a required environment value, trust grant, command, or administrator state;
+it is still useful authoring feedback and is never an approval for real installation.
+
+Add `shine.test.toml` when the category needs repeatable cross-platform expectations. Cases are
+declarative and run only against in-memory authoring state. A minimal example is available under
+`examples/presets/app/demo`; use it to assert structured actions and codes rather than copying text
+output. `preset test` requires a single category, not a repository root.
+
+When you need a distributable artifact, pack the reviewed category outside its source tree:
+
+```bash
+shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
+```
+
+The returned hash identifies deterministic bundle bytes. `shine.test.toml` remains author-only and
+is not included. A pack-policy failure must be fixed in the source; `--force` only replaces the
+output file and never bypasses validation or policy.
 
 ## Declare permissions
 

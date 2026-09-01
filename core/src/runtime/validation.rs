@@ -1,8 +1,8 @@
 //! Core-owned static preset discovery and validation contract.
 
 use super::{
-    CoreRuntime, FileKind, FileSystemHost, InMemoryHost, PresetSnapshot, PresetSourceKind,
-    RuntimeContext, RuntimePlatform, SysDriverKind, SysInstall,
+    CoreRuntime, FileKind, FileSystemObservationHost, InMemoryHost, PresetSnapshot,
+    PresetSourceKind, RuntimeContext, RuntimePlatform, SysDriverKind, SysInstall,
 };
 use crate::permission::PermissionDeclarationV1;
 use serde::Serialize;
@@ -54,63 +54,95 @@ pub struct PresetValidationReportV1 {
 }
 
 #[derive(Clone, Debug)]
-struct CategoryPath {
-    kind: &'static str,
-    name: String,
-    root: PathBuf,
+pub(super) struct CategoryPath {
+    pub(super) kind: &'static str,
+    pub(super) name: String,
+    pub(super) root: PathBuf,
+}
+
+#[derive(Clone)]
+pub(super) struct PresetSourceScope {
+    pub(super) canonical: PathBuf,
+    pub(super) categories: Vec<CategoryPath>,
+    pub(super) repository_root: PathBuf,
+    pub(super) snapshot: PresetSnapshot,
 }
 
 pub async fn validate_preset_path(
-    host: &impl FileSystemHost,
+    host: &impl FileSystemObservationHost,
     cwd: &Path,
     path: &Path,
 ) -> PresetValidationReportV1 {
     let display_path = absolute_path(cwd, path);
-    let canonical = match host.canonicalize(&display_path).await {
-        Ok(path) => path,
-        Err(error) => {
-            return input_error(
-                display_path.clone(),
+    let scope = match load_preset_source_scope(host, cwd, path).await {
+        Ok(scope) => scope,
+        Err(diagnostic) => {
+            let report_path = diagnostic.path.clone().unwrap_or(display_path);
+            return finish(report_path, vec![diagnostic], Vec::new());
+        }
+    };
+    validate_preset_source_scope(&scope).await
+}
+
+pub(super) async fn load_preset_source_scope(
+    host: &impl FileSystemObservationHost,
+    cwd: &Path,
+    path: &Path,
+) -> Result<PresetSourceScope, PresetDiagnostic> {
+    let display_path = absolute_path(cwd, path);
+    let canonical = host
+        .canonicalize(&display_path)
+        .await
+        .map_err(|error_value| {
+            error(
+                "invalid_input",
                 format!(
                     "cannot resolve preset path {}: {:#}",
                     display_path.display(),
-                    error.into_anyhow("canonicalizing preset path")
+                    error_value.into_anyhow("canonicalizing preset path")
                 ),
-            );
-        }
-    };
-    let categories = match discover_categories(host, &canonical).await {
-        Ok(categories) if !categories.is_empty() => categories,
-        Ok(_) => {
-            return input_error(
-                canonical,
-                "no preset categories found directly under app/, shell/, or sys/",
-            );
-        }
-        Err(diagnostic) => return finish(canonical, vec![diagnostic], Vec::new()),
-    };
+                &display_path,
+            )
+        })?;
+    let categories = discover_categories(host, &canonical).await?;
+    if categories.is_empty() {
+        return Err(error(
+            "invalid_input",
+            "no preset categories found directly under app/, shell/, or sys/",
+            &canonical,
+        ));
+    }
     let repository_root = common_repository_root(&categories);
-    let snapshot = match snapshot_tree(host, &repository_root).await {
-        Ok(snapshot) => snapshot,
-        Err(diagnostic) => return finish(canonical, vec![diagnostic], Vec::new()),
-    };
-    let validation_home = repository_root.join(".shine-validation-home");
+    let snapshot = snapshot_tree(host, &repository_root).await?;
+    Ok(PresetSourceScope {
+        canonical,
+        categories,
+        repository_root,
+        snapshot,
+    })
+}
+
+pub(super) async fn validate_preset_source_scope(
+    scope: &PresetSourceScope,
+) -> PresetValidationReportV1 {
+    let validation_home = scope.repository_root.join(".shine-validation-home");
     let mut reports = Vec::new();
-    for category in categories {
-        let mut diagnostics = permission_declaration_diagnostics(&snapshot, &category);
+    for category in scope.categories.iter().cloned() {
+        let mut diagnostics = permission_declaration_diagnostics(&scope.snapshot, &category);
         let permission_error = diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == PresetDiagnosticSeverity::Error);
         let mut diagnostic = if category.kind == "app" {
             (!permission_error)
-                .then(|| validate_all_app_destination_branches(&snapshot, &category))
+                .then(|| validate_all_app_destination_branches(&scope.snapshot, &category))
                 .transpose()
                 .err()
                 .map(|error| error_diagnostic("app", &category.root, format!("{error:#}")))
         } else {
             None
         };
-        let mut has_metadata = snapshot
+        let mut has_metadata = scope
+            .snapshot
             .get(&format!("{}/{}/shine.toml", category.kind, category.name))
             .is_some();
         for platform in RuntimePlatform::ALL {
@@ -120,12 +152,12 @@ pub async fn validate_preset_path(
             let mut context = RuntimeContext::isolated(
                 validation_home.clone(),
                 validation_home.join(".shine"),
-                repository_root.clone(),
+                scope.repository_root.clone(),
                 validation_home.join(".shine/bin"),
                 platform,
             );
             context.is_external_presets = true;
-            let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot.clone());
+            let runtime = CoreRuntime::new(InMemoryHost::new(), context, scope.snapshot.clone());
             let result = match category.kind {
                 "app" => runtime.validate_app_category_snapshot(&category.name),
                 "shell" => {
@@ -179,7 +211,7 @@ pub async fn validate_preset_path(
             diagnostics,
         });
     }
-    finish(canonical, Vec::new(), reports)
+    finish(scope.canonical.clone(), Vec::new(), reports)
 }
 
 fn permission_declaration_diagnostics(
@@ -609,7 +641,7 @@ fn error_diagnostic(kind: &str, root: &Path, message: String) -> PresetDiagnosti
 }
 
 async fn discover_categories(
-    host: &impl FileSystemHost,
+    host: &impl FileSystemObservationHost,
     path: &Path,
 ) -> Result<Vec<CategoryPath>, PresetDiagnostic> {
     let metadata = host.metadata(path).await.map_err(|error_value| {
@@ -747,7 +779,7 @@ fn category_from_root(root: &Path) -> Result<CategoryPath, PresetDiagnostic> {
 }
 
 async fn snapshot_tree(
-    host: &impl FileSystemHost,
+    host: &impl FileSystemObservationHost,
     root: &Path,
 ) -> Result<PresetSnapshot, PresetDiagnostic> {
     let mut builder =
@@ -832,14 +864,6 @@ fn error(code: &str, message: impl Into<String>, path: &Path) -> PresetDiagnosti
         message: message.into(),
         path: Some(path.to_path_buf()),
     }
-}
-
-fn input_error(path: PathBuf, message: impl Into<String>) -> PresetValidationReportV1 {
-    finish(
-        path.clone(),
-        vec![error("invalid_input", message, &path)],
-        Vec::new(),
-    )
 }
 
 fn finish(

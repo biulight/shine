@@ -1,0 +1,25 @@
+schema_version = 1
+
+[[cases]]
+name = "linux-empty-install"
+platform = "linux"
+
+[cases.expect]
+valid = true
+ready = true
+plan_kinds = ["lifecycle-install"]
+diagnostic_codes = []
+step_diagnostic_codes = []
+actions = ["create"]
+
+[[cases]]
+name = "windows-empty-install"
+platform = "windows"
+
+[cases.expect]
+valid = true
+ready = true
+plan_kinds = ["lifecycle-install"]
+diagnostic_codes = []
+step_diagnostic_codes = []
+actions = ["create"]

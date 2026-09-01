@@ -301,6 +301,10 @@ outside this recovery boundary.
 ```text
 shine preset new <app|shell|sys> [--force]
 shine preset validate [PATH] [--format <text|json>]
+shine preset lint [PATH] [--format <text|json>] [--deny-warnings]
+shine preset plan <CATEGORY> --platform <macos|linux|windows> [--format <text|json>]
+shine preset test <CATEGORY> [--format <text|json>]
+shine preset pack <CATEGORY> --output <FILE> [--force] [--format <text|json>]
 shine preset export [DIR] [--force]
 shine preset copy <app|shell|sys>/<NAME> [--force]
 shine preset link <PATH> [--create] [--live]
@@ -322,6 +326,42 @@ configuration, checking for updates, accessing the network, or running preset co
 or categories exit with status 1; warnings do not. JSON output uses `schema_version: 1` and contains
 no colors or explanatory text outside the JSON document. See
 [Customize presets](../guides/custom-presets.md).
+
+`preset lint` accepts the same repository, category, and manifest inputs as validation, reuses the
+validated immutable metadata, and reports author-quality or portability findings without changing
+runtime validity. Report schema v1 covers missing category/resource descriptions, legacy metadata,
+broad `network any` declarations, and absolute permission/destination paths that appear to contain
+a private machine HOME. It reports only logical targets and resources, never the suspected private
+path. Warnings do not fail by default; `--deny-warnings` exits with status 1 when the otherwise valid
+report is not clean. Static validation errors always fail.
+
+`preset plan` accepts exactly one category directory or its `shine.toml`. It first reuses static
+validation, then builds a hypothetical first-install report for the selected platform against an
+empty in-memory host. The assumptions intentionally contain no installed receipts, destinations,
+environment or secret values, trust grants, detected commands, or administrator state. App and
+Shell categories show their install steps; Sys categories show separate managed-resource and
+bootstrap sections when applicable. The command never initializes configuration, touches the real
+HOME, runs preset code, or produces an approval that can be applied. `ready: false` describes a
+blocker under the stated assumptions and does not make an otherwise valid report fail; invalid
+input or static validation still exits with status 1. JSON output uses its own `schema_version: 1`.
+
+`preset test` reads `shine.test.toml` from exactly one category and runs each declared case through
+the same synthetic authoring-plan path. Fixture schema v1 requires unique case names and a platform;
+`[cases.expect]` may assert `valid`, `ready`, and exact sorted sets named `plan_kinds`,
+`diagnostic_codes`, `step_diagnostic_codes`, and `actions`. Missing expectation fields are not
+asserted; an explicit empty list asserts no values. Fixtures cannot declare setup, teardown, or
+executable code. A parse/schema error or any failed case exits with status 1, and JSON report schema
+v1 contains stable failure codes rather than terminal prose.
+
+`preset pack` validates one category and atomically writes a deterministic bundle outside that
+category. Bundle v1 is an unsigned tar.gz containing `shine.bundle.json` plus sorted files under
+`preset/<kind>/<name>/`; the manifest records logical paths, normalized `0644`/`0755` modes, and
+SHA-256 values. Checkout roots, enumeration order, uid/gid, timestamps, and `shine.test.toml` do not
+affect bytes. Packing rejects `node_modules`, symlinks, private-key filenames/material, private HOME
+paths, and executable/shebang files not referenced by metadata without printing the suspected data.
+An existing output requires `--force`; output inside the category is always rejected. Report schema
+v1 includes the final archive size and SHA-256. Signing and registry publishing are not part of this
+command.
 
 ## Environment values and secrets
 

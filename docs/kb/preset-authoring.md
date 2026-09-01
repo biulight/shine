@@ -18,10 +18,18 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
    pages in the same change.
 7. Run `shine preset validate <path> --format json` before runtime-specific checks. It validates
    repository roots, category directories, and manifests without loading config or executing code.
-8. Keep schema-v1 permission declarations at the execution target boundary: one App category
+8. Run `shine preset lint <path> --format json` and review its author-quality and portability
+   findings. Use `--deny-warnings` only for deliberately clean CI policy.
+9. Run `shine preset plan <category> --platform <platform> --format json` for every supported target
+   platform. Treat it as a hypothetical empty-host report, never as an approval or dry-run.
+10. Put repeatable structured assertions in category-local `shine.test.toml` and run
+    `shine preset test <category> --format json`. Fixtures never contain executable setup/teardown.
+11. Build distributable bytes only with `shine preset pack`, outside the category. Fix every policy
+    diagnostic; `--force` controls output replacement only.
+12. Keep schema-v1 permission declarations at the execution target boundary: one App category
    table, one table per Shell file/platform variant, and one table per Sys item. Declare identities
    only; never place argv, values, ciphertext, credentials, or physical checkout paths in them.
-9. After changing a built-in App destination or App/Shell file selector, run
+13. After changing a built-in App destination or App/Shell file selector, run
    `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`
    and commit both regenerated public-manual blocks.
 
@@ -29,8 +37,9 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
 
 `skills/shine-preset-author/` is the portable author workflow. Keep `SKILL.md` concise and route to
 only one of `references/app.md`, `references/shell.md`, or `references/sys.md`. The skill must treat
-the installed CLI as authoritative: check `preset validate --help`, scaffold with `preset new` or
-`preset copy`, require JSON validation, and run only isolated dry-runs under a temporary
+the installed CLI as authoritative: check `preset validate --help`, `preset lint --help`, and
+`preset plan --help`, scaffold with `preset new` or `preset copy`, require JSON validation/lint and
+one hypothetical plan per target platform, and run only isolated dry-runs under a temporary
 `SHINE_CONFIG_DIR`. It must never link a source/overlay, activate a preset, or run real install,
 upgrade, bootstrap, hook, generator, or artifact actions.
 

@@ -87,7 +87,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `theme sync` | `cli/src/theme/` |
 | `env ...` | `cli/src/env/` plus `cli/src/secret/` |
 | `preset export/copy/link/unlink/overlay` | `cli/src/preset_commands.rs` |
-| `preset new/validate` | Kind template handlers and `cli/src/preset_validation.rs` |
+| `preset new/validate/lint/plan/test/pack` | Kind template handlers plus the `cli/src/preset_{validation,lint,authoring,test,pack}.rs` adapters |
 | `preset pull`, `update --pull`, `upgrade --pull` | `cli/src/git_pull.rs` plus top-level routing |
 | `init` | `cli/src/init.rs` |
 | `self install/upgrade` | `cli/src/self_install.rs`, `cli/src/update_check/` |
@@ -165,6 +165,14 @@ logic.
 | `cli/src/preset_commands.rs` | Preset copy/export/link/unlink/overlay commands |
 | `cli/src/preset_meta.rs` | Test-only Core capability-report renderer for public manual parity |
 | `cli/src/preset_validation.rs` | Core validation report text/JSON rendering and exit mapping |
+| `cli/src/preset_lint.rs` | Core author-quality lint report rendering and strict-CI exit mapping |
+| `cli/src/preset_authoring.rs` | Hypothetical authoring-plan text/JSON rendering and platform mapping |
+| `cli/src/preset_test.rs` | Declarative fixture report rendering and failed-case exit mapping |
+| `cli/src/preset_pack.rs` | Deterministic bundle report rendering and explicit atomic output write |
+| `core/src/runtime/authoring.rs` | Same-snapshot static validation and synthetic-host App/Shell/Sys authoring reports |
+| `core/src/runtime/lint.rs` | Same-snapshot cross-platform author-quality, portability, and permission-minimization diagnostics |
+| `core/src/runtime/fixture.rs` | Versioned `shine.test.toml` parsing and structured authoring-report assertions |
+| `core/src/runtime/pack.rs` | Bundle manifest, reproducible tar.gz bytes, and source-tree pack policy |
 | `cli/src/git_pull.rs` | FF-only external source pulls and managed overlay mirroring |
 | `cli/src/state.rs` | Versioned runtime-state cleanup |
 | `cli/src/status.rs` | Core App/Shell inspection-to-terminal row adapter |

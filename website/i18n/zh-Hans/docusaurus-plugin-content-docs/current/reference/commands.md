@@ -254,6 +254,10 @@ profile 文件继续使用三方合并，并会明确显示为非事务化；boo
 ```text
 shine preset new <app|shell|sys> [--force]
 shine preset validate [PATH] [--format <text|json>]
+shine preset lint [PATH] [--format <text|json>] [--deny-warnings]
+shine preset plan <CATEGORY> --platform <macos|linux|windows> [--format <text|json>]
+shine preset test <CATEGORY> [--format <text|json>]
+shine preset pack <CATEGORY> --output <FILE> [--force] [--format <text|json>]
 shine preset export [DIR] [--force]
 shine preset copy <app|shell|sys>/<NAME> [--force]
 shine preset link <PATH> [--create] [--live]
@@ -273,6 +277,34 @@ shine preset pull
 来源、不初始化 Shine 配置、不检查更新、不联网，也不运行任何预设代码。输入或类别无效时退出码
 为 1，warning 不会导致失败。JSON 输出固定使用 `schema_version: 1`，不含颜色，也不会在 JSON
 文档之外输出说明文字。Git 管理来源的安全限制及完整流程见[自定义预设](../guides/custom-presets.md)。
+
+`preset lint` 接受与 validate 相同的仓库、类别和 manifest 输入，并复用已校验的不可变 metadata；
+其作者质量与可移植性 finding 不会改变 runtime validity。报告 schema v1 覆盖缺少 category/resource
+description、legacy metadata、过宽的 `network any` 声明，以及疑似包含私有机器 HOME 的绝对
+permission/destination 路径。报告只显示逻辑 target/resource，绝不打印疑似私有路径。warning 默认
+不导致失败；`--deny-warnings` 会在报告有效但不 clean 时返回退出码 1。静态校验错误始终失败。
+
+`preset plan` 只接受一个类别目录或其中的 `shine.toml`。它先复用静态校验，再针对所选平台和空的
+内存宿主生成假设性首次安装报告。其假设刻意不包含已安装 receipt、destination、环境变量或密钥值、
+trust grant、已检测命令和管理员状态。App 与 Shell 类别展示 install step；Sys 类别会按需分别展示
+managed-resource 与 bootstrap section。该命令不会初始化配置、访问真实 HOME、运行任何预设代码，
+也不会生成可用于 apply 的批准。`ready: false` 只表示在这些假设下存在 blocker，本身不会让有效报告
+以失败退出；非法输入或静态校验失败仍返回退出码 1。JSON 输出使用独立的 `schema_version: 1`。
+
+`preset test` 从单个类别读取 `shine.test.toml`，并让每个声明 case 复用相同的 synthetic authoring
+plan 路径。Fixture schema v1 要求唯一 case name 与 platform；`[cases.expect]` 可断言 `valid`、
+`ready`，以及名为 `plan_kinds`、`diagnostic_codes`、`step_diagnostic_codes`、`actions` 的精确排序
+集合。缺失字段表示不做该断言；显式空数组表示断言没有任何值。Fixture 不能声明 setup、teardown
+或可执行代码。解析/schema 错误或任一 case 失败都会返回退出码 1；JSON 报告 schema v1 使用稳定
+failure code，而非 terminal prose。
+
+`preset pack` 校验单个类别，并在类别外原子写入确定性 bundle。Bundle v1 是未签名 tar.gz，包含
+`shine.bundle.json`，以及按顺序位于 `preset/<kind>/<name>/` 下的文件；manifest 记录逻辑路径、
+规范化 `0644`/`0755` mode 与 SHA-256。checkout root、枚举顺序、uid/gid、时间戳和
+`shine.test.toml` 都不影响 bundle bytes。打包会拒绝 `node_modules`、symlink、私钥文件名/material、
+私有 HOME 路径，以及 metadata 未引用的 executable/shebang 文件，并且不会打印疑似数据。已有输出
+需要 `--force`；输出位于类别内部时始终拒绝。报告 schema v1 包含最终 archive size 与 SHA-256。
+该命令不负责签名或发布到 registry。
 
 ## 环境变量与密钥
 

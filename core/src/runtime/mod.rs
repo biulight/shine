@@ -6,11 +6,15 @@
 mod action_executor;
 mod app;
 mod app_metadata;
+mod authoring;
 mod bootstrap;
+mod fixture;
 mod host;
 mod inspection;
 mod launcher;
+mod lint;
 mod memory;
+mod pack;
 mod planner;
 mod preset;
 mod profile;
@@ -31,6 +35,14 @@ use std::path::{Path, PathBuf};
 pub use action_executor::{
     APP_OPERATION_JOURNAL_FILE, AppOperationExecutionV1, AppRecoveryReportV1,
 };
+pub use authoring::{
+    PRESET_AUTHORING_PLAN_SCHEMA_VERSION, PresetAuthoringPlanAssumptionsV1,
+    PresetAuthoringPlanReportV1, PresetAuthoringPlanSectionV1, plan_preset_path,
+};
+pub use fixture::{
+    PRESET_TEST_FIXTURE_FILE, PRESET_TEST_SCHEMA_VERSION, PresetTestCaseResultV1,
+    PresetTestReportV1, PresetTestSummaryV1, test_preset_path,
+};
 pub use host::{
     FileKind, FileMetadata, FileSystemHost, FileSystemObservationHost, HostError, HostOperation,
     NullObserver, PrivilegedFileSystemHost, PrivilegedOperationGuard, ProcessHost, ProcessIo,
@@ -46,7 +58,14 @@ pub use launcher::{
     link_executables_with_host, link_is_current_with_host, link_stem,
     unlink_managed_command_with_host,
 };
+pub use lint::{
+    PRESET_LINT_SCHEMA_VERSION, PresetLintDiagnosticV1, PresetLintReportV1, PresetLintSeverity,
+    PresetLintSummaryV1, lint_preset_path,
+};
 pub use memory::InMemoryHost;
+pub use pack::{
+    PRESET_BUNDLE_SCHEMA_VERSION, PresetPackArtifactV1, PresetPackReportV1, pack_preset_path,
+};
 pub use planner::{
     AppApprovedUpgradeOptions, AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest,
     OpaqueSecretVersion, PlanningInputVersions, ShellPlanRequest, SysBootstrapPlanRequest,

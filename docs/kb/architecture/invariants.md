@@ -19,6 +19,30 @@ bugs. Check this list before changing the modules named in each entry.
   preview contract. Specialized operations use `sys-bootstrap`, `app-refresh`,
   `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
   lifecycle Plans or `LifecycleResultV1` operations.
+- **A Preset authoring plan is hypothetical and never authorizes mutation.** `shine preset plan`
+  validates and plans from one immutable external snapshot, but observes only deterministic empty
+  `InMemoryHost` state for the selected platform. Its versioned report may reuse semantic step and
+  permission-resolution values, but it must not serialize `PlanInputsV1`, a Plan fingerprint,
+  `PlanApprovalV1`, private checkout paths, content, argv, environment values, secret plaintext, or
+  raw errors. No apply entry point accepts an authoring report. `ready` means only that the
+  hypothetical Plan has no blocker under the report's explicit absent-state assumptions.
+- **Preset lint is policy over validated models, not a second schema.** `shine preset lint` loads the
+  same immutable source scope and runs the existing all-platform validation before Core metadata
+  lint rules. Invalid metadata is reported as a validation error and is never reparsed through an
+  independent acceptance model. Lint reports contain logical targets/resources and stable codes;
+  private-path findings never echo the suspected path. Warnings affect exit status only with the
+  explicit `--deny-warnings` CI policy.
+- **Preset fixtures are declarative assertions, never executable setup.** `shine preset test`
+  accepts one category-local `shine.test.toml`, rejects unknown fields and unsupported schema
+  versions, and runs each unique named case only through the synthetic authoring-report path.
+  Expectations compare structured validity, readiness, Plan kinds, actions, and stable diagnostic
+  codes. The schema has no command, setup, teardown, network, or arbitrary host-mutation field.
+- **Preset bundle bytes exclude host identity and author-only state.** `shine preset pack` uses one
+  validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical
+  file order, normalized mode, zero uid/gid/mtime, and a fixed gzip header determine bytes; physical
+  checkout roots and enumeration order do not. `shine.test.toml` is excluded. `node_modules`,
+  symlinks, private key candidates, private HOME paths, and metadata-unreferenced executable files
+  block packing with stable codes that never echo suspected content or paths.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, and each file's embedded, external, or
   overlay origin. It must not include physical source roots: relocating unchanged source is not a

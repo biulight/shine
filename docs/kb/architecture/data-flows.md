@@ -64,6 +64,71 @@ record additional capabilities. Pure planners combine both sources into the requ
 resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
 protected execution fails closed.
 
+## Preset authoring Plan report
+
+`shine preset plan` is routed before runtime config initialization and background update checks.
+Core resolves exactly one category directory or manifest, captures one immutable external snapshot,
+and runs static validation against that snapshot. Only a valid category proceeds to planning.
+
+```text
+category path + explicit platform
+    → one immutable external Preset snapshot
+    → same-snapshot all-platform static validation
+    → deterministic empty RuntimeContext + InMemoryHost
+    → existing App/Shell/managed-Sys/bootstrap planner
+    → authoring report (assumptions + steps + permissions + blockers)
+```
+
+App and Shell use a first-install lifecycle request. Sys partitions the validated manifest into
+managed and init items, then emits separate managed-install and bootstrap sections. The synthetic
+context contains no env values, secret versions, trust grants, detected commands, manifests,
+destinations, or administrator state, so related blockers remain visible. The output deliberately
+drops source/state digests and fingerprints: it is not a security Plan approval and cannot enter an
+apply path. Planning may perform only in-memory filesystem or split-DNS observation and never
+process, network, privilege, or mutation operations.
+
+## Preset lint
+
+`shine preset lint` shares source-scope capture and all-platform validation with `preset validate`.
+Only a validation-clean immutable snapshot reaches lint policy. Core loads the already-authoritative
+App, Shell, and Sys models for each relevant platform, deduplicates logical findings, and emits a
+versioned report with no physical checkout or suspected private path.
+
+```text
+repository/category/manifest path → immutable scope → all-platform validation
+    → Core metadata models → quality/portability/minimization rules
+    → stable logical diagnostics → optional --deny-warnings exit policy in CLI
+```
+
+Default lint success means the Preset is valid even when advisory warnings exist. Strict CI is an
+explicit frontend exit policy and does not change report contents or runtime acceptance.
+
+## Preset fixture tests
+
+`shine preset test` loads one category and its versioned `shine.test.toml` from the same immutable
+snapshot. Each unique named case selects a platform, invokes the synthetic authoring Plan flow, and
+compares only declared structured expectations. Missing expectation fields are ignored; explicit
+lists compare as sorted sets. Fixture parsing exposes no executable or real-host setup path.
+
+```text
+category + shine.test.toml → strict fixture schema → platform case
+    → synthetic authoring report → structured expectation comparison
+    → stable per-case failure codes + versioned aggregate report
+```
+
+## Preset pack
+
+Packing validates one immutable category snapshot, then separately walks the physical category with
+an observation-only host so ignored trees and symlinks cannot evade policy. After policy checks,
+Core sorts logical files, excludes the author-only fixture, builds the versioned hash/mode manifest,
+and encodes fixed-metadata tar.gz bytes. The CLI performs only the requested atomic output write.
+
+```text
+category → immutable validation → physical policy scan
+    → sorted logical files - shine.test.toml → shine.bundle.json
+    → fixed tar/gzip metadata → bytes + SHA-256 → explicit CLI output
+```
+
 ## Scoped external-code trust
 
 `core::runtime::trust` derives requirements only from the immutable logical Preset snapshot. Each

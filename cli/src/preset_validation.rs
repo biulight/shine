@@ -1,6 +1,6 @@
 //! Terminal adapter for Core-owned preset discovery and validation.
 
-use crate::commands::PresetValidationFormat;
+use crate::commands::PresetReportFormat;
 use anyhow::Result;
 use std::path::Path;
 #[cfg(test)]
@@ -11,11 +11,11 @@ pub use shine_core::runtime::{
     PresetDiagnosticSeverity, PresetValidationReportV1, PresetValidationSummary,
 };
 
-pub async fn handle_validate(path: &Path, format: PresetValidationFormat) -> Result<bool> {
+pub async fn handle_validate(path: &Path, format: PresetReportFormat) -> Result<bool> {
     let report = validate_path(path).await;
     match format {
-        PresetValidationFormat::Text => print_text_report(&report),
-        PresetValidationFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+        PresetReportFormat::Text => print_text_report(&report),
+        PresetReportFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
     }
     Ok(report.valid)
 }

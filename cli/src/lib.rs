@@ -21,9 +21,13 @@ pub mod path_display;
 pub mod persist;
 pub mod platform;
 pub(crate) mod presentation;
+pub mod preset_authoring;
 pub mod preset_commands;
+pub mod preset_lint;
 #[cfg(test)]
 mod preset_meta;
+pub mod preset_pack;
+pub mod preset_test;
 pub mod preset_validation;
 pub mod presets;
 pub mod privilege;

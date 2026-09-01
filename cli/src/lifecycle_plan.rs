@@ -328,7 +328,7 @@ fn render_plan_lines(plan: &PlanV1, config_digest: &str) -> Result<Vec<String>> 
     Ok(lines)
 }
 
-fn action_name(action: PlanActionV1) -> &'static str {
+pub(crate) fn action_name(action: PlanActionV1) -> &'static str {
     match action {
         PlanActionV1::None => "=",
         PlanActionV1::Create => "+",
@@ -340,7 +340,7 @@ fn action_name(action: PlanActionV1) -> &'static str {
     }
 }
 
-fn permission_name(permission: &PermissionV1) -> String {
+pub(crate) fn permission_name(permission: &PermissionV1) -> String {
     match permission {
         PermissionV1::Filesystem { access, path } => format!(
             "filesystem {} {path}",

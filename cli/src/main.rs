@@ -98,6 +98,66 @@ async fn run(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
+    if let Commands::Preset {
+        command:
+            PresetCommands::Lint {
+                path,
+                format,
+                deny_warnings,
+            },
+    } = &cli.command
+    {
+        let accepted = cli::preset_lint::handle_lint(path, *format, *deny_warnings).await?;
+        if !accepted {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    if let Commands::Preset {
+        command:
+            PresetCommands::Plan {
+                path,
+                platform,
+                format,
+            },
+    } = &cli.command
+    {
+        let valid = cli::preset_authoring::handle_plan(path, *platform, *format).await?;
+        if !valid {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    if let Commands::Preset {
+        command: PresetCommands::Test { path, format },
+    } = &cli.command
+    {
+        let passed = cli::preset_test::handle_test(path, *format).await?;
+        if !passed {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    if let Commands::Preset {
+        command:
+            PresetCommands::Pack {
+                path,
+                output,
+                force,
+                format,
+            },
+    } = &cli.command
+    {
+        let packed = cli::preset_pack::handle_pack(path, output, *force, *format).await?;
+        if !packed {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let config = Box::pin(Config::load_or_init()).await?;
 
     if config.legacy_allow_app_hooks || config.legacy_allow_sys_code {
@@ -264,6 +324,10 @@ async fn run(cli: Cli) -> Result<()> {
                 PresetTemplateKind::Sys => sys::handle_init_template(force).await,
             },
             PresetCommands::Validate { .. } => unreachable!(),
+            PresetCommands::Lint { .. } => unreachable!(),
+            PresetCommands::Plan { .. } => unreachable!(),
+            PresetCommands::Test { .. } => unreachable!(),
+            PresetCommands::Pack { .. } => unreachable!(),
             PresetCommands::Export(cmd) => {
                 Box::pin(handle_preset_export(&config, cmd.dir, cmd.force)).await
             }
@@ -1374,7 +1438,7 @@ mod tests {
             Commands::Preset {
                 command: PresetCommands::Validate {
                     path,
-                    format: commands::PresetValidationFormat::Text,
+                    format: commands::PresetReportFormat::Text,
                 }
             } if path == std::path::Path::new(".")
         ));
@@ -1392,9 +1456,96 @@ mod tests {
             Commands::Preset {
                 command: PresetCommands::Validate {
                     path,
-                    format: commands::PresetValidationFormat::Json,
+                    format: commands::PresetReportFormat::Json,
                 }
             } if path == std::path::Path::new("presets/app/git/shine.toml")
+        ));
+
+        let cli = Cli::try_parse_from([
+            "shine",
+            "preset",
+            "lint",
+            "presets/shell/agent",
+            "--format",
+            "json",
+            "--deny-warnings",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Lint {
+                    path,
+                    format: commands::PresetReportFormat::Json,
+                    deny_warnings: true,
+                }
+            } if path == std::path::Path::new("presets/shell/agent")
+        ));
+
+        let cli = Cli::try_parse_from([
+            "shine",
+            "preset",
+            "plan",
+            "presets/app/git",
+            "--platform",
+            "linux",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Plan {
+                    path,
+                    platform: commands::PresetPlatform::Linux,
+                    format: commands::PresetReportFormat::Json,
+                }
+            } if path == std::path::Path::new("presets/app/git")
+        ));
+        assert!(Cli::try_parse_from(["shine", "preset", "plan", "presets/app/git"]).is_err());
+
+        let cli = Cli::try_parse_from([
+            "shine",
+            "preset",
+            "test",
+            "presets/app/git",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Test {
+                    path,
+                    format: commands::PresetReportFormat::Json,
+                }
+            } if path == std::path::Path::new("presets/app/git")
+        ));
+
+        let cli = Cli::try_parse_from([
+            "shine",
+            "preset",
+            "pack",
+            "presets/app/git",
+            "--output",
+            "/tmp/git.shine-preset.tar.gz",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Pack {
+                    path,
+                    output,
+                    force: false,
+                    format: commands::PresetReportFormat::Json,
+                }
+            } if path == std::path::Path::new("presets/app/git")
+                && output == std::path::Path::new("/tmp/git.shine-preset.tar.gz")
         ));
 
         for legacy in ["export", "link", "unlink", "overlay", "pull"] {
