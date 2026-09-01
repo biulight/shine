@@ -3,6 +3,22 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-02 — Shell upgrade selection precedes shared deployment planning
+
+- **Symptom**: untargeted upgrade planned embedded cache or external snapshot writes for available
+  but uninstalled Shell categories, and fully current installed commands still contributed
+  launcher, source, and rendered-output write permissions.
+- **Root cause**: the planner enumerated every effective category and planned shared material before
+  its per-command receipt/launcher check; command permissions were accumulated globally before the
+  final action was known. The executor already upgraded only receipt-owned or compatible legacy
+  managed launchers but also rewrote an unchanged manifest, so review permissions and execution
+  effects disagreed in both directions.
+- **Fix**: filter upgrade categories and commands by the same activation evidence before shared
+  planning, accumulate command permissions locally and merge them only for a non-no-op action, and
+  skip manifest persistence when the projected receipt set is unchanged.
+- **Rule**: command-scoped activation must select the category before category-scoped deployment is
+  planned, and a `None` step must not authorize command-local mutation.
+
 ## 2026-09-02 — Available Presets are not upgrade permission targets
 
 - **Symptom**: an untargeted App upgrade requested administrator and opaque-code capabilities from

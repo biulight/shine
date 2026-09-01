@@ -246,7 +246,10 @@ evaluation failures are reported after the remaining selected generators run.
   and revalidates all of them before applying changes. It no longer changes Sys profile enablement
   or composition implicitly. Its required permissions and missing-declaration checks include only
   installed App categories, installed Shell commands, and enabled managed-system items; merely
-  available Presets that have not been installed do not contribute to the Plan.
+  available Presets that have not been installed do not contribute to the Plan. Shell category
+  cache or snapshot work is included only when that category has a selected installed command or
+  compatible legacy managed launcher, and a fully current command contributes no command-local
+  mutation permissions.
 - `upgrade --prune-stale` removes unchanged managed App entries no longer present in the source
   through the App operation journal. User-modified stale content remains preserved; interrupted
   removal is handled by `app recover`.

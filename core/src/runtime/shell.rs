@@ -2405,6 +2405,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
     ) -> Result<()> {
         let mut manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
+        let previous = manifest.clone();
         let selected = categories
             .iter()
             .map(|category| category.name.clone())
@@ -2456,6 +2457,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         match scope {
             ShellManifestUpdateScope::Categories => manifest.replace_categories(&selected, entries),
             ShellManifestUpdateScope::Commands => manifest.replace_targets(&targets, entries),
+        }
+        if manifest == previous {
+            return Ok(());
         }
         save_shell_manifest_with_host(self.host(), &self.context().shine_dir, &manifest).await
     }
@@ -3501,7 +3505,7 @@ pub struct ShellManifestEntry {
     pub content_hash: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ShellManifest {
     #[serde(default = "legacy_manifest_schema_version")]
     pub schema_version: u32,

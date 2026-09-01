@@ -207,7 +207,9 @@ enrollment，不会批准之后的 lifecycle Plan。
 - 无 target 的 `upgrade` 会一次展示 Shell、App 和已启用 managed Sys 的 Plan，只确认一次，
   并在写入前复核全部 Plan；它不再隐式修改 Sys profile 的启用状态或组合内容。所需权限与
   缺失声明检查只包含已安装的 App 类别、已安装的 Shell 命令和已启用的 managed Sys 项；
-  仅仅存在但从未安装的 Preset 不会进入 Plan。
+  仅仅存在但从未安装的 Preset 不会进入 Plan。只有类别中存在已选中的已安装命令或兼容的
+  legacy managed launcher 时，Shell 类别 cache 或 snapshot 才会进入计划；完全无需更新的
+  命令不会贡献命令级 mutation 权限。
 - `upgrade --prune-stale` 通过 App operation journal 移除预设来源中已不存在且未修改的受管
   App 条目。用户修改过的 stale 内容仍会保留；移除中断时使用 `app recover` 处理。
 - App 静态 Copy 的 effective destination 变化时，会通过一个 journaled 的旧 receipt/新 receipt

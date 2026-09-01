@@ -226,6 +226,12 @@ impl PermissionAccumulator {
         }
     }
 
+    fn merge(&mut self, other: Self) {
+        self.required.extend(other.required);
+        self.declared.extend(other.declared);
+        self.uncomputable.extend(other.uncomputable);
+    }
+
     fn finish(self) -> (PermissionSetV1, PermissionSetV1, BTreeSet<String>) {
         (
             PermissionSetV1::new(self.required),
@@ -1851,6 +1857,32 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             return finish_plan(self, request.operation, state, permissions, steps);
         }
 
+        if request.operation != LifecycleOperation::Install
+            && let Some(categories) = selected_categories.as_mut()
+        {
+            for category in categories.iter_mut() {
+                let mut installed_files = Vec::new();
+                for file in std::mem::take(&mut category.files) {
+                    let canonical = format!("shell/{}/{}", category.name, file.command_name);
+                    let launcher =
+                        command_path_for_name(&self.context().bin_dir, file.command_name.as_ref());
+                    if manifest.find(&canonical).is_some()
+                        || launcher_is_managed(self.host(), &launcher, self.context()).await?
+                    {
+                        installed_files.push(file);
+                    }
+                }
+                category.files = installed_files;
+            }
+            categories.retain(|category| !category.files.is_empty());
+            if request.target.is_some() && categories.is_empty() {
+                bail!(
+                    "Shell lifecycle target is not installed: {}",
+                    request.target.as_deref().unwrap_or_default()
+                );
+            }
+        }
+
         if request.operation == LifecycleOperation::Uninstall {
             let selected_entries = manifest
                 .entries
@@ -2461,7 +2493,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     {
                         continue;
                     }
-                    permissions.declaration(
+                    let mut file_permissions = PermissionAccumulator::default();
+                    file_permissions.declaration(
                         file.permissions.as_ref(),
                         "shell_permission_declaration_missing",
                     );
@@ -2470,7 +2503,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         &request.input_versions,
                         file,
                         &mut state,
-                        &mut permissions,
+                        &mut file_permissions,
                     )?;
                     let managed = launcher_is_managed(self.host(), &link, self.context()).await?;
                     let source =
@@ -2569,7 +2602,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                     (FilesystemAccessV1::Write, &rollback),
                                     (FilesystemAccessV1::Remove, &rollback),
                                 ] {
-                                    permissions.implicit(PermissionV1::Filesystem {
+                                    file_permissions.implicit(PermissionV1::Filesystem {
                                         access,
                                         path: review_path(self.context(), path),
                                     });
@@ -2758,7 +2791,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     }
                     if managed_update && !rollback_occupied {
                         for (access, path) in managed_update_permissions {
-                            permissions.implicit(PermissionV1::Filesystem {
+                            file_permissions.implicit(PermissionV1::Filesystem {
                                 access,
                                 path: review_path(self.context(), &path),
                             });
@@ -2766,31 +2799,33 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     }
                     typed_launcher_transaction |=
                         first_time_creation || (managed_update && !rollback_occupied);
-                    for resource in &desired_resources {
-                        add_shell_typed_permissions(
-                            self.context(),
-                            &mut permissions,
-                            resource.destination(),
-                            request.operation,
-                        );
-                    }
-                    if !(self.context().is_external_presets
-                        && self.context().external_shell_mode == ExternalShellMode::Live)
-                    {
-                        add_shell_typed_permissions(
-                            self.context(),
-                            &mut permissions,
-                            &source,
-                            request.operation,
-                        );
-                    }
-                    if !effective_transforms.is_empty() {
-                        add_shell_typed_permissions(
-                            self.context(),
-                            &mut permissions,
-                            &rendered,
-                            request.operation,
-                        );
+                    if matches!(action, PlanActionV1::Create | PlanActionV1::Update) {
+                        for resource in &desired_resources {
+                            add_shell_typed_permissions(
+                                self.context(),
+                                &mut file_permissions,
+                                resource.destination(),
+                                request.operation,
+                            );
+                        }
+                        if !(self.context().is_external_presets
+                            && self.context().external_shell_mode == ExternalShellMode::Live)
+                        {
+                            add_shell_typed_permissions(
+                                self.context(),
+                                &mut file_permissions,
+                                &source,
+                                request.operation,
+                            );
+                        }
+                        if !effective_transforms.is_empty() {
+                            add_shell_typed_permissions(
+                                self.context(),
+                                &mut file_permissions,
+                                &rendered,
+                                request.operation,
+                            );
+                        }
                     }
                     let mut step = PlanStepV1::new(&canonical, None::<String>, action);
                     if action == PlanActionV1::Blocked {
@@ -2810,6 +2845,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         step = step.with_diagnostic_code("shell_forced_reconciliation");
                     }
                     steps.push(step);
+                    if action != PlanActionV1::None {
+                        permissions.merge(file_permissions);
+                    }
                 }
             }
         }
@@ -9471,6 +9509,99 @@ target = '$HOME/.config/disabled.txt'
             purge: false,
             input_versions: PlanningInputVersions::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn shell_upgrade_ignores_uninstalled_categories_and_noop_permissions() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\necho demo\n".to_vec())
+            .file(
+                "shell/unused/shine.toml",
+                b"[[files]]\nsource = 'unused.sh'\ntarget = 'unused'\n[files.permissions]\nschema_version = 1\ncommands = ['unused-runtime']\n"
+                    .to_vec(),
+            )
+            .file(
+                "shell/unused/unused.sh",
+                b"#!/bin/sh\necho unused\n".to_vec(),
+            )
+            .file(
+                "shell/legacy/shine.toml",
+                b"[[files]]\nsource = 'legacy.sh'\ntarget = 'legacy'\n".to_vec(),
+            )
+            .file(
+                "shell/legacy/legacy.sh",
+                b"#!/bin/sh\necho legacy\n".to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+
+        let plan = runtime
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.is_ready());
+        assert!(plan.permissions.required.is_empty());
+        assert!(plan.permissions.uncomputable_codes.is_empty());
+        assert_eq!(plan.steps.len(), 1);
+        assert!(plan.steps.iter().all(|step| {
+            step.target == "shell/demo/demo"
+                && step.resource.is_none()
+                && step.action == PlanActionV1::None
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let operation_count = runtime.host().operations().len();
+        let report = runtime
+            .upgrade_shells_approved(
+                ShellPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: None,
+                    force: false,
+                    purge: false,
+                    input_versions: PlanningInputVersions::default(),
+                },
+                &approval,
+            )
+            .await
+            .unwrap();
+        assert!(report.updated_targets.is_empty());
+        let operations = runtime.host().operations();
+        let new_mutations = operations[operation_count..]
+            .iter()
+            .filter(|operation| !matches!(operation, HostOperation::Read(_)))
+            .collect::<Vec<_>>();
+        assert!(new_mutations.is_empty(), "{new_mutations:?}");
+
+        let error = runtime
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("unused".to_string()),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not installed"));
     }
 
     fn external_shell_runtime(snapshot: PresetSnapshot) -> CoreRuntime<InMemoryHost> {
