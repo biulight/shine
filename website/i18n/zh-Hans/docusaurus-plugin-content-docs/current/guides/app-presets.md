@@ -36,6 +36,23 @@ shine upgrade
 shine app install starship --replace-managed
 ```
 
+### 将旧版 App metadata 迁移到 Shine 2
+
+当前 App metadata 会在 `shine.toml` 根级声明自身语法版本：
+
+```toml
+metadata_schema_version = 2
+```
+
+它不同于 `[permissions].schema_version`，后者声明的是权限语法版本。若 overlay 覆盖了
+`app/<category>/shine.toml`，但没有这个根级字段，它就是旧版 v1 metadata。若其中 lifecycle hook
+递归运行 `shine app artifact apply`，Shine 2 会阻塞 Plan，并明确指出是 overlay metadata 需要迁移。
+只删除或迁移这个 `shine.toml`；保留 `merge.yaml`、`rules/` 等 payload 覆盖文件。不要通过授予外部代码
+信任来绕过这种不兼容。
+
+`shine state migrate` 只迁移 Shine 自己拥有的运行状态，不会重写或删除你的 Preset overlay。未来的
+Preset migration 命令才应以显式、可审阅的操作安全处理这类文件。
+
 ## 卸载与恢复
 
 ```bash
@@ -289,5 +306,9 @@ commands = ["my-reloader"]
 shine trust inspect app/<CATEGORY>
 shine trust grant app/<CATEGORY>
 ```
+
+`trust inspect` 只读，不会授予信任。授予信任前，先处理 Plan 显示的所有缺失权限声明。若启用的 overlay
+中 `app/<CATEGORY>/shine.toml` 是覆盖内置 metadata 的旧版完整副本，应先删除或迁移该 metadata 文件；
+`merge.yaml`、`rules/` 等 overlay payload 文件仍可保留。
 
 钩子默认不显示 stdout。预设将 `show_output` 设为 `true` 后，安装和 refresh 会显示成功输出；`shine upgrade` 仅在 `--verbose` 下显示成功完成信息和输出。钩子失败或权限拦截始终可见，但不会中断其它类别的安装或升级。

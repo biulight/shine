@@ -11,6 +11,8 @@ use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 struct CategoryToml {
+    #[serde(default = "legacy_metadata_schema_version")]
+    metadata_schema_version: u32,
     description: Option<String>,
     dest: DestToml,
     list_mode: Option<ListModeToml>,
@@ -19,6 +21,12 @@ struct CategoryToml {
     artifact: Option<ArtifactToml>,
     files: Option<Vec<FileToml>>,
     permissions: Option<PermissionDeclarationV1>,
+}
+
+const CURRENT_METADATA_SCHEMA_VERSION: u32 = 2;
+
+fn legacy_metadata_schema_version() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -187,11 +195,20 @@ impl<H> CoreRuntime<H> {
                 has_explicit_files: false,
                 artifact: None,
                 permissions: None,
+                metadata_schema_version: legacy_metadata_schema_version(),
+                metadata_is_overlay: false,
             }));
         };
 
         let parsed: CategoryToml = toml::from_slice(metadata)
             .with_context(|| format!("failed to parse app/{name}/shine.toml"))?;
+        if !(1..=CURRENT_METADATA_SCHEMA_VERSION).contains(&parsed.metadata_schema_version) {
+            bail!(
+                "unsupported metadata_schema_version {} in {metadata_path}; this Shine version supports versions 1 through {}",
+                parsed.metadata_schema_version,
+                CURRENT_METADATA_SCHEMA_VERSION,
+            );
+        }
         if let Some(permissions) = &parsed.permissions {
             permissions
                 .validate()
@@ -304,6 +321,8 @@ impl<H> CoreRuntime<H> {
             has_explicit_files: explicit,
             artifact: artifact(parsed.artifact, &metadata_path)?,
             permissions,
+            metadata_schema_version: parsed.metadata_schema_version,
+            metadata_is_overlay: self.presets().is_overlay(&metadata_path),
         }))
     }
 
@@ -747,6 +766,64 @@ mod tests {
                 .app_destination(&categories[0], &categories[0].files[0])
                 .unwrap(),
             home.join(".config/demo/config.toml")
+        );
+        assert_eq!(categories[0].metadata_schema_version, 1);
+        assert!(!categories[0].metadata_is_overlay);
+    }
+
+    #[test]
+    fn marks_versioned_overlay_metadata_and_rejects_future_versions() {
+        let home = std::env::temp_dir().join("shine-app-metadata-schema-test");
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"base".to_vec())
+            .overlay_file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .build();
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            RuntimeContext::isolated(
+                home.clone(),
+                home.join(".shine"),
+                home.join("presets"),
+                home.join("bin"),
+                RuntimePlatform::Linux,
+            ),
+            snapshot,
+        );
+        let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
+        assert_eq!(category.metadata_schema_version, 1);
+        assert!(category.metadata_is_overlay);
+
+        let future = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/future/shine.toml",
+                b"metadata_schema_version = 3\ndest = '~/.config/future'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/future/config.toml", b"future".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            RuntimeContext::isolated(
+                home.clone(),
+                home.join(".shine"),
+                home.join("presets"),
+                home.join("bin"),
+                RuntimePlatform::Linux,
+            ),
+            future,
+        );
+        assert!(
+            runtime
+                .app_categories(Some("future"))
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported metadata_schema_version 3")
         );
     }
 

@@ -614,6 +614,8 @@ mod tests {
             has_explicit_files: true,
             artifact: None,
             permissions: None,
+            metadata_schema_version: 2,
+            metadata_is_overlay: false,
         }
     }
 
@@ -1688,6 +1690,8 @@ mod tests {
             has_explicit_files: true,
             artifact: None,
             permissions: None,
+            metadata_schema_version: 2,
+            metadata_is_overlay: false,
         };
 
         let rows = build_app_rows(&config, &[category]).await.unwrap();
@@ -1764,6 +1768,8 @@ mod tests {
             has_explicit_files: true,
             artifact: None,
             permissions: None,
+            metadata_schema_version: 2,
+            metadata_is_overlay: false,
         };
 
         let rows = build_app_rows(&config, &[category]).await.unwrap();

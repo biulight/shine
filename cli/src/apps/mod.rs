@@ -46,6 +46,7 @@ use std::collections::BTreeMap;
 #[cfg(test)]
 use std::path::{Path, PathBuf};
 const APP_TEMPLATE: &str = r#"# App preset metadata for shine.
+metadata_schema_version = 2
 description = "My app configuration."
 dest = "~/.config/my-app"
 # Optional category platform destination. Exact OS keys override the Unix fallback:

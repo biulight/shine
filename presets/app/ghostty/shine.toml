@@ -1,3 +1,4 @@
+metadata_schema_version = 2
 description = "Ghostty terminal configuration with light/dark themes and optional background images."
 list_mode = "category"
 

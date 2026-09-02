@@ -1,3 +1,4 @@
+metadata_schema_version = 2
 description = "Git configuration with common aliases and portable defaults."
 dest = "~"
 list_mode = "category"

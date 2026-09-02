@@ -1,3 +1,4 @@
+metadata_schema_version = 2
 description = "Archey4 system information tool configuration."
 
 [dest]

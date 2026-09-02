@@ -915,6 +915,25 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     _ => &[],
                 };
                 for (index, hook) in hooks.iter().enumerate() {
+                    if category.metadata_schema_version < 2
+                        && is_recursive_app_artifact_hook(hook, &category.name)
+                    {
+                        steps.push(
+                            PlanStepV1::new(
+                                format!("app/{}", category.name),
+                                Some(format!("hook:{index}")),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code(
+                                if category.metadata_is_overlay {
+                                    "app_legacy_overlay_metadata"
+                                } else {
+                                    "app_legacy_metadata"
+                                },
+                            ),
+                        );
+                        continue;
+                    }
                     capture_app_hook_inputs(
                         self.context(),
                         &request.input_versions,
@@ -4778,6 +4797,23 @@ fn plan_app_hooks<H>(
     steps: &mut Vec<PlanStepV1>,
 ) -> Result<()> {
     for (index, hook) in hooks.iter().enumerate() {
+        if category.metadata_schema_version < 2
+            && is_recursive_app_artifact_hook(hook, &category.name)
+        {
+            steps.push(
+                PlanStepV1::new(
+                    format!("app/{}", category.name),
+                    Some(format!("hook:{index}")),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code(if category.metadata_is_overlay {
+                    "app_legacy_overlay_metadata"
+                } else {
+                    "app_legacy_metadata"
+                }),
+            );
+            continue;
+        }
         capture_app_hook_inputs(
             runtime.context(),
             input_versions,
@@ -4808,6 +4844,15 @@ fn plan_app_hooks<H>(
         );
     }
     Ok(())
+}
+
+fn is_recursive_app_artifact_hook(hook: &super::AppHook, category: &str) -> bool {
+    hook.command == "shine"
+        && hook.args.len() >= 3
+        && hook.args[0] == "app"
+        && hook.args[1] == "artifact"
+        && hook.args[2] == "apply"
+        && hook.args.get(3).is_some_and(|target| target == category)
 }
 
 async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
@@ -6839,6 +6884,45 @@ install = {{ kind = 'package', provider = 'homebrew', package = 'tool' }}
                 | super::super::HostOperation::Run { .. }
                 | super::super::HostOperation::ApplySplitDns { .. }
         )));
+    }
+
+    #[tokio::test]
+    async fn legacy_overlay_metadata_blocks_recursive_artifact_hook_before_trust() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .overlay_file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\npost_install = { command = 'shine', args = ['app', 'artifact', 'apply', 'demo'] }\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .iter()
+                    .any(|code| code == "app_legacy_overlay_metadata")
+        }));
+        assert!(!plan.permissions.required.contains(&PermissionV1::Command {
+            program: "shine".to_string(),
+        }));
     }
 
     #[tokio::test]

@@ -251,6 +251,36 @@ fn blocked_plan_error(
     }
 
     let mut reasons = Vec::new();
+    let legacy_overlay_metadata_targets = planned
+        .iter()
+        .flat_map(|(_, plan)| &plan.steps)
+        .filter(|step| {
+            step.diagnostic_codes
+                .iter()
+                .any(|code| code == "app_legacy_overlay_metadata")
+        })
+        .map(|step| step.target.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for target in legacy_overlay_metadata_targets {
+        reasons.push(format!(
+            "{target}: legacy v1 overlay metadata contains a recursive artifact hook that is incompatible with Shine 2. Remove or migrate only `{target}/shine.toml`; retain overlay payload files such as `merge.yaml` and `rules/`. `shine state migrate` does not modify Preset overlays"
+        ));
+    }
+    let legacy_metadata_targets = planned
+        .iter()
+        .flat_map(|(_, plan)| &plan.steps)
+        .filter(|step| {
+            step.diagnostic_codes
+                .iter()
+                .any(|code| code == "app_legacy_metadata")
+        })
+        .map(|step| step.target.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for target in legacy_metadata_targets {
+        reasons.push(format!(
+            "{target}: legacy v1 App metadata contains a recursive artifact hook that is incompatible with Shine 2. Migrate `{target}/shine.toml` to metadata schema v2 and remove the recursive hook; `shine state migrate` does not modify Preset metadata"
+        ));
+    }
     let external_app_targets = planned
         .iter()
         .flat_map(|(_, plan)| &plan.steps)
@@ -261,17 +291,17 @@ fn blocked_plan_error(
         })
         .map(|step| step.target.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    for target in external_app_targets {
-        reasons.push(format!(
-            "{target}: external Preset code is not trusted; run `shine trust inspect {target}`"
-        ));
-    }
 
     let missing = planned
         .iter()
         .flat_map(|(_, plan)| plan.permissions.missing_declarations.iter())
         .map(permission_name)
         .collect::<std::collections::BTreeSet<_>>();
+    for target in external_app_targets {
+        reasons.push(format!(
+            "{target}: external Preset code is not trusted; run `shine trust inspect {target}`"
+        ));
+    }
     if !missing.is_empty() {
         reasons.push(format!(
             "effective Preset metadata is missing permission declarations for {}; update its `[permissions]` table",
@@ -956,10 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn blocked_upgrade_error_reports_trust_and_missing_declaration_actions() {
-        let command = PermissionV1::Command {
-            program: "shine".to_string(),
-        };
+    fn blocked_upgrade_error_explains_legacy_overlay_metadata_migration() {
         let plan = PlanV1::new(
             LifecycleOperation::Upgrade,
             PlanInputsV1 {
@@ -968,11 +995,11 @@ mod tests {
             },
             vec![
                 PlanStepV1::new("app/clash-verge", Some("hook:0"), PlanActionV1::Blocked)
-                    .with_diagnostic_code("app_external_code_not_allowed"),
+                    .with_diagnostic_code("app_legacy_overlay_metadata"),
             ],
-            PermissionSetV1::new([command]),
+            PermissionSetV1::default(),
             &PermissionSetV1::default(),
-            ["app_permission_declaration_missing"],
+            std::iter::empty::<String>(),
         );
         let planned = vec![(
             LifecyclePlanRequest::App(AppPlanRequest {
@@ -986,12 +1013,14 @@ mod tests {
             plan,
         )];
         let diagnostics =
-            std::collections::BTreeSet::from(["app_external_code_not_allowed".to_string()]);
+            std::collections::BTreeSet::from(["app_legacy_overlay_metadata".to_string()]);
 
         let error = blocked_plan_error(&planned, &diagnostics);
 
-        assert!(error.contains("shine trust inspect app/clash-verge"));
-        assert!(error.contains("missing permission declarations for command shine"));
+        assert!(error.contains("legacy v1 overlay metadata"));
+        assert!(error.contains("app/clash-verge/shine.toml"));
+        assert!(error.contains("retain overlay payload files such as `merge.yaml` and `rules/`"));
+        assert!(error.contains("`shine state migrate` does not modify Preset overlays"));
         assert!(error.contains("no changes were made"));
     }
 

@@ -277,6 +277,8 @@ mod tests {
                 has_explicit_files: true,
                 artifact: None,
                 permissions: None,
+                metadata_schema_version: 2,
+                metadata_is_overlay: false,
             },
             file: crate::apps::AppFile {
                 source_rel: PathBuf::from(source),

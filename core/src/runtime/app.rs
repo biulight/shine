@@ -39,6 +39,10 @@ pub struct AppCategory {
     pub has_explicit_files: bool,
     pub artifact: Option<AppArtifact>,
     pub permissions: Option<PermissionDeclarationV1>,
+    /// Version of the App metadata grammar. Absence is the legacy v1 grammar.
+    pub metadata_schema_version: u32,
+    /// Whether the effective `shine.toml` came from the user overlay layer.
+    pub metadata_is_overlay: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

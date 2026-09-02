@@ -42,6 +42,25 @@ To replace managed files for one category:
 shine app install starship --replace-managed
 ```
 
+### Migrating legacy App metadata to Shine 2
+
+Current App metadata declares its own grammar at the root of `shine.toml`:
+
+```toml
+metadata_schema_version = 2
+```
+
+This is distinct from `[permissions].schema_version`, which declares the permissions grammar.
+An older overlay that replaces `app/<category>/shine.toml` without the root field is legacy v1
+metadata. If it contains a lifecycle hook that recursively runs `shine app artifact apply`, Shine 2
+blocks the Plan and identifies the overlay metadata explicitly. Remove or migrate only that
+`shine.toml`; keep payload overrides such as `merge.yaml` and `rules/`. Do not grant external-code
+trust to work around this incompatibility.
+
+`shine state migrate` migrates Shine-owned runtime state only. It never rewrites or removes your
+Preset overlay; a future Preset migration command can safely offer that as an explicit, reviewed
+operation.
+
 ## Uninstall and restore
 
 ```bash
@@ -378,6 +397,11 @@ Hooks and generators in external presets require target-scoped trust:
 shine trust inspect app/<CATEGORY>
 shine trust grant app/<CATEGORY>
 ```
+
+`trust inspect` is read-only. Before granting trust, resolve every missing permission declaration
+shown by the Plan. If an active overlay's `app/<CATEGORY>/shine.toml` is an old full copy that
+overrides built-in metadata, remove or migrate that metadata file first; overlay payload files such
+as `merge.yaml` and `rules/` remain usable.
 
 Hooks hide stdout by default. When a preset sets `show_output = true`, successful output is shown
 during installation and refresh; `shine upgrade` reserves successful hook completion and output for

@@ -17,6 +17,9 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Follow-up**: an explicit artifact executor must pass the reviewed request, including opaque input
   versions, back to Core for its final approval check; recreating the request drops secret identities
   and turns an otherwise ready Plan into a blocked one.
+- **Diagnostics**: classify the root `metadata_schema_version` rather than inferring legacy metadata
+  from a missing `command shine` permission. A v1 overlay that contains this recursive hook gets an
+  explicit `app_legacy_overlay_metadata` migration diagnostic before external-code trust is relevant.
 - **Rule**: a lifecycle hook must not launch another mutation that owns its own security Plan;
   model it as one combined operation or require an explicit follow-up command.
 
