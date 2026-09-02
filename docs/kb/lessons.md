@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-03 — In-memory validation roots must use native absolute paths
+
+- **Symptom**: the Windows Rust test job rejected an otherwise valid candidate Preset migration
+  because the synthetic validation home expanded to a path beginning with `/`.
+- **Root cause**: `validate_candidate` created its in-memory repository root with a Unix-only
+  absolute path, while the shared validator correctly checks App destination expansion against the
+  native Windows path model.
+- **Fix**: select an absolute synthetic root using `cfg(windows)`, while retaining the Unix root on
+  other platforms.
+- **Rule**: test-only in-memory filesystem roots must still use the native platform's absolute-path
+  syntax whenever the tested behavior expands or validates paths.
+
 ## 2026-09-02 — Lifecycle hooks cannot recursively apply App artifacts
 
 - **Symptom**: a successful `clash-verge` App upgrade wrote its managed rule files, then its

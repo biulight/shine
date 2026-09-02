@@ -337,6 +337,12 @@ fn mark_managed_overlay_read_only(plan: &mut PresetMigrationPlan, root: &Path) {
 }
 
 async fn validate_candidate(snapshot: &PresetSnapshot, plan: &mut PresetMigrationPlan) {
+    // `validate_preset_path` derives a synthetic home beneath this root. Keep the
+    // root absolute according to the native path semantics so its all-platform
+    // metadata validation can run on Windows too.
+    #[cfg(windows)]
+    let root = Path::new(r"C:\shine-preset-migration");
+    #[cfg(not(windows))]
     let root = Path::new("/shine-preset-migration");
     let host = InMemoryHost::new();
     let candidate_targets = plan
