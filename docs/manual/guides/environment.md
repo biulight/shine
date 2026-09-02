@@ -112,13 +112,14 @@ eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
 
 After installing the `utils` shell preset, `shine-env-export MY_TOKEN --as API_TOKEN` is equivalent.
 
-## Use age and Touch ID
+## Use age identities
 
 The `age` backend is suitable for committing team ciphertext encrypted to multiple member
 recipients. Existing GPG ciphertext needs no migration: legacy untagged ciphertext continues to use
 GPG, while new age ciphertext has an `age:` tag.
 
-Install age. On macOS, Touch ID and Secure Enclave identities also require `age-plugin-se`:
+First ensure the standard `age` CLI is installed and available on `PATH`. On macOS, Secure Enclave
+identities authorized with Touch ID also require `age-plugin-se`; Homebrew can install both:
 
 ```bash
 brew install age age-plugin-se
@@ -155,8 +156,42 @@ shine env secret seal --backend age -r age1se1qexample... -r age1qteammate...
 ```
 
 `-r/--recipient` is repeatable for both GPG and age. Removing a recipient does not revoke historical
-ciphertext; re-encrypt or reseal it to rotate access. If AI agents participate in development, read
-[Protect environment secrets when using AI agents](./agent-secret-safety.md) first.
+ciphertext; re-encrypt or reseal it to rotate access.
+
+### Experiment with phone authorization on Windows
+
+[`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) is currently an owner-only
+technical preview for synthetic or disposable data, not real or production secrets. Its Windows
+Alpha requires a Windows 11 x64 client, TPM 2.0, Microsoft Platform Crypto Provider, and a
+capability-qualified Android StrongBox phone. Follow the project's
+[`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md)
+for artifact verification, pairing, transport, recovery drills, and cleanup.
+
+After pairing, point the current Windows user's `~/.shine/config.toml` at the public identity stub:
+
+```toml
+secret_backend = "age"
+age_identity = "C:/Users/<user>/AppData/Local/age-plugin-phone/identity.txt"
+```
+
+Put the printed `age1phone...` recipient and an independently verified recovery recipient in the
+project's commit-ready `shine.workspace.toml`:
+
+```toml
+[env.encryption]
+backend = "age"
+age_recipients = ["age1phone...", "age1..."]
+```
+
+Sealing uses only the recipients' public material and does not prompt on the phone. Decrypting a
+phone-backed secret, including through `shine env run`, invokes the standard age plugin and must
+require a fresh strong biometric authorization for each file-key unwrap. Never make the
+experimental phone recipient the only recipient for retained data; the recovery path must not
+depend on the same phone StrongBox keys, Windows TPM keys, or plugin state.
+
+If AI agents participate in development, read
+[Protect environment secrets when using AI agents](./agent-secret-safety.md) first to understand
+the boundaries around identity files, Touch ID, phone authorization prompts, and command execution.
 
 ## Provide values to one command
 

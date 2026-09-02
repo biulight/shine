@@ -107,11 +107,43 @@ shine env secret identity list
 
 Add its `age1...` recipient alongside macOS Touch ID recipients so one ciphertext supports both.
 
-Windows Hello or TPM integration could theoretically offer a similar experience through an age
-plugin and Windows CNG/NCrypt, but no equally mature general community solution currently exists.
-Shine does not advertise it as a stable capability. High-security Windows users should prefer a
-YubiKey/PIV or GPG with YubiKey. A normal age identity is suitable for ordinary team development when
-the identity file and user-directory permissions are protected.
+For teams exploring fresh hardware authorization on every decrypt, Shine's author also develops the
+standalone [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) project. It grew out of
+direct Windows hardware-identity work in Shine that reached a platform capability limit. The Shine
+proof of concept found that Windows Hello's Passport provider could perform only the legacy RSA
+PKCS#1 v1.5 unwrap; RSA OAEP-SHA256, P-256 ECDH, and the tested WebAuthn PRF path were unavailable.
+Rather than ship that legacy construction or introduce a Shine-specific ciphertext format, the
+author moved the work behind the standard age plugin protocol and into a separately reviewable
+project.
+
+The current design keeps the long-term age decryption key in Android StrongBox and requires a fresh
+strong biometric authorization on the phone for each file-key unwrap. The Windows TPM holds only
+two role-separated, non-exportable P-256 keys for authenticating the paired desktop and privately
+selecting its recipient stanza. It never receives the phone's long-term private key, and there is
+no DPAPI, software-identity, password, or cached-authorization fallback. Shine continues to use the
+standard `age` CLI, `identity-v1`, and `recipient-v1`; the plugin adds no Shine dependency or custom
+ciphertext.
+
+This avoids relying on Windows Hello for the missing cryptographic operations, but it does not
+remove the current platform prerequisites. Version `0.1.0-alpha.1` is an owner-only technical
+preview requiring a Windows 11 x64 client, TPM 2.0, Microsoft Platform Crypto Provider, and a
+capability-qualified Android StrongBox phone. Developer USB/ADB is the normal Windows transport;
+QR is an explicit fallback, not an automatic downgrade. Protocol v2, public signing, multi-device
+coverage, and the complete lifecycle matrix are not finished. Use it only with synthetic or
+disposable data, never real or production secrets. Follow the project's
+[`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md)
+for the exact artifact, pairing, transport, recovery, and cleanup procedure.
+
+The plugin uses only Shine's existing age identity and recipient settings. See
+[experiment with phone authorization on Windows](./environment.md#experiment-with-phone-authorization-on-windows)
+for the exact machine and workspace configuration. The identity stub contains public pairing
+material, not the phone's long-term private key.
+
+The recovery path must not depend on the same phone StrongBox keys, Windows TPM keys, or plugin
+state. Never make the experimental phone recipient the only recipient for retained data. A normal
+age identity remains suitable for ordinary team development when its file and user-directory
+permissions are protected. For stable hardware-backed protection on Windows, prefer an
+organization-approved YubiKey/PIV or GPG with YubiKey workflow.
 
 ## Choose a secret backend
 
@@ -126,6 +158,9 @@ Age with Touch ID is often more convenient for team development and staging. For
 secrets, long-lived credentials, or strong hardware-isolation requirements, prefer GPG with YubiKey
 or an organization-approved hardware-backed design.
 
+The experimental phone design aims for hardware-backed, authorization-per-use isolation, but it is
+not included in this stable-backend ordering until its protocol and release gates are complete.
+
 ## Permissions for AI agents
 
 Treat an agent as a capable local collaborator, not as an inherently trusted security boundary:
@@ -133,8 +168,9 @@ Treat an agent as a capable local collaborator, not as an inherently trusted sec
 - Never add `~/.shine/age/identity.txt`, GPG private keys, or cloud credential files to a workspace.
 - Do not let an agent keep an interactive shell with high-privilege secrets for long periods.
 - Prefer letting the agent edit code and running `shine env run` yourself in a trusted terminal.
-- Use a normal age identity for low-risk development and Touch ID or YubiKey for sensitive work.
-- Cancel unexpected Touch ID, PIN, or YubiKey-touch prompts.
+- Use a normal age identity for low-risk development and Touch ID or YubiKey for sensitive work;
+  limit `age-plugin-phone` to its documented synthetic-data preview.
+- Cancel unexpected Touch ID, phone biometric, PIN, or YubiKey-touch prompts.
 
 Removing a recipient after an identity leaks, a device becomes untrusted, or a member leaves does not
 revoke access to historical ciphertext. Reseal or re-encrypt it and rotate the real upstream token

@@ -93,9 +93,15 @@ shine env secret identity list
 
 把输出中的 `age1...` recipient 加入 `age_recipients` 后，同一份密文可以同时加密给 macOS Touch ID recipient 和 Windows 普通 age recipient。
 
-Windows 笔记本的指纹、Windows Hello、TPM 理论上可以通过 age plugin、Windows CNG/NCrypt 等机制实现类似体验。但目前没有像 macOS `age-plugin-se` 那样成熟通用的 age 社区方案，Shine 不把它写成当前稳定能力。
+如果团队希望每次解密都需要一次新的硬件授权，可以了解由 Shine 作者另行开发的独立项目 [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone)。它源自 Shine 对 Windows 硬件 identity 的直接探索：这项工作在实现过程中碰到了平台能力上限。Shine 的 PoC 发现，Windows Hello 的 Passport provider 只能完成旧式 RSA PKCS#1 v1.5 解包；RSA OAEP-SHA256、P-256 ECDH 和测试过的 WebAuthn PRF 路径都不可用。因此，作者没有把旧式构造或 Shine 专用密文格式放进产品，而是把后续实现移到标准 age plugin 协议之后，并拆分为一个可以独立审查的项目。
 
-高安全 Windows 用户建议使用 YubiKey/PIV 或 GPG + YubiKey。普通团队开发协作可以使用普通 age identity，但要保护好 identity 文件和用户目录权限。
+当前实现把长期 age 解密密钥留在 Android StrongBox 中，每次解包 file key 都需要用户在手机上重新完成一次强生物验证。Windows TPM 只保存两把用途分离、不可导出的 P-256 密钥，分别用于证明已配对桌面身份和私下选择对应的 recipient stanza；手机的长期私钥不会进入 Windows，也不存在 DPAPI、软件 identity、密码或缓存授权回退。Shine 仍然只调用标准 `age` CLI、`identity-v1` 和 `recipient-v1`，不依赖这个项目，也不引入专用密文格式。
+
+这个设计绕开的是 Windows Hello 缺少所需密码学操作的瓶颈，并没有消除当前的平台前置条件。`0.1.0-alpha.1` 仍是 owner-only 技术预览，要求 Windows 11 x64 客户端、TPM 2.0、Microsoft Platform Crypto Provider，以及能力检查合格的 Android StrongBox 手机。Windows 上的正常传输路径是 Developer USB/ADB；QR 是显式回退，不是自动降级。协议 v2、公共签名、多设备覆盖和完整生命周期矩阵都还没有完成。它只能用于合成或可丢弃数据，不能保护真实或生产 secret。具体的制品校验、配对、传输、恢复和清理步骤以项目的 [`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md) 为准。
+
+这个 plugin 只使用 Shine 现有的 age identity 和 recipient 配置。具体的本机与 workspace 设置见[在 Windows 上实验手机授权](./environment.md#在-windows-上实验手机授权)。identity stub 只包含公开配对材料，不含手机的长期私钥。
+
+恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台 Windows 电脑的 TPM 密钥或该 plugin 的本地状态。对于需要保留的数据，绝不能只配置这个实验性手机 recipient。普通团队开发仍可使用普通 age identity，但要保护好 identity 文件和用户目录权限。Windows 上需要稳定硬件保护时，应继续采用组织认可的 YubiKey/PIV 或 GPG + YubiKey 方案。
 
 ## 如何选择密钥后端
 
@@ -108,6 +114,8 @@ Windows 笔记本的指纹、Windows Hello、TPM 理论上可以通过 age plugi
 
 `age + Touch ID` 通常比 `GPG + YubiKey` 更顺手，适合团队开发和预发环境。生产高价值 secret、长期凭据或需要强硬件隔离的场景，仍建议使用 GPG + YubiKey 或组织认可的硬件密钥方案。
 
+实验性手机方案的目标也是提供硬件托管和逐次授权隔离，但在协议与发布门槛全部完成前，不把它列入上述稳定后端排序。
+
 ## 给 AI Agent 的权限建议
 
 把 Agent 当作一个有能力的本机协作者，而不是一个天然可信的安全边界。为它准备权限时，优先遵守这些规则：
@@ -115,8 +123,8 @@ Windows 笔记本的指纹、Windows Hello、TPM 理论上可以通过 age plugi
 - 不把 `~/.shine/age/identity.txt`、GPG 私钥、云厂商 credential 文件加入工作区。
 - 不让 Agent 长时间运行带有高权限 secret 的交互式 shell。
 - 需要 secret 时，优先让 Agent 修改代码，由用户在可信终端中执行 `shine env run`。
-- 对低风险开发任务使用普通 age identity；对高敏感任务使用 Touch ID 或 YubiKey。
-- 看到非预期的 Touch ID、PIN、YubiKey 触摸提示时取消授权。
+- 对低风险开发任务使用普通 age identity；对高敏感任务使用 Touch ID 或 YubiKey；`age-plugin-phone` 仅限其文档规定的合成数据预览。
+- 看到非预期的 Touch ID、手机生物验证、PIN 或 YubiKey 触摸提示时取消授权。
 
 如果 identity 文件泄露、设备不再可信，或成员离开团队，仅从 `age_recipients` 删除 recipient 不会撤销它对历史密文的访问。需要重新封存或重新加密，并在必要时轮换上游服务中的真实 token。
 

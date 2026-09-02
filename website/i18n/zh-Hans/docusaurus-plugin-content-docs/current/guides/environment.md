@@ -103,11 +103,12 @@ eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
 
 安装 `utils` shell 预设后，也可以使用 `shine-env-export MY_TOKEN --as API_TOKEN`。
 
-## 使用 age 与 Touch ID
+## 使用 age identity
 
 Shine 支持 `age` 作为第二种密钥后端。它适合把密文提交到团队仓库中，并加密给多个成员各自的 recipient。已有 GPG 密文不需要迁移：不带标签的旧密文继续按 GPG 解密，`age` 后端生成的新密文会带有 `age:` 标签。
 
-先安装 `age`。macOS 上如需 Touch ID / Secure Enclave 身份，还需要 `age-plugin-se`：
+先确认标准 `age` CLI 已安装并位于 `PATH` 中。macOS 用户若要使用由 Secure Enclave 托管、
+通过 Touch ID 授权的 identity，还需要安装 `age-plugin-se`；Homebrew 可以同时安装两者：
 
 ```bash
 brew install age age-plugin-se
@@ -145,7 +146,28 @@ shine env secret seal --backend age -r age1se1qexample... -r age1qteammate...
 
 `-r/--recipient` 对 GPG 和 age 都可以重复使用。移除某个 recipient 不会撤销它对历史密文的访问；需要重新加密或重新 `seal` 才能轮换访问范围。
 
-如果 AI Agent 会参与开发，先阅读[在 AI Agent 参与开发时保护环境密钥](./agent-secret-safety.md)，确认 identity 文件、Touch ID 和命令执行权限的安全边界。
+### 在 Windows 上实验手机授权
+
+[`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) 目前仍是 owner-only 技术预览，只能用于合成或可丢弃数据，不能保护真实或生产 secret。当前 Windows Alpha 要求 Windows 11 x64 客户端、TPM 2.0、Microsoft Platform Crypto Provider，以及能力检查合格的 Android StrongBox 手机。制品校验、配对、传输、恢复演练和清理步骤以项目的 [`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md) 为准。
+
+配对完成后，在当前 Windows 用户的 `~/.shine/config.toml` 中把 `age_identity` 指向公开 identity stub：
+
+```toml
+secret_backend = "age"
+age_identity = "C:/Users/<user>/AppData/Local/age-plugin-phone/identity.txt"
+```
+
+在可提交到仓库的项目 `shine.workspace.toml` 中，同时加入配对输出的 `age1phone...` recipient 和一个已经独立验证过的恢复 recipient：
+
+```toml
+[env.encryption]
+backend = "age"
+age_recipients = ["age1phone...", "age1..."]
+```
+
+封存只使用 recipient 的公开材料，不会在手机上弹出授权提示。解密由手机保护的 secret（包括通过 `shine env run` 使用它）时，标准 age plugin 会为每次 file key 解包要求一次新的强生物验证。对于需要保留的数据，绝不能只配置这个实验性手机 recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台 Windows 电脑的 TPM 密钥或该 plugin 的本地状态。
+
+如果 AI Agent 会参与开发，先阅读[在 AI Agent 参与开发时保护环境密钥](./agent-secret-safety.md)，确认 identity 文件、Touch ID、手机授权提示和命令执行权限的安全边界。
 
 ## 只向一个命令提供变量
 
