@@ -261,7 +261,10 @@ evaluation failures are reported after the remaining selected generators run.
   Plan identities are shortened for display. Preserve and blocked steps remain explicit. Pass
   `--verbose` to print every ordered step and full digest/fingerprint instead. Missing declarations
   and untrusted external App code produce actionable guidance; either condition still blocks the
-  whole reviewed batch before its first mutation.
+  whole reviewed batch before its first mutation. Lifecycle action markers and status words use
+  restrained semantic colors—green create, yellow update/preserve, red remove/blocked, cyan execute,
+  and dim unchanged—while targets and permission identities remain plain. Redirected output and
+  terminals with color disabled receive the same text without ANSI escapes.
 - `upgrade --prune-stale` removes unchanged managed App entries no longer present in the source
   through the App operation journal. User-modified stale content remains preserved; interrupted
   removal is handled by `app recover`.

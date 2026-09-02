@@ -69,6 +69,12 @@ pub fn bold(s: &str) -> String {
         .to_string()
 }
 
+pub fn bold_cyan(s: &str) -> String {
+    use owo_colors::Style;
+    s.if_supports_color(Stream::Stdout, |t| t.style(Style::new().bold().cyan()))
+        .to_string()
+}
+
 pub fn dim(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.dimmed())
         .to_string()

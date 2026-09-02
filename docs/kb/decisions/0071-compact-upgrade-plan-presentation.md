@@ -22,9 +22,13 @@ Default `upgrade` presentation renders one batch heading with scope sections for
 managed System configuration. It keeps mutation, preserve, blocked, missing-declaration, and
 uncomputable-permission state explicit; groups exact required permission identities by capability;
 counts ordinary no-op steps; summarizes consecutive per-category Preset-cache steps by action; and
-uses shortened display forms for snapshot and Plan identities. The underlying `PlanV1`, approval
-fingerprint, permission validation, fresh re-planning, and all-or-nothing preflight ordering are
-unchanged.
+uses shortened display forms for snapshot and Plan identities. Lifecycle Plan renderers use a shared
+semantic tone map for action prefixes and grouped action counts: create is green, update and
+preserve are yellow, remove and blocked are red, execute is cyan, and unchanged is dim. Targets,
+resources, permission identities, and diagnostic codes remain unstyled. Output automatically falls
+back to the same plain text when stdout does not support color or color is disabled. The underlying
+`PlanV1`, approval fingerprint, permission validation, fresh re-planning, and all-or-nothing
+preflight ordering are unchanged.
 
 `upgrade --verbose` retains the unabridged rendering with every ordered step and full identity.
 Other lifecycle operations keep their existing full presentation. A blocked aggregate review
@@ -40,5 +44,7 @@ recommends `shine upgrade <TARGET>`. Multiple targets retain the aggregate comma
 - Global reconciliation and its single approval remain available and retain the same safety gates.
 - Default output is intentionally a compact projection, not a serialized Plan API; automation that
   needs complete audit text uses `--verbose`.
+- Color is presentation-only and never enters Plan serialization, fingerprints, approvals, or
+  hypothetical Preset authoring reports.
 - Renderer tests must cover scope grouping, no-op/cache summaries, exact permission identities,
   shortened display identities, and actionable blocker messages.

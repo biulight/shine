@@ -402,29 +402,38 @@ fn render_compact_plan_lines(
     let Some((_, first)) = planned.first() else {
         return Ok(Vec::new());
     };
-    let mut lines = vec![format!("Security Plan · {}", first.operation.as_str())];
+    let mut lines = vec![crate::colors::bold(&format!(
+        "Security Plan · {}",
+        first.operation.as_str()
+    ))];
     for (index, (request, plan)) in planned.iter().enumerate() {
         if index > 0 {
             lines.push(String::new());
         }
-        lines.push(format!("  {}", request.section_label()));
+        lines.push(format!(
+            "  {}",
+            crate::colors::bold_cyan(request.section_label())
+        ));
         lines.extend(render_compact_steps(plan));
         lines.extend(render_compact_permissions(plan));
-        lines.push(format!(
+        lines.push(crate::colors::dim(&format!(
             "    Identity  preset {} · config {} · state {} · plan {}",
             short_identity(&plan.inputs.preset.as_hex()),
             short_identity(config_digest),
             short_identity(&plan.inputs.state.as_hex()),
             short_identity(&plan.fingerprint()?.as_hex()),
-        ));
+        )));
     }
     Ok(lines)
 }
 
 fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
-    let mut lines = vec!["    Steps".to_string()];
+    let mut lines = vec![format!("    {}", crate::colors::bold("Steps"))];
     if plan.steps.is_empty() {
-        lines.push("      = no changes".to_string());
+        lines.push(format!(
+            "      {}",
+            style_plan_action(PlanActionV1::None, "= no changes")
+        ));
         return lines;
     }
 
@@ -455,7 +464,7 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
                 .unwrap_or(PlanActionV1::None);
             lines.push(format!(
                 "      {} {} · preset cache ({})",
-                action_name(action),
+                styled_action_name(action),
                 step.target,
                 compact_action_counts(cache_steps),
             ));
@@ -479,7 +488,7 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
         };
         lines.push(format!(
             "      {} {}{}{}",
-            action_name(step.action),
+            styled_action_name(step.action),
             step.target,
             resource,
             diagnostics
@@ -487,8 +496,14 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
     }
     if unchanged > 0 {
         lines.push(format!(
-            "      = {unchanged} unchanged {}",
-            if unchanged == 1 { "step" } else { "steps" }
+            "      {}",
+            style_plan_action(
+                PlanActionV1::None,
+                &format!(
+                    "= {unchanged} unchanged {}",
+                    if unchanged == 1 { "step" } else { "steps" }
+                )
+            )
         ));
     }
     lines
@@ -508,7 +523,7 @@ fn compact_action_counts(steps: &[shine_core::plan::PlanStepV1]) -> String {
         .into_iter()
         .filter_map(|(action, label)| {
             let count = steps.iter().filter(|step| step.action == action).count();
-            (count > 0).then(|| format!("{count} {label}"))
+            (count > 0).then(|| style_plan_action(action, &format!("{count} {label}")))
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -527,9 +542,12 @@ fn action_priority(action: PlanActionV1) -> usize {
 }
 
 fn render_compact_permissions(plan: &PlanV1) -> Vec<String> {
-    let mut lines = vec!["    Required permissions".to_string()];
+    let mut lines = vec![format!(
+        "    {}",
+        crate::colors::bold("Required permissions")
+    )];
     if plan.permissions.required.is_empty() {
-        lines.push("      - none".to_string());
+        lines.push(format!("      {}", crate::colors::dim("- none")));
     } else {
         let mut grouped = std::collections::BTreeMap::<String, Vec<String>>::new();
         for permission in plan.permissions.required.iter() {
@@ -544,15 +562,25 @@ fn render_compact_permissions(plan: &PlanV1) -> Vec<String> {
         }
     }
     if !plan.permissions.missing_declarations.is_empty() {
-        lines.push("    Missing declarations".to_string());
+        lines.push(format!(
+            "    {}",
+            crate::colors::red("Missing declarations")
+        ));
         for permission in plan.permissions.missing_declarations.iter() {
-            lines.push(format!("      ! {}", permission_name(permission)));
+            lines.push(format!(
+                "      {} {}",
+                crate::colors::red("!"),
+                permission_name(permission)
+            ));
         }
     }
     if !plan.permissions.uncomputable_codes.is_empty() {
-        lines.push("    Uncomputable permissions".to_string());
+        lines.push(format!(
+            "    {}",
+            crate::colors::red("Uncomputable permissions")
+        ));
         for code in &plan.permissions.uncomputable_codes {
-            lines.push(format!("      ! {code}"));
+            lines.push(format!("      {} {code}", crate::colors::red("!")));
         }
     }
     lines
@@ -620,16 +648,19 @@ fn short_identity(value: &str) -> String {
 }
 
 fn render_plan_lines(plan: &PlanV1, config_digest: &str) -> Result<Vec<String>> {
-    let mut lines = vec![format!("Security Plan · {}", plan.operation.as_str())];
+    let mut lines = vec![crate::colors::bold(&format!(
+        "Security Plan · {}",
+        plan.operation.as_str()
+    ))];
     lines.push(format!(
         "  Preset snapshot  {}",
         plan.inputs.preset.as_hex()
     ));
     lines.push(format!("  Config snapshot  {config_digest}"));
     lines.push(format!("  State snapshot   {}", plan.inputs.state.as_hex()));
-    lines.push("  Steps".to_string());
+    lines.push(format!("  {}", crate::colors::bold("Steps")));
     if plan.steps.is_empty() {
-        lines.push("    - none".to_string());
+        lines.push(format!("    {}", crate::colors::dim("- none")));
     }
     for step in &plan.steps {
         let resource = step
@@ -644,27 +675,31 @@ fn render_plan_lines(plan: &PlanV1, config_digest: &str) -> Result<Vec<String>> 
         };
         lines.push(format!(
             "    {} {}{}{}",
-            action_name(step.action),
+            styled_action_name(step.action),
             step.target,
             resource,
             diagnostics
         ));
     }
-    lines.push("  Required permissions".to_string());
+    lines.push(format!("  {}", crate::colors::bold("Required permissions")));
     if plan.permissions.required.is_empty() {
-        lines.push("    - none".to_string());
+        lines.push(format!("    {}", crate::colors::dim("- none")));
     }
     for permission in plan.permissions.required.iter() {
         lines.push(format!("    - {}", permission_name(permission)));
     }
     for permission in plan.permissions.missing_declarations.iter() {
         lines.push(format!(
-            "    ! missing declaration: {}",
+            "    {} {}",
+            crate::colors::red("! missing declaration:"),
             permission_name(permission)
         ));
     }
     for code in &plan.permissions.uncomputable_codes {
-        lines.push(format!("    ! uncomputable: {code}"));
+        lines.push(format!(
+            "    {} {code}",
+            crate::colors::red("! uncomputable:")
+        ));
     }
     lines.push(format!(
         "  Fingerprint      {}",
@@ -683,6 +718,39 @@ pub(crate) fn action_name(action: PlanActionV1) -> &'static str {
         PlanActionV1::Preserve => "! preserve",
         PlanActionV1::Blocked => "x blocked",
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlanActionTone {
+    Dim,
+    Green,
+    Yellow,
+    Red,
+    Cyan,
+}
+
+fn plan_action_tone(action: PlanActionV1) -> PlanActionTone {
+    match action {
+        PlanActionV1::None => PlanActionTone::Dim,
+        PlanActionV1::Create => PlanActionTone::Green,
+        PlanActionV1::Update | PlanActionV1::Preserve => PlanActionTone::Yellow,
+        PlanActionV1::Remove | PlanActionV1::Blocked => PlanActionTone::Red,
+        PlanActionV1::Execute => PlanActionTone::Cyan,
+    }
+}
+
+fn style_plan_action(action: PlanActionV1, value: &str) -> String {
+    match plan_action_tone(action) {
+        PlanActionTone::Dim => crate::colors::dim(value),
+        PlanActionTone::Green => crate::colors::green(value),
+        PlanActionTone::Yellow => crate::colors::yellow(value),
+        PlanActionTone::Red => crate::colors::red(value),
+        PlanActionTone::Cyan => crate::colors::cyan(value),
+    }
+}
+
+fn styled_action_name(action: PlanActionV1) -> String {
+    style_plan_action(action, action_name(action))
 }
 
 pub(crate) fn permission_name(permission: &PermissionV1) -> String {
@@ -742,20 +810,52 @@ mod tests {
                 preset: digest("preset"),
                 state: digest("state"),
             },
-            vec![PlanStepV1::new(
-                "app/demo",
-                Some("config"),
-                PlanActionV1::Create,
-            )],
+            vec![
+                PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Create),
+                PlanStepV1::new("app/demo", Some("generated"), PlanActionV1::Update),
+                PlanStepV1::new("app/demo", Some("user"), PlanActionV1::Preserve)
+                    .with_diagnostic_code("app_user_modified"),
+            ],
             PermissionSetV1::new([permission.clone()]),
             &PermissionSetV1::new([permission]),
             std::iter::empty::<String>(),
         );
+        let preset_digest = plan.inputs.preset.as_hex();
+        let state_digest = plan.inputs.state.as_hex();
+        let fingerprint = plan.fingerprint().unwrap().as_hex();
         let rendered = render_plan_lines(&plan, "missing").unwrap().join("\n");
         assert!(rendered.contains("+ app/demo · config"));
+        assert!(rendered.contains("~ app/demo · generated"));
+        assert!(rendered.contains("! preserve app/demo · user [app_user_modified]"));
         assert!(rendered.contains("command demo"));
+        assert!(rendered.contains(&format!("Preset snapshot  {preset_digest}")));
         assert!(rendered.contains("Config snapshot  missing"));
-        assert!(rendered.contains("Fingerprint"));
+        assert!(rendered.contains(&format!("State snapshot   {state_digest}")));
+        assert!(rendered.contains(&format!("Fingerprint      {fingerprint}")));
+        assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn lifecycle_plan_actions_use_stable_semantic_tones() {
+        assert_eq!(plan_action_tone(PlanActionV1::None), PlanActionTone::Dim);
+        assert_eq!(
+            plan_action_tone(PlanActionV1::Create),
+            PlanActionTone::Green
+        );
+        assert_eq!(
+            plan_action_tone(PlanActionV1::Update),
+            PlanActionTone::Yellow
+        );
+        assert_eq!(plan_action_tone(PlanActionV1::Remove), PlanActionTone::Red);
+        assert_eq!(
+            plan_action_tone(PlanActionV1::Execute),
+            PlanActionTone::Cyan
+        );
+        assert_eq!(
+            plan_action_tone(PlanActionV1::Preserve),
+            PlanActionTone::Yellow
+        );
+        assert_eq!(plan_action_tone(PlanActionV1::Blocked), PlanActionTone::Red);
     }
 
     #[test]
@@ -790,9 +890,19 @@ mod tests {
                 PlanStepV1::new(
                     "app/starship",
                     Some("preset-cache:starship.toml"),
+                    PlanActionV1::Update,
+                ),
+                PlanStepV1::new(
+                    "app/starship",
+                    Some("preset-cache:shared.toml"),
                     PlanActionV1::None,
                 ),
                 PlanStepV1::new("app/starship", Some("starship.toml"), PlanActionV1::None),
+                PlanStepV1::new("app/starship", Some("generated.toml"), PlanActionV1::Update),
+                PlanStepV1::new("app/starship", Some("user.toml"), PlanActionV1::Preserve)
+                    .with_diagnostic_code("app_user_modified"),
+                PlanStepV1::new("app/starship", Some("hook:0"), PlanActionV1::Blocked)
+                    .with_diagnostic_code("app_external_code_not_allowed"),
             ],
             PermissionSetV1::new([PermissionV1::Filesystem {
                 access: FilesystemAccessV1::Write,
@@ -831,10 +941,18 @@ mod tests {
 
         assert_eq!(rendered.matches("Security Plan · upgrade").count(), 1);
         assert!(rendered.contains("Shell Presets\n    Steps\n      = 1 unchanged step"));
-        assert!(rendered.contains("+ app/starship · preset cache (1 create, 1 unchanged)"));
+        assert!(
+            rendered.contains("~ app/starship · preset cache (1 create, 1 update, 1 unchanged)")
+        );
+        assert!(rendered.contains("~ app/starship · generated.toml"));
+        assert!(rendered.contains("! preserve app/starship · user.toml [app_user_modified]"));
+        assert!(
+            rendered.contains("x blocked app/starship · hook:0 [app_external_code_not_allowed]")
+        );
         assert!(rendered.contains("filesystem write"));
         assert!(rendered.contains("config present:0123456789ab…"));
         assert!(!rendered.contains("preset-cache:shine.toml"));
+        assert!(!rendered.contains('\u{1b}'));
     }
 
     #[test]

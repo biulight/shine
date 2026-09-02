@@ -219,7 +219,10 @@ enrollment，不会批准之后的 lifecycle Plan。
   但仍保留每个被审阅的 identity；snapshot 与 Plan identity 使用缩写。`preserve` 与 `blocked`
   step 始终明确显示。传入 `--verbose` 可展开全部有序 step 以及完整 digest/fingerprint。
   缺失权限声明或外部 App 代码尚未获得 trust 时会给出可执行的排查提示，并继续在首次 mutation
-  前阻止整个批次。
+  前阻止整个批次。Lifecycle action marker 与状态词使用克制的语义配色：create 为绿色，
+  update/preserve 为黄色，remove/blocked 为红色，execute 为青色，unchanged 使用 dim；target
+  与权限 identity 保持普通文本。输出被重定向或终端禁用颜色时，文本内容不变且不包含 ANSI
+  转义序列。
 - `upgrade --prune-stale` 通过 App operation journal 移除预设来源中已不存在且未修改的受管
   App 条目。用户修改过的 stale 内容仍会保留；移除中断时使用 `app recover` 处理。
 - App 静态 Copy 的 effective destination 变化时，会通过一个 journaled 的旧 receipt/新 receipt
