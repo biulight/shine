@@ -225,8 +225,10 @@ evaluation failures are reported after the remaining selected generators run.
 
 - `update --refresh-release` bypasses the 24-hour cache. By default, `update` groups targets under
   the same Homebrew-style sections as `shine list`: interactive terminals use horizontal columns,
-  while redirected output stays one target per line. It then prints the `shine upgrade` action once.
-  App files and Shell commands collapse to their category. `update --diff` switches to detailed
+  while redirected output stays one target per line. When exactly one category or managed-system
+  item needs an update, the final hint uses its canonical target, such as
+  `shine upgrade app/clash-verge`; multiple targets keep the aggregate `shine upgrade` hint. App
+  files and Shell commands collapse to their category. `update --diff` switches to detailed
   vertical rows and expands affected files and commands. Structural changes such as source or
   destination relocation, new files, deployment metadata, and command-entry refreshes are shown
   field by field; a unified diff is
@@ -253,6 +255,13 @@ evaluation failures are reported after the remaining selected generators run.
   effective command sources: Bash/Zsh plans do not request writes for native `.ps1` sources, and
   PowerShell plans do not request writes for native `.sh` sources. Category metadata and unbound
   shared helper files remain cached.
+- By default, `upgrade` renders that review as one compact Plan with separate Shell, App, and System
+  sections. No-op steps are counted, consecutive per-category Preset-cache steps are summarized,
+  permissions are grouped by capability while retaining every reviewed identity, and snapshot/
+  Plan identities are shortened for display. Preserve and blocked steps remain explicit. Pass
+  `--verbose` to print every ordered step and full digest/fingerprint instead. Missing declarations
+  and untrusted external App code produce actionable guidance; either condition still blocks the
+  whole reviewed batch before its first mutation.
 - `upgrade --prune-stale` removes unchanged managed App entries no longer present in the source
   through the App operation journal. User-modified stale content remains preserved; interrupted
   removal is handled by `app recover`.
@@ -262,7 +271,7 @@ evaluation failures are reported after the remaining selected generators run.
 - An App JSON merge whose effective destination changes uses a key-owned two-destination
   transaction. Recovery restores/removes only the old/new declared top-level keys and preserves
   unrelated current settings at both paths.
-- By default, `upgrade` prints each app category, Shell category, or managed-system item it actually
+- After approval, `upgrade` prints each app category, Shell category, or managed-system item it actually
   updates and counts each user-facing target once. App rows include the number of changed files.
   `--verbose` expands app files and successful hook output, and also shows current/skipped items and
   Shell deployment details such as snapshots, templates, and Bin Links. Failures, conflicts,

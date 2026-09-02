@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-02 — Update hints must preserve the scope users just reviewed
+
+- **Symptom**: `shine update` reported one App category but told the user to run the untargeted
+  `shine upgrade`, whose required all-installed reconciliation then displayed unrelated no-op Shell
+  steps, App Preset-cache maintenance, and preserved managed Sys state.
+- **Root cause**: update inspection intentionally reports user-facing managed results, while global
+  upgrade also plans internal cache convergence and every enabled lifecycle domain; the generic
+  hint hid that scope expansion and the Plan renderer gave every semantic step equal visual weight.
+- **Fix**: recommend the canonical targeted upgrade when exactly one update target exists, and
+  group global upgrade review by lifecycle domain with no-op/cache summaries and explicit blockers.
+- **Rule**: a follow-up command hint must not silently broaden a uniquely identified update; when a
+  broader lifecycle operation is intentional, its presentation must distinguish mutation,
+  maintenance, preservation, and blocking state.
+
 ## 2026-09-02 — Shell cache permissions follow the effective shell source set
 
 - **Symptom**: a Bash or Zsh Shell Plan requested embedded-cache write and rollback permissions for

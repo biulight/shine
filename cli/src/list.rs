@@ -160,7 +160,7 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
         print_name_section(&mut separator, "System Configs", &sys_names);
         let (_, generator_failed) = print_generator_notice(&app_rows, run_generators);
         if any_update {
-            print_update_hint();
+            print_update_hint(&update_targets(&shell_names, &app_names, &sys_names));
         }
         if generator_failed {
             anyhow::bail!("one or more App generators could not be evaluated");
@@ -241,7 +241,13 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
 
     let (_, generator_failed) = print_generator_notice(&app_rows, run_generators);
     if any_update {
-        print_update_hint();
+        let shell_names = shell_categories(&update_shell);
+        let app_names = update_app
+            .keys()
+            .map(|category| (*category).to_string())
+            .collect::<Vec<_>>();
+        let sys_names = sorted_names(update_sys.iter().map(|row| row.item_id.clone()).collect());
+        print_update_hint(&update_targets(&shell_names, &app_names, &sys_names));
     }
     if generator_failed {
         anyhow::bail!("one or more App generators could not be evaluated");
@@ -250,9 +256,26 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
     Ok(true)
 }
 
-fn print_update_hint() {
+fn print_update_hint(targets: &[String]) {
     println!();
-    println!("{}", colors::dim("Run `shine upgrade` to apply updates."));
+    println!("{}", colors::dim(&update_hint_text(targets)));
+}
+
+fn update_hint_text(targets: &[String]) -> String {
+    let command = match targets {
+        [target] => format!("shine upgrade {target}"),
+        _ => "shine upgrade".to_string(),
+    };
+    format!("Run `{command}` to apply updates.")
+}
+
+fn update_targets(shell: &[String], app: &[String], sys: &[String]) -> Vec<String> {
+    shell
+        .iter()
+        .map(|category| format!("shell/{category}"))
+        .chain(app.iter().map(|category| format!("app/{category}")))
+        .chain(sys.iter().map(|item| format!("sys/{item}")))
+        .collect()
 }
 
 fn app_update_categories<'a>(rows: &[&'a AppRow]) -> BTreeMap<&'a str, Vec<&'a AppRow>> {
@@ -777,6 +800,32 @@ mod tests {
         second.label = "proxy/usetproxy".to_string();
 
         assert_eq!(shell_categories(&[&first, &second]), vec!["proxy"]);
+    }
+
+    #[test]
+    fn update_hint_targets_the_only_pending_category() {
+        let targets = update_targets(&[], &["clash-verge".to_string()], &[]);
+
+        assert_eq!(targets, ["app/clash-verge"]);
+        assert_eq!(
+            update_hint_text(&targets),
+            "Run `shine upgrade app/clash-verge` to apply updates."
+        );
+    }
+
+    #[test]
+    fn update_hint_keeps_global_upgrade_for_multiple_categories() {
+        let targets = update_targets(
+            &["proxy".to_string()],
+            &["clash-verge".to_string()],
+            &["split-dns".to_string()],
+        );
+
+        assert_eq!(targets, ["shell/proxy", "app/clash-verge", "sys/split-dns"]);
+        assert_eq!(
+            update_hint_text(&targets),
+            "Run `shine upgrade` to apply updates."
+        );
     }
 
     #[test]

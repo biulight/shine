@@ -136,7 +136,7 @@ async fn handle_upgrade_installed_target_with_reporter(
     yes: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
-    let reviewed = crate::lifecycle_plan::review_plans(
+    let reviewed = crate::lifecycle_plan::review_upgrade_plans(
         config,
         [crate::lifecycle_plan::LifecyclePlanRequest::app(
             AppPlanRequest {
@@ -150,6 +150,7 @@ async fn handle_upgrade_installed_target_with_reporter(
             config,
         )],
         yes,
+        verbose,
     )
     .await?
     .into_iter()

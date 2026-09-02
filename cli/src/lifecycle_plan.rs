@@ -104,6 +104,21 @@ impl LifecyclePlanRequest {
             Self::SysBootstrap { request, .. } => runtime.plan_sys_bootstrap(request.clone()).await,
         }
     }
+
+    fn section_label(&self) -> &'static str {
+        match self {
+            Self::App(_) => "App Configs",
+            Self::AppRecovery => "App Recovery",
+            Self::AppRefresh(_) => "App Refresh",
+            Self::AppArtifact(_) => "App Artifact",
+            Self::Shell(_) => "Shell Presets",
+            Self::ShellRecovery => "Shell Recovery",
+            Self::Sys(_) => "System Configs",
+            Self::SysRecovery => "System Recovery",
+            Self::SysProfile(_) => "System Profile",
+            Self::SysBootstrap { .. } => "System Bootstrap",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -123,6 +138,40 @@ pub(crate) async fn review_plans(
     requests: impl IntoIterator<Item = LifecyclePlanRequest>,
     yes: bool,
 ) -> Result<Vec<ReviewedLifecyclePlan>> {
+    review_plans_with_render_mode(config, requests, yes, PlanRenderMode::Detailed).await
+}
+
+pub(crate) async fn review_upgrade_plans(
+    config: &Config,
+    requests: impl IntoIterator<Item = LifecyclePlanRequest>,
+    yes: bool,
+    verbose: bool,
+) -> Result<Vec<ReviewedLifecyclePlan>> {
+    review_plans_with_render_mode(
+        config,
+        requests,
+        yes,
+        if verbose {
+            PlanRenderMode::Detailed
+        } else {
+            PlanRenderMode::Compact
+        },
+    )
+    .await
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlanRenderMode {
+    Compact,
+    Detailed,
+}
+
+async fn review_plans_with_render_mode(
+    config: &Config,
+    requests: impl IntoIterator<Item = LifecyclePlanRequest>,
+    yes: bool,
+    render_mode: PlanRenderMode,
+) -> Result<Vec<ReviewedLifecyclePlan>> {
     let config_digest = active_config_digest(config).await?;
     let mut runtime = runtime_with_env(config).await?;
     let mut planned = Vec::new();
@@ -132,9 +181,6 @@ pub(crate) async fn review_plans(
     for request in requests {
         request.configure_runtime(&mut runtime);
         let plan = request.generate(&runtime).await?;
-        for line in render_plan_lines(&plan, &config_digest)? {
-            println!("{line}");
-        }
         blocked |= !plan.is_ready();
         blocked_diagnostics.extend(
             plan.steps
@@ -153,8 +199,22 @@ pub(crate) async fn review_plans(
         planned.push((request, plan));
     }
 
+    let rendered = match render_mode {
+        PlanRenderMode::Compact => render_compact_plan_lines(&planned, &config_digest)?,
+        PlanRenderMode::Detailed => planned
+            .iter()
+            .map(|(_, plan)| render_plan_lines(plan, &config_digest))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect(),
+    };
+    for line in rendered {
+        println!("{line}");
+    }
+
     if blocked {
-        bail!(blocked_plan_message(&blocked_diagnostics));
+        bail!(blocked_plan_error(&planned, &blocked_diagnostics));
     }
 
     if needs_confirmation && !yes {
@@ -179,6 +239,67 @@ pub(crate) async fn review_plans(
             })
         })
         .collect()
+}
+
+fn blocked_plan_error(
+    planned: &[(LifecyclePlanRequest, PlanV1)],
+    diagnostics: &std::collections::BTreeSet<String>,
+) -> String {
+    let message = blocked_plan_message(diagnostics);
+    if message != "security Plan is blocked; no changes were made" {
+        return message.to_string();
+    }
+
+    let mut reasons = Vec::new();
+    let external_app_targets = planned
+        .iter()
+        .flat_map(|(_, plan)| &plan.steps)
+        .filter(|step| {
+            step.diagnostic_codes
+                .iter()
+                .any(|code| code == "app_external_code_not_allowed")
+        })
+        .map(|step| step.target.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for target in external_app_targets {
+        reasons.push(format!(
+            "{target}: external Preset code is not trusted; run `shine trust inspect {target}`"
+        ));
+    }
+
+    let missing = planned
+        .iter()
+        .flat_map(|(_, plan)| plan.permissions.missing_declarations.iter())
+        .map(permission_name)
+        .collect::<std::collections::BTreeSet<_>>();
+    if !missing.is_empty() {
+        reasons.push(format!(
+            "effective Preset metadata is missing permission declarations for {}; update its `[permissions]` table",
+            missing.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+
+    let uncomputable = planned
+        .iter()
+        .flat_map(|(_, plan)| plan.permissions.uncomputable_codes.iter())
+        .filter(|code| !code.ends_with("_permission_declaration_missing"))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    if !uncomputable.is_empty() {
+        reasons.push(format!(
+            "permissions could not be computed: {}",
+            uncomputable.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+
+    if reasons.is_empty() {
+        message.to_string()
+    } else {
+        format!(
+            "security Plan is blocked; no changes were made:\n  - {}",
+            reasons.join("\n  - ")
+        )
+    }
 }
 
 fn blocked_plan_message(diagnostics: &std::collections::BTreeSet<String>) -> &'static str {
@@ -272,6 +393,230 @@ fn planning_input_versions(config: &Config) -> PlanningInputVersions {
 fn hex_digest(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn render_compact_plan_lines(
+    planned: &[(LifecyclePlanRequest, PlanV1)],
+    config_digest: &str,
+) -> Result<Vec<String>> {
+    let Some((_, first)) = planned.first() else {
+        return Ok(Vec::new());
+    };
+    let mut lines = vec![format!("Security Plan · {}", first.operation.as_str())];
+    for (index, (request, plan)) in planned.iter().enumerate() {
+        if index > 0 {
+            lines.push(String::new());
+        }
+        lines.push(format!("  {}", request.section_label()));
+        lines.extend(render_compact_steps(plan));
+        lines.extend(render_compact_permissions(plan));
+        lines.push(format!(
+            "    Identity  preset {} · config {} · state {} · plan {}",
+            short_identity(&plan.inputs.preset.as_hex()),
+            short_identity(config_digest),
+            short_identity(&plan.inputs.state.as_hex()),
+            short_identity(&plan.fingerprint()?.as_hex()),
+        ));
+    }
+    Ok(lines)
+}
+
+fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
+    let mut lines = vec!["    Steps".to_string()];
+    if plan.steps.is_empty() {
+        lines.push("      = no changes".to_string());
+        return lines;
+    }
+
+    let mut unchanged = 0usize;
+    let mut index = 0usize;
+    while index < plan.steps.len() {
+        let step = &plan.steps[index];
+        if step
+            .resource
+            .as_deref()
+            .is_some_and(|resource| resource.starts_with("preset-cache:"))
+        {
+            let start = index;
+            while index < plan.steps.len()
+                && plan.steps[index].target == step.target
+                && plan.steps[index]
+                    .resource
+                    .as_deref()
+                    .is_some_and(|resource| resource.starts_with("preset-cache:"))
+            {
+                index += 1;
+            }
+            let cache_steps = &plan.steps[start..index];
+            let action = cache_steps
+                .iter()
+                .map(|step| step.action)
+                .max_by_key(|action| action_priority(*action))
+                .unwrap_or(PlanActionV1::None);
+            lines.push(format!(
+                "      {} {} · preset cache ({})",
+                action_name(action),
+                step.target,
+                compact_action_counts(cache_steps),
+            ));
+            continue;
+        }
+
+        index += 1;
+        if step.action == PlanActionV1::None {
+            unchanged += 1;
+            continue;
+        }
+        let resource = step
+            .resource
+            .as_deref()
+            .map(|value| format!(" · {value}"))
+            .unwrap_or_default();
+        let diagnostics = if step.diagnostic_codes.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", step.diagnostic_codes.join(", "))
+        };
+        lines.push(format!(
+            "      {} {}{}{}",
+            action_name(step.action),
+            step.target,
+            resource,
+            diagnostics
+        ));
+    }
+    if unchanged > 0 {
+        lines.push(format!(
+            "      = {unchanged} unchanged {}",
+            if unchanged == 1 { "step" } else { "steps" }
+        ));
+    }
+    lines
+}
+
+fn compact_action_counts(steps: &[shine_core::plan::PlanStepV1]) -> String {
+    let actions = [
+        (PlanActionV1::Create, "create"),
+        (PlanActionV1::Update, "update"),
+        (PlanActionV1::Remove, "remove"),
+        (PlanActionV1::Execute, "execute"),
+        (PlanActionV1::Preserve, "preserve"),
+        (PlanActionV1::Blocked, "blocked"),
+        (PlanActionV1::None, "unchanged"),
+    ];
+    actions
+        .into_iter()
+        .filter_map(|(action, label)| {
+            let count = steps.iter().filter(|step| step.action == action).count();
+            (count > 0).then(|| format!("{count} {label}"))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn action_priority(action: PlanActionV1) -> usize {
+    match action {
+        PlanActionV1::Blocked => 7,
+        PlanActionV1::Preserve => 6,
+        PlanActionV1::Execute => 5,
+        PlanActionV1::Remove => 4,
+        PlanActionV1::Update => 3,
+        PlanActionV1::Create => 2,
+        PlanActionV1::None => 1,
+    }
+}
+
+fn render_compact_permissions(plan: &PlanV1) -> Vec<String> {
+    let mut lines = vec!["    Required permissions".to_string()];
+    if plan.permissions.required.is_empty() {
+        lines.push("      - none".to_string());
+    } else {
+        let mut grouped = std::collections::BTreeMap::<String, Vec<String>>::new();
+        for permission in plan.permissions.required.iter() {
+            let (group, value) = permission_group(permission);
+            grouped.entry(group).or_default().push(value);
+        }
+        for (group, values) in grouped {
+            lines.push(format!("      {group}"));
+            for value in values {
+                lines.push(format!("        - {value}"));
+            }
+        }
+    }
+    if !plan.permissions.missing_declarations.is_empty() {
+        lines.push("    Missing declarations".to_string());
+        for permission in plan.permissions.missing_declarations.iter() {
+            lines.push(format!("      ! {}", permission_name(permission)));
+        }
+    }
+    if !plan.permissions.uncomputable_codes.is_empty() {
+        lines.push("    Uncomputable permissions".to_string());
+        for code in &plan.permissions.uncomputable_codes {
+            lines.push(format!("      ! {code}"));
+        }
+    }
+    lines
+}
+
+fn permission_group(permission: &PermissionV1) -> (String, String) {
+    match permission {
+        PermissionV1::Filesystem { access, path } => (
+            format!(
+                "filesystem {}",
+                match access {
+                    FilesystemAccessV1::Read => "read",
+                    FilesystemAccessV1::Write => "write",
+                    FilesystemAccessV1::Remove => "remove",
+                    FilesystemAccessV1::Execute => "execute",
+                }
+            ),
+            path.clone(),
+        ),
+        PermissionV1::Network { scope } => (
+            "network".to_string(),
+            match scope {
+                NetworkScopeV1::Any => "any".to_string(),
+                NetworkScopeV1::Host(host) => format!("host {host}"),
+            },
+        ),
+        PermissionV1::Command { program } => ("command".to_string(), program.clone()),
+        PermissionV1::Administrator => ("administrator".to_string(), "required".to_string()),
+        PermissionV1::Environment { name, sensitivity } => (
+            format!(
+                "environment {}",
+                match sensitivity {
+                    EnvironmentSensitivityV1::Plain => "plain",
+                    EnvironmentSensitivityV1::Secret => "secret",
+                }
+            ),
+            name.clone(),
+        ),
+        PermissionV1::System {
+            capability,
+            resource,
+        } => (
+            format!("system {capability}"),
+            resource.clone().unwrap_or_else(|| "required".to_string()),
+        ),
+    }
+}
+
+fn short_identity(value: &str) -> String {
+    const DISPLAY_LEN: usize = 12;
+    let (prefix, digest) = value
+        .split_once(':')
+        .map_or(("", value), |(prefix, digest)| (prefix, digest));
+    let short = digest.chars().take(DISPLAY_LEN).collect::<String>();
+    let suffix = if digest.chars().count() > DISPLAY_LEN {
+        "…"
+    } else {
+        ""
+    };
+    if prefix.is_empty() {
+        format!("{short}{suffix}")
+    } else {
+        format!("{prefix}:{short}{suffix}")
+    }
 }
 
 fn render_plan_lines(plan: &PlanV1, config_digest: &str) -> Result<Vec<String>> {
@@ -411,6 +756,125 @@ mod tests {
         assert!(rendered.contains("command demo"));
         assert!(rendered.contains("Config snapshot  missing"));
         assert!(rendered.contains("Fingerprint"));
+    }
+
+    #[test]
+    fn compact_upgrade_renderer_groups_scopes_and_preset_cache_steps() {
+        let shell = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("shell-preset"),
+                state: digest("shell-state"),
+            },
+            vec![PlanStepV1::new(
+                "shell/proxy/setproxy",
+                None::<String>,
+                PlanActionV1::None,
+            )],
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let app = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("app-preset"),
+                state: digest("app-state"),
+            },
+            vec![
+                PlanStepV1::new(
+                    "app/starship",
+                    Some("preset-cache:shine.toml"),
+                    PlanActionV1::Create,
+                ),
+                PlanStepV1::new(
+                    "app/starship",
+                    Some("preset-cache:starship.toml"),
+                    PlanActionV1::None,
+                ),
+                PlanStepV1::new("app/starship", Some("starship.toml"), PlanActionV1::None),
+            ],
+            PermissionSetV1::new([PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: "shine:presets/app/starship/shine.toml".to_string(),
+            }]),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let planned = vec![
+            (
+                LifecyclePlanRequest::Shell(ShellPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: None,
+                    force: false,
+                    purge: false,
+                    input_versions: PlanningInputVersions::default(),
+                }),
+                shell,
+            ),
+            (
+                LifecyclePlanRequest::App(AppPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: None,
+                    force: false,
+                    purge: false,
+                    prune_stale: false,
+                    input_versions: PlanningInputVersions::default(),
+                }),
+                app,
+            ),
+        ];
+
+        let rendered = render_compact_plan_lines(&planned, "present:0123456789abcdef")
+            .unwrap()
+            .join("\n");
+
+        assert_eq!(rendered.matches("Security Plan · upgrade").count(), 1);
+        assert!(rendered.contains("Shell Presets\n    Steps\n      = 1 unchanged step"));
+        assert!(rendered.contains("+ app/starship · preset cache (1 create, 1 unchanged)"));
+        assert!(rendered.contains("filesystem write"));
+        assert!(rendered.contains("config present:0123456789ab…"));
+        assert!(!rendered.contains("preset-cache:shine.toml"));
+    }
+
+    #[test]
+    fn blocked_upgrade_error_reports_trust_and_missing_declaration_actions() {
+        let command = PermissionV1::Command {
+            program: "shine".to_string(),
+        };
+        let plan = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("preset"),
+                state: digest("state"),
+            },
+            vec![
+                PlanStepV1::new("app/clash-verge", Some("hook:0"), PlanActionV1::Blocked)
+                    .with_diagnostic_code("app_external_code_not_allowed"),
+            ],
+            PermissionSetV1::new([command]),
+            &PermissionSetV1::default(),
+            ["app_permission_declaration_missing"],
+        );
+        let planned = vec![(
+            LifecyclePlanRequest::App(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("clash-verge".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            }),
+            plan,
+        )];
+        let diagnostics =
+            std::collections::BTreeSet::from(["app_external_code_not_allowed".to_string()]);
+
+        let error = blocked_plan_error(&planned, &diagnostics);
+
+        assert!(error.contains("shine trust inspect app/clash-verge"));
+        assert!(error.contains("missing permission declarations for command shine"));
+        assert!(error.contains("no changes were made"));
     }
 
     #[test]

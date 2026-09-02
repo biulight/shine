@@ -186,7 +186,7 @@ pub async fn handle_config_upgrade(
 
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
     let os_id = sys::detect_os_id().await?;
-    let reviewed = crate::lifecycle_plan::review_plans(
+    let reviewed = crate::lifecycle_plan::review_upgrade_plans(
         config,
         [
             crate::lifecycle_plan::LifecyclePlanRequest::shell(
@@ -221,6 +221,7 @@ pub async fn handle_config_upgrade(
             ),
         ],
         yes,
+        verbose,
     )
     .await?;
     let mut prepared = crate::lifecycle_plan::prepare_plans(config, reviewed).await?;

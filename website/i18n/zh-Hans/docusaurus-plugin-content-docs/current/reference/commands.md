@@ -189,7 +189,9 @@ enrollment，不会批准之后的 lifecycle Plan。
 
 - `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
   Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示
-  一次 `shine upgrade`。App 文件与 Shell 命令都按类别折叠。`update --diff` 会改用纵向
+  一次升级命令。只有一个类别或受管系统项需要更新时，该提示会使用其 canonical target，
+  例如 `shine upgrade app/clash-verge`；存在多个 target 时仍提示聚合命令 `shine upgrade`。
+  App 文件与 Shell 命令都按类别折叠。`update --diff` 会改用纵向
   详细行并展开受影响的文件与命令；来源或目标迁移、新文件、部署元数据和命令入口刷新等
   结构性变更会逐字段显示，只有内容确实变化时才输出 unified diff。定向的
   `update <TARGET>` 使用相同明细。
@@ -212,13 +214,19 @@ enrollment，不会批准之后的 lifecycle Plan。
   命令不会贡献命令级 mutation 权限。嵌入式 Shell cache 权限只包含当前操作系统与 shell
   实际生效的命令来源：Bash/Zsh 的 Plan 不会要求写入原生 `.ps1` 来源，PowerShell 的 Plan
   也不会要求写入原生 `.sh` 来源；类别 metadata 与未绑定到具体命令的共享辅助文件仍会缓存。
+- `upgrade` 默认把本次审阅展示为一个紧凑 Plan，并分为 Shell、App 和 System 区段。无操作
+  step 只显示计数，同一类别中连续的 Preset cache step 会合并汇总；权限按 capability 分组，
+  但仍保留每个被审阅的 identity；snapshot 与 Plan identity 使用缩写。`preserve` 与 `blocked`
+  step 始终明确显示。传入 `--verbose` 可展开全部有序 step 以及完整 digest/fingerprint。
+  缺失权限声明或外部 App 代码尚未获得 trust 时会给出可执行的排查提示，并继续在首次 mutation
+  前阻止整个批次。
 - `upgrade --prune-stale` 通过 App operation journal 移除预设来源中已不存在且未修改的受管
   App 条目。用户修改过的 stale 内容仍会保留；移除中断时使用 `app recover` 处理。
 - App 静态 Copy 的 effective destination 变化时，会通过一个 journaled 的旧 receipt/新 receipt
   事务完成 relocation。旧受管内容必须未修改且新路径必须为空；中断时使用 `app recover` 处理。
 - App JSON merge 的 effective destination 变化时，会使用 key-owned 双 destination transaction。
   recovery 只还原/移除两端各自声明的顶层 key，并保留两个路径中的其它当前设置。
-- `upgrade` 默认逐项显示实际更新的 App 类别、Shell 类别或受管系统项，并按用户可见
+- 审批通过后，`upgrade` 会逐项显示实际更新的 App 类别、Shell 类别或受管系统项，并按用户可见
   target 各计数一次；app 行会附带变更文件数。`--verbose` 会展开 app 文件和成功 hook 的
   输出，还会显示已是最新或跳过的项目，以及 snapshot、template、Bin Link 等 Shell
   部署细节。失败、冲突、用户修改警告和被拦截的 hook 无需 `--verbose` 也会显示。

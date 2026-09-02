@@ -356,15 +356,18 @@ async fn run_managed_for_os_with_reporter(
         input_versions: PlanningInputVersions::default(),
     };
     if !dry_run {
-        let reviewed = crate::lifecycle_plan::review_plans(
-            config,
-            [crate::lifecycle_plan::LifecyclePlanRequest::sys(
-                plan_request,
+        let plan = crate::lifecycle_plan::LifecyclePlanRequest::sys(plan_request, config);
+        let reviewed = if operation == LifecycleOperation::Upgrade {
+            crate::lifecycle_plan::review_upgrade_plans(
                 config,
-            )],
-            yes,
-        )
-        .await?
+                [plan],
+                yes,
+                matches!(output_mode, ManagedOutputMode::Upgrade { verbose: true }),
+            )
+            .await?
+        } else {
+            crate::lifecycle_plan::review_plans(config, [plan], yes).await?
+        }
         .into_iter()
         .next()
         .expect("one reviewed Sys Plan");

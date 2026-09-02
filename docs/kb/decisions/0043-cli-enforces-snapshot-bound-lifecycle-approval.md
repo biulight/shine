@@ -21,7 +21,9 @@ fingerprint and complete permission set before invoking the existing executor. T
 mutation helpers remain internal implementation details.
 
 The CLI renders every ready Plan with ordered steps, required permissions, blockers, input digests,
-and fingerprint. Approval is process-local and one-shot. Interactive confirmation defaults to No;
+and fingerprint. [ADR 0071](0071-compact-upgrade-plan-presentation.md) later refined the default
+`upgrade` presentation into a grouped compact review while retaining the full rendering under
+`--verbose`. Approval is process-local and one-shot. Interactive confirmation defaults to No;
 non-interactive mutation requires command-level `--yes`. That flag skips only the prompt: it does
 not skip rendering, blockers, missing declarations, or fresh validation. Existing `--dry-run`
 paths retain their preview semantics and conflict with `--yes`; they do not create an approval or
@@ -47,5 +49,5 @@ teardown reviewable during uninstall.
 - External Presets missing required permission declarations now fail closed for protected
   mutations, while `allow_app_hooks`, `allow_sys_code`, ownership checks, and administrator
   authorization remain additional gates.
-- Automation must pass `--yes` and still receives the complete Plan on stdout.
+- Automation must pass `--yes`; add `--verbose` when it needs the complete unabridged Plan on stdout.
 - Approval is not persisted, reused as a grant, or automatically retried after a mismatch.
