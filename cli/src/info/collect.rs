@@ -135,22 +135,31 @@ mod tests {
     #[tokio::test]
     async fn shell_info_excludes_uninstalled_snapshot_siblings() {
         let dir = crate::test_support::make_temp_dir("shine-info-shell").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let source_extension = if config.shell_type == crate::shells::ShellType::PowerShell {
+            "ps1"
+        } else {
+            "sh"
+        };
+        let first_source = format!("one.{source_extension}");
+        let second_source = format!("two.{source_extension}");
         let category = dir.join("presets/shell/custom");
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\npermissions = { schema_version = 1 }\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\npermissions = { schema_version = 1 }\n",
+            format!(
+                "[[files]]\nsource = \"{first_source}\"\ntarget = \"one\"\npermissions = {{ schema_version = 1 }}\n\n[[files]]\nsource = \"{second_source}\"\ntarget = \"two\"\npermissions = {{ schema_version = 1 }}\n"
+            ),
         )
         .await
         .unwrap();
-        fs::write(category.join("one.sh"), b"#!/bin/sh\necho one\n")
+        fs::write(category.join(first_source), b"echo one\n")
             .await
             .unwrap();
-        fs::write(category.join("two.sh"), b"#!/bin/sh\necho two\n")
+        fs::write(category.join(second_source), b"echo two\n")
             .await
             .unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
         handle_install(&config, Some("custom/one"), false)

@@ -3,6 +3,32 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-02 — A Windows launcher pair has two native comment syntaxes
+
+- **Symptom**: Windows Shell update and uninstall classified a freshly installed managed launcher
+  as foreign because the PowerShell shim was recognized while its paired cmd shim was not.
+- **Root cause**: ownership probing accepted only the PowerShell/Unix `# shine-managed` marker even
+  though generated `.cmd` launchers correctly use `REM shine-managed`; finding either unrecognized
+  member makes the whole paired launcher fail closed.
+- **Fix**: recognize both generated managed-marker syntaxes while retaining the existing requirement
+  for a matching target beneath a Shine-managed root.
+- **Rule**: paired cross-shell artifacts must be recognized using every syntax the generator emits;
+  fail-closed ownership checks cannot silently omit one member's native comment format.
+
+## 2026-09-02 — Native Shell integration fixtures must use the selected source syntax
+
+- **Symptom**: the Windows Rust test job could not install `custom/one` in the Shell info
+  snapshot-sibling regression test, even though the external category and both source files were
+  present.
+- **Root cause**: the fixture declared only `.sh` native commands while `Config::new_for_test`
+  correctly selected PowerShell on Windows; Shell metadata therefore filtered out both commands
+  before lifecycle target resolution.
+- **Fix**: derive fixture source extensions from the selected Shell, explicitly select Zsh when a
+  test exercises the Unix init template, and bind all-platform validation to PowerShell for Windows
+  or Zsh for Unix targets instead of inheriting the build host's Shell.
+- **Rule**: an integration test that exercises native Shell selection must make its fixture syntax
+  match the selected Shell; filesystem presence does not override metadata activation filtering.
+
 ## 2026-09-02 — Legacy Shell activation must share one Plan and recovery model
 
 - **Symptom**: after upgrading from 1.8, uninstalling a compatible managed Shell launcher without

@@ -16,10 +16,10 @@ const BUN_SCRIPT_EXTENSIONS: &[&str] = &["ts", "js", "mts", "mjs"];
 #[cfg(not(unix))]
 const EXECUTABLE_EXTENSIONS: &[&str] = &["sh", "ps1"];
 
-// Marker lines identifying a shine-managed launcher. The Unix bun launcher script
-// and the Windows `.ps1`/`.cmd` shims all use the same convention so ownership
-// (`unlink_managed`) and current-ness detection are shared across platforms.
+// Marker lines identifying a shine-managed launcher. Unix and PowerShell use `#`;
+// cmd uses its native `REM` form. Ownership and current-ness detection accept both.
 const SHIM_MANAGED_MARKER: &str = "# shine-managed";
+const CMD_SHIM_MANAGED_MARKER: &str = "REM shine-managed";
 const SHIM_TARGET_PREFIX: &str = "# shine-target: ";
 
 /// Runtime used to invoke a linked command.
@@ -317,7 +317,7 @@ async fn host_launcher_status(
         },
         Err(_) => return Ok(LauncherStatus::NotManaged),
     };
-    if !content.contains(SHIM_MANAGED_MARKER) {
+    if !has_shim_managed_marker(&content) {
         return Ok(LauncherStatus::NotManaged);
     }
     let Some(target) = shim_target_from_content(&content) else {
@@ -610,7 +610,7 @@ pub(crate) async fn probe_managed_command_with_host(
                 .map_err(|error| error.into_anyhow("reading shell launcher"))?;
             let target = String::from_utf8(bytes.clone())
                 .ok()
-                .filter(|content| content.contains(SHIM_MANAGED_MARKER))
+                .filter(|content| has_shim_managed_marker(content))
                 .and_then(|content| shim_target_from_content(&content));
             let Some(target) = target else {
                 conflicts.push(path);
@@ -1032,15 +1032,19 @@ fn has_bun_script_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// True when `target` (from a launcher's `# shine-target:` line or a symlink)
-/// lexically resolves under `managed_root`. Relative targets are resolved against
-/// `bin_dir`. Works even if the target file no longer exists.
+/// True when `target` (from a launcher's native target marker or a symlink) lexically
+/// resolves under `managed_root`. Relative targets are resolved against `bin_dir`.
+/// Works even if the target file no longer exists.
 fn target_is_managed(target: &Path, managed_root: &Path, bin_dir: &Path) -> bool {
     if target.is_absolute() {
         target.starts_with(managed_root)
     } else {
         bin_dir.join(target).starts_with(managed_root)
     }
+}
+
+fn has_shim_managed_marker(content: &str) -> bool {
+    content.contains(SHIM_MANAGED_MARKER) || content.contains(CMD_SHIM_MANAGED_MARKER)
 }
 
 /// The command name a launcher exposes — the link path's file stem.
@@ -1060,7 +1064,7 @@ async fn launcher_target(path: &Path) -> Result<Option<PathBuf>> {
         Ok(content) => content,
         Err(_) => return Ok(None),
     };
-    if !content.contains(SHIM_MANAGED_MARKER) {
+    if !has_shim_managed_marker(&content) {
         return Ok(None);
     }
     Ok(shim_target_from_content(&content))
@@ -1348,7 +1352,7 @@ async fn unix_live_launcher_status(
         Ok(content) => content,
         Err(_) => return Ok(LauncherStatus::NotManaged),
     };
-    if !content.contains(SHIM_MANAGED_MARKER) {
+    if !has_shim_managed_marker(&content) {
         return Ok(LauncherStatus::NotManaged);
     }
     let Some(target) = shim_target_from_content(&content) else {
@@ -1407,7 +1411,7 @@ async fn unix_launcher_status(
         // Missing, non-UTF-8, or otherwise unreadable → treat as a user file.
         Err(_) => return Ok(LauncherStatus::NotManaged),
     };
-    if !content.contains(SHIM_MANAGED_MARKER) {
+    if !has_shim_managed_marker(&content) {
         return Ok(LauncherStatus::NotManaged);
     }
     let Some(target) = shim_target_from_content(&content) else {
@@ -1607,7 +1611,7 @@ async fn windows_shim_status(
         // Missing or unreadable (e.g. non-UTF-8 user file) → treat as a user file.
         Err(_) => return Ok(LauncherStatus::NotManaged),
     };
-    if !content.contains(SHIM_MANAGED_MARKER) {
+    if !has_shim_managed_marker(&content) {
         return Ok(LauncherStatus::NotManaged);
     }
 
@@ -1660,6 +1664,13 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use tokio::fs;
+
+    #[test]
+    fn recognizes_powershell_unix_and_cmd_managed_markers() {
+        assert!(has_shim_managed_marker("# shine-managed\n"));
+        assert!(has_shim_managed_marker("REM shine-managed\r\n"));
+        assert!(!has_shim_managed_marker("shine-managed\n"));
+    }
 
     #[cfg(unix)]
     async fn make_dirs() -> (PathBuf, PathBuf) {

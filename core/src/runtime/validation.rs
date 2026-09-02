@@ -157,6 +157,11 @@ pub(super) async fn validate_preset_source_scope(
                 validation_home.join(".shine/bin"),
                 platform,
             );
+            context.shell = if platform == RuntimePlatform::Windows {
+                super::ShellType::PowerShell
+            } else {
+                super::ShellType::Zsh
+            };
             context.is_external_presets = true;
             let runtime = CoreRuntime::new(InMemoryHost::new(), context, scope.snapshot.clone());
             let result = match category.kind {

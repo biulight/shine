@@ -140,14 +140,15 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **Uninstall never touches user files.** `presets::remove_prefix` removes only embedded-asset
   files; `bin_links::unlink_managed` removes only symlinks pointing into the managed presets dir,
-  plus **regular files that carry the `# shine-managed` marker and a `# shine-target:` under the
-  managed root** (Windows `.ps1`/`.cmd` shims and Unix `runtime = "bun"` launcher scripts); app
+  plus **regular files that carry the native `# shine-managed`/`REM shine-managed` marker and a
+  matching `# shine-target:`/`REM shine-target:` under the managed root** (Windows `.ps1`/`.cmd`
+  shims and Unix `runtime = "bun"` launcher scripts); app
   uninstall is driven by `~/.shine/app-manifest.toml` entries only.
 - **Bun launchers are marked regular files, identified only by content, never by name.** A Unix
   `runtime = "bun"` command is a generated executable script (not a symlink); ownership and
   current-ness (`bin_links::launcher_target`/`unix_launcher_status`, mirrored by
-  `windows_shim_status`) key on the `# shine-managed` marker + a `# shine-target:` path under the
-  managed root. An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user
+  `windows_shim_status`) key on the platform-native managed marker + target path under the managed
+  root. An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user
   conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
   format change re-detects installed launchers as stale on upgrade; changing it is a format bump.
   The content embeds the entry's ordered `env` spec (the `--with` tokens of the

@@ -200,19 +200,27 @@ mod tests {
     #[tokio::test]
     async fn command_scoped_uninstall_preserves_shared_rendered_file() {
         let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let source_extension = if config.shell_type == ShellType::PowerShell {
+            "ps1"
+        } else {
+            "sh"
+        };
+        let source = format!("shared.{source_extension}");
         let category = dir.join("presets/shell/custom");
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"shared.sh\"\ntarget = \"one\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"shared.sh\"\ntarget = \"two\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n",
+            format!(
+                "[[files]]\nsource = \"{source}\"\ntarget = \"one\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"{source}\"\ntarget = \"two\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n"
+            ),
         )
         .await
         .unwrap();
-        fs::write(category.join("shared.sh"), b"#!/bin/sh\necho shared\n")
+        fs::write(category.join(&source), b"echo shared\n")
             .await
             .unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
         handle_install(&config, Some("custom/one"), false)
@@ -221,7 +229,7 @@ mod tests {
         handle_install(&config, Some("custom/two"), false)
             .await
             .unwrap();
-        let rendered = config.rendered_dir().join("shell/custom/shared.sh");
+        let rendered = config.rendered_dir().join("shell/custom").join(source);
         assert!(rendered.exists());
 
         handle_uninstall(&config, Some("custom/one"), false, false)

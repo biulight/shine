@@ -861,30 +861,51 @@ mod tests {
     #[tokio::test]
     async fn external_snapshot_is_shared_but_only_selected_command_is_installed() {
         let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let source_extension = if config.shell_type == ShellType::PowerShell {
+            "ps1"
+        } else {
+            "sh"
+        };
+        let first_source = format!("one.{source_extension}");
+        let second_source = format!("two.{source_extension}");
         let category = dir.join("presets/shell/custom");
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n[files.permissions]\nschema_version = 1\n",
+            format!(
+                "[[files]]\nsource = \"{first_source}\"\ntarget = \"one\"\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"{second_source}\"\ntarget = \"two\"\n[files.permissions]\nschema_version = 1\n"
+            ),
         )
         .await
         .unwrap();
-        fs::write(category.join("one.sh"), b"#!/bin/sh\necho one\n")
+        fs::write(category.join(&first_source), b"echo one\n")
             .await
             .unwrap();
-        fs::write(category.join("two.sh"), b"#!/bin/sh\necho two\n")
+        fs::write(category.join(&second_source), b"echo two\n")
             .await
             .unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
         handle_install(&config, Some("custom/one"), false)
             .await
             .unwrap();
 
-        assert!(config.installed_shell_dir().join("custom/one.sh").exists());
-        assert!(config.installed_shell_dir().join("custom/two.sh").exists());
+        assert!(
+            config
+                .installed_shell_dir()
+                .join("custom")
+                .join(first_source)
+                .exists()
+        );
+        assert!(
+            config
+                .installed_shell_dir()
+                .join("custom")
+                .join(second_source)
+                .exists()
+        );
         assert!(
             crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("one"),)
                 .exists()
@@ -1509,7 +1530,8 @@ mod tests {
         .await
         .unwrap();
 
-        let config = Config::new_for_test(&dir);
+        let mut config = Config::new_for_test(&dir);
+        config.shell_type = ShellType::Zsh;
         let categories = metadata::load_installed_categories(&config, Some("custom"))
             .await
             .unwrap();
