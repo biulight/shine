@@ -94,46 +94,62 @@ shine app recover
 shine app recover --yes
 ```
 
-对于原本不存在的 destination，只有 transaction-created 文件仍与 Shine 写入的内容逐字节相同，
-恢复才会将其删除。对于 backup-aware creation，只有 backup 仍匹配原始内容，且 destination 缺失或
-仍匹配受管内容时，恢复才会还原固定 backup；若 backup move 尚未开始，则保留原始 destination。
-原地替换 receipt-owned 静态 Copy 时，Shine 会把上一个受管文件临时移动到同目录的
-`<name>.shine.rollback`。在 replacement receipt 持久化前，只有 destination 与 rollback 文件仍匹配
-前一个/目标 fingerprint 时才会恢复；receipt 持久化后则保留 destination，只移除未修改的 rollback
-material 和 stale journal。普通卸载一个未修改、没有 persistent backup 的静态 Copy 时，也会先把受管
-文件移动到该 rollback 路径，直到 receipt 移除持久化完成。精确的旧 receipt 仍存在时，恢复会还原该
-文件；只有 receipt 移除和 journal 中对应的 commit 状态都已持久化，才会移除 rollback material，
-而且仅在其类型、mode 和内容均未变化时执行。receipt 消失但缺少该 journal 状态时属于歧义状态，
-恢复会采用保守 rollback：重建旧 receipt，并还原未修改的文件。
-如果该静态 Copy 还带有固定 persistent backup，卸载会把两次移动都纳入 journal：先将受管文件移到
-`.shine.rollback`，再把 `.shine.bak` 还原到 destination。receipt commit 前，恢复只接受这两次移动
-之前、之间或之后产生的精确三路径状态；必要时先把已经还原的用户文件移回 `.shine.bak`，再恢复受管
-文件与旧 receipt。receipt commit 后，恢复保留 destination 中未修改的用户文件，只清理未修改的受管
-rollback material。两个文件的 mode 与内容 fingerprint 都必须匹配。
-强制移除被用户修改过的静态 Copy 时，恢复会分别绑定旧 receipt hash 与修改后文件的
-mode/hash。receipt commit 前会还原该精确的修改后文件，并反转可选的 backup restoration；commit
-后则保留已完成的卸载，只移除精确匹配修改后文件的 rollback material。
-JSON merge 以声明的顶层 key 作为 ownership 边界。已有的完整 JSON object 会被移动到
-`.shine.rollback`，但 recovery 只从中读取并还原这些 key，同时保留中断后修改的其它当前值。
-如果 destination 原本不存在，只有当前 object 不含其它 key 时才删除整个文件。uninstall receipt
-commit 后，当前 JSON object 已归用户所有；即使用户重新加入曾受管的 key，recovery 也只清理未修改
-的 rollback material。
-对于 `upgrade --prune-stale`，未修改的静态 Copy 与 JSON 条目使用相同的 removal recovery
-contract。如果 receipt 已移除但正向 commit marker 尚未持久化，recovery 会重建旧 receipt，并且
-只还原精确匹配的 rollback 状态。destination 已缺失时只清理 receipt；此路径绝不会强制移除用户
-修改过的 stale 内容。
-静态 Copy relocation 的新 receipt 持久化之前，recovery 只会移除未修改的新文件；必要时会把已经
-还原到旧 destination 的用户文件放回固定 backup，再恢复精确的旧受管文件。新 receipt 持久化后，
-recovery 会保留两端最终状态，只清理未修改的旧 rollback material。JSON relocation 使用独立的
-key-owned transaction：新 receipt 前，recovery 只移除新 destination 的 desired keys，并只还原旧
-destination 的 previous keys，同时保留两端其它当前设置。receipt 提交后，旧 object 已归用户所有；
-只要新 object 的 managed subset 未修改，recovery 就保留两端并只清理精确旧 rollback material。
-当上述创建、更新、relocation 或移除的 recovery 需要修改管理员路径时，recovery Plan 会包含 administrator
-permission，Shine 只在该 Plan 获得批准后请求授权。仅重建 receipt 或清理 journal 的恢复不会请求
-管理员权限。
-rollback 文件可能包含之前的受管配置，应按敏感内容处理。如果任一受保护
-路径在中断后被修改，恢复命令返回非零，并保留这些路径和 journal 等待显式处理。把 regular file
-替换为 symlink 或目录也视为修改。不要手动编辑或删除 journal 或 rollback material。
+恢复只接受与事务日志所记录的文件类型、模式、哈希、回执和路径布局完全一致的状态。相关替换回执或
+`receipt-committed` 标记持久化之前，恢复会回退尚未提交的操作；提交后则保留已经完成的结果，并且
+只清理未修改的事务文件。任何受保护路径在中断后发生变化，都会阻塞恢复并保留现场，等待显式处理。
+
+### 创建与原地替换
+
+- **目标路径原本不存在。** 只有事务创建的文件仍与 Shine 写入的内容逐字节相同，恢复才会将其删除。
+- **创建时保留了固定备份。** 只有固定备份仍匹配原始内容，且目标路径缺失或仍匹配受管内容时，恢复
+  才会还原备份。若备份移动尚未开始，恢复会保留原始目标文件。
+- **原地替换已有回执的静态 `Copy`。** Shine 会先把上一个受管文件移到同目录的
+  `<name>.shine.rollback`。替换回执持久化前，只有目标文件和回滚文件仍分别匹配记录的目标指纹和原有
+  指纹时，恢复才会继续。回执持久化后，恢复会保留目标文件，只清理未修改的回滚文件和过期事务日志。
+
+### 卸载静态 `Copy` 文件
+
+- **没有固定备份的普通卸载。** Shine 会先把未修改的受管文件移到 `<name>.shine.rollback`，并保留到
+  回执移除持久化完成。精确的旧回执仍存在时，恢复会还原该文件。如果回执已经消失，但缺少匹配的
+  `receipt-committed` 状态，恢复会采用保守回滚：重建旧回执并还原未修改的文件。只有回执移除和事务
+  日志中对应的提交状态都已持久化，恢复才会清理回滚文件，而且仅在其类型、模式和内容均未变化时执行。
+- **带固定备份的卸载。** 事务日志会记录两次移动：先把受管文件移到 `.shine.rollback`，再把
+  `.shine.bak` 还原到目标路径。回执提交前，恢复只接受这两次移动之前、之间或之后产生的精确三路径
+  状态；必要时会先把已经还原的用户文件移回 `.shine.bak`，再恢复受管文件与旧回执。提交后，恢复会
+  保留目标路径中未修改的用户文件，只清理未修改的受管回滚文件。这两个文件的模式与内容指纹都必须
+  匹配。
+- **强制卸载被用户修改的文件。** 恢复会分别校验旧回执的哈希，以及修改后文件的模式和哈希。回执
+  提交前，如果回执已经消失但没有 `receipt-committed` 状态，恢复会先重建旧回执，再还原这个精确的
+  修改后文件并反转可选的备份还原。提交后，恢复会保留已完成的卸载，只移除与修改后文件精确匹配的
+  回滚文件。
+
+### JSON merge 与 stale 清理
+
+- **JSON merge。** 声明的顶层键是所有权边界。Shine 会把已有的完整 JSON 对象移到
+  `.shine.rollback`，但恢复只从中读取并还原这些键，同时保留中断后发生变化的其它当前值。如果目标
+  路径原本不存在，只有当前对象不含其它键时，恢复才会删除整个文件。卸载回执提交后，当前 JSON 对象
+  已归用户所有；即使用户重新加入曾受管的键，恢复也只会清理未修改的回滚文件。
+- **`upgrade --prune-stale`。** 未修改的静态 `Copy` 和 JSON 条目使用相同的移除恢复规则。如果回执
+  已经消失，但对应的 `receipt-committed` 标记尚未持久化，恢复会重建旧回执，并且只还原精确匹配的
+  回滚状态。目标路径已经缺失时只清理回执；此路径绝不会强制移除用户修改过的 stale 内容。
+
+### 迁移目标路径
+
+- **静态 `Copy` 迁移。** 新回执持久化之前，恢复只会移除未修改的新文件；必要时会把已经还原到旧
+  目标路径的用户文件放回固定备份，再恢复精确的旧受管文件。新回执持久化后，恢复会保留两端的最终
+  状态，只清理未修改的旧回滚文件。
+- **JSON merge 迁移。** 此场景使用独立的键所有权事务。新回执持久化前，恢复只移除新目标路径中的
+  目标键，并只还原旧目标路径中的原有键，同时保留两端其它当前设置。回执提交后，旧 JSON 对象已归
+  用户所有；只要新对象的受管键集合未修改，恢复就会保留两端，只清理精确匹配的旧回滚文件。
+
+### 管理员路径与被阻塞的恢复
+
+- **管理员路径。** 当创建、更新、目标路径迁移或移除的恢复需要修改管理员路径时，恢复 Plan 会包含
+  管理员权限。Shine 只在该 Plan 获得批准后请求授权。仅重建回执或清理事务日志的恢复不会请求管理员
+  权限。
+- **敏感回滚文件与冲突。** 回滚文件可能包含之前的受管配置，应按敏感内容处理。如果任一受保护路径
+  在中断后被修改，恢复命令会返回非零，并保留这些路径和事务日志。把普通文件替换为符号链接或目录也
+  视为修改。不要手动编辑或删除事务日志或回滚文件。
 
 ## 配置变换
 

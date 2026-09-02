@@ -109,57 +109,83 @@ shine app recover
 shine app recover --yes
 ```
 
-For an originally absent destination, recovery removes a transaction-created file only when it is
-still byte-for-byte the content Shine wrote. For backup-aware creation, it restores the fixed backup
-only when the backup still matches the original bytes and the destination is missing or still
-matches the managed bytes; if the backup move never started, it keeps the original destination. If
-a receipt-owned static Copy is replaced in place, Shine temporarily moves the previous managed file
-to the same-directory `<name>.shine.rollback` path. Before the replacement receipt is durable,
-recovery restores it only while the destination and rollback file still match the previous/desired
-fingerprints. After the replacement receipt is durable, recovery preserves the destination and
-removes only unchanged rollback material plus the stale journal. An ordinary uninstall of an
-unchanged static Copy without a persistent backup also moves the managed file to this rollback path
-until receipt removal is durable. Recovery restores it while the exact old receipt remains, or
-removes it after both receipt removal and the journal's matching commit state are durable, and only
-while its kind, mode, and bytes are unchanged. If receipt removal is durable but that journal state
-is missing, recovery conservatively recreates the old receipt and restores the unchanged file.
-When that static Copy has a fixed persistent backup, uninstall journals both moves: the managed
-file goes to `.shine.rollback`, then `.shine.bak` returns to the destination. Before receipt commit,
-recovery accepts only the exact three-path states produced before, between, or after those moves;
-it returns the restored user file to `.shine.bak` when necessary, then restores the managed file and
-old receipt. After receipt commit, recovery keeps the unchanged user file at the destination and
-removes only unchanged managed rollback material. The modes and bytes of both files are bound.
-For a forced removal of a user-modified static Copy, recovery instead binds the old
-receipt hash separately from the modified file's mode and hash. Before receipt commit it restores
-that exact modified file and reverses an optional backup restoration; after commit it keeps the
-completed uninstall and removes only exact modified rollback material.
-For JSON merge, the declared top-level keys are the ownership boundary. An existing whole JSON
-object is moved to `.shine.rollback`, but recovery reads it only to restore those keys into the
-current object, preserving unrelated values changed after interruption. Creation at an absent path
-removes the whole file only when no unrelated keys exist. After uninstall receipt commit, the
-current JSON object is user-owned and recovery removes only unchanged rollback material—even if the
-user has reintroduced a formerly managed key.
-For `upgrade --prune-stale`, unchanged static Copy and JSON entries use the same removal recovery
-contract. If receipt removal is interrupted before its positive commit marker, recovery recreates
-the old receipt and restores only exact rollback state. A missing destination needs receipt-only
-cleanup, and user-modified stale content is never forced through this path.
-For a static Copy relocation, recovery before the new receipt removes only an unchanged new file,
-returns a restored user file to the old fixed backup when necessary, and restores the exact old
-managed file. After the new receipt is durable, it preserves both final destinations and removes
-only unchanged old rollback material. JSON relocation uses a separate key-owned transaction:
-before the new receipt, recovery removes only the desired keys at the new destination and restores
-only the previous keys at the old destination, preserving unrelated current values on both sides.
-After receipt commit, the old object is user-owned and recovery removes only exact old rollback
-material while preserving the new object when its managed subset is unchanged.
-When one of these creation, update, relocation, or removal recovery operations changes an
-administrator path,
-the recovery Plan includes administrator permission and Shine requests authorization only after
-that Plan is approved. Repair that only reconstructs a receipt or clears a journal does not request
-administrator access.
-A rollback file may contain prior managed configuration and should be treated as sensitive. If any
-guarded path changed after interruption, recovery returns nonzero and preserves the paths plus the
-journal; replacing a regular file with a symlink or directory also counts as a change. Do not edit
-or delete the journal or rollback material manually.
+Recovery accepts only states whose recorded kinds, modes, hashes, receipts, and path layout still
+match the operation journal. Before the relevant replacement receipt or `receipt-committed` marker
+is durable, recovery rolls the unfinished operation back. After that commit, it preserves the
+completed result and removes only unchanged transaction material. A change to any guarded path
+blocks recovery and preserves the interrupted state for explicit handling.
+
+### Creation and in-place replacement
+
+- **Originally absent destination.** Recovery removes a transaction-created file only when it is
+  still byte-for-byte the content Shine wrote.
+- **Backup-aware creation.** Recovery restores the fixed backup only when it still matches the
+  original bytes and the destination is missing or still matches the managed bytes. If the backup
+  move never started, recovery keeps the original destination.
+- **Receipt-owned static Copy replacement.** Shine temporarily moves the previous managed file to
+  the same-directory `<name>.shine.rollback` path. Before the replacement receipt is durable,
+  recovery proceeds only while the destination and rollback file still match the recorded desired
+  and previous fingerprints. After the receipt is durable, recovery preserves the destination and
+  removes only unchanged rollback material plus the stale journal.
+
+### Uninstalling static Copy files
+
+- **Ordinary uninstall without a persistent backup.** Shine first moves the unchanged managed file
+  to `<name>.shine.rollback` and keeps it there until receipt removal is durable. Recovery restores
+  the file while the exact old receipt remains. If the receipt is absent but the matching
+  `receipt-committed` state is missing, recovery conservatively recreates the old receipt and
+  restores the unchanged file. Recovery removes rollback material only after both receipt removal
+  and the journal's matching commit state are durable, and only while its kind, mode, and bytes are
+  unchanged.
+- **Uninstall with a fixed persistent backup.** The journal records both moves: the managed file
+  goes to `.shine.rollback`, then `.shine.bak` returns to the destination. Before receipt commit,
+  recovery accepts only the exact three-path states produced before, between, or after those moves.
+  When necessary, it returns the restored user file to `.shine.bak`, then restores the managed file
+  and old receipt. After commit, recovery keeps the unchanged user file at the destination and
+  removes only unchanged managed rollback material. The modes and content fingerprints of both
+  files must match.
+- **Forced uninstall of a user-modified file.** Recovery binds the old receipt hash separately
+  from the modified file's mode and hash. Before receipt commit, it first recreates the old receipt
+  if the receipt is absent without `receipt-committed`, then restores that exact modified file and
+  reverses an optional backup restoration. After commit, it preserves the completed uninstall and
+  removes only rollback material that exactly matches the modified file.
+
+### JSON merge and stale pruning
+
+- **JSON merge.** Declared top-level keys are the ownership boundary. Shine moves an existing whole
+  JSON object to `.shine.rollback`, but recovery reads it only to restore those keys into the
+  current object, preserving unrelated values changed after interruption. For creation at an absent
+  path, recovery removes the whole file only when it contains no unrelated keys. After uninstall
+  receipt commit, the current JSON object is user-owned; recovery removes only unchanged rollback
+  material, even if the user has reintroduced a formerly managed key.
+- **`upgrade --prune-stale`.** Unchanged static Copy and JSON entries use the same removal recovery
+  contract. If the receipt is absent but its `receipt-committed` marker is not durable, recovery
+  recreates the old receipt and restores only exact rollback state. A missing destination needs
+  receipt-only cleanup. This path never forces removal of user-modified stale content.
+
+### Relocating destinations
+
+- **Static Copy relocation.** Before the new receipt is durable, recovery removes only an unchanged
+  new file, returns a restored user file to the old fixed backup when necessary, and restores the
+  exact old managed file. After the new receipt is durable, recovery preserves both final
+  destinations and removes only unchanged old rollback material.
+- **JSON relocation.** A separate key-owned transaction applies. Before the new receipt is durable,
+  recovery removes only the desired keys at the new destination and restores only the previous keys
+  at the old destination, preserving unrelated current values on both sides. After receipt commit,
+  the old object is user-owned. Recovery preserves both objects when the new object's managed subset
+  is unchanged and removes only exact old rollback material.
+
+### Administrator paths and blocked recovery
+
+- **Administrator paths.** When creation, update, relocation, or removal recovery must change an
+  administrator path, the recovery Plan includes administrator permission. Shine requests
+  authorization only after that Plan is approved. Repair that only reconstructs a receipt or clears
+  a journal does not request administrator access.
+- **Sensitive rollback material and conflicts.** A rollback file may contain prior managed
+  configuration and should be treated as sensitive. If any guarded path changed after interruption,
+  recovery returns nonzero and preserves the paths plus the journal. Replacing a regular file with a
+  symlink or directory also counts as a change. Do not edit or delete the journal or rollback
+  material manually.
 
 ## Configuration transforms
 
