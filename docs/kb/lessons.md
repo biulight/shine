@@ -14,6 +14,9 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Fix**: remove the recursive Clash Verge install/upgrade hooks and keep artifact application an
   explicit, independently reviewed command. After a category with an artifact changes managed files,
   the CLI presents that category's apply command; it does not prompt after an unchanged operation.
+- **Follow-up**: an explicit artifact executor must pass the reviewed request, including opaque input
+  versions, back to Core for its final approval check; recreating the request drops secret identities
+  and turns an otherwise ready Plan into a blocked one.
 - **Rule**: a lifecycle hook must not launch another mutation that owns its own security Plan;
   model it as one combined operation or require an explicit follow-up command.
 

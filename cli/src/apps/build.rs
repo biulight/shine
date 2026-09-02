@@ -46,14 +46,50 @@ async fn run_explicit(
     .next()
     .expect("one reviewed App artifact Plan");
     let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    let request = reviewed_app_artifact_request(&reviewed.request);
     runtime
-        .run_app_artifact_approved(plan_request, &reviewed.approval, &mut ExplicitObserver)
+        .run_app_artifact_approved(request, &reviewed.approval, &mut ExplicitObserver)
         .await?;
     Ok(())
+}
+
+fn reviewed_app_artifact_request(
+    request: &crate::lifecycle_plan::LifecyclePlanRequest,
+) -> AppArtifactPlanRequest {
+    match request {
+        crate::lifecycle_plan::LifecyclePlanRequest::AppArtifact(request) => request.clone(),
+        _ => unreachable!("reviewed App artifact Plan must retain its artifact request"),
+    }
 }
 
 struct ExplicitObserver;
 
 impl RuntimeObserver for ExplicitObserver {
     fn emit(&mut self, _event: RuntimeEvent) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shine_core::runtime::OpaqueSecretVersion;
+
+    #[test]
+    fn artifact_execution_reuses_the_reviewed_input_versions() {
+        let mut input_versions = PlanningInputVersions::default();
+        input_versions.insert_secret_version(
+            "CLASH_CONTROLLER_TOKEN",
+            OpaqueSecretVersion::new("test-version"),
+        );
+        let request =
+            crate::lifecycle_plan::LifecyclePlanRequest::AppArtifact(AppArtifactPlanRequest {
+                category: "clash-verge".to_string(),
+                action: AppArtifactAction::Apply,
+                input_versions: input_versions.clone(),
+            });
+
+        assert_eq!(
+            reviewed_app_artifact_request(&request).input_versions,
+            input_versions
+        );
+    }
 }
