@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-03 — Remediation commands must respect target namespaces
+
+- **Symptom**: a Shell permission-migration blocker instructed users to run
+  `shine trust inspect/grant shell/<category>/<command>`, but trust enrollment accepts only App
+  categories and Sys items.
+- **Root cause**: reusable migration diagnostics embedded one generic CLI workflow for App, Shell,
+  and Sys even though permission declarations and external-code trust are separate contracts with
+  different target namespaces.
+- **Fix**: keep Core diagnostic messages factual and render target-specific remediation in the CLI;
+  Shell stops after declaration validation and planning, while executable App/Sys targets receive
+  conditional trust review instructions.
+- **Rule**: every suggested command must be generated from the callee's accepted target grammar;
+  shared diagnostics must not invent a common namespace across distinct security mechanisms.
+
 ## 2026-09-03 — In-memory validation roots must use native absolute paths
 
 - **Symptom**: the Windows Rust test job rejected an otherwise valid candidate Preset migration

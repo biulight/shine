@@ -145,7 +145,8 @@ pub fn plan_preset_migration(
                 .as_ref()
                 .and_then(|baseline| baseline.current.get(&metadata_path))
                 .is_some_and(|current| !executable_paths(&metadata_path, current).is_empty())
-                && source_layer(snapshot, &metadata_path) != "embedded";
+                && source_layer(snapshot, &metadata_path) != "embedded"
+                && target.starts_with("app/");
             let operations = if candidate.is_some() {
                 vec!["rebase_released_builtin_metadata".to_string()]
             } else {
@@ -165,7 +166,7 @@ pub fn plan_preset_migration(
                     PresetMigrationSeverityV1::Advisory,
                     "external_code_trust_review_required",
                     target,
-                    &format!("migration never creates trust grants; continue with `shine trust inspect {target}` and `shine trust grant {target}` after reviewing the migrated code"),
+                    "migration never creates trust grants; migrated external executable code still requires a separate trust review",
                 ));
             }
             continue;
@@ -421,7 +422,7 @@ fn plan_app(
                 PresetMigrationSeverityV1::Advisory,
                 "recursive_artifact_hook_removed",
                 target,
-                &format!("removed the recursive artifact hook; run `shine app artifact apply {category}` explicitly after relevant changes"),
+                "the recursive artifact hook was removed; artifact application is now an explicit operation",
             ));
         }
     }
@@ -433,7 +434,7 @@ fn plan_app(
                 PresetMigrationSeverityV1::Blocker,
                 "manual_permission_review_required",
                 target,
-                &format!("executable App metadata needs a reviewed `[permissions]` declaration; run `shine preset validate` and `shine preset plan` after adding it, then continue with `shine trust inspect {target}` and `shine trust grant {target}` when external code requires trust"),
+                "executable App metadata is missing a reviewed `[permissions]` declaration",
             ));
         } else {
             let mut permissions = Table::new();
@@ -520,7 +521,7 @@ fn plan_shell(target: &str, original: &[u8], diagnostics: &mut Vec<PresetMigrati
                 PresetMigrationSeverityV1::Blocker,
                 "manual_permission_review_required",
                 &format!("{target}/{name}"),
-                &format!("Shell command permissions cannot be inferred from its source; add `[files.permissions]`, validate and plan it, then continue with `shine trust inspect {target}/{name}` and `shine trust grant {target}/{name}`"),
+                "Shell command is missing `[files.permissions]`; permissions cannot be inferred safely from its source",
             ));
         }
     }
@@ -560,7 +561,7 @@ fn plan_sys(target: &str, original: &[u8], diagnostics: &mut Vec<PresetMigration
                 PresetMigrationSeverityV1::Blocker,
                 "manual_permission_review_required",
                 &format!("sys/{name}"),
-                &format!("Sys item permissions cannot be inferred from scripts or profile code; add `items.permissions`, validate and plan it, then continue with `shine trust inspect sys/{name}` and `shine trust grant sys/{name}`"),
+                "Sys item is missing `[items.permissions]`; permissions cannot be inferred safely from scripts or profile code",
             ));
         }
     }
@@ -730,6 +731,41 @@ mod tests {
         assert_eq!(plan.edits.len(), 1);
         assert_eq!(plan.report.summary.blockers, 1);
         assert_eq!(plan.report.status, PresetMigrationStatusV1::Blocked);
+    }
+
+    #[test]
+    fn reusable_diagnostics_are_factual_and_do_not_embed_cli_commands() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/presets")
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.demo'\n[artifact]\nscript = 'build.ts'\n".to_vec(),
+            )
+            .file("app/demo/build.ts", Vec::new())
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'run.sh'\ntarget = 'run'\n".to_vec(),
+            )
+            .file("shell/demo/run.sh", Vec::new())
+            .file(
+                "sys/linux/shine.toml",
+                b"version = 2\n[[items]]\nid = 'tool'\ninstall = { kind = 'script', path = 'install.sh' }\n".to_vec(),
+            )
+            .file("sys/linux/install.sh", Vec::new())
+            .build();
+
+        let plan = plan_preset_migration(&snapshot, "test", None, None);
+
+        assert!(
+            plan.report
+                .diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.message.contains("shine "))
+        );
+        assert!(plan.report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.target == "shell/demo/run"
+                && diagnostic.message.contains("[files.permissions]")
+        }));
     }
 
     #[test]

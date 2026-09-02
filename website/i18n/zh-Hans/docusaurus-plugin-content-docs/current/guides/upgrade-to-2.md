@@ -123,13 +123,20 @@ payload、脚本、环境值、运行状态或 trust grant。Git 管理的 overl
 显式执行路径迁移，在上游提交后再 pull。
 
 opaque App/Shell/Sys 代码的权限与 Sys v1 dispatcher 必须人工改写。按照报告中的 target-local
-位置补全，并运行 `shine preset validate <PATH>` 和
-`shine preset plan <CATEGORY> --platform <PLATFORM>` 验证。迁移后的外部代码若仍需信任，请另行
-执行 `shine trust inspect/grant <TARGET>` 审阅和授权。
+位置补全。文本报告会为可写 manifest 解析实际路径，并给出可直接复制执行的 `preset validate`
+和当前平台 `preset plan` 命令。Git 管理的 overlay 仍是只读镜像，因此报告会指向上游 checkout，
+不会建议直接编辑镜像路径。
 
-`shine update` 现在会显示 **Preset compatibility** 区块，并继续完成可执行的配置检查和 Shine
-release 检查，最后再因 blocker 返回非零。`shine upgrade` 会在任何生命周期 Plan 或 mutation 前
-执行同一 preflight；使用 `--pull` 时则在拉取并重新加载后检查，不兼容时不会产生部分升级。
+trust enrollment 只适用于外部 App hook/generator/artifact 代码和 Sys bootstrap/profile 代码。
+验证通过后，运行报告给出的 `shine trust inspect app/<CATEGORY>` 或
+`shine trust inspect sys/<ITEM>`；只有接受所显示的权限范围后才执行 grant。Shell 命令通过
+`[files.permissions]` 声明和 security Plan 审阅，不是合法的 `trust inspect/grant` target。
+
+`shine update` 会显示简洁的 **Preset compatibility** 摘要，并继续完成可执行的配置检查和 Shine
+release 检查，最后再因 blocker 返回非零。最终错误只给出一次
+`shine preset migrate --dry-run` 入口；该命令再按 manifest 分组显示详细修复步骤。
+`shine upgrade` 会在任何生命周期 Plan 或 mutation 前执行同一 preflight；使用 `--pull` 时则在
+拉取并重新加载后检查，不兼容时不会产生部分升级。
 
 外部 Preset 必须为每个可执行 target 声明 permission schema v1。缺失或无效声明属于
 blocker，不会被解释为隐式宽泛授权。作者应在分发前运行静态和 fixture 检查：

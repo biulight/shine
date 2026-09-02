@@ -127,14 +127,22 @@ environment values, runtime state, or trust grants. A managed Git overlay is rea
 upstream checkout with an explicit path, commit it there, then pull again.
 
 Permissions for opaque App/Shell/Sys code and Sys v1 dispatchers require manual authoring. Follow the
-reported target-local location and verify it with `shine preset validate <PATH>` and
-`shine preset plan <CATEGORY> --platform <PLATFORM>`. If migrated external code still needs trust,
-review it separately with `shine trust inspect/grant <TARGET>`.
+reported target-local location. In text mode, the migration report resolves writable manifests and
+prints copy-paste-safe `preset validate` and current-platform `preset plan` commands. A managed Git
+overlay remains read-only, so its report points back to the upstream checkout instead of suggesting
+an edit to the mirrored path.
 
-`shine update` now prints a **Preset compatibility** section and still completes the available
-configuration and Shine release checks before returning a blocker. `shine upgrade` performs the
-same preflight—including after `--pull`—and stops before any lifecycle Plan or mutation when the
-source is incompatible.
+Trust enrollment applies only to external App hook/generator/artifact code and Sys bootstrap/profile
+code. After validation, use the reported `shine trust inspect app/<CATEGORY>` or
+`shine trust inspect sys/<ITEM>` command and grant only after accepting the rendered scope. Shell
+commands are reviewed through their `[files.permissions]` declaration and security Plan; they are
+not valid `trust inspect/grant` targets.
+
+`shine update` prints a concise **Preset compatibility** summary and still completes the available
+configuration and Shine release checks before returning a blocker. Its final error provides the
+single `shine preset migrate --dry-run` entry point; that command groups detailed remediation by
+manifest. `shine upgrade` performs the same preflight—including after `--pull`—and stops before any
+lifecycle Plan or mutation when the source is incompatible.
 
 External Presets must declare permission schema v1 for each executable target. A missing or invalid
 declaration is a blocker, not an implicit broad grant. Authors should run the static and fixture

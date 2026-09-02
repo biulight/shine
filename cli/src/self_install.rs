@@ -25,7 +25,10 @@ pub async fn handle_update(
     if let Some(target) = target {
         info::handle_update_target(config, target, run_generators).await?;
         if migration_required {
-            bail!("Preset migration is required before this target can be upgraded");
+            bail!(
+                "{}",
+                crate::preset_migration::compatibility_failure_message(&compatibility)
+            );
         }
         return Ok(());
     }
@@ -113,7 +116,10 @@ pub async fn handle_update(
         return Err(error);
     }
     if migration_required {
-        bail!("Preset migration is required; run `shine preset migrate --dry-run`");
+        bail!(
+            "{}",
+            crate::preset_migration::compatibility_failure_message(&compatibility)
+        );
     }
 
     Ok(())
@@ -204,7 +210,10 @@ pub async fn handle_config_upgrade(
     let compatibility = crate::preset_migration::active_compatibility_plan(target).await?;
     crate::preset_migration::print_compatibility(&compatibility);
     if crate::preset_migration::compatibility_required(&compatibility) {
-        bail!("Preset migration is required; run `shine preset migrate --dry-run`");
+        bail!(
+            "{}",
+            crate::preset_migration::compatibility_failure_message(&compatibility)
+        );
     }
     if let Some(target) = target {
         return handle_config_target_upgrade(config, target, verbose, prune_stale, yes).await;

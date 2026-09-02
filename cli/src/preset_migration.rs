@@ -8,11 +8,12 @@ use serde::Serialize;
 use shine_core::runtime::{
     InMemoryHost, PresetDiagnosticSeverity, PresetMigrationBaseline, PresetMigrationDiagnosticV1,
     PresetMigrationEdit, PresetMigrationPlan, PresetMigrationSeverityV1, PresetMigrationStatusV1,
-    PresetSnapshot, PresetSnapshotRequest, PresetSnapshotSource, RealHost,
-    capture_embedded_preset_snapshot, capture_preset_snapshot, plan_preset_migration, sha256,
-    validate_preset_path,
+    PresetSnapshot, PresetSnapshotRequest, PresetSnapshotSource, PresetSourceKind, RealHost,
+    RuntimePlatform, capture_embedded_preset_snapshot, capture_preset_snapshot,
+    plan_preset_migration, sha256, validate_preset_path,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -45,7 +46,7 @@ pub async fn handle_migrate(
     }
 
     if format == PresetReportFormat::Text {
-        print_text(&plan);
+        print_text(&plan, &snapshot, managed_overlay.as_deref(), path.is_none());
         print_diffs(&display_edits);
     }
     if dry_run {
@@ -188,12 +189,16 @@ fn sys_categories_for_item(snapshot: &PresetSnapshot, item: &str) -> BTreeSet<St
 }
 
 pub fn print_compatibility(plan: &PresetMigrationPlan) {
+    print!("{}", compatibility_text(plan));
+}
+
+fn compatibility_text(plan: &PresetMigrationPlan) -> String {
     if plan.edits.is_empty() && plan.report.diagnostics.is_empty() {
-        return;
+        return String::new();
     }
-    println!("Preset compatibility");
+    let mut output = String::from("Preset compatibility\n");
     for file in &plan.report.files {
-        println!("  migrate {} ({})", file.target, file.source_layer);
+        let _ = writeln!(output, "  migrate {} ({})", file.target, file.source_layer);
     }
     for diagnostic in &plan.report.diagnostics {
         let marker = if diagnostic.severity == PresetMigrationSeverityV1::Blocker {
@@ -201,23 +206,41 @@ pub fn print_compatibility(plan: &PresetMigrationPlan) {
         } else {
             "i"
         };
-        println!(
-            "  {marker} {}{}: {} [{}]",
+        let _ = writeln!(
+            output,
+            "  {marker} {}{} [{}]",
             diagnostic.target,
             diagnostic
                 .source_layer
                 .as_deref()
                 .map(|layer| format!(" ({layer})"))
                 .unwrap_or_default(),
-            diagnostic.message,
             diagnostic.code
         );
+        let _ = writeln!(output, "    {}", diagnostic.message);
     }
-    println!("  Run `shine preset migrate --dry-run` to review the migration.");
+    output
 }
 
 pub fn compatibility_required(plan: &PresetMigrationPlan) -> bool {
     !plan.edits.is_empty() || plan.report.summary.blockers > 0
+}
+
+pub fn compatibility_failure_message(plan: &PresetMigrationPlan) -> String {
+    let blockers = plan.report.summary.blockers;
+    let changes = plan.edits.len();
+    let reason = match (blockers, changes) {
+        (0, changes) => count_phrase(changes, "automatic change", "automatic changes"),
+        (blockers, 0) => count_phrase(blockers, "blocker", "blockers"),
+        (blockers, changes) => format!(
+            "{} and {}",
+            count_phrase(blockers, "blocker", "blockers"),
+            count_phrase(changes, "automatic change", "automatic changes")
+        ),
+    };
+    format!(
+        "Preset compatibility requires attention ({reason}); run `shine preset migrate --dry-run`"
+    )
 }
 
 async fn migration_inputs(
@@ -468,39 +491,295 @@ fn report_source_layer(plan: &PresetMigrationPlan, target: &str) -> Option<Strin
         .map(|file| file.source_layer.clone())
 }
 
-fn print_text(plan: &PresetMigrationPlan) {
-    println!(
+fn print_text(
+    plan: &PresetMigrationPlan,
+    snapshot: &PresetSnapshot,
+    managed_overlay: Option<&Path>,
+    active_source: bool,
+) {
+    print!(
+        "{}",
+        migration_text(plan, snapshot, managed_overlay, active_source)
+    );
+}
+
+fn migration_text(
+    plan: &PresetMigrationPlan,
+    snapshot: &PresetSnapshot,
+    managed_overlay: Option<&Path>,
+    active_source: bool,
+) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
         "Preset migration: {}",
         match plan.report.status {
             PresetMigrationStatusV1::Current => "current",
             PresetMigrationStatusV1::Pending => "changes pending",
-            PresetMigrationStatusV1::Blocked => "manual review required",
+            PresetMigrationStatusV1::Blocked => "manual action required",
             PresetMigrationStatusV1::Applied => "applied",
             PresetMigrationStatusV1::PartiallyApplied => "partially applied",
         }
     );
+
+    let mut groups = BTreeMap::<String, Vec<&PresetMigrationDiagnosticV1>>::new();
     for diagnostic in &plan.report.diagnostics {
-        let severity = if diagnostic.severity == PresetMigrationSeverityV1::Blocker {
-            "error"
-        } else {
-            "note"
-        };
-        println!(
-            "  {severity}[{}]: {}{}: {}",
-            diagnostic.code,
-            diagnostic.target,
-            diagnostic
-                .source_layer
-                .as_deref()
-                .map(|layer| format!(" ({layer})"))
-                .unwrap_or_default(),
-            diagnostic.message
+        let key = metadata_logical_path(snapshot, &diagnostic.target)
+            .unwrap_or_else(|| diagnostic_category(&diagnostic.target));
+        groups.entry(key).or_default().push(diagnostic);
+    }
+    for (logical, diagnostics) in groups {
+        let layer = diagnostics
+            .iter()
+            .find_map(|diagnostic| diagnostic.source_layer.as_deref())
+            .map(|value| format!(" ({value})"))
+            .unwrap_or_default();
+        let _ = writeln!(
+            output,
+            "  {}{layer}",
+            logical.trim_end_matches("/shine.toml")
+        );
+        for diagnostic in &diagnostics {
+            let severity = if diagnostic.severity == PresetMigrationSeverityV1::Blocker {
+                "error"
+            } else {
+                "note"
+            };
+            let _ = writeln!(
+                output,
+                "    {severity}[{}] {}: {}",
+                diagnostic.code, diagnostic.target, diagnostic.message
+            );
+        }
+        render_remediation(
+            &mut output,
+            snapshot,
+            &logical,
+            &diagnostics,
+            managed_overlay,
+            active_source,
         );
     }
-    println!(
-        "Summary: {} changes, {} blockers, {} advisories",
-        plan.report.summary.changes, plan.report.summary.blockers, plan.report.summary.advisories
+    let _ = writeln!(
+        output,
+        "Summary: {}, {}, {}",
+        count_phrase(
+            plan.report.summary.changes,
+            "automatic change",
+            "automatic changes"
+        ),
+        count_phrase(plan.report.summary.blockers, "blocker", "blockers"),
+        count_phrase(plan.report.summary.advisories, "advisory", "advisories")
     );
+    output
+}
+
+fn render_remediation(
+    output: &mut String,
+    snapshot: &PresetSnapshot,
+    logical: &str,
+    diagnostics: &[&PresetMigrationDiagnosticV1],
+    managed_overlay: Option<&Path>,
+    active_source: bool,
+) {
+    let manual_permissions = diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "manual_permission_review_required");
+    let managed_read_only = diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "managed_overlay_read_only");
+    let manifest = snapshot
+        .origin(logical)
+        .and_then(|origin| origin.physical_path.as_deref());
+    let manifest_is_managed =
+        manifest.is_some_and(|path| managed_overlay.is_some_and(|root| path.starts_with(root)));
+
+    if managed_read_only && !manual_permissions {
+        let _ = writeln!(
+            output,
+            "    Remediation: update `{logical}` in the upstream checkout; the managed overlay mirror is read-only."
+        );
+        let _ = writeln!(
+            output,
+            "      After committing upstream, run `shine preset pull`."
+        );
+    }
+
+    if manual_permissions {
+        if managed_read_only || manifest_is_managed {
+            let _ = writeln!(
+                output,
+                "    Remediation: update `{logical}` in the upstream checkout; the managed overlay mirror is read-only."
+            );
+            let _ = writeln!(
+                output,
+                "      After committing upstream, run `shine preset pull`."
+            );
+        } else if let Some(manifest) = manifest {
+            let quoted = quote_command_arg(manifest, RuntimePlatform::current());
+            let _ = writeln!(output, "    Edit: {}", manifest.display());
+            let _ = writeln!(output, "    Verify:");
+            let _ = writeln!(output, "      `shine preset validate {quoted}`");
+            let _ = writeln!(
+                output,
+                "      `shine preset plan {quoted} --platform {}`",
+                RuntimePlatform::current().as_str()
+            );
+        } else {
+            let _ = writeln!(
+                output,
+                "    Remediation: add the target-local permission declaration in `{logical}`, then validate and plan that manifest."
+            );
+        }
+    }
+
+    for diagnostic in diagnostics {
+        if diagnostic.code == "recursive_artifact_hook_removed"
+            && let Some(category) = diagnostic.target.strip_prefix("app/")
+        {
+            let _ = writeln!(
+                output,
+                "    Next: run `shine app artifact apply {category}` after relevant changes."
+            );
+        }
+    }
+
+    for target in trust_review_targets(snapshot, logical, diagnostics) {
+        let timing = if active_source {
+            "After validation"
+        } else {
+            "After this source becomes active"
+        };
+        let _ = writeln!(output, "    {timing}, review the external executable code:");
+        let _ = writeln!(output, "      `shine trust inspect {target}`");
+        let _ = writeln!(
+            output,
+            "      If the inspection reports a requirement and you accept its scope, run `shine trust grant {target}`."
+        );
+    }
+}
+
+fn metadata_logical_path(snapshot: &PresetSnapshot, target: &str) -> Option<String> {
+    let mut parts = target.split('/');
+    let kind = parts.next()?;
+    let name = parts.next()?;
+    let direct = format!("{kind}/{name}/shine.toml");
+    if snapshot.get(&direct).is_some() {
+        return Some(direct);
+    }
+    if kind != "sys" {
+        return None;
+    }
+    snapshot.files().iter().find_map(|(logical, bytes)| {
+        if !logical.starts_with("sys/") || !logical.ends_with("/shine.toml") {
+            return None;
+        }
+        let value = toml::from_slice::<toml::Value>(bytes).ok()?;
+        value
+            .get("items")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item.get("id").and_then(toml::Value::as_str) == Some(name))
+            })
+            .then(|| logical.clone())
+    })
+}
+
+fn diagnostic_category(target: &str) -> String {
+    target.split('/').take(2).collect::<Vec<_>>().join("/")
+}
+
+fn trust_review_targets(
+    snapshot: &PresetSnapshot,
+    logical: &str,
+    diagnostics: &[&PresetMigrationDiagnosticV1],
+) -> BTreeSet<String> {
+    diagnostics
+        .iter()
+        .filter_map(|diagnostic| {
+            if diagnostic.source_layer.as_deref() == Some("embedded") {
+                return None;
+            }
+            match diagnostic.target.split_once('/') {
+                Some(("app", _))
+                    if matches!(
+                        diagnostic.code.as_str(),
+                        "manual_permission_review_required" | "external_code_trust_review_required"
+                    ) =>
+                {
+                    Some(diagnostic.target.clone())
+                }
+                Some(("sys", item))
+                    if diagnostic.code == "manual_permission_review_required"
+                        && sys_item_has_executable_code(snapshot, logical, item) =>
+                {
+                    Some(diagnostic.target.clone())
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn sys_item_has_executable_code(snapshot: &PresetSnapshot, logical: &str, item_id: &str) -> bool {
+    let Some(value) = snapshot
+        .get(logical)
+        .and_then(|bytes| toml::from_slice::<toml::Value>(bytes).ok())
+    else {
+        return false;
+    };
+    let item_code = value
+        .get("items")
+        .and_then(toml::Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item.get("id").and_then(toml::Value::as_str) == Some(item_id))
+        })
+        .is_some_and(|item| {
+            let script = item
+                .get("install")
+                .and_then(|install| install.get("kind"))
+                .and_then(toml::Value::as_str)
+                == Some("script");
+            let shell_code = item
+                .get("shell")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|integration| {
+                    ["eval", "source", "fragment"]
+                        .iter()
+                        .any(|key| integration.get(*key).is_some())
+                });
+            script || shell_code
+        });
+    if item_code {
+        return true;
+    }
+    let category_prefix = logical.trim_end_matches("shine.toml");
+    snapshot.files().keys().any(|path| {
+        path.starts_with(category_prefix)
+            && path.contains("/profile/base.")
+            && snapshot
+                .origin(path)
+                .is_some_and(|origin| origin.source_kind != PresetSourceKind::Embedded)
+    })
+}
+
+fn quote_command_arg(path: &Path, platform: RuntimePlatform) -> String {
+    let value = path.display().to_string();
+    if platform == RuntimePlatform::Windows {
+        format!("'{}'", value.replace('\'', "''"))
+    } else {
+        crate::shell_quote::quote_if_needed(&value)
+    }
+}
+
+fn count_phrase(count: usize, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
 }
 
 fn print_diffs(edits: &[PresetMigrationEdit]) {
@@ -819,6 +1098,10 @@ mod tests {
             item.code == "managed_overlay_read_only"
                 && item.source_layer.as_deref() == Some("overlay")
         }));
+        let output = migration_text(&plan, &snapshot, Some(root), true);
+        assert!(output.contains("upstream checkout"));
+        assert!(output.contains("shine preset pull"));
+        assert!(!output.contains("Edit: /managed-overlay"));
     }
 
     #[test]
@@ -837,6 +1120,115 @@ mod tests {
         assert_eq!(
             sys_categories_for_item(&snapshot, "two"),
             BTreeSet::from(["sys/ubuntu".to_string()])
+        );
+    }
+
+    #[test]
+    fn compatibility_summary_defers_the_single_next_command_to_the_failure() {
+        let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::External)
+            .base_root("/presets")
+            .file(
+                "shell/chrome/shine.toml",
+                b"[[files]]\nsource = 'open.sh'\ntarget = 'open-chrome'\n".to_vec(),
+            )
+            .file("shell/chrome/open.sh", Vec::new())
+            .build();
+        let plan = plan_preset_migration(&snapshot, "active", None, None);
+
+        let summary = compatibility_text(&plan);
+        let failure = compatibility_failure_message(&plan);
+        let detailed = migration_text(&plan, &snapshot, None, true);
+
+        assert!(summary.contains("shell/chrome/open-chrome (external)"));
+        assert!(!summary.contains("preset migrate --dry-run"));
+        assert_eq!(failure.matches("preset migrate --dry-run").count(), 1);
+        assert!(failure.contains("1 blocker"));
+        assert!(detailed.contains("0 automatic changes, 1 blocker, 0 advisories"));
+        assert!(!detailed.contains("1 blockers"));
+    }
+
+    #[test]
+    fn detailed_shell_remediation_groups_commands_and_never_suggests_trust() {
+        let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::External)
+            .base_root("/preset root")
+            .file(
+                "shell/chrome/shine.toml",
+                b"[[files]]\nsource = 'open.sh'\ntarget = 'open-chrome'\n\n[[files]]\nsource = 'close.sh'\ntarget = 'close-chrome'\n".to_vec(),
+            )
+            .file("shell/chrome/open.sh", Vec::new())
+            .file("shell/chrome/close.sh", Vec::new())
+            .build();
+        let plan = plan_preset_migration(&snapshot, "active", None, None);
+
+        let output = migration_text(&plan, &snapshot, None, true);
+
+        assert_eq!(output.matches("  shell/chrome (external)").count(), 1);
+        assert_eq!(output.matches("shine preset validate").count(), 1);
+        assert_eq!(output.matches("shine preset plan").count(), 1);
+        assert!(output.contains("'/preset root/shell/chrome/shine.toml'"));
+        assert!(output.contains("0 automatic changes, 2 blockers, 0 advisories"));
+        assert!(!output.contains("shine trust"));
+    }
+
+    #[test]
+    fn detailed_app_and_sys_remediation_suggests_trust_only_for_executable_code() {
+        let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::External)
+            .base_root("/presets")
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.demo'\n[artifact]\nscript = 'build.ts'\n".to_vec(),
+            )
+            .file("app/demo/build.ts", Vec::new())
+            .file(
+                "sys/ubuntu/shine.toml",
+                b"version = 2\n[[items]]\nid = 'scripted'\ninstall = { kind = 'script', path = 'install.sh' }\n\n[[items]]\nid = 'package-only'\ninstall = { kind = 'package', provider = 'apt', package = 'demo' }\n".to_vec(),
+            )
+            .file("sys/ubuntu/install.sh", Vec::new())
+            .build();
+        let plan = plan_preset_migration(&snapshot, "active", None, None);
+
+        let output = migration_text(&plan, &snapshot, None, true);
+
+        assert!(output.contains("shine trust inspect app/demo"));
+        assert!(output.contains("shine trust grant app/demo"));
+        assert!(output.contains("shine trust inspect sys/scripted"));
+        assert!(output.contains("shine trust grant sys/scripted"));
+        assert!(!output.contains("shine trust inspect sys/package-only"));
+        assert!(!output.contains("shine trust grant sys/package-only"));
+    }
+
+    #[test]
+    fn managed_overlay_remediation_never_suggests_editing_the_mirror() {
+        let root = Path::new("/managed overlay");
+        let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::Embedded)
+            .overlay_root(root)
+            .overlay_file(
+                "shell/chrome/shine.toml",
+                b"[[files]]\nsource = 'open.sh'\ntarget = 'open-chrome'\n".to_vec(),
+            )
+            .overlay_file("shell/chrome/open.sh", Vec::new())
+            .build();
+        let plan = plan_preset_migration(&snapshot, "active", None, None);
+
+        let output = migration_text(&plan, &snapshot, Some(root), true);
+
+        assert!(output.contains("upstream checkout"));
+        assert!(output.contains("shine preset pull"));
+        assert!(!output.contains("Edit: /managed overlay"));
+        assert!(!output.contains("shine preset validate"));
+    }
+
+    #[test]
+    fn remediation_command_paths_are_platform_quoted() {
+        let path = Path::new("/preset root/it's/shine.toml");
+
+        assert_eq!(
+            quote_command_arg(path, RuntimePlatform::Linux),
+            "'/preset root/it'\\''s/shine.toml'"
+        );
+        assert_eq!(
+            quote_command_arg(path, RuntimePlatform::Windows),
+            "'/preset root/it''s/shine.toml'"
         );
     }
 
