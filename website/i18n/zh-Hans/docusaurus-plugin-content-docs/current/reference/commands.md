@@ -276,6 +276,7 @@ shine preset lint [PATH] [--format <text|json>] [--deny-warnings]
 shine preset plan <CATEGORY> --platform <macos|linux|windows> [--format <text|json>]
 shine preset test <CATEGORY> [--format <text|json>]
 shine preset pack <CATEGORY> --output <FILE> [--force] [--format <text|json>]
+shine preset migrate [PATH] [--dry-run] [--yes] [--format <text|json>]
 shine preset export [DIR] [--force]
 shine preset copy <app|shell|sys>/<NAME> [--force]
 shine preset link <PATH> [--create] [--live]
@@ -291,10 +292,23 @@ shine preset pull
 `shine upgrade` 应用；`--live` 只适合预设开发，令源内容在下一次调用时生效。
 
 `preset schema` 直接从当前 binary 内 shipped 的 report、fixture 与 bundle Rust type，以及
-`validate`、`lint`、`plan`、`test`、`pack`、`schema` 的 live Clap help 生成 reference schema v1。
+`validate`、`lint`、`plan`、`test`、`pack`、`migrate`、`schema` 的 live Clap help 生成 reference schema v1。
 文本输出列出所含 contract；`--format json` 在一个 JSON value 中输出命令 help 与 JSON Schema
 draft 2020-12 文档。它不会复制完整 App/Shell/Sys TOML grammar；metadata 是否接受仍以
 `preset validate` 为准。该命令不会读取或初始化配置。
+
+`preset migrate` 用于审阅并迁移 Shine 1.x 的旧 authoring metadata。省略路径时，它通过只读配置
+发现检查当前激活的 external source 与 overlay；纯内置来源无需迁移。`PATH` 可以是仓库、类别目录
+或 `shine.toml`。默认 text 模式显示每个 `shine.toml` 的 unified diff，确认默认为 No；`--yes` 只
+跳过提示，仍会显示 text diff。`--dry-run` 不创建目录、备份或来源变更，并与 `--yes` 冲突。
+JSON 输出是版本化且不含文件内容的报告；JSON 模式若要写入还必须同时使用 `--yes`，以免混入
+交互文本。
+
+迁移器只修改能够证明安全的 metadata；它不会改 payload 或脚本、猜测 opaque-code 权限、授予
+trust、迁移 runtime manifest，也不会拆分 Sys v1 dispatcher。应用前会校验候选内容、复查来源
+hash，并完整创建私有备份集，再逐文件原子替换或删除。仍有人工 blocker、来源变化、备份/写入
+失败或用户拒绝时都会返回非零；即使互不依赖的安全改写已经落地也一样。Shine 管理的 Git overlay
+是只读缓存，请在上游 checkout 对显式路径执行迁移，再重新 pull。
 
 `preset validate` 接受预设仓库根目录、`app|shell|sys/<name>` 类别目录或其中的
 `shine.toml`；默认检查当前目录。它会静态检查所有平台分支和引用文件，不读取当前激活的预设

@@ -45,13 +45,16 @@ metadata_schema_version = 2
 ```
 
 它不同于 `[permissions].schema_version`，后者声明的是权限语法版本。若 overlay 覆盖了
-`app/<category>/shine.toml`，但没有这个根级字段，它就是旧版 v1 metadata。若其中 lifecycle hook
-递归运行 `shine app artifact apply`，Shine 2 会阻塞 Plan，并明确指出是 overlay metadata 需要迁移。
-只删除或迁移这个 `shine.toml`；保留 `merge.yaml`、`rules/` 等 payload 覆盖文件。不要通过授予外部代码
-信任来绕过这种不兼容。
+`app/<category>/shine.toml`，但没有这个根级字段，它就是旧版 v1 metadata。先运行
+`shine preset migrate --dry-run` 审阅，再运行 `shine preset migrate`，在默认 No 的确认后应用所显示的
+metadata-only diff；若它不是当前激活来源，可传入仓库、类别或 manifest 路径。迁移器只会移除精确
+指向同一类别的递归 `shine app artifact apply` hook；`merge.yaml`、`rules/` 等 payload 覆盖会保留，
+报告也会提醒 artifact 仍需显式执行。写入前会创建私有备份。不要通过授予外部代码信任来绕过
+不兼容。
 
-`shine state migrate` 只迁移 Shine 自己拥有的运行状态，不会重写或删除你的 Preset overlay。未来的
-Preset migration 命令才应以显式、可审阅的操作安全处理这类文件。
+opaque hook、generator 或 artifact 仍需作者编写 target-local 权限，并通过 `shine preset validate`
+和 `shine preset plan` 验证。`shine state migrate` 仍只迁移 Shine 自己拥有的运行状态，绝不会重写
+Preset source 或 overlay。
 
 ## 卸载与恢复
 

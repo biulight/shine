@@ -9,6 +9,11 @@ sidebar_position: 4
 profile 写入之前被拒绝。现有 `~/.shine/sys-manifest.toml` 执行记录仍可读取；本迁移改变的是预设
 编写契约，不是对已记录软件的所有权。
 
+先运行 `shine preset migrate --dry-run`，也可以传入 Sys 仓库、类别或 `shine.toml`。报告会指出
+`sys_v1_manual_migration_required`，保留 dispatcher 与脚本的每一个字节，并返回非零：v1 dispatcher
+是平台级 opaque code，无法可靠地自动拆分。`shine preset migrate` 绝不会修改 runtime manifest 或
+trust grant。
+
 对每个 init item，请用以下两项替换平台级 `init.sh` 或 `init.ps1` dispatcher：
 
 - 只读的 `detect` 声明（`command`、`path` 或 `any`）；以及
@@ -20,14 +25,20 @@ wire protocol 输出与更新检查 dispatcher；第三方软件更新应使用�
 
 外部安装脚本、base profile 文件、fragment、`eval` 和 `source` 需要当前 target-scoped
 `shine trust grant sys/<ITEM>`；静态 detection、provider metadata、PATH、环境变量和 aliases 不需要
-grant。可从 `shine preset copy sys/<os>` 开始，并通过以下命令验证：
+grant。
 
 每个 `[[items]]` target 还要携带权限 schema v1。固定 provider 与 managed target 已由强类型
 metadata 约束；item script 应保守声明 Preset 内的 executable path，以及经源码审查确认的 command、
 network、administrator、environment 和 system identity。该声明会参与静态校验，但不会授予信任，
 也不能让 opaque code 自动变得可静态证明。
 
+可从 `shine preset copy sys/<os>` 开始，先 validate 和 plan，再审阅外部代码并授予 trust：
+
 ```bash
+shine preset validate <PATH>
+shine preset plan sys/<os> --platform <macos|linux|windows>
+shine trust inspect sys/<ITEM>
+shine trust grant sys/<ITEM>
 shine sys list
 shine sys info <ITEM>
 shine sys bootstrap <ITEM> --dry-run

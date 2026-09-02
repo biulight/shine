@@ -52,7 +52,9 @@ fn generated_command_help() -> Result<Vec<PresetCommandHelpV1>> {
         .find_subcommand("preset")
         .context("CLI does not contain the preset command")?;
     let mut output = Vec::new();
-    for name in ["validate", "lint", "plan", "test", "pack", "schema"] {
+    for name in [
+        "validate", "lint", "plan", "test", "pack", "migrate", "schema",
+    ] {
         let mut command = preset
             .find_subcommand(name)
             .with_context(|| format!("preset command is missing {name}"))?
@@ -75,7 +77,7 @@ mod tests {
     #[test]
     fn schema_reference_uses_live_clap_help() {
         let commands = generated_command_help().unwrap();
-        assert_eq!(commands.len(), 6);
+        assert_eq!(commands.len(), 7);
         assert!(commands[2].help.contains("--platform"));
         assert!(commands[3].help.contains("shine.test.toml"));
     }

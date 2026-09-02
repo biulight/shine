@@ -36,6 +36,11 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
    `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`
    and commit both regenerated public-manual blocks.
 
+For a 1.x source, begin with `shine preset migrate <path> --dry-run`. The reviewed migrator may
+rebase only exact released metadata or apply safe structural App edits; it never supplies opaque
+permissions, splits a Sys dispatcher, grants trust, or edits payloads. Complete every reported
+manual blocker, then rerun validate, lint, plan, and fixture tests above.
+
 ## AI authoring boundary
 
 `skills/shine-preset-author/` is the portable author workflow. Keep `SKILL.md` concise and route to

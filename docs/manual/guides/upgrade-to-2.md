@@ -111,6 +111,31 @@ or rollback files block recovery and remain untouched for manual review.
 
 ## Update external Presets
 
+Review active 1.x external sources and overlays before the first configuration upgrade:
+
+```bash
+shine preset migrate --dry-run
+shine preset migrate
+# For automation after reviewing the same source:
+shine preset migrate --yes
+```
+
+You can also pass a Preset repository, category directory, or `shine.toml`. The command changes only
+safe `shine.toml` metadata, displays each diff, defaults confirmation to No, validates the candidate,
+and creates a private complete backup set before writing. It never changes payloads, scripts,
+environment values, runtime state, or trust grants. A managed Git overlay is read-only: migrate its
+upstream checkout with an explicit path, commit it there, then pull again.
+
+Permissions for opaque App/Shell/Sys code and Sys v1 dispatchers require manual authoring. Follow the
+reported target-local location and verify it with `shine preset validate <PATH>` and
+`shine preset plan <CATEGORY> --platform <PLATFORM>`. If migrated external code still needs trust,
+review it separately with `shine trust inspect/grant <TARGET>`.
+
+`shine update` now prints a **Preset compatibility** section and still completes the available
+configuration and Shine release checks before returning a blocker. `shine upgrade` performs the
+same preflight—including after `--pull`—and stops before any lifecycle Plan or mutation when the
+source is incompatible.
+
 External Presets must declare permission schema v1 for each executable target. A missing or invalid
 declaration is a blocker, not an implicit broad grant. Authors should run the static and fixture
 gates before distribution:

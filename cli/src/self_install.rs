@@ -18,16 +18,40 @@ pub async fn handle_update(
     refresh_release: bool,
     run_generators: bool,
 ) -> Result<()> {
+    let compatibility = crate::preset_migration::active_compatibility_plan(target).await?;
+    let migration_required = crate::preset_migration::compatibility_required(&compatibility);
+    crate::preset_migration::print_compatibility(&compatibility);
+
     if let Some(target) = target {
-        return info::handle_update_target(config, target, run_generators).await;
+        info::handle_update_target(config, target, run_generators).await?;
+        if migration_required {
+            bail!("Preset migration is required before this target can be upgraded");
+        }
+        return Ok(());
     }
 
-    let mut printed_update = if verbose {
-        Box::pin(list::handle_status_list(config, diff, run_generators)).await?;
-        println!();
-        true
+    let config_updates = if verbose {
+        match Box::pin(list::handle_status_list(config, diff, run_generators)).await {
+            Ok(()) => {
+                println!();
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        }
     } else {
-        Box::pin(list::handle_update_list(config, diff, run_generators)).await?
+        Box::pin(list::handle_update_list(config, diff, run_generators)).await
+    };
+    let (mut printed_update, config_update_error) = match config_updates {
+        Ok(printed) => (printed, None),
+        Err(error) => {
+            eprintln!(
+                "{}",
+                colors::yellow_stderr(&format!(
+                    "warning: configuration update check failed: {error:#}"
+                ))
+            );
+            (false, Some(error))
+        }
     };
 
     let current = version::semver();
@@ -81,8 +105,15 @@ pub async fn handle_update(
         }
     }
 
-    if !printed_update {
+    if !printed_update && config_update_error.is_none() && !migration_required {
         println!("{}", colors::dim("Nothing to update."));
+    }
+
+    if let Some(error) = config_update_error {
+        return Err(error);
+    }
+    if migration_required {
+        bail!("Preset migration is required; run `shine preset migrate --dry-run`");
     }
 
     Ok(())
@@ -170,6 +201,11 @@ pub async fn handle_config_upgrade(
     prune_stale: bool,
     yes: bool,
 ) -> Result<()> {
+    let compatibility = crate::preset_migration::active_compatibility_plan(target).await?;
+    crate::preset_migration::print_compatibility(&compatibility);
+    if crate::preset_migration::compatibility_required(&compatibility) {
+        bail!("Preset migration is required; run `shine preset migrate --dry-run`");
+    }
     if let Some(target) = target {
         return handle_config_target_upgrade(config, target, verbose, prune_stale, yes).await;
     }

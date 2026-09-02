@@ -64,6 +64,32 @@ record additional capabilities. Pure planners combine both sources into the requ
 resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
 protected execution fails closed.
 
+## Preset source compatibility and migration
+
+`shine preset migrate` is routed before mutable config initialization. Default scope uses read-only
+discovery for the active external source and overlay; an explicit repository, category, or manifest
+path bypasses active-source selection. Core plans only `shine.toml` changes from one effective
+snapshot and returns a content-free report plus process-local candidate bytes.
+
+```text
+read-only source discovery or explicit PATH → immutable effective/base/current-embedded snapshots
+    → released-1.x fingerprint and structural compatibility assessment
+    → process-local TOML candidates → authoritative same-scope validation
+    → versioned hash/action/diagnostic report + CLI-only unified diffs
+    → default-No approval → source hash recheck → complete private backup set
+    → per-file hash recheck → atomic replace/remove → final status
+```
+
+Only exact old built-in metadata with matching executable identity, safe App schema/hook cleanup,
+and overlays that reveal valid lower metadata can become edits. Opaque permissions and Sys v1
+dispatchers remain blockers. Managed Git overlays stop at diagnosis. Partial independent edits may
+land after the complete backup succeeds, but any remaining blocker or apply failure keeps the final
+result non-successful and the retained backup supports manual recovery.
+
+`update` prints this same compatibility assessment while continuing its read-only configuration and
+release checks. `upgrade` performs it after an optional pull/reload and before lifecycle planning or
+mutation. Neither path applies candidates or creates migration backups.
+
 ## Preset authoring Plan report
 
 `shine preset plan` is routed before runtime config initialization and background update checks.

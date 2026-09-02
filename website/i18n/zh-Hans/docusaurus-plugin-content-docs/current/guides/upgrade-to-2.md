@@ -108,6 +108,29 @@ shine sys recover
 
 ## 更新外部 Preset
 
+首次升级配置前，先审阅当前激活的 1.x external source 与 overlay：
+
+```bash
+shine preset migrate --dry-run
+shine preset migrate
+# 审阅同一来源后用于自动化：
+shine preset migrate --yes
+```
+
+也可以传入 Preset 仓库、类别目录或 `shine.toml`。该命令只改写安全的 `shine.toml` metadata，
+逐文件显示 diff，确认默认是 No；写入前会校验候选内容并创建完整的私有备份集。它绝不会改动
+payload、脚本、环境值、运行状态或 trust grant。Git 管理的 overlay 是只读缓存：请对上游 checkout
+显式执行路径迁移，在上游提交后再 pull。
+
+opaque App/Shell/Sys 代码的权限与 Sys v1 dispatcher 必须人工改写。按照报告中的 target-local
+位置补全，并运行 `shine preset validate <PATH>` 和
+`shine preset plan <CATEGORY> --platform <PLATFORM>` 验证。迁移后的外部代码若仍需信任，请另行
+执行 `shine trust inspect/grant <TARGET>` 审阅和授权。
+
+`shine update` 现在会显示 **Preset compatibility** 区块，并继续完成可执行的配置检查和 Shine
+release 检查，最后再因 blocker 返回非零。`shine upgrade` 会在任何生命周期 Plan 或 mutation 前
+执行同一 preflight；使用 `--pull` 时则在拉取并重新加载后检查，不兼容时不会产生部分升级。
+
 外部 Preset 必须为每个可执行 target 声明 permission schema v1。缺失或无效声明属于
 blocker，不会被解释为隐式宽泛授权。作者应在分发前运行静态和 fixture 检查：
 

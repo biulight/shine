@@ -52,14 +52,16 @@ metadata_schema_version = 2
 
 This is distinct from `[permissions].schema_version`, which declares the permissions grammar.
 An older overlay that replaces `app/<category>/shine.toml` without the root field is legacy v1
-metadata. If it contains a lifecycle hook that recursively runs `shine app artifact apply`, Shine 2
-blocks the Plan and identifies the overlay metadata explicitly. Remove or migrate only that
-`shine.toml`; keep payload overrides such as `merge.yaml` and `rules/`. Do not grant external-code
-trust to work around this incompatibility.
+metadata. Review it with `shine preset migrate --dry-run`, then run `shine preset migrate` to apply
+the displayed metadata-only diff after a default-No confirmation. Pass the repository, category, or
+manifest path when it is not the active source. The migrator can remove only an exact same-category
+recursive `shine app artifact apply` hook; it keeps payload overrides such as `merge.yaml` and
+`rules/`, reports that artifact application remains explicit, and creates a private backup before
+writing. Do not grant external-code trust to work around an incompatibility.
 
-`shine state migrate` migrates Shine-owned runtime state only. It never rewrites or removes your
-Preset overlay; a future Preset migration command can safely offer that as an explicit, reviewed
-operation.
+Opaque hooks, generators, or artifacts still need target-local permissions written by an author and
+verified with `shine preset validate` and `shine preset plan`. `shine state migrate` remains limited
+to Shine-owned runtime state and never rewrites Preset sources or overlays.
 
 ## Uninstall and restore
 

@@ -3,8 +3,8 @@
 use super::fixture::FixtureDocumentV1;
 use super::pack::BundleManifestV1;
 use super::{
-    PresetAuthoringPlanReportV1, PresetLintReportV1, PresetPackReportV1, PresetTestReportV1,
-    PresetValidationReportV1,
+    PresetAuthoringPlanReportV1, PresetLintReportV1, PresetMigrationReportV1, PresetPackReportV1,
+    PresetTestReportV1, PresetValidationReportV1,
 };
 use schemars::{JsonSchema, schema_for};
 use serde::Serialize;
@@ -23,6 +23,7 @@ pub fn preset_schema_reference_v1() -> PresetSchemaReferenceV1 {
     let mut schemas = BTreeMap::new();
     insert::<PresetValidationReportV1>(&mut schemas, "preset-validation-report-v1");
     insert::<PresetLintReportV1>(&mut schemas, "preset-lint-report-v1");
+    insert::<PresetMigrationReportV1>(&mut schemas, "preset-migration-report-v1");
     insert::<PresetAuthoringPlanReportV1>(&mut schemas, "preset-authoring-plan-report-v1");
     insert::<FixtureDocumentV1>(&mut schemas, "preset-test-fixture-v1");
     insert::<PresetTestReportV1>(&mut schemas, "preset-test-report-v1");
@@ -54,6 +55,7 @@ mod tests {
         for name in [
             "preset-validation-report-v1",
             "preset-lint-report-v1",
+            "preset-migration-report-v1",
             "preset-authoring-plan-report-v1",
             "preset-test-fixture-v1",
             "preset-test-report-v1",

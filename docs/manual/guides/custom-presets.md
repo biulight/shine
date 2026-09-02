@@ -92,6 +92,28 @@ The returned hash identifies deterministic bundle bytes. `shine.test.toml` remai
 is not included. A pack-policy failure must be fixed in the source; `--force` only replaces the
 output file and never bypasses validation or policy.
 
+## Migrate a 1.x source
+
+Preview the active external source and overlay, or name a repository, category, or manifest:
+
+```bash
+shine preset migrate --dry-run
+shine preset migrate ./my-presets --dry-run
+shine preset migrate ./my-presets
+```
+
+The migrator shows unified metadata diffs and confirmation defaults to No. It edits only
+`shine.toml`, validates the candidate, rechecks source hashes, and creates a complete private backup
+set before writing. Payloads, scripts, values, runtime manifests, and trust grants are untouched.
+Exact released 1.x built-in metadata may be rebased when its executable identity is unchanged;
+safe declarative Apps may receive the current metadata and empty permission schema. Opaque code and
+Sys v1 dispatchers remain manual blockers instead of receiving guessed or broad permissions.
+
+`--yes` is appropriate only after review and still prints text diffs. JSON is a versioned report
+without contents or diffs; use `--format json --dry-run` for inspection or combine JSON apply with
+`--yes`. A managed Git overlay is diagnosed but never changed—run the explicit-path command in its
+upstream checkout, commit there, and pull the mirror again.
+
 ## Declare permissions
 
 New Presets declare reviewable capability identities with permission schema v1. App permissions

@@ -8,7 +8,7 @@ use crate::status::{
     build_shell_rows,
 };
 use crate::sys;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
 const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
@@ -103,18 +103,11 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
         })
         .collect();
 
-    let cats_result = load_active_categories(config, None).await;
-    let (app_rows, app_lifecycle, app_inspections) = match cats_result {
-        Ok(cats) => build_update_app_rows(config, &cats, run_generators).await?,
-        Err(_) => (
-            Vec::new(),
-            shine_core::lifecycle::LifecycleResultV1::new(
-                shine_core::lifecycle::LifecycleOperation::Update,
-                false,
-            ),
-            Vec::new(),
-        ),
-    };
+    let cats = load_active_categories(config, None)
+        .await
+        .context("loading active App Presets for update")?;
+    let (app_rows, app_lifecycle, app_inspections) =
+        build_update_app_rows(config, &cats, run_generators).await?;
     let pending_app = app_lifecycle
         .outcomes
         .iter()
@@ -129,7 +122,9 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
         })
         .collect();
     let update_app = app_update_categories(&update_app);
-    let update_sys = sys::managed_updates(config).await.unwrap_or_default();
+    let update_sys = sys::managed_updates(config)
+        .await
+        .context("checking managed Sys Presets for update")?;
 
     let any_update = !update_shell.is_empty() || !update_app.is_empty() || !update_sys.is_empty();
     let has_generator_attention = app_rows.iter().any(|row| {
@@ -310,21 +305,19 @@ pub async fn handle_status_list(config: &Config, diff: bool, run_generators: boo
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
     let all_shell: Vec<&ShellRow> = shell_rows.iter().collect();
 
-    let cats_result = load_active_categories(config, None).await;
-    let (app_rows, app_inspections) = match cats_result {
-        Ok(cats) => {
-            let (rows, _, inspections) =
-                build_update_app_rows(config, &cats, run_generators).await?;
-            (rows, inspections)
-        }
-        Err(_) => (Vec::new(), Vec::new()),
-    };
+    let cats = load_active_categories(config, None)
+        .await
+        .context("loading active App Presets for status")?;
+    let (app_rows, _, app_inspections) =
+        build_update_app_rows(config, &cats, run_generators).await?;
     let installed_app: Vec<&AppRow> = app_rows
         .iter()
         .filter(|r| r.file_status != FileStatus::NotInstalled)
         .collect();
     let all_app: Vec<&AppRow> = app_rows.iter().collect();
-    let update_sys = sys::managed_updates(config).await.unwrap_or_default();
+    let update_sys = sys::managed_updates(config)
+        .await
+        .context("checking managed Sys Presets for status")?;
 
     let any = !installed_shell.is_empty() || !installed_app.is_empty() || !update_sys.is_empty();
 

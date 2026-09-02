@@ -166,6 +166,24 @@ async fn run(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
+    if let Commands::Preset {
+        command:
+            PresetCommands::Migrate {
+                path,
+                dry_run,
+                yes,
+                format,
+            },
+    } = &cli.command
+    {
+        let migrated =
+            cli::preset_migration::handle_migrate(path.as_deref(), *dry_run, *yes, *format).await?;
+        if !migrated {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let config = Box::pin(Config::load_or_init()).await?;
 
     if config.legacy_allow_app_hooks || config.legacy_allow_sys_code {
@@ -337,6 +355,7 @@ async fn run(cli: Cli) -> Result<()> {
             PresetCommands::Plan { .. } => unreachable!(),
             PresetCommands::Test { .. } => unreachable!(),
             PresetCommands::Pack { .. } => unreachable!(),
+            PresetCommands::Migrate { .. } => unreachable!(),
             PresetCommands::Export(cmd) => {
                 Box::pin(handle_preset_export(&config, cmd.dir, cmd.force)).await
             }

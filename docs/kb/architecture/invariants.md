@@ -45,6 +45,18 @@ bugs. Check this list before changing the modules named in each entry.
   from the Rust types shipped for authoring reports, fixtures, and bundle manifests, and captures
   command help from the live Clap tree. It must route before configuration loading. It does not
   redefine the App/Shell/Sys TOML grammar; runtime parsers plus `preset validate` remain authoritative.
+- **Preset source migration is reviewed, metadata-only, and backup-first.** `shine preset migrate`
+  derives candidates from one immutable effective snapshot, preserves unchanged TOML formatting,
+  validates candidates authoritatively, renders diffs through a CLI-only side channel, and rechecks
+  source SHA-256 immediately before backup and apply. Its versioned report contains only logical
+  targets, source layers, actions, stable codes, schema versions, hashes, and summary counts—never
+  file content, diffs, private values, or physical checkout paths. Dry-run creates no directory or
+  file. Apply requires default-No review (or explicit `--yes`) and a complete owner-only backup set
+  with hash/mode manifest before the first atomic metadata replacement or removal. Payloads, scripts,
+  environment values, runtime manifests, and trust grants are never migrated. Opaque-code
+  permissions, broad network access, and Sys v1 dispatchers are never inferred. Managed Git overlays
+  are diagnostic-only; a source change, backup/write failure, refusal, or remaining blocker fails the
+  command even when independent safe edits have converged.
 - **Preset bundle bytes exclude host identity and author-only state.** `shine preset pack` uses one
   validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical
   file order, normalized mode, zero uid/gid/mtime, and a fixed gzip header determine bytes; physical

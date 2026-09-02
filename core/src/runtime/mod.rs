@@ -17,6 +17,7 @@ mod memory;
 mod pack;
 mod planner;
 mod preset;
+mod preset_migration;
 mod profile;
 mod schema;
 mod shell;
@@ -75,6 +76,12 @@ pub use planner::{
 pub use preset::{
     PresetFile, PresetFileOrigin, PresetSnapshot, PresetSourceKind, PresetValidationIssue,
     PresetValidationReport,
+};
+pub use preset_migration::{
+    PRESET_MIGRATION_SCHEMA_VERSION, PresetMigrationActionV1, PresetMigrationBaseline,
+    PresetMigrationDiagnosticV1, PresetMigrationEdit, PresetMigrationFileV1, PresetMigrationPlan,
+    PresetMigrationReportV1, PresetMigrationSeverityV1, PresetMigrationStatusV1,
+    PresetMigrationSummaryV1, plan_preset_migration, sha256,
 };
 pub use profile::{
     PathUpdateStatus, SHELL_SENTINEL_END, SHELL_SENTINEL_START, ShellConfigUpdate,

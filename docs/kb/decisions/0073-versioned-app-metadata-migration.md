@@ -20,8 +20,10 @@ its own code so the CLI can explain that only the overriding `shine.toml` needs 
 while payload files remain intact.
 
 `shine state migrate` remains limited to Shine-owned runtime state, receipts, and caches. It never
-rewrites user Preset sources or overlays. A future `shine preset migrate` command may offer an
-explicit, dry-run-first and reviewed conversion with backup, but automatic mutation is out of scope.
+rewrites user Preset sources or overlays. `shine preset migrate` provides the separate explicit,
+dry-run-capable, reviewed conversion and backup contract defined by
+[ADR 0074](0074-reviewed-preset-source-migration.md); `update`, `upgrade`, and `self upgrade` never
+apply it implicitly.
 
 ## Consequences
 

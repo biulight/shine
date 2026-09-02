@@ -7,6 +7,18 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Features
+
+- Added reviewed `shine preset migrate [PATH]` migration for legacy 1.x Preset metadata, with
+  dry-run/text diff review, versioned content-free JSON reports, source revalidation, complete
+  private backups, and conservative blockers for opaque permissions and Sys v1 dispatchers.
+
+### Bug Fixes
+
+- Made `shine update` and `shine upgrade` report active Preset compatibility with logical source
+  context. Update no longer turns App/Sys inspection failures into empty results, while upgrade
+  blocks before any Plan or mutation when legacy metadata requires migration.
+
 ## [2.0.0-rc.1] — 2026-09-02
 
 This is the first reproducible 2.0 release candidate. It is a GitHub and Cargo prerelease, does not

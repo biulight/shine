@@ -177,6 +177,21 @@ pub enum PresetCommands {
         #[arg(long, value_enum, default_value_t = PresetReportFormat::Text)]
         format: PresetReportFormat,
     },
+    /// Review and migrate legacy Preset metadata for Shine 2
+    Migrate {
+        /// Preset repository, category directory, or shine.toml; defaults to active sources
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Preview migration without creating backups or changing files
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+        /// Apply the displayed migration without prompting
+        #[arg(long)]
+        yes: bool,
+        /// Report output format; JSON apply requires --yes
+        #[arg(long, value_enum, default_value_t = PresetReportFormat::Text)]
+        format: PresetReportFormat,
+    },
     /// Copy built-in presets to a directory for local customization
     Export(ExportCommand),
     /// Copy one built-in preset into the current directory

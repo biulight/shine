@@ -109,7 +109,7 @@ fn systemd_resolved_stub_active() -> bool {
         .unwrap_or(true)
 }
 
-fn embedded_preset_files() -> Vec<(String, Vec<u8>)> {
+pub(crate) fn embedded_preset_files() -> Vec<(String, Vec<u8>)> {
     crate::presets::embedded_asset_paths("")
         .into_iter()
         .filter_map(|logical| {

@@ -81,6 +81,26 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 返回的 hash 标识确定性 bundle bytes。`shine.test.toml` 只供作者使用，不会进入 bundle。Pack policy
 失败必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。
 
+## 迁移 1.x 来源
+
+可预览当前激活的 external source 与 overlay，也可以指定仓库、类别或 manifest：
+
+```bash
+shine preset migrate --dry-run
+shine preset migrate ./my-presets --dry-run
+shine preset migrate ./my-presets
+```
+
+迁移器显示 unified metadata diff，确认默认是 No。它只修改 `shine.toml`，校验候选内容、复查来源
+hash，并在写入前创建完整的私有备份集；payload、脚本、值、runtime manifest 与 trust grant 都不会
+改变。若 executable identity 未变化，精确匹配已发布 1.x 内置 metadata 的文件可 rebase；安全的纯
+声明式 App 可以补齐当前 metadata 与空权限 schema。opaque code 和 Sys v1 dispatcher 会保留为人工
+blocker，不会获得猜测或宽泛权限。
+
+`--yes` 仅适合审阅后使用，且仍显示 text diff。JSON 是不含内容和 diff 的版本化报告：检查时使用
+`--format json --dry-run`，JSON 写入则必须同时指定 `--yes`。Git 管理的 overlay 只诊断、不修改；
+请在其上游 checkout 对显式路径运行迁移，提交后再 pull 镜像。
+
 ## 声明权限
 
 新预设使用权限 schema v1 声明可审查的 capability identity。App 在类别根部使用

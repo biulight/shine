@@ -326,6 +326,7 @@ shine preset lint [PATH] [--format <text|json>] [--deny-warnings]
 shine preset plan <CATEGORY> --platform <macos|linux|windows> [--format <text|json>]
 shine preset test <CATEGORY> [--format <text|json>]
 shine preset pack <CATEGORY> --output <FILE> [--force] [--format <text|json>]
+shine preset migrate [PATH] [--dry-run] [--yes] [--format <text|json>]
 shine preset export [DIR] [--force]
 shine preset copy <app|shell|sys>/<NAME> [--force]
 shine preset link <PATH> [--create] [--live]
@@ -342,10 +343,26 @@ source changes. `--live` is for preset development.
 
 `preset schema` generates reference schema v1 from the report, fixture, and bundle Rust types
 shipped in the current binary, plus the live Clap help for `validate`, `lint`, `plan`, `test`,
-`pack`, and `schema`. Text output lists the included contracts; `--format json` emits command help
+`pack`, `migrate`, and `schema`. Text output lists the included contracts; `--format json` emits command help
 and JSON Schema draft 2020-12 documents in one JSON value. It does not duplicate the complete
 App/Shell/Sys TOML grammar: `preset validate` remains the metadata acceptance authority. The
 command does not load or initialize configuration.
+
+`preset migrate` reviews legacy 1.x authoring metadata for Shine 2. With no path it uses read-only
+configuration discovery to inspect the active external source and overlay; a purely embedded source
+needs no migration. `PATH` may name a repository, category, or `shine.toml`. The default text mode
+shows each `shine.toml` unified diff and asks for confirmation with No as the default. `--yes` skips
+the prompt but still displays text diffs. `--dry-run` creates no directory, backup, or source change
+and conflicts with `--yes`. JSON output is the versioned, content-free report; an applying JSON run
+must also use `--yes` so the document is not mixed with interactive text.
+
+The migrator changes only metadata that it can prove safe. It never edits payloads or scripts,
+guesses opaque-code permissions, grants trust, migrates runtime manifests, or splits a Sys v1
+dispatcher. It validates candidates, rechecks source hashes, and creates a complete private backup
+set before applying atomic replacements or removals. Remaining manual blockers, a changed source,
+backup/write failure, or declining confirmation returns a nonzero status, even if independent safe
+edits were applied. A Shine-managed Git overlay is read-only; migrate an upstream checkout with an
+explicit path and pull it again.
 
 `preset validate` accepts a preset repository root, an `app|shell|sys/<name>` category, or its
 `shine.toml`; the path defaults to the current directory. It statically checks every declared

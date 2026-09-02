@@ -80,6 +80,16 @@ impl PresetSnapshot {
         self.overlay.contains_key(path)
     }
 
+    pub fn base_bytes(&self, path: &str) -> Option<&[u8]> {
+        self.base.get(path).map(|file| file.bytes.as_slice())
+    }
+
+    /// Iterate over every captured physical source layer. A logical path may
+    /// occur twice when an overlay shadows a base file.
+    pub fn source_files(&self) -> impl Iterator<Item = (&String, &PresetFile)> {
+        self.base.iter().chain(self.overlay.iter())
+    }
+
     /// Bind the effective logical preset tree and trust layer without binding
     /// its machine-local checkout path.
     pub fn digest_v1(&self) -> Result<SnapshotDigestV1, SnapshotDigestError> {
