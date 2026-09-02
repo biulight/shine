@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 1.8.0. Use `--help` on any subcommand for the exact interface of the
+This page reflects Shine 2.0.0-rc.1. Use `--help` on any subcommand for the exact interface of the
 installed version.
 
 ## 1.0 target rules
@@ -495,5 +495,5 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-Stable `shine --version` output is `shine 1.8.0 (<commit> <date>)`; preview builds use a label such as
-`1.8.0-preview`.
+The RC `shine --version` output is `shine 2.0.0-rc.1 (<commit> <date>)`; preview builds use the
+SemVer-compatible label `2.0.0-rc.1.preview`.

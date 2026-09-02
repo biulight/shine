@@ -23,7 +23,8 @@ deleting unrelated files.
 
 **Give personal automation a reviewable lifecycle.**
 
-This manual applies to **Shine 1.8.0**.
+This manual applies to the **Shine 2.0.0-rc.1** release candidate. It is prerelease documentation;
+use the version selector for the stable 1.8.x manual.
 
 [![The three core values of Shine: repeatable deployment, one entry point for personal developer resources, and a reviewable lifecycle for Shine-managed content.](/img/shine-core-values-en.webp)](/img/shine-core-values-en.webp)
 

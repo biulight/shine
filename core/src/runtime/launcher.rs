@@ -65,6 +65,11 @@ pub struct UnlinkReport {
     pub skipped: Vec<PathBuf>,
 }
 
+pub(crate) struct ManagedLauncherProbe {
+    pub resources: Vec<PreparedLauncherResource>,
+    pub conflicts: Vec<PathBuf>,
+}
+
 #[derive(Clone)]
 pub struct LinkSpec {
     pub source: PathBuf,
@@ -241,20 +246,6 @@ pub(crate) async fn prepared_launcher_resource_is_exact(
                 })
         }
     })
-}
-
-async fn host_launcher_target(host: &impl FileSystemHost, path: &Path) -> Result<Option<PathBuf>> {
-    let content = match host.read(path).await {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(content) => content,
-            Err(_) => return Ok(None),
-        },
-        Err(_) => return Ok(None),
-    };
-    if !content.contains(SHIM_MANAGED_MARKER) {
-        return Ok(None);
-    }
-    Ok(shim_target_from_content(&content))
 }
 
 async fn host_remove_link(host: &impl FileSystemHost, link_path: &Path) -> Result<()> {
@@ -555,35 +546,104 @@ pub async fn unlink_managed_command_with_host(
     managed_roots: &[PathBuf],
     dry_run: bool,
 ) -> Result<UnlinkReport> {
-    let path = command_path_for_name(bin_dir, command);
-    let mut report = UnlinkReport {
-        removed: Vec::new(),
+    let probe = probe_managed_command_with_host(host, bin_dir, command, managed_roots).await?;
+    if !probe.conflicts.is_empty() {
+        return Ok(UnlinkReport {
+            removed: Vec::new(),
+            skipped: probe.conflicts,
+        });
+    }
+    let removed = probe
+        .resources
+        .iter()
+        .map(|resource| resource.destination().to_path_buf())
+        .collect::<Vec<_>>();
+    if !dry_run {
+        for path in &removed {
+            host.remove_file(path)
+                .await
+                .map_err(|error| error.into_anyhow("removing managed shell launcher"))?;
+        }
+    }
+    Ok(UnlinkReport {
+        removed,
         skipped: Vec::new(),
-    };
-    let metadata = match host.metadata(&path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.is_not_found() => return Ok(report),
-        Err(error) => return Err(error.into_anyhow("inspecting shell launcher")),
-    };
-    let target = if metadata.kind == FileKind::Symlink {
-        host.read_link(&path).await.ok()
-    } else {
-        host_launcher_target(host, &path).await?
-    };
-    let managed = target.is_some_and(|target| {
-        managed_roots
+    })
+}
+
+pub(crate) async fn probe_managed_command_with_host(
+    host: &impl FileSystemObservationHost,
+    bin_dir: &Path,
+    command: &OsStr,
+    managed_roots: &[PathBuf],
+) -> Result<ManagedLauncherProbe> {
+    let primary = command_path_for_name(bin_dir, command);
+    #[cfg(unix)]
+    let candidates = vec![primary];
+    #[cfg(not(unix))]
+    let candidates = vec![primary.clone(), primary.with_extension("cmd")];
+
+    let mut resources = Vec::new();
+    let mut conflicts = Vec::new();
+    for path in candidates {
+        let metadata = match host.metadata(&path).await {
+            Ok(metadata) => metadata,
+            Err(error) if error.is_not_found() => continue,
+            Err(error) => return Err(error.into_anyhow("inspecting shell launcher")),
+        };
+        let (target, resource) = if metadata.kind == FileKind::Symlink {
+            let target = host
+                .read_link(&path)
+                .await
+                .map_err(|error| error.into_anyhow("reading shell launcher target"))?;
+            (
+                target.clone(),
+                PreparedLauncherResource::Symlink {
+                    destination: path.clone(),
+                    target,
+                },
+            )
+        } else if metadata.kind == FileKind::File {
+            let bytes = host
+                .read(&path)
+                .await
+                .map_err(|error| error.into_anyhow("reading shell launcher"))?;
+            let target = String::from_utf8(bytes.clone())
+                .ok()
+                .filter(|content| content.contains(SHIM_MANAGED_MARKER))
+                .and_then(|content| shim_target_from_content(&content));
+            let Some(target) = target else {
+                conflicts.push(path);
+                continue;
+            };
+            (
+                target,
+                PreparedLauncherResource::File {
+                    destination: path.clone(),
+                    bytes,
+                    unix_mode: metadata.unix_mode.map(|mode| mode & 0o777),
+                },
+            )
+        } else {
+            conflicts.push(path);
+            continue;
+        };
+        if managed_roots
             .iter()
             .any(|root| target_is_managed(&target, root, bin_dir))
-    });
-    if !managed {
-        report.skipped.push(path);
-        return Ok(report);
+        {
+            resources.push(resource);
+        } else {
+            conflicts.push(path);
+        }
     }
-    if !dry_run {
-        host_remove_link(host, &path).await?;
+    if !conflicts.is_empty() {
+        resources.clear();
     }
-    report.removed.push(path);
-    Ok(report)
+    Ok(ManagedLauncherProbe {
+        resources,
+        conflicts,
+    })
 }
 
 /// Remove symlinks in `bin_dir` whose link target starts with `managed_root`.

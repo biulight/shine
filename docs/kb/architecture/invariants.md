@@ -511,6 +511,9 @@ bugs. Check this list before changing the modules named in each entry.
   `shell-manifest.toml` entries and compatible legacy launchers are the activation receipts.
   Command-scoped install must upsert only its selected receipt; command-scoped uninstall must remove
   only its selected managed launcher/receipt and preserve installed siblings.
+  A receiptless compatible legacy launcher uses its own exact-resource removal journal and positive
+  commit marker; planning, execution, and recovery must share the same ownership probe and must not
+  invent a historical receipt.
 - **External source selection and installed state are separate.** Snapshot mode materializes
   effective shell categories below `<shine_dir>/installed/shell/`; launchers must never point at
   the user-owned external tree unless `external_shell_mode = "live"` is explicit.

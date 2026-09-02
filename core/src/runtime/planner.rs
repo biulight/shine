@@ -7,7 +7,10 @@
 use super::app::{
     desired_app_hash, installed_app_entry_hash, installed_app_hash, installed_json_hash,
 };
-use super::launcher::{prepare_launcher_resources, prepared_launcher_resource_is_exact};
+use super::launcher::{
+    prepare_launcher_resources, prepared_launcher_resource_is_exact,
+    probe_managed_command_with_host,
+};
 use super::shell::has_template_annotation;
 use super::shell::shell_link_spec_from_manifest_entry;
 use super::{
@@ -1889,6 +1892,86 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .iter()
                 .filter(|entry| shell_entry_selected(entry, selection.as_ref()))
                 .collect::<Vec<_>>();
+            let mut legacy_categories =
+                self.shell_categories(selection.as_ref().map(|target| target.category))?;
+            if let Some(command) = selection.as_ref().and_then(|target| target.command) {
+                for category in &mut legacy_categories {
+                    category.files.retain(|file| file.command_name == command);
+                }
+            }
+            for category in &legacy_categories {
+                for file in &category.files {
+                    let target = format!("shell/{}/{}", category.name, file.command_name);
+                    if manifest.find(&target).is_some() {
+                        continue;
+                    }
+                    let roots =
+                        super::shell::planned_shell_managed_roots(self.context(), &category.name);
+                    let probe = probe_managed_command_with_host(
+                        self.host(),
+                        &self.context().bin_dir,
+                        std::ffi::OsStr::new(&file.command_name),
+                        &roots,
+                    )
+                    .await?;
+                    if probe.resources.is_empty() && probe.conflicts.is_empty() {
+                        continue;
+                    }
+                    let mut rollback_occupied = false;
+                    for (index, resource) in probe.resources.iter().enumerate() {
+                        let destination = resource.destination();
+                        let rollback = managed_file_rollback_path(destination);
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("legacy-launcher:{target}:{index}"),
+                            destination,
+                        )
+                        .await?;
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("legacy-launcher-rollback:{target}:{index}"),
+                            &rollback,
+                        )
+                        .await?;
+                        rollback_occupied |= path_exists(self.host(), &rollback).await?;
+                    }
+                    let action = if !probe.conflicts.is_empty() {
+                        PlanActionV1::Preserve
+                    } else if rollback_occupied {
+                        PlanActionV1::Blocked
+                    } else {
+                        typed_launcher_transaction = true;
+                        for resource in &probe.resources {
+                            let destination = resource.destination();
+                            let rollback = managed_file_rollback_path(destination);
+                            for (access, path) in [
+                                (FilesystemAccessV1::Remove, destination),
+                                (FilesystemAccessV1::Write, rollback.as_path()),
+                                (FilesystemAccessV1::Remove, rollback.as_path()),
+                            ] {
+                                permissions.implicit(PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), path),
+                                });
+                            }
+                        }
+                        PlanActionV1::Remove
+                    };
+                    steps.push(
+                        PlanStepV1::new(&target, None::<String>, action).with_diagnostic_code(
+                            if !probe.conflicts.is_empty() {
+                                "shell_foreign_launcher_preserved"
+                            } else if rollback_occupied {
+                                "shell_launcher_rollback_occupied"
+                            } else {
+                                "shell_legacy_launcher_remove_transaction"
+                            },
+                        ),
+                    );
+                }
+            }
             let selected_keys = selected_entries
                 .iter()
                 .map(|entry| (entry.category.as_str(), entry.command.as_str()))
@@ -11487,6 +11570,55 @@ target = '$HOME/.config/disabled.txt'
             .await
             .unwrap();
         assert!(manifest.find("shell/demo/demo").is_some());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn legacy_shell_launcher_manifest_failure_restores_without_creating_a_receipt() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        runtime.host().symlink(&source, &launcher).await.unwrap();
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_legacy_launcher_remove_transaction".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell manifest write should fail");
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_legacy_launcher".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
     }
 
     #[tokio::test]

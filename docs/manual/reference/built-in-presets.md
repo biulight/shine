@@ -21,7 +21,7 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-This page reflects the built-in `presets/` directory in Shine 1.8.0. For another version, use
+This page reflects the built-in `presets/` directory in Shine 2.0.0-rc.1. For another version, use
 `shine list --available` and `--help` as the authority.
 
 The platform column below is generated from the same built-in App destination and Shell file

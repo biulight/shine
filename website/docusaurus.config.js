@@ -48,7 +48,25 @@ const config = {
           path: '../docs/manual',
           routeBasePath: '/',
           sidebarPath: require.resolve('./sidebars.js'),
-          editUrl: ({locale, docPath}) => {
+          lastVersion: '1.8',
+          versions: {
+            current: {
+              label: '2.0 RC',
+              path: 'next',
+              banner: 'unreleased',
+            },
+            '1.8': {
+              label: '1.8.x',
+              path: '',
+              banner: 'none',
+            },
+          },
+          editUrl: ({version, locale, docPath}) => {
+            // Frozen releases are snapshots from their tags, not editable
+            // sources on the release branch.
+            if (version !== 'current') {
+              return undefined;
+            }
             const contentRoot =
               locale === 'en'
                 ? 'docs/manual'
@@ -78,6 +96,10 @@ const config = {
           },
           {
             type: 'localeDropdown',
+            position: 'right',
+          },
+          {
+            type: 'docsVersionDropdown',
             position: 'right',
           },
           {

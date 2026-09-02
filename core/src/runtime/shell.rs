@@ -1,9 +1,13 @@
-use super::launcher::{prepare_launcher_resources, prepared_launcher_resource_is_exact};
+use super::launcher::{
+    prepare_launcher_resources, prepared_launcher_resource_is_exact,
+    probe_managed_command_with_host,
+};
 use super::shell_action_executor::{
     ShellCacheRemoval, ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation,
-    ShellLauncherRemoval, ShellLauncherUpdate, ShellProfilePreparedFile,
-    ShellProfileReconciliation, ShellRenderedFileRemoval, ShellRenderedFileReplacement,
-    ShellSharedReplacements, ShellSnapshotRemoval, ShellSnapshotReplacement,
+    ShellLauncherRemoval, ShellLauncherUpdate, ShellLegacyLauncherRemoval,
+    ShellProfilePreparedFile, ShellProfileReconciliation, ShellRenderedFileRemoval,
+    ShellRenderedFileReplacement, ShellSharedReplacements, ShellSnapshotRemoval,
+    ShellSnapshotReplacement,
 };
 use super::{
     CoreRuntime, FileKind, FileSystemHost, InspectionChange, InspectionFileStatus, LinkConflict,
@@ -1210,6 +1214,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 &planned_manifest,
                 false,
                 operation == LifecycleOperation::Install && request.force,
+                &[],
             )
             .await?
         } else {
@@ -1228,6 +1233,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 },
                 &launcher_creation_refs,
                 &launcher_update_refs,
+                &[],
                 &[],
                 approval,
             )
@@ -1504,15 +1510,14 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             for category in categories {
                 for file in category.files {
                     let roots = self.shell_managed_roots(&category.name, None);
-                    let probe = unlink_managed_command_with_host(
+                    let probe = probe_managed_command_with_host(
                         self.host(),
                         &self.context().bin_dir,
                         std::ffi::OsStr::new(&file.command_name),
                         &roots,
-                        true,
                     )
                     .await?;
-                    if !probe.removed.is_empty() || !probe.skipped.is_empty() {
+                    if !probe.resources.is_empty() || !probe.conflicts.is_empty() {
                         targets.insert((category.name.clone(), file.command_name));
                     }
                 }
@@ -1571,6 +1576,34 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             .iter()
             .map(|removal| removal.target.clone())
             .collect::<BTreeSet<_>>();
+        let mut legacy_launcher_removals = Vec::new();
+        for (category, command) in &targets {
+            let canonical = format!("shell/{category}/{command}");
+            if manifest.find(&canonical).is_some() {
+                continue;
+            }
+            let roots = self.shell_managed_roots(category, None);
+            let probe = probe_managed_command_with_host(
+                self.host(),
+                &self.context().bin_dir,
+                std::ffi::OsStr::new(command),
+                &roots,
+            )
+            .await?;
+            if !probe.conflicts.is_empty() {
+                continue;
+            }
+            if !probe.resources.is_empty() {
+                legacy_launcher_removals.push(ShellLegacyLauncherRemoval {
+                    target: canonical,
+                    resources: probe.resources,
+                });
+            }
+        }
+        let legacy_targets = legacy_launcher_removals
+            .iter()
+            .map(|removal| removal.target.clone())
+            .collect::<Vec<_>>();
         let mut rendered_removals = Vec::new();
         if approval.is_some() && !request.dry_run {
             let rendered_root = self.context().shine_dir.join("rendered/shell");
@@ -1784,6 +1817,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 &planned_manifest,
                 selection.is_none(),
                 false,
+                &legacy_targets,
             )
             .await?
         } else {
@@ -1803,6 +1837,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 &[],
                 &[],
                 &launcher_removals,
+                &legacy_launcher_removals,
                 approval,
             )
             .await?
@@ -1822,6 +1857,16 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 links.removed.extend(
                     prepare_launcher_resources(&self.context().bin_dir, &spec)
                         .into_iter()
+                        .map(|resource| resource.destination().to_path_buf()),
+                );
+                (true, false)
+            } else if legacy_targets.contains(&canonical) {
+                links.removed.extend(
+                    legacy_launcher_removals
+                        .iter()
+                        .find(|removal| removal.target == canonical)
+                        .into_iter()
+                        .flat_map(|removal| removal.resources.iter())
                         .map(|resource| resource.destination().to_path_buf()),
                 );
                 (true, false)
@@ -2074,6 +2119,21 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         }
         Ok(specs)
     }
+}
+
+pub(super) fn planned_shell_managed_roots(
+    context: &super::RuntimeContext,
+    category: &str,
+) -> Vec<PathBuf> {
+    let mut roots = vec![
+        context.presets_dir.join("shell").join(category),
+        context.shine_dir.join("rendered/shell").join(category),
+        context.shine_dir.join("installed/shell").join(category),
+    ];
+    if let Some(overlay) = &context.overlay_dir {
+        roots.push(overlay.join("shell").join(category));
+    }
+    roots
 }
 
 impl<H> CoreRuntime<H> {
@@ -2873,6 +2933,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         manifest_after: &ShellManifest,
         remove_all: bool,
         _force: bool,
+        legacy_targets: &[String],
     ) -> Result<Vec<ShellProfileReconciliation>> {
         let mut files = Vec::new();
         let source_commands = manifest_after
@@ -3008,6 +3069,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             files,
             receipt_transitions,
             receipt_removals,
+            legacy_targets: legacy_targets.to_vec(),
         }])
     }
 
@@ -3711,6 +3773,166 @@ mod tests {
             .unwrap();
         assert_eq!(removed.links.removed.len(), 1);
         assert!(host.metadata(&launcher_path).await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn approved_uninstall_removes_receiptless_legacy_launcher_and_reconciles_profile() {
+        let host = InMemoryHost::new();
+        let home_dir = std::env::temp_dir().join("shine-core-legacy-shell-uninstall");
+        let shine_dir = home_dir.join(".shine");
+        let presets_dir = shine_dir.join("presets");
+        let bin_dir = shine_dir.join("bin");
+        let context = RuntimeContext::isolated(
+            home_dir,
+            shine_dir.clone(),
+            presets_dir.clone(),
+            bin_dir.clone(),
+            RuntimePlatform::Linux,
+        );
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/legacy/shine.toml",
+                b"[[files]]\nsource = 'tool.sh'\ntarget = 'tool'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/legacy/tool.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(host.clone(), context, snapshot);
+        let legacy_source = presets_dir.join("shell/legacy/tool.sh");
+        let launcher = command_path_for_name(&bin_dir, std::ffi::OsStr::new("tool"));
+        host.symlink(&legacy_source, &launcher).await.unwrap();
+        let managed_profile =
+            super::super::managed_shell_profile_path(&shine_dir, runtime.context().shell);
+        host.put_file(&managed_profile, b"legacy profile\n".to_vec());
+
+        let plan = runtime
+            .plan_shells(super::super::ShellPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                target: Some("legacy".to_string()),
+                force: false,
+                purge: false,
+                input_versions: super::super::PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.target == "shell/legacy/tool"
+                && step.action == crate::plan::PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_legacy_launcher_remove_transaction".to_string())
+        }));
+        assert!(plan.steps.iter().any(|step| step.target == "shell/profile"));
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .uninstall_shells_with_approval(
+                ShellUninstallRequest {
+                    target: Some("legacy".to_string()),
+                    dry_run: false,
+                    purge: false,
+                },
+                Some(&approval),
+            )
+            .await
+            .unwrap();
+
+        assert!(host.metadata(&launcher).await.is_err());
+        assert!(
+            host.metadata(&shine_dir.join(super::super::SHELL_OPERATION_JOURNAL_FILE))
+                .await
+                .is_err()
+        );
+        assert_ne!(
+            host.read(&managed_profile).await.unwrap(),
+            b"legacy profile\n"
+        );
+        assert!(
+            host.read(&shine_dir.join(SHELL_MANIFEST_FILE))
+                .await
+                .unwrap()
+                .starts_with(b"schema_version = 1")
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn approved_uninstall_removes_receiptless_legacy_windows_launcher_pair() {
+        let host = InMemoryHost::new();
+        let home_dir = std::env::temp_dir().join("shine-core-legacy-windows-shell-uninstall");
+        let shine_dir = home_dir.join(".shine");
+        let presets_dir = shine_dir.join("presets");
+        let bin_dir = shine_dir.join("bin");
+        let context = RuntimeContext::isolated(
+            home_dir,
+            shine_dir.clone(),
+            presets_dir.clone(),
+            bin_dir.clone(),
+            RuntimePlatform::Windows,
+        );
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/legacy/shine.toml",
+                b"[[files]]\nsource = 'tool.ps1'\ntarget = 'tool'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/legacy/tool.ps1", b"Write-Output 'legacy'\n".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(host.clone(), context, snapshot);
+        let legacy_source = presets_dir.join("shell/legacy/tool.ps1");
+        let launcher = command_path_for_name(&bin_dir, std::ffi::OsStr::new("tool"));
+        let marker = format!(
+            "# shine-managed\r\n# shine-target: {}\r\n",
+            legacy_source.display()
+        );
+        host.put_file(&launcher, marker.as_bytes().to_vec());
+        host.put_file(&launcher.with_extension("cmd"), marker.as_bytes().to_vec());
+
+        let plan = runtime
+            .plan_shells(super::super::ShellPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                target: Some("legacy".to_string()),
+                force: false,
+                purge: false,
+                input_versions: super::super::PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.target == "shell/legacy/tool"
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_legacy_launcher_remove_transaction".to_string())
+        }));
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let report = runtime
+            .uninstall_shells_with_approval(
+                ShellUninstallRequest {
+                    target: Some("legacy".to_string()),
+                    dry_run: false,
+                    purge: false,
+                },
+                Some(&approval),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(report.links.removed.len(), 2);
+        assert!(host.metadata(&launcher).await.is_err());
+        assert!(
+            host.metadata(&launcher.with_extension("cmd"))
+                .await
+                .is_err()
+        );
+        assert!(
+            host.metadata(&shine_dir.join(super::super::SHELL_OPERATION_JOURNAL_FILE))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

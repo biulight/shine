@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-02 — Legacy Shell activation must share one Plan and recovery model
+
+- **Symptom**: after upgrading from 1.8, uninstalling a compatible managed Shell launcher without
+  a manifest receipt rendered an empty Plan, then failed while validating profile reconciliation.
+- **Root cause**: execution retained the legacy-launcher fallback, while the pure planner selected
+  uninstall targets only from `shell-manifest.toml`; the fallback deletion also sat outside the
+  receipt-bound launcher journal.
+- **Fix**: share observation-only managed-launcher probing between planning and execution, bind
+  receiptless launcher resources to a dedicated removal action and positive commit marker, and
+  allow profile reconciliation to bind those exact legacy targets.
+- **Rule**: compatibility activation evidence is lifecycle evidence everywhere. A planner,
+  executor, journal, and recovery path must not disagree merely because an older install predates
+  the current receipt schema.
+
 ## 2026-09-02 — Update hints must preserve the scope users just reviewed
 
 - **Symptom**: `shine update` reported one App category but told the user to run the untargeted

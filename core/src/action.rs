@@ -326,7 +326,8 @@ impl ActionIrV1 {
                         }
                     }
                 }
-                ActionKindV1::RemoveShellLauncher { resources, .. } => {
+                ActionKindV1::RemoveShellLauncher { resources, .. }
+                | ActionKindV1::RemoveLegacyShellLauncher { resources } => {
                     for resource in resources {
                         for (access, path) in [
                             (FilesystemAccessV1::Remove, resource.previous.destination()),
@@ -797,6 +798,21 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn remove_legacy_shell_launcher(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        resources: Vec<ShellLauncherRemovalResourceV1>,
+    ) -> Self {
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::RemoveLegacyShellLauncher { resources },
+            rollback: RollbackSupportV1::RestoreRemovedLauncherIfUnchanged,
+        }
+    }
+
     pub fn replace_shell_snapshot(
         action_id: impl Into<String>,
         target: impl Into<String>,
@@ -893,6 +909,7 @@ impl DeclarativeActionV1 {
                 files: spec.files,
                 receipt_transitions: spec.receipt_transitions,
                 receipt_removals: spec.receipt_removals,
+                legacy_targets: spec.legacy_targets,
             },
             rollback: RollbackSupportV1::RestorePreviousShellProfileIfUnchanged,
         }
@@ -1235,6 +1252,16 @@ impl DeclarativeActionV1 {
                     .to_string(),
             )),
             (
+                ActionKindV1::RemoveLegacyShellLauncher { resources },
+                RollbackSupportV1::RestoreRemovedLauncherIfUnchanged,
+            ) if valid_shell_launcher_removal_resources(resources) => Ok(()),
+            (ActionKindV1::RemoveLegacyShellLauncher { .. }, _) => {
+                Err(ActionIrError::Invalid(
+                    "Legacy Shell launcher removal requires exact previous resources, canonical rollback paths, and restore-removed-launcher-if-unchanged rollback"
+                        .to_string(),
+                ))
+            }
+            (
                 ActionKindV1::ReplaceShellSnapshot {
                     destination,
                     stage,
@@ -1306,10 +1333,15 @@ impl DeclarativeActionV1 {
                     files,
                     receipt_transitions,
                     receipt_removals,
+                    legacy_targets,
                 },
                 RollbackSupportV1::RestorePreviousShellProfileIfUnchanged,
             ) if valid_shell_profile_files(files)
-                && valid_shell_profile_receipts(receipt_transitions, receipt_removals) =>
+                && valid_shell_profile_receipts(
+                    receipt_transitions,
+                    receipt_removals,
+                    legacy_targets,
+                ) =>
             {
                 Ok(())
             }
@@ -1651,6 +1683,9 @@ pub enum ActionKindV1 {
         previous_receipt: Box<ShellLauncherReceiptV1>,
         resources: Vec<ShellLauncherRemovalResourceV1>,
     },
+    RemoveLegacyShellLauncher {
+        resources: Vec<ShellLauncherRemovalResourceV1>,
+    },
     ReplaceShellSnapshot {
         destination: PathBuf,
         stage: PathBuf,
@@ -1685,6 +1720,8 @@ pub enum ActionKindV1 {
         receipt_transitions: Vec<ShellReceiptTransitionV1>,
         #[serde(default)]
         receipt_removals: Vec<ShellReceiptRemovalV1>,
+        #[serde(default)]
+        legacy_targets: Vec<String>,
     },
     ReconcileSysSplitDns {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1867,6 +1904,7 @@ pub struct ShellProfileReconciliationSpecV1 {
     pub files: Vec<ShellProfileFileV1>,
     pub receipt_transitions: Vec<ShellReceiptTransitionV1>,
     pub receipt_removals: Vec<ShellReceiptRemovalV1>,
+    pub legacy_targets: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2169,10 +2207,25 @@ fn valid_shell_profile_files(files: &[ShellProfileFileV1]) -> bool {
 fn valid_shell_profile_receipts(
     transitions: &[ShellReceiptTransitionV1],
     removals: &[ShellReceiptRemovalV1],
+    legacy_targets: &[String],
 ) -> bool {
-    (!transitions.is_empty() || !removals.is_empty())
+    let receipt_targets = transitions
+        .iter()
+        .map(|transition| transition.target.as_str())
+        .chain(removals.iter().map(|removal| removal.target.as_str()))
+        .collect::<BTreeSet<_>>();
+    let legacy = legacy_targets
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    (!transitions.is_empty() || !removals.is_empty() || !legacy_targets.is_empty())
         && (transitions.is_empty() || valid_shell_receipt_transitions(transitions))
         && (removals.is_empty() || valid_shell_receipt_removal_set(removals))
+        && legacy.len() == legacy_targets.len()
+        && legacy_targets
+            .iter()
+            .all(|target| target.starts_with("shell/") && target.len() > 6)
+        && receipt_targets.is_disjoint(&legacy)
 }
 
 fn valid_sys_split_dns_transition(

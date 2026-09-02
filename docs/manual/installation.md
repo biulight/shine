@@ -25,7 +25,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=1.8.0 sh install.sh
+SHINE_VERSION=2.0.0-rc.1 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -39,7 +39,7 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "1.8.0"; .\install.ps1
+$env:SHINE_VERSION = "2.0.0-rc.1"; .\install.ps1
 ```
 
 ## Install from source
@@ -65,6 +65,10 @@ shine self upgrade --channel preview
 
 `preview` is a continuously updated prerelease channel and is not included in routine automatic
 update checks. `shine update` checks both installed configuration and stable Shine releases.
+
+The reproducible 2.0 release candidate is also excluded from the stable channel. Install it by
+exact version instead of using `latest` or `preview`; see
+[Upgrade from Shine 1.x](./guides/upgrade-to-2.md) for complete commands and compatibility changes.
 
 On Unix, if `shine self install` copies the binary to a location the current user cannot modify,
 Shine interactively requests authorization and completes the installation through `sudo`. After a

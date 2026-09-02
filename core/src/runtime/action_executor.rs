@@ -1534,6 +1534,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 ActionKindV1::CreateShellLauncher { .. }
                 | ActionKindV1::UpdateShellLauncher { .. }
                 | ActionKindV1::RemoveShellLauncher { .. }
+                | ActionKindV1::RemoveLegacyShellLauncher { .. }
                 | ActionKindV1::ReplaceShellSnapshot { .. }
                 | ActionKindV1::ReplaceShellCache { .. }
                 | ActionKindV1::RemoveShellCache { .. }
@@ -4055,6 +4056,7 @@ where
                 ActionKindV1::CreateShellLauncher { .. }
                 | ActionKindV1::UpdateShellLauncher { .. }
                 | ActionKindV1::RemoveShellLauncher { .. }
+                | ActionKindV1::RemoveLegacyShellLauncher { .. }
                 | ActionKindV1::ReplaceShellSnapshot { .. }
                 | ActionKindV1::ReplaceShellCache { .. }
                 | ActionKindV1::RemoveShellCache { .. }
@@ -4370,6 +4372,7 @@ fn matching_app_receipt(
             ActionKindV1::CreateShellLauncher { .. } => false,
             ActionKindV1::UpdateShellLauncher { .. } => false,
             ActionKindV1::RemoveShellLauncher { .. } => false,
+            ActionKindV1::RemoveLegacyShellLauncher { .. } => false,
             ActionKindV1::ReplaceShellSnapshot { .. } => false,
             ActionKindV1::ReplaceShellCache { .. } => false,
             ActionKindV1::RemoveShellCache { .. } => false,
@@ -4796,6 +4799,7 @@ fn conflicting_app_receipt(
         ActionKindV1::CreateShellLauncher { .. }
         | ActionKindV1::UpdateShellLauncher { .. }
         | ActionKindV1::RemoveShellLauncher { .. }
+        | ActionKindV1::RemoveLegacyShellLauncher { .. }
         | ActionKindV1::ReplaceShellSnapshot { .. }
         | ActionKindV1::ReplaceShellCache { .. }
         | ActionKindV1::RemoveShellCache { .. }

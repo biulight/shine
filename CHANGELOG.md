@@ -7,6 +7,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.0.0-rc.1] — 2026-09-02
+
+This is the first reproducible 2.0 release candidate. It is a GitHub and Cargo prerelease, does not
+replace 1.8.x as `latest`, and is not offered by the stable updater. Read
+[Upgrade from Shine 1.x](docs/manual/guides/upgrade-to-2.md) before installing it by exact version.
+
 ### Features
 
 - Added `shine preset schema` to generate a versioned reference directly from shipped Rust report,
@@ -108,6 +114,20 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Journaled the shell sentinel changes made by explicit `sys profile enable/disable`. Recovery
   restores only Shine-owned blocks; generated profile composition keeps its explicit
   non-transactional three-way-merge boundary.
+
+### Bug Fixes
+
+- Unified Shell Plan and execution ownership checks for receiptless 1.8 launchers. Compatible Unix
+  launchers and Windows PowerShell/cmd pairs can now be uninstalled directly through the journaled
+  transaction, while modified or foreign resources remain preserved.
+
+### Known limitations
+
+- This prerelease intentionally receives no implicit RC update channel. Install an exact RC or use
+  the separately moving `preview` channel; stable checks continue to offer 1.8.x.
+- Promotion to 2.0 stable remains gated on real 1.8-state upgrade, lifecycle, uninstall, and
+  recovery smoke tests on Windows, macOS, and Linux. Please report compatibility failures through
+  the [issue tracker](https://github.com/biulight/shine/issues).
 
 ### Breaking changes
 

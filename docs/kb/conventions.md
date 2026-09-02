@@ -34,8 +34,11 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 - Baseline for any version-bump decision is the **latest stable `v*` tag** — never the moving
   `preview` tag. Find it with:
   `git tag --list 'v*' --sort=-version:refname | head -1`
-- Count/inspect the commits since that tag to decide the bump: user-facing features → minor;
-  only user-facing fixes → patch.
+- Follow Semantic Versioning for the published CLI and `shine-core`: incompatible public CLI,
+  configuration, automation, or library-contract changes → major; backward-compatible
+  user-facing features → minor; only backward-compatible user-facing fixes → patch.
+- A versioned release candidate uses `X.Y.Z-rc.N`. It is a reproducible prerelease, does not
+  replace the latest stable release, and does not trigger the stable `release` → `main` sync.
 - Release commits use `chore(release): ...` (e.g. `chore(release): prepare v0.35.0`).
 - Keep `shine-cli` and `shine-core` crate versions in sync (see commit `e14d5f9`).
 - The minimum supported Rust version is 1.88. The `mise.toml` toolchain may be newer for

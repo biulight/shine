@@ -23,7 +23,7 @@ shine --version
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=1.8.0 sh install.sh
+SHINE_VERSION=2.0.0-rc.1 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -36,7 +36,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "1.8.0"; .\install.ps1
+$env:SHINE_VERSION = "2.0.0-rc.1"; .\install.ps1
 ```
 
 ## 从源码安装
@@ -61,6 +61,9 @@ shine self upgrade --channel preview
 ```
 
 `preview` 是持续滚动的预发布通道，不参与日常自动更新检查。运行 `shine update` 可以同时检查已安装配置和稳定版程序更新。
+
+可复现的 2.0 候选版本同样不会进入 stable 通道。请通过精确版本安装，不要使用 `latest` 或
+`preview`；完整命令和兼容性变化参见[从 Shine 1.x 升级](./guides/upgrade-to-2.md)。
 
 在 Unix 系统上，如果 `shine self install` 要把二进制文件复制到当前用户不可写的位置，Shine 会交互式请求授权，并通过 `sudo` 完成安装。`shine self upgrade` 成功后同步另一个已记录的安装目标时，也会采用相同方式。不过，如果当前运行的 Shine 本身位于受保护目录，Shine 暂时无法自动提权替换该二进制文件；请改为安装并运行用户可写位置中的 Shine。Windows 在受保护位置安装或升级时，仍需使用具备相应权限的终端。
 

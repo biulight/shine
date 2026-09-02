@@ -54,6 +54,11 @@ pub(crate) struct ShellLauncherRemoval {
     pub previous_receipt: ShellManifestEntry,
 }
 
+pub(crate) struct ShellLegacyLauncherRemoval {
+    pub target: String,
+    pub resources: Vec<PreparedLauncherResource>,
+}
+
 pub(crate) struct ShellSnapshotReplacement {
     pub target: String,
     pub destination: PathBuf,
@@ -106,6 +111,7 @@ pub(crate) struct ShellProfileReconciliation {
     pub files: Vec<ShellProfilePreparedFile>,
     pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
     pub receipt_removals: Vec<(String, ShellManifestEntry)>,
+    pub legacy_targets: Vec<String>,
 }
 
 pub(crate) struct ShellProfilePreparedFile {
@@ -238,6 +244,7 @@ impl ShellOperationJournalV1 {
                 ActionKindV1::CreateShellLauncher { .. }
                     | ActionKindV1::UpdateShellLauncher { .. }
                     | ActionKindV1::RemoveShellLauncher { .. }
+                    | ActionKindV1::RemoveLegacyShellLauncher { .. }
                     | ActionKindV1::ReplaceShellSnapshot { .. }
                     | ActionKindV1::ReplaceShellCache { .. }
                     | ActionKindV1::RemoveShellCache { .. }
@@ -269,6 +276,7 @@ impl ShellOperationJournalV1 {
                             && matches!(
                                 action.kind,
                                 ActionKindV1::RemoveShellLauncher { .. }
+                                    | ActionKindV1::RemoveLegacyShellLauncher { .. }
                                     | ActionKindV1::ReplaceShellSnapshot { .. }
                                     | ActionKindV1::ReplaceShellCache { .. }
                                     | ActionKindV1::RemoveShellCache { .. }
@@ -327,6 +335,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 ActionKindV1::ReconcileShellProfile {
                     receipt_transitions,
                     receipt_removals,
+                    legacy_targets,
                     ..
                 } => {
                     if journal.receipt_committed.contains(&action.action_id) {
@@ -334,6 +343,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             &manifest,
                             receipt_transitions,
                             receipt_removals,
+                            legacy_targets,
                         ) {
                             shared_receipt_conflicts.insert(action.action_id.clone());
                         }
@@ -341,11 +351,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         &manifest,
                         receipt_transitions,
                         receipt_removals,
+                        legacy_targets,
                     ) {
                     } else if shell_profile_receipts_match_desired(
                         &manifest,
                         receipt_transitions,
                         receipt_removals,
+                        legacy_targets,
                     ) {
                         restore_shell_previous_receipts(&mut manifest, receipt_transitions)?;
                         restore_shell_removed_receipts(&mut manifest, receipt_removals)?;
@@ -613,6 +625,59 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 false,
                             )
                         }
+                    }
+                }
+                ActionKindV1::RemoveLegacyShellLauncher { resources } => {
+                    let committed = journal.receipt_committed.contains(&action.action_id);
+                    let mut action_changed = false;
+                    let mut action_blocked = false;
+                    for (index, resource) in resources.iter().enumerate() {
+                        let observation =
+                            observe_launcher_removal_resource(self.host(), resource, committed)
+                                .await?;
+                        state.add_observation(
+                            format!("legacy-launcher-remove:{}:{index}", action.action_id),
+                            observation.identity(),
+                        )?;
+                        action_changed |= observation.needs_recovery();
+                        action_blocked |= observation == LauncherRemovalObservation::Changed;
+                        for (access, path) in observation.required_permissions(resource) {
+                            required.insert(PermissionV1::Filesystem {
+                                access,
+                                path: review_path(self.context(), path),
+                            });
+                        }
+                    }
+                    if action_blocked {
+                        (
+                            PlanActionV1::Blocked,
+                            "shell_recovery_legacy_launcher_removal_changed",
+                            true,
+                        )
+                    } else if action_changed {
+                        (
+                            if committed {
+                                PlanActionV1::Remove
+                            } else {
+                                PlanActionV1::Update
+                            },
+                            if committed {
+                                "shell_recovery_cleanup_removed_legacy_launcher"
+                            } else {
+                                "shell_recovery_restore_removed_legacy_launcher"
+                            },
+                            false,
+                        )
+                    } else {
+                        (
+                            PlanActionV1::None,
+                            if committed {
+                                "shell_recovery_legacy_launcher_removal_committed"
+                            } else {
+                                "shell_recovery_legacy_launcher_removal_not_started"
+                            },
+                            false,
+                        )
                     }
                 }
                 ActionKindV1::ReplaceShellSnapshot {
@@ -1274,6 +1339,7 @@ where
         creations: &[ShellLauncherCreation<'_>],
         updates: &[ShellLauncherUpdate<'_>],
         removals: &[ShellLauncherRemoval],
+        legacy_removals: &[ShellLegacyLauncherRemoval],
         approval: &PlanApprovalV1,
     ) -> Result<Option<ShellOperationExecutionV1>> {
         if shared.caches.is_empty()
@@ -1286,6 +1352,7 @@ where
             && creations.is_empty()
             && updates.is_empty()
             && removals.is_empty()
+            && legacy_removals.is_empty()
         {
             return Ok(None);
         }
@@ -1723,6 +1790,7 @@ where
                     files: action_files,
                     receipt_transitions,
                     receipt_removals,
+                    legacy_targets: profile.legacy_targets.clone(),
                 },
             ));
             prepared.push(PreparedShellAction::Profile {
@@ -1852,6 +1920,41 @@ where
                 &removal.target,
                 "launcher",
                 receipt_contract(&removal.previous_receipt),
+                action_resources.clone(),
+            ));
+            prepared.push(PreparedShellAction::Remove(action_resources));
+        }
+        for removal in legacy_removals {
+            let mut action_resources = Vec::new();
+            for previous in &removal.resources {
+                let previous = resource_contract(previous);
+                if observe_launcher_resource(self.host(), &previous).await?
+                    != LauncherObservation::Exact
+                {
+                    bail!(
+                        "Legacy Shell launcher changed after Plan approval: {}",
+                        previous.destination().display()
+                    );
+                }
+                let rollback = managed_file_rollback_path(previous.destination());
+                match self.host().metadata(&rollback).await {
+                    Err(error) if error.is_not_found() => {}
+                    Ok(_) => bail!(
+                        "Legacy Shell launcher rollback path is occupied: {}",
+                        rollback.display()
+                    ),
+                    Err(error) => {
+                        return Err(
+                            error.into_anyhow("revalidating legacy Shell launcher rollback path")
+                        );
+                    }
+                }
+                action_resources.push(ShellLauncherRemovalResourceV1 { previous, rollback });
+            }
+            actions.push(DeclarativeActionV1::remove_legacy_shell_launcher(
+                format!("remove-legacy-launcher:{}", removal.target),
+                &removal.target,
+                "launcher",
                 action_resources.clone(),
             ));
             prepared.push(PreparedShellAction::Remove(action_resources));
@@ -2161,15 +2264,29 @@ where
                         journal.receipt_committed.push(action.action_id.clone());
                     }
                 }
+                ActionKindV1::RemoveLegacyShellLauncher { .. } => {
+                    if !journal.applied.contains(&action.action_id)
+                        || manifest.find(&action.target).is_some()
+                    {
+                        bail!(
+                            "Legacy Shell launcher removal cannot mark committed before the launcher is removed and its receipt remains absent"
+                        );
+                    }
+                    if !journal.receipt_committed.contains(&action.action_id) {
+                        journal.receipt_committed.push(action.action_id.clone());
+                    }
+                }
                 ActionKindV1::ReconcileShellProfile {
                     files,
                     receipt_transitions,
                     receipt_removals,
+                    legacy_targets,
                 } => {
                     let receipts_match = shell_profile_receipts_match_desired(
                         &manifest,
                         receipt_transitions,
                         receipt_removals,
+                        legacy_targets,
                     );
                     let mut blocked_file = None;
                     for (index, file) in files.iter().enumerate() {
@@ -2405,6 +2522,29 @@ where
                         }
                     }
                 }
+                ActionKindV1::RemoveLegacyShellLauncher { resources } => {
+                    if !journal.receipt_committed.contains(&action.action_id)
+                        || manifest.find(&action.target).is_some()
+                    {
+                        bail!(
+                            "Legacy Shell launcher removal cannot commit before its commit marker"
+                        );
+                    }
+                    for resource in resources {
+                        if observe_launcher_resource(self.host(), &resource.previous).await?
+                            != LauncherObservation::Missing
+                            || observe_launcher_resource_at(
+                                self.host(),
+                                &resource.previous,
+                                &resource.rollback,
+                            )
+                            .await?
+                                != LauncherObservation::Exact
+                        {
+                            bail!("Legacy Shell launcher removal changed before operation commit");
+                        }
+                    }
+                }
                 ActionKindV1::ReplaceShellSnapshot {
                     destination,
                     stage,
@@ -2498,11 +2638,13 @@ where
                     files,
                     receipt_transitions,
                     receipt_removals,
+                    legacy_targets,
                 } => {
                     let receipts_match = shell_profile_receipts_match_desired(
                         &manifest,
                         receipt_transitions,
                         receipt_removals,
+                        legacy_targets,
                     );
                     let mut blocked = false;
                     for file in files {
@@ -2573,7 +2715,9 @@ where
                         .map_err(|error| error.into_anyhow("cleaning Shell launcher rollback"))?;
                 }
             }
-            if let ActionKindV1::RemoveShellLauncher { resources, .. } = &action.kind {
+            if let ActionKindV1::RemoveShellLauncher { resources, .. }
+            | ActionKindV1::RemoveLegacyShellLauncher { resources } = &action.kind
+            {
                 for resource in resources {
                     self.host()
                         .remove_file(&resource.rollback)
@@ -2704,6 +2848,7 @@ where
                 ActionKindV1::ReconcileShellProfile {
                     receipt_transitions,
                     receipt_removals,
+                    legacy_targets,
                     ..
                 } => {
                     if journal.receipt_committed.contains(&action.action_id) {
@@ -2711,6 +2856,7 @@ where
                             &manifest,
                             receipt_transitions,
                             receipt_removals,
+                            legacy_targets,
                         ) {
                             bail!("Shell profile receipts changed after recovery approval");
                         }
@@ -2718,11 +2864,13 @@ where
                         &manifest,
                         receipt_transitions,
                         receipt_removals,
+                        legacy_targets,
                     ) {
                     } else if shell_profile_receipts_match_desired(
                         &manifest,
                         receipt_transitions,
                         receipt_removals,
+                        legacy_targets,
                     ) {
                         restore_shell_previous_receipts(&mut manifest, receipt_transitions)?;
                         restore_shell_removed_receipts(&mut manifest, receipt_removals)?;
@@ -2882,6 +3030,41 @@ where
                             }
                             LauncherRemovalObservation::Changed => {
                                 bail!("Shell launcher removal changed after recovery approval")
+                            }
+                        }
+                    }
+                }
+                ActionKindV1::RemoveLegacyShellLauncher { resources } => {
+                    if manifest.find(&action.target).is_some() {
+                        bail!("Legacy Shell launcher acquired a receipt after recovery approval");
+                    }
+                    let committed = journal.receipt_committed.contains(&action.action_id);
+                    for resource in resources.iter().rev() {
+                        match observe_launcher_removal_resource(self.host(), resource, committed)
+                            .await?
+                        {
+                            LauncherRemovalObservation::Stable => {}
+                            LauncherRemovalObservation::RestoreMoved => {
+                                self.host()
+                                    .rename(&resource.rollback, resource.previous.destination())
+                                    .await
+                                    .map_err(|error| {
+                                        error.into_anyhow("restoring removed legacy Shell launcher")
+                                    })?;
+                                changed = true;
+                            }
+                            LauncherRemovalObservation::CleanupRollback => {
+                                self.host().remove_file(&resource.rollback).await.map_err(
+                                    |error| {
+                                        error.into_anyhow("cleaning legacy Shell launcher rollback")
+                                    },
+                                )?;
+                                changed = true;
+                            }
+                            LauncherRemovalObservation::Changed => {
+                                bail!(
+                                    "Legacy Shell launcher removal changed after recovery approval"
+                                )
                             }
                         }
                     }
@@ -3134,6 +3317,7 @@ where
                     files,
                     receipt_transitions,
                     receipt_removals,
+                    legacy_targets,
                 } => {
                     let committed = journal.receipt_committed.contains(&action.action_id);
                     if committed
@@ -3141,6 +3325,7 @@ where
                             &manifest,
                             receipt_transitions,
                             receipt_removals,
+                            legacy_targets,
                         )
                     {
                         bail!("Shell profile receipts changed after recovery approval");
@@ -3150,6 +3335,7 @@ where
                             &manifest,
                             receipt_transitions,
                             receipt_removals,
+                            legacy_targets,
                         )
                     {
                         bail!("Shell profile receipts changed after recovery approval");
@@ -4027,18 +4213,26 @@ fn shell_profile_receipts_match_previous(
     manifest: &ShellManifest,
     transitions: &[ShellReceiptTransitionV1],
     removals: &[ShellReceiptRemovalV1],
+    legacy_targets: &[String],
 ) -> bool {
     shell_receipts_match_previous(manifest, transitions)
         && shell_removal_receipts_match_previous(manifest, removals)
+        && legacy_targets
+            .iter()
+            .all(|target| manifest.find(target).is_none())
 }
 
 fn shell_profile_receipts_match_desired(
     manifest: &ShellManifest,
     transitions: &[ShellReceiptTransitionV1],
     removals: &[ShellReceiptRemovalV1],
+    legacy_targets: &[String],
 ) -> bool {
     shell_receipts_match_desired(manifest, transitions)
         && shell_removal_receipts_match_missing(manifest, removals)
+        && legacy_targets
+            .iter()
+            .all(|target| manifest.find(target).is_none())
 }
 
 fn restore_shell_previous_receipts(
