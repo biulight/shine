@@ -17,20 +17,12 @@ list_mode = "files"
 # (CVR is cross-platform). bun is an external prerequisite (https://bun.sh).
 #
 # The real logic (rendering the active subscription's four bound enhancement
-# files + refreshing rule-providers) lives in the artifact because only it receives its explicit
-# `[artifact].env` allowlist and SHINE_APP_OVERLAY_DIR. The hooks below do NOT run that logic directly — they
-# re-invoke `shine app artifact apply clash-verge` so it runs automatically after
-# `shine app install`/`shine upgrade` changes merge.yaml. (No recursion: build
-# fires neither install nor upgrade hooks.) Requires `shine` on PATH; external
-# presets need allow_app_hooks = true. The built-in local rule references below
-# are ordinary managed files, so their updates trigger the same hook and
-# provider refresh as merge.yaml updates.
-post_install = [
-  { command = "shine", args = ["app", "artifact", "apply", "clash-verge", "--yes"], show_output = true },
-]
-post_upgrade = [
-  { command = "shine", args = ["app", "artifact", "apply", "clash-verge", "--yes"], show_output = true },
-]
+# files + refreshing rule-providers) lives in the explicit artifact because it
+# receives its own `[artifact].env` allowlist and has a separately reviewed,
+# fresh security Plan. Do not invoke `shine app artifact apply` from a lifecycle
+# hook: a nested artifact Plan can race the parent App transaction and must not
+# inherit its approval. When managed files change, Shine prints the explicit
+# artifact command; run it after changing merge.yaml or the local rule references.
 
 [artifact]
 script = "build.ts"

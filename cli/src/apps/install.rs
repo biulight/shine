@@ -218,6 +218,29 @@ async fn handle_install_with_reporter(
             .reporter
             .emit(PresentationEvent::stdout(report::restart_hint_text(&hint)));
     }
+    let artifact_categories = categories
+        .iter()
+        .filter(|category| category.artifact.is_some())
+        .map(|category| category.name.clone())
+        .collect::<BTreeSet<_>>();
+    let changed_categories = core_report
+        .files
+        .iter()
+        .filter(|file| {
+            matches!(
+                file.action,
+                AppFileAction::Installed | AppFileAction::BackedUp
+            )
+        })
+        .map(|file| file.category.clone())
+        .collect();
+    for category in report::artifact_apply_categories(&artifact_categories, changed_categories) {
+        observer
+            .reporter
+            .emit(PresentationEvent::stdout(report::artifact_apply_hint_text(
+                &category,
+            )));
+    }
     Ok(core_report.lifecycle)
 }
 

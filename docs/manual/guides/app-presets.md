@@ -251,9 +251,12 @@ explicitly:
 shine app artifact apply surge
 ```
 
-Shine does not implicitly run artifacts, although a preset may call `app artifact apply` from a
-lifecycle hook after installation or upgrade actually changes files. A failed manual apply fails the
-command. Manual apply/remove displays and revalidates a security Plan; automation must add `--yes`.
+Shine does not implicitly run artifacts. Do not call `app artifact apply` from a lifecycle hook: an
+artifact has its own snapshot-bound Plan and must not inherit a parent App operation's approval. A
+failed manual apply fails the command. Manual apply/remove displays and revalidates a security Plan;
+automation must add `--yes`.
+When an install or upgrade changes managed files for a category that declares an artifact, Shine
+prints the explicit apply command. It prints nothing when no managed files changed.
 Scripts receive configured `[artifact].env` sources only, and those sources must also be listed in
 the category's `[permissions].environment`, plus path variables such as `SHINE_APP_HTTP_DIR`,
 `SHINE_CACHE_DIR`, and `SHINE_STATE_DIR`. They can generate resources under
@@ -320,16 +323,17 @@ a mihomo `type: file` path inside `HomeDir`, loopback HTTP on the same device, o
 installs three inert reference lists under `HomeDir/ruleset/shine-source/` through ordinary managed
 app-file entries; customize those files in an overlay only when choosing the file-provider layout.
 The loopback and remote HTTP layouts do not reference these local files, so their URLs, intervals,
-and provider cache paths are unchanged. The first upgrade that adds the managed references may run
-the preset's existing immediate-refresh hook once, without changing the active provider definitions.
+and provider cache paths are unchanged. After installing or upgrading the managed references, Shine
+prints `shine app artifact apply clash-verge`; run it to render them into the active subscription. It
+does not change the active provider definitions by itself.
 After choosing one complete provider set, enable its matching
 policy groups and `prepend-rules`. `proxy: DIRECT` on loopback or private services affects only provider downloads;
 remove or change it when the server requires a proxy. Private domains that rely on system split DNS
 also require mihomo `dns.nameserver-policy` configuration.
 
-This artifact uses Bun, which must be installed on the machine. Preset hooks rerun the build after
-`merge.yaml` or a managed local reference list changes; external presets require a current
-target-scoped trust grant. Optional
+This artifact uses Bun, which must be installed on the machine. Run it explicitly after changing
+`merge.yaml` or a managed local reference list; external presets require a current target-scoped
+trust grant. Optional
 `CLASH_CONTROLLER_URL` and `CLASH_CONTROLLER_TOKEN` values can request an immediate refresh. Without
 the URL, only that immediate refresh is skipped; providers still update on their own intervals. The
 artifact refreshes every name declared by the effective `merge.yaml` `rule-providers` mapping, so

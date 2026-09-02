@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-02 — Lifecycle hooks cannot recursively apply App artifacts
+
+- **Symptom**: a successful `clash-verge` App upgrade wrote its managed rule files, then its
+  `post_upgrade` hook failed while recursively running `shine app artifact apply` with a blocked
+  Plan.
+- **Root cause**: an artifact is a separately snapshot-bound operation. Invoking it from a parent
+  App lifecycle hook attempts to compose two approvals and transaction states without binding the
+  artifact's own observations to the parent Plan.
+- **Fix**: remove the recursive Clash Verge install/upgrade hooks and keep artifact application an
+  explicit, independently reviewed command. After a category with an artifact changes managed files,
+  the CLI presents that category's apply command; it does not prompt after an unchanged operation.
+- **Rule**: a lifecycle hook must not launch another mutation that owns its own security Plan;
+  model it as one combined operation or require an explicit follow-up command.
+
 ## 2026-09-02 — Legacy App relocation receipts selected an obsolete destination
 
 - **Symptom**: upgrading a 1.8 `clash-verge` install to 2.0 blocked

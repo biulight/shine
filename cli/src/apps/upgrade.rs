@@ -184,6 +184,12 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
     runtime.context_mut_for_cli().env = env.as_map().clone();
     let mut observer = UpgradeObserver::default();
     let mut interaction = TerminalInteraction;
+    let artifact_categories = runtime
+        .app_categories(None)?
+        .into_iter()
+        .filter(|category| category.artifact.is_some())
+        .map(|category| category.name)
+        .collect::<BTreeSet<_>>();
     let core = runtime
         .upgrade_apps_approved(
             match &reviewed.request {
@@ -277,6 +283,26 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
                 category, *count,
             )));
         }
+    }
+    let changed_categories = core
+        .files
+        .iter()
+        .filter(|file| {
+            matches!(
+                file.action,
+                AppFileAction::Installed
+                    | AppFileAction::BackedUp
+                    | AppFileAction::Removed
+                    | AppFileAction::Restored
+            )
+        })
+        .map(|file| file.category.clone())
+        .collect::<BTreeSet<_>>();
+    for category in report::artifact_apply_categories(&artifact_categories, changed_categories) {
+        begin(reporter, &mut started);
+        reporter.emit(PresentationEvent::stdout(report::artifact_apply_hint_text(
+            &category,
+        )));
     }
     for event in observer.events {
         begin(reporter, &mut started);

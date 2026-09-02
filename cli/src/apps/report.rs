@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::colors;
@@ -138,6 +139,23 @@ pub(super) fn category_updated_text(category: &str, count: usize) -> String {
         colors::symbol("✓"),
         colors::dim(&format!("{count} {noun} updated"))
     )
+}
+
+pub(super) fn artifact_apply_hint_text(category: &str) -> String {
+    format!(
+        "  {} {category}: managed files changed; run `shine app artifact apply {category}`",
+        colors::symbol("!")
+    )
+}
+
+pub(super) fn artifact_apply_categories(
+    artifact_categories: &BTreeSet<String>,
+    changed_categories: BTreeSet<String>,
+) -> BTreeSet<String> {
+    artifact_categories
+        .intersection(&changed_categories)
+        .cloned()
+        .collect()
 }
 
 pub(super) fn warning_text(source: &str, detail: impl AsRef<str>) -> String {
@@ -328,6 +346,17 @@ pub(super) fn uninstall_error_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_apply_categories_only_returns_changed_artifact_categories() {
+        let artifacts = BTreeSet::from(["artifact".to_string(), "unchanged".to_string()]);
+        let changed = BTreeSet::from(["artifact".to_string(), "ordinary".to_string()]);
+
+        assert_eq!(
+            artifact_apply_categories(&artifacts, changed),
+            BTreeSet::from(["artifact".to_string()])
+        );
+    }
 
     #[test]
     fn app_lifecycle_lines_preserve_spacing_and_home_relative_paths() {
