@@ -7041,6 +7041,62 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
     }
 
     #[tokio::test]
+    async fn app_upgrade_uses_the_latest_legacy_receipt_after_a_relocation() {
+        let runtime = runtime(static_copy_app_snapshot());
+        let source = "app/demo/config.toml".to_string();
+        let old_destination = runtime.context().home_dir.join(".legacy/demo/config.toml");
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        let legacy_manifest = AppManifest {
+            schema_version: 0,
+            entries: vec![
+                AppEntry {
+                    source: source.clone(),
+                    destination: old_destination,
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                },
+                AppEntry {
+                    source,
+                    destination,
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                },
+            ],
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&legacy_manifest).unwrap().into_bytes(),
+        );
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.is_ready());
+        assert!(!plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_destination_occupied".to_string())
+        }));
+    }
+
+    #[tokio::test]
     async fn shell_and_sys_plans_use_only_observation_operations() {
         let platform = RuntimePlatform::current();
         let os_id = match platform {

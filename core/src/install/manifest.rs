@@ -121,7 +121,14 @@ impl AppManifest {
     }
 
     pub fn find_by_source(&self, source: &str) -> Option<&AppEntry> {
-        self.entries.iter().find(|entry| entry.source == source)
+        // Current writes replace an entry by source, but older releases could
+        // leave both sides of a relocation behind. Those manifests append the
+        // newer receipt, so it must win until a later mutation rewrites the
+        // manifest through `upsert` and removes the stale receipt.
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| entry.source == source)
     }
 }
 
@@ -281,6 +288,35 @@ content_hash = 7
         assert_eq!(manifest.entries.len(), 1);
         assert_eq!(manifest.entries[0].destination, Path::new("/tmp/new.toml"));
         assert!(manifest.find_by_source(&old.source).is_some());
+    }
+
+    #[test]
+    fn find_by_source_prefers_the_latest_legacy_relocation_receipt() {
+        let source = "app/clash-verge/merge.yaml".to_string();
+        let old = AppEntry {
+            source: source.clone(),
+            destination: PathBuf::from("C:/Users/example/.config/clash-verge/merge.yaml"),
+            backup: None,
+            content_hash: 1,
+            install_strategy: AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        };
+        let current = AppEntry {
+            source: source.clone(),
+            destination: PathBuf::from("C:/Users/example/.shine/clash-verge/merge.yaml"),
+            backup: None,
+            content_hash: 1,
+            install_strategy: AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        };
+        let manifest = AppManifest {
+            schema_version: 0,
+            entries: vec![old, current.clone()],
+        };
+
+        assert_eq!(manifest.find_by_source(&source), Some(&current));
     }
 
     #[test]

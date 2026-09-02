@@ -3,6 +3,22 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-02 — Legacy App relocation receipts selected an obsolete destination
+
+- **Symptom**: upgrading a 1.8 `clash-verge` install to 2.0 blocked
+  `merge.yaml` as `app_destination_occupied`, although its current
+  `~/.shine/clash-verge/merge.yaml` receipt and file were present.
+- **Root cause**: an older manifest could retain both the pre-relocation and
+  current records for one source. `find_by_source` selected the first (obsolete)
+  record, making the planner interpret the existing current destination as an
+  occupied relocation target.
+- **Fix**: select the last receipt for a source, which is the latest appended
+  legacy relocation record; the next normal manifest mutation rewrites it via
+  `upsert` and drops the stale duplicate.
+- **Rule**: when reading append-ordered legacy lifecycle state with duplicate
+  identities, select the latest compatible receipt consistently in planning and
+  execution; never reinterpret its current destination as foreign content.
+
 ## 2026-09-02 — A Windows launcher pair has two native comment syntaxes
 
 - **Symptom**: Windows Shell update and uninstall classified a freshly installed managed launcher
