@@ -2,13 +2,13 @@
 title: Shine
 slug: /
 sidebar_position: 1
-description: Turn everyday scripts and configuration into personal tools you can install, update, and remove cleanly.
+description: Turn everyday scripts and configuration into personal tools you can change with confidence and recover if interrupted.
 ---
 
 # Shine
 
-Turn the scripts and configuration you use every day into personal tools you can install, update,
-and remove cleanly.
+Turn the scripts and configuration you use every day into personal tools you can change with
+confidence and recover if interrupted.
 
 You may already sync those files between machines. But after they arrive, scripts still need to be
 added to `PATH`, application configuration still needs the right destination, and local values
@@ -18,15 +18,28 @@ directories, and system-specific paths, which makes it difficult to maintain, re
 
 Shine brings your scripts, personal configuration, and their installation rules together in a
 **Preset**. Maintain and share the preset folder in one place; Shine installs each item where it
-belongs. Install only what you need, see what changed before updating, and remove it later without
-deleting unrelated files.
+belongs. Install only what you need, see what Shine is about to do, and remove it later when you no
+longer need it. If a file has changed or Shine cannot confirm that it owns it, Shine stops instead
+of deleting it.
 
-**Give personal automation a reviewable lifecycle.**
+**Make every step of personal automation visible—and leave a safe way back.**
 
 This manual applies to the **Shine 2.0.0-rc.1** release candidate. It is prerelease documentation;
 use the version selector for the stable 1.8.x manual.
 
-[![The three core values of Shine: repeatable deployment, one entry point for personal developer resources, and a reviewable lifecycle for Shine-managed content.](/img/shine-core-values-en.webp)](/img/shine-core-values-en.webp)
+[![The three core values of Shine 2.0: repeatable deployment, one entry point for personal developer resources, and changes you can see before they happen and recover if interrupted.](/img/shine-core-values-v2-en.webp)](/img/shine-core-values-v2-en.webp)
+
+## Why 2.0 feels safer
+
+- **See what will happen before it starts.** Before an install, upgrade, or removal, Shine shows the
+  actions it plans to take and the access it needs. Nothing changes until you approve.
+- **Trust external code one Preset at a time.** If a personal Preset needs to run code, Shine asks
+  you to review that specific tool. If the code or requested access changes, Shine asks again.
+- **Pick up safely after an interruption.** If an operation stops halfway, Shine pauses later
+  changes and guides you through recovery instead of continuing blindly.
+
+Moving from 1.x or bringing your own Presets? Read [Upgrade from Shine
+1.x](./guides/upgrade-to-2.md) before you start.
 
 ## What Shine helps you do
 
@@ -37,9 +50,10 @@ use the version selector for the stable 1.8.x manual.
   the values locally.
 - **Give encrypted credentials only to commands that need them.** Seal tokens and other sensitive
   project values as GPG or age ciphertext, then decrypt them on demand for selected child processes.
-- **Look before you update.** By default, inspect what changed first; Shine applies it only when you
-  choose to upgrade.
-- **Remove only what Shine installed.** Your source folder and unrelated files stay in place.
+- **See first, then change.** Before an install, upgrade, or removal, Shine shows what it plans to do
+  and waits for your approval.
+- **Leave your files alone.** Source files and unrelated content stay in place; Shine stops when a
+  file has changed or its ownership is unclear.
 
 ## Try a built-in preset
 
