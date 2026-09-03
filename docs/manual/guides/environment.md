@@ -118,23 +118,38 @@ The `age` backend is suitable for committing team ciphertext encrypted to multip
 recipients. Existing GPG ciphertext needs no migration: legacy untagged ciphertext continues to use
 GPG, while new age ciphertext has an `age:` tag.
 
-First ensure the standard `age` CLI is installed and available on `PATH`. On macOS, Secure Enclave
-identities authorized with Touch ID also require `age-plugin-se`; Homebrew can install both:
+First ensure the standard `age` CLI is installed and available on `PATH`. Create a normal software
+identity and record its recipient:
+
+```bash
+shine env secret identity init
+shine env secret identity list
+```
+
+A normal identity uses `age-keygen` and defaults to `~/.shine/age/identity.txt`.
+
+### Use Touch ID on macOS
+
+On macOS, choose a Secure Enclave identity instead when decryption should require local user
+authorization. It also requires `age-plugin-se`; Homebrew can install both dependencies:
 
 ```bash
 brew install age age-plugin-se
 ```
 
-Create identities and record their recipients:
+Run the Touch ID form instead of the normal identity initialization above, then record its
+recipient:
 
 ```bash
-shine env secret identity init
 shine env secret identity init --touch-id
 shine env secret identity list
 ```
 
-`--touch-id` is macOS-only and prompts for Touch ID during decryption. A normal identity uses
-`age-keygen` and defaults to `~/.shine/age/identity.txt`.
+`--touch-id` is macOS-only. Decryption requires the local Secure Enclave and prompts for Touch ID or
+the system passcode; copying the identity file to another machine is normally insufficient to
+decrypt. Cancel unexpected authorization prompts and inspect the command that caused them. For the
+security boundary when AI agents can run local commands, see
+[Protect environment secrets when using AI agents](./agent-secret-safety.md#what-touch-id-improves).
 
 Configure machine-wide defaults in `~/.shine/config.toml`:
 

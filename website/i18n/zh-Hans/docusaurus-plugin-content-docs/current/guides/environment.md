@@ -107,22 +107,36 @@ eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
 
 Shine 支持 `age` 作为第二种密钥后端。它适合把密文提交到团队仓库中，并加密给多个成员各自的 recipient。已有 GPG 密文不需要迁移：不带标签的旧密文继续按 GPG 解密，`age` 后端生成的新密文会带有 `age:` 标签。
 
-先确认标准 `age` CLI 已安装并位于 `PATH` 中。macOS 用户若要使用由 Secure Enclave 托管、
-通过 Touch ID 授权的 identity，还需要安装 `age-plugin-se`；Homebrew 可以同时安装两者：
+先确认标准 `age` CLI 已安装并位于 `PATH` 中。生成一个普通软件 identity，并记录输出中的
+recipient：
+
+```bash
+shine env secret identity init
+shine env secret identity list
+```
+
+普通 identity 使用 `age-keygen`，默认写入 `~/.shine/age/identity.txt`。
+
+### 在 macOS 上使用 Touch ID
+
+如果希望每次解密都需要本机用户授权，macOS 上可以改用由 Secure Enclave 托管的 identity。
+这种方式还需要安装 `age-plugin-se`；Homebrew 可以同时安装两个依赖：
 
 ```bash
 brew install age age-plugin-se
 ```
 
-生成身份并记录输出中的 recipient：
+不要再执行上面的普通 identity 初始化，而是运行 Touch ID 形式，然后记录它的 recipient：
 
 ```bash
-shine env secret identity init
 shine env secret identity init --touch-id
 shine env secret identity list
 ```
 
-`--touch-id` 只适用于 macOS；解密时会触发系统 Touch ID 提示。普通身份使用 `age-keygen`，默认写入 `~/.shine/age/identity.txt`。
+`--touch-id` 只适用于 macOS。解密时需要本机 Secure Enclave，并会触发 Touch ID 或系统密码
+授权；即使 identity 文件被复制到另一台机器，通常也不能直接解密。看到意外的授权提示时，
+应取消授权并检查触发它的命令。如果 AI Agent 可以在本机运行命令，请继续阅读
+[在 AI Agent 参与开发时保护环境密钥](./agent-secret-safety.md#touch-id-改善什么)，了解这种方式的安全边界。
 
 如需在本机所有项目中使用同一默认后端和 recipient，将它们写入 `~/.shine/config.toml`：
 
