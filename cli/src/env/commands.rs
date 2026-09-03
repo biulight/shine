@@ -339,7 +339,7 @@ pub async fn handle_decrypt(config: &Config, key: &str) -> Result<()> {
     let Some(value) = env.get(key) else {
         bail!("{key} is not set in the active config [env]");
     };
-    let plaintext = secret::decrypt_secret(value, &config.age_identities())
+    let plaintext = secret::decrypt_secret(value, &config.resolved_age_identities())
         .await
         .with_context(|| format!("decrypting {key}"))?;
     print!("{plaintext}");
@@ -356,7 +356,7 @@ pub async fn handle_export(config: &Config, key: &str, alias: Option<&str>) -> R
         EnvExportValue::Secret {
             key: secret_key,
             value,
-        } => secret::decrypt_secret(value, &config.age_identities())
+        } => secret::decrypt_secret(value, &config.resolved_age_identities())
             .await
             .with_context(|| format!("decrypting {secret_key}"))?,
         EnvExportValue::Plaintext(value) => value.to_string(),

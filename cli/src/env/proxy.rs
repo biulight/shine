@@ -169,7 +169,7 @@ pub async fn exec(config: &Config, target: &Path, command: &str, args: &[OsStrin
     for spec in parse_env_specs(&rule.with)? {
         let value = match resolve_stored_value(&env, &spec.source)? {
             super::StoredValue::Secret { key, value } => {
-                secret::decrypt_secret(value, &config.age_identities())
+                secret::decrypt_secret(value, &config.resolved_age_identities())
                     .await
                     .with_context(|| format!("decrypting {key}"))?
             }

@@ -333,13 +333,46 @@ pub struct EnvIdentityCommand {
     pub command: EnvIdentitySubcommand,
 }
 
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+pub enum PhoneIdentityTransport {
+    #[default]
+    Auto,
+    Adb,
+    Qr,
+}
+
+impl PhoneIdentityTransport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Adb => "adb",
+            Self::Qr => "qr",
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum EnvIdentitySubcommand {
-    /// Generate a new age identity, optionally backed by Touch ID (Secure Enclave)
+    /// Generate a new age identity, optionally backed by Touch ID or a paired phone
     Init {
         /// Generate a Secure Enclave identity requiring Touch ID (macOS only)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "phone")]
         touch_id: bool,
+        /// Pair a phone-backed identity and add its public stub to global Shine config
+        #[arg(
+            long,
+            conflicts_with_all = ["touch_id", "access_control", "output", "force"]
+        )]
+        phone: bool,
+        /// Desktop label shown during phone pairing (defaults to the Windows computer name)
+        #[arg(long, requires = "phone", value_name = "LABEL")]
+        label: Option<String>,
+        /// Phone pairing transport: auto, adb, or qr
+        #[arg(long, requires = "phone", value_enum, value_name = "TRANSPORT")]
+        transport: Option<PhoneIdentityTransport>,
+        /// Explicit ADB device serial when more than one device is online
+        #[arg(long, requires = "phone", value_name = "SERIAL")]
+        adb_serial: Option<String>,
         /// Secure Enclave access control policy (only with --touch-id): any-biometry
         /// (default), any-biometry-or-passcode, current-biometry, or passcode
         #[arg(long, value_name = "POLICY")]

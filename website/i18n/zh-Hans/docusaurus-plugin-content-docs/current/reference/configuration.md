@@ -22,6 +22,7 @@ gpg_recipients = ["user@example.com", "team-backup@example.com"]
 secret_backend = "age"
 age_recipients = ["age1se1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
+age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 
 [env]
 HTTP_PROXY_PORT = "6152"
@@ -52,6 +53,7 @@ enabled = false
 | `secret_backend` | 默认密钥后端，省略时为 `gpg` |
 | `age_recipients` | `age` 后端默认加密接收者列表 |
 | `age_identity` | 解密 `age:` 密文时使用的身份文件路径，省略时可使用 `~/.shine/age/identity.txt` |
+| `age_identities` | 附加 identity 文件路径列表，排在 `age_identity` 之后并自动去重 |
 | `[env]` | 模板变量及 shell helper 使用的值 |
 | `[[env_proxy]]` | 一个透明命令代理规则；`command` 为裸命令名，`with` 为允许注入的 `KEY` 或 `KEY=ALIAS` 列表，`enabled` 默认为 `true` |
 
@@ -180,8 +182,8 @@ gpg_recipients = ["user@example.com", "team-backup@example.com"]
 
 执行 `shine env secret seal` 或 `shine env run` 时，加密设置的优先级为命令行参数、
 `[env.encryption]`、全局 `~/.shine/config.toml`。因此，全局配置适合个人默认值；项目团队的
-GPG 或 age recipient 列表应放在此文件中。recipient 是公钥信息，可提交到仓库；不要提交 `age_identity` 等
-私有身份文件。
+GPG 或 age recipient 列表应放在此文件中。recipient 是公钥信息，可提交到仓库；不要提交
+`age_identity`/`age_identities` 指向的私有身份文件或本机路径。
 
 每个环境源文件使用以下结构：
 

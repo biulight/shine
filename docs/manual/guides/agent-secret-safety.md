@@ -139,6 +139,10 @@ The plugin uses only Shine's existing age identity and recipient settings. See
 for the exact machine and workspace configuration. The identity stub contains public pairing
 material, not the phone's long-term private key.
 
+On the supported preview platform, `shine env secret identity init --phone` launches the plugin's
+own transactional setup and records only its public stub path in global `age_identities`. It does
+not manage private plugin state, switch the default backend, or add a phone-only recipient set.
+
 The recovery path must not depend on the same phone StrongBox keys, Windows TPM keys, or plugin
 state. Never make the experimental phone recipient the only recipient for retained data. A normal
 age identity remains suitable for ordinary team development when its file and user-directory

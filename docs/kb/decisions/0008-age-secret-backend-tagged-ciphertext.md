@@ -33,10 +33,12 @@ binary cannot use biometry-gated Keychain APIs without Apple entitlements, so sh
   per-instance trait object cleanly.
 - GPG encryption now also accepts a recipient list (`gpg -r` repeated), matching age's
   multi-recipient shape, so `-r/--recipient` behaves the same way regardless of backend.
-- `shine env secret identity init [--touch-id]` generates an age identity (`age-keygen` or
+- `shine env secret identity init [--touch-id]` generates a local age identity (`age-keygen` or
   `age-plugin-se keygen`) and prints its recipient; the macOS requirement for `--touch-id` is
   checked at **runtime** (`std::env::consts::OS`), not compile time, since plain age identities
-  work on every OS and the rest of the CLI is not platform-gated at compile time either.
+  work on every OS and the rest of the CLI is not platform-gated at compile time either. The later
+  `--phone` setup handoff is governed separately by [ADR 0075](0075-phone-identity-setup-handoff.md)
+  and does not change this backend or ciphertext decision.
 - Recipient/backend precedence for `encrypt`/`seal`: CLI flag > workspace `env.encryption` >
   `config.toml` (`gpg_recipients`/`age_recipients`/`secret_backend`) > default (GPG). Resolution
   helpers return `Option`, not `Result`, when used for `seal`, so sealing a file with no `[secret]`

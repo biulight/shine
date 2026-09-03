@@ -101,6 +101,10 @@ shine env secret identity list
 
 这个 plugin 只使用 Shine 现有的 age identity 和 recipient 配置。具体的本机与 workspace 设置见[在 Windows 上实验手机授权](./environment.md#在-windows-上实验手机授权)。identity stub 只包含公开配对材料，不含手机的长期私钥。
 
+在当前支持的预览平台上，`shine env secret identity init --phone` 会启动 plugin 自己的事务式
+setup，并且只把公开 stub 路径写入全局 `age_identities`。它不会管理 plugin 私有状态、切换默认
+后端，也不会创建只包含 phone recipient 的收件人集合。
+
 恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台 Windows 电脑的 TPM 密钥或该 plugin 的本地状态。对于需要保留的数据，绝不能只配置这个实验性手机 recipient。普通团队开发仍可使用普通 age identity，但要保护好 identity 文件和用户目录权限。Windows 上需要稳定硬件保护时，应继续采用组织认可的 YubiKey/PIV 或 GPG + YubiKey 方案。
 
 ## 如何选择密钥后端

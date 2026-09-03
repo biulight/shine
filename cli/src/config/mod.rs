@@ -94,6 +94,9 @@ pub struct Config {
     /// Used to avoid materializing inherited global values when saving.
     #[serde(skip)]
     project_save_state: Option<ProjectSaveState>,
+    /// Whether the active project explicitly replaces the global age identity set.
+    #[serde(skip)]
+    project_overrides_age_identities: bool,
     /// Directory used for shine runtime state.
     #[serde(skip)]
     shine_dir: PathBuf,
@@ -201,12 +204,15 @@ pub struct Config {
     /// decrypt the resulting ciphertext with their own identity.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub age_recipients: Vec<String>,
-    /// Path to the age identity file used to decrypt `age:`-tagged secrets.
-    /// May contain multiple identities (e.g. a Secure Enclave identity plus a
-    /// plain fallback), one per line. Defaults to
+    /// Legacy primary age identity file used to decrypt `age:`-tagged secrets.
+    /// The file may itself contain multiple identity lines. Defaults to
     /// `<shine_dir>/age/identity.txt` when unset and that file exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub age_identity: Option<String>,
+    /// Additional age identity files. These are merged after `age_identity`
+    /// and allow hardware-backed identities to coexist without copying them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub age_identities: Vec<String>,
     /// Environment variables substituted into template-enabled presets.
     #[serde(
         default = "default_env_map",
@@ -315,6 +321,7 @@ impl Config {
             config_path: dir.join("config.toml"),
             is_project_config: false,
             project_save_state: None,
+            project_overrides_age_identities: false,
             shine_dir: dir.to_path_buf(),
             presets_dir: dir.join("presets"),
             bin_dir: dir.join("bin"),
@@ -339,6 +346,7 @@ impl Config {
             secret_backend: None,
             age_recipients: Vec::new(),
             age_identity: None,
+            age_identities: Vec::new(),
             env: default_env_map(),
             env_proxy: Vec::new(),
             env_descriptions: BTreeMap::new(),
@@ -347,23 +355,36 @@ impl Config {
     }
 
     /// Age identity file(s) used to decrypt `age:`-tagged secrets, resolved
-    /// from `age_identity` (tilde-expanded) or, when unset, the default path
-    /// under `shine_dir` if it exists.
-    pub fn age_identities(&self) -> Vec<PathBuf> {
-        if let Some(identity) = self
+    /// from `age_identity` plus `age_identities` (tilde-expanded) or, when
+    /// neither is set, the default path under `shine_dir` if it exists.
+    pub fn resolved_age_identities(&self) -> Vec<PathBuf> {
+        let mut identities = self
             .age_identity
-            .as_deref()
+            .iter()
+            .chain(self.age_identities.iter())
+            .map(String::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-        {
-            return vec![PathBuf::from(tilde_expand(identity))];
+            .map(|value| PathBuf::from(tilde_expand(value)))
+            .fold(Vec::new(), |mut paths, path| {
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+                paths
+            });
+        if !identities.is_empty() {
+            return identities;
         }
         let default_path = self.shine_dir.join("age").join("identity.txt");
         if default_path.is_file() {
-            vec![default_path]
-        } else {
-            Vec::new()
+            identities.push(default_path);
         }
+        identities
+    }
+
+    /// Whether the active project explicitly replaces global age identities.
+    pub fn project_overrides_age_identities(&self) -> bool {
+        self.project_overrides_age_identities
     }
 
     /// Return a clone of this config with `presets_dir_override` replaced.
@@ -516,6 +537,7 @@ impl Default for Config {
             config_path: shine_dir.join("config.toml"),
             is_project_config: false,
             project_save_state: None,
+            project_overrides_age_identities: false,
             shine_dir,
             home_dir,
             schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
@@ -538,6 +560,7 @@ impl Default for Config {
             secret_backend: None,
             age_recipients: Vec::new(),
             age_identity: None,
+            age_identities: Vec::new(),
             env: default_env_map(),
             env_proxy: Vec::new(),
             env_descriptions: BTreeMap::new(),
@@ -643,7 +666,7 @@ mod tests {
             std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
         let config = Config::new_for_test(&dir);
 
-        assert!(config.age_identities().is_empty());
+        assert!(config.resolved_age_identities().is_empty());
     }
 
     #[test]
@@ -654,7 +677,7 @@ mod tests {
         config.age_identity = Some("/tmp/my-identity.txt".to_string());
 
         assert_eq!(
-            config.age_identities(),
+            config.resolved_age_identities(),
             vec![PathBuf::from("/tmp/my-identity.txt")]
         );
     }
@@ -666,7 +689,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.age_identity = Some("   ".to_string());
 
-        assert!(config.age_identities().is_empty());
+        assert!(config.resolved_age_identities().is_empty());
     }
 
     #[tokio::test]
@@ -682,8 +705,29 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(config.age_identities(), vec![default_path]);
+        assert_eq!(config.resolved_age_identities(), vec![default_path]);
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn resolved_age_identities_merges_and_deduplicates_paths() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config.age_identity = Some("/tmp/primary.txt".to_string());
+        config.age_identities = vec![
+            "/tmp/additional.txt".to_string(),
+            "/tmp/primary.txt".to_string(),
+            "  ".to_string(),
+        ];
+
+        assert_eq!(
+            config.resolved_age_identities(),
+            vec![
+                PathBuf::from("/tmp/primary.txt"),
+                PathBuf::from("/tmp/additional.txt"),
+            ]
+        );
     }
 }

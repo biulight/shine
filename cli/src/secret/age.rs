@@ -1,8 +1,8 @@
 //! age-backed secret storage: base64-encoded ciphertext round-tripped through
 //! the `age` CLI, supporting multi-recipient encryption so a secret sealed
 //! once can be decrypted by any teammate's identity — including Secure
-//! Enclave identities minted by `age-plugin-se`, which prompt Touch ID on
-//! decrypt. Ciphertext is tagged `age:` by the router in `secret::mod` so it
+//! Enclave and phone-backed identities, which require an independent user
+//! authorization on decrypt. Ciphertext is tagged `age:` by the router in `secret::mod` so it
 //! is never confused with untagged GPG ciphertext.
 
 use anyhow::{Context, Result, bail};
@@ -42,12 +42,12 @@ pub async fn decrypt_base64_age_secret(
             "no age identity configured; run `shine env secret identity init` or set age_identity in config.toml"
         );
     }
-    let needs_plugin = any_identity_uses_secure_enclave(identities).await?;
+    let required_plugins = required_identity_plugins(identities).await?;
 
     ensure_command("base64")?;
     ensure_command("age")?;
-    if needs_plugin {
-        ensure_command("age-plugin-se")?;
+    for plugin in required_plugins {
+        ensure_command(plugin)?;
     }
 
     let encrypted_file = TempFile::new("shine-age-secret").await?;
@@ -80,7 +80,8 @@ fn validate_recipients(recipients: &[String]) -> Result<Vec<&str>> {
     Ok(cleaned)
 }
 
-async fn any_identity_uses_secure_enclave(identities: &[PathBuf]) -> Result<bool> {
+async fn required_identity_plugins(identities: &[PathBuf]) -> Result<Vec<&'static str>> {
+    let mut plugins = Vec::new();
     for identity in identities {
         if !identity.is_file() {
             bail!("age identity file not found: {}", identity.display());
@@ -88,11 +89,16 @@ async fn any_identity_uses_secure_enclave(identities: &[PathBuf]) -> Result<bool
         let contents = tokio::fs::read_to_string(identity)
             .await
             .with_context(|| format!("reading age identity {}", identity.display()))?;
-        if contents.contains("AGE-PLUGIN-SE-") {
-            return Ok(true);
+        for (marker, plugin) in [
+            ("AGE-PLUGIN-SE-", "age-plugin-se"),
+            ("AGE-PLUGIN-PHONE-", "age-plugin-phone"),
+        ] {
+            if contents.contains(marker) && !plugins.contains(&plugin) {
+                plugins.push(plugin);
+            }
         }
     }
-    Ok(false)
+    Ok(plugins)
 }
 
 async fn decrypt_age_file(path: &Path, identities: &[PathBuf]) -> Result<String> {
@@ -210,5 +216,30 @@ mod tests {
             err.to_string().contains("age identity file not found"),
             "{err:#}"
         );
+    }
+
+    #[tokio::test]
+    async fn detects_each_supported_identity_plugin_once() {
+        let dir = std::env::temp_dir().join(format!("shine-age-plugins-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let secure_enclave = dir.join("secure-enclave.txt");
+        let phone = dir.join("phone.txt");
+        tokio::fs::write(&secure_enclave, "AGE-PLUGIN-SE-1EXAMPLE\n")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &phone,
+            "AGE-PLUGIN-PHONE-1EXAMPLE\nAGE-PLUGIN-PHONE-1DUPLICATE\n",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            required_identity_plugins(&[secure_enclave, phone])
+                .await
+                .unwrap(),
+            vec!["age-plugin-se", "age-plugin-phone"]
+        );
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 }

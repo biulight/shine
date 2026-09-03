@@ -157,7 +157,12 @@ Configure machine-wide defaults in `~/.shine/config.toml`:
 secret_backend = "age"
 age_recipients = ["age1se1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
+age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 ```
+
+The legacy `age_identity` path and the additional `age_identities` list are merged in order and
+deduplicated. This lets a normal or Secure Enclave identity coexist with hardware-plugin stubs
+without copying either file.
 
 A project-team recipient list belongs in `[env.encryption]` in the project's
 `shine.workspace.toml`. It can be committed and overrides global defaults without affecting other
@@ -182,12 +187,35 @@ capability-qualified Android StrongBox phone. Follow the project's
 [`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md)
 for artifact verification, pairing, transport, recovery drills, and cleanup.
 
-After pairing, point the current Windows user's `~/.shine/config.toml` at the public identity stub:
+After installing the matching desktop plugin and Android application, start its transactional
+pairing through Shine:
+
+```powershell
+shine env secret identity init --phone
+```
+
+The pairing label defaults to the Windows computer name. Override it, choose the QR route, or select
+one of multiple ADB devices explicitly when needed:
+
+```powershell
+shine env secret identity init --phone --label "Work laptop"
+shine env secret identity init --phone --transport qr
+shine env secret identity init --phone --adb-serial SERIAL
+```
+
+Shine leaves all pairing, TPM, replay, locator, interruption, and cleanup state under the plugin's
+ownership. After successful fingerprint confirmation, it adds only the public identity-stub path to
+the current user's global `age_identities`. If the active project explicitly overrides
+`age_identity` or `age_identities`, the command stops before pairing instead of creating an identity
+that the project would ignore. A manual configuration has this shape:
 
 ```toml
-secret_backend = "age"
-age_identity = "C:/Users/<user>/AppData/Local/age-plugin-phone/identity.txt"
+age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 ```
+
+The shortcut does not change `secret_backend` and does not add recipients. Interrupted plugin setup
+must be handled with `age-plugin-phone setup --resume` or `age-plugin-phone setup --cleanup` as
+described by the plugin; do not start a second pairing as recovery.
 
 Put the printed `age1phone...` recipient and an independently verified recovery recipient in the
 project's commit-ready `shine.workspace.toml`:

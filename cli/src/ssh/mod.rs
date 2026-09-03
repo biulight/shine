@@ -432,7 +432,7 @@ async fn resolve_forwarded_env(
         let ciphertext = env
             .get(&encrypted)
             .with_context(|| format!("{encrypted} is not set in the active config [env]"))?;
-        let value = secret::decrypt_secret(ciphertext, &config.age_identities())
+        let value = secret::decrypt_secret(ciphertext, &config.resolved_age_identities())
             .await
             .with_context(|| format!("decrypting {encrypted}"))?;
         resolved.insert(spec.target, value);

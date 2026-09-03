@@ -631,18 +631,32 @@ async fn run(cli: Cli) -> Result<()> {
                 EnvSecretSubcommand::Identity(cmd) => match cmd.command {
                     EnvIdentitySubcommand::Init {
                         touch_id,
+                        phone,
+                        label,
+                        transport,
+                        adb_serial,
                         access_control,
                         output,
                         force,
                     } => {
-                        env::identity::handle_identity_init(
-                            &config,
-                            touch_id,
-                            access_control.as_deref(),
-                            output.as_deref(),
-                            force,
-                        )
-                        .await
+                        if phone {
+                            env::identity::handle_phone_identity_init(
+                                &config,
+                                label.as_deref(),
+                                transport.unwrap_or_default().as_str(),
+                                adb_serial.as_deref(),
+                            )
+                            .await
+                        } else {
+                            env::identity::handle_identity_init(
+                                &config,
+                                touch_id,
+                                access_control.as_deref(),
+                                output.as_deref(),
+                                force,
+                            )
+                            .await
+                        }
                     }
                     EnvIdentitySubcommand::List => {
                         env::identity::handle_identity_list(&config).await
@@ -1709,6 +1723,62 @@ mod tests {
             } if key == "TOKEN_SECRET"
         ));
         assert!(Cli::try_parse_from(["shine", "env", "secret", "identity", "list",]).is_ok());
+    }
+
+    #[test]
+    fn cli_parses_phone_identity_setup_and_rejects_other_identity_options() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "secret",
+            "identity",
+            "init",
+            "--phone",
+            "--label",
+            "Work laptop",
+            "--transport",
+            "qr",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Secret(commands::EnvSecretCommand {
+                    command: EnvSecretSubcommand::Identity(commands::EnvIdentityCommand {
+                        command: EnvIdentitySubcommand::Init {
+                            phone: true,
+                            label: Some(label),
+                            transport: Some(commands::PhoneIdentityTransport::Qr),
+                            ..
+                        }
+                    })
+                })
+            } if label == "Work laptop"
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "shine",
+                "env",
+                "secret",
+                "identity",
+                "init",
+                "--phone",
+                "--touch-id",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "shine",
+                "env",
+                "secret",
+                "identity",
+                "init",
+                "--transport",
+                "adb",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

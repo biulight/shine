@@ -9,6 +9,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
+- Added `shine env secret identity init --phone` on Windows for guided `age-plugin-phone`
+  pairing, with explicit transport selection, stable structured setup handoff, and ordered
+  multi-identity configuration that preserves the existing secret backend and recovery policy.
 - Added reviewed `shine preset migrate [PATH]` migration for legacy 1.x Preset metadata, with
   dry-run/text diff review, versioned content-free JSON reports, source revalidation, complete
   private backups, and conservative blockers for opaque permissions and Sys v1 dispatchers.

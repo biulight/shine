@@ -144,7 +144,11 @@ shine env secret identity list
 secret_backend = "age"
 age_recipients = ["age1se1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
+age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 ```
+
+旧的 `age_identity` 单路径会与新增的 `age_identities` 路径列表按顺序合并并去重。这样普通
+identity、Secure Enclave identity 和硬件 plugin stub 可以共存，不需要复制任何文件。
 
 如果 recipient 是某个项目团队共享的名单，应将它写入项目根目录的
 `shine.workspace.toml` 的 `[env.encryption]`；这样可以随项目提交，而不会影响本机的其他
@@ -164,12 +168,33 @@ shine env secret seal --backend age -r age1se1qexample... -r age1qteammate...
 
 [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) 目前仍是 owner-only 技术预览，只能用于合成或可丢弃数据，不能保护真实或生产 secret。当前 Windows Alpha 要求 Windows 11 x64 客户端、TPM 2.0、Microsoft Platform Crypto Provider，以及能力检查合格的 Android StrongBox 手机。制品校验、配对、传输、恢复演练和清理步骤以项目的 [`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md) 为准。
 
-配对完成后，在当前 Windows 用户的 `~/.shine/config.toml` 中把 `age_identity` 指向公开 identity stub：
+安装同一版本的桌面 plugin 和 Android 应用后，可以通过 Shine 启动 plugin 自己的事务式配对：
+
+```powershell
+shine env secret identity init --phone
+```
+
+配对标签默认使用 Windows 计算机名；也可以显式指定标签、改用 QR，或在存在多台 ADB
+设备时指定序列号：
+
+```powershell
+shine env secret identity init --phone --label "Work laptop"
+shine env secret identity init --phone --transport qr
+shine env secret identity init --phone --adb-serial SERIAL
+```
+
+配对、TPM、replay、locator、中断恢复和清理状态仍完全由 plugin 管理。完整指纹确认成功后，
+Shine 只会把公开 identity stub 路径加入当前用户的全局 `age_identities`。如果当前项目显式
+覆盖了 `age_identity` 或 `age_identities`，命令会在配对前退出，避免创建一个随后被项目忽略
+的 identity。对应的手工配置形式如下：
 
 ```toml
-secret_backend = "age"
-age_identity = "C:/Users/<user>/AppData/Local/age-plugin-phone/identity.txt"
+age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 ```
+
+这个快捷命令不会修改 `secret_backend`，也不会自动添加 recipient。plugin setup 如果中断，
+必须按照其文档使用 `age-plugin-phone setup --resume` 或 `age-plugin-phone setup --cleanup`；
+不要把重新发起一次配对当作恢复手段。
 
 在可提交到仓库的项目 `shine.workspace.toml` 中，同时加入配对输出的 `age1phone...` recipient 和一个已经独立验证过的恢复 recipient：
 

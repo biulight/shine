@@ -23,6 +23,7 @@ gpg_recipients = ["user@example.com", "team-backup@example.com"]
 secret_backend = "age"
 age_recipients = ["age1se1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
+age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 
 [env]
 HTTP_PROXY_PORT = "6152"
@@ -53,6 +54,7 @@ enabled = false
 | `secret_backend` | Default secret backend; `gpg` when omitted |
 | `age_recipients` | Default encryption recipients for age |
 | `age_identity` | Identity file for `age:` ciphertext; may default to `~/.shine/age/identity.txt` |
+| `age_identities` | Additional identity-file paths, merged after `age_identity` and deduplicated |
 | `[env]` | Values used by templates and shell helpers |
 | `[[env_proxy]]` | Transparent command rule: bare `command`, injected `KEY` or `KEY=ALIAS` list in `with`, and optional `enabled` defaulting to `true` |
 
@@ -197,7 +199,8 @@ Sources merge in list order. Current process variables win by default;
 For `shine env secret seal` and `shine env run`, encryption settings resolve from command-line
 arguments, then `[env.encryption]`, then global `~/.shine/config.toml`. Global configuration is useful
 for personal defaults; commit project-team GPG or age recipient lists here. Recipients are public-key
-information. Never commit private identity files such as `age_identity`.
+information. Never commit private identity files or machine-local identity paths such as
+`age_identity`/`age_identities`.
 
 Each source uses this structure:
 

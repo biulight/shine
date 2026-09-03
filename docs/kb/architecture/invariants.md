@@ -548,6 +548,12 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Phone identity setup crosses only a public configuration handoff.** Shine may invoke the
+  standalone plugin's transactional setup and record its versioned public stub path and recipient,
+  but it must not allocate, discover, copy, remove, or repair plugin TPM, replay, locator, pairing,
+  or recovery state. A failed Shine config write never authorizes cleanup. Phone setup does not
+  change the default secret backend or add a phone-only recipient set (see
+  [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md)).
 - **Decrypt routing is tag-based only** (`secret::parse_tagged_ciphertext`). `decrypt_secret`
   must never consult `Config::secret_backend` or any other config to pick a backend — only the
   `age:` prefix (or its absence) decides. This lets `secret_backend`/`age_recipients` change
