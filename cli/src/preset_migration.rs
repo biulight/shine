@@ -1165,7 +1165,16 @@ mod tests {
         assert_eq!(output.matches("  shell/chrome (external)").count(), 1);
         assert_eq!(output.matches("shine preset validate").count(), 1);
         assert_eq!(output.matches("shine preset plan").count(), 1);
-        assert!(output.contains("'/preset root/shell/chrome/shine.toml'"));
+        let manifest = snapshot
+            .origin("shell/chrome/shine.toml")
+            .and_then(|origin| origin.physical_path.as_deref())
+            .expect("external snapshot manifest has a physical path");
+        let quoted = quote_command_arg(manifest, RuntimePlatform::current());
+        assert!(output.contains(&format!("shine preset validate {quoted}")));
+        assert!(output.contains(&format!(
+            "shine preset plan {quoted} --platform {}",
+            RuntimePlatform::current().as_str()
+        )));
         assert!(output.contains("0 automatic changes, 2 blockers, 0 advisories"));
         assert!(!output.contains("shine trust"));
     }

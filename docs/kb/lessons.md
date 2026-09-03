@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-03 — Presentation assertions must follow native path semantics
+
+- **Symptom**: the Windows Rust test job failed after the Shell migration remediation gained a
+  command-path assertion.
+- **Root cause**: the test snapshot used a Unix-looking fixture root and asserted that literal
+  rendered path, but `Path` and command rendering correctly follow the host's native semantics.
+- **Fix**: derive the expected quoted manifest path from the snapshot and the current platform,
+  then assert the complete remediation commands.
+- **Rule**: cross-platform terminal-output tests must derive physical paths through the same
+  platform-aware formatter used by production code; logical-path literals are not portable
+  physical-path expectations.
+
 ## 2026-09-03 — Terminal presentation is not evidence of a plaintext newline
 
 - **Symptom**: phone-backed decryption appeared noisier than Secure Enclave decryption and the next
