@@ -6,6 +6,7 @@
 //! is never confused with untagged GPG ciphertext.
 
 use anyhow::{Context, Result, bail};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -43,6 +44,11 @@ pub async fn decrypt_base64_age_secret(
         );
     }
     let required_plugins = required_identity_plugins(identities).await?;
+    let quiet_phone_progress = required_plugins.contains(&"age-plugin-phone")
+        && !phone_terminal_output_requested(
+            std::env::var_os("AGE_PLUGIN_PHONE_TRANSPORT").as_deref(),
+            std::env::var_os("AGE_PLUGIN_PHONE_MESSAGES").as_deref(),
+        );
 
     ensure_command("base64")?;
     ensure_command("age")?;
@@ -59,7 +65,24 @@ pub async fn decrypt_base64_age_secret(
         bail!("decoded secret is empty");
     }
 
-    decrypt_age_file(encrypted_file.path(), identities).await
+    decrypt_age_file(encrypted_file.path(), identities, quiet_phone_progress).await
+}
+
+fn phone_terminal_output_requested(transport: Option<&OsStr>, messages: Option<&OsStr>) -> bool {
+    let transport = transport.and_then(OsStr::to_str).map(str::trim);
+    let qr_transport = match transport {
+        Some(value) if value.eq_ignore_ascii_case("qr") => true,
+        Some(value) if value.eq_ignore_ascii_case("auto") => !cfg!(windows),
+        None => !cfg!(windows),
+        _ => false,
+    };
+    qr_transport
+        || messages.and_then(OsStr::to_str).is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
 }
 
 fn validate_recipients(recipients: &[String]) -> Result<Vec<&str>> {
@@ -101,7 +124,11 @@ async fn required_identity_plugins(identities: &[PathBuf]) -> Result<Vec<&'stati
     Ok(plugins)
 }
 
-async fn decrypt_age_file(path: &Path, identities: &[PathBuf]) -> Result<String> {
+async fn decrypt_age_file(
+    path: &Path,
+    identities: &[PathBuf],
+    quiet_phone_progress: bool,
+) -> Result<String> {
     let mut command = Command::new("age");
     command.arg("-d");
     for identity in identities {
@@ -112,7 +139,11 @@ async fn decrypt_age_file(path: &Path, identities: &[PathBuf]) -> Result<String>
     let output = command
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
+        .stderr(if quiet_phone_progress {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::inherit()
+        })
         .spawn()
         .with_context(|| "running age -d")?;
 
@@ -121,6 +152,11 @@ async fn decrypt_age_file(path: &Path, identities: &[PathBuf]) -> Result<String>
         .await
         .context("waiting for age -d")?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let diagnostic = stderr.trim();
+        if !diagnostic.is_empty() {
+            bail!("age decrypt failed: {diagnostic}");
+        }
         bail!("age decrypt failed");
     }
 
@@ -177,6 +213,27 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("secret is empty"), "{err:#}");
+    }
+
+    #[test]
+    fn phone_terminal_output_is_explicit_or_required_by_qr() {
+        assert_eq!(phone_terminal_output_requested(None, None), !cfg!(windows));
+        assert_eq!(
+            phone_terminal_output_requested(Some(OsStr::new("auto")), None),
+            !cfg!(windows)
+        );
+        assert!(!phone_terminal_output_requested(
+            Some(OsStr::new("adb")),
+            Some(OsStr::new("0")),
+        ));
+        assert!(phone_terminal_output_requested(
+            Some(OsStr::new("qr")),
+            None,
+        ));
+        assert!(phone_terminal_output_requested(
+            Some(OsStr::new("wifi")),
+            Some(OsStr::new("true")),
+        ));
     }
 
     #[tokio::test]

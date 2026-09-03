@@ -228,7 +228,11 @@ age_recipients = ["age1phone...", "age1..."]
 
 Sealing uses only the recipients' public material and does not prompt on the phone. Decrypting a
 phone-backed secret, including through `shine env run`, invokes the standard age plugin and must
-require a fresh strong biometric authorization for each file-key unwrap. Never make the
+require a fresh strong biometric authorization for each file-key unwrap. Developer USB and Wi-Fi
+plugin guidance is quiet by default; set `AGE_PLUGIN_PHONE_MESSAGES=1` to opt into it. Explicit QR
+requests remain visible because the phone must scan them. A successful `shine env secret decrypt`
+writes only the decrypted value, suppresses the age client's own waiting diagnostic, and does not
+append a line ending. A shell theme may still place its next prompt on a fresh line. Never make the
 experimental phone recipient the only recipient for retained data; the recovery path must not
 depend on the same phone StrongBox keys, Windows TPM keys, or plugin state.
 

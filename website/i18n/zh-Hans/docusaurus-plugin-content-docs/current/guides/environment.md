@@ -204,7 +204,7 @@ backend = "age"
 age_recipients = ["age1phone...", "age1..."]
 ```
 
-封存只使用 recipient 的公开材料，不会在手机上弹出授权提示。解密由手机保护的 secret（包括通过 `shine env run` 使用它）时，标准 age plugin 会为每次 file key 解包要求一次新的强生物验证。对于需要保留的数据，绝不能只配置这个实验性手机 recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台 Windows 电脑的 TPM 密钥或该 plugin 的本地状态。
+封存只使用 recipient 的公开材料，不会在手机上弹出授权提示。解密由手机保护的 secret（包括通过 `shine env run` 使用它）时，标准 age plugin 会为每次 file key 解包要求一次新的强生物验证。Developer USB 和 Wi-Fi 的 plugin 提示默认静默；设置 `AGE_PLUGIN_PHONE_MESSAGES=1` 可显式开启。QR 请求必须由手机扫描，因此仍会显示在终端中。`shine env secret decrypt` 成功时只写入解密值，同时屏蔽 age 客户端自身的等待提示，并且不会额外添加换行。Shell 主题仍可能主动把下一条 prompt 放到新行。对于需要保留的数据，绝不能只配置这个实验性手机 recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台 Windows 电脑的 TPM 密钥或该 plugin 的本地状态。
 
 如果 AI Agent 会参与开发，先阅读[在 AI Agent 参与开发时保护环境密钥](./agent-secret-safety.md)，确认 identity 文件、Touch ID、手机授权提示和命令执行权限的安全边界。
 

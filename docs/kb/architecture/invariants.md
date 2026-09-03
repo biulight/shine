@@ -548,6 +548,11 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Direct secret decryption writes byte-exact plaintext to stdout.** `env secret decrypt` must not
+  append a line ending or mix status presentation into successful output. Default non-QR phone
+  decrypts also capture the age client's progress diagnostics; explicit QR and opted-in messages
+  stay interactive, and captured diagnostics become visible when decryption fails. A shell may
+  independently move its next prompt.
 - **Phone identity setup crosses only a public configuration handoff.** Shine may invoke the
   standalone plugin's transactional setup and record its versioned public stub path and recipient,
   but it must not allocate, discover, copy, remove, or repair plugin TPM, replay, locator, pairing,

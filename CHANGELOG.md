@@ -18,6 +18,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Kept `env secret decrypt` output byte-exact with no appended line ending, and suppress successful
+  age progress diagnostics for default phone-plugin Developer USB and Wi-Fi unwraps. Optional
+  guidance enabled by `AGE_PLUGIN_PHONE_MESSAGES=1` and explicit QR requests remain visible.
 - Made `shine update` and `shine upgrade` report active Preset compatibility with logical source
   context. Update no longer turns App/Sys inspection failures into empty results, while upgrade
   blocks before any Plan or mutation when legacy metadata requires migration.

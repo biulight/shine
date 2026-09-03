@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-03 — Terminal presentation is not evidence of a plaintext newline
+
+- **Symptom**: phone-backed decryption appeared noisier than Secure Enclave decryption and the next
+  PowerShell prompt started on a fresh line, suggesting Shine had appended a newline.
+- **Root cause**: the phone plugin sent informational standard-age `message` callbacks, and the age
+  client also generated its own delayed waiting banner. Separately, the shell theme chose a fresh
+  line for its next prompt even though Shine used newline-free output.
+- **Fix**: keep non-QR phone interaction quiet by default, make desktop guidance explicitly opt-in,
+  retain the functional QR callback, capture age progress on Shine's default non-QR phone path, and
+  regression-test decrypted stdout as exact bytes with no added line ending.
+- **Rule**: verify CLI output at the byte stream before attributing prompt layout to the child;
+  interactive plugin callbacks must represent a required user action, not repeat another device's UI.
+
 ## 2026-09-03 — Remediation commands must respect target namespaces
 
 - **Symptom**: a Shell permission-migration blocker instructed users to run
