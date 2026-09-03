@@ -97,7 +97,7 @@ shine env secret identity list
 
 当前实现把长期 age 解密密钥留在 Android StrongBox 中，每次解包 file key 都需要用户在手机上重新完成一次强生物验证。Windows TPM 只保存两把用途分离、不可导出的 P-256 密钥，分别用于证明已配对桌面身份和私下选择对应的 recipient stanza；手机的长期私钥不会进入 Windows，也不存在 DPAPI、软件 identity、密码或缓存授权回退。Shine 仍然只调用标准 `age` CLI、`identity-v1` 和 `recipient-v1`，不依赖这个项目，也不引入专用密文格式。
 
-这个设计绕开的是 Windows Hello 缺少所需密码学操作的瓶颈，并没有消除当前的平台前置条件。`0.1.0-alpha.1` 仍是 owner-only 技术预览，要求 Windows 11 x64 客户端、TPM 2.0、Microsoft Platform Crypto Provider，以及能力检查合格的 Android StrongBox 手机。Windows 上的正常传输路径是 Developer USB/ADB；QR 是显式回退，不是自动降级。协议 v2、公共签名、多设备覆盖和完整生命周期矩阵都还没有完成。它只能用于合成或可丢弃数据，不能保护真实或生产 secret。具体的制品校验、配对、传输、恢复和清理步骤以项目的 [`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md) 为准。
+这个设计绕开的是 Windows Hello 缺少所需密码学操作的瓶颈，并没有消除当前的平台前置条件。当前仍是 owner-only 技术预览，要求 Windows 11 x64 客户端、TPM 2.0、Microsoft Platform Crypto Provider，以及能力检查合格的 Android StrongBox 手机。它的 `auto` 策略现在会在配对或解包前先做一次有界的 Wi-Fi-first 路径选择：只有一个匹配且位于前台的 listener 响应时选择 Wi-Fi；没有 listener 响应时，会在协议处理开始前选择 Windows 的 Developer USB/ADB。多个响应会安全失败，请求发出后不会再自动切换；QR 仍是显式路径。协议 v2、公共签名、多设备覆盖和完整生命周期矩阵都还没有完成。它只能用于合成或可丢弃数据，不能保护真实或生产 secret。具体的制品校验、配对、传输、恢复和清理步骤以项目的 [`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md) 为准。
 
 这个 plugin 只使用 Shine 现有的 age identity 和 recipient 配置。具体的本机与 workspace 设置见[在 Windows 上实验手机授权](./environment.md#在-windows-上实验手机授权)。identity stub 只包含公开配对材料，不含手机的长期私钥。
 

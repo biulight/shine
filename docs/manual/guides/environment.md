@@ -191,14 +191,22 @@ After installing the matching desktop plugin and Android application, start its 
 pairing through Shine:
 
 ```powershell
-shine env secret identity init --phone
+shine env secret identity init --phone --label "NUC WiFi Pair" --transport auto
 ```
 
-The pairing label defaults to the Windows computer name. Override it, choose the QR route, or select
-one of multiple ADB devices explicitly when needed:
+Before running the command, open the phone's explicit **Pair · Wi-Fi** action if you want to pair
+over the local network. On Windows, `auto` performs one bounded Wi-Fi discovery first. Exactly one
+matching foreground phone listener selects Wi-Fi; if no listener responds, setup selects Developer
+USB/ADB before creating the pairing offer. Ambiguous discovery or a local discovery error fails
+closed, and an attempt never switches transport after protocol work begins. `auto` is the default,
+so omitting `--transport auto` keeps the same policy.
+
+The pairing label defaults to the Windows computer name. Override it, pin Developer USB or QR, or
+select one of multiple ADB devices explicitly when needed:
 
 ```powershell
 shine env secret identity init --phone --label "Work laptop"
+shine env secret identity init --phone --transport adb
 shine env secret identity init --phone --transport qr
 shine env secret identity init --phone --adb-serial SERIAL
 ```
@@ -226,15 +234,18 @@ backend = "age"
 age_recipients = ["age1phone...", "age1..."]
 ```
 
-Sealing uses only the recipients' public material and does not prompt on the phone. Decrypting a
-phone-backed secret, including through `shine env run`, invokes the standard age plugin and must
-require a fresh strong biometric authorization for each file-key unwrap. Developer USB and Wi-Fi
-plugin guidance is quiet by default; set `AGE_PLUGIN_PHONE_MESSAGES=1` to opt into it. Explicit QR
-requests remain visible because the phone must scan them. A successful `shine env secret decrypt`
-writes only the decrypted value, suppresses the age client's own waiting diagnostic, and does not
-append a line ending. A shell theme may still place its next prompt on a fresh line. Never make the
-experimental phone recipient the only recipient for retained data; the recovery path must not
-depend on the same phone StrongBox keys, Windows TPM keys, or plugin state.
+Sealing uses only the recipients' public material and does not prompt on the phone. For later
+Wi-Fi-first decrypts with an `auto` pairing, enable **Wi-Fi auto-listen** and keep the phone app in
+the foreground. The plugin discovers the matching listener before creating the unwrap request and
+otherwise selects Developer USB/ADB on Windows; it does not race routes or retry in flight.
+Decrypting a phone-backed secret, including through `shine env run`, invokes the standard age
+plugin and must require a fresh strong biometric authorization for each file-key unwrap. Developer
+USB and Wi-Fi plugin guidance is quiet by default; set `AGE_PLUGIN_PHONE_MESSAGES=1` to opt into it.
+Explicit QR requests remain visible because the phone must scan them. A successful
+`shine env secret decrypt` writes only the decrypted value, suppresses the age client's own waiting
+diagnostic, and does not append a line ending. A shell theme may still place its next prompt on a
+fresh line. Never make the experimental phone recipient the only recipient for retained data; the
+recovery path must not depend on the same phone StrongBox keys, Windows TPM keys, or plugin state.
 
 If AI agents participate in development, read
 [Protect environment secrets when using AI agents](./agent-secret-safety.md) first to understand

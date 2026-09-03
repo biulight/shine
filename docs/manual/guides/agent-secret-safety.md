@@ -125,10 +125,12 @@ standard `age` CLI, `identity-v1`, and `recipient-v1`; the plugin adds no Shine 
 ciphertext.
 
 This avoids relying on Windows Hello for the missing cryptographic operations, but it does not
-remove the current platform prerequisites. Version `0.1.0-alpha.1` is an owner-only technical
-preview requiring a Windows 11 x64 client, TPM 2.0, Microsoft Platform Crypto Provider, and a
-capability-qualified Android StrongBox phone. Developer USB/ADB is the normal Windows transport;
-QR is an explicit fallback, not an automatic downgrade. Protocol v2, public signing, multi-device
+remove the current platform prerequisites. The current owner-only technical preview requires a
+Windows 11 x64 client, TPM 2.0, Microsoft Platform Crypto Provider, and a capability-qualified
+Android StrongBox phone. Its `auto` policy now makes one bounded Wi-Fi-first route decision before
+pairing or unwrap: exactly one matching foreground listener selects Wi-Fi, while no listener selects
+Developer USB/ADB on Windows before protocol work begins. Ambiguity fails closed, and there is no
+in-flight fallback; QR remains an explicit route. Protocol v2, public signing, multi-device
 coverage, and the complete lifecycle matrix are not finished. Use it only with synthetic or
 disposable data, never real or production secrets. Follow the project's
 [`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md)

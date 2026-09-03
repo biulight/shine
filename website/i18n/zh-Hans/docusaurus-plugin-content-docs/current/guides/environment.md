@@ -171,14 +171,21 @@ shine env secret seal --backend age -r age1se1qexample... -r age1qteammate...
 安装同一版本的桌面 plugin 和 Android 应用后，可以通过 Shine 启动 plugin 自己的事务式配对：
 
 ```powershell
-shine env secret identity init --phone
+shine env secret identity init --phone --label "NUC WiFi Pair" --transport auto
 ```
 
-配对标签默认使用 Windows 计算机名；也可以显式指定标签、改用 QR，或在存在多台 ADB
-设备时指定序列号：
+如果希望通过局域网完成配对，先在手机端打开显式的 **Pair · Wi-Fi** 操作，再运行上述
+命令。Windows 上的 `auto` 会先执行一次有界的 Wi-Fi discovery：只有一个匹配且位于前台的手机
+listener 响应时选择 Wi-Fi；没有 listener 响应时，会在创建 pairing offer 之前选择
+Developer USB/ADB。多个响应或本机 discovery 错误会安全失败；协议处理开始后不会再切换
+transport。`auto` 是默认值，因此省略 `--transport auto` 时策略不变。
+
+配对标签默认使用 Windows 计算机名；也可以显式指定标签、固定使用 Developer USB 或 QR，
+以及在存在多台 ADB 设备时指定序列号：
 
 ```powershell
 shine env secret identity init --phone --label "Work laptop"
+shine env secret identity init --phone --transport adb
 shine env secret identity init --phone --transport qr
 shine env secret identity init --phone --adb-serial SERIAL
 ```
@@ -204,7 +211,15 @@ backend = "age"
 age_recipients = ["age1phone...", "age1..."]
 ```
 
-封存只使用 recipient 的公开材料，不会在手机上弹出授权提示。解密由手机保护的 secret（包括通过 `shine env run` 使用它）时，标准 age plugin 会为每次 file key 解包要求一次新的强生物验证。Developer USB 和 Wi-Fi 的 plugin 提示默认静默；设置 `AGE_PLUGIN_PHONE_MESSAGES=1` 可显式开启。QR 请求必须由手机扫描，因此仍会显示在终端中。`shine env secret decrypt` 成功时只写入解密值，同时屏蔽 age 客户端自身的等待提示，并且不会额外添加换行。Shell 主题仍可能主动把下一条 prompt 放到新行。对于需要保留的数据，绝不能只配置这个实验性手机 recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台 Windows 电脑的 TPM 密钥或该 plugin 的本地状态。
+封存只使用 recipient 的公开材料，不会在手机上弹出授权提示。使用 `auto` 配对后，如果希望后续
+解密也优先走 Wi-Fi，请开启 **Wi-Fi auto-listen** 并保持手机应用在前台。plugin 会在创建
+unwrap request 前发现匹配的 listener；未发现时在 Windows 上选择 Developer USB/ADB，不会并行竞速或
+在请求开始后自动重试其它路径。解密由手机保护的 secret（包括通过 `shine env run` 使用它）时，
+标准 age plugin 会为每次 file key 解包要求一次新的强生物验证。Developer USB 和 Wi-Fi 的 plugin 提示默认
+静默；设置 `AGE_PLUGIN_PHONE_MESSAGES=1` 可显式开启。QR 请求必须由手机扫描，因此仍会显示在终端中。
+`shine env secret decrypt` 成功时只写入解密值，同时屏蔽 age 客户端自身的等待提示，并且不会额外添加换行。
+Shell 主题仍可能主动把下一条 prompt 放到新行。对于需要保留的数据，绝不能只配置这个实验性手机
+recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台 Windows 电脑的 TPM 密钥或该 plugin 的本地状态。
 
 如果 AI Agent 会参与开发，先阅读[在 AI Agent 参与开发时保护环境密钥](./agent-secret-safety.md)，确认 identity 文件、Touch ID、手机授权提示和命令执行权限的安全边界。
 

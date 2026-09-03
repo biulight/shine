@@ -446,6 +446,7 @@ shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age>] [-r <RECIPIENT>]...
 shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PATH>] [--force]
+shine env secret identity init --phone [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
 shine env secret identity list
 ```
 
@@ -456,6 +457,12 @@ mode, and output path. It exports only resolved plain values unless `--include-s
 it never includes inherited process values. Broker policy creation chooses one or more explicit
 `--release` keys or freezes every currently declared key with `--release-all-declared`; the forms
 are mutually exclusive. Touch ID identities are macOS-only and require `age-plugin-se`.
+
+Phone identity setup is Windows-only and hands pairing to `age-plugin-phone`. The `auto` transport
+is the default and asks the plugin to discover one matching foreground Wi-Fi listener first; if
+none responds, Windows selects Developer USB/ADB before creating the protocol session. See
+[Experiment with phone authorization on Windows](../guides/environment.md#experiment-with-phone-authorization-on-windows)
+for prerequisites, pairing, fallback, and recovery requirements.
 
 For broker policies, `--project` stores a human-readable project label. `--remote-workspace`
 requires remote requests to report that exact absolute workspace path in addition to matching the

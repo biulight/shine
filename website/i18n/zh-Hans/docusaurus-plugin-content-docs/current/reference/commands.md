@@ -381,10 +381,16 @@ shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age>] [-r <RECIPIENT>]...
 shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PATH>] [--force]
+shine env secret identity init --phone [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
 shine env secret identity list
 ```
 
 `--with` 可重复使用，写成 `KEY=ALIAS` 可改变子进程看到的变量名。`--no-workspace` 只使用显式值和已有进程环境，不能与 `--workspace` 或 `--mode` 同时使用。`workspace init` 只接受 `--from-dotenv`，可先用 `--dry-run` 预览生成文件。`workspace export` 必须显式指定格式、mode 和输出路径；默认只导出合并后生效的普通值，添加 `--include-secrets` 才会解密并包含 secret，且不会混入当前进程变量。broker 策略必须用一个或多个 `--release` 选择密钥，或用 `--release-all-declared` 固化当前环境源声明的全部密钥；二者不能组合。Touch ID identity 只适用于 macOS，并依赖 `age-plugin-se`。
+
+Phone identity setup 只支持 Windows，配对流程由 `age-plugin-phone` 负责。`auto` 是默认
+transport，plugin 会先尝试发现一个匹配且位于前台的 Wi-Fi listener；如果没有响应，
+Windows 会在创建协议 session 前选择 Developer USB/ADB。前置条件、配对、回退与恢复要求见
+[在 Windows 上实验手机授权](../guides/environment.md#在-windows-上实验手机授权)。
 
 创建 broker 策略时，`--project` 用于保存便于识别的项目标签；`--remote-workspace` 要求远端
 请求除了匹配 workspace 内容和其它策略字段外，还必须报告这个完全一致的绝对 workspace 路径。
