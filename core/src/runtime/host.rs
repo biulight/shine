@@ -218,8 +218,8 @@ pub struct SplitDnsState {
 }
 
 /// Platform resource port used by the Core split-DNS driver. Core owns
-/// normalization, receipt and conflict decisions; the host owns only the
-/// platform-specific observation and mutation primitive.
+/// normalization, receipt, conflict and privileged-operation serialization;
+/// the host owns only the platform-specific observation and mutation primitive.
 pub trait SplitDnsObservationHost {
     fn inspect_split_dns<'a>(
         &'a self,
@@ -672,7 +672,6 @@ impl SplitDnsHost for RealHost {
         request: &'a SplitDnsRequest,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let _guard = acquire_admin_operation_lock().await?;
             if request.os_id == "windows" {
                 apply_windows_split_dns(request).await?;
             } else {
@@ -690,7 +689,6 @@ impl SplitDnsHost for RealHost {
         request: &'a SplitDnsRequest,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let _guard = acquire_admin_operation_lock().await?;
             if request.os_id == "windows" {
                 remove_windows_split_dns(request).await?;
             } else {

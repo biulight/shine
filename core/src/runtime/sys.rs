@@ -294,7 +294,7 @@ fn split_dns_host_request(receipt: &SplitDnsReceipt) -> SplitDnsRequest {
     }
 }
 
-impl<H: SplitDnsHost> CoreRuntime<H> {
+impl<H: SplitDnsHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     pub async fn split_dns_up_to_date(&self, request: &SplitDnsDomainRequest) -> Result<bool> {
         let desired = split_dns_receipt(request)?;
         let host_request = split_dns_host_request(&desired);
@@ -325,6 +325,7 @@ impl<H: SplitDnsHost> CoreRuntime<H> {
                 restart_hint: None,
             });
         }
+        let _guard = self.host.acquire_privileged_operation().await?;
         let host_request = split_dns_host_request(&desired);
         let state = self.host.inspect_split_dns(&host_request).await?;
         if state.exists && !split_dns_owned(&state, &desired) {
@@ -340,7 +341,7 @@ impl<H: SplitDnsHost> CoreRuntime<H> {
         if let Some(SystemReceipt::SplitDns(previous)) = previous
             && (previous.resource != desired.resource || previous.os_id != desired.os_id)
         {
-            self.remove_split_dns(previous, false).await?;
+            remove_split_dns_unlocked(&self.host, previous).await?;
         }
         desired.content_hash = Some(hash_content(&host_request.content));
         Ok(ResourceOutcome {
@@ -365,7 +366,7 @@ impl<H: SplitDnsHost> CoreRuntime<H> {
 }
 
 pub async fn remove_split_dns_with_host(
-    host: &impl SplitDnsHost,
+    host: &(impl SplitDnsHost + PrivilegedFileSystemHost),
     receipt: &SplitDnsReceipt,
     dry_run: bool,
 ) -> Result<ResourceOutcome> {
@@ -379,6 +380,14 @@ pub async fn remove_split_dns_with_host(
             restart_hint: None,
         });
     }
+    let _guard = host.acquire_privileged_operation().await?;
+    remove_split_dns_unlocked(host, receipt).await
+}
+
+async fn remove_split_dns_unlocked(
+    host: &impl SplitDnsHost,
+    receipt: &SplitDnsReceipt,
+) -> Result<ResourceOutcome> {
     let request = split_dns_host_request(receipt);
     let state = host.inspect_split_dns(&request).await?;
     if state.exists && !split_dns_owned(&state, receipt) {
@@ -2275,6 +2284,48 @@ mod tests {
                 .read(Path::new("/etc/example"))
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn split_dns_entry_owns_exactly_one_privileged_operation_lock() {
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            RuntimeContext::isolated(
+                PathBuf::from("/home/test"),
+                PathBuf::from("/home/test/.shine"),
+                PathBuf::from("/presets"),
+                PathBuf::from("/bin"),
+                RuntimePlatform::Macos,
+            ),
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        );
+
+        runtime
+            .apply_split_dns(
+                SplitDnsDomainRequest {
+                    os_id: "macos".to_string(),
+                    item_id: "corp".to_string(),
+                    domain: "corp.example".to_string(),
+                    servers: "10.0.0.53".to_string(),
+                    dry_run: false,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            runtime
+                .host()
+                .operations()
+                .iter()
+                .filter(|operation| matches!(
+                    operation,
+                    crate::runtime::HostOperation::AcquirePrivilegedOperation
+                ))
+                .count(),
+            1
         );
     }
 }

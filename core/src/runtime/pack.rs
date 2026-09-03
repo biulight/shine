@@ -1,10 +1,12 @@
 //! Deterministic, policy-gated Preset bundle construction.
 
 use super::validation::{load_preset_source_scope, validate_preset_source_scope};
-use super::{FileKind, FileSystemObservationHost};
+use super::{FileKind, FileSystemObservationHost, SysInstall, SysManifest};
+use crate::permission::{PermissionDeclarationV1, PermissionPathBaseV1};
+use crate::plan::FilesystemAccessV1;
 use flate2::{Compression, GzBuilder};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -74,7 +76,7 @@ pub async fn pack_preset_path(
         .snapshot
         .get(&format!("{prefix}shine.toml"))
         .unwrap_or_default();
-    let declared = declared_paths(manifest_bytes);
+    let declared = declared_executable_paths(category.kind, manifest_bytes);
     let mut files = Vec::new();
     let mut diagnostics = BTreeSet::new();
     for (logical, bytes) in scope.snapshot.files() {
@@ -179,32 +181,115 @@ async fn scan_tree(
     Ok(files)
 }
 
-fn declared_paths(bytes: &[u8]) -> BTreeSet<String> {
-    let Ok(value) = toml::from_slice::<toml::Value>(bytes) else {
-        return BTreeSet::new();
-    };
-    let mut values = BTreeSet::new();
-    collect_strings(&value, &mut values);
-    values
+#[derive(Deserialize)]
+struct PackAppManifest {
+    artifact: Option<PackArtifact>,
+    #[serde(default)]
+    files: Vec<PackAppFile>,
+    permissions: Option<PermissionDeclarationV1>,
 }
 
-fn collect_strings(value: &toml::Value, values: &mut BTreeSet<String>) {
-    match value {
-        toml::Value::String(value) => {
-            values.insert(value.replace('\\', "/"));
+#[derive(Deserialize)]
+struct PackArtifact {
+    script: String,
+    teardown: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PackAppFile {
+    source: String,
+    generator: Option<PackGenerator>,
+}
+
+#[derive(Deserialize)]
+struct PackGenerator {
+    script: String,
+}
+
+#[derive(Deserialize)]
+struct PackShellManifest {
+    #[serde(default)]
+    files: Vec<PackShellFile>,
+}
+
+#[derive(Deserialize)]
+struct PackShellFile {
+    source: String,
+    permissions: Option<PermissionDeclarationV1>,
+}
+
+fn declared_executable_paths(kind: &str, bytes: &[u8]) -> BTreeSet<String> {
+    let mut paths = BTreeSet::new();
+    match kind {
+        "app" => {
+            let Ok(manifest) = toml::from_slice::<PackAppManifest>(bytes) else {
+                return paths;
+            };
+            if let Some(artifact) = manifest.artifact {
+                insert_path(&mut paths, artifact.script);
+                if let Some(teardown) = artifact.teardown {
+                    insert_path(&mut paths, teardown);
+                }
+            }
+            for file in manifest.files {
+                insert_path(&mut paths, file.source);
+                if let Some(generator) = file.generator {
+                    insert_path(&mut paths, generator.script);
+                }
+            }
+            collect_permission_executables(&mut paths, manifest.permissions.as_ref());
         }
-        toml::Value::Array(items) => {
-            for item in items {
-                collect_strings(item, values);
+        "shell" => {
+            let Ok(manifest) = toml::from_slice::<PackShellManifest>(bytes) else {
+                return paths;
+            };
+            for file in manifest.files {
+                insert_path(&mut paths, file.source);
+                collect_permission_executables(&mut paths, file.permissions.as_ref());
             }
         }
-        toml::Value::Table(table) => {
-            for value in table.values() {
-                collect_strings(value, values);
+        "sys" => {
+            let Ok(manifest) = toml::from_slice::<SysManifest>(bytes) else {
+                return paths;
+            };
+            for item in manifest.items {
+                if let Some(SysInstall::Script { path, .. }) = item.install {
+                    insert_path(&mut paths, path);
+                }
+                if let Some(source) = item.config.get("source").and_then(toml::Value::as_str) {
+                    insert_path(&mut paths, source.to_string());
+                }
+                for integration in item.shell {
+                    if let Some(source) = integration.source {
+                        insert_path(&mut paths, source);
+                    }
+                }
+                collect_permission_executables(&mut paths, item.permissions.as_ref());
             }
         }
         _ => {}
     }
+    paths
+}
+
+fn collect_permission_executables(
+    paths: &mut BTreeSet<String>,
+    permissions: Option<&PermissionDeclarationV1>,
+) {
+    let Some(permissions) = permissions else {
+        return;
+    };
+    for declaration in &permissions.filesystem {
+        if declaration.base == PermissionPathBaseV1::Preset
+            && declaration.access.contains(&FilesystemAccessV1::Execute)
+        {
+            insert_path(paths, declaration.path.clone());
+        }
+    }
+}
+
+fn insert_path(paths: &mut BTreeSet<String>, path: String) {
+    paths.insert(path.replace('\\', "/"));
 }
 
 fn private_material(bytes: &[u8]) -> bool {
@@ -362,5 +447,37 @@ mod tests {
             artifact.report.diagnostics,
             vec!["plaintext_secret_candidate", "undeclared_executable_code"]
         );
+    }
+
+    #[tokio::test]
+    async fn descriptive_strings_do_not_declare_executable_code() {
+        let host = source("/repo");
+        host.put_file(
+            "/repo/app/demo/shine.toml",
+            b"description = 'helper.sh'\ndest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\ndescription = 'Config'\n".to_vec(),
+        );
+        host.put_file("/repo/app/demo/helper.sh", b"#!/bin/sh\n".to_vec());
+
+        let artifact = pack_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+
+        assert!(!artifact.report.valid);
+        assert_eq!(
+            artifact.report.diagnostics,
+            vec!["undeclared_executable_code"]
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_source_fields_declare_executable_code() {
+        let host = source("/repo");
+        host.put_file(
+            "/repo/app/demo/shine.toml",
+            b"description = 'Demo'\ndest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'helper.sh'\ndescription = 'Helper'\n".to_vec(),
+        );
+        host.put_file("/repo/app/demo/helper.sh", b"#!/bin/sh\n".to_vec());
+
+        let artifact = pack_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+
+        assert!(artifact.report.valid);
     }
 }

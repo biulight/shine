@@ -61,8 +61,10 @@ bugs. Check this list before changing the modules named in each entry.
   validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical
   file order, normalized mode, zero uid/gid/mtime, and a fixed gzip header determine bytes; physical
   checkout roots and enumeration order do not. `shine.test.toml` is excluded. `node_modules`,
-  symlinks, private key candidates, private HOME paths, and metadata-unreferenced executable files
-  block packing with stable codes that never echo suspected content or paths.
+  symlinks, private key candidates, private HOME paths, and executable files not referenced by a
+  typed path-bearing metadata field block packing with stable codes that never echo suspected
+  content or paths. Descriptions, labels, arguments, and other incidental strings never declare an
+  executable payload.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, and each file's embedded, external, or
   overlay origin. It must not include physical source roots: relocating unchanged source is not a
@@ -92,6 +94,9 @@ bugs. Check this list before changing the modules named in each entry.
   script materialization under the Shine directory. If the original Preset disappeared, supported
   manifests/receipts may drive owned-resource removal, but missing teardown code is never
   reconstructed or executed.
+  A generated App file still participates in first-install destination and fixed-backup observation;
+  its Plan must declare the remove/write effects of moving an unowned destination, and execution
+  must fail closed rather than replace an occupied `.shine.bak` path.
   User modification, occupied destinations, foreign launchers, and managed Sys ownership conflicts
   remain `preserve`/`blocked`; force must produce a distinct step or diagnostic and fingerprint.
 
@@ -396,7 +401,9 @@ bugs. Check this list before changing the modules named in each entry.
   regenerates its Plan under the operation lock. Before receipt commit it restores only exact
   prior file/DNS/sentinel state; after the desired receipt is durable it preserves desired state
   and removes exact rollback material. A conflicting receipt or changed resource blocks all
-  recovery mutation. Profile active/base/new/merge composition and bootstrap execution do not
+  recovery mutation. Core transaction entries acquire the privileged-operation lock exactly once;
+  split-DNS host mutation primitives run beneath that boundary and must not reacquire it. Profile
+  active/base/new/merge composition and bootstrap execution do not
   inherit this proof and must remain visibly non-transactional or opaque in their Plan.
 - **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
   generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,

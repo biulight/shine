@@ -416,7 +416,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     && entry.is_none()
                     && direct.is_none()
                     && destination_exists
-                    && file.generator.is_none()
                     && file.install_strategy == crate::install::AppInstallStrategy::Copy;
                 let backup = if backup_action_candidate {
                     let metadata = self.host().metadata(&destination).await.map_err(|error| {
@@ -588,6 +587,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         )
                         .with_diagnostic_code("app_opaque_generator_output"),
                     );
+                    if let Some(backup) = &backup {
+                        add_app_backup_creation_permissions(
+                            self.context(),
+                            permissions,
+                            &destination,
+                            backup,
+                        );
+                    }
                     category_changes = true;
                     continue;
                 }
@@ -9015,6 +9022,77 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
             b"user-original"
         );
         assert_eq!(runtime.host().read(&backup).await.unwrap(), b"older-backup");
+    }
+
+    #[tokio::test]
+    async fn generated_app_install_is_backup_aware() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                br#"dest = '~/.config/demo'
+[permissions]
+schema_version = 1
+filesystem = [{ access = ['execute'], base = 'preset', path = 'gen.ts' }]
+commands = ['bun']
+environment = [{ name = 'SOURCE', sensitivity = 'plain' }]
+[[files]]
+source = 'generated.txt'
+generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE' }
+"#
+                .to_vec(),
+            )
+            .file("app/demo/generated.txt", b"fallback".to_vec())
+            .file(
+                "app/demo/gen.ts",
+                b"process.stdout.write('generated')".to_vec(),
+            )
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("SOURCE".to_string(), "available".to_string());
+        let destination = runtime
+            .context()
+            .home_dir
+            .join(".config/demo/generated.txt");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let ready = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(ready.is_ready());
+        for permission in [
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Remove,
+                path: "home:.config/demo/generated.txt".to_string(),
+            },
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: "home:.config/demo/generated.txt.shine.bak".to_string(),
+            },
+        ] {
+            assert!(ready.permissions.required.contains(&permission));
+        }
+
+        runtime.host().put_file(&backup, b"older-backup".to_vec());
+        let blocked = runtime.plan_apps(request).await.unwrap();
+        assert!(!blocked.is_ready());
+        assert!(blocked.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_backup_occupied".to_string())
+        }));
     }
 
     #[tokio::test]

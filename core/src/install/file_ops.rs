@@ -66,6 +66,12 @@ pub async fn install_bytes_with_host<H: FileSystemHost>(
         }
 
         let backup = backup_path(destination);
+        if path_exists(host, &backup).await? {
+            anyhow::bail!(
+                "refusing to replace existing managed backup {}",
+                backup.display()
+            );
+        }
         host.rename(destination, &backup)
             .await
             .map_err(|error| host_context(error, "failed to back up destination"))?;
@@ -215,5 +221,22 @@ mod tests {
             host.read(Path::new("/home/test/config")).await.unwrap(),
             b"changed"
         );
+    }
+
+    #[tokio::test]
+    async fn in_memory_install_preserves_an_existing_backup() {
+        let host = InMemoryHost::new();
+        let destination = Path::new("/home/test/config");
+        let backup = backup_path(destination);
+        host.put_file(destination, b"user-original".to_vec());
+        host.put_file(&backup, b"older-backup".to_vec());
+
+        let error = install_bytes_with_host(&host, b"managed", destination, false, false, false)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("existing managed backup"));
+        assert_eq!(host.read(destination).await.unwrap(), b"user-original");
+        assert_eq!(host.read(&backup).await.unwrap(), b"older-backup");
     }
 }

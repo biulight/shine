@@ -317,21 +317,9 @@ pub async fn handle_config_upgrade(
         println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
     }
 
-    let fatal_app_failures = app_lifecycle
-        .outcomes
-        .iter()
-        .filter(|outcome| {
-            outcome
-                .diagnostic_codes
-                .iter()
-                .any(|code| code == "app_generator_unavailable")
-        })
-        .count();
+    let fatal_app_failures = app_upgrade_failure_count(&app_report);
     if fatal_app_failures > 0 {
-        bail!(
-            "{} generated app configuration item(s) failed",
-            fatal_app_failures
-        );
+        bail!("{} app configuration item(s) failed", fatal_app_failures);
     }
 
     if sys_report.failed > 0 {
@@ -417,16 +405,7 @@ async fn handle_config_target_upgrade(
                         changed_app_categories(&lifecycle),
                         preserved_app_resources(&lifecycle),
                         0,
-                        lifecycle
-                            .outcomes
-                            .iter()
-                            .filter(|outcome| {
-                                outcome
-                                    .diagnostic_codes
-                                    .iter()
-                                    .any(|code| code == "app_generator_unavailable")
-                            })
-                            .count(),
+                        app_upgrade_failure_count(&report),
                         report.restart_hints,
                     )
                 }
@@ -485,6 +464,10 @@ fn config_upgrade_summary_parts(
     );
     output::push_count(&mut parts, link_conflicts, colors::yellow, "link conflicts");
     parts
+}
+
+fn app_upgrade_failure_count(report: &apps::AppUpgradeReport) -> usize {
+    report.failed
 }
 
 fn changed_shell_categories(result: &shine_core::lifecycle::LifecycleResultV1) -> usize {
@@ -899,6 +882,16 @@ mod tests {
                 "3 link conflicts".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn app_upgrade_failure_count_uses_the_authoritative_report_total() {
+        let report = apps::AppUpgradeReport {
+            failed: 3,
+            ..Default::default()
+        };
+
+        assert_eq!(app_upgrade_failure_count(&report), 3);
     }
 
     #[test]

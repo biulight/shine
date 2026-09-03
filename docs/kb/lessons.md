@@ -3,6 +3,22 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-04 — Reports and typed transaction boundaries must describe every real failure and effect
+
+- **Symptom**: configuration upgrade could exit successfully after ordinary App failures, generated
+  first installs omitted backup mutations from review and could replace an older fixed backup,
+  Split-DNS transactions paused on their own administrator lock, and an unrelated metadata string
+  could make an executable payload packable.
+- **Root cause**: callers inferred failure and executable provenance from selected diagnostic/string
+  matches, while opaque generators and platform adapters were treated as exceptions to the typed
+  Plan and transaction ownership boundaries.
+- **Fix**: use the App report's authoritative failed count, include generated destinations in
+  backup-aware planning and reject occupied backups at execution, make Core own the single
+  privileged Split-DNS lock, and derive packable executable paths only from typed path fields.
+- **Rule**: aggregate reports are the exit-status source of truth; opaque work does not exempt its
+  known filesystem effects from planning; locks have one explicit owner; and security declarations
+  come from typed semantic fields, never arbitrary string membership.
+
 ## 2026-09-03 — Presentation assertions must follow native path semantics
 
 - **Symptom**: the Windows Rust test job failed after the Shell migration remediation gained a
