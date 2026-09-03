@@ -7,6 +7,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.0.0-rc.1] — 2026-09-03
+
+This is the first reproducible 2.0 release candidate. It is a GitHub and Cargo prerelease, does not
+replace 1.8.x as `latest`, and is not offered by the stable updater. Read
+[Upgrade from Shine 1.x](docs/manual/guides/upgrade-to-2.md) before installing it by exact version.
+
 ### Features
 
 - Added `shine env secret identity init --phone` on Windows for guided `age-plugin-phone`
@@ -15,24 +21,6 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Added reviewed `shine preset migrate [PATH]` migration for legacy 1.x Preset metadata, with
   dry-run/text diff review, versioned content-free JSON reports, source revalidation, complete
   private backups, and conservative blockers for opaque permissions and Sys v1 dispatchers.
-
-### Bug Fixes
-
-- Kept `env secret decrypt` output byte-exact with no appended line ending, and suppress successful
-  age progress diagnostics for default phone-plugin Developer USB and Wi-Fi unwraps. Optional
-  guidance enabled by `AGE_PLUGIN_PHONE_MESSAGES=1` and explicit QR requests remain visible.
-- Made `shine update` and `shine upgrade` report active Preset compatibility with logical source
-  context. Update no longer turns App/Sys inspection failures into empty results, while upgrade
-  blocks before any Plan or mutation when legacy metadata requires migration.
-
-## [2.0.0-rc.1] — 2026-09-02
-
-This is the first reproducible 2.0 release candidate. It is a GitHub and Cargo prerelease, does not
-replace 1.8.x as `latest`, and is not offered by the stable updater. Read
-[Upgrade from Shine 1.x](docs/manual/guides/upgrade-to-2.md) before installing it by exact version.
-
-### Features
-
 - Added `shine preset schema` to generate a versioned reference directly from shipped Rust report,
   fixture, and bundle types plus live Clap help, avoiding a handwritten schema copy that can drift.
 - Expanded `shine.test.toml` synthetic host state with environment presence, opaque secret
@@ -135,6 +123,12 @@ replace 1.8.x as `latest`, and is not offered by the stable updater. Read
 
 ### Bug Fixes
 
+- Kept `env secret decrypt` output byte-exact with no appended line ending, and suppress successful
+  age progress diagnostics for default phone-plugin Developer USB and Wi-Fi unwraps. Optional
+  guidance enabled by `AGE_PLUGIN_PHONE_MESSAGES=1` and explicit QR requests remain visible.
+- Made `shine update` and `shine upgrade` report active Preset compatibility with logical source
+  context. Update no longer turns App/Sys inspection failures into empty results, while upgrade
+  blocks before any Plan or mutation when legacy metadata requires migration.
 - Unified Shell Plan and execution ownership checks for receiptless 1.8 launchers. Compatible Unix
   launchers and Windows PowerShell/cmd pairs can now be uninstalled directly through the journaled
   transaction, while modified or foreign resources remain preserved.
