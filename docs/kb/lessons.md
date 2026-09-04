@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-04 — Target shims must resolve against the effective Preset snapshot
+
+- **Symptom**: `shine update` listed an installed overlay-only Shell category, but
+  `shine upgrade <category>` and its canonical `shell/<category>` form both reported that the
+  category did not exist.
+- **Root cause**: update inspection used the merged built-in-plus-overlay snapshot, while the
+  top-level target shim queried only embedded metadata whenever the base source was built in.
+- **Fix**: resolve App and Shell shim candidates through the active snapshot while retaining the
+  external-source existence guard that makes a missing candidate count as zero matches.
+- **Rule**: every target resolver must use the same effective Preset namespace as the operation it
+  dispatches; base-source mode must not bypass an active overlay.
+
 ## 2026-09-04 — Reports and typed transaction boundaries must describe every real failure and effect
 
 - **Symptom**: configuration upgrade could exit successfully after ordinary App failures, generated
