@@ -369,11 +369,18 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         let categories = metadata::load_active_categories(&config, Some("sample"))
             .await
             .unwrap();
-        let (rows, _, _) =
+        let (rows, lifecycle, _) =
             crate::status::build_app_rows_with_lifecycle_options(&config, &categories, true)
                 .await
                 .unwrap();
         assert_eq!(rows[0].file_status, FileStatus::UpdateAvail);
+        assert!(!rows[0].upgrade_available);
+        assert_eq!(rows[0].refresh_sources, ["first.txt"]);
+        assert_eq!(rows[0].status_text, "refresh available");
+        assert_eq!(
+            lifecycle.outcomes[0].diagnostic_codes,
+            ["app_manual_refresh_required"]
+        );
         assert_eq!(fs::read(&destination).await.unwrap(), b"first-v1\n");
         assert_eq!(
             fs::read_to_string(app_dir.join("first.runs"))

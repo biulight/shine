@@ -185,12 +185,16 @@ enrollment，不会批准之后的 lifecycle Plan。
 `--run-generators` 后，Shine 会显式执行自动和手动 generator，在内存中应用 transform 并计算
 状态或 `--diff`，但不会写入目标文件或 manifest。全局 `update --run-generators` 会评估所有
 已安装 App 类别，定向 info/update 只评估选中的 App。外部 generator 仍需匹配当前代码与权限的
-`shine trust grant`；某项评估失败时，其余 generator 仍会继续，最后统一报告不完整结果。
+`shine trust grant`；某项评估失败时，其余 generator 仍会继续，最后统一报告不完整结果。如果
+评估发现 `auto = false` generator 的输出发生变化，update 和 status 会将其标记为
+`refresh available`，并显示准确的 `shine app refresh <CATEGORY> <FILE>` 命令；这类变化不会进入
+upgrade target。同一类别同时存在普通可升级变化和手动生成变化时，两种操作都会保留。
 
 - `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
-  Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示
-  一次升级命令。只有一个类别或受管系统项需要更新时，该提示会使用其 canonical target，
-  例如 `shine upgrade app/clash-verge`；存在多个 target 时仍提示聚合命令 `shine upgrade`。
+  Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target。只有一个类别或
+  受管系统项需要升级时，末尾的升级提示会使用其 canonical target，例如
+  `shine upgrade app/clash-verge`；存在多个 upgrade target 时仍提示聚合命令 `shine upgrade`。
+  手动生成内容发生变化时，则会为每个变化的 source 输出一条准确的 `shine app refresh` 提示。
   App 文件与 Shell 命令都按类别折叠。`update --diff` 会改用纵向
   详细行并展开受影响的文件与命令；来源或目标迁移、新文件、部署元数据和命令入口刷新等
   结构性变更会逐字段显示，只有内容确实变化时才输出 unified diff。定向的

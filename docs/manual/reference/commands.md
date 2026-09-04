@@ -221,16 +221,21 @@ not-evaluated warning instead of claiming that the installed file is current. Pa
 memory, and calculate status or `--diff` output without writing destinations or manifests. Global
 `update --run-generators` evaluates every installed App category; targeted info/update evaluates
 only the selected App. External generators still require a matching `shine trust grant`, and
-evaluation failures are reported after the remaining selected generators run.
+evaluation failures are reported after the remaining selected generators run. If evaluation finds
+changed output from an `auto = false` generator, update and status label it `refresh available` and
+show the exact `shine app refresh <CATEGORY> <FILE>` command; that change is not included in an
+upgrade target. A category with ordinary upgradeable changes as well as manual generated changes
+shows both actions.
 
 - `update --refresh-release` bypasses the 24-hour cache. By default, `update` groups targets under
   the same Homebrew-style sections as `shine list`: interactive terminals use horizontal columns,
   while redirected output stays one target per line. When exactly one category or managed-system
-  item needs an update, the final hint uses its canonical target, such as
-  `shine upgrade app/clash-verge`; multiple targets keep the aggregate `shine upgrade` hint. App
-  files and Shell commands collapse to their category. `update --diff` switches to detailed
-  vertical rows and expands affected files and commands. Structural changes such as source or
-  destination relocation, new files, deployment metadata, and command-entry refreshes are shown
+  item needs an upgrade, the final upgrade hint uses its canonical target, such as
+  `shine upgrade app/clash-verge`; multiple upgrade targets keep the aggregate `shine upgrade`
+  hint. Manual generated changes instead produce one exact `shine app refresh` hint per changed
+  source. App files and Shell commands collapse to their category. `update --diff` switches to
+  detailed vertical rows and expands affected files and commands. Structural changes such as source
+  or destination relocation, new files, deployment metadata, and command-entry refreshes are shown
   field by field; a unified diff is
   printed only when content changed. Targeted `update <TARGET>` uses the same details.
   For structural-only updates, Shine identifies a missing or mismatched command entry and a missing

@@ -144,7 +144,10 @@ bugs. Check this list before changing the modules named in each entry.
   `app_generator_not_evaluated` when dynamic desired content needs explicit execution.
   `--run-generators` is a separate opt-in assessment mode: it may execute selected generators once
   to derive in-memory desired content but must not write destinations/manifests or run hooks and
-  artifacts. Typed inspection paths remain non-serializable and must not enter the lifecycle result.
+  artifacts. An evaluated `auto = false` change remains `app_manual_refresh_required`: presentation
+  must exclude it from upgrade targets and point to the exact `app refresh` selector. A category
+  with both automatic and manual changes must retain both actions. Typed inspection paths remain
+  non-serializable and must not enter the lifecycle result.
 - **Managed-file update details are field labels, not payloads.** The read-only comparison may
   report that destination or content changed, but must not copy the destination, desired bytes, or
   environment values into structured lifecycle outcomes. Ownership and user-modification checks

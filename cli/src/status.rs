@@ -62,6 +62,11 @@ pub struct AppRow {
     pub dest: Option<String>,
     pub status_text: &'static str,
     pub file_status: FileStatus,
+    /// This row contains desired changes that ordinary App upgrade can apply.
+    pub(crate) upgrade_available: bool,
+    /// Manual-generator sources whose evaluated desired content differs from
+    /// the installed receipt and therefore require explicit App refresh.
+    pub(crate) refresh_sources: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -182,12 +187,17 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
                         }
                         effects.push(LifecycleEffect::ResourceWritePreviewed);
                         effects.push(LifecycleEffect::ReceiptWritePreviewed);
-                        Some(LifecycleOutcomeV1::new(
+                        let outcome = LifecycleOutcomeV1::new(
                             target,
                             resource,
                             LifecycleStatus::Pending,
                             effects,
-                        ))
+                        );
+                        Some(if is_manual_generator_update(inspection) {
+                            outcome.with_diagnostic_code("app_manual_refresh_required")
+                        } else {
+                            outcome
+                        })
                     }
                     FileStatus::GeneratorNotEvaluated => Some(
                         LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Pending, [])
@@ -238,6 +248,8 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
                     label.clone()
                 };
                 let (sym, status_text) = app_status_presentation(inspection.status);
+                let upgrade_available = is_upgrade_available(inspection);
+                let refresh_sources = manual_refresh_sources(std::iter::once(inspection));
                 rows.push(AppRow {
                     category: category.name.clone(),
                     sym,
@@ -247,8 +259,14 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
                         .destination
                         .as_ref()
                         .map(|path| path_display::format_home(path, &config.home_dir)),
-                    status_text,
+                    status_text: app_action_status_text(
+                        status_text,
+                        upgrade_available,
+                        !refresh_sources.is_empty(),
+                    ),
                     file_status: inspection.status,
+                    upgrade_available,
+                    refresh_sources,
                 });
             }
         } else {
@@ -295,6 +313,8 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
                 None
             };
             let (sym, status_text) = app_status_presentation(status);
+            let upgrade_available = files.iter().any(|file| is_upgrade_available(file));
+            let refresh_sources = manual_refresh_sources(files.iter().copied());
             rows.push(AppRow {
                 category: category.name.clone(),
                 sym,
@@ -304,13 +324,54 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
                 status_text: if status == FileStatus::Partial {
                     "partial install"
                 } else {
-                    status_text
+                    app_action_status_text(
+                        status_text,
+                        upgrade_available,
+                        !refresh_sources.is_empty(),
+                    )
                 },
                 file_status: status,
+                upgrade_available,
+                refresh_sources,
             });
         }
     }
     Ok((rows, lifecycle, inspections))
+}
+
+fn is_manual_generator_update(inspection: &shine_core::runtime::AppFileInspection) -> bool {
+    inspection.status == FileStatus::UpdateAvail
+        && inspection
+            .file
+            .generator
+            .as_ref()
+            .is_some_and(|generator| !generator.auto)
+}
+
+fn is_upgrade_available(inspection: &shine_core::runtime::AppFileInspection) -> bool {
+    inspection.status == FileStatus::UpdateAvail && !is_manual_generator_update(inspection)
+}
+
+fn manual_refresh_sources<'a>(
+    inspections: impl IntoIterator<Item = &'a shine_core::runtime::AppFileInspection>,
+) -> Vec<String> {
+    inspections
+        .into_iter()
+        .filter(|inspection| is_manual_generator_update(inspection))
+        .map(|inspection| inspection.file.source_rel.display().to_string())
+        .collect()
+}
+
+fn app_action_status_text(
+    fallback: &'static str,
+    upgrade_available: bool,
+    refresh_available: bool,
+) -> &'static str {
+    match (upgrade_available, refresh_available) {
+        (true, true) => "update and refresh available",
+        (false, true) => "refresh available",
+        _ => fallback,
+    }
 }
 
 fn app_status_presentation(status: FileStatus) -> (&'static str, &'static str) {
