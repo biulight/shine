@@ -260,8 +260,11 @@ async fn managed_updates_for_os_with_result(
     let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await?;
     runtime.context_mut_for_cli().env = env.as_map().clone();
-    let (_, updates, lifecycle) = runtime.inspect_managed_sys(os_id).await?;
-    Ok((updates, lifecycle))
+    let inspection = shine_core::frontend::FrontendService::new(runtime)
+        .inspect_sys(os_id)
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+    Ok((inspection.updates, inspection.lifecycle))
 }
 
 async fn run_managed_with_result(

@@ -90,18 +90,19 @@ impl LifecyclePlanRequest {
         }
     }
 
-    async fn generate(&self, runtime: &CoreRuntime<RealHost>) -> Result<PlanV1> {
+    fn service_request(&self) -> shine_core::frontend::ReviewRequest {
+        use shine_core::frontend::ReviewRequest;
         match self {
-            Self::App(request) => runtime.plan_apps(request.clone()).await,
-            Self::AppRecovery => runtime.plan_app_operation_recovery().await,
-            Self::AppRefresh(request) => runtime.plan_app_refresh(request.clone()).await,
-            Self::AppArtifact(request) => runtime.plan_app_artifact(request.clone()).await,
-            Self::Shell(request) => runtime.plan_shells(request.clone()).await,
-            Self::ShellRecovery => runtime.plan_shell_operation_recovery().await,
-            Self::Sys(request) => runtime.plan_managed_sys(request.clone()).await,
-            Self::SysRecovery => runtime.plan_sys_operation_recovery().await,
-            Self::SysProfile(request) => runtime.plan_sys_profile(request.clone()).await,
-            Self::SysBootstrap { request, .. } => runtime.plan_sys_bootstrap(request.clone()).await,
+            Self::App(request) => ReviewRequest::App(request.clone()),
+            Self::AppRecovery => ReviewRequest::AppRecovery,
+            Self::AppRefresh(request) => ReviewRequest::AppRefresh(request.clone()),
+            Self::AppArtifact(request) => ReviewRequest::AppArtifact(request.clone()),
+            Self::Shell(request) => ReviewRequest::Shell(request.clone()),
+            Self::ShellRecovery => ReviewRequest::ShellRecovery,
+            Self::Sys(request) => ReviewRequest::Sys(request.clone()),
+            Self::SysRecovery => ReviewRequest::SysRecovery,
+            Self::SysProfile(request) => ReviewRequest::SysProfile(request.clone()),
+            Self::SysBootstrap { request, .. } => ReviewRequest::SysBootstrap(request.clone()),
         }
     }
 
@@ -180,7 +181,13 @@ async fn review_plans_with_render_mode(
     let mut blocked_diagnostics = std::collections::BTreeSet::new();
     for request in requests {
         request.configure_runtime(&mut runtime);
-        let plan = request.generate(&runtime).await?;
+        let service = shine_core::frontend::FrontendService::new(runtime);
+        let plan = service
+            .review(&request.service_request())
+            .await
+            .map_err(shine_core::frontend::FrontendServiceError::into_source)?
+            .plan;
+        runtime = service.into_runtime();
         blocked |= !plan.is_ready();
         blocked_diagnostics.extend(
             plan.steps
@@ -377,9 +384,14 @@ pub(crate) async fn prepare_runtime(
     }
     let mut runtime = runtime_with_env(config).await?;
     reviewed.request.configure_runtime(&mut runtime);
-    let current = reviewed.request.generate(&runtime).await?;
+    let service = shine_core::frontend::FrontendService::new(runtime);
+    let current = service
+        .review(&reviewed.request.service_request())
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
+        .plan;
     reviewed.approval.validate(&current)?;
-    Ok(runtime)
+    Ok(service.into_runtime())
 }
 
 async fn active_config_digest(config: &Config) -> Result<String> {

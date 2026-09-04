@@ -14,7 +14,7 @@ pub async fn handle_info(
 ) -> Result<()> {
     crate::config::print_presets_note(config);
     let mut observer = shine_core::runtime::NullObserver;
-    let inspections = crate::core_runtime::from_config(config)
+    let inspections = crate::core_runtime::frontend_from_config(config)
         .await?
         .inspect_apps_with_options(
             shine_core::runtime::AppInspectionOptions {
@@ -23,7 +23,9 @@ pub async fn handle_info(
             },
             &mut observer,
         )
-        .await?;
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
+        .files;
     let selected = inspections
         .iter()
         .filter(|inspection| inspection.category.name == category)

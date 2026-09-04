@@ -89,6 +89,20 @@ Plan review remains separate from approval: future AI adapters may return a revi
 only trusted human-facing frontends create a one-shot approval after affirmative review. Apply
 continues to recapture inputs and validate a regenerated exact Plan.
 
+## Frontend inspection and review
+
+`frontend/inspection.rs` projects Core App/Shell/Sys assessment into `InspectionReportV1` while
+returning local-only domain details for CLI rendering. Physical paths, raw errors and diff contents
+never enter the report. Opaque resource identities hash normalized logical source names. App
+update applicability and update lifecycle outcomes are service-owned; manual generator changes
+remain refresh-only. Sys inspection additionally includes bootstrap receipts as recorded state,
+without changing inventory v1's managed-only installed Sys compatibility contract.
+
+`frontend/review.rs` dispatches typed workspace-local `ReviewRequest` values to existing pure
+planners and wraps the unchanged `PlanV1`. CLI review and preparation use this service. Neither
+request nor report contains approval; opaque input versions remain attached to the reviewed domain
+request through execution. See ADR 0078.
+
 ## Preset source compatibility and migration
 
 `shine preset migrate` is routed before mutable config initialization. Default scope uses read-only

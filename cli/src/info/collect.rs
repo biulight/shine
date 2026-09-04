@@ -46,7 +46,7 @@ pub(super) async fn collect_app_files(
     if let Some(env) = env {
         runtime.context_mut_for_cli().env = env.as_map().clone();
     }
-    let inspections = runtime
+    let inspections = shine_core::frontend::FrontendService::new(runtime)
         .inspect_apps_with_options(
             shine_core::runtime::AppInspectionOptions {
                 run_generators,
@@ -54,7 +54,9 @@ pub(super) async fn collect_app_files(
             },
             &mut NullObserver,
         )
-        .await?;
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
+        .files;
     Ok(app_info_files_from_inspections(inspections))
 }
 
@@ -90,9 +92,11 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
     if let Ok(env) = EnvConfig::load_or_init(config).await {
         runtime.context_mut_for_cli().env = env.as_map().clone();
     }
-    Ok(runtime
+    Ok(shine_core::frontend::FrontendService::new(runtime)
         .inspect_shells()
-        .await?
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
+        .files
         .into_iter()
         .filter(|file| file.installed)
         .map(|file| ShellInfoFile {

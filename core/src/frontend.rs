@@ -13,6 +13,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fmt;
 
+mod inspection;
+mod review;
+pub use inspection::*;
+pub use review::*;
+
 pub const INVENTORY_REPORT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -696,5 +701,298 @@ mod tests {
         assert!(encoded.contains("frontend_inventory_app_state_failed"));
         assert!(!encoded.contains("/private"));
         assert!(!encoded.contains("SECRET"));
+    }
+
+    fn app_plan_request() -> crate::runtime::AppPlanRequest {
+        crate::runtime::AppPlanRequest {
+            operation: crate::lifecycle::LifecycleOperation::Install,
+            target: Some("available".into()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: crate::runtime::PlanningInputVersions::default(),
+        }
+    }
+
+    fn assert_observation_only(host: &InMemoryHost, since: usize) {
+        assert!(
+            host.operations()[since..].iter().all(|op| matches!(
+                op,
+                crate::runtime::HostOperation::Read(_)
+                    | crate::runtime::HostOperation::InspectSplitDns { .. }
+            )),
+            "unexpected effects: {:?}",
+            &host.operations()[since..]
+        );
+    }
+
+    #[tokio::test]
+    async fn frontend_inspection_projects_three_domains_without_effects_or_private_data() {
+        let host = InMemoryHost::new();
+        seed_manifests(&host).await;
+        let since = host.operations().len();
+        let service = FrontendService::new(runtime(host, snapshot()));
+        let app = service.inspect_apps(Vec::new()).await.unwrap();
+        let shell = service.inspect_shells().await.unwrap();
+        let sys = service.inspect_sys("ubuntu").await.unwrap();
+        assert!(
+            app.report
+                .items
+                .iter()
+                .any(|item| item.target == "app/available"
+                    && item.state == InspectionStateV1::NotInstalled)
+        );
+        assert!(
+            app.report
+                .items
+                .iter()
+                .any(|item| item.target == "app/orphan"
+                    && item.state == InspectionStateV1::PresetMissing)
+        );
+        assert!(
+            sys.report
+                .items
+                .iter()
+                .any(|item| item.target == "sys/orphan-sys"
+                    && item.state == InspectionStateV1::PresetMissing)
+        );
+        for report in [&app.report, &shell.report, &sys.report] {
+            let encoded = serde_json::to_string(report).unwrap();
+            for private in [
+                "/home/test",
+                "/private",
+                "value = true",
+                "echo tool",
+                "rendered-tool.sh",
+            ] {
+                assert!(!encoded.contains(private), "{encoded}");
+            }
+            assert_eq!(
+                serde_json::from_str::<InspectionReportV1>(&encoded).unwrap(),
+                *report
+            );
+        }
+        assert_observation_only(service.runtime().host(), since);
+    }
+
+    #[tokio::test]
+    async fn frontend_inspection_preserves_user_modified_and_missing_states() {
+        let host = InMemoryHost::new();
+        let destination = PathBuf::from("/home/test/.config/available/config.toml");
+        let content = b"value = true\n";
+        AppManifest {
+            entries: vec![AppEntry {
+                source: "app/available/config.toml".into(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::install::manifest::hash_content(content),
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+            ..AppManifest::default()
+        }
+        .save(&host, &PathBuf::from("/home/test/.shine"))
+        .await
+        .unwrap();
+        host.put_file(&destination, content.to_vec());
+        let service = FrontendService::new(runtime(host, snapshot()));
+        let current = service.inspect_apps(Vec::new()).await.unwrap();
+        assert_eq!(current.report.items[0].state, InspectionStateV1::Current);
+        service
+            .runtime()
+            .host()
+            .put_file(&destination, b"user change".to_vec());
+        let modified = service.inspect_apps(Vec::new()).await.unwrap();
+        assert_eq!(
+            modified.report.items[0].state,
+            InspectionStateV1::UserModified
+        );
+        assert!(modified.report.items[0].operations.is_empty());
+        assert_eq!(
+            modified.lifecycle.outcomes[0].status,
+            crate::lifecycle::LifecycleStatus::Conflict
+        );
+        crate::runtime::FileSystemHost::remove_file(service.runtime().host(), &destination)
+            .await
+            .unwrap();
+        let missing = service.inspect_apps(Vec::new()).await.unwrap();
+        assert_eq!(missing.report.items[0].state, InspectionStateV1::Missing);
+        assert_eq!(
+            missing.lifecycle.outcomes[0].status,
+            crate::lifecycle::LifecycleStatus::Pending
+        );
+    }
+
+    #[tokio::test]
+    async fn frontend_inspection_foreign_shell_launcher_is_not_upgradeable() {
+        let host = InMemoryHost::new();
+        host.put_file("/home/test/.shine/bin/tool", b"user program".to_vec());
+        let service = FrontendService::new(runtime(host, snapshot()));
+        let shell = service.inspect_shells().await.unwrap();
+        assert_eq!(shell.report.items[0].state, InspectionStateV1::Conflict);
+        assert!(shell.report.items[0].operations.is_empty());
+        assert_observation_only(service.runtime().host(), 0);
+    }
+
+    #[tokio::test]
+    async fn frontend_review_matches_core_and_has_no_approval_authority() {
+        let service = FrontendService::new(runtime(InMemoryHost::new(), snapshot()));
+        let request = app_plan_request();
+        let expected = service.runtime().plan_apps(request.clone()).await.unwrap();
+        let report = service.review(&ReviewRequest::App(request)).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&report.plan).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        let encoded = serde_json::to_string(&report).unwrap();
+        assert!(!encoded.contains("approved_permissions"));
+        assert!(!encoded.contains("/home/test"));
+        assert!(!encoded.contains("value = true"));
+        assert_observation_only(service.runtime().host(), 0);
+        for request in [
+            ReviewRequest::AppRecovery,
+            ReviewRequest::ShellRecovery,
+            ReviewRequest::SysRecovery,
+        ] {
+            let error = service.review(&request).await.unwrap_err();
+            assert_eq!(error.diagnostic().code, "frontend_plan_review_failed");
+        }
+    }
+
+    #[tokio::test]
+    async fn frontend_manual_generator_evaluation_is_explicit_and_requires_refresh() {
+        let presets = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/generated/shine.toml",
+                br#"dest = "~/.config/generated"
+[permissions]
+schema_version = 1
+[[files]]
+source = "config.txt"
+[files.generator]
+script = "generate.sh"
+when_env = "GENERATE"
+env = ["GENERATE"]
+auto = false
+"#
+                .to_vec(),
+            )
+            .file("app/generated/config.txt", b"old".to_vec())
+            .file("app/generated/generate.sh", b"echo new".to_vec())
+            .build();
+        let host = InMemoryHost::new();
+        let destination = PathBuf::from("/home/test/.config/generated/config.txt");
+        host.put_file(&destination, b"old".to_vec());
+        AppManifest {
+            entries: vec![AppEntry {
+                source: "app/generated/config.txt".into(),
+                destination,
+                backup: None,
+                content_hash: crate::install::manifest::hash_content(b"old"),
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+            ..AppManifest::default()
+        }
+        .save(&host, &PathBuf::from("/home/test/.shine"))
+        .await
+        .unwrap();
+        let since = host.operations().len();
+        let mut runtime = runtime(host, presets);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("GENERATE".into(), "1".into());
+        let service = FrontendService::new(runtime);
+        let ordinary = service.inspect_apps(Vec::new()).await.unwrap();
+        assert_eq!(
+            ordinary.report.items[0].state,
+            InspectionStateV1::GeneratorNotEvaluated
+        );
+        assert!(ordinary.report.items[0].operations.is_empty());
+        assert_observation_only(service.runtime().host(), since);
+        service
+            .runtime()
+            .host()
+            .queue_process_output(Ok(crate::runtime::ProcessOutput {
+                exit_code: Some(0),
+                stdout: b"new".to_vec(),
+                stderr: Vec::new(),
+            }));
+        let evaluated = service
+            .inspect_apps_with_options(
+                crate::runtime::AppInspectionOptions {
+                    run_generators: true,
+                    categories: Vec::new(),
+                },
+                &mut crate::runtime::NullObserver,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            evaluated.report.items[0].state,
+            InspectionStateV1::UpdateAvailable
+        );
+        assert_eq!(
+            evaluated.report.items[0].operations,
+            [InspectionOperationV1::Refresh]
+        );
+        assert_eq!(
+            evaluated.lifecycle.outcomes[0].diagnostic_codes,
+            ["app_manual_refresh_required"]
+        );
+    }
+
+    #[tokio::test]
+    async fn frontend_bootstrap_receipt_means_recorded_and_never_software_current() {
+        let host = InMemoryHost::new();
+        let mut manifest = SysRunManifest::default();
+        manifest.entries.push(SysRunEntry {
+            os_id: "ubuntu".into(),
+            item_id: "tool".into(),
+            label: "Private label".into(),
+            status: SysItemStatus::Installed,
+            detail: "private stdout".into(),
+            updated_at: "now".into(),
+            managed: false,
+            profile_enabled: false,
+            receipt: None,
+        });
+        manifest
+            .save(&host, &PathBuf::from("/home/test/.shine"))
+            .await
+            .unwrap();
+        let presets = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "sys/ubuntu/shine.toml",
+                br#"version = 2
+[[items]]
+id = "tool"
+label = "Tool"
+[items.detect]
+kind = "command"
+command = "tool"
+[items.install]
+kind = "package"
+provider = "apt"
+package = "tool"
+"#
+                .to_vec(),
+            )
+            .build();
+        let since = host.operations().len();
+        let service = FrontendService::new(runtime(host, presets));
+        let report = service.inspect_sys("ubuntu").await.unwrap().report;
+        assert_eq!(
+            serde_json::to_value(report).unwrap(),
+            serde_json::json!({
+                "schema_version": 1,
+                "items": [{ "target": "sys/tool", "kind": "sys", "state": "recorded", "operations": [] }],
+                "diagnostics": [],
+            })
+        );
+        assert_observation_only(service.runtime().host(), since);
     }
 }
