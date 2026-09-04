@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-05 — Specialized execution must reuse its reviewed request
+
+- **Symptom**: an `app refresh` Plan with a configured secret generator input rendered as ready and
+  accepted confirmation, then failed immediately with `the Plan is blocked and cannot be approved`.
+- **Root cause**: review and preparation used a request populated with opaque input versions, but
+  refresh execution regenerated the Plan from the original request whose input versions were still
+  empty. The secret requirement therefore became uncomputable only at Core's final approval check.
+- **Fix**: extract the refresh request from `ReviewedLifecyclePlan`, matching the existing App
+  artifact adapter, and exercise the full refresh suite with a secret generator input.
+- **Rule**: once a frontend enriches a Plan request for review, every preparation and execution
+  boundary must reuse that reviewed request rather than a pre-review clone.
+
 ## 2026-09-04 — Update guidance must preserve the operation that can apply each change
 
 - **Symptom**: `shine update --run-generators` found changed Surge subscription output and advised

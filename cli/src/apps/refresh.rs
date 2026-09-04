@@ -48,6 +48,7 @@ pub async fn handle_refresh_approved(
     .next()
     .expect("one reviewed App refresh Plan");
     let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    let plan_request = reviewed_app_refresh_request(&reviewed.request);
 
     println!(
         "{}",
@@ -63,6 +64,11 @@ pub async fn handle_refresh_approved(
             &mut interaction,
         )
         .await?;
+    let single_label = report
+        .files
+        .first()
+        .filter(|_| report.files.len() == 1)
+        .map(|file| format!("{category}/{}", file.source.display()));
     let mut updated = 0;
     let mut unchanged = 0;
     let mut failed = 0;
@@ -98,14 +104,69 @@ pub async fn handle_refresh_approved(
 
     println!(
         "{}",
-        colors::dim(&format!(
-            "Refresh complete: {updated} updated, {unchanged} unchanged, {failed} failed"
-        ))
+        refresh_summary_text(single_label.as_deref(), updated, unchanged, failed)
     );
     if failed > 0 {
         bail!("{failed} generated app file(s) failed to refresh");
     }
     Ok(())
+}
+
+fn reviewed_app_refresh_request(
+    request: &crate::lifecycle_plan::LifecyclePlanRequest,
+) -> AppRefreshPlanRequest {
+    match request {
+        crate::lifecycle_plan::LifecyclePlanRequest::AppRefresh(request) => request.clone(),
+        _ => unreachable!("reviewed App refresh Plan must retain its refresh request"),
+    }
+}
+
+fn refresh_summary_text(
+    single_label: Option<&str>,
+    updated: usize,
+    unchanged: usize,
+    failed: usize,
+) -> String {
+    let total = updated + unchanged + failed;
+    if total == 1
+        && let Some(label) = single_label
+    {
+        if failed == 1 {
+            return format!(
+                "{} {}",
+                colors::symbol("!"),
+                colors::yellow(&format!("Refresh incomplete: {label} failed"))
+            );
+        }
+        if updated == 1 {
+            return format!(
+                "{} {}",
+                colors::symbol("✓"),
+                colors::green(&format!("Refresh complete: {label} updated"))
+            );
+        }
+        return format!(
+            "{} {}",
+            colors::symbol("✓"),
+            colors::green(&format!("Already up to date: {label}"))
+        );
+    }
+
+    let mut parts = Vec::new();
+    crate::output::push_count(&mut parts, updated, colors::green, "updated");
+    crate::output::push_count(&mut parts, unchanged, colors::dim, "unchanged");
+    crate::output::push_count(&mut parts, failed, colors::yellow, "failed");
+    let detail = if parts.is_empty() {
+        colors::dim("nothing changed")
+    } else {
+        parts.join(&colors::dim(", "))
+    };
+    let (symbol, conclusion) = if failed > 0 {
+        ("!", "Refresh incomplete")
+    } else {
+        ("✓", "Refresh complete")
+    };
+    format!("{} {conclusion}: {detail}", colors::symbol(symbol))
 }
 
 struct RefreshObserver;
@@ -141,6 +202,7 @@ mod tests {
     use crate::apps::{handle_install, handle_upgrade_installed};
     use crate::install_core::manifest::AppManifest;
     use crate::status::{FileStatus, app_entry_status};
+    use shine_core::runtime::OpaqueSecretVersion;
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
 
@@ -174,7 +236,7 @@ filesystem = [
   {{ access = ["execute"], base = "preset", path = "first.sh" }},
   {{ access = ["execute"], base = "preset", path = "second.sh" }},
 ]
-environment = [{{ name = "SOURCE_URL", sensitivity = "plain" }}]
+environment = [{{ name = "SOURCE_URL", sensitivity = "secret" }}]
 
 [[files]]
 source = "first.txt"
@@ -227,6 +289,49 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn refresh_execution_reuses_the_reviewed_input_versions() {
+        let mut input_versions = PlanningInputVersions::default();
+        input_versions
+            .insert_secret_version("SOURCE_URL", OpaqueSecretVersion::new("test-version"));
+        let request =
+            crate::lifecycle_plan::LifecyclePlanRequest::AppRefresh(AppRefreshPlanRequest {
+                category: "sample".to_string(),
+                file: Some(Path::new("first.txt").to_path_buf()),
+                force: false,
+                input_versions: input_versions.clone(),
+            });
+
+        assert_eq!(
+            reviewed_app_refresh_request(&request).input_versions,
+            input_versions
+        );
+    }
+
+    #[test]
+    fn refresh_summary_names_single_files_and_distinguishes_failures() {
+        assert_eq!(
+            refresh_summary_text(Some("sample/first.txt"), 1, 0, 0),
+            "✓ Refresh complete: sample/first.txt updated"
+        );
+        assert_eq!(
+            refresh_summary_text(Some("sample/first.txt"), 0, 1, 0),
+            "✓ Already up to date: sample/first.txt"
+        );
+        assert_eq!(
+            refresh_summary_text(Some("sample/first.txt"), 0, 0, 1),
+            "! Refresh incomplete: sample/first.txt failed"
+        );
+        assert_eq!(
+            refresh_summary_text(None, 2, 1, 0),
+            "✓ Refresh complete: 2 updated, 1 unchanged"
+        );
+        assert_eq!(
+            refresh_summary_text(None, 1, 0, 1),
+            "! Refresh incomplete: 1 updated, 1 failed"
+        );
     }
 
     #[tokio::test]

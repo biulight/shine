@@ -15,7 +15,10 @@ bugs. Check this list before changing the modules named in each entry.
   refresh/artifact, and Sys profile mutation must enter through an approved Core method that
   regenerates the Plan from fresh captured inputs and matches both its
   fingerprint and exact required permission set before the first mutation; missing or uncomputable
-  permissions fail closed. CLI `--yes` skips only the default-No prompt. Dry-run remains a separate
+  permissions fail closed. Every execution adapter must pass Core the reviewed request, including
+  populated plain/secret input identities; reusing a pre-review request with default input versions
+  makes the final regeneration a different or blocked Plan. CLI `--yes` skips only the default-No
+  prompt. Dry-run remains a separate
   preview contract. Specialized operations use `sys-bootstrap`, `app-refresh`,
   `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
   lifecycle Plans or `LifecycleResultV1` operations.

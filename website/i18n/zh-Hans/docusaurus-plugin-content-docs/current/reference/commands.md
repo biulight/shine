@@ -129,7 +129,12 @@ journal 存在时拒绝运行，同时继续保持 invocation-scoped atomic writ
 只跳过提示；重定向输出等非交互执行必须传入该参数。在提供 dry-run 的命令中，`--yes` 与
 `--dry-run` 互斥；dry-run 保持原有预览格式，不是已批准 Plan。
 
-`app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。`app artifact apply/remove` 显式运行预设声明的外部集成脚本，Shine 不会把 apply 隐式作为普通安装或升级的一部分。
+`app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。执行前的最终校验会
+复用审阅阶段绑定的 generator 输入身份（包括 secret 版本），确保已就绪的 Plan 在执行时仍绑定
+同一组输入。单文件刷新会在最终结论中显示 source；多文件摘要省略为零的计数，任何文件失败时
+都会先显示 `Refresh incomplete`，随后命令以非零状态退出。`app artifact apply/remove` 显式运行
+预设声明的外部集成脚本，Shine 不会把 apply
+隐式作为普通安装或升级的一部分。
 
 如果受支持的 App creation、原地静态 Copy update，或未修改静态 Copy 的普通
 removal 在 operation journal 写入后中断，之后需要安全

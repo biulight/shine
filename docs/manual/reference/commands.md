@@ -155,8 +155,12 @@ execution must use it. `--yes` and `--dry-run` are mutually exclusive where dry-
 retains its existing preview format and is not an approved Plan.
 
 `app refresh` handles only generated files tracked by the manifest and preserves the last successful
-content on failure. Artifact apply/remove explicitly runs an external integration declared by the
-preset; ordinary installation and upgrade do not implicitly apply it.
+content on failure. Its final pre-execution validation reuses the reviewed generator input
+identities, including secret versions, so a ready Plan remains bound to the same inputs through
+execution. The final result names the source for a single-file refresh; multi-file summaries omit
+zero counts, and any failed file reports `Refresh incomplete` before the command exits nonzero.
+Artifact apply/remove explicitly runs an external integration declared by the preset;
+ordinary installation and upgrade do not implicitly apply it.
 
 If a supported App creation, in-place static Copy update, or ordinary removal of an unchanged
 static Copy is interrupted after its operation journal is written,
