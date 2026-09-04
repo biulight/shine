@@ -2,7 +2,9 @@
 
 use crate::commands::{PresetPlatform, PresetReportFormat};
 use anyhow::Result;
+use shine_core::plan::{PermissionResolutionV1, PlanActionV1, PlanStepV1};
 use shine_core::runtime::{PresetAuthoringPlanReportV1, RuntimePlatform};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -57,7 +59,7 @@ fn authoring_text(report: &PresetAuthoringPlanReportV1) -> String {
         let _ = writeln!(output, "  {}", crate::colors::bold("Assumptions:"));
         let _ = writeln!(
             output,
-            "    State {} · Environment {} · Secrets {}",
+            "    Lifecycle state {} · Environment {} · Secrets {}",
             report.assumptions.lifecycle_state,
             report.assumptions.environment,
             report.assumptions.secrets
@@ -116,51 +118,25 @@ fn authoring_text(report: &PresetAuthoringPlanReportV1) -> String {
             plan.operation.as_str()
         );
         let _ = writeln!(output, "    Target: {}", plan.target);
-        let _ = writeln!(output, "    Steps:");
+        write_plan_blockers(&mut output, &plan.steps, &plan.permissions);
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "    {}",
+            crate::colors::bold(&format!("Steps ({}):", plan.steps.len()))
+        );
         if plan.steps.is_empty() {
             let _ = writeln!(output, "      - none");
         }
         for step in &plan.steps {
-            let resource = step
-                .resource
-                .as_deref()
-                .map(|value| format!(" · {value}"))
-                .unwrap_or_default();
-            let diagnostics = if step.diagnostic_codes.is_empty() {
-                String::new()
-            } else {
-                format!(" [{}]", step.diagnostic_codes.join(", "))
-            };
             let _ = writeln!(
                 output,
-                "      {} {}{}{}",
-                crate::lifecycle_plan::action_name(step.action),
-                step.target,
-                resource,
-                diagnostics
+                "      {} {}",
+                crate::lifecycle_plan::styled_action_name(step.action),
+                step_identity(step)
             );
         }
-        let _ = writeln!(output, "    Required permissions:");
-        if plan.permissions.required.is_empty() {
-            let _ = writeln!(output, "      - none");
-        }
-        for permission in plan.permissions.required.iter() {
-            let _ = writeln!(
-                output,
-                "      - {}",
-                crate::lifecycle_plan::permission_name(permission)
-            );
-        }
-        for permission in plan.permissions.missing_declarations.iter() {
-            let _ = writeln!(
-                output,
-                "      ! missing declaration: {}",
-                crate::lifecycle_plan::permission_name(permission)
-            );
-        }
-        for code in &plan.permissions.uncomputable_codes {
-            let _ = writeln!(output, "      ! uncomputable: {code}");
-        }
+        write_grouped_permissions(&mut output, &plan.permissions);
     }
     let result = if !report.valid {
         crate::colors::red("invalid")
@@ -174,12 +150,100 @@ fn authoring_text(report: &PresetAuthoringPlanReportV1) -> String {
     output
 }
 
+fn write_plan_blockers(
+    output: &mut String,
+    steps: &[PlanStepV1],
+    permissions: &PermissionResolutionV1,
+) {
+    let blocked_steps = steps
+        .iter()
+        .filter(|step| step.action == PlanActionV1::Blocked)
+        .collect::<Vec<_>>();
+    if blocked_steps.is_empty()
+        && permissions.missing_declarations.is_empty()
+        && permissions.uncomputable_codes.is_empty()
+    {
+        return;
+    }
+
+    let _ = writeln!(output);
+    let _ = writeln!(output, "    {}", crate::colors::red("Blockers:"));
+    for step in blocked_steps {
+        let _ = writeln!(output, "      {} Blocked step", crate::colors::red("✗"));
+        let _ = writeln!(output, "        {}", step_identity(step));
+    }
+    for permission in permissions.missing_declarations.iter() {
+        let _ = writeln!(
+            output,
+            "      {} Missing declaration",
+            crate::colors::red("✗")
+        );
+        let _ = writeln!(
+            output,
+            "        {}",
+            crate::lifecycle_plan::permission_name(permission)
+        );
+    }
+    for code in &permissions.uncomputable_codes {
+        let _ = writeln!(
+            output,
+            "      {} Uncomputable permission",
+            crate::colors::red("✗")
+        );
+        let _ = writeln!(output, "        {code}");
+    }
+}
+
+fn write_grouped_permissions(output: &mut String, permissions: &PermissionResolutionV1) {
+    let _ = writeln!(output);
+    let permission_count = permissions.required.iter().count();
+    let _ = writeln!(
+        output,
+        "    {}",
+        crate::colors::bold(&format!("Required permissions ({permission_count}):"))
+    );
+    if permissions.required.is_empty() {
+        let _ = writeln!(output, "      - none");
+        return;
+    }
+
+    let mut grouped = BTreeMap::<String, Vec<String>>::new();
+    for permission in permissions.required.iter() {
+        let (group, value) = crate::lifecycle_plan::permission_group(permission);
+        grouped.entry(group).or_default().push(value);
+    }
+    for (group, values) in grouped {
+        let _ = writeln!(output, "      {group} ({})", values.len());
+        for value in values {
+            let _ = writeln!(output, "        - {value}");
+        }
+    }
+}
+
+fn step_identity(step: &PlanStepV1) -> String {
+    let resource = step
+        .resource
+        .as_deref()
+        .map(|value| format!(" · {value}"))
+        .unwrap_or_default();
+    let diagnostics = if step.diagnostic_codes.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", step.diagnostic_codes.join(", "))
+    };
+    format!("{}{resource}{diagnostics}", step.target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shine_core::plan::{
+        EnvironmentSensitivityV1, FilesystemAccessV1, PermissionSetV1, PermissionV1,
+        PlanOperationV1,
+    };
     use shine_core::runtime::{
-        PRESET_AUTHORING_PLAN_SCHEMA_VERSION, PresetAuthoringPlanAssumptionsV1, PresetDiagnostic,
-        PresetDiagnosticSeverity,
+        PRESET_AUTHORING_PLAN_SCHEMA_VERSION, PresetAuthoringPlanAssumptionsV1,
+        PresetAuthoringPlanSectionV1, PresetDiagnostic, PresetDiagnosticSeverity,
     };
 
     #[test]
@@ -248,8 +312,67 @@ mod tests {
 
         let output = authoring_text(&report);
 
-        assert!(output.contains("State empty · Environment absent · Secrets absent"));
+        assert!(output.contains("Lifecycle state empty · Environment absent · Secrets absent"));
         assert!(output.contains("Trust grants none · Commands absent · Administrator unavailable"));
         assert!(output.contains("hypothetical plan blocked under these assumptions"));
+    }
+
+    #[test]
+    fn blocked_plan_puts_blockers_before_grouped_exact_permissions() {
+        let missing_environment = PermissionV1::Environment {
+            name: "SURGE_PROFILE".to_string(),
+            sensitivity: EnvironmentSensitivityV1::Plain,
+        };
+        let permissions = PermissionResolutionV1 {
+            required: PermissionSetV1::new([
+                PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: "home:.zshrc".to_string(),
+                },
+                PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: "shine:bin/mytool".to_string(),
+                },
+                PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Remove,
+                    path: "home:.zshrc".to_string(),
+                },
+                missing_environment.clone(),
+            ]),
+            missing_declarations: PermissionSetV1::new([missing_environment]),
+            uncomputable_codes: Default::default(),
+        };
+        let report = PresetAuthoringPlanReportV1 {
+            schema_version: PRESET_AUTHORING_PLAN_SCHEMA_VERSION,
+            valid: true,
+            ready: false,
+            target: Some("shell/test".to_string()),
+            platform: "macos".to_string(),
+            assumptions: PresetAuthoringPlanAssumptionsV1::default(),
+            diagnostics: Vec::new(),
+            plans: vec![PresetAuthoringPlanSectionV1 {
+                kind: "lifecycle-install".to_string(),
+                target: "shell/test".to_string(),
+                operation: PlanOperationV1::Install,
+                ready: false,
+                steps: vec![
+                    PlanStepV1::new("shell/test", Some("shared-snapshot"), PlanActionV1::Create),
+                    PlanStepV1::new("shell/test/mytool", None::<String>, PlanActionV1::Create),
+                ],
+                permissions,
+            }],
+        };
+
+        let output = authoring_text(&report);
+        let blockers = output.find("Blockers:").unwrap();
+        let steps = output.find("Steps (2):").unwrap();
+        let permissions = output.find("Required permissions (4):").unwrap();
+
+        assert!(blockers < steps && steps < permissions);
+        assert!(output.contains("Missing declaration\n        environment plain SURGE_PROFILE"));
+        assert!(output.contains("filesystem write (2)"));
+        assert!(output.contains("filesystem remove (1)"));
+        assert!(output.contains("environment plain (1)"));
+        assert!(output.contains("+ shell/test/mytool"));
     }
 }

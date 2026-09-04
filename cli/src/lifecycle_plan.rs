@@ -616,7 +616,7 @@ fn render_compact_permissions(plan: &PlanV1) -> Vec<String> {
     lines
 }
 
-fn permission_group(permission: &PermissionV1) -> (String, String) {
+pub(crate) fn permission_group(permission: &PermissionV1) -> (String, String) {
     match permission {
         PermissionV1::Filesystem { access, path } => (
             format!(
@@ -779,7 +779,7 @@ fn style_plan_action(action: PlanActionV1, value: &str) -> String {
     }
 }
 
-fn styled_action_name(action: PlanActionV1) -> String {
+pub(crate) fn styled_action_name(action: PlanActionV1) -> String {
     style_plan_action(action, action_name(action))
 }
 
