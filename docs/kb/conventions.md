@@ -21,8 +21,8 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   | `fix(ci): ...` | CI pipeline fix |
   | `fix(internal): ...` | any other non-user-facing cleanup |
 - GitHub Release notes also skip documentation-only commits written as `docs:`, `docs(scope):`,
-  or `fix(docs):`. Feature and bug-fix commits remain included even when they update public docs
-  in the same change.
+  or `fix(docs):`, plus `chore(release)` preparation commits. Feature and bug-fix commits remain
+  included even when they update public docs in the same change.
 - Pre-commit runs `cargo fmt --check`, `clippy -D warnings`, `cargo deny check`, `typos`, and
   `cargo nextest run`; it validates `mise.toml`, and changes to Bun tooling or TypeScript sources
   additionally run `mise exec -- bun run check:ts` (strict type-check + Bun tests). All must pass
@@ -39,6 +39,9 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   user-facing features → minor; only backward-compatible user-facing fixes → patch.
 - A versioned release candidate uses `X.Y.Z-rc.N`. It is a reproducible prerelease, does not
   replace the latest stable release, and does not trigger the stable `release` → `main` sync.
+- Generated RC notes cover the immediately preceding versioned tag; generated stable notes cover
+  the previous stable tag through the new stable tag, consolidating all intervening RC work into
+  one stable release section.
 - Release commits use `chore(release): ...` (e.g. `chore(release): prepare v0.35.0`).
 - Keep `shine-cli` and `shine-core` crate versions in sync (see commit `e14d5f9`).
 - The minimum supported Rust version is 1.88. The `mise.toml` toolchain may be newer for
