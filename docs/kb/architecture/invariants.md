@@ -15,7 +15,10 @@ bugs. Check this list before changing the modules named in each entry.
   refresh/artifact, and Sys profile mutation must enter through an approved Core method that
   regenerates the Plan from fresh captured inputs and matches both its
   fingerprint and exact required permission set before the first mutation; missing or uncomputable
-  permissions fail closed. CLI `--yes` skips only the default-No prompt. Dry-run remains a separate
+  permissions fail closed. Every execution adapter must pass Core the reviewed request, including
+  populated plain/secret input identities; reusing a pre-review request with default input versions
+  makes the final regeneration a different or blocked Plan. CLI `--yes` skips only the default-No
+  prompt. Dry-run remains a separate
   preview contract. Specialized operations use `sys-bootstrap`, `app-refresh`,
   `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
   lifecycle Plans or `LifecycleResultV1` operations.
@@ -156,7 +159,10 @@ bugs. Check this list before changing the modules named in each entry.
   `app_generator_not_evaluated` when dynamic desired content needs explicit execution.
   `--run-generators` is a separate opt-in assessment mode: it may execute selected generators once
   to derive in-memory desired content but must not write destinations/manifests or run hooks and
-  artifacts. Typed inspection paths remain non-serializable and must not enter the lifecycle result.
+  artifacts. An evaluated `auto = false` change remains `app_manual_refresh_required`: presentation
+  must exclude it from upgrade targets and point to the exact `app refresh` selector. A category
+  with both automatic and manual changes must retain both actions. Typed inspection paths remain
+  non-serializable and must not enter the lifecycle result.
 - **Managed-file update details are field labels, not payloads.** The read-only comparison may
   report that destination or content changed, but must not copy the destination, desired bytes, or
   environment values into structured lifecycle outcomes. Ownership and user-modification checks

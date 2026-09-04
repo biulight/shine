@@ -117,19 +117,28 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
         .filter(|outcome| outcome.status == shine_core::lifecycle::LifecycleStatus::Pending)
         .map(|outcome| outcome.target.as_str())
         .collect::<BTreeSet<_>>();
-    let update_app: Vec<&AppRow> = app_rows
+    let update_app_rows: Vec<&AppRow> = app_rows
         .iter()
         .filter(|r| {
-            r.file_status == FileStatus::UpdateAvail
-                && pending_app.contains(format!("app/{}", r.category).as_str())
+            r.upgrade_available && pending_app.contains(format!("app/{}", r.category).as_str())
         })
         .collect();
-    let update_app = app_update_categories(&update_app);
+    let update_app = app_update_categories(&update_app_rows);
+    let actionable_app_rows = app_rows
+        .iter()
+        .filter(|row| {
+            (row.upgrade_available || !row.refresh_sources.is_empty())
+                && pending_app.contains(format!("app/{}", row.category).as_str())
+        })
+        .collect::<Vec<_>>();
+    let actionable_app = app_update_categories(&actionable_app_rows);
+    let refresh_commands = app_refresh_commands(&actionable_app);
     let update_sys = sys::managed_updates(config)
         .await
         .context("checking managed Sys Presets for update")?;
 
-    let any_update = !update_shell.is_empty() || !update_app.is_empty() || !update_sys.is_empty();
+    let any_update =
+        !update_shell.is_empty() || !actionable_app.is_empty() || !update_sys.is_empty();
     let has_generator_attention = app_rows.iter().any(|row| {
         matches!(
             row.file_status,
@@ -146,7 +155,7 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
 
     if !diff {
         let shell_names = shell_categories(&update_shell);
-        let app_names = update_app
+        let app_names = actionable_app
             .keys()
             .map(|category| (*category).to_string())
             .collect::<Vec<_>>();
@@ -157,9 +166,14 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
         print_name_section(&mut separator, "App Configs", &app_names);
         print_name_section(&mut separator, "System Configs", &sys_names);
         let (_, generator_failed) = print_generator_notice(&app_rows, run_generators);
-        if any_update {
-            print_update_hint(&update_targets(&shell_names, &app_names, &sys_names));
-        }
+        let upgrade_app_names = update_app
+            .keys()
+            .map(|category| (*category).to_string())
+            .collect::<Vec<_>>();
+        print_action_hints(
+            &update_targets(&shell_names, &upgrade_app_names, &sys_names),
+            &refresh_commands,
+        );
         if generator_failed {
             anyhow::bail!("one or more App generators could not be evaluated");
         }
@@ -190,26 +204,27 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
         }
     }
 
-    if !update_app.is_empty() {
+    if !actionable_app.is_empty() {
         if !update_shell.is_empty() {
             println!();
         }
         println!("{}", colors::bold("App Configs"));
 
-        let label_width = update_app
+        let label_width = actionable_app
             .keys()
             .map(|category| category.len())
             .max()
             .unwrap_or(0);
 
-        for (category, rows) in &update_app {
+        for (category, rows) in &actionable_app {
             let pad = " ".repeat(label_width.saturating_sub(category.len()));
+            let (status_text, status_sym) = app_category_action_status(rows);
             println!(
                 "  {}  {}{}  {}",
                 colors::symbol("↑"),
                 category,
                 pad,
-                colors::status_label("update available", "↑"),
+                colors::status_label(status_text, status_sym),
             );
             for row in rows {
                 print_app_update_detail(row);
@@ -219,7 +234,7 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
     }
 
     if !update_sys.is_empty() {
-        if !update_shell.is_empty() || !update_app.is_empty() {
+        if !update_shell.is_empty() || !actionable_app.is_empty() {
             println!();
         }
         println!("{}", colors::bold("System Configs"));
@@ -245,7 +260,10 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
             .map(|category| (*category).to_string())
             .collect::<Vec<_>>();
         let sys_names = sorted_names(update_sys.iter().map(|row| row.item_id.clone()).collect());
-        print_update_hint(&update_targets(&shell_names, &app_names, &sys_names));
+        print_action_hints(
+            &update_targets(&shell_names, &app_names, &sys_names),
+            &refresh_commands,
+        );
     }
     if generator_failed {
         anyhow::bail!("one or more App generators could not be evaluated");
@@ -254,9 +272,22 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
     Ok(true)
 }
 
-fn print_update_hint(targets: &[String]) {
+fn print_action_hints(upgrade_targets: &[String], refresh_commands: &[String]) {
+    if upgrade_targets.is_empty() && refresh_commands.is_empty() {
+        return;
+    }
     println!();
-    println!("{}", colors::dim(&update_hint_text(targets)));
+    if !upgrade_targets.is_empty() {
+        println!("{}", colors::dim(&update_hint_text(upgrade_targets)));
+    }
+    for command in refresh_commands {
+        println!(
+            "{}",
+            colors::dim(&format!(
+                "Run `{command}` to refresh generated configuration."
+            ))
+        );
+    }
 }
 
 fn update_hint_text(targets: &[String]) -> String {
@@ -287,6 +318,35 @@ fn app_update_categories<'a>(rows: &[&'a AppRow]) -> BTreeMap<&'a str, Vec<&'a A
     categories
 }
 
+fn app_refresh_commands(rows: &BTreeMap<&str, Vec<&AppRow>>) -> Vec<String> {
+    rows.iter()
+        .flat_map(|(category, rows)| {
+            rows.iter().flat_map(move |row| {
+                row.refresh_sources.iter().map(move |source| {
+                    format!(
+                        "shine app refresh {} {}",
+                        crate::shell_quote::quote_if_needed(category),
+                        crate::shell_quote::quote_if_needed(source)
+                    )
+                })
+            })
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn app_category_action_status(rows: &[&AppRow]) -> (&'static str, &'static str) {
+    let upgrade_available = rows.iter().any(|row| row.upgrade_available);
+    let refresh_available = rows.iter().any(|row| !row.refresh_sources.is_empty());
+    let text = match (upgrade_available, refresh_available) {
+        (true, true) => "update and refresh available",
+        (false, true) => "refresh available",
+        _ => "update available",
+    };
+    (text, "↑")
+}
+
 fn print_app_update_detail(row: &AppRow) {
     let destination = row
         .dest
@@ -298,7 +358,7 @@ fn print_app_update_detail(row: &AppRow) {
         colors::symbol("↑"),
         row.label,
         destination,
-        colors::status_label("update available", "↑"),
+        colors::status_label(row.status_text, "↑"),
     );
 }
 
@@ -360,6 +420,8 @@ pub async fn handle_status_list(config: &Config, diff: bool, run_generators: boo
                 status_text: row.status_text,
                 file_status: row.file_status,
                 dest: row.dest.clone(),
+                upgrade_available: row.upgrade_available,
+                refresh_sources: row.refresh_sources.clone(),
             })
             .collect()
     } else {
@@ -422,6 +484,7 @@ pub async fn handle_status_list(config: &Config, diff: bool, run_generators: boo
 
         let mut up_to_date = 0usize;
         let mut update_available = 0usize;
+        let mut refresh_available = 0usize;
         let mut user_modified = 0usize;
         let mut missing = 0usize;
 
@@ -441,11 +504,7 @@ pub async fn handle_status_list(config: &Config, diff: bool, run_generators: boo
                 String::new()
             };
 
-            let run_hint = if row.sym == "↑" {
-                format!("  {}", colors::dim("run `shine upgrade`"))
-            } else {
-                String::new()
-            };
+            let run_hint = app_status_run_hint(row);
 
             println!(
                 "  {}  {}{}{}  {}{}",
@@ -467,7 +526,17 @@ pub async fn handle_status_list(config: &Config, diff: bool, run_generators: boo
             match row.file_status {
                 FileStatus::Missing => missing += 1,
                 FileStatus::UserModified | FileStatus::Partial => user_modified += 1,
-                FileStatus::UpdateAvail => update_available += 1,
+                FileStatus::UpdateAvail => {
+                    if row.upgrade_available {
+                        update_available += 1;
+                    }
+                    if !row.refresh_sources.is_empty() {
+                        refresh_available += 1;
+                    }
+                    if !row.upgrade_available && row.refresh_sources.is_empty() {
+                        update_available += 1;
+                    }
+                }
                 FileStatus::GeneratorNotEvaluated
                 | FileStatus::GeneratorEvaluationFailed
                 | FileStatus::GeneratorTrustRequired => user_modified += 1,
@@ -476,7 +545,13 @@ pub async fn handle_status_list(config: &Config, diff: bool, run_generators: boo
             }
         }
 
-        let parts = app_status_summary_parts(up_to_date, update_available, user_modified, missing);
+        let parts = app_status_summary_parts(
+            up_to_date,
+            update_available,
+            refresh_available,
+            user_modified,
+            missing,
+        );
         if !parts.is_empty() {
             output::footer("Summary", &parts);
         }
@@ -693,6 +768,8 @@ struct AppLifecycleStatus {
     status_text: &'static str,
     file_status: FileStatus,
     dest: Option<String>,
+    upgrade_available: bool,
+    refresh_sources: Vec<String>,
 }
 
 fn app_category_statuses(rows: &[&AppRow]) -> Vec<AppLifecycleStatus> {
@@ -718,6 +795,8 @@ fn app_category_statuses(rows: &[&AppRow]) -> Vec<AppLifecycleStatus> {
                     status_text: row.status_text,
                     file_status: row.file_status,
                     dest: row.dest.clone(),
+                    upgrade_available: row.upgrade_available,
+                    refresh_sources: row.refresh_sources.clone(),
                 });
             }
             let has_not_installed = rows
@@ -734,7 +813,7 @@ fn app_category_statuses(rows: &[&AppRow]) -> Vec<AppLifecycleStatus> {
             } else {
                 installed_max
             };
-            let (sym, status_text) = match status {
+            let (sym, mut status_text) = match status {
                 FileStatus::Missing => ("!", "destination missing"),
                 FileStatus::UserModified => ("~", "user modified"),
                 FileStatus::Partial => ("~", "partial install"),
@@ -745,6 +824,20 @@ fn app_category_statuses(rows: &[&AppRow]) -> Vec<AppLifecycleStatus> {
                 FileStatus::UpToDate => ("✓", "up-to-date"),
                 FileStatus::NotInstalled => unreachable!(),
             };
+            let upgrade_available = rows.iter().any(|row| row.upgrade_available);
+            let refresh_sources = rows
+                .iter()
+                .flat_map(|row| row.refresh_sources.iter().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            if status == FileStatus::UpdateAvail {
+                status_text = match (upgrade_available, refresh_sources.is_empty()) {
+                    (true, false) => "update and refresh available",
+                    (false, false) => "refresh available",
+                    _ => status_text,
+                };
+            }
             Some(AppLifecycleStatus {
                 category: category.to_string(),
                 detail_label: category.to_string(),
@@ -752,6 +845,8 @@ fn app_category_statuses(rows: &[&AppRow]) -> Vec<AppLifecycleStatus> {
                 status_text,
                 file_status: status,
                 dest: None,
+                upgrade_available,
+                refresh_sources,
             })
         })
         .collect()
@@ -774,6 +869,7 @@ fn should_show_shell_in_simple_list(row: &ShellRow) -> bool {
 fn app_status_summary_parts(
     up_to_date: usize,
     update_available: usize,
+    refresh_available: usize,
     user_modified: usize,
     missing: usize,
 ) -> Vec<String> {
@@ -785,9 +881,37 @@ fn app_status_summary_parts(
         colors::cyan,
         "update available",
     );
+    output::push_count(
+        &mut parts,
+        refresh_available,
+        colors::cyan,
+        "refresh available",
+    );
     output::push_count(&mut parts, user_modified, colors::yellow, "user-modified");
     output::push_count(&mut parts, missing, colors::yellow, "destination missing");
     parts
+}
+
+fn app_status_run_hint(row: &AppLifecycleStatus) -> String {
+    let mut commands = Vec::new();
+    if row.upgrade_available {
+        commands.push(format!(
+            "run `shine upgrade app/{}`",
+            crate::shell_quote::quote_if_needed(&row.category)
+        ));
+    }
+    commands.extend(row.refresh_sources.iter().map(|source| {
+        format!(
+            "run `shine app refresh {} {}`",
+            crate::shell_quote::quote_if_needed(&row.category),
+            crate::shell_quote::quote_if_needed(source)
+        )
+    }));
+    if commands.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", colors::dim(&commands.join("; ")))
+    }
 }
 
 #[cfg(test)]
@@ -816,6 +940,8 @@ mod tests {
             dest: None,
             status_text: "up-to-date",
             file_status,
+            upgrade_available: file_status == FileStatus::UpdateAvail,
+            refresh_sources: Vec::new(),
         }
     }
 
@@ -839,6 +965,41 @@ mod tests {
         second.label = "proxy/usetproxy".to_string();
 
         assert_eq!(shell_categories(&[&first, &second]), vec!["proxy"]);
+    }
+
+    #[test]
+    fn manual_generator_updates_render_refresh_commands_instead_of_upgrade_targets() {
+        let mut row = app_row("surge", FileStatus::UpdateAvail);
+        row.upgrade_available = false;
+        row.refresh_sources = vec!["subscription-proxies.conf".to_string()];
+        let grouped = app_update_categories(&[&row]);
+
+        assert_eq!(
+            app_refresh_commands(&grouped),
+            ["shine app refresh surge subscription-proxies.conf"]
+        );
+        assert_eq!(
+            app_category_action_status(&grouped["surge"]),
+            ("refresh available", "↑")
+        );
+    }
+
+    #[test]
+    fn mixed_app_updates_retain_both_upgrade_and_refresh_actions() {
+        let automatic = app_row("sample", FileStatus::UpdateAvail);
+        let mut manual = app_row("sample", FileStatus::UpdateAvail);
+        manual.upgrade_available = false;
+        manual.refresh_sources = vec!["generated.conf".to_string()];
+        let grouped = app_update_categories(&[&automatic, &manual]);
+
+        assert_eq!(
+            app_category_action_status(&grouped["sample"]),
+            ("update and refresh available", "↑")
+        );
+        assert_eq!(
+            app_refresh_commands(&grouped),
+            ["shine app refresh sample generated.conf"]
+        );
     }
 
     #[test]
@@ -1016,25 +1177,26 @@ mod tests {
     #[test]
     fn app_status_summary_parts_includes_only_nonzero_counts() {
         assert_eq!(
-            app_status_summary_parts(3, 1, 0, 0),
+            app_status_summary_parts(3, 1, 0, 0, 0),
             vec!["3 up-to-date".to_string(), "1 update available".to_string()]
         );
     }
 
     #[test]
     fn app_status_summary_parts_empty_when_all_zero() {
-        assert!(app_status_summary_parts(0, 0, 0, 0).is_empty());
+        assert!(app_status_summary_parts(0, 0, 0, 0, 0).is_empty());
     }
 
     #[test]
-    fn app_status_summary_parts_reports_all_four_counters() {
+    fn app_status_summary_parts_reports_all_five_counters() {
         assert_eq!(
-            app_status_summary_parts(1, 2, 3, 4),
+            app_status_summary_parts(1, 2, 3, 4, 5),
             vec![
                 "1 up-to-date".to_string(),
                 "2 update available".to_string(),
-                "3 user-modified".to_string(),
-                "4 destination missing".to_string(),
+                "3 refresh available".to_string(),
+                "4 user-modified".to_string(),
+                "5 destination missing".to_string(),
             ]
         );
     }

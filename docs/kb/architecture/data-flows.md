@@ -552,11 +552,17 @@ inspection never runs it; explicit evaluation may:
    generators once, applies transforms in memory, and computes status/diffs without writing.
 3. `auto = false` makes implicit status local-only and excludes the file from upgrade, but explicit
    `--run-generators` evaluation includes it.
+   When that explicit evaluation finds different desired content, the shared inspection result
+   retains `app_manual_refresh_required`; update/status render the exact source-scoped `app refresh`
+   action and do not fold the file into upgrade targets. If other files in the category are
+   upgradeable, both actions remain visible.
    `shine app refresh <category> [source]` explicitly refreshes only
    manifest-owned generated files, with an optional `--force` for user changes. Refresh reviews an
    `app-refresh` Plan that binds manifest ownership, live destination state, generator inputs, and
    potential post-upgrade hooks. Embedded generator Plans also bind the runtime-script
-   materialization path before generator execution.
+   materialization path before generator execution. The CLI passes that exact reviewed request,
+   including opaque secret input versions, through preparation and Core's final pre-mutation Plan
+   regeneration.
 4. An existing managed destination is the last-known-good snapshot when a
    generator fails; a first-time enabled generator failure is fatal.
 5. Only `generator.env` values are injected. External preset or overlay generator code requires a
