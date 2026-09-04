@@ -210,11 +210,26 @@ pub(super) async fn plan_preset_source_scope_with_state(
         report.diagnostics.push(PresetDiagnostic {
             severity: PresetDiagnosticSeverity::Error,
             code: "preset_validation_failed".to_string(),
-            message: format!(
-                "{target} failed static validation; run `shine preset validate` for details"
-            ),
+            message: format!("{target} failed static validation"),
             path: None,
         });
+        report.diagnostics.extend(
+            validation
+                .diagnostics
+                .iter()
+                .chain(
+                    validation
+                        .categories
+                        .iter()
+                        .flat_map(|category| &category.diagnostics),
+                )
+                .filter(|diagnostic| diagnostic.severity == PresetDiagnosticSeverity::Error)
+                .cloned()
+                .map(|mut diagnostic| {
+                    diagnostic.path = None;
+                    diagnostic
+                }),
+        );
         return report;
     }
     report.diagnostics.extend(
@@ -456,6 +471,30 @@ mod tests {
             operation,
             HostOperation::Read(_) | HostOperation::InspectSplitDns { .. }
         )));
+    }
+
+    #[tokio::test]
+    async fn invalid_authoring_plan_includes_safe_validation_details() {
+        let source = app_source();
+        source.put_file(
+            "/repo/app/demo/shine.toml",
+            b"dest = '~/.config/demo'\n[permissions]\nschema_version = 2\n[[files]]\nsource = 'config.toml'\n"
+                .to_vec(),
+        );
+
+        let report = plan_preset_path(
+            &source,
+            Path::new("/repo"),
+            Path::new("app/demo"),
+            RuntimePlatform::Linux,
+        )
+        .await;
+
+        assert!(!report.valid);
+        assert_eq!(report.diagnostics[0].code, "preset_validation_failed");
+        assert_eq!(report.diagnostics[1].code, "unsupported_permission_schema");
+        assert!(report.diagnostics.iter().all(|item| item.path.is_none()));
+        assert!(!serde_json::to_string(&report).unwrap().contains("/repo"));
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@
 
 use crate::commands::PresetReportFormat;
 use anyhow::Result;
+use std::fmt::Write as _;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -54,49 +55,85 @@ fn finish_report(
     }
 }
 fn print_text_report(report: &PresetValidationReportV1) {
-    println!(
-        "Preset validation: {} ({})",
-        report.path.display(),
-        if report.valid { "valid" } else { "invalid" }
+    print!("{}", validation_text(report));
+}
+
+fn validation_text(report: &PresetValidationReportV1) -> String {
+    let mut output = String::new();
+    let status = if report.valid {
+        crate::colors::green("valid")
+    } else {
+        crate::colors::red("invalid")
+    };
+    let _ = writeln!(
+        output,
+        "{} {status}",
+        crate::colors::bold("Preset validation:")
+    );
+    let _ = writeln!(
+        output,
+        "  {} {}",
+        crate::colors::dim("Source:"),
+        report.path.display()
     );
     for diagnostic in &report.diagnostics {
-        print_diagnostic("  ", diagnostic);
+        let _ = writeln!(output);
+        crate::preset_report::write_diagnostic(
+            &mut output,
+            "  ",
+            diagnostic,
+            true,
+            diagnostic.path.as_deref() != Some(report.path.as_path()),
+        );
     }
     for category in &report.categories {
-        println!(
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
             "  {} {}/{}",
-            if category.valid { "OK" } else { "ERROR" },
+            if category.valid {
+                crate::colors::symbol("✓")
+            } else {
+                crate::colors::symbol("✗")
+            },
             category.kind,
             category.name
         );
         for diagnostic in &category.diagnostics {
-            print_diagnostic("    ", diagnostic);
+            crate::preset_report::write_diagnostic(
+                &mut output,
+                "    ",
+                diagnostic,
+                false,
+                diagnostic.path.as_deref() != Some(report.path.as_path()),
+            );
         }
     }
-    println!(
-        "Summary: {} categories, {} errors, {} warnings",
-        report.summary.categories, report.summary.errors, report.summary.warnings
-    );
-}
-
-fn print_diagnostic(prefix: &str, diagnostic: &PresetDiagnostic) {
-    let severity = match diagnostic.severity {
-        PresetDiagnosticSeverity::Error => "error",
-        PresetDiagnosticSeverity::Warning => "warning",
-    };
-    if let Some(path) = &diagnostic.path {
-        println!(
-            "{prefix}{severity}[{}]: {} ({})",
-            diagnostic.code,
-            diagnostic.message,
-            path.display()
-        );
-    } else {
-        println!(
-            "{prefix}{severity}[{}]: {}",
-            diagnostic.code, diagnostic.message
-        );
+    if !report.diagnostics.is_empty() || !report.categories.is_empty() {
+        let _ = writeln!(output);
     }
+    let categories =
+        crate::preset_report::count_phrase(report.summary.categories, "category", "categories");
+    let errors = crate::preset_report::count_phrase(report.summary.errors, "error", "errors");
+    let warnings =
+        crate::preset_report::count_phrase(report.summary.warnings, "warning", "warnings");
+    let _ = writeln!(
+        output,
+        "{} {} · {} · {}",
+        crate::colors::bold("Summary:"),
+        crate::colors::dim(&categories),
+        if report.summary.errors > 0 {
+            crate::colors::red(&errors)
+        } else {
+            crate::colors::dim(&errors)
+        },
+        if report.summary.warnings > 0 {
+            crate::colors::yellow(&warnings)
+        } else {
+            crate::colors::dim(&warnings)
+        }
+    );
+    output
 }
 
 #[cfg(test)]
@@ -111,6 +148,36 @@ mod tests {
 
     async fn fixture_root(name: &str) -> PathBuf {
         crate::test_support::make_temp_dir(name).await
+    }
+
+    #[test]
+    fn text_report_uses_singular_counts_and_omits_a_duplicate_diagnostic_path() {
+        let path = PathBuf::from("/preset/root/shell/chrome/shine.toml");
+        let report = finish_report(
+            path.clone(),
+            Vec::new(),
+            vec![PresetCategoryValidation {
+                kind: "shell".to_string(),
+                name: "chrome".to_string(),
+                path: path.parent().unwrap().to_path_buf(),
+                valid: false,
+                diagnostics: vec![PresetDiagnostic {
+                    severity: PresetDiagnosticSeverity::Error,
+                    code: "invalid_permission_declaration".to_string(),
+                    message: "shell/chrome/open-chrome has malformed permission fields".to_string(),
+                    path: Some(path.clone()),
+                }],
+            }],
+        );
+
+        let output = validation_text(&report);
+
+        assert!(output.contains("Preset validation: invalid"));
+        assert_eq!(output.matches(path.to_str().unwrap()).count(), 1);
+        assert!(output.contains("  ✗ shell/chrome"));
+        assert!(output.contains("code: invalid_permission_declaration"));
+        assert!(output.contains("Summary: 1 category · 1 error · 0 warnings"));
+        assert!(!output.contains("1 categories"));
     }
 
     #[tokio::test]

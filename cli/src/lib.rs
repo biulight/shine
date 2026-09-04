@@ -28,6 +28,7 @@ pub mod preset_lint;
 mod preset_meta;
 pub mod preset_migration;
 pub mod preset_pack;
+pub(crate) mod preset_report;
 pub mod preset_schema;
 pub mod preset_test;
 pub mod preset_validation;

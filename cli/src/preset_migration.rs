@@ -196,29 +196,43 @@ fn compatibility_text(plan: &PresetMigrationPlan) -> String {
     if plan.edits.is_empty() && plan.report.diagnostics.is_empty() {
         return String::new();
     }
-    let mut output = String::from("Preset compatibility\n");
+    let mut output = format!("{}\n", crate::colors::bold("Preset compatibility"));
     for file in &plan.report.files {
-        let _ = writeln!(output, "  migrate {} ({})", file.target, file.source_layer);
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "  {} migrate {} ({})",
+            crate::colors::symbol("~"),
+            file.target,
+            file.source_layer
+        );
     }
     for diagnostic in &plan.report.diagnostics {
         let marker = if diagnostic.severity == PresetMigrationSeverityV1::Blocker {
-            "!"
+            crate::colors::symbol("✗")
         } else {
-            "i"
+            crate::colors::yellow("!")
         };
+        let _ = writeln!(output);
         let _ = writeln!(
             output,
-            "  {marker} {}{} [{}]",
+            "  {marker} {}{}",
             diagnostic.target,
             diagnostic
                 .source_layer
                 .as_deref()
                 .map(|layer| format!(" ({layer})"))
-                .unwrap_or_default(),
+                .unwrap_or_default()
+        );
+        crate::preset_report::write_wrapped(&mut output, "    ", &diagnostic.message);
+        let _ = writeln!(
+            output,
+            "    {} {}",
+            crate::colors::dim("code:"),
             diagnostic.code
         );
-        let _ = writeln!(output, "    {}", diagnostic.message);
     }
+    let _ = writeln!(output);
     output
 }
 
@@ -239,7 +253,7 @@ pub fn compatibility_failure_message(plan: &PresetMigrationPlan) -> String {
         ),
     };
     format!(
-        "Preset compatibility requires attention ({reason}); run `shine preset migrate --dry-run`"
+        "Preset compatibility requires attention ({reason})\n\nNext:\n  shine preset migrate --dry-run"
     )
 }
 
@@ -558,7 +572,7 @@ fn migration_text(
                 crate::colors::symbol("!")
             };
             let _ = writeln!(output, "    {symbol} {}", diagnostic.target);
-            let _ = writeln!(output, "      {}", diagnostic.message);
+            crate::preset_report::write_wrapped(&mut output, "      ", &diagnostic.message);
             let _ = writeln!(
                 output,
                 "      {} {}",
@@ -1186,9 +1200,12 @@ mod tests {
         let detailed = migration_text(&plan, &snapshot, None, true);
 
         assert!(summary.contains("shell/chrome/open-chrome (external)"));
+        assert!(summary.contains("code: manual_permission_review_required"));
+        assert!(!summary.contains("[manual_permission_review_required]"));
         assert!(!summary.contains("preset migrate --dry-run"));
         assert_eq!(failure.matches("preset migrate --dry-run").count(), 1);
         assert!(failure.contains("1 blocker"));
+        assert!(failure.contains("\n\nNext:\n  shine preset migrate --dry-run"));
         assert!(detailed.contains("1 blocker · 0 automatic changes · 0 advisories"));
         assert!(!detailed.contains("1 blockers"));
     }
