@@ -510,16 +510,26 @@ fn migration_text(
     active_source: bool,
 ) -> String {
     let mut output = String::new();
+    let status = match plan.report.status {
+        PresetMigrationStatusV1::Current => "current",
+        PresetMigrationStatusV1::Pending => "changes pending",
+        PresetMigrationStatusV1::Blocked => "manual action required",
+        PresetMigrationStatusV1::Applied => "applied",
+        PresetMigrationStatusV1::PartiallyApplied => "partially applied",
+    };
+    let styled_status = match plan.report.status {
+        PresetMigrationStatusV1::Current | PresetMigrationStatusV1::Applied => {
+            crate::colors::green(status)
+        }
+        PresetMigrationStatusV1::Pending | PresetMigrationStatusV1::PartiallyApplied => {
+            crate::colors::yellow(status)
+        }
+        PresetMigrationStatusV1::Blocked => crate::colors::red(status),
+    };
     let _ = writeln!(
         output,
-        "Preset migration: {}",
-        match plan.report.status {
-            PresetMigrationStatusV1::Current => "current",
-            PresetMigrationStatusV1::Pending => "changes pending",
-            PresetMigrationStatusV1::Blocked => "manual action required",
-            PresetMigrationStatusV1::Applied => "applied",
-            PresetMigrationStatusV1::PartiallyApplied => "partially applied",
-        }
+        "{} {styled_status}",
+        crate::colors::bold("Preset migration:")
     );
 
     let mut groups = BTreeMap::<String, Vec<&PresetMigrationDiagnosticV1>>::new();
@@ -528,30 +538,35 @@ fn migration_text(
             .unwrap_or_else(|| diagnostic_category(&diagnostic.target));
         groups.entry(key).or_default().push(diagnostic);
     }
+    let mut needs_preset_pull = false;
     for (logical, diagnostics) in groups {
         let layer = diagnostics
             .iter()
             .find_map(|diagnostic| diagnostic.source_layer.as_deref())
             .map(|value| format!(" ({value})"))
             .unwrap_or_default();
+        let _ = writeln!(output);
         let _ = writeln!(
             output,
             "  {}{layer}",
             logical.trim_end_matches("/shine.toml")
         );
         for diagnostic in &diagnostics {
-            let severity = if diagnostic.severity == PresetMigrationSeverityV1::Blocker {
-                "error"
+            let symbol = if diagnostic.severity == PresetMigrationSeverityV1::Blocker {
+                crate::colors::symbol("✗")
             } else {
-                "note"
+                crate::colors::symbol("!")
             };
+            let _ = writeln!(output, "    {symbol} {}", diagnostic.target);
+            let _ = writeln!(output, "      {}", diagnostic.message);
             let _ = writeln!(
                 output,
-                "    {severity}[{}] {}: {}",
-                diagnostic.code, diagnostic.target, diagnostic.message
+                "      {} {}",
+                crate::colors::dim("code:"),
+                diagnostic.code
             );
         }
-        render_remediation(
+        needs_preset_pull |= render_remediation(
             &mut output,
             snapshot,
             &logical,
@@ -560,16 +575,43 @@ fn migration_text(
             active_source,
         );
     }
+
+    if needs_preset_pull {
+        let _ = writeln!(output);
+        let _ = writeln!(output, "  {}", crate::colors::cyan("Next:"));
+        let _ = writeln!(output, "    Commit the upstream changes, then run:");
+        let _ = writeln!(output, "      shine preset pull");
+    }
+
+    if !plan.report.diagnostics.is_empty() {
+        let _ = writeln!(output);
+    }
+    let changes = count_phrase(
+        plan.report.summary.changes,
+        "automatic change",
+        "automatic changes",
+    );
+    let blockers = count_phrase(plan.report.summary.blockers, "blocker", "blockers");
+    let advisories = count_phrase(plan.report.summary.advisories, "advisory", "advisories");
     let _ = writeln!(
         output,
-        "Summary: {}, {}, {}",
-        count_phrase(
-            plan.report.summary.changes,
-            "automatic change",
-            "automatic changes"
-        ),
-        count_phrase(plan.report.summary.blockers, "blocker", "blockers"),
-        count_phrase(plan.report.summary.advisories, "advisory", "advisories")
+        "{} {} · {} · {}",
+        crate::colors::bold("Summary:"),
+        if plan.report.summary.blockers > 0 {
+            crate::colors::red(&blockers)
+        } else {
+            crate::colors::dim(&blockers)
+        },
+        if plan.report.summary.changes > 0 {
+            crate::colors::green(&changes)
+        } else {
+            crate::colors::dim(&changes)
+        },
+        if plan.report.summary.advisories > 0 {
+            crate::colors::yellow(&advisories)
+        } else {
+            crate::colors::dim(&advisories)
+        }
     );
     output
 }
@@ -581,7 +623,7 @@ fn render_remediation(
     diagnostics: &[&PresetMigrationDiagnosticV1],
     managed_overlay: Option<&Path>,
     active_source: bool,
-) {
+) -> bool {
     let manual_permissions = diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "manual_permission_review_required");
@@ -595,40 +637,42 @@ fn render_remediation(
         manifest.is_some_and(|path| managed_overlay.is_some_and(|root| path.starts_with(root)));
 
     if managed_read_only && !manual_permissions {
+        let _ = writeln!(output);
+        let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
         let _ = writeln!(
             output,
-            "    Remediation: update `{logical}` in the upstream checkout; the managed overlay mirror is read-only."
+            "      Review and update {logical} in the upstream checkout."
         );
-        let _ = writeln!(
-            output,
-            "      After committing upstream, run `shine preset pull`."
-        );
+        let _ = writeln!(output, "      The managed overlay mirror is read-only.");
     }
 
     if manual_permissions {
         if managed_read_only || manifest_is_managed {
+            let _ = writeln!(output);
+            let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
             let _ = writeln!(
                 output,
-                "    Remediation: update `{logical}` in the upstream checkout; the managed overlay mirror is read-only."
+                "      Review and update {logical} in the upstream checkout."
             );
-            let _ = writeln!(
-                output,
-                "      After committing upstream, run `shine preset pull`."
-            );
+            let _ = writeln!(output, "      The managed overlay mirror is read-only.");
         } else if let Some(manifest) = manifest {
             let quoted = quote_command_arg(manifest, RuntimePlatform::current());
-            let _ = writeln!(output, "    Edit: {}", manifest.display());
-            let _ = writeln!(output, "    Verify:");
-            let _ = writeln!(output, "      `shine preset validate {quoted}`");
+            let _ = writeln!(output);
+            let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
+            let _ = writeln!(output, "      Edit: {}", manifest.display());
+            let _ = writeln!(output, "      Verify:");
+            let _ = writeln!(output, "        shine preset validate {quoted}");
             let _ = writeln!(
                 output,
-                "      `shine preset plan {quoted} --platform {}`",
+                "        shine preset plan {quoted} --platform {}",
                 RuntimePlatform::current().as_str()
             );
         } else {
+            let _ = writeln!(output);
+            let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
             let _ = writeln!(
                 output,
-                "    Remediation: add the target-local permission declaration in `{logical}`, then validate and plan that manifest."
+                "      Add the target-local permission declaration in {logical}, then validate and plan that manifest."
             );
         }
     }
@@ -657,6 +701,8 @@ fn render_remediation(
             "      If the inspection reports a requirement and you accept its scope, run `shine trust grant {target}`."
         );
     }
+
+    managed_read_only || (manual_permissions && manifest_is_managed)
 }
 
 fn metadata_logical_path(snapshot: &PresetSnapshot, target: &str) -> Option<String> {
@@ -1143,7 +1189,7 @@ mod tests {
         assert!(!summary.contains("preset migrate --dry-run"));
         assert_eq!(failure.matches("preset migrate --dry-run").count(), 1);
         assert!(failure.contains("1 blocker"));
-        assert!(detailed.contains("0 automatic changes, 1 blocker, 0 advisories"));
+        assert!(detailed.contains("1 blocker · 0 automatic changes · 0 advisories"));
         assert!(!detailed.contains("1 blockers"));
     }
 
@@ -1175,7 +1221,7 @@ mod tests {
             "shine preset plan {quoted} --platform {}",
             RuntimePlatform::current().as_str()
         )));
-        assert!(output.contains("0 automatic changes, 2 blockers, 0 advisories"));
+        assert!(output.contains("2 blockers · 0 automatic changes · 0 advisories"));
         assert!(!output.contains("shine trust"));
     }
 
@@ -1216,13 +1262,22 @@ mod tests {
                 b"[[files]]\nsource = 'open.sh'\ntarget = 'open-chrome'\n".to_vec(),
             )
             .overlay_file("shell/chrome/open.sh", Vec::new())
+            .overlay_file(
+                "shell/test/shine.toml",
+                b"[[files]]\nsource = 'test.sh'\ntarget = 'mytool'\n".to_vec(),
+            )
+            .overlay_file("shell/test/test.sh", Vec::new())
             .build();
         let plan = plan_preset_migration(&snapshot, "active", None, None);
 
         let output = migration_text(&plan, &snapshot, Some(root), true);
 
         assert!(output.contains("upstream checkout"));
-        assert!(output.contains("shine preset pull"));
+        assert_eq!(output.matches("shine preset pull").count(), 1);
+        assert!(output.contains("    ✗ shell/chrome/open-chrome\n      Shell command"));
+        assert!(output.contains("      code: manual_permission_review_required"));
+        assert_eq!(output.matches("    Fix:\n").count(), 2);
+        assert!(output.contains("  Next:\n    Commit the upstream changes, then run:"));
         assert!(!output.contains("Edit: /managed overlay"));
         assert!(!output.contains("shine preset validate"));
     }
