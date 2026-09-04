@@ -38,9 +38,9 @@
 - Phase 5 已完成：`preset validate`、`lint`、`plan`、声明式合成 host-state fixture test、确定性
   unsigned bundle pack，以及由 shipped Rust types 与 live CLI help 生成的 schema reference 已形成
   authoring 闭环；App、Shell、Sys 示例均进入 CI。
-- `2.0.0-rc.2` 继续修复 RC 审查中发现的问题，但稳定版仍以 macOS、Ubuntu 和 Windows 上真实 1.8 state 的 upgrade、
-  lifecycle、uninstall 与 recovery smoke test 为 gate。新的 mutation frontend 不得绕过这一稳定化
-  阶段。
+- `2.0.0` 已在 macOS、Ubuntu 和 Windows 上完成真实 1.8 state 的 upgrade、lifecycle、uninstall
+  与 recovery smoke test，并作为稳定版发布边界。后续 mutation frontend 仍须复用已经验证的
+  lifecycle、安全与恢复 contract。
 - Authoring 已有版本化 JSON reports，但真实 host 上的 inventory、inspection、Plan review、operation
   state 和 recovery 仍主要由 CLI 组装与呈现；`shine-core` runtime API 继续是 workspace-internal，
   尚未形成供 CLI、MCP 和 UI 共同依赖的稳定 Frontend Service contract。
@@ -138,7 +138,7 @@ fixtures、schema reference、examples 和 CI workflow。
 - Pack 可复现，并拒绝 plaintext secret、private absolute paths、`node_modules` 和未声明代码。
 - 实现这些命令时同步更新 English 与 Simplified Chinese manual。
 
-## Immediate Release Gate — Stabilize Shine 2.0
+## Completed Release Gate — Stabilize Shine 2.0
 
 **Outcome:** 在增加新的 mutation frontend 之前，证明 2.0 lifecycle、security 和 recovery contract
 可以安全接管真实 1.8 state。
@@ -152,8 +152,8 @@ fixtures、schema reference、examples 和 CI workflow。
 - 发布 gate、失败证据与平台例外进入 release checklist；未通过的 mutation 路径不因 UI 或 AI
   adapter 而获得新的入口。
 
-Read-only Frontend Service 设计与 authoring-only MCP prototype 可以并行，但新的真实 mutation
-surface 必须等待此 gate 完成。
+该 gate 已在 2.0.0 正式版前完成。后续真实 mutation surface 必须继续满足同等的跨平台验证和
+安全边界，不能因新增 frontend 而降低要求。
 
 ## Phase 6 — Frontend Service and Conformance Contract
 

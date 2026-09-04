@@ -7,12 +7,26 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-09-04
+
+This stable release promotes the 2.0 lifecycle security and recovery boundary after upgrade,
+lifecycle, uninstall, and recovery validation on macOS, Ubuntu, and Windows. Read
+[Upgrade from Shine 1.x](docs/manual/guides/upgrade-to-2.md) before upgrading an existing 1.x
+installation. The complete 2.0 feature and breaking-change inventory is recorded in the release
+candidate sections below.
+
 ### Features
 
 - Added native/Bun script-form App lifecycle hooks that share the parent install or upgrade Plan,
   including declared environment inputs and the fixed App script contract. Clash Verge now uses
   this path to refresh current rule providers automatically after its managed files change while
   retaining the safe reselect-then-apply flow for changed subscription bindings.
+
+### Bug Fixes
+
+- Converged duplicate legacy App relocation receipts on the latest source record, so upgrading a
+  1.8 installation consumes the reviewed action for the current destination, removes the stale
+  receipt, and preserves the obsolete destination as an unowned user file.
 
 ## [2.0.0-rc.2] — 2026-09-04
 

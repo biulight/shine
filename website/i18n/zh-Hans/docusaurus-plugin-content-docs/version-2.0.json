@@ -1,7 +1,7 @@
 {
   "version.label": {
-    "message": "Next",
-    "description": "The label for version current"
+    "message": "2.0",
+    "description": "The label for version 2.0"
   },
   "sidebar.manual.category.Guides": {
     "message": "操作指南",
