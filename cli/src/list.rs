@@ -4,13 +4,16 @@ use crate::config::Config;
 use crate::info::UpdateDiffs;
 use crate::output;
 use crate::status::{
-    AppRow, FileStatus, ShellRow, build_app_rows, build_app_rows_with_lifecycle_options,
-    build_shell_rows,
+    AppRow, FileStatus, ShellRow, build_app_rows_with_lifecycle_options, build_shell_rows,
 };
 use crate::sys;
 use anyhow::{Context, Result};
+use shine_core::frontend::{
+    CapabilityKindV1, FrontendServiceError, InventoryReportV1, InventoryRequest,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
 const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
 
 async fn build_update_app_rows(
@@ -509,28 +512,34 @@ pub async fn handle_status_list(config: &Config, diff: bool, run_generators: boo
 
 pub async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
-    let shell_rows = build_shell_rows(config).await?;
-    let installed_shell: Vec<String> = shell_rows
-        .iter()
-        .filter(|r| should_show_shell_in_simple_list(r))
-        .map(|r| r.category.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
+    let service = crate::core_runtime::frontend_from_config(config).await?;
+    let shell_inventory = service
+        .inventory(InventoryRequest::for_kind(CapabilityKindV1::Shell))
+        .await
+        .map_err(FrontendServiceError::into_source)?;
+    let installed_shell = installed_shell_categories_from_inventory(&shell_inventory);
 
-    let cats_result = load_active_categories(config, None).await;
-    let installed_app = match cats_result {
-        Ok(cats) => {
-            let app_rows = build_app_rows(config, &cats).await?;
-            installed_app_categories(&app_rows)
+    let installed_app = match service
+        .inventory(InventoryRequest::for_kind(CapabilityKindV1::App))
+        .await
+    {
+        Ok(report) => installed_app_categories_from_inventory(&report),
+        Err(error) if error.diagnostic().code == "frontend_inventory_app_source_failed" => {
+            Vec::new()
         }
-        Err(_) => Vec::new(),
+        Err(error) => return Err(error.into_source()),
     };
-    let installed_sys = sys::installed_managed(config).await?;
-    let installed_sys: Vec<String> = installed_sys
-        .iter()
-        .map(|row| row.item_id.clone())
-        .collect();
+
+    let os_id = sys::detect_os_id().await?;
+    let sys_inventory = service
+        .inventory(
+            InventoryRequest::for_kind(CapabilityKindV1::Sys)
+                .with_sys_os_id(os_id)
+                .installed_only(),
+        )
+        .await
+        .map_err(FrontendServiceError::into_source)?;
+    let installed_sys = installed_sys_items_from_inventory(&sys_inventory);
 
     let installed_shell = sorted_names(installed_shell);
     let installed_app = sorted_names(installed_app);
@@ -556,6 +565,41 @@ pub async fn handle_list(config: &Config) -> Result<()> {
     Ok(())
 }
 
+fn shell_inventory_category(target: &str) -> Option<String> {
+    let remainder = target.strip_prefix("shell/")?;
+    let (category, command) = remainder.split_once('/')?;
+    (!category.is_empty() && !command.is_empty()).then(|| category.to_string())
+}
+
+fn installed_shell_categories_from_inventory(report: &InventoryReportV1) -> Vec<String> {
+    report
+        .items
+        .iter()
+        .filter(|item| item.available && item.installed)
+        .filter_map(|item| shell_inventory_category(&item.target))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn installed_app_categories_from_inventory(report: &InventoryReportV1) -> Vec<String> {
+    report
+        .items
+        .iter()
+        .filter(|item| item.available && item.installed)
+        .filter_map(|item| item.target.strip_prefix("app/").map(str::to_string))
+        .collect()
+}
+
+fn installed_sys_items_from_inventory(report: &InventoryReportV1) -> Vec<String> {
+    report
+        .items
+        .iter()
+        .filter(|item| item.installed)
+        .filter_map(|item| item.target.strip_prefix("sys/").map(str::to_string))
+        .collect()
+}
+
 fn print_name_section(separator: &mut output::SectionSeparator, title: &str, names: &[String]) {
     if names.is_empty() {
         return;
@@ -566,6 +610,7 @@ fn print_name_section(separator: &mut output::SectionSeparator, title: &str, nam
     output::print_columns(names);
 }
 
+#[cfg(test)]
 fn installed_app_categories(rows: &[AppRow]) -> Vec<String> {
     rows.iter()
         .filter(|row| row.file_status != FileStatus::NotInstalled)
@@ -721,6 +766,7 @@ fn sorted_names(mut names: Vec<String>) -> Vec<String> {
     names
 }
 
+#[cfg(test)]
 fn should_show_shell_in_simple_list(row: &ShellRow) -> bool {
     row.is_installed && row.status_text != SHELL_PRESET_PRESENT_LINK_MISSING
 }
@@ -897,6 +943,62 @@ mod tests {
         ];
 
         assert_eq!(installed_app_categories(&rows), vec!["surge"]);
+    }
+
+    #[test]
+    fn frontend_inventory_projection_preserves_legacy_list_visibility() {
+        let report = InventoryReportV1 {
+            schema_version: shine_core::frontend::INVENTORY_REPORT_SCHEMA_VERSION,
+            items: vec![
+                shine_core::frontend::CapabilityInventoryItemV1 {
+                    target: "app/installed".to_string(),
+                    kind: CapabilityKindV1::App,
+                    available: true,
+                    installed: true,
+                },
+                shine_core::frontend::CapabilityInventoryItemV1 {
+                    target: "app/orphan".to_string(),
+                    kind: CapabilityKindV1::App,
+                    available: false,
+                    installed: true,
+                },
+                shine_core::frontend::CapabilityInventoryItemV1 {
+                    target: "shell/tools/one".to_string(),
+                    kind: CapabilityKindV1::Shell,
+                    available: true,
+                    installed: true,
+                },
+                shine_core::frontend::CapabilityInventoryItemV1 {
+                    target: "shell/tools/two".to_string(),
+                    kind: CapabilityKindV1::Shell,
+                    available: true,
+                    installed: true,
+                },
+                shine_core::frontend::CapabilityInventoryItemV1 {
+                    target: "shell/orphan/tool".to_string(),
+                    kind: CapabilityKindV1::Shell,
+                    available: false,
+                    installed: true,
+                },
+                shine_core::frontend::CapabilityInventoryItemV1 {
+                    target: "sys/managed".to_string(),
+                    kind: CapabilityKindV1::Sys,
+                    available: false,
+                    installed: true,
+                },
+            ],
+            diagnostics: Vec::new(),
+        };
+
+        assert_eq!(
+            installed_app_categories_from_inventory(&report),
+            ["installed"]
+        );
+        assert_eq!(
+            installed_shell_categories_from_inventory(&report),
+            ["tools"]
+        );
+        assert_eq!(installed_sys_items_from_inventory(&report), ["managed"]);
     }
 
     #[test]

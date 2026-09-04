@@ -12,6 +12,14 @@ use shine_core::runtime::{
     RuntimePlatform, capture_embedded_preset_snapshot, capture_preset_snapshot,
 };
 
+pub(crate) async fn frontend_from_config(
+    config: &Config,
+) -> Result<shine_core::frontend::FrontendService<RealHost>> {
+    from_config(config)
+        .await
+        .map(shine_core::frontend::FrontendService::new)
+}
+
 pub(crate) async fn from_config(config: &Config) -> Result<CoreRuntime<RealHost>> {
     from_config_with_preset_mode(config, config.is_external_presets).await
 }

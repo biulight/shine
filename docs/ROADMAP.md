@@ -42,8 +42,9 @@
   与 recovery smoke test，并作为稳定版发布边界。后续 mutation frontend 仍须复用已经验证的
   lifecycle、安全与恢复 contract。
 - Authoring 已有版本化 JSON reports，但真实 host 上的 inventory、inspection、Plan review、operation
-  state 和 recovery 仍主要由 CLI 组装与呈现；`shine-core` runtime API 继续是 workspace-internal，
-  尚未形成供 CLI、MCP 和 UI 共同依赖的稳定 Frontend Service contract。
+  state 和 recovery 仍主要由 CLI 组装与呈现；Phase 6A 已建立版本化、脱敏的 Frontend Service
+  inventory contract，并由 `shine list` 首先复用。Inspection、Plan review、operation state、events、
+  recovery 与 mutation conformance 仍待后续切片完成；`CoreRuntime` 继续是 workspace-internal。
 
 ## Guiding Principles
 
@@ -160,6 +161,11 @@ fixtures、schema reference、examples 和 CI workflow。
 **Outcome:** 在 `shine-core` 之上建立 CLI、MCP 和 UI 共用的 frontend-neutral application service，
 统一真实 host 上的 inventory、inspection、Plan review、operation state、recovery 和 lifecycle result，
 同时保留 Core 的安全与领域边界。
+
+实现边界与切片顺序见
+[`frontend-service-conformance-prd.md`](frontend-service-conformance-prd.md)；contract redaction、
+event projection 与 approval ownership 由 [`ADR 0077`](kb/decisions/0077-frontend-service-contract-and-approval-ownership.md)
+约束。
 
 **Exit criteria:**
 

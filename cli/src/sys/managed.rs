@@ -5,12 +5,14 @@ use crate::presentation::{
 };
 use anyhow::{Result, bail};
 
+#[cfg(test)]
+use super::SysInstalledRow;
 use super::detect::detect_os_id;
 use super::execution::{
     item_outcome_lines, presentation_bold, presentation_dim, presentation_symbol,
     presentation_symbol_stderr,
 };
-use super::{SysInstalledRow, SysItemOutcome, SysItemStatus, SysUpdateRow, SysUpgradeReport};
+use super::{SysItemOutcome, SysItemStatus, SysUpdateRow, SysUpgradeReport};
 use shine_core::lifecycle::{LifecycleOperation, LifecycleResultV1};
 use shine_core::runtime::{PlanningInputVersions, SysManagedPlanRequest};
 
@@ -243,11 +245,7 @@ pub(crate) async fn managed_updates_with_result(
     managed_updates_for_os_with_result(config, &os_id).await
 }
 
-pub(crate) async fn installed_managed(config: &Config) -> Result<Vec<SysInstalledRow>> {
-    let os_id = detect_os_id().await?;
-    installed_managed_for_os(config, &os_id).await
-}
-
+#[cfg(test)]
 async fn installed_managed_for_os(config: &Config, os_id: &str) -> Result<Vec<SysInstalledRow>> {
     crate::core_runtime::from_config(config)
         .await?

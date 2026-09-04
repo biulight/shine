@@ -123,6 +123,18 @@ bugs. Check this list before changing the modules named in each entry.
   manifest-version gates. Adding a new host operation must retain those checks rather than treating
   a successful write primitive as ownership evidence.
 
+- **Frontend contracts are explicit redacted projections.** `FrontendService` consumes one fully
+  captured `CoreRuntime` and returns versioned reports containing canonical identities, typed safe
+  states, and stable diagnostic codes. Reports never copy raw errors, private paths, content, argv,
+  process output, environment values, or secret plaintext. `RuntimeEvent` and typed inspection
+  paths remain non-serializable; future event or inspection contracts require a new explicit safe
+  projection rather than adding `Serialize` to those internal types.
+- **A review request is not human approval.** AI/MCP adapters may request a fresh Plan for review,
+  but they cannot create or accept approval authority, expose mutation, or treat a model assertion
+  as confirmation. Only a trusted human-facing CLI/UI may construct the one-shot
+  `PlanApprovalV1` after affirmative review; apply still recaptures inputs, regenerates the exact
+  Plan, and validates its fingerprint and permissions before mutation.
+
 - **Reusable lifecycle results contain identities and codes, never payloads.** Structured outcomes
   may record canonical targets, logical resource names, status, effects, and stable diagnostic
   codes. They must not copy raw errors/logs, source or destination content, environment or secret

@@ -64,6 +64,31 @@ record additional capabilities. Pure planners combine both sources into the requ
 resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
 protected execution fails closed.
 
+## Frontend Service inventory
+
+The CLI and future adapters construct `FrontendService` from the same captured `CoreRuntime`,
+immutable effective Preset snapshot, and host observation ports. Inventory parses App/Shell/Sys
+metadata through Core, loads version-gated manifests and receipts, and observes target-launcher
+presence without executing Preset code, detection commands, or host mutations. Ownership and
+launcher conflicts remain part of later inspection contracts.
+
+```text
+captured RuntimeContext + immutable PresetSnapshot + observation host
+    → Core metadata + manifest/receipt/launcher evidence
+    → canonical available/installed target union
+    → InventoryReportV1 + safe diagnostic codes
+    → adapter-only grouping, filtering, and rendering
+```
+
+The stable report never contains the manifest path, destination, content, argv, environment value,
+secret, or local source error. Manifest-only targets receive `frontend_inventory_preset_missing`;
+the CLI compatibility adapter still applies its released App/Shell visibility rules. Existing
+`RuntimeEvent` values and inspection paths remain private side channels and are not serialized.
+
+Plan review remains separate from approval: future AI adapters may return a review request, while
+only trusted human-facing frontends create a one-shot approval after affirmative review. Apply
+continues to recapture inputs and validate a regenerated exact Plan.
+
 ## Preset source compatibility and migration
 
 `shine preset migrate` is routed before mutable config initialization. Default scope uses read-only

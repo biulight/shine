@@ -3653,7 +3653,7 @@ impl Default for ShellManifest {
 
 impl ShellManifest {
     pub async fn load(
-        host: &impl FileSystemHost,
+        host: &impl super::FileSystemObservationHost,
         shine_dir: &(impl AsRef<Path> + ?Sized),
     ) -> Result<Self> {
         load_shell_manifest_with_host(host, shine_dir.as_ref()).await
