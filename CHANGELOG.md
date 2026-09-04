@@ -7,6 +7,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Features
+
+- Added native/Bun script-form App lifecycle hooks that share the parent install or upgrade Plan,
+  including declared environment inputs and the fixed App script contract. Clash Verge now uses
+  this path to refresh current rule providers automatically after its managed files change while
+  retaining the safe reselect-then-apply flow for changed subscription bindings.
+
 ## [2.0.0-rc.2] — 2026-09-04
 
 This release candidate fixes issues found while reviewing and exercising 2.0.0-rc.1. It remains a

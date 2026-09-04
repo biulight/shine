@@ -1,6 +1,6 @@
 use super::{
-    AppArtifact, AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
-    ArtifactRuntime, CoreRuntime, RuntimePlatform,
+    AppArtifact, AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppHookAction,
+    AppListMode, ArtifactRuntime, CoreRuntime, RuntimePlatform,
 };
 use crate::install::AppInstallStrategy;
 use crate::permission::PermissionDeclarationV1;
@@ -54,7 +54,9 @@ enum HookSpecToml {
 
 #[derive(Debug, Clone, Deserialize)]
 struct HookToml {
-    command: String,
+    command: Option<String>,
+    script: Option<String>,
+    runtime: Option<ArtifactRuntimeToml>,
     #[serde(default)]
     args: Vec<String>,
     #[serde(default)]
@@ -470,11 +472,34 @@ fn hooks(value: Option<HookSpecToml>, field: &str, context: &str) -> Result<Vec<
     hooks
         .into_iter()
         .map(|hook| {
-            if hook.command.trim().is_empty() {
-                bail!("{context}: {field}.command must not be empty");
-            }
+            let action = match (hook.command, hook.script) {
+                (Some(command), None) => {
+                    if command.trim().is_empty() {
+                        bail!("{context}: {field}.command must not be empty");
+                    }
+                    if hook.runtime.is_some() {
+                        bail!("{context}: {field}.runtime is only valid with script");
+                    }
+                    AppHookAction::Command(command)
+                }
+                (None, Some(script)) => {
+                    let normalized = normalize_relative(&script)
+                        .with_context(|| format!("{context}: invalid {field}.script"))?;
+                    let runtime = artifact_runtime(hook.runtime, &script, context)?;
+                    AppHookAction::Script {
+                        script: normalized,
+                        runtime,
+                    }
+                }
+                (Some(_), Some(_)) => {
+                    bail!("{context}: {field} must declare only one of command or script")
+                }
+                (None, None) => {
+                    bail!("{context}: {field} must declare one of command or script")
+                }
+            };
             Ok(AppHook {
-                command: hook.command,
+                action,
                 args: hook.args,
                 show_output: hook.show_output,
                 env: crate::env::parse_env_specs(&hook.env)
@@ -736,6 +761,73 @@ fn legacy_description(content: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
     use crate::runtime::{InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext};
+
+    fn hook_toml(
+        command: Option<&str>,
+        script: Option<&str>,
+        runtime: Option<ArtifactRuntimeToml>,
+    ) -> HookToml {
+        HookToml {
+            command: command.map(str::to_string),
+            script: script.map(str::to_string),
+            runtime,
+            args: Vec::new(),
+            show_output: false,
+            env: vec!["TOKEN=API_TOKEN".to_string()],
+        }
+    }
+
+    #[test]
+    fn parses_command_and_bun_script_hooks() {
+        let command = hooks(
+            Some(HookSpecToml::Single(hook_toml(Some("reload"), None, None))),
+            "post_upgrade",
+            "app/demo/shine.toml",
+        )
+        .unwrap();
+        assert!(
+            matches!(command[0].action, AppHookAction::Command(ref value) if value == "reload")
+        );
+
+        let script = hooks(
+            Some(HookSpecToml::Single(hook_toml(
+                None,
+                Some("refresh.ts"),
+                Some(ArtifactRuntimeToml::Bun),
+            ))),
+            "post_upgrade",
+            "app/demo/shine.toml",
+        )
+        .unwrap();
+        assert!(matches!(
+            script[0].action,
+            AppHookAction::Script {
+                ref script,
+                runtime: ArtifactRuntime::Bun,
+            } if script == Path::new("refresh.ts")
+        ));
+        assert_eq!(script[0].env[0].source, "TOKEN");
+        assert_eq!(script[0].env[0].target, "API_TOKEN");
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_invalid_script_hooks() {
+        for hook in [
+            hook_toml(Some("reload"), Some("refresh.ts"), None),
+            hook_toml(None, None, None),
+            hook_toml(Some("reload"), None, Some(ArtifactRuntimeToml::Bun)),
+            hook_toml(None, Some("refresh.sh"), Some(ArtifactRuntimeToml::Bun)),
+        ] {
+            assert!(
+                hooks(
+                    Some(HookSpecToml::Single(hook)),
+                    "post_upgrade",
+                    "app/demo/shine.toml",
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn parses_app_category_from_snapshot_and_selects_platform() {

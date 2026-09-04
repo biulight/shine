@@ -1,6 +1,6 @@
 # Built-in Executable Preset Inventory
 
-Last classified: 2026-08-31
+Last classified: 2026-09-04
 
 This inventory tracks the Roadmap Phase 4 requirement that every built-in executable Preset is
 either migrated to typed declarative actions or explicitly classified. It is not a public feature
@@ -19,7 +19,7 @@ Classification vocabulary:
 
 | Target | Executable capability | Class | Privilege | Built-in provenance | Current rollback classification |
 |---|---|---|---|---|---|
-| `app/clash-verge` | `post_install`, `post_upgrade` invoking `shine app artifact apply` | opaque hook | user | embedded | hook side effects unsupported |
+| `app/clash-verge` | Bun `build.ts` `post_upgrade` script hook | opaque hook bound to parent Plan | user | embedded | managed-file transaction is durable; hook side effects are non-transactional and failures are non-fatal |
 | `app/clash-verge` | Bun `build.ts` / `unbuild.ts` artifact | opaque artifact with explicit teardown | user | embedded | best-effort explicit teardown; not transactional |
 | `app/surge` | `post_install`, `post_upgrade` app reload | opaque hook | user | embedded | unsupported |
 | `app/surge` | Bun `build.ts` / `unbuild.ts` artifact | opaque artifact with explicit teardown | user | embedded | best-effort explicit teardown; user-owned profile preserved by its own guards |

@@ -458,6 +458,12 @@ bugs. Check this list before changing the modules named in each entry.
   preset or overlay code requires a grant matching canonical target, capability, code digest,
   trust layer, and exact permission set. Read-oriented checks execute it only through the explicit
   `--run-generators` mode; ordinary inspection remains process-free.
+- **Script hooks belong to their parent lifecycle Plan.** A `post_install`/`post_upgrade` hook may
+  resolve a native or Bun script from the immutable App snapshot and receive declared environment
+  inputs plus the fixed `SHINE_APP_*` contract. Planning must bind its executable source, runtime,
+  environment identities, materialized embedded cache, and declared capabilities before App files
+  mutate. It must execute only after that category changes. A hook must never recursively launch an
+  artifact or another mutation with an independently approved Plan.
 - **Bun package installation is source-scoped and explicit.** Embedded scripts and external scripts
   without a locked declaration run with `--no-install`. Only an effective external/overlay script
   whose own physical category contains both `package.json` and `bun.lock` may run with

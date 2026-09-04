@@ -320,7 +320,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
 pub use app::{
     AppArtifact, AppArtifactAction, AppArtifactRequest, AppCacheRequest, AppCategory,
     AppDestinationRoot, AppFile, AppFileAction, AppFileLifecycleReport, AppGenerator,
-    AppGeneratorRequest, AppHook, AppHookPhase, AppHookReport, AppHookRequest,
+    AppGeneratorRequest, AppHook, AppHookAction, AppHookPhase, AppHookReport, AppHookRequest,
     AppInspectionOptions, AppLifecycleReport, AppLifecycleRequest, AppListMode, AppRefreshRequest,
     AppUninstallLifecycleRequest, AppUpgradeLifecycleReport, AppUpgradeRequest, ArtifactRuntime,
 };

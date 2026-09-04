@@ -922,9 +922,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     _ => &[],
                 };
                 for (index, hook) in hooks.iter().enumerate() {
-                    if category.metadata_schema_version < 2
-                        && is_recursive_app_artifact_hook(hook, &category.name)
-                    {
+                    if is_recursive_app_artifact_hook(hook, &category.name) {
                         steps.push(
                             PlanStepV1::new(
                                 format!("app/{}", category.name),
@@ -932,7 +930,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 PlanActionV1::Blocked,
                             )
                             .with_diagnostic_code(
-                                if category.metadata_is_overlay {
+                                if category.metadata_schema_version >= 2 {
+                                    "app_recursive_artifact_hook_unsupported"
+                                } else if category.metadata_is_overlay {
                                     "app_legacy_overlay_metadata"
                                 } else {
                                     "app_legacy_metadata"
@@ -949,9 +949,16 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         state,
                         permissions,
                     )?;
-                    permissions.require(PermissionV1::Command {
-                        program: hook.command.clone(),
-                    });
+                    add_app_hook_permissions(
+                        self,
+                        &category,
+                        hook,
+                        index,
+                        state,
+                        permissions,
+                        steps,
+                    )
+                    .await?;
                     let blocked =
                         !self.app_capability_trusted(&category, TrustCapabilityV1::AppHook)?;
                     steps.push(
@@ -1709,7 +1716,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             &mut state,
             &mut permissions,
             &mut steps,
-        )?;
+        )
+        .await?;
         finish_specialized_plan(self, PlanOperationV1::AppRefresh, state, permissions, steps)
     }
 
@@ -4794,7 +4802,7 @@ fn select_refresh_files(category: &AppCategory, selector: Option<&Path>) -> Resu
     Ok(candidates)
 }
 
-fn plan_app_hooks<H>(
+async fn plan_app_hooks<H: FileSystemObservationHost>(
     runtime: &CoreRuntime<H>,
     category: &AppCategory,
     hooks: &[super::AppHook],
@@ -4804,16 +4812,16 @@ fn plan_app_hooks<H>(
     steps: &mut Vec<PlanStepV1>,
 ) -> Result<()> {
     for (index, hook) in hooks.iter().enumerate() {
-        if category.metadata_schema_version < 2
-            && is_recursive_app_artifact_hook(hook, &category.name)
-        {
+        if is_recursive_app_artifact_hook(hook, &category.name) {
             steps.push(
                 PlanStepV1::new(
                     format!("app/{}", category.name),
                     Some(format!("hook:{index}")),
                     PlanActionV1::Blocked,
                 )
-                .with_diagnostic_code(if category.metadata_is_overlay {
+                .with_diagnostic_code(if category.metadata_schema_version >= 2 {
+                    "app_recursive_artifact_hook_unsupported"
+                } else if category.metadata_is_overlay {
                     "app_legacy_overlay_metadata"
                 } else {
                     "app_legacy_metadata"
@@ -4829,9 +4837,7 @@ fn plan_app_hooks<H>(
             state,
             permissions,
         )?;
-        permissions.require(PermissionV1::Command {
-            program: hook.command.clone(),
-        });
+        add_app_hook_permissions(runtime, category, hook, index, state, permissions, steps).await?;
         let blocked = !runtime.app_capability_trusted(category, TrustCapabilityV1::AppHook)?;
         steps.push(
             PlanStepV1::new(
@@ -4854,12 +4860,71 @@ fn plan_app_hooks<H>(
 }
 
 fn is_recursive_app_artifact_hook(hook: &super::AppHook, category: &str) -> bool {
-    hook.command == "shine"
+    matches!(&hook.action, super::AppHookAction::Command(command) if command == "shine")
         && hook.args.len() >= 3
         && hook.args[0] == "app"
         && hook.args[1] == "artifact"
         && hook.args[2] == "apply"
         && hook.args.get(3).is_some_and(|target| target == category)
+}
+
+async fn add_app_hook_permissions<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    category: &AppCategory,
+    hook: &super::AppHook,
+    index: usize,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+    steps: &mut Vec<PlanStepV1>,
+) -> Result<()> {
+    let super::AppHookAction::Script {
+        script,
+        runtime: runtime_kind,
+    } = &hook.action
+    else {
+        if let super::AppHookAction::Command(command) = &hook.action {
+            permissions.require(PermissionV1::Command {
+                program: command.clone(),
+            });
+        }
+        return Ok(());
+    };
+
+    permissions.require(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Execute,
+        path: format!("preset:{}", script.display().to_string().replace('\\', "/")),
+    });
+    if *runtime_kind == ArtifactRuntime::Bun {
+        permissions.require(PermissionV1::Command {
+            program: "bun".to_string(),
+        });
+    }
+    let logical = format!("app/{}/{}", category.name, script.display());
+    let script_file = runtime
+        .presets()
+        .file(&logical)
+        .with_context(|| format!("app hook script is missing: {logical}"))?;
+    if script_file.origin.physical_path.is_none() {
+        let cache_root = runtime
+            .context()
+            .presets_dir
+            .join("app")
+            .join(&category.name);
+        capture_tree_state(
+            runtime.host(),
+            state,
+            format!("hook:{index}:preset-cache"),
+            &cache_root,
+        )
+        .await?;
+        add_shine_write_permission(runtime.context(), permissions, &cache_root);
+        steps.push(PlanStepV1::new(
+            format!("app/{}", category.name),
+            Some(format!("hook:{index}:preset-cache")),
+            PlanActionV1::Update,
+        ));
+    }
+    Ok(())
 }
 
 async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
@@ -5968,15 +6033,31 @@ fn capture_app_hook_inputs(
 ) -> Result<()> {
     let sensitivity = declaration_sensitivity(declaration);
     for spec in &hook.env {
-        capture_env_identity(
-            context,
-            versions,
-            &spec.source,
-            sensitivity.get(&spec.source).copied(),
-            state,
-            permissions,
-        )?;
-        if !context.env.contains_key(&spec.source) {
+        let declared_sensitivity = sensitivity.get(&spec.source).copied();
+        if context.env.contains_key(&spec.source) {
+            capture_env_identity(
+                context,
+                versions,
+                &spec.source,
+                declared_sensitivity,
+                state,
+                permissions,
+            )?;
+        } else if matches!(&hook.action, super::AppHookAction::Script { .. }) {
+            permissions.require(PermissionV1::Environment {
+                name: spec.source.clone(),
+                sensitivity: declared_sensitivity.unwrap_or(EnvironmentSensitivityV1::Plain),
+            });
+            state.public(format!("env:{}", spec.source), "missing")?;
+        } else {
+            capture_env_identity(
+                context,
+                versions,
+                &spec.source,
+                declared_sensitivity,
+                state,
+                permissions,
+            )?;
             permissions
                 .uncomputable
                 .insert("app_hook_env_missing".to_string());
@@ -6891,6 +6972,61 @@ install = {{ kind = 'package', provider = 'homebrew', package = 'tool' }}
                 | super::super::HostOperation::Run { .. }
                 | super::super::HostOperation::ApplySplitDns { .. }
         )));
+    }
+
+    #[tokio::test]
+    async fn app_script_hook_is_bound_into_the_parent_plan() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = ['TOKEN', 'OPTIONAL_TOKEN'] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\nnetwork = [{ scope = 'any' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }, { name = 'OPTIONAL_TOKEN', sensitivity = 'secret' }]\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"updated".to_vec())
+            .file("app/demo/refresh.ts", b"export {};".to_vec())
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("TOKEN".to_string(), "secret-looking-value".to_string());
+        seed_static_copy_app(&runtime, b"managed", None).await;
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.is_ready());
+        assert!(plan.permissions.required.contains(&PermissionV1::Command {
+            program: "bun".to_string(),
+        }));
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Execute,
+                    path: "preset:refresh.ts".to_string(),
+                })
+        );
+        assert!(
+            plan.permissions
+                .required
+                .iter()
+                .any(|permission| matches!(permission, PermissionV1::Network { .. }))
+        );
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("hook:0") && step.action == PlanActionV1::Execute
+        }));
+        let encoded = serde_json::to_string(&plan).unwrap();
+        assert!(!encoded.contains("secret-looking-value"));
+        assert_eq!(plan.operation, PlanOperationV1::Upgrade);
     }
 
     #[tokio::test]

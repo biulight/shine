@@ -298,7 +298,8 @@ explicitly:
 shine app artifact apply surge
 ```
 
-Shine does not implicitly run artifacts. Do not call `app artifact apply` from a lifecycle hook: an
+Shine does not implicitly run artifact operations. A lifecycle may run the same script through a
+script-form hook bound into its parent Plan, but must not call `app artifact apply`: an
 artifact has its own snapshot-bound Plan and must not inherit a parent App operation's approval. A
 failed manual apply fails the command. Manual apply/remove displays and revalidates a security Plan;
 automation must add `--yes`.
@@ -370,17 +371,20 @@ a mihomo `type: file` path inside `HomeDir`, loopback HTTP on the same device, o
 installs three inert reference lists under `HomeDir/ruleset/shine-source/` through ordinary managed
 app-file entries; customize those files in an overlay only when choosing the file-provider layout.
 The loopback and remote HTTP layouts do not reference these local files, so their URLs, intervals,
-and provider cache paths are unchanged. After installing or upgrading the managed references, Shine
-prints `shine app artifact apply clash-verge`; run it to render them into the active subscription. It
-does not change the active provider definitions by itself.
+and provider cache paths are unchanged. When `shine upgrade` changes this category, its approved
+post-upgrade script runs automatically. If the subscription bindings are already current, local
+reference changes immediately refresh every provider and close existing connections. If the
+rendered binding documents change, the script writes them without contacting providers that mihomo
+has not loaded yet; reselect the subscription and run `shine app artifact apply clash-verge`.
 After choosing one complete provider set, enable its matching
 policy groups and `prepend-rules`. `proxy: DIRECT` on loopback or private services affects only provider downloads;
 remove or change it when the server requires a proxy. Private domains that rely on system split DNS
 also require mihomo `dns.nameserver-policy` configuration.
 
-This artifact uses Bun, which must be installed on the machine. Run it explicitly after changing
-`merge.yaml` or a managed local reference list; external presets require a current target-scoped
-trust grant. Optional
+The artifact and post-upgrade script use Bun, which must be installed on the machine. The automatic
+hook runs only when `shine upgrade` actually changes a managed `clash-verge` file; use the explicit
+command for first-time setup, after reselecting changed bindings, or to retry a failed refresh.
+External script hooks require a current target-scoped trust grant. Optional
 `CLASH_CONTROLLER_URL` and `CLASH_CONTROLLER_TOKEN` values can request an immediate refresh. Without
 the URL, only that immediate refresh is skipped; providers still update on their own intervals. The
 artifact refreshes every name declared by the effective `merge.yaml` `rule-providers` mapping, so
@@ -402,8 +406,15 @@ category. Unchanged categories do not trigger hooks.
 
 Bind every environment input a hook consumes with its `env` list and declare the same names under
 the category permission declaration. Plan review hashes `plain` values and binds `secret` values by
-an opaque revision; neither value is serialized into the Plan. A missing hook input or secret
-identity blocks approval.
+an opaque revision; neither value is serialized into the Plan. A missing command-hook input or
+secret identity blocks approval. Script-hook inputs are optional like artifact inputs: missing
+values are snapshot-bound as missing and omitted from the child environment.
+
+Each hook declares exactly one action. `command` runs direct argv. `script` resolves a native or Bun
+script from the reviewed Preset snapshot, injects its declared `env` values plus the fixed
+`SHINE_APP_*` contract, and executes inside the parent lifecycle Plan. `runtime` is valid only for a
+script hook; Bun scripts use the same extension and locked-dependency rules as artifacts and
+generators.
 
 ```toml
 post_upgrade = [
@@ -417,6 +428,24 @@ environment = [
   { name = "API_TOKEN", sensitivity = "secret" },
 ]
 commands = ["my-reloader"]
+```
+
+```toml
+post_upgrade = [{
+  script = "refresh.ts",
+  runtime = "bun",
+  env = ["API_URL", "API_TOKEN"],
+}]
+
+[permissions]
+schema_version = 1
+filesystem = [{ access = ["execute"], base = "preset", path = "refresh.ts" }]
+network = [{ scope = "any" }]
+commands = ["bun"]
+environment = [
+  { name = "API_URL", sensitivity = "plain" },
+  { name = "API_TOKEN", sensitivity = "secret" },
+]
 ```
 
 Hooks and generators in external presets require target-scoped trust:

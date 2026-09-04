@@ -598,12 +598,13 @@ external teardown without stopping owned-file removal. Surge ships a symmetric b
 `unbuild.ts`; other app
 presets may still keep artifact-specific reversal logic in an overlay.
 
-**Lifecycle command hooks (`apps/hooks.rs`).** `post_install` (fired by `install`, including
-`--replace-managed`) and
-`post_upgrade` (fired by `upgrade`) share one runner, `run_app_hooks(config, get_category, changed,
-HookPhase)` — run once per *changed* category, gated by target-scoped trust for external presets,
-failures non-fatal. These are plain argv commands with only their declared env allowlist — distinct from
-the explicit `[artifact].env` + fixed `SHINE_APP_*` artifact contract.
+**Lifecycle hooks (`CoreRuntime::run_app_hooks`).** `post_install` (fired by `install`, including
+`--replace-managed`) and `post_upgrade` (fired by upgrade or explicit generator refresh) run once
+per changed category, require target-scoped trust for external code, and remain non-fatal. A command
+hook runs direct argv with its declared env allowlist. A script hook resolves native/Bun code from
+the immutable snapshot, is planned and materialized inside the parent lifecycle operation, and
+receives its declared env plus the fixed `SHINE_APP_*` contract. It never creates or inherits a
+separate artifact approval.
 
 ## Shell install / uninstall
 

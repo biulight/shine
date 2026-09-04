@@ -3,6 +3,10 @@ description = "Clash Verge Rev subscription enhancements: layers a LAN proxy, po
 dest = "~/.shine/clash-verge"
 list_mode = "files"
 
+post_upgrade = [
+  { script = "build.ts", runtime = "bun", env = ["CLASH_PROFILES_FILE", "CLASH_CONTROLLER_URL", "CLASH_CONTROLLER_TOKEN"], show_output = true },
+]
+
 # `shine app artifact apply clash-verge` runs the artifact script to refresh the mihomo
 # rule-providers via the external controller — the analog of `surge-cli reload`.
 # HTTP providers re-pull their source; file providers reload their local file.
@@ -17,13 +21,12 @@ list_mode = "files"
 # macOS-only bash artifact — clash-verge's artifact works on macOS/Windows/Linux
 # (CVR is cross-platform). bun is an external prerequisite (https://bun.sh).
 #
-# The real logic (rendering the active subscription's four bound enhancement
-# files + refreshing rule-providers) lives in the explicit artifact because it
-# receives its own `[artifact].env` allowlist and has a separately reviewed,
-# fresh security Plan. Do not invoke `shine app artifact apply` from a lifecycle
-# hook: a nested artifact Plan can race the parent App transaction and must not
-# inherit its approval. When managed files change, Shine prints the explicit
-# artifact command; run it after changing merge.yaml or the local rule references.
+# The same idempotent script is both the explicit artifact and this category's
+# script-form post-upgrade hook. The hook is bound directly into the parent App
+# Plan; it never recursively launches `shine app artifact apply`. A local rule
+# update can therefore refresh immediately. If rendering changes CVR's bound
+# editor files, the script preserves the existing two-stage flow: reselect the
+# subscription, then run the explicit artifact command to refresh its providers.
 
 [artifact]
 script = "build.ts"
@@ -38,7 +41,7 @@ filesystem = [
   { access = ["execute"], base = "preset", path = "unbuild.ts" },
 ]
 network = [{ scope = "any" }]
-commands = ["bun", "shine"]
+commands = ["bun"]
 environment = [
   { name = "CLASH_PROFILES_FILE", sensitivity = "plain" },
   { name = "CLASH_CONTROLLER_URL", sensitivity = "plain" },

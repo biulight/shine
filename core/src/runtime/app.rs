@@ -53,10 +53,19 @@ pub enum AppListMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppHook {
-    pub command: String,
+    pub action: AppHookAction,
     pub args: Vec<String>,
     pub show_output: bool,
     pub env: Vec<EnvVarSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppHookAction {
+    Command(String),
+    Script {
+        script: PathBuf,
+        runtime: ArtifactRuntime,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2629,6 +2638,19 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                     ))?;
                 }
             }
+            for hook in category.post_install.iter().chain(&category.post_upgrade) {
+                if let AppHookAction::Script {
+                    script,
+                    runtime: ArtifactRuntime::Bun,
+                } = &hook.action
+                {
+                    self.bun_dependency_arg(&format!(
+                        "app/{}/{}",
+                        category.name,
+                        script.display()
+                    ))?;
+                }
+            }
         }
         Ok(has_metadata)
     }
@@ -2751,7 +2773,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             let mut completed = true;
             let mut notes = Vec::new();
             for hook in hooks {
-                let env = hook
+                let mut env: BTreeMap<String, String> = hook
                     .env
                     .iter()
                     .filter_map(|spec| {
@@ -2761,11 +2783,48 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                             .map(|value| (spec.target.clone(), value.clone()))
                     })
                     .collect();
+                let (program, mut args, cwd) = match &hook.action {
+                    AppHookAction::Command(command) => (command.clone(), Vec::new(), None),
+                    AppHookAction::Script { script, runtime } => {
+                        let logical = format!("app/{}/{}", category_name, script.display());
+                        match self
+                            .prepare_app_script(&category_name, &logical, *runtime, true)
+                            .await
+                        {
+                            Ok(prepared) => {
+                                env.extend(self.fixed_app_contract_env(
+                                    &category_name,
+                                    &prepared.category_root,
+                                ));
+                                (
+                                    prepared.program,
+                                    prepared.args,
+                                    Some(prepared.category_root),
+                                )
+                            }
+                            Err(error) => {
+                                observer.emit(RuntimeEvent::Warning {
+                                    code: "app_hook_failed",
+                                    target: Some(format!("app/{category_name}")),
+                                    detail: format!("{}: {error}", script.display()),
+                                });
+                                completed = false;
+                                break;
+                            }
+                        }
+                    }
+                };
+                args.extend(hook.args.clone());
+                let label = match &hook.action {
+                    AppHookAction::Command(command) => command.clone(),
+                    AppHookAction::Script { script, .. } => script.display().to_string(),
+                };
                 let output = self
                     .host
                     .run(ProcessRequest {
-                        program: hook.command.clone(),
-                        args: hook.args.clone(),
+                        program,
+                        args,
+                        cwd,
                         env,
                         ..ProcessRequest::default()
                     })
@@ -2785,7 +2844,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                             target: Some(format!("app/{category_name}")),
                             detail: format!(
                                 "{} exited with {}{}",
-                                hook.command,
+                                label,
                                 display_exit_code(output.exit_code),
                                 process_detail(&output)
                             ),
@@ -2797,7 +2856,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                         observer.emit(RuntimeEvent::Warning {
                             code: "app_hook_failed",
                             target: Some(format!("app/{category_name}")),
-                            detail: format!("{}: {error}", hook.command),
+                            detail: format!("{label}: {error}"),
                         });
                         completed = false;
                         break;
@@ -3400,6 +3459,77 @@ mod lifecycle_tests {
             }],
         );
         assert_eq!(env.get("SHINE_APP_ID").map(String::as_str), Some("demo"));
+    }
+
+    #[tokio::test]
+    async fn bun_script_hook_runs_from_the_parent_lifecycle_and_failure_is_non_fatal() {
+        let home_dir = std::env::temp_dir().join("shine-core-script-hook");
+        let shine_dir = home_dir.join(".shine");
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = ['TOKEN'] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }]\n[[files]]\nsource = 'config'\n".to_vec(),
+            )
+            .file("app/demo/config", b"one".to_vec())
+            .file("app/demo/refresh.ts", b"export {};".to_vec())
+            .build();
+        let mut context = RuntimeContext::isolated(
+            home_dir,
+            shine_dir.clone(),
+            shine_dir.join("presets"),
+            shine_dir.join("bin"),
+            RuntimePlatform::Linux,
+        );
+        context
+            .env
+            .insert("TOKEN".to_string(), "opaque".to_string());
+        let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
+        let categories = runtime.app_categories(Some("demo")).unwrap();
+        runtime
+            .host()
+            .queue_process_output(Ok(crate::runtime::ProcessOutput {
+                exit_code: Some(0),
+                ..Default::default()
+            }));
+        let mut observer = NullObserver;
+        let success = runtime
+            .run_app_hooks(
+                AppHookRequest {
+                    categories: categories.clone(),
+                    changed: BTreeSet::from(["demo".to_string()]),
+                    phase: AppHookPhase::PostUpgrade,
+                    show_success: false,
+                },
+                &mut observer,
+            )
+            .await;
+        assert_eq!(success.outcomes[0].status, LifecycleStatus::Changed);
+        assert!(runtime.host().operations().iter().any(|operation| matches!(
+            operation,
+            HostOperation::Run { program, args }
+                if program == "bun" && args.first().is_some_and(|arg| arg == "--no-install")
+        )));
+
+        runtime
+            .host()
+            .queue_process_output(Ok(crate::runtime::ProcessOutput {
+                exit_code: Some(1),
+                stderr: b"controller unavailable".to_vec(),
+                ..Default::default()
+            }));
+        let failed = runtime
+            .run_app_hooks(
+                AppHookRequest {
+                    categories,
+                    changed: BTreeSet::from(["demo".to_string()]),
+                    phase: AppHookPhase::PostUpgrade,
+                    show_success: false,
+                },
+                &mut observer,
+            )
+            .await;
+        assert_eq!(failed.outcomes[0].status, LifecycleStatus::Failed);
+        assert_eq!(failed.outcomes[0].diagnostic_codes, ["app_hook_failed"]);
     }
 
     #[tokio::test]

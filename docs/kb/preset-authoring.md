@@ -178,11 +178,21 @@ tables. Both run direct argv commands only when the category actually changed:
   `--replace-managed`.
 - `post_upgrade` runs after an upgrade that writes or installs at least one file.
 - External preset/overlay hooks require `shine trust grant app/<category>` after review.
-- Hooks inherit only the parent environment. They do not receive `[env]` values or `SHINE_APP_*`.
+- Command hooks receive only their declared `[env]` mappings in addition to the process baseline;
+  they do not receive the fixed `SHINE_APP_*` contract.
 - `show_output = true` prints successful stdout; otherwise success is quiet.
 
-Use a hook for a lifecycle action such as reload/setup. Use an artifact when the action needs the
-artifact environment contract or explicit user invocation.
+A hook may instead declare `script` plus an optional `runtime = "bun"`. Script hooks are resolved
+from the same immutable Preset snapshot as generators and artifacts, receive their declared `env`
+mapping plus the fixed `SHINE_APP_*` contract, and execute inside the parent lifecycle Plan. The
+script path needs a Preset `execute` permission and Bun needs a command declaration. `command` and
+`script` are mutually exclusive; `runtime` is valid only with `script`. Never use a command hook to
+recursively launch `shine app artifact apply`: that mutation owns a separate Plan. Command-hook
+inputs remain required; script-hook inputs follow artifact semantics and may be absent, in which
+case the Plan binds the missing state and execution omits the variable.
+
+Use a command hook for a direct reload/setup command, a script hook for a snapshot-bound lifecycle
+script, and an artifact when the action must remain an explicit user invocation.
 
 ### Generated files
 

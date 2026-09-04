@@ -101,6 +101,9 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
   explicit `app_legacy_overlay_metadata` migration diagnostic before external-code trust is relevant.
 - **Rule**: a lifecycle hook must not launch another mutation that owns its own security Plan;
   model it as one combined operation or require an explicit follow-up command.
+- **Follow-up (2026-09-04)**: script-form hooks provide that combined operation. Their source,
+  runtime, inputs, permissions, and embedded materialization are part of the parent lifecycle Plan;
+  they do not relax the ban on invoking `shine app artifact apply` from a command hook.
 
 ## 2026-09-04 — Legacy App relocation receipts must converge before execution
 

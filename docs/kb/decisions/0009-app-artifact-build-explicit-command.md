@@ -112,18 +112,11 @@ app manifest installs, updates, backs up, and uninstalls them under `ruleset/shi
 HTTPS provider examples do not reference these files; their URLs, intervals, and cache paths remain
 unchanged.
 
-**Opt-in auto-run via hooks.** The core principle above — Shine's install/upgrade machinery never
-runs an artifact implicitly — is unchanged: there is still no `run_on_upgrade` field and the runner
-never invokes the artifact on its own. But a preset MAY *opt in* to auto-running its build by
-declaring a `post_install`/`post_upgrade` hook that re-invokes `shine app artifact apply <id>` (a fresh shine
-process that re-enters the artifact with the full `[env]` + `SHINE_APP_*` contract that hooks
-themselves don't get). `clash-verge` does this so `shine app install`/`shine upgrade` update the
-bound subscription enhancement files when `merge.yaml` changes. This is only appropriate because
-clash-verge's artifact is **idempotent and safe** (write-if-changed, then refresh only after CVR
-has applied it); surge does
-NOT do this — its artifact patches a live profile (provider-specific, order-sensitive), which is
-exactly the kind of side effect this ADR keeps behind an explicit command. Constraints: the hook
-needs `shine` on PATH; external presets need `allow_app_hooks = true`; it fires only when the
-preset's own files change (not on unrelated `shine upgrade` runs; managed local rule-reference
-edits now count as preset changes); no recursion, since `shine app artifact apply` fires neither install nor upgrade
-hooks.
+**Script-form lifecycle reuse.** ADR 0076 adds script-form hooks that execute inside the parent App
+Plan. This does not make artifacts implicit and does not permit a command hook to invoke
+`shine app artifact apply <id>` recursively. `clash-verge` safely points its `post_upgrade` script
+hook at the same idempotent `build.ts`: the parent upgrade Plan binds the script, runtime, inputs,
+permissions, and materialization before any managed file changes. The hook fires only when that
+category changes. Current bindings refresh providers immediately; changed bindings retain the
+reselect-then-explicit-apply flow that avoids first-apply HTTP 404 responses. Surge keeps only its
+direct reload command hook; its profile-patching artifact remains explicit.

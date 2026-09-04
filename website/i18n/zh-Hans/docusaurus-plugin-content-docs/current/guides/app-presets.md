@@ -243,7 +243,8 @@ shine app refresh surge subscription-proxies.conf
 shine app artifact apply surge
 ```
 
-Shine 不会隐式运行 artifact。不要在生命周期钩子中调用 `app artifact apply`：artifact 有独立的
+Shine 不会隐式运行 artifact 操作。生命周期可以通过纳入父 Plan 的脚本型钩子复用同一个脚本，
+但不要在钩子中调用 `app artifact apply`：artifact 有独立的
 快照绑定 Plan，不能继承父 App 操作的批准。手动 apply/remove 会显示并重新校验安全 Plan；自动化
 调用必须添加 `--yes`，执行失败会让命令直接失败。
 当某个声明 artifact 的类别在安装或升级中确实改动了受管文件时，Shine 会打印显式 apply 命令；没有受管文件
@@ -291,9 +292,9 @@ shine app artifact apply clash-verge
 
 Shine 只读取 `profiles.yaml` 定位这些绑定文件，不会修改订阅、创建绑定或写入远端订阅 YAML。构建写入新内容后，在 Clash Verge Rev 中重新选择一次订阅，再运行构建即可请求立即刷新 rule-provider。
 
-示例沿用上述三类流量，并为 rule-provider 提供三套互斥布局：mihomo `HomeDir` 内的 `type: file`、同设备的 loopback HTTP 服务，或远程 HTTPS 服务。Shine 会通过普通受管 app 文件把三份默认不生效的参考规则安装到 `HomeDir/ruleset/shine-source/`；只有选择 file provider 时才需要在 overlay 中覆盖这些文件。loopback 和远程 HTTP 布局不会引用它们，因此 URL、interval 与 provider 缓存路径保持不变。安装或升级这些受管参考文件后，Shine 会打印 `shine app artifact apply clash-verge`；运行它即可将规则渲染到当前订阅。该命令本身不会改动当前 provider 定义。选择一整套 provider 后，还需同步启用对应策略组与 `prepend-rules`。loopback 或私有服务的 `proxy: DIRECT` 只控制 provider 下载，如服务器只能经代理访问，应删除或调整它。私有域名依赖系统 split DNS 时，还需配置 mihomo 自己的 `dns.nameserver-policy`。
+示例沿用上述三类流量，并为 rule-provider 提供三套互斥布局：mihomo `HomeDir` 内的 `type: file`、同设备的 loopback HTTP 服务，或远程 HTTPS 服务。Shine 会通过普通受管 app 文件把三份默认不生效的参考规则安装到 `HomeDir/ruleset/shine-source/`；只有选择 file provider 时才需要在 overlay 中覆盖这些文件。loopback 和远程 HTTP 布局不会引用它们，因此 URL、interval 与 provider 缓存路径保持不变。`shine upgrade` 实际更新该类别后，会自动运行已审批的 post-upgrade 脚本。若订阅绑定内容已经生效，本地参考规则更新会立即刷新全部 provider 并关闭旧连接；若渲染结果改变了绑定文件，脚本只写入文件，不请求 mihomo 尚未加载的 provider。此时请重新选择订阅，再运行 `shine app artifact apply clash-verge`。选择一整套 provider 后，还需同步启用对应策略组与 `prepend-rules`。loopback 或私有服务的 `proxy: DIRECT` 只控制 provider 下载，如服务器只能经代理访问，应删除或调整它。私有域名依赖系统 split DNS 时，还需配置 mihomo 自己的 `dns.nameserver-policy`。
 
-该 artifact 使用 Bun，运行机器必须已安装 Bun。在 `merge.yaml` 或受管本地参考规则变化后，请显式运行它；外部预设需要当前 target-scoped trust grant。即时刷新还可使用 `[env]` 中的 `CLASH_CONTROLLER_URL` 和 `CLASH_CONTROLLER_TOKEN`；未配置 URL 时只跳过立即刷新，provider 仍按自身 interval 更新。artifact 会刷新最终生效的 `merge.yaml` 中 `rule-providers` 映射声明的全部名称，自定义 provider 名称无需同步修改脚本。该映射缺失、为 null 或为空时跳过刷新；存在但不是映射时报告配置错误。所有已声明 provider 都刷新成功后，artifact 还会关闭当前全部 mihomo 连接，使浏览器和其它应用自动重连并立即按新规则匹配，无需重启应用；正在进行的下载或其它长连接可能会短暂中断。控制器令牌不要写入 overlay 或文档。
+artifact 和 post-upgrade 脚本都使用 Bun，运行机器必须已安装 Bun。自动钩子仅在 `shine upgrade` 确实改动 `clash-verge` 受管文件时运行；首次设置、重选变化后的绑定或刷新失败重试仍使用显式命令。外部脚本型钩子需要当前 target-scoped trust grant。即时刷新还可使用 `[env]` 中的 `CLASH_CONTROLLER_URL` 和 `CLASH_CONTROLLER_TOKEN`；未配置 URL 时只跳过立即刷新，provider 仍按自身 interval 更新。artifact 会刷新最终生效的 `merge.yaml` 中 `rule-providers` 映射声明的全部名称，自定义 provider 名称无需同步修改脚本。该映射缺失、为 null 或为空时跳过刷新；存在但不是映射时报告配置错误。所有已声明 provider 都刷新成功后，artifact 还会关闭当前全部 mihomo 连接，使浏览器和其它应用自动重连并立即按新规则匹配，无需重启应用；正在进行的下载或其它长连接可能会短暂中断。控制器令牌不要写入 overlay 或文档。
 
 `shine app artifact remove clash-verge` 不会清除 Clash Verge Rev 自己保存的订阅绑定；完全移除时还需在应用中手动清空上述四个编辑器。
 
@@ -301,9 +302,12 @@ Shine 只读取 `profiles.yaml` 定位这些绑定文件，不会修改订阅、
 
 预设作者可以声明 `post_install` 和 `post_upgrade` 钩子：前者在安装实际写入文件后运行，后者只在 `shine upgrade` 实际更新该类别至少一个文件后运行；未变化的类别不会触发。
 
+每个钩子必须且只能声明一种动作。`command` 直接运行 argv；`script` 从已审查的 Preset 快照解析 native 或 Bun 脚本，将自身 `env` 声明的值与固定 `SHINE_APP_*` 环境一起注入，并作为父生命周期 Plan 的一部分执行。`runtime` 只能与 `script` 同用；Bun 脚本沿用 artifact 和 generator 的扩展名及锁定依赖规则。
+
 钩子读取的每个环境输入都必须列入钩子的 `env`，并在类别权限声明中声明同名变量。Plan 审阅会对
-`plain` 值取 hash，并以 opaque revision 绑定 `secret` 值；Plan 不会序列化任何原值。缺少钩子输入
-或 secret identity 时不能批准。
+`plain` 值取 hash，并以 opaque revision 绑定 `secret` 值；Plan 不会序列化任何原值。command hook
+输入缺失或 secret identity 不可用时不能批准。脚本型 hook 的输入与 artifact 一样可选：缺失状态
+会绑定进快照，但不会注入子进程环境。
 
 ```toml
 post_upgrade = [
@@ -317,6 +321,24 @@ environment = [
   { name = "API_TOKEN", sensitivity = "secret" },
 ]
 commands = ["my-reloader"]
+```
+
+```toml
+post_upgrade = [{
+  script = "refresh.ts",
+  runtime = "bun",
+  env = ["API_URL", "API_TOKEN"],
+}]
+
+[permissions]
+schema_version = 1
+filesystem = [{ access = ["execute"], base = "preset", path = "refresh.ts" }]
+network = [{ scope = "any" }]
+commands = ["bun"]
+environment = [
+  { name = "API_URL", sensitivity = "plain" },
+  { name = "API_TOKEN", sensitivity = "secret" },
+]
 ```
 
 外部预设中的钩子和 generator 需要 target-scoped trust：

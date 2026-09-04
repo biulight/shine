@@ -271,7 +271,15 @@ impl RuntimeObserver for InstallObserver<'_> {
                     let sequence = hooks
                         .iter()
                         .map(|hook| {
-                            std::iter::once(hook.command.as_str())
+                            let program = match &hook.action {
+                                shine_core::runtime::AppHookAction::Command(command) => {
+                                    command.as_str()
+                                }
+                                shine_core::runtime::AppHookAction::Script { script, .. } => {
+                                    script.to_str().unwrap_or("<script>")
+                                }
+                            };
+                            std::iter::once(program)
                                 .chain(hook.args.iter().map(String::as_str))
                                 .map(crate::shell_quote::quote_if_needed)
                                 .collect::<Vec<_>>()
