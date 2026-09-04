@@ -6651,6 +6651,47 @@ mod tests {
                 ))
         );
     }
+    async fn frontend_recover(
+        runtime: &CoreRuntime<InMemoryHost>,
+        request: crate::frontend::ReviewRequest,
+        expected: &PlanV1,
+    ) {
+        use crate::frontend::{ExecutionOptions, ExecutionResultV1, FrontendService};
+        let service = FrontendService::new(CoreRuntime::new(
+            runtime.host().clone(),
+            runtime.context().clone(),
+            runtime.presets().clone(),
+        ));
+        let readonly = service.read_only().request_review(&request).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&readonly.plan).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        let trusted = service.into_trusted();
+        let reviewed = trusted.review(request).await.unwrap();
+        let approved = reviewed.approve_after_human_confirmation().unwrap();
+        let mut events = Vec::new();
+        let execution = trusted
+            .apply(
+                approved,
+                ExecutionOptions::default(),
+                &mut super::super::NullObserver,
+                &mut Interaction,
+                &mut events,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            execution.report.result,
+            ExecutionResultV1::Recovery { .. }
+        ));
+        assert_eq!(execution.report.operation, expected.operation);
+        let encoded = serde_json::to_string(&execution.report).unwrap();
+        assert!(!encoded.contains("approved_permissions"));
+        assert!(!encoded.contains(runtime.context().home_dir.to_string_lossy().as_ref()));
+        assert_eq!(events.len(), 2);
+    }
+
     struct Interaction;
 
     impl RuntimeInteraction for Interaction {
@@ -7905,11 +7946,12 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
             step.diagnostic_codes
                 .contains(&"app_recovery_restore_json_relocation".to_string())
         }));
-        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-        runtime
-            .recover_app_operation_approved(&recovery_approval)
-            .await
-            .unwrap();
+        frontend_recover(
+            &runtime,
+            crate::frontend::ReviewRequest::AppRecovery,
+            &recovery_plan,
+        )
+        .await;
         assert!(runtime.host().read(&previous).await.is_err());
         assert!(runtime.host().read(&desired).await.is_err());
         assert!(runtime.host().read(&rollback).await.is_err());
@@ -9896,11 +9938,12 @@ path = '$HOME/.tool/bin'
         let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
         assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, true).await;
         assert!(recovery_plan.is_ready());
-        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
-        runtime
-            .recover_sys_operation_approved(&recovery_approval)
-            .await
-            .unwrap();
+        frontend_recover(
+            &runtime,
+            crate::frontend::ReviewRequest::SysRecovery,
+            &recovery_plan,
+        )
+        .await;
         let restored = String::from_utf8(runtime.host().read(&profile).await.unwrap()).unwrap();
         assert!(restored.contains("before"));
         assert!(restored.contains("user-after-interruption"));
@@ -10354,11 +10397,12 @@ target = '$HOME/.config/disabled.txt'
             step.diagnostic_codes
                 .contains(&"shell_recovery_restore_previous_cache".to_string())
         }));
-        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-        runtime
-            .recover_shell_operation_approved(&approval)
-            .await
-            .unwrap();
+        frontend_recover(
+            &runtime,
+            crate::frontend::ReviewRequest::ShellRecovery,
+            &recovery,
+        )
+        .await;
         assert!(runtime.host().metadata(&source).await.is_err());
         assert!(
             ShellManifest::load(runtime.host(), &runtime.context().shine_dir)

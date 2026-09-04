@@ -149,6 +149,19 @@ pub struct ProjectedObserver<'a, O, S> {
 }
 
 impl<'a, O: RuntimeObserver, S: FrontendEventSink> ProjectedObserver<'a, O, S> {
+    /// Completion means the call finished; its result may still contain failed outcomes.
+    pub(crate) fn emit_operation_status(&mut self, status: Option<FrontendEventStatusV1>) {
+        let event = FrontendEventV1 {
+            schema_version: FRONTEND_EVENT_SCHEMA_VERSION,
+            sequence: self.projector.sequence,
+            kind: FrontendEventKindV1::Progress,
+            target: None,
+            status,
+        };
+        self.projector.sequence = self.projector.sequence.saturating_add(1);
+        self.safe.emit(event);
+    }
+
     pub fn new(plan: &PlanV1, local: &'a mut O, safe: &'a mut S) -> Self {
         Self {
             projector: EventProjector::for_plan(plan),

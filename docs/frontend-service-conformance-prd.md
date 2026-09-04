@@ -1,6 +1,6 @@
 # Frontend Service and Conformance PRD
 
-> **Status:** Roadmap Phase 6 in progress; Slices 6A–6C implemented, trusted mutation remains.
+> **Status:** Roadmap Phase 6 complete; Slices 6A–6D and conformance gates verified.
 > This document is internal and does not define a released CLI or JSON interface.
 
 ## Summary
@@ -12,7 +12,8 @@ results without turning the workspace-internal `CoreRuntime` into a general remo
 
 Slices 6A–6C introduce Contract v1 inventory, inspection, Plan review, journal-derived operation
 state and safe events, and migrate CLI data collection while preserving terminal behavior. Slice 6D
-will complete trusted mutation and adapter conformance under the accepted approval boundary.
+completes shared bootstrap, restricted read-only access, trusted mutation and adapter conformance
+under the accepted approval boundary.
 
 ## Goals
 
@@ -53,14 +54,15 @@ sorts by kind and canonical identity, and diagnoses installed targets whose curr
 missing. A local service failure retains its source error only in a non-serializable wrapper; the
 stable diagnostic never copies that source.
 
-The existing `RuntimeEvent` remains a local presentation side channel. A future event contract must
-be a new explicit safe projection, not `Serialize` added to `RuntimeEvent`.
+The existing `RuntimeEvent` remains a local presentation side channel. `FrontendEventV1` is an
+explicit safe projection; `RuntimeEvent` remains non-serializable.
 
 ## Approval ownership
 
-A Plan or serialized review request never proves approval. A trusted CLI or UI may create a
-process-local `PlanApprovalV1` only after an affirmative human action over the freshly displayed
-ready Plan. An AI or MCP adapter may request review but must not expose approval construction,
+A Plan or serialized review request never proves approval. A trusted CLI or UI consumes a local
+human review to create a non-cloneable, non-serializable `ApprovedOperation` after an affirmative
+human action over the freshly displayed ready Plan. The legacy `PlanApprovalV1` stays inside Core
+execution and durable journals. An AI or MCP adapter may request review but must not expose approval construction,
 accept an approval-shaped payload from a model, forward `--yes` authority, or call mutation on the
 user's behalf. Apply must still recapture state, regenerate the exact Plan, and validate its
 fingerprint and permission set.
@@ -110,6 +112,16 @@ permissions; the English and Chinese manuals and production builds cover that vi
   unsupported journals, and adversarial private event payloads across App/Shell/Sys.
 
 ## Slice 6D acceptance
+
+Implemented in ADR 0080. Final workspace verification passed 1,212 tests plus six compile-fail
+doc-tests, all-target Clippy, formatting, dependency policy and spelling checks. New conformance
+fixtures cover Core/CLI-like/UI-like ordinary lifecycle results, specialized refresh/artifact and
+bootstrap/profile identities, exact secret-version reuse, source/configuration/state invalidation,
+and safe read-only errors. Existing interruption fixtures additionally execute App/Shell/Sys
+recovery through the service. A repository boundary test guards CLI execution routing.
+
+These checks ran on the local macOS host with in-memory domain fixtures and existing CLI tests;
+this stage did not repeat the real Linux/Windows release smoke gate or ship a new frontend.
 
 - Shared bootstrap captures resolved context and one immutable effective snapshot. Read-only
   adapters receive a restricted facade returning safe reports, without runtime, execution,

@@ -5,6 +5,13 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **Frontend approval is a consumed local capability.** Trusted human review retains the exact
+  request and opaque configuration revision. Execution consumes a non-cloneable, non-serializable
+  handoff and regenerates the Plan before delegating to approved Core methods. Read-only adapters
+  receive neither runtime nor approval access; their error values contain only safe diagnostics,
+  never raw error chains. CLI adapters render local details but cannot independently match approval
+  or reconstruct an execution request (ADR 0080).
+
 - **Frontend operation state never replaces recovery assessment.** Journal progress is durable
   bookkeeping and may lag an OS effect; it does not prove a live worker exists. The domain builds
   its summary and recovery Plan from one captured journal, and only the existing fingerprint,

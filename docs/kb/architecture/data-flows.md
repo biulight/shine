@@ -119,6 +119,24 @@ original event only to trusted local presentation while sending the safe project
 sink. Events convey progress, not approval, a durable replay cursor or recovery authority. See
 ADR 0079.
 
+## Frontend authority and execution
+
+`FrontendService::capture` accepts distribution-resolved context and source settings and delegates
+effective snapshot capture to the shared host-backed bootstrap. Trusted distribution code supplies
+an opaque configuration revision. `ReadOnlyFrontend` returns only safe reports and safe diagnostic
+errors; it has no execution, generator evaluation, runtime or approval constructor access.
+
+Trusted human review retains the exact request and configuration revision alongside the Plan.
+After confirmation, its consumed `ApprovedOperation` carries that request through fresh validation
+and the shared execution dispatcher. CLI preparation recaptures configuration and Presets before
+execution; all domain adapters call `lifecycle_plan::execute_reviewed` and only render returned local
+details. They do not construct legacy approval, match fingerprints or rebuild execution requests.
+
+The service emits safe progress around all dispatched calls and preserves raw observer events for
+local renderers. Normal operations reuse `LifecycleResultV1`; specialized operations and recovery
+retain distinct identities in `ExecutionReportV1`. Successful call completion does not imply every
+item succeeded. Validation rejection produces no execution events or effects. See ADR 0080.
+
 ## Preset source compatibility and migration
 
 `shine preset migrate` is routed before mutable config initialization. Default scope uses read-only

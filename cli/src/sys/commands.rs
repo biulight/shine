@@ -438,14 +438,19 @@ async fn handle_init_for_os(
     .next()
     .context("missing reviewed Sys bootstrap Plan")?;
     let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
-    let report = runtime
-        .run_sys_bootstrap_approved(
-            plan_request,
-            &reviewed.approval,
-            &mut interaction,
-            &mut observer,
-        )
-        .await?;
+    let report = match crate::lifecycle_plan::execute_reviewed(
+        config,
+        runtime,
+        reviewed,
+        shine_core::frontend::ExecutionOptions::default(),
+        &mut observer,
+        &mut interaction,
+    )
+    .await?
+    {
+        shine_core::frontend::OperationDetails::SysBootstrap(report) => *report,
+        _ => unreachable!("reviewed operation result type"),
+    };
     println!();
     print_sys_summary(&report.outcomes);
     if report

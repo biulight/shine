@@ -9,7 +9,7 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Root cause**: the planner copied the durable ActionIR resource label, which can contain a
   physical destination, into the public Plan step.
 - **Fix**: derive `managed-file`, `split-dns`, or `profile-blocks` from the action kind while
-  preserving existing journal bytes and exact scoped permissions (Phase 6C).
+  preserving existing journal bytes and exact scoped permissions (`3d10c42`, Phase 6C).
 - **Rule**: project local journal metadata explicitly; never assume ActionIR labels are safe
   frontend report fields.
 

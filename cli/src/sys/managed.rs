@@ -433,17 +433,19 @@ async fn run_managed_for_os_with_prepared_reporter(
         action,
         started: false,
     };
-    let core = runtime
-        .run_managed_sys_approved(
-            match &reviewed.request {
-                crate::lifecycle_plan::LifecyclePlanRequest::Sys(request) => request.clone(),
-                _ => unreachable!("reviewed Sys Plan"),
-            },
-            &reviewed.approval,
-            interaction,
-            &mut observer,
-        )
-        .await?;
+    let core = match crate::lifecycle_plan::execute_reviewed(
+        config,
+        runtime,
+        reviewed,
+        shine_core::frontend::ExecutionOptions::default(),
+        &mut observer,
+        interaction,
+    )
+    .await?
+    {
+        shine_core::frontend::OperationDetails::SysManaged(report) => *report,
+        _ => unreachable!("reviewed operation result type"),
+    };
     finish_managed_report(core, output_mode, &mut observer)
 }
 

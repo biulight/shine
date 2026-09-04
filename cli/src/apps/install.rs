@@ -104,18 +104,20 @@ async fn handle_install_with_reporter(
         categories: &categories,
     };
     let mut interaction = TerminalInteraction;
-    let core_report = if let Some(reviewed) = &reviewed {
-        runtime
-            .install_apps_approved(
-                match &reviewed.request {
-                    crate::lifecycle_plan::LifecyclePlanRequest::App(request) => request.clone(),
-                    _ => unreachable!("reviewed App Plan"),
-                },
-                &reviewed.approval,
-                &mut observer,
-                &mut interaction,
-            )
-            .await?
+    let core_report = if let Some(reviewed) = reviewed {
+        match crate::lifecycle_plan::execute_reviewed(
+            config,
+            runtime,
+            reviewed,
+            shine_core::frontend::ExecutionOptions::default(),
+            &mut observer,
+            &mut interaction,
+        )
+        .await?
+        {
+            shine_core::frontend::OperationDetails::App(report) => *report,
+            _ => unreachable!("reviewed operation result type"),
+        }
     } else {
         runtime
             .preview_install_apps(

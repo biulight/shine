@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 use shine_core::plan::{
     EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, PermissionV1, PlanActionV1,
-    PlanApprovalV1, PlanV1,
+    PlanV1,
 };
 use shine_core::runtime::{
     AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest, CoreRuntime,
@@ -122,11 +122,10 @@ impl LifecyclePlanRequest {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct ReviewedLifecyclePlan {
     pub(crate) request: LifecyclePlanRequest,
-    pub(crate) approval: PlanApprovalV1,
-    config_digest: String,
+    pub(crate) approved: shine_core::frontend::ApprovedOperation,
 }
 
 pub(crate) struct PreparedLifecyclePlan {
@@ -176,18 +175,22 @@ async fn review_plans_with_render_mode(
     let config_digest = active_config_digest(config).await?;
     let mut runtime = runtime_with_env(config).await?;
     let mut planned = Vec::new();
+    let mut human_reviews = Vec::new();
     let mut needs_confirmation = false;
     let mut blocked = false;
     let mut blocked_diagnostics = std::collections::BTreeSet::new();
     for request in requests {
         request.configure_runtime(&mut runtime);
-        let service = shine_core::frontend::FrontendService::new(runtime);
-        let plan = service
-            .review(&request.service_request())
+        let trusted = shine_core::frontend::FrontendService::new(runtime)
+            .with_configuration_revision(Some(config_digest.clone()))
+            .into_trusted();
+        let human_review = trusted
+            .review(request.service_request())
             .await
-            .map_err(shine_core::frontend::FrontendServiceError::into_source)?
-            .plan;
-        runtime = service.into_runtime();
+            .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+        let plan = human_review.report().plan.clone();
+        human_reviews.push(human_review);
+        runtime = trusted.into_runtime();
         blocked |= !plan.is_ready();
         blocked_diagnostics.extend(
             plan.steps
@@ -238,11 +241,13 @@ async fn review_plans_with_render_mode(
     }
     planned
         .into_iter()
-        .map(|(request, plan)| {
+        .zip(human_reviews)
+        .map(|((request, _), human_review)| {
             Ok(ReviewedLifecyclePlan {
                 request,
-                approval: PlanApprovalV1::for_reviewed_plan(&plan)?,
-                config_digest: config_digest.clone(),
+                approved: human_review
+                    .approve_after_human_confirmation()
+                    .map_err(shine_core::frontend::FrontendServiceError::into_source)?,
             })
         })
         .collect()
@@ -379,19 +384,41 @@ pub(crate) async fn prepare_runtime(
     config: &Config,
     reviewed: &ReviewedLifecyclePlan,
 ) -> Result<CoreRuntime<RealHost>> {
-    if active_config_digest(config).await? != reviewed.config_digest {
-        bail!("active configuration changed after security Plan review; no changes were made");
-    }
+    let revision = active_config_digest(config).await?;
     let mut runtime = runtime_with_env(config).await?;
     reviewed.request.configure_runtime(&mut runtime);
-    let service = shine_core::frontend::FrontendService::new(runtime);
-    let current = service
-        .review(&reviewed.request.service_request())
+    let trusted = shine_core::frontend::FrontendService::new(runtime)
+        .with_configuration_revision(Some(revision))
+        .into_trusted();
+    trusted
+        .validate_approved(&reviewed.approved)
         .await
-        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
-        .plan;
-    reviewed.approval.validate(&current)?;
-    Ok(service.into_runtime())
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+    Ok(trusted.into_runtime())
+}
+
+pub(crate) async fn execute_reviewed(
+    config: &Config,
+    runtime: CoreRuntime<RealHost>,
+    reviewed: ReviewedLifecyclePlan,
+    options: shine_core::frontend::ExecutionOptions,
+    observer: &mut impl shine_core::runtime::RuntimeObserver,
+    interaction: &mut impl shine_core::runtime::RuntimeInteraction,
+) -> Result<shine_core::frontend::OperationDetails> {
+    let trusted = shine_core::frontend::FrontendService::new(runtime)
+        .with_configuration_revision(Some(active_config_digest(config).await?))
+        .into_trusted();
+    let execution = trusted
+        .apply(
+            reviewed.approved,
+            options,
+            observer,
+            interaction,
+            &mut Vec::new(),
+        )
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+    Ok(execution.details)
 }
 
 async fn active_config_digest(config: &Config) -> Result<String> {

@@ -5,6 +5,57 @@ use shine_core::runtime::{
 use std::path::{Path, PathBuf};
 
 #[test]
+fn cli_lifecycle_authority_routes_through_frontend_service() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let review = std::fs::read_to_string(root.join("cli/src/lifecycle_plan.rs")).unwrap();
+    assert!(review.contains(".approve_after_human_confirmation()"));
+    assert!(review.contains(".validate_approved("));
+    assert!(!review.contains("PlanApprovalV1"));
+    for adapter in [
+        "apps/install.rs",
+        "apps/uninstall.rs",
+        "apps/upgrade.rs",
+        "apps/refresh.rs",
+        "apps/build.rs",
+        "apps/recovery.rs",
+        "shells/install.rs",
+        "shells/uninstall.rs",
+        "shells/recovery.rs",
+        "sys/managed.rs",
+        "sys/profile_commands.rs",
+        "sys/commands.rs",
+        "sys/recovery.rs",
+    ] {
+        let source = std::fs::read_to_string(root.join("cli/src").join(adapter)).unwrap();
+        assert!(
+            source.contains("lifecycle_plan::execute_reviewed("),
+            "{adapter}"
+        );
+        for method in [
+            "install_apps_approved",
+            "uninstall_apps_approved",
+            "upgrade_apps_approved",
+            "refresh_app_generators_approved",
+            "run_app_artifact_approved",
+            "install_shells_approved",
+            "uninstall_shells_approved",
+            "upgrade_shells_approved",
+            "run_managed_sys_approved",
+            "set_sys_profile_approved",
+            "run_sys_bootstrap_approved",
+            "recover_app_operation_approved",
+            "recover_shell_operation_approved",
+            "recover_sys_operation_approved",
+        ] {
+            assert!(
+                !source.contains(&format!(".{method}(")),
+                "{adapter} bypasses shared execution"
+            );
+        }
+    }
+}
+
+#[test]
 fn core_manifest_excludes_frontend_and_distribution_dependencies() {
     let manifest =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();

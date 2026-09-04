@@ -13,14 +13,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fmt;
 
+mod bootstrap;
+#[cfg(test)]
+mod conformance;
 mod events;
 mod inspection;
 mod operations;
+mod read_only;
 mod review;
+mod trusted;
 pub use events::*;
 pub use inspection::*;
 pub use operations::*;
+pub use read_only::*;
 pub use review::*;
+pub use trusted::*;
 
 pub const INVENTORY_REPORT_SCHEMA_VERSION: u32 = 1;
 
@@ -176,11 +183,15 @@ impl std::error::Error for FrontendServiceError {
 /// Frontend-neutral service over one fully captured Core runtime.
 pub struct FrontendService<H> {
     runtime: CoreRuntime<H>,
+    configuration_revision: Option<String>,
 }
 
 impl<H> FrontendService<H> {
     pub fn new(runtime: CoreRuntime<H>) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            configuration_revision: None,
+        }
     }
 
     pub fn runtime(&self) -> &CoreRuntime<H> {
@@ -456,7 +467,10 @@ mod tests {
     };
     use std::path::PathBuf;
 
-    fn runtime(host: InMemoryHost, presets: PresetSnapshot) -> CoreRuntime<InMemoryHost> {
+    pub(super) fn runtime(
+        host: InMemoryHost,
+        presets: PresetSnapshot,
+    ) -> CoreRuntime<InMemoryHost> {
         CoreRuntime::new(
             host,
             RuntimeContext::isolated(
@@ -470,7 +484,7 @@ mod tests {
         )
     }
 
-    fn snapshot() -> PresetSnapshot {
+    pub(super) fn snapshot() -> PresetSnapshot {
         PresetSnapshot::builder(PresetSourceKind::External)
             .file(
                 "app/available/shine.toml",
@@ -707,7 +721,7 @@ mod tests {
         assert!(!encoded.contains("SECRET"));
     }
 
-    fn app_plan_request() -> crate::runtime::AppPlanRequest {
+    pub(super) fn app_plan_request() -> crate::runtime::AppPlanRequest {
         crate::runtime::AppPlanRequest {
             operation: crate::lifecycle::LifecycleOperation::Install,
             target: Some("available".into()),
@@ -718,7 +732,7 @@ mod tests {
         }
     }
 
-    fn assert_observation_only(host: &InMemoryHost, since: usize) {
+    pub(super) fn assert_observation_only(host: &InMemoryHost, since: usize) {
         assert!(
             host.operations()[since..].iter().all(|op| matches!(
                 op,

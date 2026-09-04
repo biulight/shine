@@ -124,15 +124,19 @@ async fn handle_install_with_reporter(
     .next()
     .expect("one reviewed Shell Plan");
     let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
-    let core_report = runtime
-        .install_shells_approved(
-            match &reviewed.request {
-                crate::lifecycle_plan::LifecyclePlanRequest::Shell(request) => request.clone(),
-                _ => unreachable!("reviewed Shell Plan"),
-            },
-            &reviewed.approval,
-        )
-        .await?;
+    let core_report = match crate::lifecycle_plan::execute_reviewed(
+        config,
+        runtime,
+        reviewed,
+        shine_core::frontend::ExecutionOptions::default(),
+        &mut shine_core::runtime::NullObserver,
+        &mut crate::presentation::TerminalInteraction,
+    )
+    .await?
+    {
+        shine_core::frontend::OperationDetails::ShellInstall(report) => *report,
+        _ => unreachable!("reviewed operation result type"),
+    };
     if !config.is_external_presets {
         reporter.emit(PresentationEvent::stdout(output::summary_line_text(
             "Shell Presets",
@@ -371,15 +375,19 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
     let crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime } = prepared;
-    let core = runtime
-        .upgrade_shells_approved(
-            match &reviewed.request {
-                crate::lifecycle_plan::LifecyclePlanRequest::Shell(request) => request.clone(),
-                _ => unreachable!("reviewed Shell Plan"),
-            },
-            &reviewed.approval,
-        )
-        .await?;
+    let core = match crate::lifecycle_plan::execute_reviewed(
+        config,
+        runtime,
+        reviewed,
+        shine_core::frontend::ExecutionOptions::default(),
+        &mut shine_core::runtime::NullObserver,
+        &mut crate::presentation::TerminalInteraction,
+    )
+    .await?
+    {
+        shine_core::frontend::OperationDetails::ShellUpgrade(report) => *report,
+        _ => unreachable!("reviewed operation result type"),
+    };
     if core.runs.is_empty() {
         if verbose {
             reporter.emit(PresentationEvent::stdout(style_dim(
