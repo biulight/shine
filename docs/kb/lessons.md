@@ -102,18 +102,21 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Rule**: a lifecycle hook must not launch another mutation that owns its own security Plan;
   model it as one combined operation or require an explicit follow-up command.
 
-## 2026-09-02 — Legacy App relocation receipts selected an obsolete destination
+## 2026-09-04 — Legacy App relocation receipts must converge before execution
 
 - **Symptom**: upgrading a 1.8 `clash-verge` install to 2.0 blocked
-  `merge.yaml` as `app_destination_occupied`, although its current
+  `merge.yaml` as `app_destination_occupied` or failed after approval because
+  the reviewed App update Action was not consumed, although its current
   `~/.shine/clash-verge/merge.yaml` receipt and file were present.
 - **Root cause**: an older manifest could retain both the pre-relocation and
-  current records for one source. `find_by_source` selected the first (obsolete)
-  record, making the planner interpret the existing current destination as an
-  occupied relocation target.
-- **Fix**: select the last receipt for a source, which is the latest appended
-  legacy relocation record; the next normal manifest mutation rewrites it via
-  `upsert` and drops the stale duplicate.
+  current records for one source. The planner originally selected the first
+  obsolete record; after it learned to select the latest record, the executor
+  still iterated both and skipped the obsolete record without consuming the
+  Action approved for the current one.
+- **Fix**: both planning and execution select the last receipt for a source,
+  which is the latest appended legacy relocation record. A successful mutation
+  rewrites it via `upsert`, drops the stale receipt, and preserves the obsolete
+  destination as an unowned user file.
 - **Rule**: when reading append-ordered legacy lifecycle state with duplicate
   identities, select the latest compatible receipt consistently in planning and
   execution; never reinterpret its current destination as foreign content.

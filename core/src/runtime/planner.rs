@@ -8161,6 +8161,90 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
     }
 
     #[tokio::test]
+    async fn approved_app_upgrade_converges_legacy_duplicate_relocation_receipts() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.shine/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous_destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let destination = runtime.context().shine_dir.join("demo/config.toml");
+        for path in [&previous_destination, &destination] {
+            runtime.host().put_file(path, b"previous-managed".to_vec());
+        }
+        let entry = |destination: PathBuf| AppEntry {
+            source: "app/demo/config.toml".to_string(),
+            destination,
+            backup: None,
+            content_hash: crate::install::hash_content(b"previous-managed"),
+            install_strategy: crate::install::AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        };
+        let manifest = AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![
+                entry(previous_destination.clone()),
+                entry(destination.clone()),
+            ],
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&manifest).unwrap().into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(report.updated_categories, vec!["demo"]);
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"next-managed"
+        );
+        assert_eq!(
+            runtime.host().read(&previous_destination).await.unwrap(),
+            b"previous-managed"
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let matching = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.source == "app/demo/config.toml")
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].destination, destination);
+        assert_eq!(
+            matching[0].content_hash,
+            crate::install::hash_content(b"next-managed")
+        );
+    }
+
+    #[tokio::test]
     async fn approved_app_upgrade_journals_static_copy_relocation() {
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(

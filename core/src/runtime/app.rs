@@ -1256,17 +1256,24 @@ where
             action_irs,
         };
         let mut manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        let selected_entries = manifest
-            .entries
-            .iter()
-            .filter(|entry| {
-                request
-                    .category
-                    .as_ref()
-                    .is_none_or(|category| entry.source.starts_with(&format!("app/{category}/")))
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        // Older releases could append both sides of a relocation under the
+        // same source. Match `AppManifest::find_by_source`: the latest receipt
+        // is authoritative until a successful upsert removes its stale peers.
+        // Reverse twice so the surviving receipts retain manifest order.
+        let mut selected_sources = BTreeSet::new();
+        let mut selected_entries =
+            manifest
+                .entries
+                .iter()
+                .rev()
+                .filter(|entry| {
+                    request.category.as_ref().is_none_or(|category| {
+                        entry.source.starts_with(&format!("app/{category}/"))
+                    }) && selected_sources.insert(entry.source.clone())
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+        selected_entries.reverse();
         if let Some(category) = &request.category
             && selected_entries.is_empty()
         {
