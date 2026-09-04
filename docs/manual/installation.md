@@ -25,7 +25,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.0.0-rc.1 sh install.sh
+SHINE_VERSION=2.0.0-rc.2 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -39,7 +39,7 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.0.0-rc.1"; .\install.ps1
+$env:SHINE_VERSION = "2.0.0-rc.2"; .\install.ps1
 ```
 
 ## Install from source

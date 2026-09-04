@@ -13,21 +13,21 @@ the RC is an explicit choice and does not change routine stable update checks.
 On macOS or Linux, download the matching installer and select the exact version:
 
 ```bash
-curl -fsSLO https://github.com/biulight/shine/releases/download/v2.0.0-rc.1/install.sh
-SHINE_VERSION=2.0.0-rc.1 sh install.sh
+curl -fsSLO https://github.com/biulight/shine/releases/download/v2.0.0-rc.2/install.sh
+SHINE_VERSION=2.0.0-rc.2 sh install.sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-irm https://github.com/biulight/shine/releases/download/v2.0.0-rc.1/install.ps1 -OutFile install.ps1
-$env:SHINE_VERSION = "2.0.0-rc.1"; .\install.ps1
+irm https://github.com/biulight/shine/releases/download/v2.0.0-rc.2/install.ps1 -OutFile install.ps1
+$env:SHINE_VERSION = "2.0.0-rc.2"; .\install.ps1
 ```
 
 Or install the exact crate version with Rust 1.88 or later:
 
 ```bash
-cargo install shine-cli --version 2.0.0-rc.1
+cargo install shine-cli --version 2.0.0-rc.2
 ```
 
 `shine self upgrade --channel preview` follows the continuously replaced preview build; it is not

@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 2.0.0-rc.1。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
+本页适用于 Shine 2.0.0-rc.2。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
 
 ## 1.0 target 规则
 
@@ -438,4 +438,4 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-RC 的 `shine --version` 显示 `shine 2.0.0-rc.1 (<commit> <date>)`；preview 构建使用兼容 SemVer 的 `2.0.0-rc.1.preview` 版本标签。
+RC 的 `shine --version` 显示 `shine 2.0.0-rc.2 (<commit> <date>)`；preview 构建使用兼容 SemVer 的 `2.0.0-rc.2.preview` 版本标签。

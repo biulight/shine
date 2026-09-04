@@ -38,7 +38,7 @@
 - Phase 5 已完成：`preset validate`、`lint`、`plan`、声明式合成 host-state fixture test、确定性
   unsigned bundle pack，以及由 shipped Rust types 与 live CLI help 生成的 schema reference 已形成
   authoring 闭环；App、Shell、Sys 示例均进入 CI。
-- `2.0.0-rc.1` 已发布，但稳定版仍以 macOS、Ubuntu 和 Windows 上真实 1.8 state 的 upgrade、
+- `2.0.0-rc.2` 继续修复 RC 审查中发现的问题，但稳定版仍以 macOS、Ubuntu 和 Windows 上真实 1.8 state 的 upgrade、
   lifecycle、uninstall 与 recovery smoke test 为 gate。新的 mutation frontend 不得绕过这一稳定化
   阶段。
 - Authoring 已有版本化 JSON reports，但真实 host 上的 inventory、inspection、Plan review、operation

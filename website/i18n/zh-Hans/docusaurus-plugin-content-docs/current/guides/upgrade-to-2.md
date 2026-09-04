@@ -13,21 +13,21 @@ Shine 2.0 目前仍是候选版本。稳定更新通道继续停留在 1.8.x，�
 在 macOS 或 Linux 上下载对应安装器并指定精确版本：
 
 ```bash
-curl -fsSLO https://github.com/biulight/shine/releases/download/v2.0.0-rc.1/install.sh
-SHINE_VERSION=2.0.0-rc.1 sh install.sh
+curl -fsSLO https://github.com/biulight/shine/releases/download/v2.0.0-rc.2/install.sh
+SHINE_VERSION=2.0.0-rc.2 sh install.sh
 ```
 
 在 Windows PowerShell 中：
 
 ```powershell
-irm https://github.com/biulight/shine/releases/download/v2.0.0-rc.1/install.ps1 -OutFile install.ps1
-$env:SHINE_VERSION = "2.0.0-rc.1"; .\install.ps1
+irm https://github.com/biulight/shine/releases/download/v2.0.0-rc.2/install.ps1 -OutFile install.ps1
+$env:SHINE_VERSION = "2.0.0-rc.2"; .\install.ps1
 ```
 
 也可以在 Rust 1.88 或更高版本下安装精确的 crate 版本：
 
 ```bash
-cargo install shine-cli --version 2.0.0-rc.1
+cargo install shine-cli --version 2.0.0-rc.2
 ```
 
 `shine self upgrade --channel preview` 跟随持续覆盖的 preview 构建，并不是可复现的 RC。

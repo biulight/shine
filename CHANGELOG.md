@@ -7,6 +7,25 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.0.0-rc.2] — 2026-09-04
+
+This release candidate fixes issues found while reviewing and exercising 2.0.0-rc.1. It remains a
+GitHub and Cargo prerelease, does not replace 1.8.x as `latest`, and is not offered by the stable
+updater. Read [Upgrade from Shine 1.x](docs/manual/guides/upgrade-to-2.md) before installing it by
+exact version.
+
+### Bug Fixes
+
+- Improved Preset validation, lint, test, plan, and migration diagnostics so actionable source
+  locations, remediation, blockers, and summaries remain visible in both text and JSON workflows.
+- Made authoring plans prioritize real validation and planning blockers instead of obscuring them
+  behind secondary diagnostics.
+- Closed reviewed lifecycle safety gaps: configuration upgrade now honors App failure counts,
+  generated installs review and preserve fixed backups, Split-DNS transactions use one lock owner,
+  and packing recognizes executable payloads only through typed metadata paths.
+- Resolved App and Shell targets against the effective Preset snapshot, so installed overlay-only
+  categories can be addressed consistently by top-level upgrade and inspection commands.
+
 ## [2.0.0-rc.1] — 2026-09-03
 
 This is the first reproducible 2.0 release candidate. It is a GitHub and Cargo prerelease, does not
