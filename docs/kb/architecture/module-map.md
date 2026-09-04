@@ -18,6 +18,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
 | `core/src/action.rs` | Versioned executable Action IR, typed permission derivation, opaque provenance, and rollback classification |
 | `core/src/frontend.rs` | Versioned redacted Frontend Service contracts and inventory; `frontend/inspection.rs` owns inspection/status projection and local details; `frontend/review.rs` dispatches pure Plan review |
+| `core/src/frontend/{operations,events}.rs` | Safe journal-state/recovery projection and explicit progress-event redaction; domain executors retain journal parsing and recovery decisions |
 | `core/src/permission.rs` | Versioned target-local Preset permission declarations, normalization, and payload-free identity validation |
 | `core/src/trust.rs` | Versioned target-local external-code trust grants, exact matching, and stale-scope decisions |
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |

@@ -103,6 +103,22 @@ planners and wraps the unchanged `PlanV1`. CLI review and preparation use this s
 request nor report contains approval; opaque input versions remain attached to the reviewed domain
 request through execution. See ADR 0078.
 
+## Frontend operation state and safe events
+
+Each domain executor loads and validates its journal once, extracts recorded action progress, and
+passes that exact journal and bytes to its existing recovery planner. The service hashes the local
+operation identity and emits counts plus the payload-free recovery Plan. An idle report means no
+journal was observed; journal presence does not establish that a process is alive. Counts are
+durable bookkeeping, not a substitute for receipt/positive-marker and live-resource validation.
+Corrupt or future journals return a safe diagnostic without cleanup.
+
+`frontend/events.rs` explicitly projects each `RuntimeEvent` variant to a versioned event kind,
+execution-local sequence, optional reviewed canonical target and typed outcome. It never copies
+raw codes, details, output, labels, paths or environment values. `ProjectedObserver` forwards the
+original event only to trusted local presentation while sending the safe projection to the frontend
+sink. Events convey progress, not approval, a durable replay cursor or recovery authority. See
+ADR 0079.
+
 ## Preset source compatibility and migration
 
 `shine preset migrate` is routed before mutable config initialization. Default scope uses read-only

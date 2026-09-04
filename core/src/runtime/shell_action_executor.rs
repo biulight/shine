@@ -308,6 +308,46 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             load_shell_operation_journal(self.host(), &self.context().shine_dir)
                 .await?
                 .context("no interrupted Shell operation is available for recovery")?;
+        self.plan_shell_operation_recovery_from_journal(journal, journal_bytes)
+            .await
+    }
+
+    pub(crate) async fn inspect_shell_operation_journal(
+        &self,
+    ) -> Result<Option<super::JournalInspection>> {
+        let Some((journal, journal_bytes)) =
+            load_shell_operation_journal(self.host(), &self.context().shine_dir).await?
+        else {
+            return Ok(None);
+        };
+        let mut prepared_actions = 0;
+        let mut applied_actions = 0;
+        let mut receipt_committed_actions = 0;
+        for action in &journal.action_ir.actions {
+            if journal.receipt_committed.contains(&action.action_id) {
+                receipt_committed_actions += 1;
+            } else if journal.applied.contains(&action.action_id) {
+                applied_actions += 1;
+            } else {
+                prepared_actions += 1;
+            }
+        }
+        Ok(Some(super::JournalInspection {
+            operation_id: journal.action_ir.operation_id.clone(),
+            prepared_actions,
+            applied_actions,
+            receipt_committed_actions,
+            recovery_plan: self
+                .plan_shell_operation_recovery_from_journal(journal, journal_bytes)
+                .await?,
+        }))
+    }
+
+    async fn plan_shell_operation_recovery_from_journal(
+        &self,
+        journal: ShellOperationJournalV1,
+        journal_bytes: Vec<u8>,
+    ) -> Result<PlanV1> {
         let mut manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let mut shared_receipts_to_restore = BTreeSet::new();

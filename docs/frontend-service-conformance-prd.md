@@ -1,6 +1,6 @@
 # Frontend Service and Conformance PRD
 
-> **Status:** Roadmap Phase 6 in progress; inventory, inspection and Plan review implemented.
+> **Status:** Roadmap Phase 6 in progress; Slices 6A–6C implemented, trusted mutation remains.
 > This document is internal and does not define a released CLI or JSON interface.
 
 ## Summary
@@ -10,10 +10,9 @@ future local MCP adapter, and `shine-ui`. The service owns stable, redacted cont
 inventory, inspection, Plan review, operation state, diagnostics, events, recovery, and lifecycle
 results without turning the workspace-internal `CoreRuntime` into a general remote API.
 
-Slices 6A–6B introduce Contract v1 inventory, inspection and Plan review and migrate CLI data
-collection while preserving terminal behavior. Operation state/events and trusted mutation are the
-remaining slices; their wire shape, approval ownership and conformance expectations must be accepted
-before implementation.
+Slices 6A–6C introduce Contract v1 inventory, inspection, Plan review, journal-derived operation
+state and safe events, and migrate CLI data collection while preserving terminal behavior. Slice 6D
+will complete trusted mutation and adapter conformance under the accepted approval boundary.
 
 ## Goals
 
@@ -94,6 +93,10 @@ fingerprint and permission set.
   conflict preservation, manual refresh, and direct-Core/service Plan equivalence.
 
 ## Slice 6C acceptance
+
+Implemented in ADR 0079. Workspace verification passed 1,205 tests, including journal state and
+event redaction fixtures. Sys recovery now uses logical resource labels, retaining exact scoped
+permissions; the English and Chinese manuals and production builds cover that visible correction.
 
 - Core, not adapters, reads and validates each domain journal. Stable operation reports contain
   opaque operation identity, journal progress, and recovery readiness; they never contain Action IR

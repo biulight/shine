@@ -7,6 +7,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- Use logical resource labels in Sys recovery Plans so private destination paths do not appear
+  in resource descriptions; reviewed filesystem permissions retain their exact scope.
+
 ## [2.0.1] — 2026-09-05
 
 ### Bug Fixes

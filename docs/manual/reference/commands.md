@@ -321,6 +321,8 @@ exact Sys receipt is durable. A pending journal blocks later mutating Sys comman
 `shine sys recover` to review a fresh recovery Plan; it restores only fingerprint-matching previous
 state before receipt commit, or keeps desired state and cleans exact rollback afterward. Changed
 resources, rollback material, owned sentinel blocks, or receipts block recovery and are preserved.
+Recovery steps use logical resource labels (`managed-file`, `split-dns`, or `profile-blocks`);
+the permission list still identifies the exact scoped resources that recovery may access.
 Generated active/base/new/merge profile files retain their three-way merge behavior and are shown
 as non-transactional; bootstrap scripts and package/provider calls remain explicitly opaque and
 outside this recovery boundary.

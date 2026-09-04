@@ -44,8 +44,9 @@
 - Authoring 已有版本化 JSON reports，但真实 host 上的 inventory、inspection、Plan review、operation
   state 和 recovery 仍主要由 CLI 组装与呈现；Phase 6A 已建立版本化、脱敏的 Frontend Service
   inventory contract，并由 `shine list` 首先复用。Phase 6B 已建立脱敏 inspection 与复用 `PlanV1`
-  的 review contract，CLI 状态检查与 Plan review 已接入。Operation state、events、recovery 与
-  mutation conformance 仍待后续切片完成；`CoreRuntime` 继续是 workspace-internal。
+  的 review contract，CLI 状态检查与 Plan review 已接入。Phase 6C 已建立 journal-derived operation
+  state、recovery readiness 与安全 event projection；trusted mutation 和完整 conformance 仍待 6D
+  完成。`CoreRuntime` 继续是 workspace-internal。
 
 ## Guiding Principles
 
@@ -259,7 +260,7 @@ P0  Preset model, lifecycle, env/secrets, shine-core     Phase 1–2
 P1  Plan, permissions, validation, trust                Phase 3
 P2  Declarative actions, recovery, Preset DX            Phase 4–5
 DONE Shine 2.0 real-state stabilization                 Completed release gate
-NOW Frontend Service and conformance contract           Phase 6 (6A–6B complete; 6C next)
+NOW Frontend Service and conformance contract           Phase 6 (6A–6C complete; 6D next)
 P4  Agent Skill + local MCP integration                 Phase 7
 P5  Trusted shine-ui and consumer UX                    Phase 8
 P6  Registry and sharing                                Phase 9

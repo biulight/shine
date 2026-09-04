@@ -51,6 +51,7 @@ pub use host::{
     ProcessOutput, ProcessRequest, RealHost, RuntimeEvent, RuntimeInteraction, RuntimeObserver,
     SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SplitDnsState,
 };
+pub(crate) use inspection::JournalInspection;
 pub use inspection::{
     AppFileInspection, DomainInspectionReport, InspectionChange, InspectionFileStatus,
     ShellFileInspection,

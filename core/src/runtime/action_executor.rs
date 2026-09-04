@@ -262,6 +262,49 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             load_app_operation_journal(self.host(), &self.context().shine_dir)
                 .await?
                 .context("no interrupted App operation is available for recovery")?;
+        self.plan_app_operation_recovery_from_journal(journal, journal_bytes)
+            .await
+    }
+
+    pub(crate) async fn inspect_app_operation_journal(
+        &self,
+    ) -> Result<Option<super::JournalInspection>> {
+        let Some((journal, journal_bytes)) =
+            load_app_operation_journal(self.host(), &self.context().shine_dir).await?
+        else {
+            return Ok(None);
+        };
+        let prepared_actions = journal
+            .actions
+            .iter()
+            .filter(|action| action.state == JournalActionStateV1::Prepared)
+            .count() as u64;
+        let applied_actions = journal
+            .actions
+            .iter()
+            .filter(|action| action.state == JournalActionStateV1::Applied)
+            .count() as u64;
+        let receipt_committed_actions = journal
+            .actions
+            .iter()
+            .filter(|action| action.state == JournalActionStateV1::ReceiptCommitted)
+            .count() as u64;
+        Ok(Some(super::JournalInspection {
+            operation_id: journal.action_ir.operation_id.clone(),
+            prepared_actions,
+            applied_actions,
+            receipt_committed_actions,
+            recovery_plan: self
+                .plan_app_operation_recovery_from_journal(journal, journal_bytes)
+                .await?,
+        }))
+    }
+
+    async fn plan_app_operation_recovery_from_journal(
+        &self,
+        journal: AppOperationJournalV1,
+        journal_bytes: Vec<u8>,
+    ) -> Result<PlanV1> {
         let (manifest, manifest_bytes) =
             load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
         let mut state = SnapshotDigestV1::builder("state:app-recovery");

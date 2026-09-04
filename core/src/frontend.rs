@@ -13,9 +13,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fmt;
 
+mod events;
 mod inspection;
+mod operations;
 mod review;
+pub use events::*;
 pub use inspection::*;
+pub use operations::*;
 pub use review::*;
 
 pub const INVENTORY_REPORT_SCHEMA_VERSION: u32 = 1;
@@ -994,5 +998,186 @@ package = "tool"
             })
         );
         assert_observation_only(service.runtime().host(), since);
+    }
+
+    #[tokio::test]
+    async fn frontend_operation_idle_and_invalid_journals_are_safe_and_read_only() {
+        use crate::runtime::{
+            APP_OPERATION_JOURNAL_FILE, SHELL_OPERATION_JOURNAL_FILE, SYS_OPERATION_JOURNAL_FILE,
+        };
+        let service = FrontendService::new(runtime(InMemoryHost::new(), snapshot()));
+        for (kind, file) in [
+            (CapabilityKindV1::App, APP_OPERATION_JOURNAL_FILE),
+            (CapabilityKindV1::Shell, SHELL_OPERATION_JOURNAL_FILE),
+            (CapabilityKindV1::Sys, SYS_OPERATION_JOURNAL_FILE),
+        ] {
+            let idle = service.operation_state(kind).await.unwrap();
+            assert_eq!(idle.state, OperationStateV1::Idle);
+            assert!(idle.journal.is_none() && idle.recovery_plan.is_none());
+            let path = service.runtime().context().shine_dir.join(file);
+            let bytes = b"invalid journal with /private/path and SECRET=value";
+            service.runtime().host().put_file(&path, bytes.to_vec());
+            let since = service.runtime().host().operations().len();
+            let error = service.operation_state(kind).await.unwrap_err();
+            assert_eq!(
+                serde_json::to_value(error.diagnostic()).unwrap(),
+                serde_json::json!({
+                    "code": "frontend_operation_state_failed", "severity": "error"
+                })
+            );
+            assert_eq!(
+                crate::runtime::FileSystemObservationHost::read(service.runtime().host(), &path)
+                    .await
+                    .unwrap(),
+                bytes
+            );
+            assert_observation_only(service.runtime().host(), since);
+        }
+    }
+
+    #[tokio::test]
+    async fn frontend_operation_rejects_future_journals_without_exposing_stored_approval() {
+        let service = FrontendService::new(runtime(InMemoryHost::new(), snapshot()));
+        let plan = service
+            .runtime()
+            .plan_apps(app_plan_request())
+            .await
+            .unwrap();
+        let approval = crate::plan::PlanApprovalV1 {
+            schema_version: crate::plan::PLAN_APPROVAL_SCHEMA_VERSION,
+            plan_fingerprint: plan.fingerprint().unwrap(),
+            approved_permissions: plan.permissions.required,
+        };
+        for (kind, file) in [
+            (
+                CapabilityKindV1::App,
+                crate::runtime::APP_OPERATION_JOURNAL_FILE,
+            ),
+            (
+                CapabilityKindV1::Shell,
+                crate::runtime::SHELL_OPERATION_JOURNAL_FILE,
+            ),
+            (
+                CapabilityKindV1::Sys,
+                crate::runtime::SYS_OPERATION_JOURNAL_FILE,
+            ),
+        ] {
+            let mut journal = serde_json::json!({"schema_version": 999,
+                "action_ir": crate::action::ActionIrV1::new("private-operation", Vec::new()), "approval": approval});
+            match kind {
+                CapabilityKindV1::App => {
+                    journal["actions"] = serde_json::json!([]);
+                }
+                CapabilityKindV1::Shell => {
+                    journal["applied"] = serde_json::json!([]);
+                    journal["receipt_committed"] = serde_json::json!([]);
+                }
+                CapabilityKindV1::Sys => {
+                    journal["receipt"] = serde_json::json!({});
+                    journal["state"] = serde_json::json!("prepared");
+                }
+            }
+            let bytes = toml::to_string(&journal).unwrap().into_bytes();
+            let path = service.runtime().context().shine_dir.join(file);
+            service.runtime().host().put_file(&path, bytes.clone());
+            let since = service.runtime().host().operations().len();
+            let error = service.operation_state(kind).await.unwrap_err();
+            assert!(
+                !serde_json::to_string(error.diagnostic())
+                    .unwrap()
+                    .contains("private-operation")
+            );
+            assert!(error.into_source().to_string().contains("999"));
+            assert_eq!(
+                crate::runtime::FileSystemObservationHost::read(service.runtime().host(), &path)
+                    .await
+                    .unwrap(),
+                bytes
+            );
+            assert_observation_only(service.runtime().host(), since);
+        }
+    }
+
+    #[tokio::test]
+    async fn frontend_events_redact_all_private_payloads_and_preserve_local_delivery() {
+        use crate::runtime::{RuntimeEvent, RuntimeObserver, SysItemOutcome};
+        #[derive(Default)]
+        struct Local(Vec<RuntimeEvent>);
+        impl RuntimeObserver for Local {
+            fn emit(&mut self, event: RuntimeEvent) {
+                self.0.push(event);
+            }
+        }
+        let runtime = runtime(InMemoryHost::new(), snapshot());
+        let plan = runtime.plan_apps(app_plan_request()).await.unwrap();
+        let mut local = Local::default();
+        let mut safe = Vec::new();
+        let private = "/private/path SECRET=value --password";
+        let events = vec![
+            RuntimeEvent::Section { domain: private },
+            RuntimeEvent::Progress {
+                code: private,
+                target: "app/available".into(),
+            },
+            RuntimeEvent::Warning {
+                code: private,
+                target: Some(private.into()),
+                detail: private.into(),
+            },
+            RuntimeEvent::ProcessOutput {
+                code: private,
+                target: "app/available".into(),
+                stream: private,
+                text: private.into(),
+            },
+            RuntimeEvent::Interaction {
+                code: private,
+                target: private.into(),
+            },
+            RuntimeEvent::SysBootstrapSelection {
+                os_id: private.into(),
+                shell: private.into(),
+                item_ids: vec![private.into()],
+                item_labels: std::collections::BTreeMap::from([(private.into(), private.into())]),
+                source: crate::runtime::SelectionSource::Profile(private.into()),
+            },
+            RuntimeEvent::SysBootstrapItemStart {
+                item_id: private.into(),
+                label: private.into(),
+                requires_admin: true,
+            },
+            RuntimeEvent::SysBootstrapOutcome(SysItemOutcome {
+                item_id: private.into(),
+                label: private.into(),
+                status: SysItemStatus::Failed,
+                detail: private.into(),
+                logs: vec![private.into()],
+            }),
+        ];
+        {
+            let mut observer = ProjectedObserver::new(&plan, &mut local, &mut safe);
+            for event in events {
+                observer.emit(event);
+            }
+        }
+        assert_eq!(local.0.len(), 8);
+        assert!(matches!(&local.0[3], RuntimeEvent::ProcessOutput { text, .. } if text == private));
+        assert_eq!(safe.len(), 8);
+        for (index, event) in safe.iter().enumerate() {
+            assert_eq!(event.sequence, index as u64);
+            let encoded = serde_json::to_string(event).unwrap();
+            for forbidden in ["/private", "SECRET", "--password", "private-operation"] {
+                assert!(!encoded.contains(forbidden));
+            }
+        }
+        assert_eq!(safe[1].target.as_deref(), Some("app/available"));
+        assert!(safe[2].target.is_none());
+        assert_eq!(
+            serde_json::to_value(&safe[3]).unwrap(),
+            serde_json::json!({
+                "schema_version": 1, "sequence": 3, "kind": "process-output-available", "target": "app/available"
+            })
+        );
+        assert_eq!(safe[7].status, Some(FrontendEventStatusV1::Failed));
     }
 }

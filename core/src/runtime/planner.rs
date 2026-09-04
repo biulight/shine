@@ -6592,6 +6592,65 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
+    async fn assert_frontend_journal(
+        runtime: &CoreRuntime<InMemoryHost>,
+        kind: crate::frontend::CapabilityKindV1,
+        ready: bool,
+    ) {
+        use crate::frontend::{FrontendService, OperationStateV1};
+        let expected = match kind {
+            crate::frontend::CapabilityKindV1::App => {
+                runtime.plan_app_operation_recovery().await.unwrap()
+            }
+            crate::frontend::CapabilityKindV1::Shell => {
+                runtime.plan_shell_operation_recovery().await.unwrap()
+            }
+            crate::frontend::CapabilityKindV1::Sys => {
+                runtime.plan_sys_operation_recovery().await.unwrap()
+            }
+        };
+        let since = runtime.host().operations().len();
+        let service = FrontendService::new(CoreRuntime::new(
+            runtime.host().clone(),
+            runtime.context().clone(),
+            runtime.presets().clone(),
+        ));
+        let report = service.operation_state(kind).await.unwrap();
+        assert_eq!(
+            report.state,
+            if ready {
+                OperationStateV1::RecoveryReady
+            } else {
+                OperationStateV1::RecoveryBlocked
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(report.recovery_plan.as_ref().unwrap()).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        let progress = report.journal.as_ref().unwrap();
+        assert!(
+            progress.prepared_actions
+                + progress.applied_actions
+                + progress.receipt_committed_actions
+                > 0
+        );
+        let encoded = serde_json::to_string(&report).unwrap();
+        let private_root = serde_json::to_string(&runtime.context().home_dir).unwrap();
+        assert!(
+            !encoded.contains(private_root.trim_matches('"')),
+            "{encoded}"
+        );
+        assert!(!encoded.contains("approved_permissions"));
+        assert!(
+            runtime.host().operations()[since..]
+                .iter()
+                .all(|op| matches!(
+                    op,
+                    HostOperation::Read(_) | HostOperation::InspectSplitDns { .. }
+                ))
+        );
+    }
     struct Interaction;
 
     impl RuntimeInteraction for Interaction {
@@ -8728,6 +8787,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
         );
 
         let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::App, true).await;
         assert!(recovery_plan.is_ready());
         assert!(recovery_plan.steps.iter().any(|step| {
             step.diagnostic_codes
@@ -9506,6 +9566,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
         );
 
         let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::App, true).await;
         let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
         runtime
             .recover_app_operation_approved(&recovery_approval)
@@ -9833,6 +9894,7 @@ path = '$HOME/.tool/bin'
         );
 
         let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, true).await;
         assert!(recovery_plan.is_ready());
         let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
         runtime
@@ -11441,6 +11503,7 @@ target = '$HOME/.config/disabled.txt'
                     .contains(&"shell_recovery_required".to_string())
         }));
         let recovery_plan = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Shell, true).await;
         let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
         let report = runtime
             .recover_shell_operation_approved(&recovery_approval)
@@ -11471,6 +11534,7 @@ target = '$HOME/.config/disabled.txt'
             .put_file(&launcher, b"#!/bin/sh\necho user\n".to_vec());
 
         let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Shell, false).await;
         assert!(!recovery.is_ready());
         assert!(recovery.steps.iter().any(|step| {
             step.action == PlanActionV1::Blocked
@@ -11513,6 +11577,7 @@ target = '$HOME/.config/disabled.txt'
         assert!(manifest.find("shell/demo/demo").is_some());
         assert!(runtime.host().metadata(&launcher).await.is_ok());
         let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Shell, true).await;
         assert!(recovery.is_ready());
         assert!(recovery.steps.iter().any(|step| {
             step.diagnostic_codes
@@ -12635,6 +12700,7 @@ target = '$HOME/.config/disabled.txt'
         );
 
         let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, true).await;
         assert!(recovery_plan.is_ready());
         let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
         runtime
@@ -12710,6 +12776,7 @@ servers_env = 'PRIVATE_DNS_SERVERS'
         assert!(runtime.host().read(&resource).await.is_ok());
 
         let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, true).await;
         assert!(recovery_plan.is_ready());
         let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
         runtime
@@ -13769,5 +13836,105 @@ servers_env = 'PRIVATE_DNS_SERVERS'
                     .diagnostic_codes
                     .contains(&"app_remove_rollback_occupied".to_string())
         }));
+    }
+
+    #[tokio::test]
+    async fn frontend_app_operation_state_preserves_post_interruption_user_changes() {
+        let runtime = runtime(static_copy_app_snapshot());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".into()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+        assert!(
+            runtime
+                .install_apps_approved(
+                    request,
+                    &approval,
+                    &mut super::super::NullObserver,
+                    &mut Interaction
+                )
+                .await
+                .is_err()
+        );
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        runtime
+            .host()
+            .put_file(&destination, b"user content after interruption".to_vec());
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::App, false).await;
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user content after interruption"
+        );
+    }
+
+    #[tokio::test]
+    async fn frontend_sys_operation_state_reports_committed_cleanup_and_blocks_changed_resource() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                br#"version = 2
+[[items]]
+id = "managed"
+label = "Managed"
+mode = "managed"
+driver = "managed-file"
+permissions = { schema_version = 1 }
+[items.config]
+source = "managed.txt"
+target = "~/.config/managed.txt"
+"#
+                .to_vec(),
+            )
+            .file("sys/test/managed.txt", b"managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let request = SysManagedPlanRequest {
+            operation: LifecycleOperation::Install,
+            os_id: "test".into(),
+            target: Some("managed".into()),
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_remove_after(
+            runtime
+                .context()
+                .shine_dir
+                .join(super::super::SYS_OPERATION_JOURNAL_FILE),
+            0,
+        );
+        let _result = runtime
+            .run_managed_sys_approved(
+                request,
+                &approval,
+                &mut Interaction,
+                &mut super::super::NullObserver,
+            )
+            .await;
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, true).await;
+        let observation = runtime
+            .inspect_sys_operation_journal()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(observation.receipt_committed_actions, 1);
+        let destination = runtime.context().home_dir.join(".config/managed.txt");
+        runtime
+            .host()
+            .put_file(&destination, b"user content".to_vec());
+        assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, false).await;
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user content"
+        );
     }
 }

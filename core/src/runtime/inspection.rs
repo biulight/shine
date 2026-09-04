@@ -88,3 +88,12 @@ pub struct DomainInspectionReport {
     pub app_files: Vec<AppFileInspection>,
     pub shell_files: Vec<ShellFileInspection>,
 }
+
+/// Validated local journal observation. Raw journal content never leaves its owning domain.
+pub(crate) struct JournalInspection {
+    pub operation_id: String,
+    pub prepared_actions: u64,
+    pub applied_actions: u64,
+    pub receipt_committed_actions: u64,
+    pub recovery_plan: crate::plan::PlanV1,
+}

@@ -3,6 +3,16 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-05 — Recovery Plans must not reuse local journal resource labels
+
+- **Symptom**: frontend conformance tests found a private destination path in a Sys recovery Plan.
+- **Root cause**: the planner copied the durable ActionIR resource label, which can contain a
+  physical destination, into the public Plan step.
+- **Fix**: derive `managed-file`, `split-dns`, or `profile-blocks` from the action kind while
+  preserving existing journal bytes and exact scoped permissions (Phase 6C).
+- **Rule**: project local journal metadata explicitly; never assume ActionIR labels are safe
+  frontend report fields.
+
 ## 2026-09-05 — Specialized execution must reuse its reviewed request
 
 - **Symptom**: an `app refresh` Plan with a configured secret generator input rendered as ready and

@@ -5,6 +5,14 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **Frontend operation state never replaces recovery assessment.** Journal progress is durable
+  bookkeeping and may lag an OS effect; it does not prove a live worker exists. The domain builds
+  its summary and recovery Plan from one captured journal, and only the existing fingerprint,
+  receipt and positive-marker checks determine recovery readiness. Corrupt/future journals are
+  preserved. Stable events explicitly omit raw runtime codes, details, labels and process output;
+  target fields must belong to the generated Plan's canonical allow-list. Neither serialized
+  operation state nor progress events authorize mutation (ADR 0079).
+
 - **A security Plan is not dry-run and approval is snapshot-bound.** `PlanV1` contains only ordered
   semantic steps, safe diagnostic codes, resolved permissions, and digests of exact source/state
   observations. App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile
