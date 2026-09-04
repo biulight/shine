@@ -1,39 +1,11 @@
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::path::Path;
-use tokio::process::Command;
 
 const PACKAGE_JSON: &str = "package.json";
 const LOCK_FILE: &str = "bun.lock";
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum BunDependencyMode {
-    #[default]
-    Disabled,
-    Locked,
-}
-
-impl BunDependencyMode {
-    pub fn as_manifest_value(self) -> Option<&'static str> {
-        match self {
-            Self::Disabled => None,
-            Self::Locked => Some("locked"),
-        }
-    }
-
-    pub fn install_arg(self) -> &'static str {
-        match self {
-            Self::Disabled => "--no-install",
-            Self::Locked => "--install=fallback",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct BunRuntimeSpec {
-    pub dependency_mode: BunDependencyMode,
-    pub dependency_hash: Option<u64>,
-}
+pub use shine_core::runtime::{BunDependencyMode, BunRuntimeSpec};
 
 /// Resolve the Bun dependency policy for one physical preset category.
 ///
@@ -85,12 +57,6 @@ pub fn resolve(category_root: &Path, allow_external_dependencies: bool) -> Resul
         dependency_mode: BunDependencyMode::Locked,
         dependency_hash: Some(crate::install_core::hash_content(&bytes)),
     })
-}
-
-pub fn command(script: &Path, spec: BunRuntimeSpec) -> Command {
-    let mut command = Command::new("bun");
-    command.arg(spec.dependency_mode.install_arg()).arg(script);
-    command
 }
 
 #[cfg(test)]

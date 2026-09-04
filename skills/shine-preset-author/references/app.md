@@ -18,6 +18,19 @@ installed Shine release.
 Prefer explicit file lists. Keep sources and generator/artifact scripts inside
 the category. Never use absolute source paths or `..`.
 
+## Permission declaration
+
+Every App category has one top-level `[permissions]` table with
+`schema_version = 1`. Ordinary managed destinations and receipt operations are
+already bounded by typed App metadata; use the table for additional commands,
+network access, environment names, administrator authorization, system
+capabilities, or filesystem effects of hooks, generators, and artifacts.
+
+Environment entries contain only a name and `plain`/`secret` sensitivity.
+Filesystem entries use `access`, a structured `base` (`home`, `shine`,
+`data-dir`, `preset`, or `absolute`), and a normalized path. A declaration does
+not enable external code: the user must separately review and grant target-scoped trust.
+
 ## Optional behavior
 
 - `transforms` supports only transforms accepted by the current validator,
@@ -27,8 +40,12 @@ the category. Never use absolute source paths or `..`.
   `when_env` key included in `env`. Always provide a static source fallback.
 - `post_install` and `post_upgrade` hooks are argv declarations. Validation does
   not run them, and this skill must never run them.
-- `[artifact]` may declare `script`, optional `teardown`, and `runtime`. This
-  skill validates referenced files but never applies or removes an artifact.
+- `[artifact]` may declare `script`, optional `teardown`, `runtime`, and an
+  explicit `env` allowlist. Every environment source must also have a
+  sensitivity entry in the category permission declaration. This skill
+  validates referenced files but never applies or removes an artifact. A hook
+  that deliberately invokes artifact apply must pass `--yes` for its
+  non-interactive child Plan.
 - Bun code uses `.ts`, `.js`, `.mts`, or `.mjs`. If dependencies are needed,
   place both `package.json` and `bun.lock` at the category root; never declare
   `trustedDependencies`.

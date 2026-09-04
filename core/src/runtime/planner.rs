@@ -1,0 +1,13773 @@
+//! Pure, snapshot-bound lifecycle planners.
+//!
+//! This module intentionally depends only on observation host ports. It never
+//! materializes Preset code, invokes a process, requests privilege, or writes
+//! through a host.
+
+use super::app::{
+    desired_app_hash, installed_app_entry_hash, installed_app_hash, installed_json_hash,
+};
+use super::launcher::{
+    prepare_launcher_resources, prepared_launcher_resource_is_exact,
+    probe_managed_command_with_host,
+};
+use super::shell::has_template_annotation;
+use super::shell::shell_link_spec_from_manifest_entry;
+use super::{
+    AppArtifactAction, AppArtifactRequest, AppCategory, AppFile, AppLifecycleReport,
+    AppLifecycleRequest, AppRefreshRequest, AppUninstallLifecycleRequest,
+    AppUpgradeLifecycleReport, AppUpgradeRequest, ArtifactRuntime, CoreRuntime, ExternalShellMode,
+    FileKind, FileSystemHost, FileSystemObservationHost, LinkRuntime, LinkSpec,
+    PrivilegedFileSystemHost, ProcessHost, RuntimeInteraction, RuntimeObserver, ShellFile,
+    ShellLifecycleReport, ShellLifecycleRequest, ShellManifest, ShellManifestEntry,
+    ShellUninstallReport, ShellUninstallRequest, ShellUpgradeLifecycleReport, ShellUpgradeRequest,
+    SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SysBootstrapBatchReport,
+    SysBootstrapBatchRequest, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall, SysItem,
+    SysItemMode, SysManagedAction, SysManagedReport, SysManagedRequest, SysManifest,
+    SysPackageProvider, SysProfileStateReport, SysProfileStateRequest, SysRunEntry, SysRunManifest,
+    SystemReceipt, command_path_for_name, link_is_current_with_host, parse_shell_lifecycle_target,
+    split_dns_receipt,
+};
+use crate::action::{
+    ActionIrV1, DeclarativeActionV1, ForcedManagedFileBackupV1, ForcedManagedFileRemoveSpecV1,
+    ManagedFileRelocationBackupV1, ManagedFileRelocationSpecV1, ManagedFileRemoveSpecV1,
+    ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1, ManagedJsonMergeSpecV1,
+    ManagedJsonRelocationSpecV1, ManagedJsonRemoveSpecV1, managed_file_rollback_path,
+    shell_snapshot_rollback_path, shell_snapshot_stage_path,
+};
+use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
+use crate::install::{AppEntry, AppManifest};
+use crate::lifecycle::LifecycleOperation;
+use crate::permission::{PermissionDeclarationV1, PermissionPathBaseV1};
+use crate::plan::{
+    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, PermissionSetV1, PermissionV1,
+    PlanActionV1, PlanApprovalV1, PlanInputsV1, PlanOperationV1, PlanStepV1, PlanV1,
+    SnapshotDigestBuilderV1, SnapshotDigestV1,
+};
+use crate::trust::TrustCapabilityV1;
+use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+/// Opaque identity supplied by a frontend for a secret value used by a Plan.
+/// It is a ciphertext hash, secret-store version, or handle revision; planner
+/// APIs intentionally expose no plaintext accessor.
+#[derive(Clone, Eq, PartialEq)]
+pub struct OpaqueSecretVersion(String);
+
+impl OpaqueSecretVersion {
+    pub fn new(identity: impl Into<String>) -> Self {
+        Self(identity.into())
+    }
+
+    fn identity(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for OpaqueSecretVersion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("OpaqueSecretVersion([redacted])")
+    }
+}
+
+/// Opaque secret identities supplied by a frontend for inputs used by a Plan.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PlanningInputVersions {
+    secret_versions: BTreeMap<String, OpaqueSecretVersion>,
+}
+
+impl PlanningInputVersions {
+    pub fn insert_secret_version(&mut self, name: impl Into<String>, version: OpaqueSecretVersion) {
+        self.secret_versions.insert(name.into(), version);
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppPlanRequest {
+    pub operation: LifecycleOperation,
+    pub target: Option<String>,
+    pub force: bool,
+    pub purge: bool,
+    pub prune_stale: bool,
+    pub input_versions: PlanningInputVersions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShellPlanRequest {
+    pub operation: LifecycleOperation,
+    pub target: Option<String>,
+    pub force: bool,
+    pub purge: bool,
+    pub input_versions: PlanningInputVersions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SysManagedPlanRequest {
+    pub operation: LifecycleOperation,
+    pub os_id: String,
+    pub target: Option<String>,
+    pub input_versions: PlanningInputVersions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SysBootstrapPlanRequest {
+    pub os_id: String,
+    pub item_ids: Vec<String>,
+    pub sys_shell: String,
+    pub force_profile: bool,
+    pub input_versions: PlanningInputVersions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppRefreshPlanRequest {
+    pub category: String,
+    pub file: Option<PathBuf>,
+    pub force: bool,
+    pub input_versions: PlanningInputVersions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppArtifactPlanRequest {
+    pub category: String,
+    pub action: AppArtifactAction,
+    pub input_versions: PlanningInputVersions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SysProfilePlanRequest {
+    pub os_id: String,
+    pub item_id: String,
+    pub enabled: bool,
+}
+
+/// Presentation-only App upgrade settings which do not affect the reviewed
+/// operation. Stale removal is intentionally controlled only by
+/// [`AppPlanRequest::prune_stale`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AppApprovedUpgradeOptions {
+    pub show_hook_success: bool,
+}
+
+struct StateCapture {
+    builder: SnapshotDigestBuilderV1,
+    seen: BTreeMap<String, Vec<u8>>,
+}
+
+impl StateCapture {
+    fn new(domain: &str, operation: impl Into<PlanOperationV1>) -> Result<Self> {
+        let operation = operation.into();
+        let mut builder = SnapshotDigestV1::builder(format!("state:{domain}"));
+        builder.add_observation("operation", operation_name(operation))?;
+        Ok(Self {
+            builder,
+            seen: BTreeMap::new(),
+        })
+    }
+
+    fn public(&mut self, label: impl Into<String>, value: impl AsRef<[u8]>) -> Result<()> {
+        let label = label.into();
+        let value = value.as_ref();
+        if let Some(previous) = self.seen.get(&label) {
+            if previous == value {
+                return Ok(());
+            }
+            bail!("conflicting planner observation label `{label}`");
+        }
+        self.builder.add_observation(label.clone(), value)?;
+        self.seen.insert(label, value.to_vec());
+        Ok(())
+    }
+
+    fn bytes(&mut self, label: impl Into<String>, value: Option<&[u8]>) -> Result<()> {
+        let fingerprint = match value {
+            Some(bytes) => format!("present:{}", sha256_hex(bytes)),
+            None => "missing".to_string(),
+        };
+        self.public(label, fingerprint)
+    }
+
+    fn finish(self) -> SnapshotDigestV1 {
+        self.builder.finish()
+    }
+}
+
+#[derive(Default)]
+struct PermissionAccumulator {
+    required: Vec<PermissionV1>,
+    declared: Vec<PermissionV1>,
+    uncomputable: BTreeSet<String>,
+}
+
+impl PermissionAccumulator {
+    fn implicit(&mut self, permission: PermissionV1) {
+        self.required.push(permission.clone());
+        self.declared.push(permission);
+    }
+
+    fn require(&mut self, permission: PermissionV1) {
+        self.required.push(permission);
+    }
+
+    fn declaration(&mut self, declaration: Option<&PermissionDeclarationV1>, missing: &str) {
+        match declaration {
+            Some(declaration) => match declaration.permission_set() {
+                Ok(permissions) => {
+                    for permission in permissions.iter().cloned() {
+                        self.required.push(permission.clone());
+                        self.declared.push(permission);
+                    }
+                }
+                Err(_) => {
+                    self.uncomputable.insert(missing.to_string());
+                }
+            },
+            None => {
+                self.uncomputable.insert(missing.to_string());
+            }
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.required.extend(other.required);
+        self.declared.extend(other.declared);
+        self.uncomputable.extend(other.uncomputable);
+    }
+
+    fn finish(self) -> (PermissionSetV1, PermissionSetV1, BTreeSet<String>) {
+        (
+            PermissionSetV1::new(self.required),
+            PermissionSetV1::new(self.declared),
+            self.uncomputable,
+        )
+    }
+}
+
+impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    pub async fn plan_apps(&self, request: AppPlanRequest) -> Result<PlanV1> {
+        validate_app_request(&request)?;
+        let selected_categories = if request.operation == LifecycleOperation::Uninstall {
+            None
+        } else {
+            let categories = self.app_categories(request.target.as_deref())?;
+            if request.target.is_some() && categories.is_empty() {
+                bail!(
+                    "app preset category not found: {}",
+                    request.target.as_deref().unwrap_or_default()
+                );
+            }
+            Some(categories)
+        };
+        let mut state = StateCapture::new("app", request.operation)?;
+        capture_request_mode(
+            &mut state,
+            request.target.as_deref(),
+            request.force,
+            request.purge,
+            request.prune_stale,
+        )?;
+        capture_context(&mut state, self.context())?;
+        let interrupted_operation =
+            if let Some(journal_bytes) = self.app_operation_journal_bytes().await? {
+                state.bytes("journal:app-operation", Some(&journal_bytes))?;
+                true
+            } else {
+                false
+            };
+        let (manifest, manifest_bytes) =
+            load_app_manifest(self.host(), &self.context().shine_dir).await?;
+        capture_manifest_selection(
+            &mut state,
+            "manifest:app",
+            manifest_bytes.is_some(),
+            manifest.schema_version,
+            &manifest
+                .entries
+                .iter()
+                .filter(|entry| {
+                    request.target.as_ref().is_none_or(|target| {
+                        app_source_parts(&entry.source)
+                            .is_some_and(|(category, _)| category == target)
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        let mut permissions = PermissionAccumulator::default();
+        let mut steps = Vec::new();
+
+        if interrupted_operation {
+            steps.push(
+                PlanStepV1::new(
+                    request
+                        .target
+                        .as_ref()
+                        .map(|category| format!("app/{category}"))
+                        .unwrap_or_else(|| "app".to_string()),
+                    Some("operation-journal"),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code("app_recovery_required"),
+            );
+            return finish_plan(self, request.operation, state, permissions, steps);
+        }
+
+        if request.operation == LifecycleOperation::Uninstall {
+            self.plan_app_uninstall(
+                &request,
+                &manifest,
+                &mut state,
+                &mut permissions,
+                &mut steps,
+            )
+            .await?;
+        } else {
+            self.plan_app_convergence(
+                &request,
+                selected_categories.unwrap_or_default(),
+                &manifest,
+                &mut state,
+                &mut permissions,
+                &mut steps,
+            )
+            .await?;
+        }
+
+        finish_plan(self, request.operation, state, permissions, steps)
+    }
+
+    async fn plan_app_convergence(
+        &self,
+        request: &AppPlanRequest,
+        categories: Vec<AppCategory>,
+        manifest: &AppManifest,
+        state: &mut StateCapture,
+        permissions: &mut PermissionAccumulator,
+        steps: &mut Vec<PlanStepV1>,
+    ) -> Result<()> {
+        let installed_categories = manifest
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                app_source_parts(&entry.source).map(|(category, _)| category.to_string())
+            })
+            .collect::<BTreeSet<_>>();
+        let active_sources = categories
+            .iter()
+            .flat_map(|category| {
+                category
+                    .files
+                    .iter()
+                    .map(|file| logical_app_source(category, file))
+            })
+            .collect::<BTreeSet<_>>();
+
+        for category in categories {
+            let installed_category = installed_categories.contains(&category.name);
+            if request.operation != LifecycleOperation::Install && !installed_category {
+                continue;
+            }
+            permissions.declaration(
+                category.permissions.as_ref(),
+                "app_permission_declaration_missing",
+            );
+            if !self.context().is_external_presets
+                && (request.operation == LifecycleOperation::Install
+                    || installed_categories.contains(&category.name))
+            {
+                self.plan_app_cache_convergence(request, &category, state, permissions, steps)
+                    .await?;
+            }
+            let mut category_changes = false;
+            for file in &category.files {
+                let source = logical_app_source(&category, file);
+                let target = format!("app/{}", category.name);
+                let destination = self.app_destination(&category, file)?;
+                let direct = manifest.find_by_dest(&destination);
+                let by_source = manifest.find_by_source(&source);
+                let entry = by_source.or_else(|| direct.filter(|entry| entry.source == source));
+
+                capture_path_state(
+                    self.host(),
+                    state,
+                    format!("resource:{source}"),
+                    &destination,
+                )
+                .await?;
+                if let Some(entry) = entry.filter(|entry| entry.destination != destination) {
+                    capture_path_state(
+                        self.host(),
+                        state,
+                        format!("relocation-source:{source}"),
+                        &entry.destination,
+                    )
+                    .await?;
+                }
+                add_app_typed_permissions(
+                    self.context(),
+                    permissions,
+                    file,
+                    &destination,
+                    request.operation,
+                );
+
+                let destination_exists = path_exists(self.host(), &destination).await?;
+                let backup_action_candidate = request.operation == LifecycleOperation::Install
+                    && entry.is_none()
+                    && direct.is_none()
+                    && destination_exists
+                    && file.install_strategy == crate::install::AppInstallStrategy::Copy;
+                let backup = if backup_action_candidate {
+                    let metadata = self.host().metadata(&destination).await.map_err(|error| {
+                        error.into_anyhow("observing backup-aware App destination")
+                    })?;
+                    if metadata.kind != FileKind::File {
+                        steps.push(
+                            PlanStepV1::new(
+                                &target,
+                                Some(file.source_rel.display().to_string()),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code("app_backup_source_not_regular"),
+                        );
+                        continue;
+                    }
+                    Some(crate::install::backup_path(&destination))
+                } else {
+                    None
+                };
+                if let Some(backup) = &backup {
+                    capture_path_state(self.host(), state, format!("backup:{source}"), backup)
+                        .await?;
+                    if manifest.find_by_dest(backup).is_some()
+                        || path_exists(self.host(), backup).await?
+                    {
+                        steps.push(
+                            PlanStepV1::new(
+                                &target,
+                                Some(file.source_rel.display().to_string()),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code("app_backup_occupied"),
+                        );
+                        continue;
+                    }
+                }
+                let stale_destination_released =
+                    if request.operation == LifecycleOperation::Upgrade && request.prune_stale {
+                        if let Some(entry) = direct.filter(|entry| {
+                            entry.source != source && !active_sources.contains(&entry.source)
+                        }) {
+                            read_optional(self.host(), &entry.destination)
+                                .await?
+                                .as_deref()
+                                .and_then(|bytes| match &entry.install_strategy {
+                                    crate::install::AppInstallStrategy::Copy => {
+                                        Some(crate::install::hash_content(bytes))
+                                    }
+                                    crate::install::AppInstallStrategy::JsonMerge {
+                                        managed_keys,
+                                    } => installed_json_hash(bytes, managed_keys).ok().flatten(),
+                                })
+                                .is_some_and(|hash| hash == entry.content_hash)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                let destination_owned_by_other = direct.is_some_and(|entry| entry.source != source)
+                    && !stale_destination_released;
+                let destination_unowned =
+                    entry.is_none() && destination_exists && !stale_destination_released;
+                let occupied_relocation = entry
+                    .is_some_and(|entry| entry.destination != destination)
+                    && destination_exists;
+                let occupied = destination_owned_by_other
+                    || (destination_unowned && request.operation != LifecycleOperation::Install)
+                    || occupied_relocation;
+                if occupied && !request.force {
+                    steps.push(
+                        PlanStepV1::new(
+                            &target,
+                            Some(file.source_rel.display().to_string()),
+                            PlanActionV1::Blocked,
+                        )
+                        .with_diagnostic_code("app_destination_occupied"),
+                    );
+                    continue;
+                }
+
+                let current = match entry {
+                    Some(entry) => read_optional(self.host(), &entry.destination).await?,
+                    None => read_optional(self.host(), &destination).await?,
+                };
+                let user_modified = match (entry, current.as_deref()) {
+                    (Some(entry), Some(bytes)) => installed_app_entry_hash(entry, bytes)
+                        .map(|hash| hash.is_some_and(|hash| hash != entry.content_hash))
+                        .unwrap_or(true),
+                    _ => false,
+                };
+                if user_modified && !request.force {
+                    steps.push(
+                        PlanStepV1::new(
+                            &target,
+                            Some(file.source_rel.display().to_string()),
+                            PlanActionV1::Preserve,
+                        )
+                        .with_diagnostic_code("app_user_modified"),
+                    );
+                    continue;
+                }
+
+                if let Some(generator) = &file.generator {
+                    let manual_implicit = !generator.auto
+                        && matches!(
+                            request.operation,
+                            LifecycleOperation::Update | LifecycleOperation::Upgrade
+                        );
+                    if manual_implicit {
+                        steps.push(
+                            PlanStepV1::new(
+                                &target,
+                                Some(file.source_rel.display().to_string()),
+                                PlanActionV1::None,
+                            )
+                            .with_diagnostic_code("app_manual_refresh_required"),
+                        );
+                        continue;
+                    }
+                    capture_generator_inputs(
+                        self.context(),
+                        &request.input_versions,
+                        category.permissions.as_ref(),
+                        generator,
+                        state,
+                        permissions,
+                    )?;
+                    add_generator_permissions(
+                        self,
+                        permissions,
+                        &category,
+                        generator,
+                        state,
+                        steps,
+                    )
+                    .await?;
+                    let blocked = app_code_blocked(self, &category, &generator.script)?;
+                    steps.push(
+                        PlanStepV1::new(
+                            &target,
+                            Some(format!("generator:{}", file.source_rel.display())),
+                            if blocked {
+                                PlanActionV1::Blocked
+                            } else {
+                                PlanActionV1::Execute
+                            },
+                        )
+                        .with_diagnostic_code(if blocked {
+                            "app_external_code_not_allowed"
+                        } else {
+                            "app_opaque_generator_output"
+                        }),
+                    );
+                    if blocked {
+                        continue;
+                    }
+                    let action = if entry.is_some() {
+                        PlanActionV1::Update
+                    } else {
+                        PlanActionV1::Create
+                    };
+                    steps.push(
+                        PlanStepV1::new(
+                            &target,
+                            Some(file.source_rel.display().to_string()),
+                            action,
+                        )
+                        .with_diagnostic_code("app_opaque_generator_output"),
+                    );
+                    if let Some(backup) = &backup {
+                        add_app_backup_creation_permissions(
+                            self.context(),
+                            permissions,
+                            &destination,
+                            backup,
+                        );
+                    }
+                    category_changes = true;
+                    continue;
+                }
+
+                if !file.transforms.is_empty() {
+                    capture_declared_env_inputs(
+                        self.context(),
+                        &request.input_versions,
+                        category.permissions.as_ref(),
+                        state,
+                        permissions,
+                    )?;
+                }
+                let desired = crate::install::transforms::apply(
+                    &file.transforms,
+                    self.app_source_bytes(&category.name, file)?,
+                    &self.context().env,
+                )?;
+                let desired_hash = desired_app_hash(file, &desired)?;
+                let action = match entry {
+                    None if occupied => PlanActionV1::Update,
+                    None => PlanActionV1::Create,
+                    Some(entry)
+                        if entry.destination == destination
+                            && current.as_deref().and_then(|bytes| {
+                                installed_app_hash(file, bytes).ok().flatten()
+                            }) == Some(entry.content_hash)
+                            && desired_hash == entry.content_hash =>
+                    {
+                        PlanActionV1::None
+                    }
+                    Some(_) => PlanActionV1::Update,
+                };
+                let static_relocation_entry = entry.filter(|entry| {
+                    request.operation == LifecycleOperation::Upgrade
+                        && action == PlanActionV1::Update
+                        && entry.destination != destination
+                        && entry.install_strategy == crate::install::AppInstallStrategy::Copy
+                        && file.install_strategy == crate::install::AppInstallStrategy::Copy
+                        && file.generator.is_none()
+                        && !request.force
+                });
+                let json_relocation_entry = entry.filter(|entry| {
+                    request.operation == LifecycleOperation::Upgrade
+                        && action == PlanActionV1::Update
+                        && entry.destination != destination
+                        && matches!(
+                            entry.install_strategy,
+                            crate::install::AppInstallStrategy::JsonMerge { .. }
+                        )
+                        && matches!(
+                            file.install_strategy,
+                            crate::install::AppInstallStrategy::JsonMerge { .. }
+                        )
+                        && entry.backup.is_none()
+                        && !entry.requires_admin
+                        && !file.requires_admin
+                        && file.generator.is_none()
+                        && !request.force
+                });
+                let relocation_entry = static_relocation_entry.or(json_relocation_entry);
+                let relocation_rollback =
+                    if let Some(entry) = relocation_entry {
+                        if current.is_none() && entry.backup.is_some() {
+                            steps.push(
+                                PlanStepV1::new(
+                                    &target,
+                                    Some(file.source_rel.display().to_string()),
+                                    PlanActionV1::Blocked,
+                                )
+                                .with_diagnostic_code("app_relocation_backup_source_missing"),
+                            );
+                            continue;
+                        }
+                        if current.is_some() {
+                            let metadata = self.host().metadata(&entry.destination).await.map_err(
+                                |error| error.into_anyhow("observing App relocation source"),
+                            )?;
+                            if metadata.kind != FileKind::File {
+                                steps.push(
+                                    PlanStepV1::new(
+                                        &target,
+                                        Some(file.source_rel.display().to_string()),
+                                        PlanActionV1::Blocked,
+                                    )
+                                    .with_diagnostic_code("app_relocation_source_not_regular"),
+                                );
+                                continue;
+                            }
+                            if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
+                                &entry.install_strategy
+                            {
+                                let current = current
+                                    .as_deref()
+                                    .context("observed App JSON relocation source disappeared")?;
+                                if installed_json_hash(current, managed_keys)?
+                                    != Some(entry.content_hash)
+                                {
+                                    steps.push(
+                                        PlanStepV1::new(
+                                            &target,
+                                            Some(file.source_rel.display().to_string()),
+                                            PlanActionV1::Preserve,
+                                        )
+                                        .with_diagnostic_code("app_user_modified"),
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        if let Some(backup) = &entry.backup {
+                            capture_path_state(
+                                self.host(),
+                                state,
+                                format!("relocation-backup:{source}"),
+                                backup,
+                            )
+                            .await?;
+                            let canonical = crate::install::backup_path(&entry.destination);
+                            let backup_regular = match self.host().metadata(backup).await {
+                                Ok(metadata) => metadata.kind == FileKind::File,
+                                Err(error) if error.is_not_found() => false,
+                                Err(error) => {
+                                    return Err(error.into_anyhow(
+                                        "observing App relocation persistent backup",
+                                    ));
+                                }
+                            };
+                            if *backup != canonical || !backup_regular {
+                                steps.push(
+                                    PlanStepV1::new(
+                                        &target,
+                                        Some(file.source_rel.display().to_string()),
+                                        PlanActionV1::Blocked,
+                                    )
+                                    .with_diagnostic_code("app_relocation_backup_unsupported"),
+                                );
+                                continue;
+                            }
+                        }
+                        let rollback =
+                            crate::action::managed_file_rollback_path(&entry.destination);
+                        if rollback == destination {
+                            steps.push(
+                                PlanStepV1::new(
+                                    &target,
+                                    Some(file.source_rel.display().to_string()),
+                                    PlanActionV1::Blocked,
+                                )
+                                .with_diagnostic_code("app_relocation_path_conflict"),
+                            );
+                            continue;
+                        }
+                        capture_path_state(
+                            self.host(),
+                            state,
+                            format!("relocation-rollback:{source}"),
+                            &rollback,
+                        )
+                        .await?;
+                        if manifest.find_by_dest(&rollback).is_some()
+                            || path_exists(self.host(), &rollback).await?
+                        {
+                            steps.push(
+                                PlanStepV1::new(
+                                    &target,
+                                    Some(file.source_rel.display().to_string()),
+                                    PlanActionV1::Blocked,
+                                )
+                                .with_diagnostic_code("app_relocation_rollback_occupied"),
+                            );
+                            continue;
+                        }
+                        Some(rollback)
+                    } else {
+                        None
+                    };
+                let update_destination_regular = if action == PlanActionV1::Update
+                    && entry.is_some_and(|entry| entry.destination == destination)
+                {
+                    self.host()
+                        .metadata(&destination)
+                        .await
+                        .map_err(|error| {
+                            error.into_anyhow("observing managed App update destination")
+                        })?
+                        .kind
+                        == FileKind::File
+                } else {
+                    false
+                };
+                let update_action_candidate = action == PlanActionV1::Update
+                    && entry.is_some_and(|entry| entry.destination == destination)
+                    && current.as_deref().is_some_and(|bytes| {
+                        entry.is_some_and(|entry| {
+                            crate::install::hash_content(bytes) == entry.content_hash
+                        })
+                    })
+                    && file.install_strategy == crate::install::AppInstallStrategy::Copy
+                    && file.generator.is_none()
+                    && update_destination_regular
+                    && !request.force;
+                let json_action_candidate = matches!(
+                    file.install_strategy,
+                    crate::install::AppInstallStrategy::JsonMerge { .. }
+                ) && file.generator.is_none()
+                    && matches!(action, PlanActionV1::Create | PlanActionV1::Update)
+                    && entry.is_none_or(|entry| {
+                        entry.destination == destination
+                            && entry.install_strategy == file.install_strategy
+                            && !entry.requires_admin
+                    });
+                let json_destination_regular = if json_action_candidate && current.is_some() {
+                    let metadata =
+                        self.host().metadata(&destination).await.map_err(|error| {
+                            error.into_anyhow("observing managed JSON destination")
+                        })?;
+                    metadata.kind == FileKind::File
+                } else {
+                    true
+                };
+                if json_action_candidate && !json_destination_regular {
+                    steps.push(
+                        PlanStepV1::new(
+                            &target,
+                            Some(file.source_rel.display().to_string()),
+                            PlanActionV1::Blocked,
+                        )
+                        .with_diagnostic_code("app_json_destination_not_regular"),
+                    );
+                    continue;
+                }
+                if json_action_candidate
+                    && current
+                        .as_deref()
+                        .is_some_and(|bytes| installed_app_hash(file, bytes).is_err())
+                {
+                    steps.push(
+                        PlanStepV1::new(
+                            &target,
+                            Some(file.source_rel.display().to_string()),
+                            PlanActionV1::Blocked,
+                        )
+                        .with_diagnostic_code("app_json_destination_invalid"),
+                    );
+                    continue;
+                }
+                let update_rollback = (update_action_candidate || json_action_candidate)
+                    .then(|| crate::action::managed_file_rollback_path(&destination));
+                if let Some(rollback) = &update_rollback {
+                    capture_path_state(
+                        self.host(),
+                        state,
+                        format!("update-rollback:{source}"),
+                        rollback,
+                    )
+                    .await?;
+                    if manifest.find_by_dest(rollback).is_some()
+                        || path_exists(self.host(), rollback).await?
+                    {
+                        steps.push(
+                            PlanStepV1::new(
+                                &target,
+                                Some(file.source_rel.display().to_string()),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code("app_update_rollback_occupied"),
+                        );
+                        continue;
+                    }
+                }
+                let mut step =
+                    PlanStepV1::new(&target, Some(file.source_rel.display().to_string()), action);
+                if relocation_rollback.is_some() {
+                    step = step.with_diagnostic_code("app_destination_relocated");
+                } else if user_modified && request.force {
+                    step = step.with_diagnostic_code("app_user_modification_override");
+                } else if occupied && request.force {
+                    step = step.with_diagnostic_code("app_destination_occupation_override");
+                }
+                category_changes |= matches!(action, PlanActionV1::Create | PlanActionV1::Update);
+                if request.operation == LifecycleOperation::Install
+                    && action == PlanActionV1::Create
+                    && file.install_strategy == crate::install::AppInstallStrategy::Copy
+                {
+                    add_app_journal_permissions(self.context(), permissions);
+                    if let Some(backup) = &backup {
+                        add_app_backup_creation_permissions(
+                            self.context(),
+                            permissions,
+                            &destination,
+                            backup,
+                        );
+                    }
+                } else if let Some(rollback) = &update_rollback {
+                    add_app_journal_permissions(self.context(), permissions);
+                    add_app_update_permissions(self.context(), permissions, &destination, rollback);
+                } else if let (Some(entry), Some(rollback)) =
+                    (relocation_entry, relocation_rollback.as_ref())
+                {
+                    add_app_journal_permissions(self.context(), permissions);
+                    add_app_relocation_permissions(
+                        self.context(),
+                        permissions,
+                        entry,
+                        current.is_some(),
+                        &destination,
+                        rollback,
+                        file.requires_admin,
+                    );
+                }
+                steps.push(step);
+            }
+
+            if category_changes {
+                add_shine_receipt_permission(
+                    self.context(),
+                    permissions,
+                    "app-manifest.toml",
+                    request.operation,
+                );
+                let hooks: &[super::AppHook] = match request.operation {
+                    LifecycleOperation::Install => &category.post_install,
+                    LifecycleOperation::Upgrade => &category.post_upgrade,
+                    _ => &[],
+                };
+                for (index, hook) in hooks.iter().enumerate() {
+                    if is_recursive_app_artifact_hook(hook, &category.name) {
+                        steps.push(
+                            PlanStepV1::new(
+                                format!("app/{}", category.name),
+                                Some(format!("hook:{index}")),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code(
+                                if category.metadata_schema_version >= 2 {
+                                    "app_recursive_artifact_hook_unsupported"
+                                } else if category.metadata_is_overlay {
+                                    "app_legacy_overlay_metadata"
+                                } else {
+                                    "app_legacy_metadata"
+                                },
+                            ),
+                        );
+                        continue;
+                    }
+                    capture_app_hook_inputs(
+                        self.context(),
+                        &request.input_versions,
+                        category.permissions.as_ref(),
+                        hook,
+                        state,
+                        permissions,
+                    )?;
+                    add_app_hook_permissions(
+                        self,
+                        &category,
+                        hook,
+                        index,
+                        state,
+                        permissions,
+                        steps,
+                    )
+                    .await?;
+                    let blocked =
+                        !self.app_capability_trusted(&category, TrustCapabilityV1::AppHook)?;
+                    steps.push(
+                        PlanStepV1::new(
+                            format!("app/{}", category.name),
+                            Some(format!("hook:{index}")),
+                            if blocked {
+                                PlanActionV1::Blocked
+                            } else {
+                                PlanActionV1::Execute
+                            },
+                        )
+                        .with_diagnostic_code(if blocked {
+                            "app_external_code_not_allowed"
+                        } else {
+                            "app_hook_execution"
+                        }),
+                    );
+                }
+            }
+        }
+
+        if request.operation == LifecycleOperation::Upgrade {
+            let mut stale_receipt_changes = false;
+            for entry in manifest.entries.iter().filter(|entry| {
+                request.target.as_ref().is_none_or(|target| {
+                    app_source_parts(&entry.source).is_some_and(|(category, _)| category == target)
+                })
+            }) {
+                if !active_sources.contains(&entry.source) {
+                    let (category, resource) =
+                        app_source_parts(&entry.source).unwrap_or(("unknown", "unknown"));
+                    if !request.prune_stale {
+                        steps.push(
+                            PlanStepV1::new(
+                                format!("app/{category}"),
+                                Some(resource),
+                                PlanActionV1::Preserve,
+                            )
+                            .with_diagnostic_code("app_stale_source_preserved"),
+                        );
+                        continue;
+                    }
+                    capture_path_state(
+                        self.host(),
+                        state,
+                        format!("stale-resource:{}", entry.source),
+                        &entry.destination,
+                    )
+                    .await?;
+                    let current = read_optional(self.host(), &entry.destination).await?;
+                    if current.is_some()
+                        && let Some(backup) = &entry.backup
+                    {
+                        capture_path_state(
+                            self.host(),
+                            state,
+                            format!("stale-backup:{}", entry.source),
+                            backup,
+                        )
+                        .await?;
+                    }
+                    let current_matches_receipt =
+                        current
+                            .as_deref()
+                            .is_none_or(|bytes| match &entry.install_strategy {
+                                crate::install::AppInstallStrategy::Copy => {
+                                    crate::install::hash_content(bytes) == entry.content_hash
+                                }
+                                crate::install::AppInstallStrategy::JsonMerge { managed_keys } => {
+                                    installed_json_hash(bytes, managed_keys).ok().flatten()
+                                        == Some(entry.content_hash)
+                                }
+                            });
+                    let removal_supported = current.is_none()
+                        || match &entry.install_strategy {
+                            crate::install::AppInstallStrategy::Copy => {
+                                if let Some(backup) = &entry.backup {
+                                    if *backup != crate::install::backup_path(&entry.destination) {
+                                        false
+                                    } else {
+                                        match self.host().metadata(backup).await {
+                                            Ok(metadata) => metadata.kind == FileKind::File,
+                                            Err(error) if error.is_not_found() => false,
+                                            Err(error) => {
+                                                return Err(error.into_anyhow(
+                                                    "observing stale App persistent backup",
+                                                ));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    true
+                                }
+                            }
+                            crate::install::AppInstallStrategy::JsonMerge { .. } => {
+                                !entry.requires_admin && entry.backup.is_none()
+                            }
+                        };
+                    let action = if current_matches_receipt && removal_supported {
+                        PlanActionV1::Remove
+                    } else if current_matches_receipt {
+                        PlanActionV1::Blocked
+                    } else {
+                        PlanActionV1::Preserve
+                    };
+                    if action == PlanActionV1::Remove {
+                        stale_receipt_changes = true;
+                        if current.is_some() {
+                            add_app_entry_permissions(
+                                self.context(),
+                                permissions,
+                                entry,
+                                LifecycleOperation::Uninstall,
+                            );
+                            let remove_rollback = match &entry.install_strategy {
+                                crate::install::AppInstallStrategy::JsonMerge { .. }
+                                    if entry.backup.is_none() =>
+                                {
+                                    Some(crate::action::managed_file_rollback_path(
+                                        &entry.destination,
+                                    ))
+                                }
+                                crate::install::AppInstallStrategy::Copy => {
+                                    if let Some(backup) = &entry.backup {
+                                        if *backup
+                                            != crate::install::backup_path(&entry.destination)
+                                        {
+                                            None
+                                        } else {
+                                            match self.host().metadata(backup).await {
+                                                Ok(metadata) if metadata.kind == FileKind::File => {
+                                                    Some(crate::action::managed_file_rollback_path(
+                                                        &entry.destination,
+                                                    ))
+                                                }
+                                                Ok(_) => None,
+                                                Err(error) if error.is_not_found() => None,
+                                                Err(error) => {
+                                                    return Err(error.into_anyhow(
+                                                        "observing stale App persistent backup",
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Some(crate::action::managed_file_rollback_path(
+                                            &entry.destination,
+                                        ))
+                                    }
+                                }
+                                crate::install::AppInstallStrategy::JsonMerge { .. } => None,
+                            };
+                            if let Some(rollback) = remove_rollback {
+                                capture_path_state(
+                                    self.host(),
+                                    state,
+                                    format!("stale-remove-rollback:{}", entry.source),
+                                    &rollback,
+                                )
+                                .await?;
+                                if manifest.find_by_dest(&rollback).is_some()
+                                    || path_exists(self.host(), &rollback).await?
+                                {
+                                    steps.push(
+                                        PlanStepV1::new(
+                                            format!("app/{category}"),
+                                            Some(resource),
+                                            PlanActionV1::Blocked,
+                                        )
+                                        .with_diagnostic_code("app_remove_rollback_occupied"),
+                                    );
+                                    continue;
+                                }
+                                add_app_journal_permissions(self.context(), permissions);
+                                add_app_update_permissions(
+                                    self.context(),
+                                    permissions,
+                                    &entry.destination,
+                                    &rollback,
+                                );
+                                if matches!(
+                                    entry.install_strategy,
+                                    crate::install::AppInstallStrategy::JsonMerge { .. }
+                                ) {
+                                    permissions.implicit(PermissionV1::Filesystem {
+                                        access: FilesystemAccessV1::Write,
+                                        path: review_path(self.context(), &entry.destination),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    let mut step =
+                        PlanStepV1::new(format!("app/{category}"), Some(resource), action)
+                            .with_diagnostic_code(if action == PlanActionV1::Remove {
+                                "app_stale_source_pruned"
+                            } else if action == PlanActionV1::Blocked {
+                                "app_stale_removal_unsupported"
+                            } else {
+                                "app_stale_source_preserved"
+                            });
+                    if !current_matches_receipt {
+                        step = step.with_diagnostic_code("app_user_modified");
+                    }
+                    steps.push(step);
+                }
+            }
+            if stale_receipt_changes {
+                add_shine_receipt_permission(
+                    self.context(),
+                    permissions,
+                    "app-manifest.toml",
+                    LifecycleOperation::Upgrade,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn plan_app_cache_convergence(
+        &self,
+        request: &AppPlanRequest,
+        category: &AppCategory,
+        state: &mut StateCapture,
+        permissions: &mut PermissionAccumulator,
+        steps: &mut Vec<PlanStepV1>,
+    ) -> Result<()> {
+        let prefix = format!("app/{}/", category.name);
+        let overwrite = request.operation == LifecycleOperation::Upgrade || request.force;
+        for (logical, desired) in self
+            .presets()
+            .files()
+            .iter()
+            .filter(|(logical, _)| logical.starts_with(&prefix))
+        {
+            let destination = self.context().presets_dir.join(logical);
+            capture_path_state(self.host(), state, format!("cache:{logical}"), &destination)
+                .await?;
+            let current = read_optional(self.host(), &destination).await?;
+            let action = match current {
+                None => PlanActionV1::Create,
+                Some(current) if overwrite && current.as_slice() != desired.as_slice() => {
+                    PlanActionV1::Update
+                }
+                Some(_) => PlanActionV1::None,
+            };
+            if matches!(action, PlanActionV1::Create | PlanActionV1::Update) {
+                permissions.implicit(PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: review_path(self.context(), &destination),
+                });
+            }
+            steps.push(PlanStepV1::new(
+                format!("app/{}", category.name),
+                Some(format!(
+                    "preset-cache:{}",
+                    logical.trim_start_matches(&prefix)
+                )),
+                action,
+            ));
+        }
+        Ok(())
+    }
+
+    async fn plan_app_uninstall(
+        &self,
+        request: &AppPlanRequest,
+        manifest: &AppManifest,
+        state: &mut StateCapture,
+        permissions: &mut PermissionAccumulator,
+        steps: &mut Vec<PlanStepV1>,
+    ) -> Result<()> {
+        let receipt_categories = manifest
+            .entries
+            .iter()
+            .filter(|entry| {
+                request.target.as_ref().is_none_or(|target| {
+                    app_source_parts(&entry.source).is_some_and(|(category, _)| category == target)
+                })
+            })
+            .filter_map(|entry| {
+                app_source_parts(&entry.source).map(|(category, _)| category.to_string())
+            })
+            .collect::<BTreeSet<_>>();
+        for category_name in &receipt_categories {
+            let category_prefix = format!("app/{category_name}/");
+            if !self
+                .presets()
+                .files()
+                .keys()
+                .any(|path| path.starts_with(&category_prefix))
+            {
+                continue;
+            }
+            let Some(category) = self.app_categories(Some(category_name))?.into_iter().next()
+            else {
+                continue;
+            };
+            if let Some((artifact, teardown)) = category.artifact.as_ref().and_then(|artifact| {
+                artifact
+                    .teardown
+                    .as_deref()
+                    .map(|teardown| (artifact, teardown))
+            }) {
+                let blocked = app_code_blocked(self, &category, Path::new(teardown))?;
+                if blocked {
+                    steps.push(
+                        PlanStepV1::new(
+                            format!("app/{category_name}"),
+                            Some("artifact:teardown"),
+                            PlanActionV1::Preserve,
+                        )
+                        .with_diagnostic_code("app_artifact_teardown_skipped"),
+                    );
+                } else {
+                    permissions.declaration(
+                        category.permissions.as_ref(),
+                        "app_artifact_permission_declaration_missing",
+                    );
+                    capture_app_artifact_inputs(
+                        self.context(),
+                        &request.input_versions,
+                        category.permissions.as_ref(),
+                        artifact,
+                        state,
+                        permissions,
+                    )?;
+                    add_app_artifact_permissions(
+                        self,
+                        &category,
+                        teardown,
+                        artifact.runtime,
+                        state,
+                        permissions,
+                        steps,
+                    )
+                    .await?;
+                    steps.push(
+                        PlanStepV1::new(
+                            format!("app/{category_name}"),
+                            Some("artifact:teardown"),
+                            PlanActionV1::Execute,
+                        )
+                        .with_diagnostic_code("app_artifact_execution"),
+                    );
+                }
+            }
+        }
+        let entries = manifest.entries.iter().filter(|entry| {
+            request.target.as_ref().is_none_or(|target| {
+                app_source_parts(&entry.source).is_some_and(|(category, _)| category == target)
+            })
+        });
+        let mut changed_categories = BTreeSet::new();
+        for entry in entries {
+            let (category, resource) =
+                app_source_parts(&entry.source).unwrap_or(("unknown", "unknown"));
+            capture_path_state(
+                self.host(),
+                state,
+                format!("resource:{}", entry.source),
+                &entry.destination,
+            )
+            .await?;
+            if let Some(backup) = &entry.backup {
+                capture_path_state(
+                    self.host(),
+                    state,
+                    format!("backup:{}", entry.source),
+                    backup,
+                )
+                .await?;
+            }
+            let current = read_optional(self.host(), &entry.destination).await?;
+            let category_prefix = format!("app/{category}/");
+            let active_file = if self
+                .presets()
+                .files()
+                .keys()
+                .any(|path| path.starts_with(&category_prefix))
+            {
+                self.app_categories(Some(category))?
+                    .into_iter()
+                    .flat_map(|category| category.files)
+                    .find(|file| logical_app_source_for(category, file) == entry.source)
+            } else {
+                None
+            };
+            let modified = match (active_file.as_ref(), current.as_deref()) {
+                (Some(file), Some(bytes)) => installed_app_hash(file, bytes)
+                    .map(|hash| hash.is_some_and(|hash| hash != entry.content_hash))
+                    .unwrap_or(true),
+                (None, Some(bytes)) => crate::install::hash_content(bytes) != entry.content_hash,
+                (_, None) => false,
+            };
+            let action = if modified && !request.force {
+                PlanActionV1::Preserve
+            } else {
+                PlanActionV1::Remove
+            };
+            if action == PlanActionV1::Remove && current.is_some() {
+                add_app_entry_permissions(self.context(), permissions, entry, request.operation);
+            }
+            let typed_removal_candidate = active_file.as_ref().is_some_and(|file| {
+                file.generator.is_none()
+                    && file.install_strategy == entry.install_strategy
+                    && matches!(
+                        file.install_strategy,
+                        crate::install::AppInstallStrategy::Copy
+                            | crate::install::AppInstallStrategy::JsonMerge { .. }
+                    )
+                    && current.as_deref().is_some_and(|bytes| {
+                        installed_app_hash(file, bytes)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|hash| hash == entry.content_hash || request.force)
+                    })
+            });
+            let remove_rollback = if action == PlanActionV1::Remove && typed_removal_candidate {
+                let metadata = self
+                    .host()
+                    .metadata(&entry.destination)
+                    .await
+                    .map_err(|error| {
+                        error.into_anyhow("observing managed App removal destination")
+                    })?;
+                if metadata.kind != FileKind::File {
+                    None
+                } else if let Some(backup) = &entry.backup {
+                    if *backup != crate::install::backup_path(&entry.destination) {
+                        None
+                    } else {
+                        match self.host().metadata(backup).await {
+                            Ok(metadata) if metadata.kind == FileKind::File => Some(
+                                crate::action::managed_file_rollback_path(&entry.destination),
+                            ),
+                            Ok(_) => None,
+                            Err(error) if error.is_not_found() => None,
+                            Err(error) => {
+                                return Err(error.into_anyhow(
+                                    "observing managed App removal persistent backup",
+                                ));
+                            }
+                        }
+                    }
+                } else {
+                    Some(crate::action::managed_file_rollback_path(
+                        &entry.destination,
+                    ))
+                }
+            } else {
+                None
+            };
+            if let Some(rollback) = &remove_rollback {
+                capture_path_state(
+                    self.host(),
+                    state,
+                    format!("remove-rollback:{}", entry.source),
+                    rollback,
+                )
+                .await?;
+                if manifest.find_by_dest(rollback).is_some()
+                    || path_exists(self.host(), rollback).await?
+                {
+                    steps.push(
+                        PlanStepV1::new(
+                            format!("app/{category}"),
+                            Some(resource),
+                            PlanActionV1::Blocked,
+                        )
+                        .with_diagnostic_code("app_remove_rollback_occupied"),
+                    );
+                    continue;
+                }
+                add_app_journal_permissions(self.context(), permissions);
+                add_app_update_permissions(
+                    self.context(),
+                    permissions,
+                    &entry.destination,
+                    rollback,
+                );
+                if matches!(
+                    entry.install_strategy,
+                    crate::install::AppInstallStrategy::JsonMerge { .. }
+                ) {
+                    permissions.implicit(PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Write,
+                        path: review_path(self.context(), &entry.destination),
+                    });
+                }
+            }
+            let mut step = PlanStepV1::new(format!("app/{category}"), Some(resource), action);
+            if modified {
+                step = step.with_diagnostic_code(if request.force {
+                    "app_user_modification_override"
+                } else {
+                    "app_user_modified"
+                });
+            }
+            if action == PlanActionV1::Remove {
+                changed_categories.insert(category.to_string());
+            }
+            steps.push(step);
+        }
+        if !changed_categories.is_empty() {
+            add_shine_receipt_permission(
+                self.context(),
+                permissions,
+                "app-manifest.toml",
+                request.operation,
+            );
+        }
+        if self.context().is_external_presets {
+            if request.purge {
+                steps.push(
+                    PlanStepV1::new(
+                        request
+                            .target
+                            .as_ref()
+                            .map(|category| format!("app/{category}"))
+                            .unwrap_or_else(|| "app".to_string()),
+                        Some("preset-cache"),
+                        PlanActionV1::Preserve,
+                    )
+                    .with_diagnostic_code("app_external_preset_cache_preserved"),
+                );
+            }
+        } else {
+            let cache_targets = if request.purge && request.target.is_none() {
+                vec!["app".to_string()]
+            } else if let Some(category) = &request.target {
+                vec![format!("app/{category}")]
+            } else {
+                receipt_categories
+                    .into_iter()
+                    .map(|category| format!("app/{category}"))
+                    .collect()
+            };
+            for target in cache_targets {
+                let root = self.context().presets_dir.join(&target);
+                let exists = path_exists(self.host(), &root).await?;
+                capture_tree_state(self.host(), state, format!("cache:{target}"), &root).await?;
+                if exists {
+                    permissions.implicit(PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Remove,
+                        path: review_path(self.context(), &root),
+                    });
+                }
+                steps.push(
+                    PlanStepV1::new(
+                        target,
+                        Some("preset-cache"),
+                        if exists {
+                            PlanActionV1::Remove
+                        } else {
+                            PlanActionV1::None
+                        },
+                    )
+                    .with_diagnostic_code(if request.purge {
+                        "app_preset_cache_purge"
+                    } else {
+                        "app_preset_cache_remove"
+                    }),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    pub async fn plan_app_refresh(&self, request: AppRefreshPlanRequest) -> Result<PlanV1> {
+        let category = self
+            .app_categories(Some(&request.category))?
+            .into_iter()
+            .next()
+            .with_context(|| format!("app preset category not found: {}", request.category))?;
+        let candidates = select_refresh_files(&category, request.file.as_deref())?;
+        let (manifest, manifest_bytes) =
+            load_app_manifest(self.host(), &self.context().shine_dir).await?;
+        let mut selected = Vec::new();
+        for file in candidates {
+            let destination = self.app_destination(&category, &file)?;
+            let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
+                if request.file.is_some() {
+                    bail!(
+                        "app '{}' generated file is not installed: {}",
+                        request.category,
+                        file.source_rel.display()
+                    );
+                }
+                continue;
+            };
+            selected.push((file, destination, entry));
+        }
+        if selected.is_empty() {
+            bail!(
+                "app '{}' has no installed generated files; run `shine install app/{}` first",
+                request.category,
+                request.category
+            );
+        }
+
+        let mut state = StateCapture::new("app-refresh", PlanOperationV1::AppRefresh)?;
+        capture_context(&mut state, self.context())?;
+        state.public("category", &request.category)?;
+        state.public(
+            "file",
+            request
+                .file
+                .as_deref()
+                .map(logical_path)
+                .unwrap_or_else(|| "all".to_string()),
+        )?;
+        state.public("force", request.force.to_string())?;
+        capture_manifest_selection(
+            &mut state,
+            "manifest:app-refresh",
+            manifest_bytes.is_some(),
+            manifest.schema_version,
+            &selected
+                .iter()
+                .map(|(_, _, entry)| entry)
+                .collect::<Vec<_>>(),
+        )?;
+
+        if let Some(journal_bytes) = self.app_operation_journal_bytes().await? {
+            state.bytes("journal:app-operation", Some(&journal_bytes))?;
+            return finish_specialized_plan(
+                self,
+                PlanOperationV1::AppRefresh,
+                state,
+                PermissionAccumulator::default(),
+                vec![
+                    PlanStepV1::new(
+                        format!("app/{}", request.category),
+                        Some("operation-journal"),
+                        PlanActionV1::Blocked,
+                    )
+                    .with_diagnostic_code("app_recovery_required"),
+                ],
+            );
+        }
+
+        let mut permissions = PermissionAccumulator::default();
+        permissions.declaration(
+            category.permissions.as_ref(),
+            "app_refresh_permission_declaration_missing",
+        );
+        let mut steps = Vec::new();
+        for (file, destination, entry) in &selected {
+            let generator = file
+                .generator
+                .as_ref()
+                .expect("selected generated App file");
+            let resource = file.source_rel.display().to_string();
+            capture_path_state(
+                self.host(),
+                &mut state,
+                format!("resource:app/{}/{}", request.category, resource),
+                destination,
+            )
+            .await?;
+            add_app_typed_permissions(
+                self.context(),
+                &mut permissions,
+                file,
+                destination,
+                LifecycleOperation::Update,
+            );
+            capture_generator_inputs(
+                self.context(),
+                &request.input_versions,
+                category.permissions.as_ref(),
+                generator,
+                &mut state,
+                &mut permissions,
+            )?;
+            add_generator_permissions(
+                self,
+                &mut permissions,
+                &category,
+                generator,
+                &mut state,
+                &mut steps,
+            )
+            .await?;
+
+            let missing_input = self
+                .context()
+                .env
+                .get(&generator.when_env)
+                .is_none_or(|value| value.trim().is_empty());
+            let external_code_blocked = app_code_blocked(self, &category, &generator.script)?;
+            let blocked = missing_input || external_code_blocked;
+            let mut execution = PlanStepV1::new(
+                format!("app/{}", request.category),
+                Some(format!("generator:{resource}")),
+                if blocked {
+                    PlanActionV1::Blocked
+                } else {
+                    PlanActionV1::Execute
+                },
+            );
+            if missing_input {
+                execution = execution.with_diagnostic_code("app_generator_required_env_missing");
+            }
+            if external_code_blocked {
+                execution = execution.with_diagnostic_code("app_external_code_not_allowed");
+            }
+            if !blocked {
+                execution = execution.with_diagnostic_code("app_opaque_generator_output");
+            }
+            steps.push(execution);
+            if blocked {
+                continue;
+            }
+
+            let current = read_optional(self.host(), destination).await?;
+            let user_modified = current.as_deref().is_some_and(|bytes| {
+                installed_app_hash(file, bytes)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|hash| hash != entry.content_hash)
+            });
+            let action = if user_modified && !request.force {
+                PlanActionV1::Preserve
+            } else {
+                PlanActionV1::Update
+            };
+            let mut step =
+                PlanStepV1::new(format!("app/{}", request.category), Some(resource), action)
+                    .with_diagnostic_code("app_opaque_generator_output");
+            if user_modified {
+                step = step.with_diagnostic_code(if request.force {
+                    "app_user_modification_override"
+                } else {
+                    "app_user_modified"
+                });
+            }
+            steps.push(step);
+        }
+        add_shine_receipt_permission(
+            self.context(),
+            &mut permissions,
+            "app-manifest.toml",
+            LifecycleOperation::Update,
+        );
+        plan_app_hooks(
+            self,
+            &category,
+            &category.post_upgrade,
+            &request.input_versions,
+            &mut state,
+            &mut permissions,
+            &mut steps,
+        )
+        .await?;
+        finish_specialized_plan(self, PlanOperationV1::AppRefresh, state, permissions, steps)
+    }
+
+    pub async fn plan_app_artifact(&self, request: AppArtifactPlanRequest) -> Result<PlanV1> {
+        let category = self
+            .app_categories(Some(&request.category))?
+            .into_iter()
+            .next()
+            .with_context(|| format!("app preset category not found: {}", request.category))?;
+        let artifact = category.artifact.as_ref().with_context(|| {
+            format!(
+                "app '{}' does not define an artifact script",
+                request.category
+            )
+        })?;
+        let (script, operation, resource) = match request.action {
+            AppArtifactAction::Apply => (
+                artifact.script.as_str(),
+                PlanOperationV1::AppArtifactApply,
+                "artifact:apply",
+            ),
+            AppArtifactAction::Remove => (
+                artifact.teardown.as_deref().with_context(|| {
+                    format!(
+                        "app '{}' does not define an artifact teardown script",
+                        request.category
+                    )
+                })?,
+                PlanOperationV1::AppArtifactRemove,
+                "artifact:teardown",
+            ),
+        };
+        let mut state = StateCapture::new("app-artifact", operation)?;
+        capture_context(&mut state, self.context())?;
+        state.public("category", &request.category)?;
+        state.public("script", script.replace('\\', "/"))?;
+        if let Some(journal_bytes) = self.app_operation_journal_bytes().await? {
+            state.bytes("journal:app-operation", Some(&journal_bytes))?;
+            return finish_specialized_plan(
+                self,
+                operation,
+                state,
+                PermissionAccumulator::default(),
+                vec![
+                    PlanStepV1::new(
+                        format!("app/{}", request.category),
+                        Some("operation-journal"),
+                        PlanActionV1::Blocked,
+                    )
+                    .with_diagnostic_code("app_recovery_required"),
+                ],
+            );
+        }
+        let mut permissions = PermissionAccumulator::default();
+        permissions.declaration(
+            category.permissions.as_ref(),
+            "app_artifact_permission_declaration_missing",
+        );
+        let mut steps = Vec::new();
+        capture_app_artifact_inputs(
+            self.context(),
+            &request.input_versions,
+            category.permissions.as_ref(),
+            artifact,
+            &mut state,
+            &mut permissions,
+        )?;
+        add_app_artifact_permissions(
+            self,
+            &category,
+            script,
+            artifact.runtime,
+            &mut state,
+            &mut permissions,
+            &mut steps,
+        )
+        .await?;
+        let blocked = app_code_blocked(self, &category, Path::new(script))?;
+        let mut step = PlanStepV1::new(
+            format!("app/{}", request.category),
+            Some(resource),
+            if blocked {
+                PlanActionV1::Blocked
+            } else {
+                PlanActionV1::Execute
+            },
+        );
+        step = step.with_diagnostic_code(if blocked {
+            "app_external_code_not_allowed"
+        } else {
+            "app_artifact_execution"
+        });
+        steps.push(step);
+        finish_specialized_plan(self, operation, state, permissions, steps)
+    }
+
+    pub async fn plan_shells(&self, request: ShellPlanRequest) -> Result<PlanV1> {
+        validate_shell_request(&request)?;
+        let selection = request
+            .target
+            .as_deref()
+            .map(parse_shell_lifecycle_target)
+            .transpose()?;
+        let mut selected_categories = if request.operation == LifecycleOperation::Uninstall {
+            None
+        } else {
+            Some(self.shell_categories(selection.as_ref().map(|target| target.category))?)
+        };
+        if let (Some(command), Some(categories)) = (
+            selection.as_ref().and_then(|target| target.command),
+            selected_categories.as_mut(),
+        ) {
+            for category in categories {
+                category.files.retain(|file| file.command_name == command);
+            }
+        }
+        if request.operation != LifecycleOperation::Uninstall
+            && request.target.is_some()
+            && selected_categories.as_ref().is_none_or(|categories| {
+                categories.iter().all(|category| category.files.is_empty())
+            })
+        {
+            bail!(
+                "Shell lifecycle target not found: {}",
+                request.target.as_deref().unwrap_or_default()
+            );
+        }
+        let mut state = StateCapture::new("shell", request.operation)?;
+        capture_request_mode(
+            &mut state,
+            request.target.as_deref(),
+            request.force,
+            request.purge,
+            false,
+        )?;
+        capture_context(&mut state, self.context())?;
+        let interrupted_operation =
+            if let Some(journal_bytes) = self.shell_operation_journal_bytes().await? {
+                state.bytes("journal:shell-operation", Some(&journal_bytes))?;
+                true
+            } else {
+                false
+            };
+        let (manifest, manifest_bytes) =
+            load_shell_manifest(self.host(), &self.context().shine_dir).await?;
+        capture_manifest_selection(
+            &mut state,
+            "manifest:shell",
+            manifest_bytes.is_some(),
+            manifest.schema_version,
+            &manifest
+                .entries
+                .iter()
+                .filter(|entry| shell_entry_selected(entry, selection.as_ref()))
+                .collect::<Vec<_>>(),
+        )?;
+        let mut permissions = PermissionAccumulator::default();
+        let mut steps = Vec::new();
+        let mut typed_launcher_transaction = false;
+
+        if interrupted_operation {
+            steps.push(
+                PlanStepV1::new(
+                    request
+                        .target
+                        .as_ref()
+                        .map(|target| format!("shell/{target}"))
+                        .unwrap_or_else(|| "shell".to_string()),
+                    Some("operation-journal"),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code("shell_recovery_required"),
+            );
+            return finish_plan(self, request.operation, state, permissions, steps);
+        }
+
+        if request.operation != LifecycleOperation::Install
+            && let Some(categories) = selected_categories.as_mut()
+        {
+            for category in categories.iter_mut() {
+                let mut installed_files = Vec::new();
+                for file in std::mem::take(&mut category.files) {
+                    let canonical = format!("shell/{}/{}", category.name, file.command_name);
+                    let launcher =
+                        command_path_for_name(&self.context().bin_dir, file.command_name.as_ref());
+                    if manifest.find(&canonical).is_some()
+                        || launcher_is_managed(self.host(), &launcher, self.context()).await?
+                    {
+                        installed_files.push(file);
+                    }
+                }
+                category.files = installed_files;
+            }
+            categories.retain(|category| !category.files.is_empty());
+            if request.target.is_some() && categories.is_empty() {
+                bail!(
+                    "Shell lifecycle target is not installed: {}",
+                    request.target.as_deref().unwrap_or_default()
+                );
+            }
+        }
+
+        if request.operation == LifecycleOperation::Uninstall {
+            let selected_entries = manifest
+                .entries
+                .iter()
+                .filter(|entry| shell_entry_selected(entry, selection.as_ref()))
+                .collect::<Vec<_>>();
+            let mut legacy_categories =
+                self.shell_categories(selection.as_ref().map(|target| target.category))?;
+            if let Some(command) = selection.as_ref().and_then(|target| target.command) {
+                for category in &mut legacy_categories {
+                    category.files.retain(|file| file.command_name == command);
+                }
+            }
+            for category in &legacy_categories {
+                for file in &category.files {
+                    let target = format!("shell/{}/{}", category.name, file.command_name);
+                    if manifest.find(&target).is_some() {
+                        continue;
+                    }
+                    let roots =
+                        super::shell::planned_shell_managed_roots(self.context(), &category.name);
+                    let probe = probe_managed_command_with_host(
+                        self.host(),
+                        &self.context().bin_dir,
+                        std::ffi::OsStr::new(&file.command_name),
+                        &roots,
+                    )
+                    .await?;
+                    if probe.resources.is_empty() && probe.conflicts.is_empty() {
+                        continue;
+                    }
+                    let mut rollback_occupied = false;
+                    for (index, resource) in probe.resources.iter().enumerate() {
+                        let destination = resource.destination();
+                        let rollback = managed_file_rollback_path(destination);
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("legacy-launcher:{target}:{index}"),
+                            destination,
+                        )
+                        .await?;
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("legacy-launcher-rollback:{target}:{index}"),
+                            &rollback,
+                        )
+                        .await?;
+                        rollback_occupied |= path_exists(self.host(), &rollback).await?;
+                    }
+                    let action = if !probe.conflicts.is_empty() {
+                        PlanActionV1::Preserve
+                    } else if rollback_occupied {
+                        PlanActionV1::Blocked
+                    } else {
+                        typed_launcher_transaction = true;
+                        for resource in &probe.resources {
+                            let destination = resource.destination();
+                            let rollback = managed_file_rollback_path(destination);
+                            for (access, path) in [
+                                (FilesystemAccessV1::Remove, destination),
+                                (FilesystemAccessV1::Write, rollback.as_path()),
+                                (FilesystemAccessV1::Remove, rollback.as_path()),
+                            ] {
+                                permissions.implicit(PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), path),
+                                });
+                            }
+                        }
+                        PlanActionV1::Remove
+                    };
+                    steps.push(
+                        PlanStepV1::new(&target, None::<String>, action).with_diagnostic_code(
+                            if !probe.conflicts.is_empty() {
+                                "shell_foreign_launcher_preserved"
+                            } else if rollback_occupied {
+                                "shell_launcher_rollback_occupied"
+                            } else {
+                                "shell_legacy_launcher_remove_transaction"
+                            },
+                        ),
+                    );
+                }
+            }
+            let selected_keys = selected_entries
+                .iter()
+                .map(|entry| (entry.category.as_str(), entry.command.as_str()))
+                .collect::<BTreeSet<_>>();
+            let categories_removed = selected_entries
+                .iter()
+                .map(|entry| entry.category.as_str())
+                .filter(|category| {
+                    !manifest.entries.iter().any(|entry| {
+                        entry.category == **category
+                            && !selected_keys
+                                .contains(&(entry.category.as_str(), entry.command.as_str()))
+                    })
+                })
+                .collect::<BTreeSet<_>>();
+            let rendered_root = self.context().shine_dir.join("rendered/shell");
+            let selected_rendered_paths = selected_entries
+                .iter()
+                .map(|entry| entry.rendered_path.clone())
+                .collect::<BTreeSet<_>>();
+            for destination in selected_rendered_paths {
+                if !destination.starts_with(&rendered_root) {
+                    continue;
+                }
+                let consumers = manifest
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.rendered_path == destination)
+                    .collect::<Vec<_>>();
+                if consumers.iter().any(|entry| {
+                    !selected_keys.contains(&(entry.category.as_str(), entry.command.as_str()))
+                }) {
+                    continue;
+                }
+                let target = consumers
+                    .first()
+                    .map(|entry| format!("shell/{}/{}", entry.category, entry.command))
+                    .context("Shell rendered-file removal has no receipt consumer")?;
+                let rollback = managed_file_rollback_path(&destination);
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("rendered-remove:{target}"),
+                    &destination,
+                )
+                .await?;
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("rendered-remove-rollback:{target}"),
+                    &rollback,
+                )
+                .await?;
+                let destination_state = self.host().metadata(&destination).await;
+                let rollback_occupied = path_exists(self.host(), &rollback).await?;
+                let (action, diagnostic) = match destination_state {
+                    Ok(metadata) if metadata.kind != FileKind::File => (
+                        PlanActionV1::Blocked,
+                        "shell_rendered_file_removal_not_regular",
+                    ),
+                    _ if rollback_occupied => (
+                        PlanActionV1::Blocked,
+                        "shell_rendered_file_removal_rollback_occupied",
+                    ),
+                    Err(error) if error.is_not_found() => {
+                        (PlanActionV1::None, "shell_rendered_file_removal_not_needed")
+                    }
+                    Ok(_) => {
+                        typed_launcher_transaction = true;
+                        for (access, path) in [
+                            (FilesystemAccessV1::Remove, &destination),
+                            (FilesystemAccessV1::Write, &rollback),
+                            (FilesystemAccessV1::Remove, &rollback),
+                        ] {
+                            permissions.implicit(PermissionV1::Filesystem {
+                                access,
+                                path: review_path(self.context(), path),
+                            });
+                        }
+                        (
+                            PlanActionV1::Remove,
+                            "shell_rendered_file_remove_transaction",
+                        )
+                    }
+                    Err(error) => {
+                        return Err(error.into_anyhow("inspecting Shell rendered-file removal"));
+                    }
+                };
+                steps.push(
+                    PlanStepV1::new(target, Some("rendered-output"), action)
+                        .with_diagnostic_code(diagnostic),
+                );
+            }
+            for entry in &selected_entries {
+                let target = format!("shell/{}/{}", entry.category, entry.command);
+                let previous_spec = shell_link_spec_from_manifest_entry(entry)?;
+                let resources = prepare_launcher_resources(&self.context().bin_dir, &previous_spec);
+                let mut exact = true;
+                let mut rollback_occupied = false;
+                for (index, resource) in resources.iter().enumerate() {
+                    capture_path_state(
+                        self.host(),
+                        &mut state,
+                        format!("launcher:{target}:{index}"),
+                        resource.destination(),
+                    )
+                    .await?;
+                    exact &= prepared_launcher_resource_is_exact(self.host(), resource).await?;
+                    let rollback = managed_file_rollback_path(resource.destination());
+                    capture_path_state(
+                        self.host(),
+                        &mut state,
+                        format!("launcher-rollback:{target}:{index}"),
+                        &rollback,
+                    )
+                    .await?;
+                    rollback_occupied |= path_exists(self.host(), &rollback).await?;
+                }
+                let transactional = exact && !rollback_occupied;
+                if transactional {
+                    typed_launcher_transaction = true;
+                    for resource in &resources {
+                        for (access, path) in [
+                            (
+                                FilesystemAccessV1::Remove,
+                                resource.destination().to_path_buf(),
+                            ),
+                            (
+                                FilesystemAccessV1::Write,
+                                managed_file_rollback_path(resource.destination()),
+                            ),
+                            (
+                                FilesystemAccessV1::Remove,
+                                managed_file_rollback_path(resource.destination()),
+                            ),
+                        ] {
+                            permissions.implicit(PermissionV1::Filesystem {
+                                access,
+                                path: review_path(self.context(), &path),
+                            });
+                        }
+                    }
+                }
+                steps.push(
+                    PlanStepV1::new(
+                        &target,
+                        None::<String>,
+                        if exact && rollback_occupied {
+                            PlanActionV1::Blocked
+                        } else if transactional {
+                            PlanActionV1::Remove
+                        } else {
+                            PlanActionV1::Preserve
+                        },
+                    )
+                    .with_diagnostic_code(if exact && rollback_occupied {
+                        "shell_launcher_rollback_occupied"
+                    } else if transactional {
+                        "shell_managed_launcher_remove_transaction"
+                    } else {
+                        "shell_foreign_launcher_preserved"
+                    }),
+                );
+            }
+            let global_cache_purge =
+                !self.context().is_external_presets && request.purge && selection.is_none();
+            if request.purge && !self.context().is_external_presets {
+                let mut purge_roots = categories_removed
+                    .iter()
+                    .map(|category| self.context().presets_dir.join("shell").join(category))
+                    .collect::<Vec<_>>();
+                purge_roots.push(self.context().presets_dir.join("shell"));
+                purge_roots.push(self.context().bin_dir.clone());
+                purge_roots.sort();
+                purge_roots.dedup();
+                for (index, path) in purge_roots.iter().enumerate() {
+                    capture_path_state(
+                        self.host(),
+                        &mut state,
+                        format!("shell-purge-root:{index}"),
+                        path,
+                    )
+                    .await?;
+                    if path_exists(self.host(), path).await? {
+                        permissions.implicit(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Remove,
+                            path: review_path(self.context(), path),
+                        });
+                    }
+                }
+            }
+            if global_cache_purge {
+                let root = self.context().presets_dir.join("shell");
+                capture_tree_state(
+                    self.host(),
+                    &mut state,
+                    "shell-cache:all".to_string(),
+                    &root,
+                )
+                .await?;
+                let mut file_count = 0usize;
+                let mut blocked = false;
+                if let Some(files) =
+                    super::shell_action_executor::collect_shell_tree_for_action(self.host(), &root)
+                        .await?
+                {
+                    for file in files {
+                        let destination = root.join(file.relative_path);
+                        let rollback = managed_file_rollback_path(&destination);
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("shell-cache-purge:{file_count}"),
+                            &destination,
+                        )
+                        .await?;
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("shell-cache-purge-rollback:{file_count}"),
+                            &rollback,
+                        )
+                        .await?;
+                        blocked |= path_exists(self.host(), &rollback).await?;
+                        file_count += 1;
+                        if !blocked {
+                            for (access, path) in [
+                                (FilesystemAccessV1::Remove, &destination),
+                                (FilesystemAccessV1::Write, &rollback),
+                                (FilesystemAccessV1::Remove, &rollback),
+                            ] {
+                                permissions.implicit(PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), path),
+                                });
+                            }
+                        }
+                    }
+                }
+                if file_count > 0 && !blocked {
+                    typed_launcher_transaction = true;
+                }
+                steps.push(
+                    PlanStepV1::new(
+                        "shell",
+                        Some("preset-cache"),
+                        if blocked {
+                            PlanActionV1::Blocked
+                        } else if file_count > 0 {
+                            PlanActionV1::Remove
+                        } else {
+                            PlanActionV1::None
+                        },
+                    )
+                    .with_diagnostic_code(if blocked {
+                        "shell_cache_removal_rollback_occupied"
+                    } else {
+                        "shell_cache_remove_transaction"
+                    }),
+                );
+            }
+            for category in &categories_removed {
+                if !self.context().is_external_presets && !global_cache_purge {
+                    let prefix = format!("shell/{category}/");
+                    let mut file_count = 0usize;
+                    let mut blocked = false;
+                    for logical in self
+                        .presets()
+                        .files()
+                        .keys()
+                        .filter(|logical| logical.starts_with(&prefix))
+                    {
+                        let destination = self.context().presets_dir.join(logical);
+                        let metadata = self.host().metadata(&destination).await;
+                        match metadata {
+                            Err(error) if error.is_not_found() => continue,
+                            Ok(metadata) if metadata.kind == FileKind::File => {}
+                            Ok(_) => {
+                                blocked = true;
+                                continue;
+                            }
+                            Err(error) => {
+                                return Err(error.into_anyhow("inspecting Shell cache removal"));
+                            }
+                        }
+                        let rollback = managed_file_rollback_path(&destination);
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("shell-cache-remove:{category}:{file_count}"),
+                            &destination,
+                        )
+                        .await?;
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("shell-cache-remove-rollback:{category}:{file_count}"),
+                            &rollback,
+                        )
+                        .await?;
+                        blocked |= path_exists(self.host(), &rollback).await?;
+                        file_count += 1;
+                        for (access, path) in [
+                            (FilesystemAccessV1::Remove, &destination),
+                            (FilesystemAccessV1::Write, &rollback),
+                            (FilesystemAccessV1::Remove, &rollback),
+                        ] {
+                            permissions.implicit(PermissionV1::Filesystem {
+                                access,
+                                path: review_path(self.context(), path),
+                            });
+                        }
+                    }
+                    if file_count > 0 && !blocked {
+                        typed_launcher_transaction = true;
+                    }
+                    steps.push(
+                        PlanStepV1::new(
+                            format!("shell/{category}"),
+                            Some("preset-cache"),
+                            if blocked {
+                                PlanActionV1::Blocked
+                            } else if file_count > 0 {
+                                PlanActionV1::Remove
+                            } else {
+                                PlanActionV1::None
+                            },
+                        )
+                        .with_diagnostic_code(if blocked {
+                            "shell_cache_removal_conflict"
+                        } else {
+                            "shell_cache_remove_transaction"
+                        }),
+                    );
+                }
+
+                let snapshot = self
+                    .context()
+                    .shine_dir
+                    .join("installed/shell")
+                    .join(category);
+                let rollback = shell_snapshot_rollback_path(&snapshot);
+                capture_tree_state(
+                    self.host(),
+                    &mut state,
+                    format!("shell-snapshot-remove:{category}"),
+                    &snapshot,
+                )
+                .await?;
+                capture_tree_state(
+                    self.host(),
+                    &mut state,
+                    format!("shell-snapshot-remove-rollback:{category}"),
+                    &rollback,
+                )
+                .await?;
+                let exists = path_exists(self.host(), &snapshot).await?;
+                let rollback_occupied = path_exists(self.host(), &rollback).await?;
+                if exists && !rollback_occupied {
+                    typed_launcher_transaction = true;
+                    for (access, path) in [
+                        (FilesystemAccessV1::Remove, &snapshot),
+                        (FilesystemAccessV1::Write, &rollback),
+                        (FilesystemAccessV1::Remove, &rollback),
+                    ] {
+                        permissions.implicit(PermissionV1::Filesystem {
+                            access,
+                            path: review_path(self.context(), path),
+                        });
+                    }
+                }
+                steps.push(
+                    PlanStepV1::new(
+                        format!("shell/{category}"),
+                        Some("shared-snapshot"),
+                        if rollback_occupied {
+                            PlanActionV1::Blocked
+                        } else if exists {
+                            PlanActionV1::Remove
+                        } else {
+                            PlanActionV1::None
+                        },
+                    )
+                    .with_diagnostic_code(if rollback_occupied {
+                        "shell_snapshot_removal_rollback_occupied"
+                    } else {
+                        "shell_snapshot_remove_transaction"
+                    }),
+                );
+            }
+        } else {
+            let overwrite_embedded_cache =
+                request.force || request.operation == LifecycleOperation::Upgrade;
+            for category in selected_categories.unwrap_or_default() {
+                if !self.context().is_external_presets {
+                    let prefix = format!("shell/{}/", category.name);
+                    let effective_logicals = self.effective_shell_cache_logicals(&category)?;
+                    let mut cache_mutations = Vec::new();
+                    let mut cache_created = false;
+                    let mut cache_updated = false;
+                    let mut cache_conflict = false;
+                    let mut cache_rollback_occupied = false;
+                    for (logical, desired) in
+                        self.presets().files().iter().filter(|(logical, _)| {
+                            logical.starts_with(&prefix) && effective_logicals.contains(*logical)
+                        })
+                    {
+                        let destination = self.context().presets_dir.join(logical);
+                        let mutation = match self.host().metadata(&destination).await {
+                            Ok(metadata) if metadata.kind == FileKind::File => {
+                                let current =
+                                    self.host().read(&destination).await.map_err(|error| {
+                                        error.into_anyhow("reading embedded Shell cache file")
+                                    })?;
+                                let mutation = current != *desired && overwrite_embedded_cache;
+                                cache_updated |= mutation;
+                                mutation
+                            }
+                            Ok(_) => {
+                                capture_path_state(
+                                    self.host(),
+                                    &mut state,
+                                    format!("shell-cache-conflict:{}:{}", category.name, logical),
+                                    &destination,
+                                )
+                                .await?;
+                                cache_conflict = true;
+                                false
+                            }
+                            Err(error) if error.is_not_found() => {
+                                cache_created = true;
+                                true
+                            }
+                            Err(error) => {
+                                return Err(
+                                    error.into_anyhow("inspecting embedded Shell cache file")
+                                );
+                            }
+                        };
+                        if mutation {
+                            let rollback = managed_file_rollback_path(&destination);
+                            capture_path_state(
+                                self.host(),
+                                &mut state,
+                                format!("shell-cache:{}:{}", category.name, logical),
+                                &destination,
+                            )
+                            .await?;
+                            capture_path_state(
+                                self.host(),
+                                &mut state,
+                                format!("shell-cache-rollback:{}:{}", category.name, logical),
+                                &rollback,
+                            )
+                            .await?;
+                            cache_rollback_occupied |= path_exists(self.host(), &rollback).await?;
+                            cache_mutations.push((destination, rollback));
+                        }
+                    }
+                    cache_rollback_occupied |= cache_mutations.iter().any(|(destination, _)| {
+                        cache_mutations
+                            .iter()
+                            .any(|(_, rollback)| destination == rollback)
+                    });
+                    if cache_conflict || !cache_mutations.is_empty() {
+                        let blocked = cache_conflict || cache_rollback_occupied;
+                        if !blocked {
+                            typed_launcher_transaction = true;
+                            for (destination, rollback) in &cache_mutations {
+                                for (access, path) in [
+                                    (FilesystemAccessV1::Write, destination),
+                                    (FilesystemAccessV1::Remove, destination),
+                                    (FilesystemAccessV1::Write, rollback),
+                                    (FilesystemAccessV1::Remove, rollback),
+                                ] {
+                                    permissions.implicit(PermissionV1::Filesystem {
+                                        access,
+                                        path: review_path(self.context(), path),
+                                    });
+                                }
+                            }
+                        }
+                        steps.push(
+                            PlanStepV1::new(
+                                format!("shell/{}", category.name),
+                                Some("preset-cache"),
+                                if blocked {
+                                    PlanActionV1::Blocked
+                                } else if cache_updated {
+                                    PlanActionV1::Update
+                                } else if cache_created {
+                                    PlanActionV1::Create
+                                } else {
+                                    PlanActionV1::Update
+                                },
+                            )
+                            .with_diagnostic_code(if cache_conflict {
+                                "shell_cache_destination_conflict"
+                            } else if cache_rollback_occupied {
+                                "shell_cache_rollback_occupied"
+                            } else {
+                                "shell_cache_replace_transaction"
+                            }),
+                        );
+                    }
+                }
+                let untransformed_snapshot = self.context().is_external_presets
+                    && self.context().external_shell_mode == ExternalShellMode::Snapshot
+                    && category.files.iter().all(|file| {
+                        file.transforms.is_empty()
+                            && self
+                                .presets()
+                                .get(&format!(
+                                    "shell/{}/{}",
+                                    category.name,
+                                    logical_path(&file.source_rel)
+                                ))
+                                .is_none_or(|bytes| !has_template_annotation(bytes))
+                    });
+                if untransformed_snapshot {
+                    let prefix = format!("shell/{}/", category.name);
+                    let expected = self
+                        .presets()
+                        .files()
+                        .iter()
+                        .filter_map(|(logical, bytes)| {
+                            logical.strip_prefix(&prefix).map(|relative| {
+                                (PathBuf::from(relative), crate::install::hash_content(bytes))
+                            })
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    let destination = self
+                        .context()
+                        .shine_dir
+                        .join("installed/shell")
+                        .join(&category.name);
+                    if !shell_snapshot_tree_current(self.host(), &destination, &expected).await? {
+                        let stage = shell_snapshot_stage_path(&destination);
+                        let rollback = shell_snapshot_rollback_path(&destination);
+                        for (label, path) in [
+                            ("destination", &destination),
+                            ("stage", &stage),
+                            ("rollback", &rollback),
+                        ] {
+                            capture_tree_state(
+                                self.host(),
+                                &mut state,
+                                format!("shell-snapshot-{}:{label}", category.name),
+                                path,
+                            )
+                            .await?;
+                        }
+                        let transaction_path_occupied = path_exists(self.host(), &stage).await?
+                            || path_exists(self.host(), &rollback).await?;
+                        if !transaction_path_occupied {
+                            typed_launcher_transaction = true;
+                            for (access, path) in [
+                                (FilesystemAccessV1::Write, &destination),
+                                (FilesystemAccessV1::Remove, &destination),
+                                (FilesystemAccessV1::Write, &stage),
+                                (FilesystemAccessV1::Remove, &stage),
+                                (FilesystemAccessV1::Write, &rollback),
+                                (FilesystemAccessV1::Remove, &rollback),
+                            ] {
+                                permissions.implicit(PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), path),
+                                });
+                            }
+                        }
+                        steps.push(
+                            PlanStepV1::new(
+                                format!("shell/{}", category.name),
+                                Some("shared-snapshot"),
+                                if transaction_path_occupied {
+                                    PlanActionV1::Blocked
+                                } else if path_exists(self.host(), &destination).await? {
+                                    PlanActionV1::Update
+                                } else {
+                                    PlanActionV1::Create
+                                },
+                            )
+                            .with_diagnostic_code(
+                                if transaction_path_occupied {
+                                    "shell_snapshot_transaction_path_occupied"
+                                } else {
+                                    "shell_snapshot_replace_transaction"
+                                },
+                            ),
+                        );
+                    }
+                }
+                for file in &category.files {
+                    let canonical = format!("shell/{}/{}", category.name, file.command_name);
+                    let entry = manifest.find(&canonical);
+                    let link =
+                        command_path_for_name(&self.context().bin_dir, file.command_name.as_ref());
+                    let exists = self.host().metadata(&link).await.is_ok();
+                    if request.operation != LifecycleOperation::Install
+                        && entry.is_none()
+                        && !exists
+                    {
+                        continue;
+                    }
+                    let mut file_permissions = PermissionAccumulator::default();
+                    file_permissions.declaration(
+                        file.permissions.as_ref(),
+                        "shell_permission_declaration_missing",
+                    );
+                    capture_shell_inputs(
+                        self.context(),
+                        &request.input_versions,
+                        file,
+                        &mut state,
+                        &mut file_permissions,
+                    )?;
+                    let managed = launcher_is_managed(self.host(), &link, self.context()).await?;
+                    let source =
+                        self.shell_deployment_source_path(&category.name, &file.source_rel);
+                    let rendered = self.shell_rendered_path(&category.name, &file.source_rel);
+                    let logical_source =
+                        format!("shell/{}/{}", category.name, logical_path(&file.source_rel));
+                    let desired_source = self
+                        .presets()
+                        .get(&logical_source)
+                        .context("missing Shell source")?;
+                    let effective_transforms = if !file.transforms.is_empty() {
+                        file.transforms.clone()
+                    } else if has_template_annotation(desired_source) {
+                        vec!["template".to_string()]
+                    } else {
+                        Vec::new()
+                    };
+                    let effective = if effective_transforms.is_empty() {
+                        source.clone()
+                    } else {
+                        rendered.clone()
+                    };
+                    state.public(
+                        format!("desired:{logical_source}"),
+                        sha256_hex(desired_source),
+                    )?;
+                    capture_path_state(
+                        self.host(),
+                        &mut state,
+                        format!("source:{canonical}"),
+                        &source,
+                    )
+                    .await?;
+                    let mut rendered_current = true;
+                    if !effective_transforms.is_empty() {
+                        let desired_rendered = crate::install::apply_transforms(
+                            &effective_transforms,
+                            desired_source,
+                            &self.context().env,
+                        )?;
+                        let desired_mode = self
+                            .host()
+                            .metadata(&source)
+                            .await
+                            .ok()
+                            .and_then(|metadata| metadata.unix_mode)
+                            .or_else(|| cfg!(unix).then_some(0o755));
+                        let rendered_conflict = match self.host().metadata(&rendered).await {
+                            Ok(metadata) if metadata.kind == FileKind::File => {
+                                let current =
+                                    self.host().read(&rendered).await.map_err(|error| {
+                                        error.into_anyhow("reading Shell rendered output")
+                                    })?;
+                                rendered_current = current == desired_rendered
+                                    && metadata.unix_mode == desired_mode;
+                                false
+                            }
+                            Ok(_) => {
+                                rendered_current = false;
+                                true
+                            }
+                            Err(error) if error.is_not_found() => {
+                                rendered_current = false;
+                                false
+                            }
+                            Err(error) if error.is_not_directory() => {
+                                return Err(error.into_anyhow("creating rendered script directory"));
+                            }
+                            Err(error) => {
+                                return Err(error.into_anyhow("inspecting Shell rendered output"));
+                            }
+                        };
+                        if !rendered_current {
+                            let rollback = managed_file_rollback_path(&rendered);
+                            capture_path_state(
+                                self.host(),
+                                &mut state,
+                                format!("rendered:{canonical}"),
+                                &rendered,
+                            )
+                            .await?;
+                            capture_path_state(
+                                self.host(),
+                                &mut state,
+                                format!("rendered-rollback:{canonical}"),
+                                &rollback,
+                            )
+                            .await?;
+                            let rollback_occupied = path_exists(self.host(), &rollback).await?;
+                            if !rendered_conflict && !rollback_occupied {
+                                typed_launcher_transaction = true;
+                                for (access, path) in [
+                                    (FilesystemAccessV1::Write, &rendered),
+                                    (FilesystemAccessV1::Remove, &rendered),
+                                    (FilesystemAccessV1::Write, &rollback),
+                                    (FilesystemAccessV1::Remove, &rollback),
+                                ] {
+                                    file_permissions.implicit(PermissionV1::Filesystem {
+                                        access,
+                                        path: review_path(self.context(), path),
+                                    });
+                                }
+                            }
+                            steps.push(
+                                PlanStepV1::new(
+                                    &canonical,
+                                    Some("rendered-output"),
+                                    if rendered_conflict || rollback_occupied {
+                                        PlanActionV1::Blocked
+                                    } else if path_exists(self.host(), &rendered).await? {
+                                        PlanActionV1::Update
+                                    } else {
+                                        PlanActionV1::Create
+                                    },
+                                )
+                                .with_diagnostic_code(
+                                    if rendered_conflict {
+                                        "shell_rendered_destination_conflict"
+                                    } else if rollback_occupied {
+                                        "shell_rendered_rollback_occupied"
+                                    } else {
+                                        "shell_rendered_replace_transaction"
+                                    },
+                                ),
+                            );
+                        }
+                    }
+                    let bun = self.shell_bun_runtime_spec(&category.name, file)?;
+                    let env = file
+                        .env
+                        .iter()
+                        .map(crate::env::EnvVarSpec::to_with_arg)
+                        .collect::<Vec<_>>();
+                    let render_target = (self.context().is_external_presets
+                        && self.context().external_shell_mode == ExternalShellMode::Live
+                        && !effective_transforms.is_empty())
+                    .then(|| canonical.clone());
+                    let desired_spec = LinkSpec {
+                        source: effective.clone(),
+                        link_name: file.command_name.clone().into(),
+                        runtime: file.runtime,
+                        bun_dependencies: bun.dependency_mode,
+                        env: env.clone(),
+                        render_target: render_target.clone(),
+                    };
+                    let desired_resources =
+                        prepare_launcher_resources(&self.context().bin_dir, &desired_spec);
+                    let mut all_launcher_resources_absent = true;
+                    for (index, resource) in desired_resources.iter().enumerate() {
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("launcher:{canonical}:{index}"),
+                            resource.destination(),
+                        )
+                        .await?;
+                        all_launcher_resources_absent &=
+                            self.host().metadata(resource.destination()).await.is_err();
+                    }
+                    let link_current = exists
+                        && managed
+                        && link_is_current_with_host(
+                            self.host(),
+                            &link,
+                            &effective,
+                            file.runtime,
+                            bun.dependency_mode,
+                            &env,
+                            render_target.as_deref(),
+                        )
+                        .await?;
+                    let source_current = if self.context().is_external_presets
+                        && self.context().external_shell_mode == ExternalShellMode::Live
+                    {
+                        true
+                    } else {
+                        match self.host().metadata(&source).await {
+                            Ok(metadata) if metadata.kind == FileKind::File => {
+                                self.host()
+                                    .read(&source)
+                                    .await
+                                    .map_err(|error| {
+                                        error.into_anyhow("reading Shell deployment source")
+                                    })?
+                                    .as_slice()
+                                    == desired_source
+                            }
+                            Ok(_) => false,
+                            Err(error) if error.is_not_found() => false,
+                            Err(error) => {
+                                return Err(error.into_anyhow("inspecting Shell deployment source"));
+                            }
+                        }
+                    };
+                    let expected_runtime = match file.runtime {
+                        LinkRuntime::Native => "native",
+                        LinkRuntime::Bun => "bun",
+                    };
+                    let manifest_current = entry.is_some_and(|entry| {
+                        entry.mode == self.context().external_shell_mode
+                            && entry.source_path == source
+                            && entry.runtime == expected_runtime
+                            && entry.bun_dependencies
+                                == bun.dependency_mode.as_manifest_value().map(str::to_string)
+                            && entry.dependency_hash == bun.dependency_hash
+                            && entry.transforms == effective_transforms
+                            && entry.env == env
+                            && entry.needs_source == file.needs_source
+                    });
+                    let current =
+                        link_current && source_current && rendered_current && manifest_current;
+                    let mut action = if exists && !managed && !request.force {
+                        PlanActionV1::Blocked
+                    } else if !exists {
+                        PlanActionV1::Create
+                    } else if current {
+                        PlanActionV1::None
+                    } else {
+                        PlanActionV1::Update
+                    };
+                    if action == PlanActionV1::Create && !all_launcher_resources_absent {
+                        action = PlanActionV1::Blocked;
+                    }
+                    let first_time_creation = request.operation == LifecycleOperation::Install
+                        && action == PlanActionV1::Create
+                        && entry.is_none()
+                        && all_launcher_resources_absent;
+                    let mut managed_update = false;
+                    let mut rollback_occupied = false;
+                    let mut managed_update_permissions = Vec::new();
+                    if action == PlanActionV1::Update
+                        && managed
+                        && let Some(entry) = entry
+                    {
+                        let previous_spec = shell_link_spec_from_manifest_entry(entry)?;
+                        let previous_resources =
+                            prepare_launcher_resources(&self.context().bin_dir, &previous_spec);
+                        if previous_resources.len() == desired_resources.len()
+                            && previous_resources.iter().zip(&desired_resources).all(
+                                |(previous, desired)| {
+                                    previous.destination() == desired.destination()
+                                },
+                            )
+                        {
+                            let mut previous_exact = true;
+                            let mut changed_resource = false;
+                            for (index, (previous, desired)) in previous_resources
+                                .iter()
+                                .zip(&desired_resources)
+                                .enumerate()
+                            {
+                                previous_exact &=
+                                    prepared_launcher_resource_is_exact(self.host(), previous)
+                                        .await?;
+                                if previous == desired {
+                                    continue;
+                                }
+                                changed_resource = true;
+                                let rollback = managed_file_rollback_path(previous.destination());
+                                capture_path_state(
+                                    self.host(),
+                                    &mut state,
+                                    format!("launcher-rollback:{canonical}:{index}"),
+                                    &rollback,
+                                )
+                                .await?;
+                                rollback_occupied |= self.host().metadata(&rollback).await.is_ok();
+                                for (access, path) in [
+                                    (
+                                        FilesystemAccessV1::Remove,
+                                        previous.destination().to_path_buf(),
+                                    ),
+                                    (FilesystemAccessV1::Write, rollback.clone()),
+                                    (FilesystemAccessV1::Remove, rollback),
+                                ] {
+                                    managed_update_permissions.push((access, path));
+                                }
+                            }
+                            managed_update = previous_exact && changed_resource;
+                        }
+                    }
+                    if managed_update && rollback_occupied {
+                        action = PlanActionV1::Blocked;
+                    }
+                    if managed_update && !rollback_occupied {
+                        for (access, path) in managed_update_permissions {
+                            file_permissions.implicit(PermissionV1::Filesystem {
+                                access,
+                                path: review_path(self.context(), &path),
+                            });
+                        }
+                    }
+                    typed_launcher_transaction |=
+                        first_time_creation || (managed_update && !rollback_occupied);
+                    if matches!(action, PlanActionV1::Create | PlanActionV1::Update) {
+                        for resource in &desired_resources {
+                            add_shell_typed_permissions(
+                                self.context(),
+                                &mut file_permissions,
+                                resource.destination(),
+                                request.operation,
+                            );
+                        }
+                        if !(self.context().is_external_presets
+                            && self.context().external_shell_mode == ExternalShellMode::Live)
+                        {
+                            add_shell_typed_permissions(
+                                self.context(),
+                                &mut file_permissions,
+                                &source,
+                                request.operation,
+                            );
+                        }
+                        if !effective_transforms.is_empty() {
+                            add_shell_typed_permissions(
+                                self.context(),
+                                &mut file_permissions,
+                                &rendered,
+                                request.operation,
+                            );
+                        }
+                    }
+                    let mut step = PlanStepV1::new(&canonical, None::<String>, action);
+                    if action == PlanActionV1::Blocked {
+                        step = step.with_diagnostic_code(if rollback_occupied {
+                            "shell_launcher_rollback_occupied"
+                        } else if !all_launcher_resources_absent && !exists {
+                            "shell_launcher_resource_conflict"
+                        } else {
+                            "shell_foreign_launcher_conflict"
+                        });
+                    } else if managed_update {
+                        step =
+                            step.with_diagnostic_code("shell_managed_launcher_update_transaction");
+                    } else if exists && !managed && request.force {
+                        step = step.with_diagnostic_code("shell_foreign_launcher_override");
+                    } else if request.force && action == PlanActionV1::Update {
+                        step = step.with_diagnostic_code("shell_forced_reconciliation");
+                    }
+                    steps.push(step);
+                    if action != PlanActionV1::None {
+                        permissions.merge(file_permissions);
+                    }
+                }
+            }
+        }
+
+        if steps.iter().any(|step| {
+            matches!(
+                step.action,
+                PlanActionV1::Create | PlanActionV1::Update | PlanActionV1::Remove
+            )
+        }) || (request.operation == LifecycleOperation::Uninstall
+            && manifest
+                .entries
+                .iter()
+                .any(|entry| shell_entry_selected(entry, selection.as_ref())))
+        {
+            add_shine_receipt_permission(
+                self.context(),
+                &mut permissions,
+                "shell-manifest.toml",
+                request.operation,
+            );
+            let profile_action = if request.operation == LifecycleOperation::Uninstall {
+                if request.target.is_none() {
+                    PlanActionV1::Remove
+                } else {
+                    PlanActionV1::Update
+                }
+            } else {
+                PlanActionV1::Update
+            };
+            let managed_profile =
+                super::managed_shell_profile_path(&self.context().shine_dir, self.context().shell);
+            for (index, path) in std::iter::once(&managed_profile)
+                .chain(self.context().shell_config_paths.iter())
+                .enumerate()
+            {
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("shell-profile:{index}"),
+                    path,
+                )
+                .await?;
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("shell-profile-rollback:{index}"),
+                    &managed_file_rollback_path(path),
+                )
+                .await?;
+            }
+            add_shell_profile_permissions(self.context(), &mut permissions);
+            typed_launcher_transaction = true;
+            steps.push(
+                PlanStepV1::new("shell/profile", None::<String>, profile_action)
+                    .with_diagnostic_code("shell_profile_reconcile_transaction"),
+            );
+        }
+        if typed_launcher_transaction {
+            add_shell_journal_permissions(self.context(), &mut permissions);
+        }
+        finish_plan(self, request.operation, state, permissions, steps)
+    }
+}
+
+impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
+    pub async fn plan_managed_sys(&self, request: SysManagedPlanRequest) -> Result<PlanV1> {
+        validate_sys_request(&request)?;
+        let sys_manifest_path = format!("sys/{}/shine.toml", request.os_id);
+        let loaded = if self.presets().get(&sys_manifest_path).is_some() {
+            Some(self.load_sys_preset(&request.os_id).await?)
+        } else {
+            None
+        };
+        let mut state = StateCapture::new("sys", request.operation)?;
+        capture_request_mode(&mut state, request.target.as_deref(), false, false, false)?;
+        capture_context(&mut state, self.context())?;
+        let interrupted_operation =
+            if let Some(journal_bytes) = self.sys_operation_journal_bytes().await? {
+                state.bytes("journal:sys-operation", Some(&journal_bytes))?;
+                true
+            } else {
+                false
+            };
+        state.public("os-id", &request.os_id)?;
+        let (manifest, manifest_bytes) =
+            load_sys_manifest(self.host(), &self.context().shine_dir).await?;
+        let enabled = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.os_id == request.os_id && entry.managed && entry.profile_enabled)
+            .map(|entry| entry.item_id.as_str())
+            .collect::<BTreeSet<_>>();
+        capture_manifest_selection(
+            &mut state,
+            "manifest:sys",
+            manifest_bytes.is_some(),
+            manifest.schema_version,
+            &manifest
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.os_id == request.os_id
+                        && request
+                            .target
+                            .as_ref()
+                            .is_none_or(|target| entry.item_id == *target)
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        let mut permissions = PermissionAccumulator::default();
+        let mut steps = Vec::new();
+
+        if interrupted_operation {
+            steps.push(
+                PlanStepV1::new(
+                    request
+                        .target
+                        .as_ref()
+                        .map(|target| format!("sys/{target}"))
+                        .unwrap_or_else(|| "sys".to_string()),
+                    Some("operation-journal"),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code("sys_recovery_required"),
+            );
+            return finish_plan(self, request.operation, state, permissions, steps);
+        }
+
+        let mut candidates = Vec::<(Option<SysItem>, Option<SysRunEntry>)>::new();
+        if request.operation == LifecycleOperation::Uninstall {
+            for entry in manifest.entries.iter().filter(|entry| {
+                entry.os_id == request.os_id
+                    && entry.managed
+                    && request
+                        .target
+                        .as_ref()
+                        .is_none_or(|target| entry.item_id == *target)
+            }) {
+                let item = loaded
+                    .as_ref()
+                    .and_then(|loaded| {
+                        loaded
+                            .manifest
+                            .items
+                            .iter()
+                            .find(|item| item.id == entry.item_id)
+                    })
+                    .cloned();
+                candidates.push((item, Some(entry.clone())));
+            }
+        } else if let Some(loaded) = &loaded {
+            for item in loaded.manifest.items.iter().filter(|item| {
+                item.mode == SysItemMode::Managed
+                    && request.target.as_ref().map_or_else(
+                        || {
+                            request.operation != LifecycleOperation::Upgrade
+                                || enabled.contains(item.id.as_str())
+                        },
+                        |target| item.id == *target,
+                    )
+            }) {
+                let entry = manifest
+                    .entries
+                    .iter()
+                    .find(|entry| entry.os_id == request.os_id && entry.item_id == item.id)
+                    .cloned();
+                if request.operation == LifecycleOperation::Install
+                    || entry.is_some()
+                    || request.target.is_some()
+                {
+                    candidates.push((Some(item.clone()), entry));
+                }
+            }
+        }
+        if request.target.is_some() && candidates.is_empty() {
+            bail!(
+                "unknown or unrecorded managed sys item `{}`",
+                request.target.as_deref().unwrap_or_default()
+            );
+        }
+
+        for (item, entry) in candidates {
+            let item_id = item
+                .as_ref()
+                .map(|item| item.id.as_str())
+                .or_else(|| entry.as_ref().map(|entry| entry.item_id.as_str()))
+                .unwrap_or("unknown");
+            let target = format!("sys/{item_id}");
+            if let Some(item) = &item {
+                permissions.declaration(
+                    item.permissions.as_ref(),
+                    "sys_permission_declaration_missing",
+                );
+                capture_sys_env(
+                    self.context(),
+                    &request.input_versions,
+                    item,
+                    &mut state,
+                    &mut permissions,
+                )?;
+                if item.requires_admin {
+                    permissions.implicit(PermissionV1::Administrator);
+                }
+            }
+            let previous = entry.as_ref().and_then(|entry| entry.receipt.as_ref());
+            if let Some(receipt) = previous {
+                add_sys_receipt_permissions(
+                    self.context(),
+                    &mut permissions,
+                    receipt,
+                    request.operation,
+                );
+            }
+            let mut managed_paths = Vec::new();
+            if let Some(SystemReceipt::ManagedFile(receipt)) = previous {
+                managed_paths.push(receipt.destination.clone());
+            }
+            if let Some(item) = &item
+                && item.driver == SysDriverKind::ManagedFile
+            {
+                managed_paths.push(captured_sys_path(
+                    &sys_config_string(&item.config, "target")?,
+                    &self.context().home_dir,
+                )?);
+            }
+            managed_paths.sort();
+            managed_paths.dedup();
+            for (index, path) in managed_paths.iter().enumerate() {
+                let rollback = crate::action::managed_file_rollback_path(path);
+                let backup = crate::install::backup_path(path);
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("transaction:{target}:{index}:rollback"),
+                    &rollback,
+                )
+                .await?;
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("transaction:{target}:{index}:backup"),
+                    &backup,
+                )
+                .await?;
+                for (access, transaction_path) in [
+                    (FilesystemAccessV1::Write, path.as_path()),
+                    (FilesystemAccessV1::Remove, path.as_path()),
+                    (FilesystemAccessV1::Write, rollback.as_path()),
+                    (FilesystemAccessV1::Remove, rollback.as_path()),
+                    (FilesystemAccessV1::Write, backup.as_path()),
+                    (FilesystemAccessV1::Remove, backup.as_path()),
+                ] {
+                    permissions.implicit(PermissionV1::Filesystem {
+                        access,
+                        path: review_path(self.context(), transaction_path),
+                    });
+                }
+            }
+            let action = if request.operation == LifecycleOperation::Uninstall {
+                match previous {
+                    Some(receipt) => {
+                        let modified =
+                            sys_receipt_modified(self, receipt, &mut state, &target).await?;
+                        if modified {
+                            PlanActionV1::Preserve
+                        } else {
+                            PlanActionV1::Remove
+                        }
+                    }
+                    None => PlanActionV1::None,
+                }
+            } else {
+                if item.as_ref().is_none() {
+                    PlanActionV1::Blocked
+                } else if item
+                    .as_ref()
+                    .is_some_and(|item| item.driver == SysDriverKind::Script)
+                {
+                    permissions
+                        .uncomputable
+                        .insert("sys_managed_driver_uncomputable".to_string());
+                    PlanActionV1::Blocked
+                } else if item.as_ref().is_some_and(|item| {
+                    item.required_env.iter().any(|key| {
+                        self.context()
+                            .env
+                            .get(key)
+                            .is_none_or(|value| value.trim().is_empty())
+                    })
+                }) {
+                    PlanActionV1::Blocked
+                } else if previous.is_some()
+                    && sys_receipt_modified(
+                        self,
+                        previous.expect("checked receipt"),
+                        &mut state,
+                        &target,
+                    )
+                    .await?
+                {
+                    PlanActionV1::Preserve
+                } else {
+                    let item = item.as_ref().expect("checked managed Sys item");
+                    let desired_current = sys_item_current(
+                        self,
+                        &request.os_id,
+                        item,
+                        previous,
+                        &mut state,
+                        &target,
+                        &mut permissions,
+                    )
+                    .await?;
+                    if desired_current {
+                        PlanActionV1::None
+                    } else if previous.is_some() {
+                        PlanActionV1::Update
+                    } else {
+                        PlanActionV1::Create
+                    }
+                }
+            };
+            let mut step = PlanStepV1::new(&target, None::<String>, action);
+            if action == PlanActionV1::Preserve {
+                step = step.with_diagnostic_code("sys_resource_user_modified");
+            } else if action == PlanActionV1::Blocked {
+                step = step.with_diagnostic_code(
+                    if item
+                        .as_ref()
+                        .is_some_and(|item| item.driver == SysDriverKind::Script)
+                    {
+                        "sys_managed_driver_uncomputable"
+                    } else {
+                        "sys_missing_required_env"
+                    },
+                );
+            }
+            steps.push(step);
+        }
+        if steps.iter().any(|step| {
+            matches!(
+                step.action,
+                PlanActionV1::Create | PlanActionV1::Update | PlanActionV1::Remove
+            )
+        }) {
+            add_shine_receipt_permission(
+                self.context(),
+                &mut permissions,
+                "sys-manifest.toml",
+                request.operation,
+            );
+            for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+                permissions.implicit(PermissionV1::Filesystem {
+                    access,
+                    path: review_path(
+                        self.context(),
+                        &self
+                            .context()
+                            .shine_dir
+                            .join(super::SYS_OPERATION_JOURNAL_FILE),
+                    ),
+                });
+            }
+        }
+        finish_plan(self, request.operation, state, permissions, steps)
+    }
+}
+
+impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    pub async fn plan_sys_profile(&self, request: SysProfilePlanRequest) -> Result<PlanV1> {
+        validate_sys_profile_request(&request)?;
+        let loaded = self.load_sys_preset(&request.os_id).await?;
+        let item = loaded
+            .manifest
+            .items
+            .iter()
+            .find(|item| item.id == request.item_id)
+            .with_context(|| {
+                format!(
+                    "unknown sys item `{}` for {}",
+                    request.item_id, request.os_id
+                )
+            })?;
+        if item.mode != SysItemMode::Init {
+            bail!(
+                "managed sys item `{}` has no bootstrap shell integration",
+                request.item_id
+            );
+        }
+        if item.shell.is_empty() {
+            bail!(
+                "sys item `{}` declares no shell integration",
+                request.item_id
+            );
+        }
+        let operation = if request.enabled {
+            PlanOperationV1::SysProfileEnable
+        } else {
+            PlanOperationV1::SysProfileDisable
+        };
+        let mut state = StateCapture::new("sys-profile", operation)?;
+        capture_context(&mut state, self.context())?;
+        if let Some(journal_bytes) = self.sys_operation_journal_bytes().await? {
+            state.bytes("journal:sys-operation", Some(&journal_bytes))?;
+            return finish_specialized_plan(
+                self,
+                operation,
+                state,
+                PermissionAccumulator::default(),
+                vec![
+                    PlanStepV1::new(
+                        format!("sys/{}", request.item_id),
+                        Some("operation-journal"),
+                        PlanActionV1::Blocked,
+                    )
+                    .with_diagnostic_code("sys_recovery_required"),
+                ],
+            );
+        }
+        state.public("os-id", &request.os_id)?;
+        state.public("item-id", &request.item_id)?;
+        state.public("enabled", request.enabled.to_string())?;
+        let (manifest, manifest_bytes) =
+            load_sys_manifest(self.host(), &self.context().shine_dir).await?;
+        let existing = manifest.entries.iter().find(|entry| {
+            entry.os_id == request.os_id && entry.item_id == request.item_id && !entry.managed
+        });
+        capture_manifest_selection(
+            &mut state,
+            "manifest:sys-profile",
+            manifest_bytes.is_some(),
+            manifest.schema_version,
+            &existing,
+        )?;
+
+        let mut permissions = PermissionAccumulator::default();
+        let detected = if request.enabled {
+            let detection = item
+                .detect
+                .as_ref()
+                .with_context(|| format!("sys item `{}` has no standard detection", item.id))?;
+            observe_sys_detection(
+                self,
+                detection,
+                &mut state,
+                &format!("sys/{}", item.id),
+                &mut permissions,
+            )
+            .await?
+        } else {
+            true
+        };
+
+        let mut enabled = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.os_id == request.os_id && !entry.managed && entry.profile_enabled)
+            .map(|entry| entry.item_id.clone())
+            .collect::<BTreeSet<_>>();
+        if request.enabled {
+            enabled.insert(request.item_id.clone());
+        } else {
+            enabled.remove(&request.item_id);
+        }
+        for enabled_item in loaded
+            .manifest
+            .items
+            .iter()
+            .filter(|candidate| enabled.contains(candidate.id.as_str()))
+        {
+            permissions.declaration(
+                enabled_item.permissions.as_ref(),
+                "sys_profile_permission_declaration_missing",
+            );
+        }
+        add_shine_write_permission(
+            self.context(),
+            &mut permissions,
+            &self.context().shine_dir.join("sys-manifest.toml"),
+        );
+        let sys_shell: &'static str = self.context().shell.into();
+        capture_sys_profile_state(
+            self,
+            &request.os_id,
+            sys_shell,
+            &mut state,
+            &mut permissions,
+        )
+        .await?;
+        let sys_profile_paths = sys_profile_block_paths(self.context(), &request.os_id);
+        for (index, path) in sys_profile_paths.iter().enumerate() {
+            let rollback = crate::action::managed_file_rollback_path(path);
+            capture_path_state(
+                self.host(),
+                &mut state,
+                format!("sys-profile-block:{index}"),
+                path,
+            )
+            .await?;
+            capture_path_state(
+                self.host(),
+                &mut state,
+                format!("sys-profile-block-rollback:{index}"),
+                &rollback,
+            )
+            .await?;
+            for (access, transaction_path) in [
+                (FilesystemAccessV1::Write, path.as_path()),
+                (FilesystemAccessV1::Remove, path.as_path()),
+                (FilesystemAccessV1::Write, rollback.as_path()),
+                (FilesystemAccessV1::Remove, rollback.as_path()),
+            ] {
+                permissions.implicit(PermissionV1::Filesystem {
+                    access,
+                    path: review_path(self.context(), transaction_path),
+                });
+            }
+        }
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            permissions.implicit(PermissionV1::Filesystem {
+                access,
+                path: review_path(
+                    self.context(),
+                    &self
+                        .context()
+                        .shine_dir
+                        .join(super::SYS_OPERATION_JOURNAL_FILE),
+                ),
+            });
+        }
+        let external_code_blocked =
+            sys_profile_code_blocked_for_enabled(self, &request.os_id, &loaded.manifest, &enabled)?
+                || !self.sys_capability_trusted(
+                    &request.os_id,
+                    item,
+                    TrustCapabilityV1::SysProfileCode,
+                )?;
+        let state_changes = existing.is_none_or(|entry| entry.profile_enabled != request.enabled);
+        let mut state_step = PlanStepV1::new(
+            format!("sys/{}", request.item_id),
+            Some("profile-state"),
+            if request.enabled && !detected {
+                PlanActionV1::Blocked
+            } else if state_changes {
+                PlanActionV1::Update
+            } else {
+                PlanActionV1::None
+            },
+        );
+        if request.enabled && !detected {
+            state_step = state_step.with_diagnostic_code("sys_profile_item_not_detected");
+        }
+        let mut profile_step = PlanStepV1::new(
+            "sys/profile",
+            Some(sys_shell),
+            if external_code_blocked {
+                PlanActionV1::Blocked
+            } else {
+                PlanActionV1::Update
+            },
+        );
+        if external_code_blocked {
+            profile_step = profile_step.with_diagnostic_code("sys_external_code_not_allowed");
+        } else {
+            profile_step = profile_step
+                .with_diagnostic_code("sys_profile_block_transaction")
+                .with_diagnostic_code("sys_profile_merge_recovery_unsupported");
+        }
+        finish_specialized_plan(
+            self,
+            operation,
+            state,
+            permissions,
+            vec![state_step, profile_step],
+        )
+    }
+
+    pub async fn plan_sys_bootstrap(&self, request: SysBootstrapPlanRequest) -> Result<PlanV1> {
+        validate_sys_bootstrap_request(&request)?;
+        let loaded = self.load_sys_preset(&request.os_id).await?;
+        let mut selected = Vec::with_capacity(request.item_ids.len());
+        let mut seen = BTreeSet::new();
+        for item_id in &request.item_ids {
+            if !seen.insert(item_id.as_str()) {
+                bail!("duplicate sys bootstrap item `{item_id}`");
+            }
+            let item = loaded
+                .manifest
+                .items
+                .iter()
+                .find(|item| item.id == *item_id)
+                .with_context(|| format!("unknown sys bootstrap item `{item_id}`"))?;
+            if item.mode != SysItemMode::Init {
+                bail!("`{item_id}` is a managed system resource; use `shine sys apply {item_id}`");
+            }
+            selected.push(item);
+        }
+
+        let mut state = StateCapture::new("sys-bootstrap", PlanOperationV1::SysBootstrap)?;
+        capture_context(&mut state, self.context())?;
+        if let Some(journal_bytes) = self.sys_operation_journal_bytes().await? {
+            state.bytes("journal:sys-operation", Some(&journal_bytes))?;
+            return finish_specialized_plan(
+                self,
+                PlanOperationV1::SysBootstrap,
+                state,
+                PermissionAccumulator::default(),
+                vec![
+                    PlanStepV1::new("sys", Some("operation-journal"), PlanActionV1::Blocked)
+                        .with_diagnostic_code("sys_recovery_required"),
+                ],
+            );
+        }
+        state.public("os-id", &request.os_id)?;
+        state.public("items", serde_json::to_vec(&request.item_ids)?)?;
+        state.public("sys-shell", &request.sys_shell)?;
+        state.public("force-profile", request.force_profile.to_string())?;
+        state.public(
+            "path-env",
+            self.context()
+                .path_env
+                .as_deref()
+                .map(|value| sha256_hex(value.as_bytes()))
+                .unwrap_or_else(|| "missing".to_string()),
+        )?;
+        capture_proxy_env(self.context(), &mut state)?;
+
+        let (run_manifest, manifest_bytes) =
+            load_sys_manifest(self.host(), &self.context().shine_dir).await?;
+        capture_manifest_selection(
+            &mut state,
+            "manifest:sys-bootstrap",
+            manifest_bytes.is_some(),
+            run_manifest.schema_version,
+            &run_manifest
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.os_id == request.os_id && seen.contains(entry.item_id.as_str())
+                })
+                .collect::<Vec<_>>(),
+        )?;
+
+        let mut permissions = PermissionAccumulator::default();
+        let mut steps = Vec::new();
+        for item in &selected {
+            permissions.declaration(
+                item.permissions.as_ref(),
+                "sys_bootstrap_permission_declaration_missing",
+            );
+            capture_sys_env(
+                self.context(),
+                &request.input_versions,
+                item,
+                &mut state,
+                &mut permissions,
+            )?;
+            let present = observe_sys_detection(
+                self,
+                item.detect
+                    .as_ref()
+                    .with_context(|| format!("sys item `{}` has no standard detection", item.id))?,
+                &mut state,
+                &format!("sys/{}", item.id),
+                &mut permissions,
+            )
+            .await?;
+            let install = item
+                .install
+                .as_ref()
+                .with_context(|| format!("sys item `{}` has no standard installer", item.id))?;
+            add_sys_bootstrap_install_permissions(
+                self,
+                &request.os_id,
+                item,
+                install,
+                &mut permissions,
+            )?;
+
+            let missing_env = item.required_env.iter().any(|name| {
+                self.context()
+                    .env
+                    .get(name)
+                    .is_none_or(|value| value.trim().is_empty())
+            });
+            let external_code_blocked = sys_bootstrap_code_blocked(self, &request.os_id, item)?;
+            let action = if missing_env || external_code_blocked {
+                PlanActionV1::Blocked
+            } else if present {
+                PlanActionV1::Update
+            } else {
+                PlanActionV1::Execute
+            };
+            let mut step = PlanStepV1::new(format!("sys/{}", item.id), Some("bootstrap"), action);
+            if missing_env {
+                step = step.with_diagnostic_code("sys_bootstrap_required_env_missing");
+            }
+            if external_code_blocked {
+                step = step.with_diagnostic_code("sys_external_code_not_allowed");
+            }
+            steps.push(step);
+        }
+
+        if !selected.is_empty() {
+            add_shine_write_permission(
+                self.context(),
+                &mut permissions,
+                &self.context().shine_dir.join("sys-manifest.toml"),
+            );
+            capture_sys_profile_state(
+                self,
+                &request.os_id,
+                &request.sys_shell,
+                &mut state,
+                &mut permissions,
+            )
+            .await?;
+            let mut profile = PlanStepV1::new(
+                "sys/profile",
+                Some(request.sys_shell.clone()),
+                PlanActionV1::Update,
+            );
+            if sys_profile_code_blocked(
+                self,
+                &request.os_id,
+                &loaded.manifest,
+                &selected,
+                &run_manifest,
+            )? {
+                profile = profile.with_diagnostic_code("sys_external_code_not_allowed");
+                profile.action = PlanActionV1::Blocked;
+            }
+            profile = profile.with_diagnostic_code("sys_bootstrap_profile_recovery_unsupported");
+            steps.push(profile);
+        }
+
+        let (required, declared, uncomputable) = permissions.finish();
+        Ok(PlanV1::new(
+            PlanOperationV1::SysBootstrap,
+            PlanInputsV1 {
+                preset: self.presets().digest_v1()?,
+                state: state.finish(),
+            },
+            steps,
+            required,
+            &declared,
+            uncomputable,
+        ))
+    }
+}
+
+impl<H> CoreRuntime<H>
+where
+    H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost,
+{
+    pub async fn preview_install_apps(
+        &self,
+        request: AppLifecycleRequest,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        if !request.dry_run {
+            bail!("App install mutation requires snapshot-bound approval");
+        }
+        self.install_apps(request, observer, interaction).await
+    }
+
+    pub async fn preview_uninstall_apps(
+        &self,
+        request: AppUninstallLifecycleRequest,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        if !request.dry_run {
+            bail!("App uninstall mutation requires snapshot-bound approval");
+        }
+        self.uninstall_apps(request, observer, interaction).await
+    }
+
+    pub async fn install_apps_approved(
+        &self,
+        request: AppPlanRequest,
+        approval: &PlanApprovalV1,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        if request.operation != LifecycleOperation::Install {
+            bail!("approved App install requires an install Plan");
+        }
+        let plan = self.plan_apps(request.clone()).await?;
+        approval.validate(&plan)?;
+        let action_irs = self
+            .approved_app_file_action_irs(&request, &plan, approval)
+            .await?;
+        self.install_apps_with_approved_actions(
+            AppLifecycleRequest {
+                target: request.target,
+                dry_run: false,
+                force: request.force,
+            },
+            &plan,
+            approval,
+            action_irs,
+            observer,
+            interaction,
+        )
+        .await
+    }
+
+    pub async fn uninstall_apps_approved(
+        &self,
+        request: AppPlanRequest,
+        approval: &PlanApprovalV1,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        if request.operation != LifecycleOperation::Uninstall {
+            bail!("approved App uninstall requires an uninstall Plan");
+        }
+        let plan = self.plan_apps(request.clone()).await?;
+        approval.validate(&plan)?;
+        let action_irs = self
+            .approved_app_file_action_irs(&request, &plan, approval)
+            .await?;
+        self.uninstall_apps_with_approved_actions(
+            AppUninstallLifecycleRequest {
+                target: request.target,
+                dry_run: false,
+                force: request.force,
+                purge: request.purge,
+            },
+            &plan,
+            approval,
+            action_irs,
+            observer,
+            interaction,
+        )
+        .await
+    }
+
+    pub async fn upgrade_apps_approved(
+        &self,
+        request: AppPlanRequest,
+        approval: &PlanApprovalV1,
+        options: AppApprovedUpgradeOptions,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppUpgradeLifecycleReport> {
+        if request.operation != LifecycleOperation::Upgrade {
+            bail!("approved App upgrade requires an upgrade Plan");
+        }
+        let plan = self.plan_apps(request.clone()).await?;
+        approval.validate(&plan)?;
+        let action_irs = self
+            .approved_app_file_action_irs(&request, &plan, approval)
+            .await?;
+        self.upgrade_apps(
+            AppUpgradeRequest {
+                category: request.target,
+                prune_stale: request.prune_stale,
+                prompt_stale: false,
+                show_hook_success: options.show_hook_success,
+            },
+            &plan,
+            approval,
+            action_irs,
+            observer,
+            interaction,
+        )
+        .await
+    }
+
+    pub async fn refresh_app_generators_approved(
+        &self,
+        request: AppRefreshPlanRequest,
+        approval: &PlanApprovalV1,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        approval.validate(&self.plan_app_refresh(request.clone()).await?)?;
+        self.refresh_app_generators(
+            AppRefreshRequest {
+                category: request.category,
+                file: request.file,
+                force: request.force,
+            },
+            observer,
+            interaction,
+        )
+        .await
+    }
+
+    pub async fn run_app_artifact_approved(
+        &self,
+        request: AppArtifactPlanRequest,
+        approval: &PlanApprovalV1,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<crate::lifecycle::LifecycleOutcomeV1> {
+        approval.validate(&self.plan_app_artifact(request.clone()).await?)?;
+        let category = self
+            .app_categories(Some(&request.category))?
+            .into_iter()
+            .next()
+            .with_context(|| format!("app preset category not found: {}", request.category))?;
+        let artifact = category.artifact.with_context(|| {
+            format!(
+                "app '{}' does not define an artifact script",
+                request.category
+            )
+        })?;
+        self.run_app_artifact(
+            AppArtifactRequest {
+                category: request.category,
+                artifact,
+                action: request.action,
+                implicit: false,
+                dry_run: false,
+            },
+            observer,
+        )
+        .await
+    }
+}
+
+impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    /// Emit the exact creation actions only after the corresponding install
+    /// Plan has been freshly regenerated and approved. Managed bytes remain
+    /// outside the Action IR and are checked again by the executor.
+    async fn approved_app_file_action_irs(
+        &self,
+        request: &AppPlanRequest,
+        plan: &PlanV1,
+        approval: &PlanApprovalV1,
+    ) -> Result<Vec<ActionIrV1>> {
+        approval.validate(plan)?;
+        if request.operation == LifecycleOperation::Uninstall {
+            return self.approved_app_remove_action_irs(request, plan).await;
+        }
+        let fingerprint = plan.fingerprint()?.as_hex();
+        let operation = match request.operation {
+            LifecycleOperation::Install => "install",
+            LifecycleOperation::Upgrade => "upgrade",
+            _ => return Ok(Vec::new()),
+        };
+        let categories = self.app_categories(request.target.as_deref())?;
+        let (manifest, _) = load_app_manifest(self.host(), &self.context().shine_dir).await?;
+        let mut actions = Vec::new();
+
+        for category in categories {
+            for file in &category.files {
+                if file.generator.is_some() {
+                    continue;
+                }
+                let source = logical_app_source(&category, file);
+                let destination = self.app_destination(&category, file)?;
+                let resource = file.source_rel.display().to_string();
+                let target = format!("app/{}", category.name);
+                let desired = crate::install::transforms::apply(
+                    &file.transforms,
+                    self.app_source_bytes(&category.name, file)?,
+                    &self.context().env,
+                )?;
+                let action_identity = format!("{target}/{resource}");
+                let desired_hash = desired_app_hash(file, &desired)?;
+                let direct = manifest.find_by_source(&source);
+                if let Some(entry) = direct.filter(|entry| {
+                    request.operation == LifecycleOperation::Upgrade
+                        && entry.destination != destination
+                        && matches!(
+                            entry.install_strategy,
+                            crate::install::AppInstallStrategy::JsonMerge { .. }
+                        )
+                        && matches!(
+                            file.install_strategy,
+                            crate::install::AppInstallStrategy::JsonMerge { .. }
+                        )
+                        && entry.backup.is_none()
+                        && !entry.requires_admin
+                        && !file.requires_admin
+                        && !request.force
+                        && plan.steps.iter().any(|step| {
+                            step.target == target
+                                && step.resource.as_deref() == Some(resource.as_str())
+                                && step.action == PlanActionV1::Update
+                                && step
+                                    .diagnostic_codes
+                                    .contains(&"app_destination_relocated".to_string())
+                        })
+                }) {
+                    if manifest.find_by_dest(&destination).is_some()
+                        || path_exists(self.host(), &destination).await?
+                    {
+                        bail!("managed JSON relocation destination changed after Plan approval");
+                    }
+                    let crate::install::AppInstallStrategy::JsonMerge {
+                        managed_keys: previous_managed_keys,
+                    } = &entry.install_strategy
+                    else {
+                        unreachable!("JSON relocation entry checked above")
+                    };
+                    let crate::install::AppInstallStrategy::JsonMerge {
+                        managed_keys: desired_managed_keys,
+                    } = &file.install_strategy
+                    else {
+                        unreachable!("JSON relocation file checked above")
+                    };
+                    let previous = read_optional(self.host(), &entry.destination).await?;
+                    let (previous_present, previous_mode, previous_original_hash) = if let Some(
+                        bytes,
+                    ) = &previous
+                    {
+                        if installed_json_hash(bytes, previous_managed_keys)?
+                            != Some(entry.content_hash)
+                        {
+                            bail!("managed JSON relocation source changed after Plan approval");
+                        }
+                        let metadata =
+                            self.host()
+                                .metadata(&entry.destination)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow(
+                                        "observing managed JSON relocation source mode",
+                                    )
+                                })?;
+                        if metadata.kind != FileKind::File {
+                            bail!(
+                                "managed JSON relocation source changed kind after Plan approval"
+                            );
+                        }
+                        (
+                            true,
+                            metadata.unix_mode,
+                            Some(crate::install::hash_content(bytes)),
+                        )
+                    } else {
+                        (false, None, None)
+                    };
+                    let rollback = crate::action::managed_file_rollback_path(&entry.destination);
+                    if manifest.find_by_dest(&rollback).is_some()
+                        || path_exists(self.host(), &rollback).await?
+                    {
+                        bail!("managed JSON relocation rollback path changed after Plan approval");
+                    }
+                    let action = DeclarativeActionV1::relocate_managed_json(
+                        format!("relocate-json:{action_identity}"),
+                        target,
+                        resource,
+                        ManagedJsonRelocationSpecV1 {
+                            previous_destination: entry.destination.clone(),
+                            desired_destination: destination,
+                            previous_present,
+                            previous_mode,
+                            previous_original_hash,
+                            previous_receipt_hash: entry.content_hash,
+                            previous_managed_keys: previous_managed_keys.clone(),
+                            desired_managed_hash: desired_hash,
+                            desired_managed_keys: desired_managed_keys.clone(),
+                            previous_uses_env: entry.uses_env,
+                            desired_uses_env: file
+                                .transforms
+                                .iter()
+                                .any(|transform| transform == "template"),
+                        },
+                    );
+                    actions.push(ActionIrV1::new(
+                        format!("app-{operation}:{fingerprint}:{action_identity}"),
+                        vec![action],
+                    ));
+                    continue;
+                }
+                if let Some(entry) = direct.filter(|entry| {
+                    request.operation == LifecycleOperation::Upgrade
+                        && entry.destination != destination
+                        && entry.install_strategy == crate::install::AppInstallStrategy::Copy
+                        && file.install_strategy == crate::install::AppInstallStrategy::Copy
+                        && !request.force
+                        && plan.steps.iter().any(|step| {
+                            step.target == target
+                                && step.resource.as_deref() == Some(resource.as_str())
+                                && step.action == PlanActionV1::Update
+                                && step
+                                    .diagnostic_codes
+                                    .contains(&"app_destination_relocated".to_string())
+                        })
+                }) {
+                    if manifest.find_by_dest(&destination).is_some()
+                        || path_exists(self.host(), &destination).await?
+                    {
+                        bail!("App relocation destination changed after Plan approval");
+                    }
+                    let previous = read_optional(self.host(), &entry.destination).await?;
+                    if previous.is_none() && entry.backup.is_some() {
+                        bail!("App relocation source disappeared while its backup remains owned");
+                    }
+                    let (previous_present, previous_mode) =
+                        if let Some(bytes) = &previous {
+                            if crate::install::hash_content(bytes) != entry.content_hash {
+                                bail!("App relocation source changed after Plan approval");
+                            }
+                            let metadata = self.host().metadata(&entry.destination).await.map_err(
+                                |error| error.into_anyhow("observing App relocation source mode"),
+                            )?;
+                            if metadata.kind != FileKind::File {
+                                bail!("App relocation source changed kind after Plan approval");
+                            }
+                            (true, metadata.unix_mode)
+                        } else {
+                            (false, None)
+                        };
+                    let previous_backup = if let Some(backup) = &entry.backup {
+                        if *backup != crate::install::backup_path(&entry.destination) {
+                            bail!("App relocation backup changed after Plan approval");
+                        }
+                        let metadata = self.host().metadata(backup).await.map_err(|error| {
+                            error.into_anyhow("observing App relocation backup mode")
+                        })?;
+                        if metadata.kind != FileKind::File {
+                            bail!("App relocation backup changed kind after Plan approval");
+                        }
+                        let bytes = read_optional(self.host(), backup)
+                            .await?
+                            .context("App relocation backup disappeared after Plan approval")?;
+                        Some(ManagedFileRelocationBackupV1 {
+                            path: backup.clone(),
+                            mode: metadata.unix_mode,
+                            hash: crate::install::hash_content(&bytes),
+                        })
+                    } else {
+                        None
+                    };
+                    let rollback = crate::action::managed_file_rollback_path(&entry.destination);
+                    if manifest.find_by_dest(&rollback).is_some()
+                        || path_exists(self.host(), &rollback).await?
+                    {
+                        bail!("App relocation rollback path changed after Plan approval");
+                    }
+                    let action = DeclarativeActionV1::relocate_managed_file(
+                        format!("relocate:{action_identity}"),
+                        target,
+                        resource,
+                        ManagedFileRelocationSpecV1 {
+                            previous_destination: entry.destination.clone(),
+                            previous_backup,
+                            desired_destination: destination,
+                            previous_present,
+                            previous_mode,
+                            previous_hash: entry.content_hash,
+                            desired_hash,
+                            previous_uses_env: entry.uses_env,
+                            desired_uses_env: file
+                                .transforms
+                                .iter()
+                                .any(|transform| transform == "template"),
+                            previous_requires_admin: entry.requires_admin,
+                            desired_requires_admin: file.requires_admin,
+                        },
+                    );
+                    actions.push(ActionIrV1::new(
+                        format!("app-{operation}:{fingerprint}:{action_identity}"),
+                        vec![action],
+                    ));
+                    continue;
+                }
+                if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
+                    &file.install_strategy
+                {
+                    let expected_step = if direct.is_some() {
+                        PlanActionV1::Update
+                    } else {
+                        PlanActionV1::Create
+                    };
+                    if !matches!(
+                        request.operation,
+                        LifecycleOperation::Install | LifecycleOperation::Upgrade
+                    ) || direct.is_some_and(|entry| {
+                        entry.destination != destination
+                            || entry.install_strategy != file.install_strategy
+                            || entry.requires_admin
+                            || desired_hash == entry.content_hash
+                    }) || (direct.is_none() && request.operation != LifecycleOperation::Install)
+                        || !plan.steps.iter().any(|step| {
+                            step.target == target
+                                && step.resource.as_deref() == Some(resource.as_str())
+                                && step.action == expected_step
+                        })
+                    {
+                        continue;
+                    }
+                    let current = read_optional(self.host(), &destination).await?;
+                    let (original_mode, original_hash) = if let Some(bytes) = &current {
+                        let metadata =
+                            self.host().metadata(&destination).await.map_err(|error| {
+                                error.into_anyhow("observing managed JSON destination mode")
+                            })?;
+                        if metadata.kind != FileKind::File {
+                            continue;
+                        }
+                        installed_json_hash(bytes, managed_keys)?;
+                        (
+                            metadata.unix_mode,
+                            Some(crate::install::hash_content(bytes)),
+                        )
+                    } else {
+                        (None, None)
+                    };
+                    if direct.is_some() && current.is_none() {
+                        continue;
+                    }
+                    let rollback = crate::action::managed_file_rollback_path(&destination);
+                    if manifest.find_by_dest(&rollback).is_some()
+                        || path_exists(self.host(), &rollback).await?
+                    {
+                        bail!("managed JSON rollback path changed after Plan approval");
+                    }
+                    let action = DeclarativeActionV1::merge_managed_json(
+                        format!("merge-json:{action_identity}"),
+                        target,
+                        resource,
+                        ManagedJsonMergeSpecV1 {
+                            destination,
+                            original_mode,
+                            original_hash,
+                            previous_receipt_hash: direct.map(|entry| entry.content_hash),
+                            desired_managed_hash: desired_hash,
+                            managed_keys: managed_keys.clone(),
+                        },
+                    );
+                    actions.push(ActionIrV1::new(
+                        format!("app-{operation}:{fingerprint}:{action_identity}"),
+                        vec![action],
+                    ));
+                    continue;
+                }
+                let desired_hash = crate::install::hash_content(&desired);
+                let action = if let Some(entry) = direct {
+                    if entry.destination != destination
+                        || entry.install_strategy != crate::install::AppInstallStrategy::Copy
+                        || entry.requires_admin != file.requires_admin
+                        || request.force
+                        || desired_hash == entry.content_hash
+                        || !plan.steps.iter().any(|step| {
+                            step.target == target
+                                && step.resource.as_deref() == Some(resource.as_str())
+                                && step.action == PlanActionV1::Update
+                        })
+                    {
+                        continue;
+                    }
+                    let Some(original) = read_optional(self.host(), &destination).await? else {
+                        continue;
+                    };
+                    if crate::install::hash_content(&original) != entry.content_hash {
+                        continue;
+                    }
+                    let original_mode =
+                        self.host().metadata(&destination).await.map_err(|error| {
+                            error.into_anyhow("observing managed App update mode")
+                        })?;
+                    if original_mode.kind != FileKind::File {
+                        continue;
+                    }
+                    let original_mode = original_mode.unix_mode;
+                    let rollback = crate::action::managed_file_rollback_path(&destination);
+                    if manifest.find_by_dest(&rollback).is_some()
+                        || path_exists(self.host(), &rollback).await?
+                    {
+                        bail!("App update rollback path changed after Plan approval");
+                    }
+                    DeclarativeActionV1::update_managed_file(
+                        format!("update:{action_identity}"),
+                        target,
+                        resource,
+                        ManagedFileUpdateSpecV1 {
+                            destination,
+                            previous_backup: entry.backup.clone(),
+                            original_mode,
+                            original_hash: entry.content_hash,
+                            desired_hash,
+                            requires_admin: file.requires_admin,
+                        },
+                    )
+                } else {
+                    if request.operation != LifecycleOperation::Install
+                        || manifest.find_by_dest(&destination).is_some()
+                        || !plan.steps.iter().any(|step| {
+                            step.target == target
+                                && step.resource.as_deref() == Some(resource.as_str())
+                                && step.action == PlanActionV1::Create
+                        })
+                    {
+                        continue;
+                    }
+                    match read_optional(self.host(), &destination).await? {
+                        None => DeclarativeActionV1::create_managed_file(
+                            format!("create:{action_identity}"),
+                            target,
+                            resource,
+                            destination,
+                            desired_hash,
+                            file.requires_admin,
+                        ),
+                        Some(original) => {
+                            let backup = crate::install::backup_path(&destination);
+                            if manifest.find_by_dest(&backup).is_some()
+                                || path_exists(self.host(), &backup).await?
+                            {
+                                bail!("App backup path changed after Plan approval");
+                            }
+                            DeclarativeActionV1::create_managed_file_with_backup(
+                                format!("create-with-backup:{action_identity}"),
+                                target,
+                                resource,
+                                crate::action::ManagedFileCreationWithBackupSpecV1 {
+                                    destination,
+                                    backup,
+                                    original_hash: crate::install::hash_content(&original),
+                                    desired_hash,
+                                    requires_admin: file.requires_admin,
+                                },
+                            )
+                        }
+                    }
+                };
+                actions.push(ActionIrV1::new(
+                    format!("app-{operation}:{fingerprint}:{action_identity}"),
+                    vec![action],
+                ));
+            }
+        }
+        if request.operation == LifecycleOperation::Upgrade && request.prune_stale {
+            actions.extend(
+                self.approved_app_stale_remove_action_irs(request, plan)
+                    .await?,
+            );
+        }
+        Ok(actions)
+    }
+
+    async fn approved_app_remove_action_irs(
+        &self,
+        request: &AppPlanRequest,
+        plan: &PlanV1,
+    ) -> Result<Vec<ActionIrV1>> {
+        let fingerprint = plan.fingerprint()?.as_hex();
+        let (manifest, _) = load_app_manifest(self.host(), &self.context().shine_dir).await?;
+        let mut actions = Vec::new();
+        for entry in manifest.entries.iter().filter(|entry| {
+            request.target.as_ref().is_none_or(|target| {
+                app_source_parts(&entry.source).is_some_and(|(category, _)| category == target)
+            })
+        }) {
+            let Some((category, resource)) = app_source_parts(&entry.source) else {
+                continue;
+            };
+            let category_prefix = format!("app/{category}/");
+            if !self
+                .presets()
+                .files()
+                .keys()
+                .any(|path| path.starts_with(&category_prefix))
+            {
+                continue;
+            }
+            let active_file = self
+                .app_categories(Some(category))?
+                .into_iter()
+                .flat_map(|category| category.files)
+                .find(|file| logical_app_source_for(category, file) == entry.source);
+            if !active_file.as_ref().is_some_and(|file| {
+                file.generator.is_none() && file.install_strategy == entry.install_strategy
+            }) || !plan.steps.iter().any(|step| {
+                step.target == format!("app/{category}")
+                    && step.resource.as_deref() == Some(resource)
+                    && step.action == PlanActionV1::Remove
+            }) {
+                continue;
+            }
+            if let Some(action) = self
+                .approved_app_remove_action_ir(
+                    &manifest,
+                    entry,
+                    category,
+                    resource,
+                    &fingerprint,
+                    "app-uninstall",
+                    request.force,
+                )
+                .await?
+            {
+                actions.push(action);
+            }
+        }
+        Ok(actions)
+    }
+
+    async fn approved_app_stale_remove_action_irs(
+        &self,
+        request: &AppPlanRequest,
+        plan: &PlanV1,
+    ) -> Result<Vec<ActionIrV1>> {
+        let fingerprint = plan.fingerprint()?.as_hex();
+        let (manifest, _) = load_app_manifest(self.host(), &self.context().shine_dir).await?;
+        let active_sources = self
+            .app_categories(request.target.as_deref())?
+            .iter()
+            .flat_map(|category| {
+                category
+                    .files
+                    .iter()
+                    .map(|file| logical_app_source(category, file))
+            })
+            .collect::<BTreeSet<_>>();
+        let mut actions = Vec::new();
+        for entry in manifest.entries.iter().filter(|entry| {
+            request.target.as_ref().is_none_or(|target| {
+                app_source_parts(&entry.source).is_some_and(|(category, _)| category == target)
+            })
+        }) {
+            if active_sources.contains(&entry.source) {
+                continue;
+            }
+            let Some((category, resource)) = app_source_parts(&entry.source) else {
+                continue;
+            };
+            if !plan.steps.iter().any(|step| {
+                step.target == format!("app/{category}")
+                    && step.resource.as_deref() == Some(resource)
+                    && step.action == PlanActionV1::Remove
+                    && step
+                        .diagnostic_codes
+                        .contains(&"app_stale_source_pruned".to_string())
+            }) {
+                continue;
+            }
+            if let Some(action) = self
+                .approved_app_remove_action_ir(
+                    &manifest,
+                    entry,
+                    category,
+                    resource,
+                    &fingerprint,
+                    "app-upgrade-prune",
+                    false,
+                )
+                .await?
+            {
+                actions.push(action);
+            }
+        }
+        Ok(actions)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn approved_app_remove_action_ir(
+        &self,
+        manifest: &AppManifest,
+        entry: &AppEntry,
+        category: &str,
+        resource: &str,
+        fingerprint: &str,
+        operation: &str,
+        force: bool,
+    ) -> Result<Option<ActionIrV1>> {
+        let metadata = match self.host().metadata(&entry.destination).await {
+            Ok(metadata) if metadata.kind == FileKind::File => metadata,
+            Ok(_) => return Ok(None),
+            Err(error) if error.is_not_found() => return Ok(None),
+            Err(error) => {
+                return Err(error.into_anyhow("observing managed App removal destination"));
+            }
+        };
+        let Some(current) = read_optional(self.host(), &entry.destination).await? else {
+            return Ok(None);
+        };
+        let target = format!("app/{category}");
+        let action_identity = format!("{target}/{resource}");
+        if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
+            &entry.install_strategy
+        {
+            if entry.requires_admin || entry.backup.is_some() {
+                return Ok(None);
+            }
+            let Some(current_managed_hash) = installed_json_hash(&current, managed_keys)? else {
+                return Ok(None);
+            };
+            if current_managed_hash != entry.content_hash && !force {
+                return Ok(None);
+            }
+            let rollback = crate::action::managed_file_rollback_path(&entry.destination);
+            if manifest.find_by_dest(&rollback).is_some()
+                || path_exists(self.host(), &rollback).await?
+            {
+                bail!("managed JSON removal rollback path changed after Plan approval");
+            }
+            let action = DeclarativeActionV1::remove_managed_json(
+                format!("remove-json:{action_identity}"),
+                target,
+                resource,
+                ManagedJsonRemoveSpecV1 {
+                    destination: entry.destination.clone(),
+                    original_mode: metadata.unix_mode,
+                    original_hash: crate::install::hash_content(&current),
+                    receipt_managed_hash: entry.content_hash,
+                    current_managed_hash,
+                    managed_keys: managed_keys.clone(),
+                    uses_env: entry.uses_env,
+                },
+            );
+            return Ok(Some(ActionIrV1::new(
+                format!("{operation}:{fingerprint}:{action_identity}"),
+                vec![action],
+            )));
+        }
+        if entry.install_strategy != crate::install::AppInstallStrategy::Copy {
+            return Ok(None);
+        }
+        let current_hash = crate::install::hash_content(&current);
+        if current_hash != entry.content_hash && !force {
+            return Ok(None);
+        }
+        let backup_identity = if let Some(backup) = &entry.backup {
+            if *backup != crate::install::backup_path(&entry.destination) {
+                return Ok(None);
+            }
+            let metadata = match self.host().metadata(backup).await {
+                Ok(metadata) if metadata.kind == FileKind::File => metadata,
+                Ok(_) => return Ok(None),
+                Err(error) if error.is_not_found() => return Ok(None),
+                Err(error) => {
+                    return Err(
+                        error.into_anyhow("observing managed App removal persistent backup")
+                    );
+                }
+            };
+            let Some(bytes) = read_optional(self.host(), backup).await? else {
+                return Ok(None);
+            };
+            Some((
+                backup.clone(),
+                metadata.unix_mode,
+                crate::install::hash_content(&bytes),
+            ))
+        } else {
+            None
+        };
+        let rollback = crate::action::managed_file_rollback_path(&entry.destination);
+        if manifest.find_by_dest(&rollback).is_some() || path_exists(self.host(), &rollback).await?
+        {
+            bail!("App removal rollback path changed after Plan approval");
+        }
+        let action = if current_hash != entry.content_hash {
+            DeclarativeActionV1::force_remove_managed_file(
+                format!("force-remove:{action_identity}"),
+                target,
+                resource,
+                ForcedManagedFileRemoveSpecV1 {
+                    destination: entry.destination.clone(),
+                    persistent_backup: backup_identity
+                        .map(|(path, mode, hash)| ForcedManagedFileBackupV1 { path, mode, hash }),
+                    receipt_hash: entry.content_hash,
+                    current_mode: metadata.unix_mode,
+                    current_hash,
+                    uses_env: entry.uses_env,
+                    requires_admin: entry.requires_admin,
+                },
+            )
+        } else if let Some((backup, backup_mode, backup_hash)) = backup_identity {
+            DeclarativeActionV1::remove_managed_file_with_backup(
+                format!("remove-with-backup:{action_identity}"),
+                target,
+                resource,
+                ManagedFileRemoveWithBackupSpecV1 {
+                    destination: entry.destination.clone(),
+                    backup,
+                    managed_mode: metadata.unix_mode,
+                    managed_hash: entry.content_hash,
+                    backup_mode,
+                    backup_hash,
+                    uses_env: entry.uses_env,
+                    requires_admin: entry.requires_admin,
+                },
+            )
+        } else {
+            DeclarativeActionV1::remove_managed_file(
+                format!("remove:{action_identity}"),
+                target,
+                resource,
+                ManagedFileRemoveSpecV1 {
+                    destination: entry.destination.clone(),
+                    original_mode: metadata.unix_mode,
+                    original_hash: entry.content_hash,
+                    uses_env: entry.uses_env,
+                    requires_admin: entry.requires_admin,
+                },
+            )
+        };
+        Ok(Some(ActionIrV1::new(
+            format!("{operation}:{fingerprint}:{action_identity}"),
+            vec![action],
+        )))
+    }
+}
+
+impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
+    pub async fn preview_install_shells(
+        &self,
+        request: ShellLifecycleRequest,
+    ) -> Result<ShellLifecycleReport> {
+        if !request.dry_run {
+            bail!("Shell install mutation requires snapshot-bound approval");
+        }
+        self.install_shells(request).await
+    }
+
+    pub async fn preview_uninstall_shells(
+        &self,
+        request: ShellUninstallRequest,
+    ) -> Result<ShellUninstallReport> {
+        if !request.dry_run {
+            bail!("Shell uninstall mutation requires snapshot-bound approval");
+        }
+        self.uninstall_shells(request).await
+    }
+
+    pub async fn install_shells_approved(
+        &self,
+        request: ShellPlanRequest,
+        approval: &PlanApprovalV1,
+    ) -> Result<ShellLifecycleReport> {
+        if request.operation != LifecycleOperation::Install {
+            bail!("approved Shell install requires an install Plan");
+        }
+        approval.validate(&self.plan_shells(request.clone()).await?)?;
+        self.install_shells_with_approval(
+            ShellLifecycleRequest {
+                target: request.target,
+                dry_run: false,
+                force: request.force,
+            },
+            approval,
+        )
+        .await
+    }
+
+    pub async fn uninstall_shells_approved(
+        &self,
+        request: ShellPlanRequest,
+        approval: &PlanApprovalV1,
+    ) -> Result<ShellUninstallReport> {
+        if request.operation != LifecycleOperation::Uninstall {
+            bail!("approved Shell uninstall requires an uninstall Plan");
+        }
+        approval.validate(&self.plan_shells(request.clone()).await?)?;
+        self.uninstall_shells_with_approval(
+            ShellUninstallRequest {
+                target: request.target,
+                dry_run: false,
+                purge: request.purge,
+            },
+            Some(approval),
+        )
+        .await
+    }
+
+    pub async fn upgrade_shells_approved(
+        &self,
+        request: ShellPlanRequest,
+        approval: &PlanApprovalV1,
+    ) -> Result<ShellUpgradeLifecycleReport> {
+        if request.operation != LifecycleOperation::Upgrade {
+            bail!("approved Shell upgrade requires an upgrade Plan");
+        }
+        approval.validate(&self.plan_shells(request.clone()).await?)?;
+        self.upgrade_shells(
+            ShellUpgradeRequest {
+                category: request.target,
+            },
+            approval,
+        )
+        .await
+    }
+}
+
+impl<H> CoreRuntime<H>
+where
+    H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost,
+{
+    pub async fn preview_managed_sys(
+        &self,
+        request: SysManagedRequest,
+        interaction: &mut impl RuntimeInteraction,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<SysManagedReport> {
+        if !request.dry_run {
+            bail!("managed Sys mutation requires snapshot-bound approval");
+        }
+        self.run_managed_sys(request, interaction, observer).await
+    }
+
+    pub async fn run_managed_sys_approved(
+        &self,
+        request: SysManagedPlanRequest,
+        approval: &PlanApprovalV1,
+        interaction: &mut impl RuntimeInteraction,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<SysManagedReport> {
+        let plan = self.plan_managed_sys(request.clone()).await?;
+        approval.validate(&plan)?;
+        let action = if request.operation == LifecycleOperation::Uninstall {
+            SysManagedAction::Remove
+        } else {
+            SysManagedAction::Apply
+        };
+        self.run_managed_sys_with_approval(
+            SysManagedRequest {
+                os_id: request.os_id,
+                target: request.target,
+                action,
+                dry_run: false,
+                operation: request.operation,
+            },
+            interaction,
+            observer,
+            Some((&plan, approval)),
+        )
+        .await
+    }
+}
+
+impl<H> CoreRuntime<H>
+where
+    H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost + ProcessHost,
+{
+    pub async fn preview_sys_profile(
+        &self,
+        request: SysProfileStateRequest,
+    ) -> Result<SysProfileStateReport> {
+        if !request.dry_run {
+            bail!("Sys profile mutation requires snapshot-bound approval");
+        }
+        self.set_sys_profile_state(request).await
+    }
+
+    pub async fn set_sys_profile_approved(
+        &self,
+        request: SysProfilePlanRequest,
+        approval: &PlanApprovalV1,
+    ) -> Result<SysProfileStateReport> {
+        let plan = self.plan_sys_profile(request.clone()).await?;
+        approval.validate(&plan)?;
+        self.set_sys_profile_state_with_approval(
+            SysProfileStateRequest {
+                os_id: request.os_id,
+                item_id: request.item_id,
+                enabled: request.enabled,
+                dry_run: false,
+            },
+            Some((&plan, approval)),
+        )
+        .await
+    }
+
+    pub async fn preview_sys_bootstrap(
+        &self,
+        request: SysBootstrapBatchRequest,
+        interaction: &mut impl RuntimeInteraction,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<SysBootstrapBatchReport> {
+        if !request.dry_run {
+            bail!("Sys bootstrap mutation requires snapshot-bound approval");
+        }
+        self.run_sys_bootstrap_batch(request, interaction, observer)
+            .await
+    }
+
+    pub async fn run_sys_bootstrap_approved(
+        &self,
+        request: SysBootstrapPlanRequest,
+        approval: &PlanApprovalV1,
+        interaction: &mut impl RuntimeInteraction,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<SysBootstrapBatchReport> {
+        approval.validate(&self.plan_sys_bootstrap(request.clone()).await?)?;
+        self.run_sys_bootstrap_batch(
+            SysBootstrapBatchRequest {
+                os_id: request.os_id,
+                requested: request.item_ids,
+                preset: None,
+                interactive: false,
+                sys_shell: request.sys_shell,
+                dry_run: false,
+                force_profile: request.force_profile,
+            },
+            interaction,
+            observer,
+        )
+        .await
+    }
+}
+
+fn select_refresh_files(category: &AppCategory, selector: Option<&Path>) -> Result<Vec<AppFile>> {
+    let candidates = if let Some(selector) = selector {
+        let file = category
+            .files
+            .iter()
+            .find(|file| file.source_rel == selector)
+            .with_context(|| {
+                format!(
+                    "app '{}' file not found: {}",
+                    category.name,
+                    selector.display()
+                )
+            })?;
+        if file.generator.is_none() {
+            bail!(
+                "app '{}' file is not generated: {}",
+                category.name,
+                selector.display()
+            );
+        }
+        vec![file.clone()]
+    } else {
+        category
+            .files
+            .iter()
+            .filter(|file| file.generator.is_some())
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    if candidates.is_empty() {
+        bail!("app '{}' has no generated files", category.name);
+    }
+    Ok(candidates)
+}
+
+async fn plan_app_hooks<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    category: &AppCategory,
+    hooks: &[super::AppHook],
+    input_versions: &PlanningInputVersions,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+    steps: &mut Vec<PlanStepV1>,
+) -> Result<()> {
+    for (index, hook) in hooks.iter().enumerate() {
+        if is_recursive_app_artifact_hook(hook, &category.name) {
+            steps.push(
+                PlanStepV1::new(
+                    format!("app/{}", category.name),
+                    Some(format!("hook:{index}")),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code(if category.metadata_schema_version >= 2 {
+                    "app_recursive_artifact_hook_unsupported"
+                } else if category.metadata_is_overlay {
+                    "app_legacy_overlay_metadata"
+                } else {
+                    "app_legacy_metadata"
+                }),
+            );
+            continue;
+        }
+        capture_app_hook_inputs(
+            runtime.context(),
+            input_versions,
+            category.permissions.as_ref(),
+            hook,
+            state,
+            permissions,
+        )?;
+        add_app_hook_permissions(runtime, category, hook, index, state, permissions, steps).await?;
+        let blocked = !runtime.app_capability_trusted(category, TrustCapabilityV1::AppHook)?;
+        steps.push(
+            PlanStepV1::new(
+                format!("app/{}", category.name),
+                Some(format!("hook:{index}")),
+                if blocked {
+                    PlanActionV1::Blocked
+                } else {
+                    PlanActionV1::Execute
+                },
+            )
+            .with_diagnostic_code(if blocked {
+                "app_external_code_not_allowed"
+            } else {
+                "app_hook_execution"
+            }),
+        );
+    }
+    Ok(())
+}
+
+fn is_recursive_app_artifact_hook(hook: &super::AppHook, category: &str) -> bool {
+    matches!(&hook.action, super::AppHookAction::Command(command) if command == "shine")
+        && hook.args.len() >= 3
+        && hook.args[0] == "app"
+        && hook.args[1] == "artifact"
+        && hook.args[2] == "apply"
+        && hook.args.get(3).is_some_and(|target| target == category)
+}
+
+async fn add_app_hook_permissions<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    category: &AppCategory,
+    hook: &super::AppHook,
+    index: usize,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+    steps: &mut Vec<PlanStepV1>,
+) -> Result<()> {
+    let super::AppHookAction::Script {
+        script,
+        runtime: runtime_kind,
+    } = &hook.action
+    else {
+        if let super::AppHookAction::Command(command) = &hook.action {
+            permissions.require(PermissionV1::Command {
+                program: command.clone(),
+            });
+        }
+        return Ok(());
+    };
+
+    permissions.require(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Execute,
+        path: format!("preset:{}", script.display().to_string().replace('\\', "/")),
+    });
+    if *runtime_kind == ArtifactRuntime::Bun {
+        permissions.require(PermissionV1::Command {
+            program: "bun".to_string(),
+        });
+    }
+    let logical = format!("app/{}/{}", category.name, script.display());
+    let script_file = runtime
+        .presets()
+        .file(&logical)
+        .with_context(|| format!("app hook script is missing: {logical}"))?;
+    if script_file.origin.physical_path.is_none() {
+        let cache_root = runtime
+            .context()
+            .presets_dir
+            .join("app")
+            .join(&category.name);
+        capture_tree_state(
+            runtime.host(),
+            state,
+            format!("hook:{index}:preset-cache"),
+            &cache_root,
+        )
+        .await?;
+        add_shine_write_permission(runtime.context(), permissions, &cache_root);
+        steps.push(PlanStepV1::new(
+            format!("app/{}", category.name),
+            Some(format!("hook:{index}:preset-cache")),
+            PlanActionV1::Update,
+        ));
+    }
+    Ok(())
+}
+
+async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    category: &AppCategory,
+    script: &str,
+    runtime_kind: ArtifactRuntime,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+    steps: &mut Vec<PlanStepV1>,
+) -> Result<()> {
+    permissions.require(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Execute,
+        path: format!("preset:{}", script.replace('\\', "/")),
+    });
+    if runtime_kind == ArtifactRuntime::Bun {
+        permissions.require(PermissionV1::Command {
+            program: "bun".to_string(),
+        });
+    }
+    let logical = format!("app/{}/{script}", category.name);
+    let script_file = runtime
+        .presets()
+        .file(&logical)
+        .with_context(|| format!("app script is missing: {logical}"))?;
+    if script_file.origin.physical_path.is_none() {
+        let cache_root = runtime
+            .context()
+            .presets_dir
+            .join("app")
+            .join(&category.name);
+        capture_tree_state(
+            runtime.host(),
+            state,
+            "artifact:preset-cache".to_string(),
+            &cache_root,
+        )
+        .await?;
+        add_shine_write_permission(runtime.context(), permissions, &cache_root);
+        steps.push(PlanStepV1::new(
+            format!("app/{}", category.name),
+            Some("artifact:preset-cache"),
+            PlanActionV1::Update,
+        ));
+    }
+    for (label, directory) in [
+        (
+            "http-dir",
+            runtime
+                .context()
+                .shine_dir
+                .join("http")
+                .join("app")
+                .join(&category.name),
+        ),
+        (
+            "cache-dir",
+            runtime
+                .context()
+                .cache_dir
+                .join("shine")
+                .join("app")
+                .join(&category.name),
+        ),
+        (
+            "state-dir",
+            runtime
+                .context()
+                .shine_dir
+                .join("state")
+                .join("app")
+                .join(&category.name),
+        ),
+    ] {
+        let exists = path_exists(runtime.host(), &directory).await?;
+        capture_path_state(
+            runtime.host(),
+            state,
+            format!("artifact:{label}"),
+            &directory,
+        )
+        .await?;
+        permissions.implicit(PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Write,
+            path: review_path(runtime.context(), &directory),
+        });
+        if !exists {
+            steps.push(PlanStepV1::new(
+                format!("app/{}", category.name),
+                Some(format!("artifact:{label}")),
+                PlanActionV1::Create,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn finish_plan<H>(
+    runtime: &CoreRuntime<H>,
+    operation: LifecycleOperation,
+    state: StateCapture,
+    permissions: PermissionAccumulator,
+    steps: Vec<PlanStepV1>,
+) -> Result<PlanV1> {
+    let (required, declared, uncomputable) = permissions.finish();
+    Ok(PlanV1::new(
+        operation,
+        PlanInputsV1 {
+            preset: runtime.presets().digest_v1()?,
+            state: state.finish(),
+        },
+        steps,
+        required,
+        &declared,
+        uncomputable,
+    ))
+}
+
+fn finish_specialized_plan<H>(
+    runtime: &CoreRuntime<H>,
+    operation: PlanOperationV1,
+    state: StateCapture,
+    permissions: PermissionAccumulator,
+    steps: Vec<PlanStepV1>,
+) -> Result<PlanV1> {
+    let (required, declared, uncomputable) = permissions.finish();
+    Ok(PlanV1::new(
+        operation,
+        PlanInputsV1 {
+            preset: runtime.presets().digest_v1()?,
+            state: state.finish(),
+        },
+        steps,
+        required,
+        &declared,
+        uncomputable,
+    ))
+}
+
+fn validate_sys_bootstrap_request(request: &SysBootstrapPlanRequest) -> Result<()> {
+    if request.os_id.is_empty()
+        || request.os_id.contains(['/', '\\'])
+        || request.os_id.contains("..")
+    {
+        bail!("invalid Sys bootstrap os id");
+    }
+    if request.sys_shell.is_empty() {
+        bail!("Sys bootstrap shell identity must not be empty");
+    }
+    Ok(())
+}
+
+fn validate_sys_profile_request(request: &SysProfilePlanRequest) -> Result<()> {
+    if request.os_id.is_empty()
+        || request.os_id.contains(['/', '\\'])
+        || request.os_id.contains("..")
+    {
+        bail!("invalid Sys profile os id");
+    }
+    if request.item_id.is_empty()
+        || request.item_id.contains(['/', '\\'])
+        || request.item_id.contains("..")
+    {
+        bail!("invalid Sys profile item id");
+    }
+    Ok(())
+}
+
+fn capture_proxy_env(context: &super::RuntimeContext, state: &mut StateCapture) -> Result<()> {
+    for (name, value) in &context.proxy_env {
+        state.public(
+            format!("proxy-env:{name}"),
+            format!("plain:{}", sha256_hex(value.as_bytes())),
+        )?;
+    }
+    Ok(())
+}
+
+async fn observe_sys_detection<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    detection: &SysDetection,
+    state: &mut StateCapture,
+    target: &str,
+    permissions: &mut PermissionAccumulator,
+) -> Result<bool> {
+    match detection {
+        SysDetection::Command {
+            command,
+            version_args,
+        } => {
+            if !version_args.is_empty() {
+                permissions.implicit(PermissionV1::Command {
+                    program: command.clone(),
+                });
+            }
+            observe_command_presence(runtime, command, state, target).await
+        }
+        SysDetection::Path { path } => {
+            let resolved = captured_sys_path(path, &runtime.context().home_dir)?;
+            observe_presence(
+                runtime.host(),
+                state,
+                format!("detection:{target}:path"),
+                &resolved,
+            )
+            .await
+        }
+        SysDetection::Any { probes } => {
+            let mut present = false;
+            for (index, probe) in probes.iter().enumerate() {
+                let found = match probe {
+                    SysDetectionProbe::Command { command } => {
+                        observe_command_presence(
+                            runtime,
+                            command,
+                            state,
+                            &format!("{target}:probe:{index}"),
+                        )
+                        .await?
+                    }
+                    SysDetectionProbe::Path { path } => {
+                        let resolved = captured_sys_path(path, &runtime.context().home_dir)?;
+                        observe_presence(
+                            runtime.host(),
+                            state,
+                            format!("detection:{target}:probe:{index}:path"),
+                            &resolved,
+                        )
+                        .await?
+                    }
+                };
+                present |= found;
+            }
+            Ok(present)
+        }
+    }
+}
+
+async fn observe_command_presence<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    command: &str,
+    state: &mut StateCapture,
+    target: &str,
+) -> Result<bool> {
+    let mut present = false;
+    for (index, candidate) in command_candidates(runtime.context(), command)
+        .into_iter()
+        .enumerate()
+    {
+        let metadata = match runtime.host().metadata(&candidate).await {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.is_not_found() => None,
+            Err(error) => return Err(error.into_anyhow("observing Sys detection command")),
+        };
+        let value = metadata.as_ref().map_or_else(
+            || "missing".to_string(),
+            |metadata| {
+                format!(
+                    "{:?}:{}:{}",
+                    metadata.kind,
+                    metadata.len,
+                    metadata.unix_mode.unwrap_or_default()
+                )
+            },
+        );
+        state.public(format!("detection:{target}:candidate:{index}"), value)?;
+        present |= metadata.is_some_and(|metadata| {
+            metadata.kind == FileKind::File
+                && (runtime.context().platform == super::RuntimePlatform::Windows
+                    || metadata.unix_mode.is_none_or(|mode| mode & 0o111 != 0))
+        });
+    }
+    Ok(present)
+}
+
+fn command_candidates(context: &super::RuntimeContext, command: &str) -> Vec<PathBuf> {
+    let mut directories = context
+        .path_env
+        .as_deref()
+        .map(std::env::split_paths)
+        .map(Iterator::collect::<Vec<_>>)
+        .unwrap_or_default();
+    directories.extend([
+        context.home_dir.join(".local/bin"),
+        context.home_dir.join(".cargo/bin"),
+        context.home_dir.join(".bun/bin"),
+        context.home_dir.join(".local/share/pnpm"),
+        context
+            .home_dir
+            .join("AppData/Local/Microsoft/WinGet/Links"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+    ]);
+    directories
+        .into_iter()
+        .flat_map(|directory| {
+            if context.platform == super::RuntimePlatform::Windows {
+                vec![
+                    directory.join(command),
+                    directory.join(format!("{command}.exe")),
+                    directory.join(format!("{command}.cmd")),
+                    directory.join(format!("{command}.bat")),
+                    directory.join(format!("{command}.ps1")),
+                ]
+            } else {
+                vec![directory.join(command)]
+            }
+        })
+        .collect()
+}
+
+async fn observe_presence(
+    host: &impl FileSystemObservationHost,
+    state: &mut StateCapture,
+    label: String,
+    path: &Path,
+) -> Result<bool> {
+    match host.metadata(path).await {
+        Ok(metadata) => {
+            state.public(
+                label,
+                format!(
+                    "{:?}:{}:{}",
+                    metadata.kind,
+                    metadata.len,
+                    metadata.unix_mode.unwrap_or_default()
+                ),
+            )?;
+            Ok(true)
+        }
+        Err(error) if error.is_not_found() => {
+            state.public(label, "missing")?;
+            Ok(false)
+        }
+        Err(error) => Err(error.into_anyhow("observing Sys detection path")),
+    }
+}
+
+fn add_sys_bootstrap_install_permissions<H>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    item: &SysItem,
+    install: &SysInstall,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    match install {
+        SysInstall::Package { provider, .. } => {
+            let program = match provider {
+                SysPackageProvider::Homebrew | SysPackageProvider::HomebrewCask => "brew",
+                SysPackageProvider::Apt => "apt-get",
+                SysPackageProvider::Winget => "winget",
+            };
+            permissions.implicit(PermissionV1::Command {
+                program: program.to_string(),
+            });
+            permissions.implicit(PermissionV1::Network {
+                scope: NetworkScopeV1::Any,
+            });
+        }
+        SysInstall::Script { path, .. } => {
+            permissions.require(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Execute,
+                path: format!("preset:{}", path.replace('\\', "/")),
+            });
+            permissions.implicit(PermissionV1::Command {
+                program: match os_id {
+                    "windows" => "powershell.exe",
+                    "macos" => "zsh",
+                    _ => "bash",
+                }
+                .to_string(),
+            });
+            add_shine_write_permission(
+                runtime.context(),
+                permissions,
+                &runtime.context().shine_dir.join("runtime/sys").join(os_id),
+            );
+        }
+    }
+    if super::sys_install_requires_admin(os_id, install, item)? {
+        permissions.implicit(PermissionV1::Administrator);
+    }
+    for name in runtime.context().proxy_env.keys() {
+        permissions.implicit(PermissionV1::Environment {
+            name: name.clone(),
+            sensitivity: EnvironmentSensitivityV1::Plain,
+        });
+    }
+    Ok(())
+}
+
+fn sys_bootstrap_code_blocked<H>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    item: &SysItem,
+) -> Result<bool> {
+    let Some(SysInstall::Script { path, .. }) = &item.install else {
+        return Ok(false);
+    };
+    let logical = format!("sys/{os_id}/{}", path.replace('\\', "/"));
+    if !runtime
+        .presets()
+        .origin(&logical)
+        .is_some_and(|origin| origin.source_kind != super::PresetSourceKind::Embedded)
+    {
+        return Ok(false);
+    }
+    Ok(!runtime.sys_capability_trusted(os_id, item, TrustCapabilityV1::SysBootstrapScript)?)
+}
+
+fn sys_profile_code_blocked<H>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    manifest: &SysManifest,
+    selected: &[&SysItem],
+    run_manifest: &SysRunManifest,
+) -> Result<bool> {
+    let enabled = run_manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.os_id == os_id && !entry.managed && entry.profile_enabled)
+        .map(|entry| entry.item_id.as_str())
+        .chain(selected.iter().map(|item| item.id.as_str()))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    sys_profile_code_blocked_for_enabled(runtime, os_id, manifest, &enabled)
+}
+
+fn sys_profile_code_blocked_for_enabled<H>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    manifest: &SysManifest,
+    enabled: &BTreeSet<String>,
+) -> Result<bool> {
+    for item in manifest
+        .items
+        .iter()
+        .filter(|item| enabled.contains(&item.id))
+    {
+        if !runtime.sys_capability_trusted(os_id, item, TrustCapabilityV1::SysProfileCode)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+async fn capture_sys_profile_state<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    sys_shell: &str,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    let ext = if os_id == "windows" { "ps1" } else { "sh" };
+    for phase in ["pre", "post"] {
+        let path = runtime
+            .context()
+            .home_dir
+            .join(".shine/profile")
+            .join(format!("{os_id}.{phase}.{ext}"));
+        capture_path_state(runtime.host(), state, format!("profile:{phase}"), &path).await?;
+        add_shine_write_permission(runtime.context(), permissions, &path);
+    }
+    for (index, path) in runtime.context().shell_config_paths.iter().enumerate() {
+        capture_path_state(
+            runtime.host(),
+            state,
+            format!("shell-profile:{sys_shell}:{index}"),
+            path,
+        )
+        .await?;
+        add_shine_write_permission(runtime.context(), permissions, path);
+    }
+    permissions.implicit(PermissionV1::Command {
+        program: "git".to_string(),
+    });
+    Ok(())
+}
+
+fn sys_profile_block_paths(context: &super::RuntimeContext, os_id: &str) -> Vec<PathBuf> {
+    match os_id {
+        "macos" => vec![context.home_dir.join(".zshrc")],
+        "ubuntu" => vec![
+            context.home_dir.join(".bashrc"),
+            context.home_dir.join(".zshrc"),
+        ],
+        "windows" => vec![
+            context
+                .home_dir
+                .join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+            context
+                .home_dir
+                .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+        ],
+        _ => context.shell_config_paths.clone(),
+    }
+}
+
+fn add_shine_write_permission(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    path: &Path,
+) {
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Write,
+        path: review_path(context, path),
+    });
+}
+
+fn validate_app_request(request: &AppPlanRequest) -> Result<()> {
+    if request.purge && request.operation != LifecycleOperation::Uninstall {
+        bail!("App purge is valid only for uninstall Plans");
+    }
+    if request.prune_stale && request.operation != LifecycleOperation::Upgrade {
+        bail!("App stale pruning is valid only for upgrade Plans");
+    }
+    if request.force
+        && !matches!(
+            request.operation,
+            LifecycleOperation::Install | LifecycleOperation::Uninstall
+        )
+    {
+        bail!("App force is valid only for install or uninstall Plans");
+    }
+    Ok(())
+}
+
+fn validate_shell_request(request: &ShellPlanRequest) -> Result<()> {
+    if request.purge && request.operation != LifecycleOperation::Uninstall {
+        bail!("Shell purge is valid only for uninstall Plans");
+    }
+    if request.force && request.operation != LifecycleOperation::Install {
+        bail!("Shell force is valid only for install Plans");
+    }
+    Ok(())
+}
+
+fn validate_sys_request(request: &SysManagedPlanRequest) -> Result<()> {
+    if request.os_id.is_empty()
+        || request.os_id.contains(['/', '\\'])
+        || request.os_id.contains("..")
+    {
+        bail!("invalid managed Sys os id");
+    }
+    Ok(())
+}
+
+fn capture_context(state: &mut StateCapture, context: &super::RuntimeContext) -> Result<()> {
+    state.public("platform", context.platform.as_str())?;
+    state.public("external-presets", context.is_external_presets.to_string())?;
+    state.public(
+        "external-shell-mode",
+        match context.external_shell_mode {
+            ExternalShellMode::Snapshot => "snapshot",
+            ExternalShellMode::Live => "live",
+        },
+    )?;
+    state.public(
+        "home",
+        sha256_hex(context.home_dir.as_os_str().as_encoded_bytes()),
+    )?;
+    state.public(
+        "shine",
+        sha256_hex(context.shine_dir.as_os_str().as_encoded_bytes()),
+    )?;
+    state.public(
+        "trust-grants",
+        sha256_hex(&serde_json::to_vec(&context.trust_grants)?),
+    )?;
+    Ok(())
+}
+
+fn capture_request_mode(
+    state: &mut StateCapture,
+    target: Option<&str>,
+    force: bool,
+    purge: bool,
+    prune_stale: bool,
+) -> Result<()> {
+    state.public("target", target.unwrap_or("all"))?;
+    state.public("force", force.to_string())?;
+    state.public("purge", purge.to_string())?;
+    state.public("prune-stale", prune_stale.to_string())?;
+    Ok(())
+}
+
+fn capture_manifest_selection<T: serde::Serialize>(
+    state: &mut StateCapture,
+    label: &str,
+    present: bool,
+    schema_version: u32,
+    entries: &T,
+) -> Result<()> {
+    state.public(format!("{label}:present"), present.to_string())?;
+    state.public(format!("{label}:schema"), schema_version.to_string())?;
+    let encoded = serde_json::to_vec(entries)?;
+    state.bytes(format!("{label}:entries"), Some(&encoded))
+}
+
+async fn capture_path_state(
+    host: &impl FileSystemObservationHost,
+    state: &mut StateCapture,
+    label: String,
+    path: &Path,
+) -> Result<()> {
+    match host.metadata(path).await {
+        Ok(metadata) => {
+            let fingerprint = match metadata.kind {
+                FileKind::File => read_optional(host, path)
+                    .await?
+                    .as_deref()
+                    .map(sha256_hex)
+                    .unwrap_or_else(|| "none".to_string()),
+                FileKind::Symlink => host
+                    .read_link(path)
+                    .await
+                    .map(|target| sha256_hex(target.as_os_str().as_encoded_bytes()))
+                    .unwrap_or_else(|_| "unreadable".to_string()),
+                FileKind::Directory => "none".to_string(),
+            };
+            let value = format!(
+                "{:?}:{}:{}",
+                metadata.kind,
+                metadata.unix_mode.unwrap_or_default(),
+                fingerprint
+            );
+            state.public(label, value)
+        }
+        Err(error) if error.is_not_found() => state.public(label, "missing"),
+        Err(error) => Err(error.into_anyhow("observing planned resource")),
+    }
+}
+
+async fn capture_tree_state(
+    host: &impl FileSystemObservationHost,
+    state: &mut StateCapture,
+    label: String,
+    root: &Path,
+) -> Result<()> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        let resource = if relative.as_os_str().is_empty() {
+            "root".to_string()
+        } else {
+            logical_path(relative)
+        };
+        capture_path_state(host, state, format!("{label}:{resource}"), &path).await?;
+        match host.metadata(&path).await {
+            Ok(metadata) if metadata.kind == FileKind::Directory => {
+                let mut children = host
+                    .read_dir(&path)
+                    .await
+                    .map_err(|error| error.into_anyhow("observing planned resource tree"))?;
+                children.sort();
+                pending.extend(children.into_iter().rev());
+            }
+            Ok(_) => {}
+            Err(error) if error.is_not_found() => {}
+            Err(error) => return Err(error.into_anyhow("observing planned resource tree")),
+        }
+    }
+    Ok(())
+}
+
+async fn path_exists(host: &impl FileSystemObservationHost, path: &Path) -> Result<bool> {
+    match host.metadata(path).await {
+        Ok(_) => Ok(true),
+        Err(error) if error.is_not_found() => Ok(false),
+        Err(error) => Err(error.into_anyhow("observing planned resource")),
+    }
+}
+
+async fn shell_snapshot_tree_current(
+    host: &impl FileSystemObservationHost,
+    root: &Path,
+    expected: &BTreeMap<PathBuf, u64>,
+) -> Result<bool> {
+    let metadata = match host.metadata(root).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.is_not_found() => return Ok(false),
+        Err(error) => return Err(error.into_anyhow("observing planned Shell snapshot")),
+    };
+    if metadata.kind != FileKind::Directory {
+        return Ok(false);
+    }
+    let mut actual = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let mut children = host
+            .read_dir(&directory)
+            .await
+            .map_err(|error| error.into_anyhow("observing planned Shell snapshot tree"))?;
+        children.sort();
+        for path in children {
+            let metadata = host
+                .metadata(&path)
+                .await
+                .map_err(|error| error.into_anyhow("observing planned Shell snapshot entry"))?;
+            match metadata.kind {
+                FileKind::Directory => pending.push(path),
+                FileKind::File => {
+                    let bytes = host.read(&path).await.map_err(|error| {
+                        error.into_anyhow("reading planned Shell snapshot entry")
+                    })?;
+                    actual.insert(
+                        path.strip_prefix(root)
+                            .context("planned Shell snapshot escaped its root")?
+                            .to_path_buf(),
+                        crate::install::hash_content(&bytes),
+                    );
+                }
+                FileKind::Symlink => return Ok(false),
+            }
+        }
+    }
+    Ok(actual == *expected)
+}
+
+async fn read_optional(
+    host: &impl FileSystemObservationHost,
+    path: &Path,
+) -> Result<Option<Vec<u8>>> {
+    match host.read(path).await {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.is_not_found() => Ok(None),
+        Err(error) => Err(error.into_anyhow("reading planned state")),
+    }
+}
+
+async fn load_app_manifest(
+    host: &impl FileSystemObservationHost,
+    shine_dir: &Path,
+) -> Result<(AppManifest, Option<Vec<u8>>)> {
+    let bytes = read_optional(host, &shine_dir.join("app-manifest.toml")).await?;
+    let mut manifest: AppManifest = bytes
+        .as_deref()
+        .map(toml::from_slice)
+        .transpose()?
+        .unwrap_or_default();
+    match manifest.schema_version {
+        0 => manifest.schema_version = APP_MANIFEST_SCHEMA_VERSION,
+        APP_MANIFEST_SCHEMA_VERSION => {}
+        version => bail!(
+            "app manifest schema version {version} is newer than this Shine supports ({APP_MANIFEST_SCHEMA_VERSION})"
+        ),
+    }
+    Ok((manifest, bytes))
+}
+
+async fn load_shell_manifest(
+    host: &impl FileSystemObservationHost,
+    shine_dir: &Path,
+) -> Result<(ShellManifest, Option<Vec<u8>>)> {
+    let bytes = read_optional(host, &shine_dir.join("shell-manifest.toml")).await?;
+    let mut manifest: ShellManifest = bytes
+        .as_deref()
+        .map(toml::from_slice)
+        .transpose()?
+        .unwrap_or_default();
+    match manifest.schema_version {
+        0 => manifest.schema_version = super::SHELL_MANIFEST_SCHEMA_VERSION,
+        super::SHELL_MANIFEST_SCHEMA_VERSION => {}
+        version => bail!(
+            "shell manifest schema version {version} is newer than this Shine supports ({})",
+            super::SHELL_MANIFEST_SCHEMA_VERSION
+        ),
+    }
+    Ok((manifest, bytes))
+}
+
+async fn load_sys_manifest(
+    host: &impl FileSystemObservationHost,
+    shine_dir: &Path,
+) -> Result<(SysRunManifest, Option<Vec<u8>>)> {
+    let bytes = read_optional(host, &shine_dir.join("sys-manifest.toml")).await?;
+    let mut manifest: SysRunManifest = bytes
+        .as_deref()
+        .map(toml::from_slice)
+        .transpose()?
+        .unwrap_or_default();
+    match manifest.schema_version {
+        0 => manifest.schema_version = super::SYS_MANIFEST_SCHEMA_VERSION,
+        super::SYS_MANIFEST_SCHEMA_VERSION => {}
+        version => bail!(
+            "sys manifest schema version {version} is newer than this Shine supports ({})",
+            super::SYS_MANIFEST_SCHEMA_VERSION
+        ),
+    }
+    Ok((manifest, bytes))
+}
+
+fn add_app_typed_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    file: &AppFile,
+    destination: &Path,
+    operation: LifecycleOperation,
+) {
+    permissions.implicit(PermissionV1::Filesystem {
+        access: if operation == LifecycleOperation::Uninstall {
+            FilesystemAccessV1::Remove
+        } else {
+            FilesystemAccessV1::Write
+        },
+        path: review_path(context, destination),
+    });
+    if file.requires_admin {
+        permissions.implicit(PermissionV1::Administrator);
+    }
+}
+
+fn add_app_entry_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    entry: &AppEntry,
+    operation: LifecycleOperation,
+) {
+    permissions.implicit(PermissionV1::Filesystem {
+        access: if operation == LifecycleOperation::Uninstall {
+            FilesystemAccessV1::Remove
+        } else {
+            FilesystemAccessV1::Write
+        },
+        path: review_path(context, &entry.destination),
+    });
+    if operation == LifecycleOperation::Uninstall
+        && let Some(backup) = &entry.backup
+    {
+        permissions.implicit(PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Write,
+            path: review_path(context, &entry.destination),
+        });
+        permissions.implicit(PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Remove,
+            path: review_path(context, backup),
+        });
+    }
+    if entry.requires_admin {
+        permissions.implicit(PermissionV1::Administrator);
+    }
+}
+
+fn add_shell_typed_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    path: &Path,
+    operation: LifecycleOperation,
+) {
+    permissions.implicit(PermissionV1::Filesystem {
+        access: if operation == LifecycleOperation::Uninstall {
+            FilesystemAccessV1::Remove
+        } else {
+            FilesystemAccessV1::Write
+        },
+        path: review_path(context, path),
+    });
+}
+
+fn add_shell_profile_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+) {
+    let managed_profile = super::managed_shell_profile_path(&context.shine_dir, context.shell);
+    for path in std::iter::once(&managed_profile).chain(context.shell_config_paths.iter()) {
+        let rollback = managed_file_rollback_path(path);
+        for (access, effect) in [
+            (FilesystemAccessV1::Write, path),
+            (FilesystemAccessV1::Remove, path),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            permissions.implicit(PermissionV1::Filesystem {
+                access,
+                path: review_path(context, effect),
+            });
+        }
+    }
+}
+
+fn add_shine_receipt_permission(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    file: &str,
+    operation: LifecycleOperation,
+) {
+    permissions.implicit(PermissionV1::Filesystem {
+        access: if operation == LifecycleOperation::Uninstall {
+            FilesystemAccessV1::Remove
+        } else {
+            FilesystemAccessV1::Write
+        },
+        path: review_path(context, &context.shine_dir.join(file)),
+    });
+}
+
+fn add_app_journal_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+) {
+    let path = review_path(
+        context,
+        &context.shine_dir.join(super::APP_OPERATION_JOURNAL_FILE),
+    );
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Write,
+        path: path.clone(),
+    });
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Remove,
+        path,
+    });
+}
+
+fn add_shell_journal_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+) {
+    let path = review_path(
+        context,
+        &context.shine_dir.join(super::SHELL_OPERATION_JOURNAL_FILE),
+    );
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Write,
+        path: path.clone(),
+    });
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Remove,
+        path,
+    });
+}
+
+fn add_app_backup_creation_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    destination: &Path,
+    backup: &Path,
+) {
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Remove,
+        path: review_path(context, destination),
+    });
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Write,
+        path: review_path(context, backup),
+    });
+}
+
+fn add_app_update_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    destination: &Path,
+    rollback: &Path,
+) {
+    for (access, path) in [
+        (FilesystemAccessV1::Remove, destination),
+        (FilesystemAccessV1::Write, rollback),
+        (FilesystemAccessV1::Remove, rollback),
+    ] {
+        permissions.implicit(PermissionV1::Filesystem {
+            access,
+            path: review_path(context, path),
+        });
+    }
+}
+
+fn add_app_relocation_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    previous: &AppEntry,
+    previous_present: bool,
+    desired_destination: &Path,
+    rollback: &Path,
+    desired_requires_admin: bool,
+) {
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Write,
+        path: review_path(context, desired_destination),
+    });
+    if previous_present {
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, previous.destination.as_path()),
+            (FilesystemAccessV1::Write, rollback),
+            (FilesystemAccessV1::Remove, rollback),
+        ] {
+            permissions.implicit(PermissionV1::Filesystem {
+                access,
+                path: review_path(context, path),
+            });
+        }
+        if matches!(
+            previous.install_strategy,
+            crate::install::AppInstallStrategy::JsonMerge { .. }
+        ) {
+            permissions.implicit(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: review_path(context, &previous.destination),
+            });
+        }
+        if let Some(backup) = &previous.backup {
+            permissions.implicit(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: review_path(context, &previous.destination),
+            });
+            permissions.implicit(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Remove,
+                path: review_path(context, backup),
+            });
+        }
+    }
+    if (previous_present && previous.requires_admin) || desired_requires_admin {
+        permissions.implicit(PermissionV1::Administrator);
+    }
+}
+
+fn capture_generator_inputs(
+    context: &super::RuntimeContext,
+    versions: &PlanningInputVersions,
+    declaration: Option<&PermissionDeclarationV1>,
+    generator: &super::AppGenerator,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    let sensitivity = declaration_sensitivity(declaration);
+    let mut names = generator
+        .env
+        .iter()
+        .map(|spec| spec.source.as_str())
+        .collect::<BTreeSet<_>>();
+    names.insert(&generator.when_env);
+    for name in names {
+        capture_env_identity(
+            context,
+            versions,
+            name,
+            sensitivity.get(name).copied(),
+            state,
+            permissions,
+        )?;
+    }
+    Ok(())
+}
+
+fn capture_app_artifact_inputs(
+    context: &super::RuntimeContext,
+    versions: &PlanningInputVersions,
+    declaration: Option<&PermissionDeclarationV1>,
+    artifact: &super::AppArtifact,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    let sensitivity = declaration_sensitivity(declaration);
+    for spec in &artifact.env {
+        let declared_sensitivity = sensitivity.get(&spec.source).copied();
+        if context.env.contains_key(&spec.source) {
+            capture_env_identity(
+                context,
+                versions,
+                &spec.source,
+                declared_sensitivity,
+                state,
+                permissions,
+            )?;
+        } else {
+            permissions.require(PermissionV1::Environment {
+                name: spec.source.clone(),
+                sensitivity: declared_sensitivity.unwrap_or(EnvironmentSensitivityV1::Plain),
+            });
+            state.public(format!("env:{}", spec.source), "missing")?;
+        }
+    }
+    Ok(())
+}
+
+fn capture_declared_env_inputs(
+    context: &super::RuntimeContext,
+    versions: &PlanningInputVersions,
+    declaration: Option<&PermissionDeclarationV1>,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    for entry in declaration
+        .into_iter()
+        .flat_map(|declaration| &declaration.environment)
+    {
+        capture_env_identity(
+            context,
+            versions,
+            &entry.name,
+            Some(entry.sensitivity),
+            state,
+            permissions,
+        )?;
+    }
+    Ok(())
+}
+
+fn capture_app_hook_inputs(
+    context: &super::RuntimeContext,
+    versions: &PlanningInputVersions,
+    declaration: Option<&PermissionDeclarationV1>,
+    hook: &super::AppHook,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    let sensitivity = declaration_sensitivity(declaration);
+    for spec in &hook.env {
+        let declared_sensitivity = sensitivity.get(&spec.source).copied();
+        if context.env.contains_key(&spec.source) {
+            capture_env_identity(
+                context,
+                versions,
+                &spec.source,
+                declared_sensitivity,
+                state,
+                permissions,
+            )?;
+        } else if matches!(&hook.action, super::AppHookAction::Script { .. }) {
+            permissions.require(PermissionV1::Environment {
+                name: spec.source.clone(),
+                sensitivity: declared_sensitivity.unwrap_or(EnvironmentSensitivityV1::Plain),
+            });
+            state.public(format!("env:{}", spec.source), "missing")?;
+        } else {
+            capture_env_identity(
+                context,
+                versions,
+                &spec.source,
+                declared_sensitivity,
+                state,
+                permissions,
+            )?;
+            permissions
+                .uncomputable
+                .insert("app_hook_env_missing".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn capture_shell_inputs(
+    context: &super::RuntimeContext,
+    versions: &PlanningInputVersions,
+    file: &ShellFile,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    let sensitivity = declaration_sensitivity(file.permissions.as_ref());
+    for spec in &file.env {
+        capture_env_identity(
+            context,
+            versions,
+            &spec.source,
+            sensitivity.get(&spec.source).copied(),
+            state,
+            permissions,
+        )?;
+    }
+    Ok(())
+}
+
+fn capture_sys_env(
+    context: &super::RuntimeContext,
+    versions: &PlanningInputVersions,
+    item: &SysItem,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    let sensitivity = declaration_sensitivity(item.permissions.as_ref());
+    let names = item
+        .required_env
+        .iter()
+        .map(String::as_str)
+        .chain(sensitivity.keys().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    for name in names {
+        capture_env_identity(
+            context,
+            versions,
+            name,
+            sensitivity.get(name).copied(),
+            state,
+            permissions,
+        )?;
+    }
+    Ok(())
+}
+
+fn capture_env_identity(
+    context: &super::RuntimeContext,
+    versions: &PlanningInputVersions,
+    name: &str,
+    sensitivity: Option<EnvironmentSensitivityV1>,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    let sensitivity = sensitivity.unwrap_or(EnvironmentSensitivityV1::Plain);
+    permissions.require(PermissionV1::Environment {
+        name: name.to_string(),
+        sensitivity,
+    });
+    let value = match sensitivity {
+        EnvironmentSensitivityV1::Plain => context
+            .env
+            .get(name)
+            .map(|value| format!("plain:{}", sha256_hex(value.as_bytes())))
+            .unwrap_or_else(|| "missing".to_string()),
+        EnvironmentSensitivityV1::Secret => match versions.secret_versions.get(name) {
+            Some(version) if !version.identity().is_empty() => format!(
+                "secret-version:{}",
+                sha256_hex(version.identity().as_bytes())
+            ),
+            Some(_) | None => {
+                permissions
+                    .uncomputable
+                    .insert("secret_input_identity_unavailable".to_string());
+                "secret-version:missing".to_string()
+            }
+        },
+    };
+    state.public(format!("env:{name}"), value)
+}
+
+fn declaration_sensitivity(
+    declaration: Option<&PermissionDeclarationV1>,
+) -> BTreeMap<String, EnvironmentSensitivityV1> {
+    declaration
+        .into_iter()
+        .flat_map(|declaration| &declaration.environment)
+        .map(|entry| (entry.name.clone(), entry.sensitivity))
+        .collect()
+}
+
+async fn add_generator_permissions<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    permissions: &mut PermissionAccumulator,
+    category: &AppCategory,
+    generator: &super::AppGenerator,
+    state: &mut StateCapture,
+    steps: &mut Vec<PlanStepV1>,
+) -> Result<()> {
+    permissions.require(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Execute,
+        path: format!("preset:{}", generator.script.display()),
+    });
+    if generator.runtime == ArtifactRuntime::Bun {
+        permissions.require(PermissionV1::Command {
+            program: "bun".to_string(),
+        });
+    }
+    let logical = format!("app/{}/{}", category.name, generator.script.display());
+    let script = runtime
+        .presets()
+        .file(&logical)
+        .with_context(|| format!("app generator script is missing: {logical}"))?;
+    if script.origin.physical_path.is_none() {
+        let file_name = generator
+            .script
+            .file_name()
+            .context("app generator script has no file name")?;
+        let path = runtime
+            .context()
+            .shine_dir
+            .join("runtime/app")
+            .join(&category.name)
+            .join(file_name);
+        let exists = path_exists(runtime.host(), &path).await?;
+        capture_path_state(
+            runtime.host(),
+            state,
+            format!("generator-runtime:{logical}"),
+            &path,
+        )
+        .await?;
+        add_shine_write_permission(runtime.context(), permissions, &path);
+        steps.push(
+            PlanStepV1::new(
+                format!("app/{}", category.name),
+                Some(format!("generator-runtime:{}", generator.script.display())),
+                if exists {
+                    PlanActionV1::Update
+                } else {
+                    PlanActionV1::Create
+                },
+            )
+            .with_diagnostic_code("app_generator_runtime_materialization"),
+        );
+    }
+    Ok(())
+}
+
+fn app_code_blocked<H>(
+    runtime: &CoreRuntime<H>,
+    category: &AppCategory,
+    script: &Path,
+) -> Result<bool> {
+    let logical = format!("app/{}/{}", category.name, script.display());
+    if !runtime
+        .presets()
+        .origin(&logical)
+        .is_some_and(|origin| origin.source_kind != super::PresetSourceKind::Embedded)
+    {
+        return Ok(false);
+    }
+    let script = script.to_string_lossy();
+    let capability = if category.artifact.as_ref().is_some_and(|artifact| {
+        artifact.script == script || artifact.teardown.as_deref() == Some(script.as_ref())
+    }) {
+        TrustCapabilityV1::AppArtifact
+    } else {
+        TrustCapabilityV1::AppGenerator
+    };
+    Ok(!runtime.app_capability_trusted(category, capability)?)
+}
+
+async fn launcher_is_managed(
+    host: &impl FileSystemObservationHost,
+    path: &Path,
+    context: &super::RuntimeContext,
+) -> Result<bool> {
+    let metadata = match host.metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.is_not_found() => return Ok(false),
+        Err(error) => return Err(error.into_anyhow("observing Shell launcher ownership")),
+    };
+    if metadata.kind == FileKind::Symlink {
+        return Ok(host.read_link(path).await.is_ok_and(|target| {
+            target.starts_with(&context.shine_dir) || target.starts_with(&context.presets_dir)
+        }));
+    }
+    let Some(bytes) = read_optional(host, path).await? else {
+        return Ok(false);
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return Ok(false);
+    };
+    Ok(text.contains("# shine-managed")
+        && text
+            .lines()
+            .find_map(|line| line.strip_prefix("# shine-target:"))
+            .is_some_and(|target| {
+                let target = Path::new(target.trim());
+                target.starts_with(&context.shine_dir) || target.starts_with(&context.presets_dir)
+            }))
+}
+
+fn shell_entry_selected(
+    entry: &ShellManifestEntry,
+    selection: Option<&super::ShellTarget<'_>>,
+) -> bool {
+    selection.is_none_or(|target| {
+        entry.category == target.category
+            && target
+                .command
+                .is_none_or(|command| entry.command == command)
+    })
+}
+
+async fn sys_receipt_modified<H: FileSystemObservationHost + SplitDnsObservationHost>(
+    runtime: &CoreRuntime<H>,
+    receipt: &SystemReceipt,
+    state: &mut StateCapture,
+    target: &str,
+) -> Result<bool> {
+    match receipt {
+        SystemReceipt::ManagedFile(receipt) => {
+            capture_path_state(
+                runtime.host(),
+                state,
+                format!("receipt-resource:{target}"),
+                &receipt.destination,
+            )
+            .await?;
+            let current = read_optional(runtime.host(), &receipt.destination).await?;
+            Ok(current
+                .as_deref()
+                .map(crate::install::hash_content)
+                .is_some_and(|hash| hash != receipt.content_hash))
+        }
+        SystemReceipt::SplitDns(receipt) => {
+            let request = SplitDnsRequest {
+                os_id: receipt.os_id.clone(),
+                item_id: receipt.item_id.clone(),
+                domain: receipt.domain.clone(),
+                servers: receipt.servers.clone(),
+                resource: PathBuf::from(&receipt.resource),
+                content: Vec::new(),
+            };
+            let observed = runtime.host().inspect_split_dns(&request).await?;
+            state.bytes(
+                format!("receipt-resource:{target}"),
+                observed.exists.then_some(observed.content.as_slice()),
+            )?;
+            Ok(observed.exists
+                && !String::from_utf8_lossy(&observed.content)
+                    .contains(&format!("split-dns:{}", receipt.item_id)))
+        }
+        SystemReceipt::Script { .. } => Ok(true),
+    }
+}
+
+async fn sys_item_current<H: FileSystemObservationHost + SplitDnsObservationHost>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    item: &SysItem,
+    previous: Option<&SystemReceipt>,
+    state: &mut StateCapture,
+    target: &str,
+    permissions: &mut PermissionAccumulator,
+) -> Result<bool> {
+    match item.driver {
+        SysDriverKind::SplitDns => {
+            permissions.implicit(PermissionV1::System {
+                capability: "split-dns".to_string(),
+                resource: Some("private-domain".to_string()),
+            });
+            let domain_key = sys_config_string(&item.config, "domain_env")?;
+            let servers_key = sys_config_string(&item.config, "servers_env")?;
+            let desired = split_dns_receipt(&super::SplitDnsDomainRequest {
+                os_id: os_id.to_string(),
+                item_id: item.id.clone(),
+                domain: runtime
+                    .context()
+                    .env
+                    .get(&domain_key)
+                    .cloned()
+                    .context("missing split DNS domain")?,
+                servers: runtime
+                    .context()
+                    .env
+                    .get(&servers_key)
+                    .cloned()
+                    .context("missing split DNS servers")?,
+                dry_run: true,
+            })?;
+            let request = SplitDnsRequest {
+                os_id: desired.os_id.clone(),
+                item_id: desired.item_id.clone(),
+                domain: desired.domain.clone(),
+                servers: desired.servers.clone(),
+                resource: PathBuf::from(&desired.resource),
+                content: split_dns_content_for_plan(&desired),
+            };
+            let observed = runtime.host().inspect_split_dns(&request).await?;
+            state.bytes(
+                format!("resource:{target}"),
+                observed.exists.then_some(observed.content.as_slice()),
+            )?;
+            Ok(
+                previous.is_some_and(|previous| split_dns_receipt_matches(previous, &desired))
+                    && observed.exists
+                    && observed.content == request.content,
+            )
+        }
+        SysDriverKind::ManagedFile => {
+            let source = sys_config_string(&item.config, "source")?;
+            let logical = format!("sys/{os_id}/{}", source.trim_start_matches('/'));
+            let raw = runtime
+                .presets()
+                .get(&logical)
+                .with_context(|| format!("missing {logical}"))?;
+            let transforms = item
+                .config
+                .get("transforms")
+                .and_then(toml::Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(toml::Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let desired =
+                crate::install::transforms::apply(&transforms, raw, &runtime.context().env)?;
+            let destination = captured_sys_path(
+                &sys_config_string(&item.config, "target")?,
+                &runtime.context().home_dir,
+            )?;
+            permissions.implicit(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: review_path(runtime.context(), &destination),
+            });
+            capture_path_state(
+                runtime.host(),
+                state,
+                format!("resource:{target}"),
+                &destination,
+            )
+            .await?;
+            let current = read_optional(runtime.host(), &destination).await?;
+            let desired_hash = crate::install::hash_content(&desired);
+            Ok(
+                matches!(previous, Some(SystemReceipt::ManagedFile(receipt)) if receipt.destination == destination && receipt.content_hash == desired_hash)
+                    && current.as_deref() == Some(desired.as_slice()),
+            )
+        }
+        SysDriverKind::Script => Ok(false),
+    }
+}
+
+fn add_sys_receipt_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    receipt: &SystemReceipt,
+    operation: LifecycleOperation,
+) {
+    match receipt {
+        SystemReceipt::ManagedFile(receipt) => {
+            permissions.implicit(PermissionV1::Filesystem {
+                access: if operation == LifecycleOperation::Uninstall {
+                    FilesystemAccessV1::Remove
+                } else {
+                    FilesystemAccessV1::Write
+                },
+                path: review_path(context, &receipt.destination),
+            });
+            if receipt.privileged {
+                permissions.implicit(PermissionV1::Administrator);
+            }
+        }
+        SystemReceipt::SplitDns(_) => {
+            permissions.implicit(PermissionV1::Administrator);
+            permissions.implicit(PermissionV1::System {
+                capability: "split-dns".to_string(),
+                resource: Some("private-domain".to_string()),
+            });
+        }
+        SystemReceipt::Script { .. } => {
+            permissions
+                .uncomputable
+                .insert("sys_managed_driver_uncomputable".to_string());
+        }
+    }
+}
+
+fn split_dns_content_for_plan(receipt: &super::SplitDnsReceipt) -> Vec<u8> {
+    let marker = format!("Managed by shine: split-dns:{}", receipt.item_id);
+    match receipt.os_id.as_str() {
+        "macos" => format!(
+            "# {marker}\n{}\n",
+            receipt
+                .servers
+                .iter()
+                .map(|server| format!("nameserver {server}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+        .into_bytes(),
+        "ubuntu" => format!(
+            "# {marker}\n[Resolve]\nDNS={}\nDomains=~{}\n",
+            receipt.servers.join(" "),
+            receipt.domain
+        )
+        .into_bytes(),
+        _ => format!(
+            "{marker}\n{}\n{}",
+            receipt.resource,
+            receipt.servers.join(",")
+        )
+        .into_bytes(),
+    }
+}
+
+fn sys_config_string(config: &toml::Table, key: &str) -> Result<String> {
+    config
+        .get(key)
+        .and_then(toml::Value::as_str)
+        .map(str::to_string)
+        .with_context(|| format!("managed Sys config `{key}` must be a string"))
+}
+
+fn captured_sys_path(raw: &str, home: &Path) -> Result<PathBuf> {
+    if raw == "$HOME" || raw == "~" {
+        return Ok(home.to_path_buf());
+    }
+    if let Some(rest) = raw
+        .strip_prefix("$HOME/")
+        .or_else(|| raw.strip_prefix("~/"))
+    {
+        if rest
+            .split(['/', '\\'])
+            .any(|part| matches!(part, "" | "." | ".."))
+        {
+            bail!("invalid managed Sys target");
+        }
+        return Ok(home.join(rest));
+    }
+    let path = PathBuf::from(raw);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        bail!("managed Sys target must be absolute or HOME-relative");
+    }
+    Ok(path)
+}
+
+fn review_path(context: &super::RuntimeContext, path: &Path) -> String {
+    for (base, root) in [
+        (PermissionPathBaseV1::Shine, &context.shine_dir),
+        (PermissionPathBaseV1::DataDir, &context.data_dir),
+        (PermissionPathBaseV1::Home, &context.home_dir),
+    ] {
+        if let Ok(relative) = path.strip_prefix(root) {
+            let value = if relative.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                logical_path(relative)
+            };
+            return format!("{}:{value}", base.as_str());
+        }
+    }
+    format!("absolute:{}", logical_path(path))
+}
+
+fn logical_app_source(category: &AppCategory, file: &AppFile) -> String {
+    format!("app/{}/{}", category.name, logical_path(&file.source_rel))
+}
+
+fn logical_app_source_for(category: &str, file: &AppFile) -> String {
+    format!("app/{category}/{}", logical_path(&file.source_rel))
+}
+
+fn split_dns_receipt_matches(previous: &SystemReceipt, desired: &super::SplitDnsReceipt) -> bool {
+    matches!(previous, SystemReceipt::SplitDns(previous)
+        if previous.version == desired.version
+            && previous.os_id == desired.os_id
+            && previous.item_id == desired.item_id
+            && previous.domain == desired.domain
+            && previous.servers == desired.servers
+            && previous.resource == desired.resource)
+}
+
+fn app_source_parts(source: &str) -> Option<(&str, &str)> {
+    let mut parts = source.splitn(3, '/');
+    (parts.next()? == "app").then_some((parts.next()?, parts.next()?))
+}
+
+fn logical_path(path: &Path) -> String {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn operation_name(operation: PlanOperationV1) -> &'static str {
+    operation.as_str()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{
+        FileMetadata, HostError, HostOperation, InMemoryHost, PresetSnapshot, PresetSourceKind,
+        RuntimeContext, RuntimePlatform, SplitDnsState,
+    };
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct Interaction;
+
+    impl RuntimeInteraction for Interaction {
+        fn confirm(&mut self, _code: &'static str, default: bool) -> Result<bool> {
+            Ok(default)
+        }
+
+        fn authorize_admin<'a>(
+            &'a mut self,
+            _item_count: usize,
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+            Box::pin(async { Ok(true) })
+        }
+
+        fn select_many(
+            &mut self,
+            _code: &'static str,
+            _choices: &[String],
+            defaults: &[String],
+        ) -> Result<Vec<String>> {
+            Ok(defaults.to_vec())
+        }
+    }
+
+    struct NoAdminInteraction;
+
+    impl RuntimeInteraction for NoAdminInteraction {
+        fn confirm(&mut self, _code: &'static str, default: bool) -> Result<bool> {
+            Ok(default)
+        }
+
+        fn authorize_admin<'a>(
+            &'a mut self,
+            _item_count: usize,
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+            Box::pin(async { panic!("preserved App files must not request administrator access") })
+        }
+
+        fn select_many(
+            &mut self,
+            _code: &'static str,
+            _choices: &[String],
+            defaults: &[String],
+        ) -> Result<Vec<String>> {
+            Ok(defaults.to_vec())
+        }
+    }
+
+    #[derive(Clone)]
+    struct ObservationOnlyHost(InMemoryHost);
+
+    impl FileSystemObservationHost for ObservationOnlyHost {
+        fn canonicalize<'a>(
+            &'a self,
+            path: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
+            self.0.canonicalize(path)
+        }
+        fn read<'a>(
+            &'a self,
+            path: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, HostError>> + Send + 'a>> {
+            self.0.read(path)
+        }
+        fn metadata<'a>(
+            &'a self,
+            path: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = Result<FileMetadata, HostError>> + Send + 'a>> {
+            self.0.metadata(path)
+        }
+        fn read_dir<'a>(
+            &'a self,
+            path: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<PathBuf>, HostError>> + Send + 'a>> {
+            self.0.read_dir(path)
+        }
+        fn read_link<'a>(
+            &'a self,
+            path: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
+            self.0.read_link(path)
+        }
+    }
+
+    impl SplitDnsObservationHost for ObservationOnlyHost {
+        fn inspect_split_dns<'a>(
+            &'a self,
+            request: &'a SplitDnsRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<SplitDnsState>> + Send + 'a>> {
+            self.0.inspect_split_dns(request)
+        }
+    }
+
+    fn runtime(snapshot: PresetSnapshot) -> CoreRuntime<InMemoryHost> {
+        let home = std::env::temp_dir().join("shine-planner-home");
+        let shine = home.join(".shine");
+        CoreRuntime::new(
+            InMemoryHost::new(),
+            RuntimeContext::isolated(
+                home.clone(),
+                shine.clone(),
+                shine.join("presets"),
+                shine.join("bin"),
+                RuntimePlatform::current(),
+            ),
+            snapshot,
+        )
+    }
+
+    fn static_copy_app_snapshot() -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .build()
+    }
+
+    fn privileged_static_copy_app_snapshot() -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '/etc/demo'\n[permissions]\nschema_version = 1\nadministrator = true\n[[files]]\nsource = 'config.toml'\nrequires_admin = true\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .build()
+    }
+
+    async fn seed_static_copy_app(
+        runtime: &CoreRuntime<InMemoryHost>,
+        current: &[u8],
+        backup_content: Option<&[u8]>,
+    ) -> (PathBuf, Option<PathBuf>) {
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        runtime.host().put_file(&destination, current.to_vec());
+        let backup = backup_content.map(|content| {
+            let backup = crate::install::backup_path(&destination);
+            runtime.host().put_file(&backup, content.to_vec());
+            backup
+        });
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: backup.clone(),
+                content_hash: crate::install::hash_content(b"managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        (destination, backup)
+    }
+
+    async fn seed_privileged_static_copy_app(
+        runtime: &CoreRuntime<InMemoryHost>,
+        current: &[u8],
+        backup_content: Option<&[u8]>,
+    ) -> (PathBuf, Option<PathBuf>) {
+        let destination = PathBuf::from("/etc/demo/config.toml");
+        runtime.host().put_file(&destination, current.to_vec());
+        let backup = backup_content.map(|content| {
+            let backup = crate::install::backup_path(&destination);
+            runtime.host().put_file(&backup, content.to_vec());
+            backup
+        });
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: backup.clone(),
+                content_hash: crate::install::hash_content(b"managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: true,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        (destination, backup)
+    }
+
+    fn observation_runtime(
+        snapshot: PresetSnapshot,
+    ) -> (CoreRuntime<ObservationOnlyHost>, InMemoryHost) {
+        let home = std::env::temp_dir().join("shine-observation-only-home");
+        let shine = home.join(".shine");
+        let inner = InMemoryHost::new();
+        (
+            CoreRuntime::new(
+                ObservationOnlyHost(inner.clone()),
+                RuntimeContext::isolated(
+                    home,
+                    shine.clone(),
+                    shine.join("presets"),
+                    shine.join("bin"),
+                    RuntimePlatform::current(),
+                ),
+                snapshot,
+            ),
+            inner,
+        )
+    }
+
+    fn bootstrap_snapshot(source: PresetSourceKind, with_permissions: bool) -> PresetSnapshot {
+        let permissions = if with_permissions {
+            "permissions = { schema_version = 1 }"
+        } else {
+            ""
+        };
+        PresetSnapshot::builder(source)
+            .file(
+                "sys/test/shine.toml",
+                format!(
+                    r#"version = 2
+[[items]]
+id = 'tool'
+label = 'Tool'
+{permissions}
+detect = {{ kind = 'path', path = '$HOME/.tool-present' }}
+install = {{ kind = 'package', provider = 'homebrew', package = 'tool' }}
+"#
+                )
+                .into_bytes(),
+            )
+            .build()
+    }
+
+    fn bootstrap_request() -> SysBootstrapPlanRequest {
+        SysBootstrapPlanRequest {
+            os_id: "test".to_string(),
+            item_ids: vec!["tool".to_string()],
+            sys_shell: "zsh".to_string(),
+            force_profile: false,
+            input_versions: PlanningInputVersions::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn sys_bootstrap_plan_is_observation_only_and_snapshot_bound() {
+        let (runtime, host) =
+            observation_runtime(bootstrap_snapshot(PresetSourceKind::Embedded, true));
+        let missing = runtime
+            .plan_sys_bootstrap(bootstrap_request())
+            .await
+            .unwrap();
+        assert_eq!(missing.operation, PlanOperationV1::SysBootstrap);
+        assert!(missing.is_ready());
+        assert!(
+            missing
+                .steps
+                .iter()
+                .any(|step| { step.target == "sys/tool" && step.action == PlanActionV1::Execute })
+        );
+        assert!(
+            missing
+                .permissions
+                .required
+                .contains(&PermissionV1::Command {
+                    program: "brew".to_string(),
+                })
+        );
+        assert!(
+            host.operations()
+                .iter()
+                .all(|operation| matches!(operation, super::super::HostOperation::Read(_)))
+        );
+
+        host.put_file(
+            runtime.context().home_dir.join(".tool-present"),
+            b"present".to_vec(),
+        );
+        let present = runtime
+            .plan_sys_bootstrap(bootstrap_request())
+            .await
+            .unwrap();
+        assert!(
+            present
+                .steps
+                .iter()
+                .any(|step| { step.target == "sys/tool" && step.action == PlanActionV1::Update })
+        );
+        assert_ne!(missing.inputs.state, present.inputs.state);
+    }
+
+    #[tokio::test]
+    async fn sys_bootstrap_missing_permission_declaration_fails_closed() {
+        let runtime = runtime(bootstrap_snapshot(PresetSourceKind::External, false));
+        let plan = runtime
+            .plan_sys_bootstrap(bootstrap_request())
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(
+            plan.permissions
+                .uncomputable_codes
+                .contains("sys_bootstrap_permission_declaration_missing")
+        );
+    }
+
+    #[tokio::test]
+    async fn sys_bootstrap_approved_execution_rejects_changed_detection_state() {
+        let runtime = runtime(bootstrap_snapshot(PresetSourceKind::Embedded, true));
+        let request = bootstrap_request();
+        let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(
+            runtime.context().home_dir.join(".tool-present"),
+            b"present".to_vec(),
+        );
+        let mut interaction = Interaction;
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .run_sys_bootstrap_approved(request, &approval, &mut interaction, &mut observer)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan changed"));
+        assert!(
+            !runtime
+                .host()
+                .operations()
+                .iter()
+                .any(|operation| matches!(operation, super::super::HostOperation::Run { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn app_plan_is_pure_ready_and_payload_free() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"secret-looking-content".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let host = runtime.host().clone();
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(plan.is_ready());
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| step.action == PlanActionV1::Create)
+        );
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: "shine:app-operation-journal.toml".to_string(),
+                    })
+            );
+        }
+        let encoded = serde_json::to_string(&plan).unwrap();
+        assert!(!encoded.contains("secret-looking-content"));
+        assert!(!host.operations().iter().any(|operation| matches!(
+            operation,
+            super::super::HostOperation::Write(_)
+                | super::super::HostOperation::Remove(_)
+                | super::super::HostOperation::Run { .. }
+                | super::super::HostOperation::ApplySplitDns { .. }
+        )));
+    }
+
+    #[tokio::test]
+    async fn app_script_hook_is_bound_into_the_parent_plan() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = ['TOKEN', 'OPTIONAL_TOKEN'] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\nnetwork = [{ scope = 'any' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }, { name = 'OPTIONAL_TOKEN', sensitivity = 'secret' }]\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"updated".to_vec())
+            .file("app/demo/refresh.ts", b"export {};".to_vec())
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("TOKEN".to_string(), "secret-looking-value".to_string());
+        seed_static_copy_app(&runtime, b"managed", None).await;
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.is_ready());
+        assert!(plan.permissions.required.contains(&PermissionV1::Command {
+            program: "bun".to_string(),
+        }));
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Execute,
+                    path: "preset:refresh.ts".to_string(),
+                })
+        );
+        assert!(
+            plan.permissions
+                .required
+                .iter()
+                .any(|permission| matches!(permission, PermissionV1::Network { .. }))
+        );
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("hook:0") && step.action == PlanActionV1::Execute
+        }));
+        let encoded = serde_json::to_string(&plan).unwrap();
+        assert!(!encoded.contains("secret-looking-value"));
+        assert_eq!(plan.operation, PlanOperationV1::Upgrade);
+    }
+
+    #[tokio::test]
+    async fn legacy_overlay_metadata_blocks_recursive_artifact_hook_before_trust() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .overlay_file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\npost_install = { command = 'shine', args = ['app', 'artifact', 'apply', 'demo'] }\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .iter()
+                    .any(|code| code == "app_legacy_overlay_metadata")
+        }));
+        assert!(!plan.permissions.required.contains(&PermissionV1::Command {
+            program: "shine".to_string(),
+        }));
+    }
+
+    #[tokio::test]
+    async fn app_upgrade_ignores_permissions_from_uninstalled_presets() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .file(
+                "app/admin/shine.toml",
+                b"dest = '/etc/admin'\n[permissions]\nschema_version = 1\nadministrator = true\n[[files]]\nsource = 'config.toml'\nrequires_admin = true\n".to_vec(),
+            )
+            .file("app/admin/config.toml", b"managed".to_vec())
+            .file(
+                "app/legacy/shine.toml",
+                b"dest = '~/.config/legacy'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/legacy/config.toml", b"managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        seed_static_copy_app(&runtime, b"managed", None).await;
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.is_ready());
+        assert!(
+            !plan
+                .permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        assert!(plan.permissions.uncomputable_codes.is_empty());
+        assert!(
+            plan.steps
+                .iter()
+                .all(|step| step.target != "app/admin" && step.target != "app/legacy")
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_permission_and_secret_identity_fail_closed() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("app/demo/shine.toml", b"dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\ngenerator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'TOKEN' }\n".to_vec())
+            .file("app/demo/config.toml", b"fallback".to_vec())
+            .file("app/demo/gen.ts", b"process.stdout.write('x')".to_vec())
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("TOKEN".to_string(), "plaintext".to_string());
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        let encoded = serde_json::to_string(&plan).unwrap();
+        assert!(!encoded.contains("plaintext"));
+    }
+
+    #[tokio::test]
+    async fn secret_inputs_require_opaque_versions_and_never_serialize_values() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                br#"dest = '~/.config/demo'
+[permissions]
+schema_version = 1
+filesystem = [{ access = ['execute'], base = 'preset', path = 'gen.ts' }]
+commands = ['bun']
+environment = [{ name = 'TOKEN', sensitivity = 'secret' }]
+[[files]]
+source = 'config.toml'
+generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'TOKEN' }
+"#
+                .to_vec(),
+            )
+            .file("app/demo/config.toml", b"fallback".to_vec())
+            .file(
+                "app/demo/gen.ts",
+                b"process.stdout.write('generated')".to_vec(),
+            )
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("TOKEN".to_string(), "top-secret-value".to_string());
+        let mut request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let missing = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(!missing.is_ready());
+        assert!(
+            missing
+                .permissions
+                .uncomputable_codes
+                .contains("secret_input_identity_unavailable")
+        );
+
+        request
+            .input_versions
+            .insert_secret_version("TOKEN", OpaqueSecretVersion::new("vault-revision-7"));
+        assert!(!format!("{:?}", request.input_versions).contains("vault-revision-7"));
+        let ready = runtime.plan_apps(request).await.unwrap();
+        assert!(ready.is_ready());
+        let encoded = serde_json::to_string(&ready).unwrap();
+        assert!(!encoded.contains("top-secret-value"));
+        assert!(!encoded.contains("vault-revision-7"));
+    }
+
+    #[tokio::test]
+    async fn app_user_modification_is_preserved_unless_force_is_bound() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        runtime
+            .host()
+            .put_file(&destination, b"user-edited".to_vec());
+        let manifest = AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination,
+                backup: None,
+                content_hash: crate::install::hash_content(b"desired"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&manifest).unwrap().into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let preserved = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(preserved.steps.iter().any(|step| {
+            step.action == PlanActionV1::Preserve
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_user_modified".to_string())
+        }));
+        let forced = runtime
+            .plan_apps(AppPlanRequest {
+                force: true,
+                ..request
+            })
+            .await
+            .unwrap();
+        assert!(forced.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_user_modification_override".to_string())
+        }));
+        assert_ne!(
+            preserved.fingerprint().unwrap(),
+            forced.fingerprint().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn app_upgrade_uses_the_latest_legacy_receipt_after_a_relocation() {
+        let runtime = runtime(static_copy_app_snapshot());
+        let source = "app/demo/config.toml".to_string();
+        let old_destination = runtime.context().home_dir.join(".legacy/demo/config.toml");
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        let legacy_manifest = AppManifest {
+            schema_version: 0,
+            entries: vec![
+                AppEntry {
+                    source: source.clone(),
+                    destination: old_destination,
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                },
+                AppEntry {
+                    source,
+                    destination,
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                },
+            ],
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&legacy_manifest).unwrap().into_bytes(),
+        );
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.is_ready());
+        assert!(!plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_destination_occupied".to_string())
+        }));
+    }
+
+    #[tokio::test]
+    async fn shell_and_sys_plans_use_only_observation_operations() {
+        let platform = RuntimePlatform::current();
+        let os_id = match platform {
+            RuntimePlatform::Macos => "macos",
+            RuntimePlatform::Linux => "ubuntu",
+            RuntimePlatform::Windows => "windows",
+        };
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("shell/demo/shine.toml", b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\nplatforms = ['unix']\n[files.permissions]\nschema_version = 1\n".to_vec())
+            .file("shell/demo/demo.sh", b"#!/bin/sh\n".to_vec())
+            .file(format!("sys/{os_id}/shine.toml"), b"version = 2\n[[items]]\nid = 'managed'\nlabel = 'Managed'\nmode = 'managed'\ndriver = 'managed-file'\npermissions = { schema_version = 1 }\n[items.config]\nsource = 'managed.txt'\ntarget = '$HOME/.config/managed.txt'\n".to_vec())
+            .file(format!("sys/{os_id}/managed.txt"), b"managed".to_vec())
+            .build();
+        let (runtime, host) = observation_runtime(snapshot);
+        if platform.is_unix() {
+            let shell = runtime
+                .plan_shells(ShellPlanRequest {
+                    operation: LifecycleOperation::Install,
+                    target: Some("demo/demo".to_string()),
+                    force: false,
+                    purge: false,
+                    input_versions: PlanningInputVersions::default(),
+                })
+                .await
+                .unwrap();
+            assert!(shell.is_ready());
+        }
+        let sys = runtime
+            .plan_managed_sys(SysManagedPlanRequest {
+                operation: LifecycleOperation::Install,
+                os_id: os_id.to_string(),
+                target: Some("managed".to_string()),
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(sys.is_ready());
+        assert!(!host.operations().iter().any(|operation| matches!(
+            operation,
+            super::super::HostOperation::Write(_)
+                | super::super::HostOperation::Remove(_)
+                | super::super::HostOperation::Run { .. }
+                | super::super::HostOperation::ApplySplitDns { .. }
+                | super::super::HostOperation::RemoveSplitDns { .. }
+        )));
+    }
+
+    #[tokio::test]
+    async fn app_plan_fingerprint_binds_manifest_and_live_state() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let initial = runtime.plan_apps(request.clone()).await.unwrap();
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        runtime.host().put_file(&destination, b"foreign".to_vec());
+        let changed = runtime.plan_apps(request).await.unwrap();
+        assert_ne!(initial.inputs.state, changed.inputs.state);
+        assert_ne!(
+            initial.fingerprint().unwrap(),
+            changed.fingerprint().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_app_install_rejects_changed_state_before_mutation() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(
+            runtime.context().home_dir.join(".config/demo/config.toml"),
+            b"foreign".to_vec(),
+        );
+
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan"));
+        assert!(
+            !runtime.host().operations().iter().any(|operation| matches!(
+                operation,
+                super::super::HostOperation::Write(_)
+                    | super::super::HostOperation::Remove(_)
+                    | super::super::HostOperation::Run { .. }
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_app_install_journals_create_and_commits_only_after_receipt_write() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file(
+                "app/demo/config.toml",
+                b"secret-managed-bytes".to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert_eq!(actions.len(), 1);
+        let encoded = toml::to_string(&actions[0]).unwrap();
+        assert!(
+            encoded.contains(&crate::install::hash_content(b"secret-managed-bytes").to_string())
+        );
+        assert!(!encoded.contains("secret-managed-bytes"));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::APP_OPERATION_JOURNAL_FILE);
+        let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/config.toml")
+                .map(|entry| entry.content_hash),
+            Some(crate::install::hash_content(b"secret-managed-bytes"))
+        );
+        assert!(runtime.host().read(&journal).await.is_err());
+
+        let operations = runtime.host().operations();
+        let journal_writes = operations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, operation)| {
+                matches!(operation, super::super::HostOperation::Write(path) if path == &journal)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let destination_write = operations
+            .iter()
+            .position(|operation| matches!(operation, super::super::HostOperation::Write(path) if path == &destination))
+            .unwrap();
+        let receipt_write = operations
+            .iter()
+            .position(|operation| matches!(operation, super::super::HostOperation::Write(path) if path == &manifest_path))
+            .unwrap();
+        let journal_commit = operations
+            .iter()
+            .position(|operation| matches!(operation, super::super::HostOperation::Remove(path) if path == &journal))
+            .unwrap();
+        assert_eq!(journal_writes.len(), 2);
+        assert!(journal_writes[0] < destination_write);
+        assert!(destination_write < journal_writes[1]);
+        assert!(journal_writes[1] < receipt_write);
+        assert!(receipt_write < journal_commit);
+    }
+
+    #[tokio::test]
+    async fn approved_json_merge_install_and_uninstall_use_key_owned_actions() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['proxy', 'containersProxy']\n".to_vec(),
+            )
+            .file(
+                "app/demo/settings.json",
+                br#"{"proxy":"managed","containersProxy":"managed"}"#.to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime
+            .context()
+            .home_dir
+            .join(".config/demo/settings.json");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, br#"{"theme":"dark"}"#.to_vec());
+        let install_request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let install_plan = runtime.plan_apps(install_request.clone()).await.unwrap();
+        let install_approval = PlanApprovalV1::for_reviewed_plan(&install_plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&install_request, &install_plan, &install_approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::MergeManagedJson { .. }))
+        ));
+        let mut observer = super::super::NullObserver;
+        runtime
+            .install_apps_approved(
+                install_request,
+                &install_approval,
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        let installed = runtime.host().read(&destination).await.unwrap();
+        let installed: serde_json::Value = serde_json::from_slice(&installed).unwrap();
+        assert_eq!(installed["theme"], "dark");
+        assert_eq!(installed["proxy"], "managed");
+        assert!(runtime.host().read(&rollback).await.is_err());
+
+        let uninstall_request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let uninstall_plan = runtime.plan_apps(uninstall_request.clone()).await.unwrap();
+        assert!(
+            uninstall_plan
+                .permissions
+                .required
+                .contains(&PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: review_path(runtime.context(), &destination),
+                })
+        );
+        let uninstall_approval = PlanApprovalV1::for_reviewed_plan(&uninstall_plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&uninstall_request, &uninstall_plan, &uninstall_approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedJson { .. }))
+        ));
+        runtime
+            .uninstall_apps_approved(
+                uninstall_request,
+                &uninstall_approval,
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        let remaining = runtime.host().read(&destination).await.unwrap();
+        let remaining: serde_json::Value = serde_json::from_slice(&remaining).unwrap();
+        assert_eq!(remaining, serde_json::json!({"theme": "dark"}));
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn approved_app_upgrade_journals_key_owned_json_relocation() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['containersProxy']\n".to_vec(),
+            )
+            .file(
+                "app/demo/settings.json",
+                br#"{"containersProxy":"next"}"#.to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/settings.json");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/settings.json");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        let previous_source = br#"{"proxy":"previous"}"#;
+        runtime.host().put_file(
+            &previous,
+            br#"{"proxy":"previous","theme":"dark"}"#.to_vec(),
+        );
+        let managed_keys = vec!["proxy".to_string()];
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/settings.json".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::runtime::app::managed_json_hash(
+                    previous_source,
+                    &managed_keys,
+                )
+                .unwrap(),
+                install_strategy: crate::install::AppInstallStrategy::JsonMerge {
+                    managed_keys: managed_keys.clone(),
+                },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_destination_relocated".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RelocateManagedJson { .. }))
+        ));
+        for (access, path) in [
+            (FilesystemAccessV1::Write, previous.clone()),
+            (FilesystemAccessV1::Remove, previous.clone()),
+            (FilesystemAccessV1::Write, desired.clone()),
+            (FilesystemAccessV1::Write, rollback.clone()),
+            (FilesystemAccessV1::Remove, rollback.clone()),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), &path),
+                    })
+            );
+        }
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        let previous_json: serde_json::Value =
+            serde_json::from_slice(&runtime.host().read(&previous).await.unwrap()).unwrap();
+        let desired_json: serde_json::Value =
+            serde_json::from_slice(&runtime.host().read(&desired).await.unwrap()).unwrap();
+        assert_eq!(previous_json, serde_json::json!({"theme": "dark"}));
+        assert_eq!(desired_json, serde_json::json!({"containersProxy": "next"}));
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let entry = manifest.find_by_source("app/demo/settings.json").unwrap();
+        assert_eq!(entry.destination, desired);
+        assert_eq!(
+            entry.content_hash,
+            crate::runtime::app::managed_json_hash(
+                br#"{"containersProxy":"next"}"#,
+                &["containersProxy".to_string()],
+            )
+            .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['proxy']\n".to_vec(),
+            )
+            .file("app/demo/settings.json", br#"{"proxy":"next"}"#.to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/settings.json");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/settings.json");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        let managed_keys = vec!["proxy".to_string()];
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/settings.json".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::runtime::app::managed_json_hash(
+                    br#"{"proxy":"previous"}"#,
+                    &managed_keys,
+                )
+                .unwrap(),
+                install_strategy: crate::install::AppInstallStrategy::JsonMerge { managed_keys },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(
+                ir.actions.as_slice(),
+                [action] if matches!(
+                    action.kind,
+                    crate::action::ActionKindV1::RelocateManagedJson {
+                        previous_present: false,
+                        previous_original_hash: None,
+                        ..
+                    }
+                )
+            )
+        ));
+
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        assert!(runtime.host().read(&previous).await.is_err());
+        let desired_json: serde_json::Value =
+            serde_json::from_slice(&runtime.host().read(&desired).await.unwrap()).unwrap();
+        assert_eq!(desired_json, serde_json::json!({"proxy": "next"}));
+        assert!(runtime.host().read(&rollback).await.is_err());
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_restore_json_relocation".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert!(runtime.host().read(&desired).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/settings.json")
+                .unwrap()
+                .destination,
+            previous
+        );
+    }
+
+    #[tokio::test]
+    async fn json_relocation_receipt_failure_restores_only_owned_keys_on_both_sides() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['proxy']\n".to_vec(),
+            )
+            .file("app/demo/settings.json", br#"{"proxy":"next"}"#.to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/settings.json");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/settings.json");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        let managed_keys = vec!["proxy".to_string()];
+        runtime.host().put_file(
+            &previous,
+            br#"{"proxy":"previous","theme":"light"}"#.to_vec(),
+        );
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/settings.json".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::runtime::app::managed_json_hash(
+                    br#"{"proxy":"previous"}"#,
+                    &managed_keys,
+                )
+                .unwrap(),
+                install_strategy: crate::install::AppInstallStrategy::JsonMerge {
+                    managed_keys: managed_keys.clone(),
+                },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        runtime
+            .host()
+            .put_file(&previous, br#"{"theme":"dark","zoom":2}"#.to_vec());
+        runtime
+            .host()
+            .put_file(&desired, br#"{"proxy":"next","font":"large"}"#.to_vec());
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_restore_json_relocation".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        let previous_json: serde_json::Value =
+            serde_json::from_slice(&runtime.host().read(&previous).await.unwrap()).unwrap();
+        let desired_json: serde_json::Value =
+            serde_json::from_slice(&runtime.host().read(&desired).await.unwrap()).unwrap();
+        assert_eq!(
+            previous_json,
+            serde_json::json!({"proxy": "previous", "theme": "dark", "zoom": 2})
+        );
+        assert_eq!(desired_json, serde_json::json!({"font": "large"}));
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn committed_json_relocation_cleanup_preserves_user_owned_values_on_both_sides() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['proxy']\n".to_vec(),
+            )
+            .file("app/demo/settings.json", br#"{"proxy":"next"}"#.to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/settings.json");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/settings.json");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        let managed_keys = vec!["proxy".to_string()];
+        runtime.host().put_file(
+            &previous,
+            br#"{"proxy":"previous","theme":"light"}"#.to_vec(),
+        );
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/settings.json".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::runtime::app::managed_json_hash(
+                    br#"{"proxy":"previous"}"#,
+                    &managed_keys,
+                )
+                .unwrap(),
+                install_strategy: crate::install::AppInstallStrategy::JsonMerge { managed_keys },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_remove_after(&rollback, 0);
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/settings.json")
+                .unwrap()
+                .destination,
+            desired
+        );
+        runtime.host().put_file(
+            &previous,
+            br#"{"proxy":"user-owned","theme":"dark"}"#.to_vec(),
+        );
+        runtime
+            .host()
+            .put_file(&desired, br#"{"proxy":"next","font":"large"}"#.to_vec());
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_remove_committed_json_relocation_rollback".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&previous).await.unwrap(),
+            br#"{"proxy":"user-owned","theme":"dark"}"#
+        );
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            br#"{"proxy":"next","font":"large"}"#
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn approved_privileged_app_install_journals_static_copy_creation() {
+        let runtime = runtime(privileged_static_copy_app_snapshot());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(
+                ir.actions.as_slice(),
+                [action] if matches!(
+                    action.kind,
+                    crate::action::ActionKindV1::CreateManagedFile {
+                        requires_admin: true,
+                        ..
+                    }
+                )
+            )
+        ));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        let destination = PathBuf::from("/etc/demo/config.toml");
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .contains(&HostOperation::WritePrivileged(destination))
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_privileged_app_install_journals_backup_aware_creation() {
+        let runtime = runtime(privileged_static_copy_app_snapshot());
+        let destination = PathBuf::from("/etc/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(
+                ir.actions.as_slice(),
+                [action] if matches!(
+                    action.kind,
+                    crate::action::ActionKindV1::CreateManagedFileWithBackup {
+                        requires_admin: true,
+                        ..
+                    }
+                )
+            )
+        ));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+        assert_eq!(
+            runtime.host().read(&backup).await.unwrap(),
+            b"user-original"
+        );
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .contains(&HostOperation::MovePrivileged {
+                    from: destination,
+                    to: backup,
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_app_upgrade_journals_static_in_place_managed_update() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"previous-managed".to_vec());
+        runtime
+            .host()
+            .set_mode(&destination, 0o100600)
+            .await
+            .unwrap();
+        let manifest = AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&manifest).unwrap().into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::UpdateManagedFile { .. }))
+        ));
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), &rollback),
+                    })
+            );
+        }
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.updated_categories, vec!["demo"]);
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"next-managed"
+        );
+        assert_eq!(
+            runtime
+                .host()
+                .metadata(&destination)
+                .await
+                .unwrap()
+                .unix_mode,
+            Some(0o100600)
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/config.toml")
+                .map(|entry| entry.content_hash),
+            Some(crate::install::hash_content(b"next-managed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_app_upgrade_converges_legacy_duplicate_relocation_receipts() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.shine/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous_destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let destination = runtime.context().shine_dir.join("demo/config.toml");
+        for path in [&previous_destination, &destination] {
+            runtime.host().put_file(path, b"previous-managed".to_vec());
+        }
+        let entry = |destination: PathBuf| AppEntry {
+            source: "app/demo/config.toml".to_string(),
+            destination,
+            backup: None,
+            content_hash: crate::install::hash_content(b"previous-managed"),
+            install_strategy: crate::install::AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        };
+        let manifest = AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![
+                entry(previous_destination.clone()),
+                entry(destination.clone()),
+            ],
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&manifest).unwrap().into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(report.updated_categories, vec!["demo"]);
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"next-managed"
+        );
+        assert_eq!(
+            runtime.host().read(&previous_destination).await.unwrap(),
+            b"previous-managed"
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let matching = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.source == "app/demo/config.toml")
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].destination, destination);
+        assert_eq!(
+            matching[0].content_hash,
+            crate::install::hash_content(b"next-managed")
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_app_upgrade_journals_static_copy_relocation() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        runtime
+            .host()
+            .put_file(&previous, b"previous-managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_destination_relocated".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RelocateManagedFile { .. }))
+        ));
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, previous.clone()),
+            (FilesystemAccessV1::Write, desired.clone()),
+            (FilesystemAccessV1::Write, rollback.clone()),
+            (FilesystemAccessV1::Remove, rollback.clone()),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), &path),
+                    })
+            );
+        }
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let entry = manifest.find_by_source("app/demo/config.toml").unwrap();
+        assert_eq!(entry.destination, desired);
+        assert!(entry.backup.is_none());
+    }
+
+    #[tokio::test]
+    async fn app_relocation_uses_previous_receipt_administrator_identity() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = PathBuf::from("/etc/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        runtime
+            .host()
+            .put_file(&previous, b"previous-managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: true,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let mut observer = super::super::NullObserver;
+        runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .contains(&HostOperation::MovePrivileged {
+                    from: previous,
+                    to: rollback,
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn app_relocation_rejects_destination_created_after_review() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        runtime
+            .host()
+            .put_file(&previous, b"previous-managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .put_file(&desired, b"late-user-file".to_vec());
+
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan"));
+        assert_eq!(
+            runtime.host().read(&previous).await.unwrap(),
+            b"previous-managed"
+        );
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"late-user-file"
+        );
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn app_relocation_recovery_after_receipt_commit_cleans_only_rollback() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        runtime
+            .host()
+            .put_file(&previous, b"previous-managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_remove_after(&rollback, 0);
+
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"previous-managed"
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/config.toml")
+                .unwrap()
+                .destination,
+            desired
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_remove_committed_relocation_rollback".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn app_relocation_receipt_failure_recovers_previous_file_and_backup() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        let backup = crate::install::backup_path(&previous);
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        runtime
+            .host()
+            .put_file(&previous, b"previous-managed".to_vec());
+        runtime.host().put_file(&backup, b"user-original".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: Some(backup.clone()),
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            runtime.host().read(&previous).await.unwrap(),
+            b"user-original"
+        );
+        assert!(runtime.host().read(&backup).await.is_err());
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"previous-managed"
+        );
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&previous).await.unwrap(),
+            b"previous-managed"
+        );
+        assert_eq!(
+            runtime.host().read(&backup).await.unwrap(),
+            b"user-original"
+        );
+        assert!(runtime.host().read(&desired).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn app_relocation_recovers_created_destination_when_previous_file_was_missing() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert!(runtime.host().read(&desired).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/config.toml")
+                .unwrap()
+                .destination,
+            previous
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_privileged_app_upgrade_journals_static_copy_update() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '/etc/demo'\n[permissions]\nschema_version = 1\nadministrator = true\n[[files]]\nsource = 'config.toml'\nrequires_admin = true\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let (destination, _) = seed_privileged_static_copy_app(&runtime, b"managed", None).await;
+        runtime
+            .host()
+            .set_mode(&destination, 0o100600)
+            .await
+            .unwrap();
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(
+                ir.actions.as_slice(),
+                [action] if matches!(
+                    action.kind,
+                    crate::action::ActionKindV1::UpdateManagedFile {
+                        requires_admin: true,
+                        ..
+                    }
+                )
+            )
+        ));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"next-managed"
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let operations = runtime.host().operations();
+        assert!(operations.contains(&HostOperation::MovePrivileged {
+            from: destination.clone(),
+            to: rollback.clone(),
+        }));
+        assert!(operations.contains(&HostOperation::WritePrivileged(destination.clone())));
+        assert!(operations.contains(&HostOperation::SetModePrivileged {
+            path: destination,
+            mode: 0o100600,
+        }));
+        assert!(operations.contains(&HostOperation::RemovePrivileged(rollback)));
+    }
+
+    #[tokio::test]
+    async fn app_managed_update_blocks_an_occupied_transaction_rollback_path() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        runtime
+            .host()
+            .put_file(&destination, b"previous-managed".to_vec());
+        runtime.host().put_file(
+            crate::action::managed_file_rollback_path(&destination),
+            b"foreign".to_vec(),
+        );
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&AppManifest {
+                schema_version: APP_MANIFEST_SCHEMA_VERSION,
+                entries: vec![AppEntry {
+                    source: "app/demo/config.toml".to_string(),
+                    destination,
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"previous-managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_update_rollback_occupied".to_string())
+        }));
+    }
+
+    #[tokio::test]
+    async fn approved_app_install_journals_an_existing_static_managed_update() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"previous-managed".to_vec());
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&AppManifest {
+                schema_version: APP_MANIFEST_SCHEMA_VERSION,
+                entries: vec![AppEntry {
+                    source: "app/demo/config.toml".to_string(),
+                    destination: destination.clone(),
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"previous-managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert!(report.lifecycle.summary().changed > 0);
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"next-managed"
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_app_install_journals_backup_creation_and_commits_both_paths() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        for permission in [
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Remove,
+                path: "home:.config/demo/config.toml".to_string(),
+            },
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: "home:.config/demo/config.toml.shine.bak".to_string(),
+            },
+        ] {
+            assert!(plan.permissions.required.contains(&permission));
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions[0].actions[0].kind,
+            crate::action::ActionKindV1::CreateManagedFileWithBackup { .. }
+        ));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let entry = manifest
+            .find_by_source("app/demo/config.toml")
+            .expect("backup-aware receipt");
+        assert_eq!(entry.backup.as_ref(), Some(&backup));
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"desired");
+        assert_eq!(
+            runtime.host().read(&backup).await.unwrap(),
+            b"user-original"
+        );
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn app_install_blocks_instead_of_replacing_an_existing_backup() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        runtime.host().put_file(&backup, b"older-backup".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_backup_occupied".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+        assert_eq!(runtime.host().read(&backup).await.unwrap(), b"older-backup");
+    }
+
+    #[tokio::test]
+    async fn generated_app_install_is_backup_aware() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                br#"dest = '~/.config/demo'
+[permissions]
+schema_version = 1
+filesystem = [{ access = ['execute'], base = 'preset', path = 'gen.ts' }]
+commands = ['bun']
+environment = [{ name = 'SOURCE', sensitivity = 'plain' }]
+[[files]]
+source = 'generated.txt'
+generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE' }
+"#
+                .to_vec(),
+            )
+            .file("app/demo/generated.txt", b"fallback".to_vec())
+            .file(
+                "app/demo/gen.ts",
+                b"process.stdout.write('generated')".to_vec(),
+            )
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("SOURCE".to_string(), "available".to_string());
+        let destination = runtime
+            .context()
+            .home_dir
+            .join(".config/demo/generated.txt");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let ready = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(ready.is_ready());
+        for permission in [
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Remove,
+                path: "home:.config/demo/generated.txt".to_string(),
+            },
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: "home:.config/demo/generated.txt.shine.bak".to_string(),
+            },
+        ] {
+            assert!(ready.permissions.required.contains(&permission));
+        }
+
+        runtime.host().put_file(&backup, b"older-backup".to_vec());
+        let blocked = runtime.plan_apps(request).await.unwrap();
+        assert!(!blocked.is_ready());
+        assert!(blocked.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_backup_occupied".to_string())
+        }));
+    }
+
+    #[tokio::test]
+    async fn backup_aware_install_blocks_a_non_regular_destination() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let target = runtime.context().home_dir.join("user-config.toml");
+        runtime.host().put_file(&target, b"user-original".to_vec());
+        runtime.host().symlink(&target, &destination).await.unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_backup_source_not_regular".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_backup_install_rejects_a_backup_created_after_review() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(&backup, b"late-backup".to_vec());
+
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan"));
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+        assert_eq!(runtime.host().read(&backup).await.unwrap(), b"late-backup");
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn app_install_receipt_failure_leaves_journal_for_explicit_recovery() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
+        runtime.host().fail_write_after(&manifest_path, 0);
+
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .install_apps_approved(request.clone(), &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("failed to write app manifest"));
+        assert!(
+            runtime
+                .host()
+                .read(&runtime.context().home_dir.join(".config/demo/config.toml"))
+                .await
+                .is_ok()
+        );
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_ok()
+        );
+        assert!(runtime.host().read(&manifest_path).await.is_err());
+
+        let blocked = runtime.plan_apps(request).await.unwrap();
+        assert!(!blocked.is_ready());
+        assert!(blocked.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_required".to_string())
+                && step.action == PlanActionV1::Blocked
+        }));
+    }
+
+    #[tokio::test]
+    async fn backup_install_receipt_failure_recovers_the_original_file() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+                .await
+                .is_err()
+        );
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"desired");
+        assert_eq!(
+            runtime.host().read(&backup).await.unwrap(),
+            b"user-original"
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+        assert!(runtime.host().read(&backup).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn app_refresh_plan_is_payload_free_and_rejects_changed_destination() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                br#"dest = '~/.config/demo'
+[permissions]
+schema_version = 1
+filesystem = [{ access = ['execute'], base = 'preset', path = 'gen.ts' }]
+commands = ['bun']
+environment = [{ name = 'SOURCE', sensitivity = 'plain' }]
+[[files]]
+source = 'generated.txt'
+generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }
+"#
+                .to_vec(),
+            )
+            .file("app/demo/generated.txt", b"fallback".to_vec())
+            .file("app/demo/gen.ts", b"process.stdout.write('generated')".to_vec())
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("SOURCE".to_string(), "sensitive-source-value".to_string());
+        let destination = runtime
+            .context()
+            .home_dir
+            .join(".config/demo/generated.txt");
+        runtime.host().put_file(&destination, b"installed".to_vec());
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&AppManifest {
+                schema_version: APP_MANIFEST_SCHEMA_VERSION,
+                entries: vec![AppEntry {
+                    source: "app/demo/generated.txt".to_string(),
+                    destination: destination.clone(),
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"installed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = AppRefreshPlanRequest {
+            category: "demo".to_string(),
+            file: None,
+            force: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_app_refresh(request.clone()).await.unwrap();
+        assert_eq!(plan.operation, PlanOperationV1::AppRefresh);
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Execute
+                && step.resource.as_deref() == Some("generator:generated.txt")
+        }));
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Create
+                && step.resource.as_deref() == Some("generator-runtime:gen.ts")
+        }));
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: "shine:runtime/app/demo/gen.ts".to_string(),
+                })
+        );
+        assert!(
+            !serde_json::to_string(&plan)
+                .unwrap()
+                .contains("sensitive-source-value")
+        );
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(&destination, b"changed".to_vec());
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .refresh_app_generators_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan changed"));
+        assert!(
+            !runtime
+                .host()
+                .operations()
+                .iter()
+                .any(|operation| matches!(operation, super::super::HostOperation::Run { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn app_artifact_plan_scopes_secrets_and_rejects_changed_runtime_state() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                br#"dest = '~/.config/demo'
+[artifact]
+script = 'build.ts'
+teardown = 'unbuild.ts'
+runtime = 'bun'
+env = ['TOKEN']
+[permissions]
+schema_version = 1
+filesystem = [
+  { access = ['execute'], base = 'preset', path = 'build.ts' },
+  { access = ['execute'], base = 'preset', path = 'unbuild.ts' },
+]
+commands = ['bun']
+environment = [{ name = 'TOKEN', sensitivity = 'secret' }]
+[[files]]
+source = 'config.toml'
+"#
+                .to_vec(),
+            )
+            .file("app/demo/config.toml", b"config".to_vec())
+            .file("app/demo/build.ts", b"process.exit(0)".to_vec())
+            .file("app/demo/unbuild.ts", b"process.exit(0)".to_vec())
+            .build();
+        let mut runtime = runtime(snapshot);
+        let optional = runtime
+            .plan_app_artifact(AppArtifactPlanRequest {
+                category: "demo".to_string(),
+                action: AppArtifactAction::Apply,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(optional.is_ready());
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("TOKEN".to_string(), "top-secret-value".to_string());
+        let mut versions = PlanningInputVersions::default();
+        versions.insert_secret_version("TOKEN", OpaqueSecretVersion::new("vault-revision-9"));
+        let request = AppArtifactPlanRequest {
+            category: "demo".to_string(),
+            action: AppArtifactAction::Apply,
+            input_versions: versions,
+        };
+
+        let plan = runtime.plan_app_artifact(request.clone()).await.unwrap();
+        assert_eq!(plan.operation, PlanOperationV1::AppArtifactApply);
+        assert!(plan.is_ready());
+        let encoded = serde_json::to_string(&plan).unwrap();
+        assert!(!encoded.contains("top-secret-value"));
+        assert!(!encoded.contains("vault-revision-9"));
+        let remove = runtime
+            .plan_app_artifact(AppArtifactPlanRequest {
+                action: AppArtifactAction::Remove,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(remove.operation, PlanOperationV1::AppArtifactRemove);
+        assert!(remove.is_ready());
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("state/app/demo/changed"),
+            b"changed".to_vec(),
+        );
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .run_app_artifact_approved(request, &approval, &mut observer)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan changed"));
+        assert!(
+            !runtime
+                .host()
+                .operations()
+                .iter()
+                .any(|operation| matches!(operation, super::super::HostOperation::Run { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn sys_profile_plan_is_observation_only_and_rejects_changed_shell_state() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'tool'
+label = 'Tool'
+permissions = { schema_version = 1 }
+detect = { kind = 'path', path = '$HOME/.tool-present' }
+install = { kind = 'package', provider = 'homebrew', package = 'tool' }
+[[items.shell]]
+shells = ['zsh']
+phase = 'post'
+path = '$HOME/.tool/bin'
+"#
+                .to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+        runtime.host().put_file(
+            runtime.context().home_dir.join(".tool-present"),
+            b"present".to_vec(),
+        );
+        let request = SysProfilePlanRequest {
+            os_id: "test".to_string(),
+            item_id: "tool".to_string(),
+            enabled: true,
+        };
+
+        let plan = runtime.plan_sys_profile(request.clone()).await.unwrap();
+        assert_eq!(plan.operation, PlanOperationV1::SysProfileEnable);
+        assert!(plan.is_ready());
+        let disable = runtime
+            .plan_sys_profile(SysProfilePlanRequest {
+                enabled: false,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(disable.operation, PlanOperationV1::SysProfileDisable);
+        assert!(disable.is_ready());
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .iter()
+                .all(|operation| matches!(operation, super::super::HostOperation::Read(_)))
+        );
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(
+            runtime.context().home_dir.join(".zshrc"),
+            b"user change".to_vec(),
+        );
+        let error = runtime
+            .set_sys_profile_approved(request, &approval)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan changed"));
+        assert!(
+            !runtime.host().operations().iter().any(|operation| matches!(
+                operation,
+                super::super::HostOperation::Write(_)
+                    | super::super::HostOperation::Remove(_)
+                    | super::super::HostOperation::Run { .. }
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn sys_profile_recovery_restores_owned_blocks_and_preserves_later_user_edits() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/ubuntu/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'tool'
+label = 'Tool'
+permissions = { schema_version = 1 }
+detect = { kind = 'path', path = '$HOME/.tool-present' }
+install = { kind = 'package', provider = 'homebrew', package = 'tool' }
+[[items.shell]]
+shells = ['bash', 'zsh']
+phase = 'post'
+path = '$HOME/.tool/bin'
+"#
+                .to_vec(),
+            )
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime.context_mut_for_cli().shell = super::super::ShellType::Bash;
+        let profile = runtime.context().home_dir.join(".bashrc");
+        runtime.host().put_file(
+            runtime.context().home_dir.join(".tool-present"),
+            b"present".to_vec(),
+        );
+        runtime.host().put_file(&profile, b"before\n".to_vec());
+        let request = SysProfilePlanRequest {
+            os_id: "ubuntu".to_string(),
+            item_id: "tool".to_string(),
+            enabled: true,
+        };
+        let plan = runtime.plan_sys_profile(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.target == "sys/profile"
+                && step
+                    .diagnostic_codes
+                    .contains(&"sys_profile_block_transaction".to_string())
+                && step
+                    .diagnostic_codes
+                    .contains(&"sys_profile_merge_recovery_unsupported".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("sys-manifest.toml"), 0);
+        assert!(
+            runtime
+                .set_sys_profile_approved(request, &approval)
+                .await
+                .is_err()
+        );
+        let interrupted = String::from_utf8(runtime.host().read(&profile).await.unwrap()).unwrap();
+        assert!(interrupted.contains("shine ubuntu sys pre"));
+        runtime.host().put_file(
+            &profile,
+            format!("{interrupted}\nuser-after-interruption\n").into_bytes(),
+        );
+
+        let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_sys_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        let restored = String::from_utf8(runtime.host().read(&profile).await.unwrap()).unwrap();
+        assert!(restored.contains("before"));
+        assert!(restored.contains("user-after-interruption"));
+        assert!(!restored.contains("shine ubuntu sys pre"));
+        assert!(
+            SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn bulk_managed_sys_upgrade_plans_only_profile_enabled_items() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'enabled'
+label = 'Enabled'
+mode = 'managed'
+driver = 'managed-file'
+permissions = { schema_version = 1 }
+[items.config]
+source = 'enabled.txt'
+target = '$HOME/.config/enabled.txt'
+[[items]]
+id = 'disabled'
+label = 'Disabled'
+mode = 'managed'
+driver = 'managed-file'
+permissions = { schema_version = 1 }
+[items.config]
+source = 'disabled.txt'
+target = '$HOME/.config/disabled.txt'
+"#
+                .to_vec(),
+            )
+            .file("sys/test/enabled.txt", b"enabled".to_vec())
+            .file("sys/test/disabled.txt", b"disabled".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let entry = |item_id: &str, profile_enabled: bool| SysRunEntry {
+            os_id: "test".to_string(),
+            item_id: item_id.to_string(),
+            label: item_id.to_string(),
+            status: super::super::SysItemStatus::Installed,
+            detail: String::new(),
+            updated_at: "1".to_string(),
+            managed: true,
+            profile_enabled,
+            receipt: None,
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("sys-manifest.toml"),
+            toml::to_string(&SysRunManifest {
+                schema_version: super::super::SYS_MANIFEST_SCHEMA_VERSION,
+                entries: vec![entry("enabled", true), entry("disabled", false)],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+
+        let plan = runtime
+            .plan_managed_sys(SysManagedPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                os_id: "test".to_string(),
+                target: None,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(plan.steps.iter().any(|step| step.target == "sys/enabled"));
+        assert!(!plan.steps.iter().any(|step| step.target == "sys/disabled"));
+    }
+
+    #[tokio::test]
+    async fn app_target_plan_ignores_unrelated_manifest_and_live_state() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let demo_destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let other_destination = runtime.context().home_dir.join(".config/other/config.toml");
+        runtime
+            .host()
+            .put_file(&demo_destination, b"desired".to_vec());
+        runtime
+            .host()
+            .put_file(&other_destination, b"first".to_vec());
+        let mut manifest = AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![
+                AppEntry {
+                    source: "app/demo/config.toml".to_string(),
+                    destination: demo_destination,
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"desired"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                },
+                AppEntry {
+                    source: "app/other/config.toml".to_string(),
+                    destination: other_destination.clone(),
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"first"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                },
+            ],
+        };
+        let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
+        runtime.host().put_file(
+            &manifest_path,
+            toml::to_string(&manifest).unwrap().into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let initial = runtime.plan_apps(request.clone()).await.unwrap();
+
+        manifest.entries[1].content_hash = crate::install::hash_content(b"second");
+        runtime.host().put_file(
+            &manifest_path,
+            toml::to_string(&manifest).unwrap().into_bytes(),
+        );
+        runtime
+            .host()
+            .put_file(&other_destination, b"second".to_vec());
+        let unchanged = runtime.plan_apps(request).await.unwrap();
+        assert_eq!(initial.inputs.state, unchanged.inputs.state);
+        assert_eq!(
+            initial.fingerprint().unwrap(),
+            unchanged.fingerprint().unwrap()
+        );
+    }
+
+    fn shell_launcher_snapshot() -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\necho demo\n".to_vec())
+            .build()
+    }
+
+    fn shell_bun_launcher_snapshot() -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.ts'\ntarget = 'demo'\nruntime = 'bun'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.ts", b"console.log('demo')\n".to_vec())
+            .build()
+    }
+
+    fn transformed_shell_snapshot(script: &[u8]) -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\ntransforms = ['template']\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", script.to_vec())
+            .build()
+    }
+
+    fn shell_install_request() -> ShellPlanRequest {
+        ShellPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo/demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_plan_and_cache_exclude_inactive_platform_sources() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\nplatforms = ['unix']\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = 'demo.ps1'\ntarget = 'demo'\nplatforms = ['windows']\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\necho demo\n".to_vec())
+            .file("shell/demo/demo.ps1", b"Write-Output demo\n".to_vec())
+            .file("shell/demo/helper.txt", b"shared helper\n".to_vec())
+            .file(
+                "shell/syntax/shine.toml",
+                b"[[files]]\nsource = 'native.sh'\ntarget = 'native'\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = 'native.ps1'\ntarget = 'native'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/syntax/native.sh", b"#!/bin/sh\necho native\n".to_vec())
+            .file(
+                "shell/syntax/native.ps1",
+                b"Write-Output native\n".to_vec(),
+            )
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime.context_mut_for_cli().platform = RuntimePlatform::Linux;
+        runtime.context_mut_for_cli().shell = super::super::ShellType::Zsh;
+        let request = shell_install_request();
+
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+
+        assert!(plan.is_ready());
+        assert!(
+            plan.permissions
+                .required
+                .iter()
+                .all(|permission| { !format!("{permission:?}").contains("demo.ps1") })
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        let cache = runtime.context().presets_dir.join("shell/demo");
+        assert!(runtime.host().read(&cache.join("demo.sh")).await.is_ok());
+        assert!(runtime.host().read(&cache.join("helper.txt")).await.is_ok());
+        assert!(runtime.host().read(&cache.join("demo.ps1")).await.is_err());
+
+        runtime.context_mut_for_cli().platform = RuntimePlatform::Windows;
+        runtime.context_mut_for_cli().shell = super::super::ShellType::Bash;
+        let categories = runtime.shell_categories(Some("demo")).unwrap();
+        assert_eq!(categories.len(), 1);
+        assert!(categories[0].files.is_empty());
+        let effective = runtime
+            .effective_shell_cache_logicals(&categories[0])
+            .unwrap();
+        assert!(!effective.contains("shell/demo/demo.ps1"));
+
+        let syntax = runtime.shell_categories(Some("syntax")).unwrap();
+        assert_eq!(syntax[0].files.len(), 1);
+        assert_eq!(syntax[0].files[0].source_rel, PathBuf::from("native.sh"));
+        let effective = runtime.effective_shell_cache_logicals(&syntax[0]).unwrap();
+        assert!(effective.contains("shell/syntax/native.sh"));
+        assert!(!effective.contains("shell/syntax/native.ps1"));
+    }
+
+    #[tokio::test]
+    async fn shell_upgrade_ignores_uninstalled_categories_and_noop_permissions() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\necho demo\n".to_vec())
+            .file(
+                "shell/unused/shine.toml",
+                b"[[files]]\nsource = 'unused.sh'\ntarget = 'unused'\n[files.permissions]\nschema_version = 1\ncommands = ['unused-runtime']\n"
+                    .to_vec(),
+            )
+            .file(
+                "shell/unused/unused.sh",
+                b"#!/bin/sh\necho unused\n".to_vec(),
+            )
+            .file(
+                "shell/legacy/shine.toml",
+                b"[[files]]\nsource = 'legacy.sh'\ntarget = 'legacy'\n".to_vec(),
+            )
+            .file(
+                "shell/legacy/legacy.sh",
+                b"#!/bin/sh\necho legacy\n".to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+
+        let plan = runtime
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.is_ready());
+        assert!(plan.permissions.required.is_empty());
+        assert!(plan.permissions.uncomputable_codes.is_empty());
+        assert_eq!(plan.steps.len(), 1);
+        assert!(plan.steps.iter().all(|step| {
+            step.target == "shell/demo/demo"
+                && step.resource.is_none()
+                && step.action == PlanActionV1::None
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let operation_count = runtime.host().operations().len();
+        let report = runtime
+            .upgrade_shells_approved(
+                ShellPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: None,
+                    force: false,
+                    purge: false,
+                    input_versions: PlanningInputVersions::default(),
+                },
+                &approval,
+            )
+            .await
+            .unwrap();
+        assert!(report.updated_targets.is_empty());
+        let operations = runtime.host().operations();
+        let new_mutations = operations[operation_count..]
+            .iter()
+            .filter(|operation| !matches!(operation, HostOperation::Read(_)))
+            .collect::<Vec<_>>();
+        assert!(new_mutations.is_empty(), "{new_mutations:?}");
+
+        let error = runtime
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("unused".to_string()),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not installed"));
+    }
+
+    fn external_shell_runtime(snapshot: PresetSnapshot) -> CoreRuntime<InMemoryHost> {
+        let home = std::env::temp_dir().join("shine-planner-external-shell-home");
+        let shine = home.join(".shine");
+        let mut context = RuntimeContext::isolated(
+            home.clone(),
+            shine.clone(),
+            home.join("external-presets"),
+            shine.join("bin"),
+            RuntimePlatform::current(),
+        );
+        context.is_external_presets = true;
+        context.external_shell_mode = ExternalShellMode::Snapshot;
+        CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    }
+
+    #[tokio::test]
+    async fn transformed_shell_install_transactions_rendered_output_before_receipt() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho first\n"));
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("preset-cache")
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_cache_replace_transaction".to_string())
+        }));
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("rendered-output")
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_rendered_replace_transaction".to_string())
+        }));
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        for (access, path) in [
+            (FilesystemAccessV1::Write, &rendered),
+            (FilesystemAccessV1::Remove, &rendered),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), path),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho first\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .metadata(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::SHELL_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn embedded_shell_cache_receipt_failure_removes_created_files_on_recovery() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt write should fail");
+        let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        assert_eq!(
+            runtime.host().read(&source).await.unwrap(),
+            b"#!/bin/sh\necho demo\n"
+        );
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_previous_cache".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&source).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn embedded_shell_cache_marker_failure_restores_previous_files_and_receipt() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let previous_receipt = ShellManifest::load(original.host(), &original.context().shine_dir)
+            .await
+            .unwrap()
+            .find("shell/demo/demo")
+            .unwrap()
+            .clone();
+        let desired = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file(
+                "shell/demo/demo.sh",
+                b"#!/bin/sh\necho desired\n".to_vec(),
+            )
+            .build();
+        let runtime =
+            CoreRuntime::new(original.host().clone(), original.context().clone(), desired);
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: true,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_cache_replace_transaction".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 2);
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell cache receipt marker write should fail");
+        let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&source);
+        assert_eq!(
+            runtime.host().read(&source).await.unwrap(),
+            b"#!/bin/sh\necho desired\n"
+        );
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"#!/bin/sh\necho demo\n"
+        );
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&source).await.unwrap(),
+            b"#!/bin/sh\necho demo\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert_eq!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .unwrap(),
+            &previous_receipt
+        );
+    }
+
+    #[tokio::test]
+    async fn occupied_embedded_shell_cache_rollback_blocks_before_mutation() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&source);
+        runtime.host().put_file(&rollback, b"occupied".to_vec());
+        let plan = runtime.plan_shells(shell_install_request()).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("preset-cache")
+                && step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_cache_rollback_occupied".to_string())
+        }));
+        assert!(runtime.host().metadata(&source).await.is_err());
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"occupied");
+    }
+
+    #[tokio::test]
+    async fn rendered_shell_receipt_failure_removes_created_output_on_recovery() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho first\n"));
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt write should fail");
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        assert!(runtime.host().metadata(&rendered).await.is_ok());
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_previous_rendered_file".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&rendered).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_shell_marker_failure_restores_previous_output_and_receipt() {
+        let original = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho previous\n"));
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let previous_receipt = ShellManifest::load(original.host(), &original.context().shine_dir)
+            .await
+            .unwrap()
+            .find("shell/demo/demo")
+            .unwrap()
+            .clone();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            transformed_shell_snapshot(b"#!/bin/sh\necho desired\n"),
+        );
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/demo.sh"),
+            b"#!/bin/sh\necho desired\n".to_vec(),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 2);
+        runtime
+            .upgrade_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("rendered receipt marker write should fail");
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho desired\n"
+        );
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"#!/bin/sh\necho previous\n"
+        );
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho previous\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert_eq!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .unwrap(),
+            &previous_receipt
+        );
+    }
+
+    #[tokio::test]
+    async fn transformed_shell_uninstall_transactions_rendered_output() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("rendered-output")
+                && step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_rendered_file_remove_transaction".to_string())
+        }));
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let unrelated = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/unrelated.sh");
+        runtime
+            .host()
+            .put_file(&unrelated, b"unrelated rendered bytes".to_vec());
+        let rollback = managed_file_rollback_path(&rendered);
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, &rendered),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), path),
+                    })
+            );
+        }
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&rendered).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert_eq!(
+            runtime.host().read(&unrelated).await.unwrap(),
+            b"unrelated rendered bytes"
+        );
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_uninstall_receipt_failure_restores_file_on_recovery() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        let cache = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        let cache_rollback = managed_file_rollback_path(&cache);
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        assert!(runtime.host().metadata(&rendered).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+        assert!(runtime.host().metadata(&cache).await.is_err());
+        assert!(runtime.host().metadata(&cache_rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_rendered_file".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho rendered\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert_eq!(
+            runtime.host().read(&cache).await.unwrap(),
+            b"#!/bin/sh\necho rendered\n"
+        );
+        assert!(runtime.host().metadata(&cache_rollback).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_profile_recovery_preserves_unrelated_post_interruption_edits() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let config = runtime.context().shell_config_paths[0].clone();
+        runtime.host().put_file(&config, b"before\n".to_vec());
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8(runtime.host().read(&config).await.unwrap())
+                .unwrap()
+                .contains(super::super::profile::SHELL_SENTINEL_START)
+        );
+
+        let mut request = shell_uninstall_request();
+        request.target = None;
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.steps.iter().any(|step| {
+            step.target == "shell/profile"
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_profile_reconcile_transaction".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        runtime
+            .host()
+            .put_file(&config, b"before\nuser-after-interruption\n".to_vec());
+        let journal_text = String::from_utf8(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::SHELL_OPERATION_JOURNAL_FILE),
+                )
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            journal_text.contains("reconcile-shell-profile"),
+            "journal: {journal_text}"
+        );
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(
+            recovery.steps.iter().any(|step| {
+                step.diagnostic_codes
+                    .contains(&"shell_recovery_restore_profile".to_string())
+            }),
+            "recovery diagnostics: {:?}",
+            recovery
+                .steps
+                .iter()
+                .flat_map(|step| step.diagnostic_codes.iter())
+                .collect::<Vec<_>>()
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        let restored = String::from_utf8(runtime.host().read(&config).await.unwrap()).unwrap();
+        assert!(restored.contains("before"));
+        assert!(restored.contains("user-after-interruption"));
+        assert!(restored.contains(super::super::profile::SHELL_SENTINEL_START));
+        assert!(restored.contains(super::super::profile::SHELL_SENTINEL_END));
+    }
+
+    #[tokio::test]
+    async fn rendered_uninstall_recovery_blocks_modified_rollback() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        runtime
+            .host()
+            .put_file(&rollback, b"user changed rollback".to_vec());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(!recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_rendered_file_removal_changed".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"user changed rollback"
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_uninstall_marker_failure_reconstructs_receipt_before_restore() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 4);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell rendered removal commit marker should fail");
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        assert!(runtime.host().metadata(&rendered).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_rendered_file".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho rendered\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_uninstall_preserves_a_file_with_an_unselected_consumer() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/shared.sh");
+        runtime
+            .host()
+            .put_file(&rendered, b"#!/bin/sh\necho shared\n".to_vec());
+        let entries = ["one", "two"]
+            .into_iter()
+            .map(|command| ShellManifestEntry {
+                category: "demo".to_string(),
+                command: command.to_string(),
+                mode: ExternalShellMode::Snapshot,
+                source_path: runtime.context().presets_dir.join("shell/demo/shared.sh"),
+                rendered_path: rendered.clone(),
+                runtime: "native".to_string(),
+                bun_dependencies: None,
+                dependency_hash: None,
+                transforms: vec!["template".to_string()],
+                env: Vec::new(),
+                needs_source: false,
+                content_hash: 1,
+            })
+            .collect();
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("shell-manifest.toml"),
+            toml::to_string(&ShellManifest {
+                schema_version: super::super::SHELL_MANIFEST_SCHEMA_VERSION,
+                entries,
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let plan = runtime
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                target: Some("demo/one".to_string()),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(!plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("rendered-output")
+                && step.action == PlanActionV1::Remove
+        }));
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho shared\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_uninstall_blocks_an_occupied_rollback_when_destination_is_missing() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("shell-manifest.toml"),
+            toml::to_string(&ShellManifest {
+                schema_version: super::super::SHELL_MANIFEST_SCHEMA_VERSION,
+                entries: vec![ShellManifestEntry {
+                    category: "demo".to_string(),
+                    command: "demo".to_string(),
+                    mode: ExternalShellMode::Snapshot,
+                    source_path: runtime.context().presets_dir.join("shell/demo/demo.sh"),
+                    rendered_path: rendered.clone(),
+                    runtime: "native".to_string(),
+                    bun_dependencies: None,
+                    dependency_hash: None,
+                    transforms: vec!["template".to_string()],
+                    env: Vec::new(),
+                    needs_source: false,
+                    content_hash: 1,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        runtime
+            .host()
+            .put_file(&rollback, b"unclaimed rollback".to_vec());
+
+        let plan = runtime
+            .plan_shells(shell_uninstall_request())
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_rendered_file_removal_rollback_occupied".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"unclaimed rollback"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_render_refuses_to_run_while_shell_recovery_is_pending() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let install = shell_install_request();
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("Shell receipt write should fail");
+
+        let error = runtime
+            .render_live_shell("shell/demo/demo")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("requires explicit recovery"));
+    }
+
+    #[tokio::test]
+    async fn approved_external_shell_install_transactions_the_shared_snapshot() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\necho external\n".to_vec())
+            .build();
+        let runtime = external_shell_runtime(snapshot);
+        runtime.host().put_file(
+            runtime
+                .context()
+                .presets_dir
+                .join("shell/demo/shine.toml"),
+            b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n"
+                .to_vec(),
+        );
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/demo.sh"),
+            b"#!/bin/sh\necho external\n".to_vec(),
+        );
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.target == "shell/demo"
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_snapshot_replace_transaction".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+
+        let installed = runtime
+            .context()
+            .shine_dir
+            .join("installed/shell/demo/demo.sh");
+        assert_eq!(
+            runtime.host().read(&installed).await.unwrap(),
+            b"#!/bin/sh\necho external\n"
+        );
+        assert!(
+            runtime
+                .host()
+                .metadata(&shell_snapshot_stage_path(
+                    &runtime.context().shine_dir.join("installed/shell/demo")
+                ))
+                .await
+                .is_err()
+        );
+        assert!(
+            runtime
+                .host()
+                .metadata(&shell_snapshot_rollback_path(
+                    &runtime.context().shine_dir.join("installed/shell/demo")
+                ))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn external_shell_snapshot_marker_failure_restores_receipts_tree_and_launcher() {
+        let metadata = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n";
+        let script = b"#!/bin/sh\necho external\n";
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("shell/demo/shine.toml", metadata.to_vec())
+            .file("shell/demo/demo.sh", script.to_vec())
+            .build();
+        let runtime = external_shell_runtime(snapshot);
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/shine.toml"),
+            metadata.to_vec(),
+        );
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/demo.sh"),
+            script.to_vec(),
+        );
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 4);
+        assert!(
+            runtime
+                .install_shells_approved(request, &approval)
+                .await
+                .is_err()
+        );
+
+        let destination = runtime.context().shine_dir.join("installed/shell/demo");
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        assert_eq!(
+            runtime
+                .host()
+                .read(&destination.join("demo.sh"))
+                .await
+                .unwrap(),
+            script
+        );
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&journal).await.is_ok());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_some()
+        );
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_previous_snapshot".to_string())
+        }));
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_remove_created_launcher".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&destination).await.is_err());
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&journal).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn external_shell_snapshot_uninstall_receipt_failure_restores_tree_and_receipt() {
+        let metadata = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n";
+        let script = b"#!/bin/sh\necho external\n";
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("shell/demo/shine.toml", metadata.to_vec())
+            .file("shell/demo/demo.sh", script.to_vec())
+            .build();
+        let runtime = external_shell_runtime(snapshot);
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/shine.toml"),
+            metadata.to_vec(),
+        );
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/demo.sh"),
+            script.to_vec(),
+        );
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("shared-snapshot")
+                && step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_snapshot_remove_transaction".to_string())
+        }));
+        let destination = runtime.context().shine_dir.join("installed/shell/demo");
+        let rollback = shell_snapshot_rollback_path(&destination);
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, &destination),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), path),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        assert!(runtime.host().metadata(&destination).await.is_err());
+        assert_eq!(
+            runtime
+                .host()
+                .read(&rollback.join("demo.sh"))
+                .await
+                .unwrap(),
+            script
+        );
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_snapshot".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime
+                .host()
+                .read(&destination.join("demo.sh"))
+                .await
+                .unwrap(),
+            script
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn external_shell_snapshot_upgrade_marker_failure_restores_previous_tree_and_receipt() {
+        let metadata = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n";
+        let previous_script = b"#!/bin/sh\necho previous\n";
+        let desired_script = b"#!/bin/sh\necho desired\n";
+        let previous_snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("shell/demo/shine.toml", metadata.to_vec())
+            .file("shell/demo/demo.sh", previous_script.to_vec())
+            .build();
+        let original = external_shell_runtime(previous_snapshot);
+        original.host().put_file(
+            original.context().presets_dir.join("shell/demo/shine.toml"),
+            metadata.to_vec(),
+        );
+        original.host().put_file(
+            original.context().presets_dir.join("shell/demo/demo.sh"),
+            previous_script.to_vec(),
+        );
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let previous_receipt = ShellManifest::load(original.host(), &original.context().shine_dir)
+            .await
+            .unwrap()
+            .find("shell/demo/demo")
+            .unwrap()
+            .clone();
+
+        let desired_snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("shell/demo/shine.toml", metadata.to_vec())
+            .file("shell/demo/demo.sh", desired_script.to_vec())
+            .build();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            desired_snapshot,
+        );
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/demo.sh"),
+            desired_script.to_vec(),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 2);
+        assert!(
+            runtime
+                .upgrade_shells_approved(request, &approval)
+                .await
+                .is_err()
+        );
+        let destination = runtime.context().shine_dir.join("installed/shell/demo");
+        let rollback = shell_snapshot_rollback_path(&destination);
+        assert_eq!(
+            runtime
+                .host()
+                .read(&destination.join("demo.sh"))
+                .await
+                .unwrap(),
+            desired_script
+        );
+        assert_eq!(
+            runtime
+                .host()
+                .read(&rollback.join("demo.sh"))
+                .await
+                .unwrap(),
+            previous_script
+        );
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime
+                .host()
+                .read(&destination.join("demo.sh"))
+                .await
+                .unwrap(),
+            previous_script
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let restored_receipt = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap()
+            .find("shell/demo/demo")
+            .unwrap()
+            .clone();
+        assert_eq!(restored_receipt, previous_receipt);
+    }
+
+    #[tokio::test]
+    async fn approved_shell_launcher_creation_journals_before_mutation_and_commits_after_receipt() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: "shine:shell-operation-journal.toml".to_string(),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let manifest_path = runtime.context().shine_dir.join("shell-manifest.toml");
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().read(&journal).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_some());
+
+        let operations = runtime.host().operations();
+        let first_journal_write = operations
+            .iter()
+            .position(
+                |operation| matches!(operation, HostOperation::Write(path) if path == &journal),
+            )
+            .unwrap();
+        let launcher_mutation = operations
+            .iter()
+            .position(|operation| {
+                matches!(operation, HostOperation::CreateSymlink { link, .. } if link == &launcher)
+                    || matches!(operation, HostOperation::Write(path) if path == &launcher)
+            })
+            .unwrap();
+        let receipt_write = operations
+            .iter()
+            .position(|operation| matches!(operation, HostOperation::Write(path) if path == &manifest_path))
+            .unwrap();
+        let journal_commit = operations
+            .iter()
+            .position(
+                |operation| matches!(operation, HostOperation::Remove(path) if path == &journal),
+            )
+            .unwrap();
+        assert!(first_journal_write < launcher_mutation);
+        assert!(launcher_mutation < receipt_write);
+        assert!(receipt_write < journal_commit);
+    }
+
+    #[tokio::test]
+    async fn shell_receipt_failure_leaves_explicit_recovery_that_removes_unchanged_launcher() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let manifest_path = runtime.context().shine_dir.join("shell-manifest.toml");
+        runtime.host().fail_write_after(&manifest_path, 0);
+
+        let error = runtime
+            .install_shells_approved(request.clone(), &approval)
+            .await
+            .err()
+            .expect("Shell receipt write should fail");
+        assert!(error.to_string().contains("failed to write shell manifest"));
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().read(&journal).await.is_ok());
+
+        let blocked = runtime.plan_shells(request).await.unwrap();
+        assert!(!blocked.is_ready());
+        assert!(blocked.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_recovery_required".to_string())
+        }));
+        let recovery_plan = runtime.plan_shell_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        let report = runtime
+            .recover_shell_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(report.rolled_back_actions.len(), 3);
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().read(&journal).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn shell_recovery_preserves_a_launcher_changed_after_interruption() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt write should fail");
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        runtime
+            .host()
+            .put_file(&launcher, b"#!/bin/sh\necho user\n".to_vec());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(!recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_recovery_launcher_changed".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&launcher).await.unwrap(),
+            b"#!/bin/sh\necho user\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_recovery_preserves_a_launcher_after_receipt_commit() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_remove_after(&journal, 0);
+        let error = runtime
+            .install_shells_approved(shell_install_request(), &approval)
+            .await
+            .err()
+            .expect("Shell journal commit should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("removing Shell operation journal")
+        );
+
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_some());
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_receipt_already_committed".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        let report = runtime
+            .recover_shell_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(report.rolled_back_actions.is_empty());
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().read(&journal).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn managed_shell_launcher_update_moves_old_resource_before_receipt_commit() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_managed_launcher_update_transaction".to_string())
+        }));
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, &launcher),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), path),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.find("shell/demo/demo").unwrap().runtime, "bun");
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join("shell-operation-journal.toml"),
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_update_receipt_failure_recovers_previous_resource() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
+        let old_kind = original.host().metadata(&launcher).await.unwrap().kind;
+        let old_target = original.host().read_link(&launcher).await.ok();
+        let old_bytes = original.host().read(&launcher).await.ok();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("replacement receipt write should fail");
+        let rollback = managed_file_rollback_path(&launcher);
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_previous_launcher".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().metadata(&launcher).await.unwrap().kind,
+            old_kind
+        );
+        assert_eq!(runtime.host().read_link(&launcher).await.ok(), old_target);
+        assert_eq!(runtime.host().read(&launcher).await.ok(), old_bytes);
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.find("shell/demo/demo").unwrap().runtime, "native");
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_update_write_failure_restores_moved_previous_resource() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
+        let old_kind = original.host().metadata(&launcher).await.unwrap().kind;
+        let old_target = original.host().read_link(&launcher).await.ok();
+        let old_bytes = original.host().read(&launcher).await.ok();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_write_after(&launcher, 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("replacement launcher write should fail");
+        let rollback = managed_file_rollback_path(&launcher);
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().metadata(&launcher).await.unwrap().kind,
+            old_kind
+        );
+        assert_eq!(runtime.host().read_link(&launcher).await.ok(), old_target);
+        assert_eq!(runtime.host().read(&launcher).await.ok(), old_bytes);
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_update_rename_failure_recovers_not_started_state() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
+        let old_target = original.host().read_link(&launcher).await.ok();
+        let old_bytes = original.host().read(&launcher).await.ok();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let rollback = managed_file_rollback_path(&launcher);
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_rename_after(&launcher, &rollback, 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("moving old launcher should fail");
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_launcher_update_not_started".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read_link(&launcher).await.ok(), old_target);
+        assert_eq!(runtime.host().read(&launcher).await.ok(), old_bytes);
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_update_commit_failure_cleans_only_exact_rollback() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_remove_after(&rollback, 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("rollback cleanup should fail");
+        let replacement = runtime.host().read(&launcher).await.unwrap();
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_cleanup_launcher_rollback".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&launcher).await.unwrap(), replacement);
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.find("shell/demo/demo").unwrap().runtime, "bun");
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_update_recovery_blocks_modified_replacement() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("replacement receipt write should fail");
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime
+            .host()
+            .put_file(&launcher, b"#!/bin/sh\necho user change\n".to_vec());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(!recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_launcher_update_changed".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&launcher).await.unwrap(),
+            b"#!/bin/sh\necho user change\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn occupied_shell_launcher_rollback_blocks_before_update() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime.host().put_file(&rollback, b"user-owned".to_vec());
+
+        let plan = runtime.plan_shells(install).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_launcher_rollback_occupied".to_string())
+        }));
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"user-owned");
+    }
+
+    fn shell_uninstall_request() -> ShellPlanRequest {
+        ShellPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo/demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        }
+    }
+
+    async fn installed_shell_runtime() -> CoreRuntime<InMemoryHost> {
+        let runtime = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        runtime
+    }
+
+    #[tokio::test]
+    async fn approved_shell_launcher_removal_moves_before_receipt_commit_and_cleans_transaction() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_managed_launcher_remove_transaction".to_string())
+        }));
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, &launcher),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), path),
+                    })
+            );
+        }
+        let operation_offset = runtime.host().operations().len();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .unwrap();
+
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_none());
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        assert!(runtime.host().metadata(&journal).await.is_err());
+
+        let operations = runtime.host().operations();
+        let operations = &operations[operation_offset..];
+        let journal_write = operations
+            .iter()
+            .position(
+                |operation| matches!(operation, HostOperation::Write(path) if path == &journal),
+            )
+            .unwrap();
+        let launcher_move = operations
+            .iter()
+            .position(
+                |operation| matches!(operation, HostOperation::Remove(path) if path == &launcher),
+            )
+            .unwrap();
+        let receipt_write = operations
+            .iter()
+            .position(|operation| matches!(operation, HostOperation::Write(path) if path == &runtime.context().shine_dir.join("shell-manifest.toml")))
+            .unwrap();
+        let receipt_commit_marker = operations
+            .iter()
+            .rposition(
+                |operation| matches!(operation, HostOperation::Write(path) if path == &journal),
+            )
+            .unwrap();
+        let rollback_cleanup = operations
+            .iter()
+            .position(
+                |operation| matches!(operation, HostOperation::Remove(path) if path == &rollback),
+            )
+            .unwrap();
+        assert!(journal_write < launcher_move);
+        assert!(launcher_move < receipt_write);
+        assert!(receipt_write < receipt_commit_marker);
+        assert!(receipt_commit_marker < rollback_cleanup);
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_removal_receipt_failure_restores_moved_launcher() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_launcher".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_some());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn legacy_shell_launcher_manifest_failure_restores_without_creating_a_receipt() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        runtime.host().symlink(&source, &launcher).await.unwrap();
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_legacy_launcher_remove_transaction".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell manifest write should fail");
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_legacy_launcher".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_removal_marker_failure_reconstructs_receipt_before_restore() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 3);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt commit marker should fail");
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_none());
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_launcher_receipt".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_some());
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_removal_commit_failure_cleans_only_exact_rollback() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime.host().fail_remove_after(&rollback, 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell launcher rollback cleanup should fail");
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_none());
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_cleanup_removed_launcher".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_none());
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_removal_recovery_blocks_modified_rollback_material() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        runtime
+            .host()
+            .put_file(&rollback, b"user-changed rollback".to_vec());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(!recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_launcher_removal_changed".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"user-changed rollback"
+        );
+    }
+
+    #[tokio::test]
+    async fn occupied_shell_launcher_rollback_blocks_before_removal() {
+        let runtime = installed_shell_runtime().await;
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime.host().put_file(&rollback, b"user-owned".to_vec());
+
+        let plan = runtime
+            .plan_shells(shell_uninstall_request())
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_launcher_rollback_occupied".to_string())
+        }));
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"user-owned");
+    }
+
+    #[tokio::test]
+    async fn approved_shell_uninstall_preserves_a_modified_receipt_owned_launcher() {
+        let runtime = installed_shell_runtime().await;
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        runtime
+            .host()
+            .put_file(&launcher, b"#!/bin/sh\necho user-owned\n".to_vec());
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Preserve
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_foreign_launcher_preserved".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let report = runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            runtime.host().read(&launcher).await.unwrap(),
+            b"#!/bin/sh\necho user-owned\n"
+        );
+        assert!(report.lifecycle.outcomes.iter().any(|outcome| {
+            outcome.status == crate::lifecycle::LifecycleStatus::Conflict
+                && outcome
+                    .diagnostic_codes
+                    .contains(&"shell_command_conflict".to_string())
+        }));
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_none());
+    }
+
+    #[tokio::test]
+    async fn approved_shell_upgrade_uses_managed_launcher_update_transaction() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_managed_launcher_update_transaction".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .upgrade_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.find("shell/demo/demo").unwrap().runtime, "bun");
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn shell_plan_binds_both_windows_launcher_resources() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let plan = runtime.plan_shells(shell_install_request()).await.unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let cmd = launcher.with_extension("cmd");
+        for destination in [launcher, cmd] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Write,
+                        path: review_path(runtime.context(), &destination),
+                    })
+            );
+        }
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn shell_recovery_removes_a_partial_windows_shim_pair() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let cmd = launcher.with_extension("cmd");
+        runtime.host().fail_write_after(&cmd, 0);
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("second Windows shim write should fail");
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&cmd).await.is_err());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&cmd).await.is_err());
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn shell_recovery_restores_a_partial_windows_launcher_update() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
+        let cmd = launcher.with_extension("cmd");
+        let old_ps1 = original.host().read(&launcher).await.unwrap();
+        let old_cmd = original.host().read(&cmd).await.unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_write_after(&cmd, 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("second replacement shim write should fail");
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&launcher).await.unwrap(), old_ps1);
+        assert_eq!(runtime.host().read(&cmd).await.unwrap(), old_cmd);
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn shell_recovery_restores_a_partial_windows_launcher_removal() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let cmd = launcher.with_extension("cmd");
+        let launcher_bytes = runtime.host().read(&launcher).await.unwrap();
+        let cmd_bytes = runtime.host().read(&cmd).await.unwrap();
+        let cmd_rollback = managed_file_rollback_path(&cmd);
+        runtime.host().fail_rename_after(&cmd, &cmd_rollback, 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("second Windows launcher move should fail");
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&launcher).await.unwrap(),
+            launcher_bytes
+        );
+        assert_eq!(runtime.host().read(&cmd).await.unwrap(), cmd_bytes);
+        assert!(runtime.host().metadata(&cmd_rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn foreign_shell_launcher_blocks_without_mutation() {
+        if !RuntimePlatform::current().is_unix() {
+            return;
+        }
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("shell/demo/shine.toml", b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n".to_vec())
+            .file("shell/demo/demo.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo/demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let missing = runtime.plan_shells(request.clone()).await.unwrap();
+        runtime
+            .host()
+            .put_file(&launcher, b"#!/bin/sh\necho user\n".to_vec());
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_foreign_launcher_conflict".to_string())
+        }));
+        assert_ne!(missing.inputs.state, plan.inputs.state);
+        let forced = runtime
+            .plan_shells(ShellPlanRequest {
+                force: true,
+                ..request
+            })
+            .await
+            .unwrap();
+        assert!(forced.is_ready());
+        assert!(forced.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_foreign_launcher_override".to_string())
+        }));
+        assert_ne!(plan.fingerprint().unwrap(), forced.fingerprint().unwrap());
+    }
+
+    #[tokio::test]
+    async fn targeted_shell_uninstall_preserves_shared_category_state_and_updates_profile() {
+        if !RuntimePlatform::current().is_unix() {
+            return;
+        }
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let source_root = runtime.context().shine_dir.join("installed/shell/demo");
+        let entries = ["one", "two"]
+            .into_iter()
+            .map(|command| ShellManifestEntry {
+                category: "demo".to_string(),
+                command: command.to_string(),
+                mode: ExternalShellMode::Snapshot,
+                source_path: source_root.join(format!("{command}.sh")),
+                rendered_path: runtime
+                    .context()
+                    .shine_dir
+                    .join(format!("rendered/shell/demo/{command}.sh")),
+                runtime: "native".to_string(),
+                bun_dependencies: None,
+                dependency_hash: None,
+                transforms: Vec::new(),
+                env: Vec::new(),
+                needs_source: true,
+                content_hash: 1,
+            })
+            .collect::<Vec<_>>();
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("shell-manifest.toml"),
+            toml::to_string(&ShellManifest {
+                schema_version: super::super::SHELL_MANIFEST_SCHEMA_VERSION,
+                entries,
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "one".as_ref());
+        runtime.host().put_file(
+            launcher,
+            format!(
+                "#!/bin/sh\n# shine-managed\n# shine-target:{}\n",
+                source_root.join("one.sh").display()
+            )
+            .into_bytes(),
+        );
+
+        let plan = runtime
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                target: Some("demo/one".to_string()),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            plan.steps.iter().any(|step| {
+                step.target == "shell/profile" && step.action == PlanActionV1::Update
+            })
+        );
+        assert!(!plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("shared-category-state")
+                && step.action == PlanActionV1::Remove
+        }));
+    }
+
+    #[tokio::test]
+    async fn managed_sys_uninstall_can_use_receipt_without_original_preset() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("app/placeholder/file", b"placeholder".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/managed.txt");
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        let manifest = SysRunManifest {
+            schema_version: super::super::SYS_MANIFEST_SCHEMA_VERSION,
+            entries: vec![SysRunEntry {
+                os_id: "test".to_string(),
+                item_id: "managed".to_string(),
+                label: "Managed".to_string(),
+                status: super::super::SysItemStatus::Installed,
+                detail: String::new(),
+                updated_at: "1".to_string(),
+                managed: true,
+                profile_enabled: false,
+                receipt: Some(SystemReceipt::ManagedFile(
+                    super::super::ManagedFileReceipt {
+                        version: super::super::RECEIPT_VERSION,
+                        destination: destination.clone(),
+                        backup: None,
+                        content_hash: crate::install::hash_content(b"managed"),
+                        privileged: false,
+                        restart_hint: None,
+                    },
+                )),
+            }],
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("sys-manifest.toml"),
+            toml::to_string(&manifest).unwrap().into_bytes(),
+        );
+        let plan = runtime
+            .plan_managed_sys(SysManagedPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                os_id: "test".to_string(),
+                target: Some("managed".to_string()),
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(plan.is_ready());
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| step.action == PlanActionV1::Remove)
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_recovery() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("app/placeholder/file", b"placeholder".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/managed.txt");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        let previous_entry = SysRunEntry {
+            os_id: "test".to_string(),
+            item_id: "managed".to_string(),
+            label: "Managed".to_string(),
+            status: super::super::SysItemStatus::Installed,
+            detail: String::new(),
+            updated_at: "1".to_string(),
+            managed: true,
+            profile_enabled: false,
+            receipt: Some(SystemReceipt::ManagedFile(
+                super::super::ManagedFileReceipt {
+                    version: super::super::RECEIPT_VERSION,
+                    destination: destination.clone(),
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"managed"),
+                    privileged: false,
+                    restart_hint: None,
+                },
+            )),
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("sys-manifest.toml"),
+            toml::to_string(&SysRunManifest {
+                schema_version: super::super::SYS_MANIFEST_SCHEMA_VERSION,
+                entries: vec![previous_entry.clone()],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = SysManagedPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            os_id: "test".to_string(),
+            target: Some("managed".to_string()),
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("sys-manifest.toml"), 0);
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .run_managed_sys_approved(request, &approval, &mut Interaction, &mut observer,)
+                .await
+                .is_err()
+        );
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"managed");
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::SYS_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_ok()
+        );
+
+        let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_sys_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.entries, vec![previous_entry]);
+    }
+
+    #[tokio::test]
+    async fn split_dns_manifest_failure_removes_created_resource_on_explicit_recovery() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/macos/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'split-dns'
+label = 'Split DNS'
+mode = 'managed'
+driver = 'split-dns'
+requires_admin = true
+required_env = ['PRIVATE_DNS_DOMAIN', 'PRIVATE_DNS_SERVERS']
+permissions = { schema_version = 1, administrator = true, environment = [{ name = 'PRIVATE_DNS_DOMAIN', sensitivity = 'plain' }, { name = 'PRIVATE_DNS_SERVERS', sensitivity = 'plain' }], system = [{ capability = 'split-dns', resource = 'private-domain' }] }
+[items.config]
+domain_env = 'PRIVATE_DNS_DOMAIN'
+servers_env = 'PRIVATE_DNS_SERVERS'
+"#
+                .to_vec(),
+            )
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("PRIVATE_DNS_DOMAIN".to_string(), "corp.test".to_string());
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.53".to_string());
+        let request = SysManagedPlanRequest {
+            operation: LifecycleOperation::Install,
+            os_id: "macos".to_string(),
+            target: Some("split-dns".to_string()),
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("sys-manifest.toml"), 0);
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .run_managed_sys_approved(request, &approval, &mut Interaction, &mut observer,)
+                .await
+                .is_err()
+        );
+        let receipt = split_dns_receipt(&super::super::SplitDnsDomainRequest {
+            os_id: "macos".to_string(),
+            item_id: "split-dns".to_string(),
+            domain: "corp.test".to_string(),
+            servers: "10.0.0.53".to_string(),
+            dry_run: false,
+        })
+        .unwrap();
+        let resource = PathBuf::from(receipt.resource);
+        assert!(runtime.host().read(&resource).await.is_ok());
+
+        let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_sys_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&resource).await.is_err());
+        assert!(
+            SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_sys_missing_env_blocks_and_admin_requirement_is_explicit() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'managed'
+label = 'Managed'
+mode = 'managed'
+driver = 'managed-file'
+requires_admin = true
+required_env = ['TOKEN']
+permissions = { schema_version = 1, administrator = true, environment = [{ name = 'TOKEN', sensitivity = 'plain' }] }
+[items.config]
+source = 'managed.txt'
+target = '$HOME/.config/managed.txt'
+"#
+                .to_vec(),
+            )
+            .file("sys/test/managed.txt", b"managed".to_vec())
+            .build();
+        let mut runtime = runtime(snapshot);
+        let request = SysManagedPlanRequest {
+            operation: LifecycleOperation::Install,
+            os_id: "test".to_string(),
+            target: Some("managed".to_string()),
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let missing = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        assert!(!missing.is_ready());
+        assert!(missing.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"sys_missing_required_env".to_string())
+        }));
+        assert!(
+            missing
+                .permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("TOKEN".to_string(), "plain-value".to_string());
+        let ready = runtime.plan_managed_sys(request).await.unwrap();
+        assert!(ready.is_ready());
+        assert_ne!(missing.inputs.state, ready.inputs.state);
+        assert!(
+            !serde_json::to_string(&ready)
+                .unwrap()
+                .contains("plain-value")
+        );
+    }
+
+    #[tokio::test]
+    async fn split_dns_plan_binds_receipt_and_live_ownership() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/macos/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'split-dns'
+label = 'Split DNS'
+mode = 'managed'
+driver = 'split-dns'
+requires_admin = true
+required_env = ['PRIVATE_DNS_DOMAIN', 'PRIVATE_DNS_SERVERS']
+permissions = { schema_version = 1, administrator = true, environment = [{ name = 'PRIVATE_DNS_DOMAIN', sensitivity = 'plain' }, { name = 'PRIVATE_DNS_SERVERS', sensitivity = 'plain' }], system = [{ capability = 'split-dns', resource = 'private-domain' }] }
+[items.config]
+domain_env = 'PRIVATE_DNS_DOMAIN'
+servers_env = 'PRIVATE_DNS_SERVERS'
+"#
+                .to_vec(),
+            )
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("PRIVATE_DNS_DOMAIN".to_string(), "corp.test".to_string());
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.53".to_string());
+        let receipt = split_dns_receipt(&super::super::SplitDnsDomainRequest {
+            os_id: "macos".to_string(),
+            item_id: "split-dns".to_string(),
+            domain: "corp.test".to_string(),
+            servers: "10.0.0.53".to_string(),
+            dry_run: true,
+        })
+        .unwrap();
+        let resource = PathBuf::from(&receipt.resource);
+        runtime
+            .host()
+            .put_file(&resource, split_dns_content_for_plan(&receipt));
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("sys-manifest.toml"),
+            toml::to_string(&SysRunManifest {
+                schema_version: super::super::SYS_MANIFEST_SCHEMA_VERSION,
+                entries: vec![SysRunEntry {
+                    os_id: "macos".to_string(),
+                    item_id: "split-dns".to_string(),
+                    label: "Split DNS".to_string(),
+                    status: super::super::SysItemStatus::Installed,
+                    detail: String::new(),
+                    updated_at: "1".to_string(),
+                    managed: true,
+                    profile_enabled: false,
+                    receipt: Some(SystemReceipt::SplitDns(receipt)),
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = SysManagedPlanRequest {
+            operation: LifecycleOperation::Install,
+            os_id: "macos".to_string(),
+            target: Some("split-dns".to_string()),
+            input_versions: PlanningInputVersions::default(),
+        };
+        let current = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        assert!(current.is_ready());
+        assert!(
+            current
+                .steps
+                .iter()
+                .any(|step| step.action == PlanActionV1::None)
+        );
+
+        runtime.host().put_file(&resource, b"foreign".to_vec());
+        let conflicted = runtime.plan_managed_sys(request).await.unwrap();
+        assert!(conflicted.steps.iter().any(|step| {
+            step.action == PlanActionV1::Preserve
+                && step
+                    .diagnostic_codes
+                    .contains(&"sys_resource_user_modified".to_string())
+        }));
+        assert_ne!(current.inputs.state, conflicted.inputs.state);
+    }
+
+    #[tokio::test]
+    async fn invalid_operation_flag_combinations_are_rejected() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let app = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: None,
+                force: false,
+                purge: true,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await;
+        assert!(app.is_err());
+        let shell = runtime
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: true,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await;
+        assert!(shell.is_err());
+    }
+
+    #[tokio::test]
+    async fn app_uninstall_can_use_manifest_without_original_preset() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("app/other/config", b"other".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime
+            .context()
+            .home_dir
+            .join(".config/retired/config.toml");
+        runtime.host().put_file(&destination, b"installed".to_vec());
+        let manifest = AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/retired/config.toml".to_string(),
+                destination,
+                backup: None,
+                content_hash: crate::install::hash_content(b"installed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&manifest).unwrap().into_bytes(),
+        );
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                target: Some("retired".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(plan.is_ready());
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| step.action == PlanActionV1::Remove)
+        );
+        assert!(!plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Execute
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_teardown_execution".to_string())
+        }));
+    }
+
+    #[tokio::test]
+    async fn approved_app_upgrade_prune_journals_stale_static_copy_removal() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: None,
+            force: false,
+            purge: false,
+            prune_stale: true,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_stale_source_pruned".to_string())
+        }));
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, destination.clone()),
+            (FilesystemAccessV1::Write, rollback.clone()),
+            (FilesystemAccessV1::Remove, rollback.clone()),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), &path),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedFile { .. }))
+        ));
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.lifecycle.summary().changed, 1);
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn app_upgrade_prune_blocks_stale_copy_with_noncanonical_backup() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = runtime
+            .context()
+            .home_dir
+            .join(".config/demo/config.legacy");
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        runtime.host().put_file(&backup, b"original".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination,
+                backup: Some(backup),
+                content_hash: crate::install::hash_content(b"managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: false,
+                purge: false,
+                prune_stale: true,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_stale_removal_unsupported".to_string())
+        }));
+    }
+
+    #[tokio::test]
+    async fn app_upgrade_prune_receipt_failure_recovers_stale_static_copy() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: None,
+            force: false,
+            purge: false,
+            prune_stale: true,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"managed");
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.entries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn approved_app_upgrade_prune_journals_stale_json_keys() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let destination = runtime.context().home_dir.join(".config/demo/config.json");
+        let current = br#"{"proxy":{"mode":"managed"},"theme":"dark"}"#;
+        let managed_source = br#"{"proxy":{"mode":"managed"}}"#;
+        let managed_keys = vec!["proxy".to_string()];
+        runtime.host().put_file(&destination, current.to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.json".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::runtime::app::managed_json_hash(managed_source, &managed_keys)
+                    .unwrap(),
+                install_strategy: crate::install::AppInstallStrategy::JsonMerge { managed_keys },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: None,
+            force: false,
+            purge: false,
+            prune_stale: true,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedJson { .. }))
+        ));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        let remaining = runtime.host().read(&destination).await.unwrap();
+        let remaining: serde_json::Value = serde_json::from_slice(&remaining).unwrap();
+        assert_eq!(remaining, serde_json::json!({ "theme": "dark" }));
+    }
+
+    #[tokio::test]
+    async fn approved_app_uninstall_journals_static_managed_removal() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&AppManifest {
+                schema_version: APP_MANIFEST_SCHEMA_VERSION,
+                entries: vec![AppEntry {
+                    source: "app/demo/config.toml".to_string(),
+                    destination: destination.clone(),
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), &rollback),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedFile { .. }))
+        ));
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .uninstall_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(report.lifecycle.summary().changed, 1);
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn approved_app_uninstall_journals_backup_restoration() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        runtime.host().put_file(&backup, b"user-original".to_vec());
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&AppManifest {
+                schema_version: APP_MANIFEST_SCHEMA_VERSION,
+                entries: vec![AppEntry {
+                    source: "app/demo/config.toml".to_string(),
+                    destination: destination.clone(),
+                    backup: Some(backup.clone()),
+                    content_hash: crate::install::hash_content(b"managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        for (access, path) in [
+            (FilesystemAccessV1::Write, destination.clone()),
+            (FilesystemAccessV1::Remove, backup.clone()),
+            (FilesystemAccessV1::Write, rollback.clone()),
+            (FilesystemAccessV1::Remove, rollback.clone()),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), &path),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedFileWithBackup { .. }))
+        ));
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .uninstall_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.files[0].action,
+            super::super::AppFileAction::Restored
+        );
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+        assert!(runtime.host().read(&backup).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn approved_privileged_app_uninstall_journals_static_copy_removal() {
+        let runtime = runtime(privileged_static_copy_app_snapshot());
+        let (destination, _) = seed_privileged_static_copy_app(&runtime, b"managed", None).await;
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(
+                ir.actions.as_slice(),
+                [action] if matches!(
+                    action.kind,
+                    crate::action::ActionKindV1::RemoveManagedFile {
+                        requires_admin: true,
+                        ..
+                    }
+                )
+            )
+        ));
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .uninstall_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(report.files[0].action, super::super::AppFileAction::Removed);
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let operations = runtime.host().operations();
+        assert!(operations.contains(&HostOperation::MovePrivileged {
+            from: destination,
+            to: rollback.clone(),
+        }));
+        assert!(operations.contains(&HostOperation::RemovePrivileged(rollback)));
+    }
+
+    #[tokio::test]
+    async fn preserved_privileged_app_file_does_not_request_admin() {
+        let runtime = runtime(privileged_static_copy_app_snapshot());
+        let (destination, _) =
+            seed_privileged_static_copy_app(&runtime, b"user-modified", None).await;
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Preserve
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_user_modified".to_string())
+        }));
+        assert!(
+            !plan
+                .permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .uninstall_apps_approved(request, &approval, &mut observer, &mut NoAdminInteraction)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.files[0].action,
+            super::super::AppFileAction::UserModified
+        );
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-modified"
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.entries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn approved_privileged_forced_app_uninstall_journals_backup_restoration() {
+        let runtime = runtime(privileged_static_copy_app_snapshot());
+        let (destination, backup) =
+            seed_privileged_static_copy_app(&runtime, b"user-modified", Some(b"user-original"))
+                .await;
+        let backup = backup.unwrap();
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: true,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            &actions[0].actions[0].kind,
+            crate::action::ActionKindV1::ForceRemoveManagedFile {
+                persistent_backup: Some(_),
+                requires_admin: true,
+                ..
+            }
+        ));
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .uninstall_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.files[0].action,
+            super::super::AppFileAction::ForceRestored
+        );
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+        assert!(runtime.host().read(&backup).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let operations = runtime.host().operations();
+        assert!(operations.contains(&HostOperation::MovePrivileged {
+            from: backup,
+            to: destination,
+        }));
+        assert!(operations.contains(&HostOperation::RemovePrivileged(rollback)));
+    }
+
+    #[tokio::test]
+    async fn approved_forced_app_uninstall_journals_modified_static_copy_removal() {
+        let runtime = runtime(static_copy_app_snapshot());
+        let (destination, _) = seed_static_copy_app(&runtime, b"user-modified", None).await;
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: true,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_user_modification_override".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::ForceRemoveManagedFile { .. }))
+        ));
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .uninstall_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.files[0].action,
+            super::super::AppFileAction::ForceRemoved
+        );
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn approved_forced_app_uninstall_journals_backup_restoration() {
+        let runtime = runtime(static_copy_app_snapshot());
+        let (destination, backup) =
+            seed_static_copy_app(&runtime, b"user-modified", Some(b"user-original")).await;
+        let backup = backup.unwrap();
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: true,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            &actions[0].actions[0].kind,
+            crate::action::ActionKindV1::ForceRemoveManagedFile {
+                persistent_backup: Some(_),
+                ..
+            }
+        ));
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .uninstall_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.files[0].action,
+            super::super::AppFileAction::ForceRestored
+        );
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+        assert!(runtime.host().read(&backup).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn force_keeps_unchanged_static_copy_on_the_ordinary_remove_action() {
+        let runtime = runtime(static_copy_app_snapshot());
+        seed_static_copy_app(&runtime, b"managed", None).await;
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: true,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedFile { .. }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn forced_app_remove_blocks_an_occupied_transaction_rollback_path() {
+        let runtime = runtime(static_copy_app_snapshot());
+        let (destination, _) = seed_static_copy_app(&runtime, b"user-modified", None).await;
+        runtime.host().put_file(
+            crate::action::managed_file_rollback_path(&destination),
+            b"foreign".to_vec(),
+        );
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                target: Some("demo".to_string()),
+                force: true,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_remove_rollback_occupied".to_string())
+        }));
+    }
+
+    #[tokio::test]
+    async fn app_managed_remove_blocks_an_occupied_transaction_rollback_path() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        runtime.host().put_file(
+            crate::action::managed_file_rollback_path(&destination),
+            b"foreign".to_vec(),
+        );
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&AppManifest {
+                schema_version: APP_MANIFEST_SCHEMA_VERSION,
+                entries: vec![AppEntry {
+                    source: "app/demo/config.toml".to_string(),
+                    destination,
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_remove_rollback_occupied".to_string())
+        }));
+    }
+}

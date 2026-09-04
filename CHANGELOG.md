@@ -7,6 +7,200 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-09-04
+
+This stable release promotes the 2.0 lifecycle security and recovery boundary after upgrade,
+lifecycle, uninstall, and recovery validation on macOS, Ubuntu, and Windows. Read
+[Upgrade from Shine 1.x](docs/manual/guides/upgrade-to-2.md) before upgrading an existing 1.x
+installation. The complete 2.0 feature and breaking-change inventory is recorded in the release
+candidate sections below.
+
+### Features
+
+- Added native/Bun script-form App lifecycle hooks that share the parent install or upgrade Plan,
+  including declared environment inputs and the fixed App script contract. Clash Verge now uses
+  this path to refresh current rule providers automatically after its managed files change while
+  retaining the safe reselect-then-apply flow for changed subscription bindings.
+
+### Bug Fixes
+
+- Converged duplicate legacy App relocation receipts on the latest source record, so upgrading a
+  1.8 installation consumes the reviewed action for the current destination, removes the stale
+  receipt, and preserves the obsolete destination as an unowned user file.
+
+## [2.0.0-rc.2] — 2026-09-04
+
+This release candidate fixes issues found while reviewing and exercising 2.0.0-rc.1. It remains a
+GitHub and Cargo prerelease, does not replace 1.8.x as `latest`, and is not offered by the stable
+updater. Read [Upgrade from Shine 1.x](docs/manual/guides/upgrade-to-2.md) before installing it by
+exact version.
+
+### Bug Fixes
+
+- Improved Preset validation, lint, test, plan, and migration diagnostics so actionable source
+  locations, remediation, blockers, and summaries remain visible in both text and JSON workflows.
+- Made authoring plans prioritize real validation and planning blockers instead of obscuring them
+  behind secondary diagnostics.
+- Closed reviewed lifecycle safety gaps: configuration upgrade now honors App failure counts,
+  generated installs review and preserve fixed backups, Split-DNS transactions use one lock owner,
+  and packing recognizes executable payloads only through typed metadata paths.
+- Resolved App and Shell targets against the effective Preset snapshot, so installed overlay-only
+  categories can be addressed consistently by top-level upgrade and inspection commands.
+
+## [2.0.0-rc.1] — 2026-09-03
+
+This is the first reproducible 2.0 release candidate. It is a GitHub and Cargo prerelease, does not
+replace 1.8.x as `latest`, and is not offered by the stable updater. Read
+[Upgrade from Shine 1.x](docs/manual/guides/upgrade-to-2.md) before installing it by exact version.
+
+### Features
+
+- Added `shine env secret identity init --phone` on Windows for guided `age-plugin-phone`
+  pairing, with explicit transport selection, stable structured setup handoff, and ordered
+  multi-identity configuration that preserves the existing secret backend and recovery policy.
+- Added reviewed `shine preset migrate [PATH]` migration for legacy 1.x Preset metadata, with
+  dry-run/text diff review, versioned content-free JSON reports, source revalidation, complete
+  private backups, and conservative blockers for opaque permissions and Sys v1 dispatchers.
+- Added `shine preset schema` to generate a versioned reference directly from shipped Rust report,
+  fixture, and bundle types plus live Clap help, avoiding a handwritten schema copy that can drift.
+- Expanded `shine.test.toml` synthetic host state with environment presence, opaque secret
+  versions, files, runtime receipt documents, command detection, exact scoped trust grants, and
+  administrator state. Test reports now expose the actual structured Plan sets used for comparison.
+- Added fixture-tested App, Shell, and Sys authoring examples and exercise all three through schema,
+  validation, strict lint, test, and deterministic pack gates in CI.
+- Added `shine preset plan <CATEGORY> --platform <macos|linux|windows>` with versioned text/JSON
+  authoring reports. It reuses static validation and Core lifecycle planners against deterministic
+  empty in-memory state, exposing semantic steps, permissions, and blockers without loading active
+  configuration, touching real HOME, executing Preset code, or producing a mutation approval.
+- Added `shine preset lint [PATH]` with versioned text/JSON quality diagnostics for missing
+  descriptions, legacy metadata, broad network scopes, and private-machine absolute paths.
+  Validation errors always fail; `--deny-warnings` provides opt-in strict CI behavior.
+- Added declarative `shine.test.toml` fixtures and `shine preset test <CATEGORY>`. Fixture cases
+  assert platform-specific authoring validity, readiness, Plan sections, actions, and diagnostic
+  codes against in-memory state without setup/teardown scripts or Preset code execution.
+- Added deterministic `shine preset pack <CATEGORY> --output <FILE>` tar.gz bundles with a versioned
+  hash/mode manifest. Packing rejects plaintext private-key candidates, private HOME paths,
+  `node_modules`, symlinks, and undeclared executable files; fixture files are not distributed.
+- Added snapshot-bound lifecycle Plan review and one-shot approval for App, Shell, and managed Sys
+  install, upgrade, and uninstall. Protected commands now support `--yes` for automation while
+  still rendering and revalidating the complete Plan before mutation.
+- Added a dedicated snapshot-bound `sys-bootstrap` Plan, repeated `sys bootstrap --item <ITEM>`
+  selection, and approval revalidation before detection, package/script execution, profile writes,
+  or receipt mutation.
+- Added specialized snapshot-bound Plans for App generator refresh, artifact apply/remove, and Sys
+  profile enable/disable, with fresh state validation before executable code or profile writes.
+- Added App lifecycle-hook `env` declarations so Plan fingerprints bind plain input hashes and
+  opaque secret revisions without serializing environment values.
+- Added versioned, target-local Preset permission declarations with strict static validation and
+  migrated every built-in App, Shell, and Sys target.
+- Added `shine trust inspect/grant/list/revoke` and owner-only, target-scoped external-code grants
+  bound to the current code digest, trust layer, capability, and exact permission set.
+- Added `shine app recover` to review and safely clean up or roll back an interrupted journaled App
+  installation, including restoring an unchanged fixed backup after backup-aware creation, without
+  overwriting destination or backup files changed after the interruption.
+- Journaled receipt-owned, unprivileged static Copy updates during App install and upgrade, using
+  same-directory transaction rollback material that is restored or removed only while unchanged.
+- Journaled ordinary removal of unchanged, receipt-owned, unprivileged static Copy App files
+  without persistent backups. Interrupted uninstall restores only unchanged rollback material
+  while the original receipt remains, or removes it after receipt removal is durable.
+- Journaled ordinary static Copy removal when the receipt owns a fixed persistent backup. Uninstall
+  restores the user file through two fingerprint-bound moves; interrupted recovery restores both
+  pre-uninstall paths before receipt commit or keeps the restored user file after commit.
+- Journaled forced removal of user-modified, unprivileged static Copy App files. The modified file
+  remains fingerprint-bound rollback material until receipt commit, and interrupted recovery also
+  reverses an optional persistent-backup restoration without storing either file in the journal.
+- Extended journaled ordinary, backup-restoring, and forced static Copy removal to administrator
+  paths. Protected moves, cleanup, and recovery share the administrator lock and request elevation
+  only when the reviewed Plan will mutate a protected path.
+- Extended journaled static Copy creation, backup-aware creation, and in-place update to
+  administrator paths. Protected writes, moves, mode restoration, receipt commit, and recovery hold
+  one administrator lock; receipt-only recovery does not request elevation.
+- Journaled App JSON merge install, in-place update, ordinary uninstall, and forced uninstall.
+  Recovery restores or removes only declared top-level keys while preserving unrelated values
+  changed after interruption; Action IR and journals contain hashes and key names, never JSON
+  payloads.
+- Journaled `upgrade --prune-stale` removal of unchanged App static Copy and JSON receipts by
+  reusing the receipt-gated removal transactions. Interrupted pruning recovers through
+  `shine app recover`; user-modified stale content remains preserved, and missing destinations use
+  receipt-only cleanup.
+- Journaled App static Copy relocation as one old-receipt/new-receipt transaction spanning the old
+  destination, optional fixed backup, rollback material, and absent new destination. Interrupted
+  relocation recovers through `shine app recover`, and the new receipt no longer inherits the old
+  backup path.
+- Journaled App JSON relocation as one key-owned old-receipt/new-receipt transaction. Recovery
+  removes desired keys from the new destination and restores previous keys at the old destination
+  before receipt commit while preserving unrelated current values at both paths; after commit it
+  cleans only exact old rollback material.
+- Journaled raw external Shell snapshot creation and replacement at the category boundary. The
+  transaction binds deterministic stage/rollback trees, selected command receipt transitions, and
+  a positive commit marker; recovery restores the old receipt view before dependent launcher
+  rollback and blocks changed tree material.
+- Journaled first-time Shell launcher creation for Unix symlinks, Unix Bun/live launchers, and
+  Windows PowerShell/cmd shim pairs. `shine shell recover` reviews a separate recovery Plan and
+  removes only unchanged transaction-created launcher resources, while preserving an exact
+  receipt-owned launcher or any user-modified path.
+- Journaled updates of unchanged, receipt-owned Shell launchers during install and upgrade. Old
+  Unix or Windows launcher resources move to fingerprint-bound same-directory rollback material;
+  recovery restores them before the new command receipt or keeps the replacement and cleans only
+  unchanged rollback material after receipt commit.
+- Journaled uninstall of unchanged, receipt-owned Shell launchers. Unix launchers and both Windows
+  shims move to exact same-directory rollback material before receipt removal; a positive commit
+  marker distinguishes completed removal from the crash window that reconstructs the old receipt
+  and restores unchanged resources through `shine shell recover`.
+- Journaled removal of the last-consumer Shell rendered file before command receipt deletion.
+  Recovery reconstructs missing consumer receipts and restores only exact rollback material before
+  the positive commit marker; live rendering now shares the lifecycle/recovery lock and refuses a
+  pending journal.
+- Journaled Shell cache and external snapshot uninstall plus Shine-owned profile sentinel
+  reconciliation. `shine shell recover` restores only exact rollback material or owned blocks and
+  preserves unrelated cache files, receipts, and profile edits made after interruption.
+- Added `shine sys recover` for interrupted managed-file and split-DNS operations. Managed Sys
+  actions now journal exact receipt transitions and recover only fingerprint-matching resource and
+  rollback state.
+- Journaled the shell sentinel changes made by explicit `sys profile enable/disable`. Recovery
+  restores only Shine-owned blocks; generated profile composition keeps its explicit
+  non-transactional three-way-merge boundary.
+
+### Bug Fixes
+
+- Kept `env secret decrypt` output byte-exact with no appended line ending, and suppress successful
+  age progress diagnostics for default phone-plugin Developer USB and Wi-Fi unwraps. Optional
+  guidance enabled by `AGE_PLUGIN_PHONE_MESSAGES=1` and explicit QR requests remain visible.
+- Made `shine update` and `shine upgrade` report active Preset compatibility with logical source
+  context. Update no longer turns App/Sys inspection failures into empty results, while upgrade
+  blocks before any Plan or mutation when legacy metadata requires migration.
+- Unified Shell Plan and execution ownership checks for receiptless 1.8 launchers. Compatible Unix
+  launchers and Windows PowerShell/cmd pairs can now be uninstalled directly through the journaled
+  transaction, while modified or foreign resources remain preserved.
+
+### Known limitations
+
+- This prerelease intentionally receives no implicit RC update channel. Install an exact RC or use
+  the separately moving `preview` channel; stable checks continue to offer 1.8.x.
+- Promotion to 2.0 stable remains gated on real 1.8-state upgrade, lifecycle, uninstall, and
+  recovery smoke tests on Windows, macOS, and Linux. Please report compatibility failures through
+  the [issue tracker](https://github.com/biulight/shine/issues).
+
+### Breaking changes
+
+- Protected mutation from external Presets now fails closed when a required permission declaration
+  is missing or cannot be computed; non-interactive use must pass `--yes`, which conflicts with
+  `--dry-run` where preview is available.
+- Mutating `sys bootstrap` now requires default-No Plan approval in a terminal or explicit `--yes`
+  for non-interactive use. Its existing `--dry-run` remains a separate preview.
+- `app refresh`, `app artifact apply/remove`, and mutating `sys profile enable/disable` now require
+  default-No Plan approval or explicit `--yes`. Generator and artifact processes now receive only
+  their explicit `generator.env` or `[artifact].env` variables plus fixed `SHINE_APP_*` values
+  instead of the full active `[env]` table.
+- Untargeted `shine upgrade` no longer synchronizes the Sys shell profile implicitly. Use
+  `shine sys profile enable/disable` to change that explicit state.
+- Retired `allow_app_hooks` and `allow_sys_code`. They are ignored, removed on the next config save,
+  and never converted into broad trust. Enroll reviewed external targets with `shine trust grant`.
+- App list/info/update no longer executes generators by default. `app info`, top-level `info`, and
+  targeted/global `update` accept `--run-generators` to evaluate automatic or manual generator
+  output in memory without writing destinations or manifests. Default output warns when generated
+  content was not evaluated; evaluation failures and missing external-code trust remain explicit.
+
 ## [1.8.0] — 2026-08-28
 
 ### Features

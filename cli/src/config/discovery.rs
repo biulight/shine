@@ -86,6 +86,7 @@ pub(crate) struct ReadOnlyRuntimePaths {
     pub(crate) presets_dir: PathBuf,
     pub(crate) presets_overlay_dir: Option<PathBuf>,
     pub(crate) is_external_presets: bool,
+    pub(crate) managed_overlay: bool,
 }
 
 /// Resolve the active runtime paths without initializing `Config` or writing
@@ -120,6 +121,9 @@ pub(crate) fn discover_runtime_paths_read_only() -> Option<ReadOnlyRuntimePaths>
                     .filter(|path| path.exists())
             })
     });
+    let global_managed_overlay = global.as_ref().is_some_and(|config| {
+        config.presets_overlay_dir.is_none() && config.presets_overlay_git.is_some()
+    }) && global_overlay.is_some();
 
     let current_dir = std::env::current_dir().ok()?;
     let Some(project) = find_project_config(&current_dir) else {
@@ -128,6 +132,7 @@ pub(crate) fn discover_runtime_paths_read_only() -> Option<ReadOnlyRuntimePaths>
             presets_dir: global_presets_dir,
             presets_overlay_dir: global_overlay,
             is_external_presets: global_is_external,
+            managed_overlay: global_managed_overlay,
         });
     };
 
@@ -157,12 +162,16 @@ pub(crate) fn discover_runtime_paths_read_only() -> Option<ReadOnlyRuntimePaths>
         .and_then(|config| config.presets_overlay_dir.as_deref())
         .map(|path| resolve_config_presets_path(path, &project.root))
         .or(global_overlay);
+    let project_has_manual_overlay = project_config
+        .as_ref()
+        .is_some_and(|config| config.presets_overlay_dir.is_some());
 
     Some(ReadOnlyRuntimePaths {
         shine_dir,
         presets_dir,
         presets_overlay_dir,
         is_external_presets,
+        managed_overlay: global_managed_overlay && !project_has_manual_overlay,
     })
 }
 
@@ -270,6 +279,49 @@ mod tests {
         assert!(find_project_config(&project_dir).is_none());
 
         fs::remove_dir_all(&project_dir).await.unwrap();
+    }
+
+    #[test]
+    fn read_only_discovery_marks_existing_git_overlay_as_managed() {
+        let _guard = env_lock();
+        let root = std::env::temp_dir().join(format!(
+            "shine-discovery-managed-overlay-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let previous_dir = std::env::current_dir().unwrap();
+        let previous_config = std::env::var_os("SHINE_CONFIG_DIR");
+        let previous_presets = std::env::var_os("SHINE_PRESETS");
+        std::fs::create_dir_all(root.join("overlay")).unwrap();
+        std::fs::write(
+            root.join(GLOBAL_CONFIG_FILE),
+            "presets_overlay_git = 'https://example.invalid/presets.git'\n",
+        )
+        .unwrap();
+        // SAFETY: env_lock serializes process-global environment and cwd mutation.
+        unsafe {
+            std::env::set_var("SHINE_CONFIG_DIR", &root);
+            std::env::remove_var("SHINE_PRESETS");
+        }
+        std::env::set_current_dir(&root).unwrap();
+
+        let runtime = discover_runtime_paths_read_only().unwrap();
+
+        std::env::set_current_dir(previous_dir).unwrap();
+        // SAFETY: env_lock remains held while the previous environment is restored.
+        unsafe {
+            match previous_config {
+                Some(value) => std::env::set_var("SHINE_CONFIG_DIR", value),
+                None => std::env::remove_var("SHINE_CONFIG_DIR"),
+            }
+            match previous_presets {
+                Some(value) => std::env::set_var("SHINE_PRESETS", value),
+                None => std::env::remove_var("SHINE_PRESETS"),
+            }
+        }
+
+        assert!(runtime.managed_overlay);
+        assert_eq!(runtime.presets_overlay_dir, Some(root.join("overlay")));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     // --- resolve_runtime_config_dirs unit tests ---

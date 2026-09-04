@@ -221,7 +221,7 @@ pub async fn write_env_override_entry(path: &Path, key: &str, value: Option<&str
         let mut doc: toml_edit::DocumentMut = existing
             .parse()
             .context("parsing existing env override file for comment preservation")?;
-        utils::migration::sync_table(doc.as_table_mut(), &target);
+        shine_core::migration::sync_table(doc.as_table_mut(), &target);
         doc.to_string()
     };
 

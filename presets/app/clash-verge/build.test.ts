@@ -10,6 +10,7 @@ import {
   refreshProviders,
   renderPayload,
   resolveBoundFiles,
+  syncPayload,
   type BoundFiles,
 } from "./build";
 
@@ -177,6 +178,31 @@ test("refreshProviders skips an empty provider set", async () => {
   expect(await refreshProviders([])).toBe("skipped");
 });
 
+test("refreshProviders authenticates and reports partial controller failure", async () => {
+  const requests: Array<{ input: string; init: RequestInit }> = [];
+  const result = await refreshProviders(
+    ["lan", "office"],
+    async (input, init) => {
+      requests.push({ input, init });
+      return new Response(null, { status: input.endsWith("/lan") ? 204 : 401 });
+    },
+    "http://127.0.0.1:9097/",
+    "controller-secret",
+  );
+
+  expect(result).toBe("failed");
+  expect(requests).toEqual([
+    {
+      input: "http://127.0.0.1:9097/providers/rules/lan",
+      init: { method: "PUT", headers: { Authorization: "Bearer controller-secret" } },
+    },
+    {
+      input: "http://127.0.0.1:9097/providers/rules/office",
+      init: { method: "PUT", headers: { Authorization: "Bearer controller-secret" } },
+    },
+  ]);
+});
+
 test("closeConnections drops existing traffic through the authenticated controller", async () => {
   const requests: Array<{ input: string; init: RequestInit }> = [];
   const result = await closeConnections("http://127.0.0.1:9097", "controller-secret", async (input, init) => {
@@ -219,6 +245,63 @@ test("installPayload is idempotent and marks every managed copy", () => {
   // CVR rewrites comments/formatting on save; semantic equality must remain current.
   writeFileSync(targets.rules, "delete: []\n# rewritten by CVR\nappend: []\nprepend: []\n");
   expect(installPayload(payload, targets)).toBe("current");
+});
+
+test("syncPayload refreshes current providers and closes existing connections", async () => {
+  const dir = tempDir();
+  const targetDir = join(dir, "profiles");
+  mkdirSync(targetDir);
+  const targets = Object.fromEntries(
+    ["merge", "rules", "proxies", "groups"].map((kind) => [kind, join(targetDir, `${kind}.yaml`)]),
+  ) as BoundFiles;
+  const editor = "prepend: []\nappend: []\ndelete: []\n";
+  const payload = { merge: "rule-providers: {}\n", rules: editor, proxies: editor, groups: editor };
+  expect(installPayload(payload, targets)).toBe("changed");
+  const requests: string[] = [];
+
+  expect(
+    await syncPayload(
+      payload,
+      ["lan"],
+      targets,
+      async (input) => {
+        requests.push(input);
+        return new Response(null, { status: 204 });
+      },
+      "http://127.0.0.1:9097",
+      "",
+    ),
+  ).toBe("refreshed");
+  expect(requests).toEqual([
+    "http://127.0.0.1:9097/providers/rules/lan",
+    "http://127.0.0.1:9097/connections",
+  ]);
+});
+
+test("syncPayload writes changed bindings without contacting unloaded providers", async () => {
+  const dir = tempDir();
+  const targetDir = join(dir, "profiles");
+  mkdirSync(targetDir);
+  const targets = Object.fromEntries(
+    ["merge", "rules", "proxies", "groups"].map((kind) => [kind, join(targetDir, `${kind}.yaml`)]),
+  ) as BoundFiles;
+  const editor = "prepend: []\nappend: []\ndelete: []\n";
+  let requests = 0;
+
+  expect(
+    await syncPayload(
+      { merge: "rule-providers: {}\n", rules: editor, proxies: editor, groups: editor },
+      ["new-provider"],
+      targets,
+      async () => {
+        requests += 1;
+        return new Response(null, { status: 204 });
+      },
+      "http://127.0.0.1:9097",
+      "",
+    ),
+  ).toBe("bindings-updated");
+  expect(requests).toBe(0);
 });
 
 test("the example exposes the composite source keys", () => {

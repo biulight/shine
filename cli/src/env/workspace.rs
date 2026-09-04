@@ -637,7 +637,7 @@ async fn resolve_explicit_values(
             super::StoredValue::Secret {
                 key: secret_key,
                 value: ciphertext,
-            } => secret::decrypt_secret(ciphertext, &config.age_identities())
+            } => secret::decrypt_secret(ciphertext, &config.resolved_age_identities())
                 .await
                 .with_context(|| format!("decrypting {secret_key}"))?,
             super::StoredValue::Plaintext(value) => value.to_string(),
@@ -1035,7 +1035,7 @@ async fn decrypt_source_payload(
     if source.payload.data.trim().is_empty() {
         return Ok(BTreeMap::new());
     }
-    let plaintext = secret::decrypt_secret(&source.payload.data, &config.age_identities())
+    let plaintext = secret::decrypt_secret(&source.payload.data, &config.resolved_age_identities())
         .await
         .with_context(|| format!("decrypting {}", path.display()))?;
     let payload: SecretPayload = toml::from_str(&plaintext)
@@ -1184,7 +1184,7 @@ async fn read_valid_cache(
     if cache.version != CACHE_FORMAT_VERSION || cached.input_hash != input_hash {
         return Ok(None);
     }
-    let plaintext = secret::decrypt_secret(&cached.data, &config.age_identities()).await?;
+    let plaintext = secret::decrypt_secret(&cached.data, &config.resolved_age_identities()).await?;
     let payload: SecretPayload = toml::from_str(&plaintext)?;
     let keys: Vec<_> = payload.values.keys().cloned().collect();
     if payload.version != SECRET_PAYLOAD_VERSION || keys != cached.keys {

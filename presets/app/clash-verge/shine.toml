@@ -1,6 +1,11 @@
+metadata_schema_version = 2
 description = "Clash Verge Rev subscription enhancements: layers a LAN proxy, policy groups, and rule-providers onto the active subscription without touching it."
 dest = "~/.shine/clash-verge"
 list_mode = "files"
+
+post_upgrade = [
+  { script = "build.ts", runtime = "bun", env = ["CLASH_PROFILES_FILE", "CLASH_CONTROLLER_URL", "CLASH_CONTROLLER_TOKEN"], show_output = true },
+]
 
 # `shine app artifact apply clash-verge` runs the artifact script to refresh the mihomo
 # rule-providers via the external controller — the analog of `surge-cli reload`.
@@ -16,26 +21,32 @@ list_mode = "files"
 # macOS-only bash artifact — clash-verge's artifact works on macOS/Windows/Linux
 # (CVR is cross-platform). bun is an external prerequisite (https://bun.sh).
 #
-# The real logic (rendering the active subscription's four bound enhancement
-# files + refreshing rule-providers) lives in the artifact because only it receives the `[env]` table and
-# SHINE_APP_OVERLAY_DIR. The hooks below do NOT run that logic directly — they
-# re-invoke `shine app artifact apply clash-verge` so it runs automatically after
-# `shine app install`/`shine upgrade` changes merge.yaml. (No recursion: build
-# fires neither install nor upgrade hooks.) Requires `shine` on PATH; external
-# presets need allow_app_hooks = true. The built-in local rule references below
-# are ordinary managed files, so their updates trigger the same hook and
-# provider refresh as merge.yaml updates.
-post_install = [
-  { command = "shine", args = ["app", "artifact", "apply", "clash-verge"], show_output = true },
-]
-post_upgrade = [
-  { command = "shine", args = ["app", "artifact", "apply", "clash-verge"], show_output = true },
-]
+# The same idempotent script is both the explicit artifact and this category's
+# script-form post-upgrade hook. The hook is bound directly into the parent App
+# Plan; it never recursively launches `shine app artifact apply`. A local rule
+# update can therefore refresh immediately. If rendering changes CVR's bound
+# editor files, the script preserves the existing two-stage flow: reselect the
+# subscription, then run the explicit artifact command to refresh its providers.
 
 [artifact]
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
+env = ["CLASH_PROFILES_FILE", "CLASH_CONTROLLER_URL", "CLASH_CONTROLLER_TOKEN"]
+
+[permissions]
+schema_version = 1
+filesystem = [
+  { access = ["execute"], base = "preset", path = "build.ts" },
+  { access = ["execute"], base = "preset", path = "unbuild.ts" },
+]
+network = [{ scope = "any" }]
+commands = ["bun"]
+environment = [
+  { name = "CLASH_PROFILES_FILE", sensitivity = "plain" },
+  { name = "CLASH_CONTROLLER_URL", sensitivity = "plain" },
+  { name = "CLASH_CONTROLLER_TOKEN", sensitivity = "secret" },
+]
 
 # The single composite enhancement payload, installed verbatim (plain Copy — no
 # templating, so the file is always valid YAML). build.ts splits its keys into

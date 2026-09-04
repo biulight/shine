@@ -1,0 +1,26 @@
+version = 2
+description = "Minimal fixture-tested Ubuntu system preset."
+
+[[items]]
+id = "demo-config"
+label = "Demo configuration"
+description = "Install a managed example system configuration."
+mode = "managed"
+driver = "managed-file"
+
+[items.permissions]
+schema_version = 1
+filesystem = [{ access = ["write"], base = "home", path = ".config/shine-demo/system.conf" }]
+
+[items.config]
+source = "system.conf"
+target = "~/.config/shine-demo/system.conf"
+
+[[items]]
+id = "demo-tool"
+label = "Demo tool"
+description = "Install an example package when its command is absent."
+mode = "init"
+permissions = { schema_version = 1, administrator = true, commands = ["apt-get"] }
+detect = { kind = "command", command = "demo-tool" }
+install = { kind = "package", provider = "apt", package = "demo-tool" }

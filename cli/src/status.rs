@@ -4,72 +4,32 @@
 //! status-row library: it computes per-file/per-category install status
 //! (`FileStatus`) and renders it into `AppRow`/`ShellRow` for display.
 
-use crate::apps::{
-    AppCategory, AppListMode, installed_content_hash, resolve_install_destination,
-    source_hash_for_file,
-};
+use crate::apps::{AppCategory, AppListMode};
+#[cfg(test)]
+use crate::apps::{installed_content_hash, resolve_install_destination, source_hash_for_file};
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
-use crate::install_core::{AppEntry, AppManifest, apply_transforms};
+#[cfg(test)]
+use crate::install_core::{AppEntry, AppManifest};
 use crate::path_display;
 use anyhow::Result;
+use shine_core::lifecycle::{
+    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+};
+#[cfg(test)]
 use std::collections::BTreeMap;
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
 // Shared row types
 // ---------------------------------------------------------------------------
 
-/// Per-file status used for aggregation within a category.
-/// Higher discriminant = higher priority (wins in fold).
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub enum FileStatus {
-    NotInstalled,
-    UpToDate,
-    UpdateAvail,
-    Partial,
-    UserModified,
-    Missing,
-}
+pub(crate) use shine_core::runtime::InspectionChange as UpdateChange;
+pub use shine_core::runtime::InspectionFileStatus as FileStatus;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum UpdateChange {
-    ContentChanged,
-    SourceRelocated {
-        from: PathBuf,
-        to: PathBuf,
-    },
-    DestinationRelocated {
-        from: PathBuf,
-        to: PathBuf,
-    },
-    NewFile {
-        destination: PathBuf,
-    },
-    DeploymentChanged {
-        field: &'static str,
-        from: String,
-        to: String,
-    },
-    CommandEntryMissing {
-        path: PathBuf,
-    },
-    CommandEntryOutdated {
-        path: PathBuf,
-    },
-    ManifestEntryMissing {
-        target: String,
-    },
-}
-
-impl UpdateChange {
-    pub(crate) fn includes_content(changes: &[Self]) -> bool {
-        changes.contains(&Self::ContentChanged)
-    }
-}
-
+#[cfg(test)]
 pub(crate) struct AppFileAssessment {
     pub(crate) destination: Option<PathBuf>,
     pub(crate) status: FileStatus,
@@ -86,6 +46,9 @@ pub struct ShellRow {
     pub status_text: &'static str,
     /// `true` when at least one of preset-file or bin-symlink exists.
     pub is_installed: bool,
+    /// Existing launcher is outside Shine's ownership proof and must be
+    /// preserved rather than reported as an applicable update.
+    pub(crate) link_conflict: bool,
     pub(crate) changes: Vec<UpdateChange>,
 }
 
@@ -107,405 +70,206 @@ pub struct AppRow {
 
 /// Build shell preset rows.  Does not include the PATH sentinel line.
 pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
-    let categories = crate::shells::metadata::load_active_categories(config, None).await?;
-    if categories.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let bin_dir = config.bin_dir();
-    let shell_manifest = crate::shells::deployment::ShellManifest::load(config).await?;
-    let mut rows: Vec<ShellRow> = Vec::new();
-
-    for cat in &categories {
-        let snapshot_current =
-            crate::shells::deployment::snapshot_category_current(config, &cat.name)
-                .await
-                .unwrap_or(false);
-        for script in &cat.files {
-            let desired_path = crate::shells::deployment::desired_source_path(
-                config,
-                &cat.name,
-                &script.source_rel,
-            );
-            let script_path = crate::shells::deployment::deployment_source_path(
-                config,
-                &cat.name,
-                &script.source_rel,
-            );
-            let source_key = format!("shell/{}/{}", cat.name, script.source_rel.display());
-            let display_name = format!("{}/{}", cat.name, script.command_name);
-            let rendered_path =
-                crate::shells::deployment::rendered_path(config, &cat.name, &script.source_rel);
-            let link_name = OsString::from(&script.command_name);
-            let link_path = crate::bin_links::command_path_for_name(bin_dir, &link_name);
-
-            let file_exists = script_path.exists();
-            let link_exists = link_path.exists() || {
-                tokio::fs::symlink_metadata(&link_path)
-                    .await
-                    .map(|m| m.file_type().is_symlink())
-                    .unwrap_or(false)
+    let inspections = crate::core_runtime::from_config(config)
+        .await?
+        .inspect_shells()
+        .await?;
+    Ok(inspections
+        .into_iter()
+        .map(|file| {
+            let (symbol, status_sym) = match file.status {
+                FileStatus::NotInstalled => ("✗", "✗"),
+                FileStatus::UpdateAvail => ("↑", "↑"),
+                FileStatus::Missing => ("!", "!"),
+                FileStatus::Partial
+                | FileStatus::UserModified
+                | FileStatus::GeneratorNotEvaluated
+                | FileStatus::GeneratorEvaluationFailed
+                | FileStatus::GeneratorTrustRequired => ("~", "~"),
+                FileStatus::UpToDate => ("✓", "✓"),
             };
-            let effective_transforms =
-                crate::shells::deployment::effective_transforms(script, &desired_path)
-                    .await
-                    .unwrap_or_else(|_| script.transforms.clone());
-            let effective_source = if !effective_transforms.is_empty() {
-                &rendered_path
-            } else {
-                &script_path
-            };
-            let runtime_env = script
-                .env
-                .iter()
-                .map(crate::env::EnvVarSpec::to_with_arg)
-                .collect::<Vec<_>>();
-            let bun_runtime =
-                crate::shells::deployment::bun_runtime_spec(config, &cat.name, script)?;
-            let link_current = if link_exists {
-                let render_target = (config.is_external_presets
-                    && config.external_shell_mode == crate::config::ExternalShellMode::Live
-                    && !effective_transforms.is_empty())
-                .then(|| format!("shell/{}/{}", cat.name, script.command_name));
-                crate::bin_links::link_is_current(
-                    &link_path,
-                    effective_source,
-                    script.runtime,
-                    bun_runtime.dependency_mode,
-                    &runtime_env,
-                    render_target.as_deref(),
-                )
-                .await?
-            } else {
-                false
-            };
-
-            let (sym, status_text) = match (file_exists, link_exists) {
-                (true, true) => ("✓", "up-to-date"),
-                (true, false) => ("↑", "update available"),
-                (false, true) => ("~", "bin symlink present, preset missing"),
-                (false, false) => ("✗", "not installed"),
-            };
-
-            let canonical_target = format!("shell/{}/{}", cat.name, script.command_name);
-            let expected_runtime = match script.runtime {
-                crate::bin_links::LinkRuntime::Native => "native",
-                crate::bin_links::LinkRuntime::Bun => "bun",
-            };
-            let manifest_entry = shell_manifest.find(&canonical_target);
-            // Extracted preset files and category snapshots are shared deployment
-            // caches, not proof that every command in the category was installed.
-            // A command is active when it has a manifest receipt or a launcher
-            // (the latter preserves compatibility with pre-manifest installs).
-            let is_installed = manifest_entry.is_some() || link_exists;
-            let manifest_current = (!config.is_external_presets && manifest_entry.is_none())
-                || manifest_entry.is_some_and(|entry| {
-                    entry.mode == config.external_shell_mode
-                        && entry.source_path == script_path
-                        && entry.runtime == expected_runtime
-                        && entry.bun_dependencies
-                            == bun_runtime
-                                .dependency_mode
-                                .as_manifest_value()
-                                .map(str::to_string)
-                        && entry.dependency_hash == bun_runtime.dependency_hash
-                        && entry.transforms == effective_transforms
-                        && entry.env == runtime_env
-                        && entry.needs_source == script.needs_source
-                });
-
-            let source_status = shell_source_status(
-                config,
-                &source_key,
-                &desired_path,
-                &script_path,
-                &rendered_path,
-                &effective_transforms,
-            )
-            .await;
-            let mut changes = Vec::new();
-            if source_status == Some(FileStatus::UpdateAvail) {
-                changes.push(UpdateChange::ContentChanged);
+            ShellRow {
+                category: file.category.name.clone(),
+                symbol: colors::symbol(symbol),
+                label: format!("{}/{}", file.category.name, file.file.command_name),
+                status_sym,
+                status_text: file.status_text,
+                is_installed: file.installed,
+                link_conflict: file.link_conflict,
+                changes: file.changes,
             }
-            if let Some(entry) = manifest_entry {
-                if entry.source_path != script_path {
-                    changes.push(UpdateChange::SourceRelocated {
-                        from: entry.source_path.clone(),
-                        to: script_path.clone(),
-                    });
-                    if !UpdateChange::includes_content(&changes)
-                        && tokio::fs::read(&script_path).await.is_ok_and(|bytes| {
-                            crate::install_core::hash_content(&bytes) != entry.content_hash
-                        })
-                    {
-                        changes.push(UpdateChange::ContentChanged);
-                    }
-                }
-                push_deployment_change(
-                    &mut changes,
-                    "mode",
-                    format!("{:?}", entry.mode).to_lowercase(),
-                    format!("{:?}", config.external_shell_mode).to_lowercase(),
-                );
-                push_deployment_change(
-                    &mut changes,
-                    "runtime",
-                    entry.runtime.clone(),
-                    expected_runtime.to_string(),
-                );
-                push_deployment_change(
-                    &mut changes,
-                    "bun dependencies",
-                    entry
-                        .bun_dependencies
-                        .clone()
-                        .unwrap_or_else(|| "disabled".to_string()),
-                    bun_runtime
-                        .dependency_mode
-                        .as_manifest_value()
-                        .unwrap_or("disabled")
-                        .to_string(),
-                );
-                push_deployment_change(
-                    &mut changes,
-                    "dependency lock",
-                    entry
-                        .dependency_hash
-                        .map(|hash| format!("{hash:016x}"))
-                        .unwrap_or_else(|| "none".to_string()),
-                    bun_runtime
-                        .dependency_hash
-                        .map(|hash| format!("{hash:016x}"))
-                        .unwrap_or_else(|| "none".to_string()),
-                );
-                push_deployment_change(
-                    &mut changes,
-                    "transforms",
-                    format_list(&entry.transforms),
-                    format_list(&effective_transforms),
-                );
-                push_deployment_change(
-                    &mut changes,
-                    "env",
-                    format_list(&entry.env),
-                    format_list(&runtime_env),
-                );
-                push_deployment_change(
-                    &mut changes,
-                    "needs source",
-                    entry.needs_source.to_string(),
-                    script.needs_source.to_string(),
-                );
-            }
-            if is_installed && file_exists && !link_exists {
-                changes.push(UpdateChange::CommandEntryMissing {
-                    path: link_path.clone(),
-                });
-            }
-            if config.is_external_presets && manifest_entry.is_none() && link_exists {
-                changes.push(UpdateChange::ManifestEntryMissing {
-                    target: canonical_target.clone(),
-                });
-            }
-            if !snapshot_current
-                && source_status != Some(FileStatus::UpdateAvail)
-                && config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
-            {
-                changes.push(UpdateChange::DeploymentChanged {
-                    field: "snapshot",
-                    from: "installed layout".to_string(),
-                    to: "active preset layout".to_string(),
-                });
-            }
-            let entry_rebuild_already_explained = changes.iter().any(|change| {
-                matches!(
-                    change,
-                    UpdateChange::SourceRelocated { .. }
-                        | UpdateChange::DeploymentChanged { .. }
-                        | UpdateChange::CommandEntryMissing { .. }
-                )
-            });
-            if !link_current && link_exists && !entry_rebuild_already_explained {
-                changes.push(UpdateChange::CommandEntryOutdated {
-                    path: link_path.clone(),
-                });
-            }
-            if !is_installed {
-                changes.clear();
-            }
-
-            let (sym, status_text) = if !is_installed {
-                ("✗", "not installed")
-            } else if link_exists && (!link_current || !manifest_current || !snapshot_current) {
-                ("↑", "update available")
-            } else {
-                match source_status {
-                    Some(FileStatus::UpdateAvail) if file_exists || link_exists => {
-                        ("↑", "update available")
-                    }
-                    Some(FileStatus::Missing) if link_exists => ("!", "rendered script missing"),
-                    _ if config.is_external_presets
-                        && config.external_shell_mode == crate::config::ExternalShellMode::Live
-                        && file_exists
-                        && link_exists =>
-                    {
-                        if effective_transforms.is_empty() {
-                            ("✓", "live source")
-                        } else {
-                            ("✓", "rendered on next run")
-                        }
-                    }
-                    _ => (sym, status_text),
-                }
-            };
-
-            rows.push(ShellRow {
-                category: cat.name.clone(),
-                symbol: colors::symbol(sym),
-                label: display_name,
-                status_sym: sym,
-                status_text,
-                is_installed,
-                changes,
-            });
-        }
-    }
-
-    Ok(rows)
+        })
+        .collect())
 }
-
-fn format_list(values: &[String]) -> String {
-    if values.is_empty() {
-        "none".to_string()
-    } else {
-        values.join(", ")
-    }
-}
-
-fn push_deployment_change(
-    changes: &mut Vec<UpdateChange>,
-    field: &'static str,
-    from: String,
-    to: String,
-) {
-    if from != to {
-        changes.push(UpdateChange::DeploymentChanged { field, from, to });
-    }
-}
-
-async fn shell_source_status(
-    config: &Config,
-    source_key: &str,
-    desired_path: &Path,
-    script_path: &Path,
-    rendered_path: &Path,
-    declared_transforms: &[String],
-) -> Option<FileStatus> {
-    let source_bytes = if config.is_external_presets {
-        tokio::fs::read(desired_path).await.ok()?
-    } else {
-        crate::presets::read_asset_bytes(source_key)?
-    };
-    if !script_path.exists() {
-        return Some(FileStatus::UpdateAvail);
-    }
-    if config.is_external_presets
-        && config.external_shell_mode == crate::config::ExternalShellMode::Live
-    {
-        return Some(FileStatus::UpToDate);
-    }
-    let current_source = tokio::fs::read(script_path).await.ok()?;
-    if source_bytes != current_source {
-        return Some(FileStatus::UpdateAvail);
-    }
-    let transforms = declared_transforms.to_vec();
-    if transforms.is_empty() {
-        return Some(FileStatus::UpToDate);
-    }
-
-    if !rendered_path.exists() {
-        return Some(FileStatus::Missing);
-    }
-
-    let env = EnvConfig::load_or_init(config).await.ok()?;
-    let rendered = apply_transforms(&transforms, &source_bytes, env.as_map()).ok()?;
-    let current = tokio::fs::read(rendered_path).await.ok()?;
-
-    if rendered == current {
-        Some(FileStatus::UpToDate)
-    } else {
-        Some(FileStatus::UpdateAvail)
-    }
-}
-
-/// Build app config rows for the given pre-loaded categories.
 pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Result<Vec<AppRow>> {
-    let manifest = AppManifest::load(config.shine_dir()).await?;
-    let env = EnvConfig::load_or_init(config).await.ok();
-    let empty_map = BTreeMap::new();
-    let env_map = env.as_ref().map(|e| e.as_map()).unwrap_or(&empty_map);
-    let mut rows: Vec<AppRow> = Vec::new();
+    build_app_rows_with_lifecycle(config, categories)
+        .await
+        .map(|(rows, _)| rows)
+}
 
-    for cat in categories {
-        if cat.has_explicit_files && cat.list_mode == AppListMode::Files {
-            for file in &cat.files {
-                let (dest_opt, status) =
-                    app_file_row_status(config, cat, file, &manifest, env_map).await;
+pub(crate) async fn build_app_rows_with_lifecycle(
+    config: &Config,
+    categories: &[AppCategory],
+) -> Result<(Vec<AppRow>, LifecycleResultV1)> {
+    build_app_rows_with_lifecycle_options(config, categories, false)
+        .await
+        .map(|(rows, lifecycle, _)| (rows, lifecycle))
+}
 
-                let label = file
-                    .display_name
-                    .clone()
-                    .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-                let simple_label = if cat.files.len() == 1 {
-                    cat.name.clone()
+pub(crate) async fn build_app_rows_with_lifecycle_options(
+    config: &Config,
+    categories: &[AppCategory],
+    run_generators: bool,
+) -> Result<(
+    Vec<AppRow>,
+    LifecycleResultV1,
+    Vec<shine_core::runtime::AppFileInspection>,
+)> {
+    let mut runtime = crate::core_runtime::from_config(config).await?;
+    if let Ok(env) = EnvConfig::load_or_init(config).await {
+        runtime.context_mut_for_cli().env = env.as_map().clone();
+    }
+    let selected = categories
+        .iter()
+        .map(|category| category.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let inspections = runtime
+        .inspect_apps_with_options(
+            shine_core::runtime::AppInspectionOptions {
+                run_generators,
+                categories: categories
+                    .iter()
+                    .map(|category| category.name.clone())
+                    .collect(),
+            },
+            &mut shine_core::runtime::NullObserver,
+        )
+        .await?
+        .into_iter()
+        .filter(|file| selected.contains(file.category.name.as_str()))
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    let mut lifecycle = LifecycleResultV1::new(LifecycleOperation::Update, false);
+
+    for category in categories {
+        let files = inspections
+            .iter()
+            .filter(|file| file.category.name == category.name)
+            .collect::<Vec<_>>();
+        for inspection in &files {
+            let manifest_owned = inspection.manifest_entry.is_some()
+                || inspection
+                    .changes
+                    .iter()
+                    .any(|change| matches!(change, UpdateChange::NewFile { .. }));
+            if manifest_owned {
+                let target = format!("app/{}", category.name);
+                let resource = Some(inspection.file.source_rel.display().to_string());
+                let outcome = match inspection.status {
+                    FileStatus::UpToDate => Some(LifecycleOutcomeV1::new(
+                        target,
+                        resource,
+                        LifecycleStatus::Unchanged,
+                        [],
+                    )),
+                    FileStatus::UpdateAvail => {
+                        let relocated = inspection.changes.iter().any(|change| {
+                            matches!(change, UpdateChange::DestinationRelocated { .. })
+                        });
+                        let mut effects = Vec::new();
+                        if relocated {
+                            effects.push(LifecycleEffect::ResourceRemovePreviewed);
+                        }
+                        effects.push(LifecycleEffect::ResourceWritePreviewed);
+                        effects.push(LifecycleEffect::ReceiptWritePreviewed);
+                        Some(LifecycleOutcomeV1::new(
+                            target,
+                            resource,
+                            LifecycleStatus::Pending,
+                            effects,
+                        ))
+                    }
+                    FileStatus::GeneratorNotEvaluated => Some(
+                        LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Pending, [])
+                            .with_diagnostic_code("app_generator_not_evaluated"),
+                    ),
+                    FileStatus::GeneratorEvaluationFailed => Some(
+                        LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Failed, [])
+                            .with_diagnostic_code("app_generator_evaluation_failed"),
+                    ),
+                    FileStatus::GeneratorTrustRequired => Some(
+                        LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Failed, [])
+                            .with_diagnostic_code("app_generator_trust_required"),
+                    ),
+                    FileStatus::Missing => Some(LifecycleOutcomeV1::new(
+                        target,
+                        resource,
+                        LifecycleStatus::Pending,
+                        [
+                            LifecycleEffect::ResourceWritePreviewed,
+                            LifecycleEffect::ReceiptWritePreviewed,
+                        ],
+                    )),
+                    FileStatus::UserModified => Some(
+                        LifecycleOutcomeV1::new(
+                            target,
+                            resource,
+                            LifecycleStatus::Conflict,
+                            [LifecycleEffect::UserResourcePreserved],
+                        )
+                        .with_diagnostic_code("app_user_modified"),
+                    ),
+                    FileStatus::NotInstalled | FileStatus::Partial => None,
+                };
+                if let Some(outcome) = outcome {
+                    lifecycle.push(outcome);
+                }
+            }
+        }
+
+        if category.has_explicit_files && category.list_mode == AppListMode::Files {
+            for inspection in files {
+                let label = inspection.file.display_name.clone().unwrap_or_else(|| {
+                    format!("{}/{}", category.name, inspection.file.source_rel.display())
+                });
+                let simple_label = if category.files.len() == 1 {
+                    category.name.clone()
                 } else {
                     label.clone()
                 };
-
-                let dest_str = dest_opt.map(|d| path_display::format_home(&d, &config.home_dir));
-
-                let (sym, status_text) = match status {
-                    FileStatus::Missing => ("!", "destination missing"),
-                    FileStatus::UserModified => ("~", "user modified"),
-                    FileStatus::UpdateAvail => ("↑", "update available"),
-                    FileStatus::UpToDate => ("✓", "up-to-date"),
-                    FileStatus::NotInstalled | FileStatus::Partial => ("✗", "not installed"),
-                };
-
+                let (sym, status_text) = app_status_presentation(inspection.status);
                 rows.push(AppRow {
-                    category: cat.name.clone(),
+                    category: category.name.clone(),
                     sym,
                     label,
                     simple_label,
-                    dest: dest_str,
+                    dest: inspection
+                        .destination
+                        .as_ref()
+                        .map(|path| path_display::format_home(path, &config.home_dir)),
                     status_text,
-                    file_status: status,
+                    file_status: inspection.status,
                 });
             }
         } else {
-            let mut file_statuses: Vec<FileStatus> = Vec::new();
-
-            for file in &cat.files {
-                let (_, status) = app_file_row_status(config, cat, file, &manifest, env_map).await;
-                file_statuses.push(status);
-            }
-
-            let has_installed = file_statuses.iter().any(|s| {
+            let statuses = files.iter().map(|file| file.status).collect::<Vec<_>>();
+            let has_installed = statuses.iter().any(|status| {
                 matches!(
-                    s,
-                    FileStatus::UpToDate | FileStatus::UpdateAvail | FileStatus::UserModified
+                    status,
+                    FileStatus::UpToDate
+                        | FileStatus::UpdateAvail
+                        | FileStatus::GeneratorNotEvaluated
+                        | FileStatus::GeneratorEvaluationFailed
+                        | FileStatus::GeneratorTrustRequired
+                        | FileStatus::UserModified
                 )
             });
-            let has_not_installed = file_statuses.contains(&FileStatus::NotInstalled);
-            let cat_status = if has_installed && has_not_installed {
-                // Use the max status of installed files. Only collapse to Partial
-                // when all installed files are up-to-date; higher-severity statuses
-                // (UpdateAvail, UserModified) take priority because the user action
-                // ("shine upgrade") handles updates for installed files.
-                let installed_max = file_statuses
+            let has_not_installed = statuses.contains(&FileStatus::NotInstalled);
+            let status = if has_installed && has_not_installed {
+                let installed_max = statuses
                     .iter()
                     .copied()
-                    .filter(|s| *s != FileStatus::NotInstalled)
+                    .filter(|status| *status != FileStatus::NotInstalled)
                     .max()
                     .unwrap_or(FileStatus::Partial);
                 if installed_max == FileStatus::UpToDate {
@@ -514,47 +278,137 @@ pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Resu
                     installed_max
                 }
             } else {
-                file_statuses
+                statuses
                     .iter()
                     .copied()
                     .max()
                     .unwrap_or(FileStatus::NotInstalled)
             };
-
-            let dest_display: Option<String> = if let Some(root) = &cat.destination_root {
+            let destination = if let Some(root) = &category.destination_root {
                 Some(path_display::format_tilde_path(root, &config.home_dir))
-            } else if cat.files.len() == 1 {
-                resolve_install_destination(cat, &cat.files[0], config)
-                    .ok()
-                    .map(|p| path_display::format_home(&p, &config.home_dir))
+            } else if files.len() == 1 {
+                files[0]
+                    .destination
+                    .as_ref()
+                    .map(|path| path_display::format_home(path, &config.home_dir))
             } else {
                 None
             };
-
-            let (sym, status_text) = match cat_status {
-                FileStatus::Missing => ("!", "destination missing"),
-                FileStatus::UserModified => ("~", "user modified"),
-                FileStatus::Partial => ("~", "partial install"),
-                FileStatus::UpdateAvail => ("↑", "update available"),
-                FileStatus::UpToDate => ("✓", "up-to-date"),
-                FileStatus::NotInstalled => ("✗", "not installed"),
-            };
-
+            let (sym, status_text) = app_status_presentation(status);
             rows.push(AppRow {
-                category: cat.name.clone(),
+                category: category.name.clone(),
                 sym,
-                label: cat.name.clone(),
-                simple_label: cat.name.clone(),
-                dest: dest_display,
-                status_text,
-                file_status: cat_status,
+                label: category.name.clone(),
+                simple_label: category.name.clone(),
+                dest: destination,
+                status_text: if status == FileStatus::Partial {
+                    "partial install"
+                } else {
+                    status_text
+                },
+                file_status: status,
             });
         }
     }
-
-    Ok(rows)
+    Ok((rows, lifecycle, inspections))
 }
 
+fn app_status_presentation(status: FileStatus) -> (&'static str, &'static str) {
+    match status {
+        FileStatus::Missing => ("!", "destination missing"),
+        FileStatus::UserModified => ("~", "user modified"),
+        FileStatus::UpdateAvail => ("↑", "update available"),
+        FileStatus::GeneratorNotEvaluated => ("!", "generator not evaluated"),
+        FileStatus::GeneratorEvaluationFailed => ("!", "generator evaluation failed"),
+        FileStatus::GeneratorTrustRequired => ("!", "generator trust required"),
+        FileStatus::UpToDate => ("✓", "up-to-date"),
+        FileStatus::NotInstalled | FileStatus::Partial => ("✗", "not installed"),
+    }
+}
+
+#[cfg(test)]
+fn app_update_outcome(
+    category: &AppCategory,
+    file: &crate::apps::AppFile,
+    assessment: &AppFileAssessment,
+    manifest: &AppManifest,
+) -> Option<LifecycleOutcomeV1> {
+    let source = format!("app/{}/{}", category.name, file.source_rel.display());
+    let owned = manifest.find_by_source(&source).is_some()
+        || assessment
+            .destination
+            .as_ref()
+            .is_some_and(|destination| manifest.find_by_dest(destination).is_some())
+        || assessment
+            .changes
+            .iter()
+            .any(|change| matches!(change, UpdateChange::NewFile { .. }));
+    if !owned {
+        return None;
+    }
+    let target = format!("app/{}", category.name);
+    let resource = Some(file.source_rel.display().to_string());
+    match assessment.status {
+        FileStatus::UpToDate => Some(LifecycleOutcomeV1::new(
+            target,
+            resource,
+            LifecycleStatus::Unchanged,
+            [],
+        )),
+        FileStatus::UpdateAvail => {
+            let mut effects = Vec::new();
+            if assessment
+                .changes
+                .iter()
+                .any(|change| matches!(change, UpdateChange::DestinationRelocated { .. }))
+            {
+                effects.push(LifecycleEffect::ResourceRemovePreviewed);
+            }
+            effects.extend([
+                LifecycleEffect::ResourceWritePreviewed,
+                LifecycleEffect::ReceiptWritePreviewed,
+            ]);
+            Some(LifecycleOutcomeV1::new(
+                target,
+                resource,
+                LifecycleStatus::Pending,
+                effects,
+            ))
+        }
+        FileStatus::GeneratorNotEvaluated => Some(
+            LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Pending, [])
+                .with_diagnostic_code("app_generator_not_evaluated"),
+        ),
+        FileStatus::GeneratorEvaluationFailed => Some(
+            LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Failed, [])
+                .with_diagnostic_code("app_generator_evaluation_failed"),
+        ),
+        FileStatus::GeneratorTrustRequired => Some(
+            LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Failed, [])
+                .with_diagnostic_code("app_generator_trust_required"),
+        ),
+        FileStatus::Missing => Some(LifecycleOutcomeV1::new(
+            target,
+            resource,
+            LifecycleStatus::Pending,
+            [
+                LifecycleEffect::ResourceWritePreviewed,
+                LifecycleEffect::ReceiptWritePreviewed,
+            ],
+        )),
+        FileStatus::UserModified => Some(
+            LifecycleOutcomeV1::new(
+                target,
+                resource,
+                LifecycleStatus::Conflict,
+                [LifecycleEffect::UserResourcePreserved],
+            )
+            .with_diagnostic_code("app_user_modified"),
+        ),
+        FileStatus::NotInstalled | FileStatus::Partial => None,
+    }
+}
+#[cfg(test)]
 pub(crate) async fn app_file_row_status(
     config: &Config,
     cat: &AppCategory,
@@ -566,6 +420,7 @@ pub(crate) async fn app_file_row_status(
     (assessment.destination, assessment.status)
 }
 
+#[cfg(test)]
 pub(crate) async fn assess_app_file(
     config: &Config,
     cat: &AppCategory,
@@ -662,6 +517,7 @@ pub(crate) async fn assess_app_file(
 /// Shared by `app_file_row_status` (used by `list`/`app info`) and `info`'s
 /// `collect_app_files` — both need this exact computation once an `AppEntry`
 /// has been resolved.
+#[cfg(test)]
 pub(crate) async fn app_entry_status(
     config: &Config,
     cat: &AppCategory,
@@ -722,7 +578,7 @@ mod tests {
     use crate::install_core::AppInstallStrategy;
     #[cfg(windows)]
     use crate::test_support::env_lock;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use tokio::fs;
 
     async fn make_temp_dir() -> std::path::PathBuf {
@@ -757,6 +613,9 @@ mod tests {
             uses_metadata: true,
             has_explicit_files: true,
             artifact: None,
+            permissions: None,
+            metadata_schema_version: 2,
+            metadata_is_overlay: false,
         }
     }
 
@@ -770,6 +629,81 @@ mod tests {
             uses_env: false,
             requires_admin: false,
         }
+    }
+
+    #[test]
+    fn app_update_outcomes_map_owned_conflicts_missing_files_and_relocations() {
+        let destination = PathBuf::from("/private/machine/dest.txt");
+        let manifest = AppManifest {
+            entries: vec![sample_app_entry(destination.clone(), 1)],
+            ..AppManifest::default()
+        };
+        let category = sample_app_category();
+        let file = sample_app_file();
+
+        let missing = app_update_outcome(
+            &category,
+            &file,
+            &AppFileAssessment {
+                destination: Some(destination.clone()),
+                status: FileStatus::Missing,
+                changes: Vec::new(),
+            },
+            &manifest,
+        )
+        .unwrap();
+        assert_eq!(missing.status, LifecycleStatus::Pending);
+        assert_eq!(
+            missing.effects,
+            [
+                LifecycleEffect::ResourceWritePreviewed,
+                LifecycleEffect::ReceiptWritePreviewed,
+            ]
+        );
+
+        let conflict = app_update_outcome(
+            &category,
+            &file,
+            &AppFileAssessment {
+                destination: Some(destination.clone()),
+                status: FileStatus::UserModified,
+                changes: Vec::new(),
+            },
+            &manifest,
+        )
+        .unwrap();
+        assert_eq!(conflict.status, LifecycleStatus::Conflict);
+        assert_eq!(conflict.effects, [LifecycleEffect::UserResourcePreserved]);
+        assert_eq!(conflict.diagnostic_codes, ["app_user_modified"]);
+
+        let relocated = app_update_outcome(
+            &category,
+            &file,
+            &AppFileAssessment {
+                destination: Some(PathBuf::from("/private/machine/new.txt")),
+                status: FileStatus::UpdateAvail,
+                changes: vec![UpdateChange::DestinationRelocated {
+                    from: destination,
+                    to: PathBuf::from("/private/machine/new.txt"),
+                }],
+            },
+            &manifest,
+        )
+        .unwrap();
+        assert_eq!(relocated.status, LifecycleStatus::Pending);
+        assert_eq!(
+            relocated.effects,
+            [
+                LifecycleEffect::ResourceRemovePreviewed,
+                LifecycleEffect::ResourceWritePreviewed,
+                LifecycleEffect::ReceiptWritePreviewed,
+            ]
+        );
+        assert!(
+            !serde_json::to_string(&relocated)
+                .unwrap()
+                .contains("/private/machine")
+        );
     }
 
     #[tokio::test]
@@ -865,6 +799,7 @@ mod tests {
             &sample_app_file(),
             &AppManifest {
                 entries: vec![entry],
+                ..AppManifest::default()
             },
             &BTreeMap::new(),
         )
@@ -921,6 +856,7 @@ mod tests {
                 dir.join("dest/old.txt"),
                 crate::install_core::hash_content(b"old"),
             )],
+            ..AppManifest::default()
         };
 
         let assessment =
@@ -957,6 +893,7 @@ mod tests {
                 old_destination,
                 crate::install_core::hash_content(b"managed"),
             )],
+            ..AppManifest::default()
         };
 
         let assessment = assess_app_file(
@@ -1021,6 +958,7 @@ mod tests {
                 old_destination.clone(),
                 crate::install_core::hash_content(b"generated snapshot"),
             )],
+            ..AppManifest::default()
         };
 
         let assessment =
@@ -1052,6 +990,7 @@ mod tests {
                 dir.join("old/dest.txt"),
                 crate::install_core::hash_content(b"old content"),
             )],
+            ..AppManifest::default()
         };
 
         let assessment = assess_app_file(
@@ -1085,7 +1024,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.ps1\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.ps1\"\ntarget = \"setproxy\"\nneeds_source = true\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1120,7 +1059,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1164,7 +1103,7 @@ mod tests {
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1218,7 +1157,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1265,7 +1204,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1305,7 +1244,7 @@ mod tests {
         fs::create_dir_all(&old_category).await.unwrap();
         fs::write(
             old_category.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1377,7 +1316,7 @@ mod tests {
         fs::create_dir_all(&old_category).await.unwrap();
         fs::write(
             old_category.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1449,8 +1388,9 @@ mod tests {
                 needs_source: true,
                 content_hash: crate::install_core::hash_content(bytes),
             }],
+            ..ShellManifest::default()
         }
-        .save(&config)
+        .save(&shine_core::runtime::RealHost, &config)
         .await
         .unwrap();
 
@@ -1502,7 +1442,7 @@ mod tests {
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1585,7 +1525,7 @@ mod tests {
         fs::write(
             cat_dir.join("shine.toml"),
             format!(
-                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\n"
+                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\npermissions = {{ schema_version = 1 }}\n"
             ),
         )
         .await
@@ -1623,7 +1563,7 @@ mod tests {
         fs::write(
             cat_dir.join("shine.toml"),
             format!(
-                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\n"
+                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\npermissions = {{ schema_version = 1 }}\n"
             ),
         )
         .await
@@ -1641,7 +1581,7 @@ mod tests {
 
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"cc.ts\"\ntarget = \"ccenv\"\nruntime = \"bun\"\nplatforms = [\"unix\", \"windows\"]\n",
+            b"[[files]]\nsource = \"cc.ts\"\ntarget = \"ccenv\"\nruntime = \"bun\"\nplatforms = [\"unix\", \"windows\"]\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1669,7 +1609,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\npermissions = { schema_version = 1, environment = [{ name = \"PROXY_NO_PROXY\", sensitivity = \"plain\" }] }\n",
         )
         .await
         .unwrap();
@@ -1749,6 +1689,9 @@ mod tests {
             uses_metadata: true,
             has_explicit_files: true,
             artifact: None,
+            permissions: None,
+            metadata_schema_version: 2,
+            metadata_is_overlay: false,
         };
 
         let rows = build_app_rows(&config, &[category]).await.unwrap();
@@ -1765,8 +1708,26 @@ mod tests {
     #[tokio::test]
     async fn file_list_mode_keeps_file_labels_for_multi_file_app_simple_list() {
         let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let preset = config.presets_dir().join("app/sample");
+        fs::create_dir_all(&preset).await.unwrap();
+        fs::write(
+            preset.join("shine.toml"),
+            format!(
+                "dest = {:?}\n[[files]]\nsource = \"config.toml\"\n[[files]]\nsource = \"theme.toml\"\n",
+                dir.join(".config/sample").display().to_string()
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(preset.join("config.toml"), b"config\n")
+            .await
+            .unwrap();
+        fs::write(preset.join("theme.toml"), b"theme\n")
+            .await
+            .unwrap();
 
         let category = AppCategory {
             name: "sample".to_string(),
@@ -1806,6 +1767,9 @@ mod tests {
             uses_metadata: true,
             has_explicit_files: true,
             artifact: None,
+            permissions: None,
+            metadata_schema_version: 2,
+            metadata_is_overlay: false,
         };
 
         let rows = build_app_rows(&config, &[category]).await.unwrap();

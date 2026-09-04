@@ -1,0 +1,32 @@
+schema_version = 1
+
+[[cases]]
+name = "linux-with-environment"
+platform = "linux"
+
+[cases.host]
+environment = ["DEMO_GREETING"]
+
+[cases.expect]
+valid = true
+ready = true
+plan_kinds = ["lifecycle-install"]
+diagnostic_codes = []
+step_diagnostic_codes = ["shell_profile_reconcile_transaction", "shell_snapshot_replace_transaction"]
+actions = ["create", "update"]
+missing_permissions = []
+permission_diagnostic_codes = []
+
+[[cases]]
+name = "macos-without-environment"
+platform = "macos"
+
+[cases.expect]
+valid = true
+ready = true
+plan_kinds = ["lifecycle-install"]
+diagnostic_codes = []
+step_diagnostic_codes = ["shell_profile_reconcile_transaction", "shell_snapshot_replace_transaction"]
+actions = ["create", "update"]
+missing_permissions = []
+permission_diagnostic_codes = []

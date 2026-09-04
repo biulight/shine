@@ -3,34 +3,139 @@ use crate::colors;
 use crate::config::Config;
 use crate::info::UpdateDiffs;
 use crate::output;
-use crate::status::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_rows};
+use crate::status::{
+    AppRow, FileStatus, ShellRow, build_app_rows, build_app_rows_with_lifecycle_options,
+    build_shell_rows,
+};
 use crate::sys;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
 const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
 
-pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
+async fn build_update_app_rows(
+    config: &Config,
+    categories: &[crate::apps::AppCategory],
+    run_generators: bool,
+) -> Result<(
+    Vec<AppRow>,
+    shine_core::lifecycle::LifecycleResultV1,
+    Vec<shine_core::runtime::AppFileInspection>,
+)> {
+    if !run_generators {
+        return build_app_rows_with_lifecycle_options(config, categories, false).await;
+    }
+    let (static_rows, static_lifecycle, static_inspections) =
+        build_app_rows_with_lifecycle_options(config, categories, false).await?;
+    let installed = static_rows
+        .iter()
+        .filter(|row| row.file_status != FileStatus::NotInstalled)
+        .map(|row| row.category.as_str())
+        .collect::<BTreeSet<_>>();
+    let selected = categories
+        .iter()
+        .filter(|category| installed.contains(category.name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Ok((static_rows, static_lifecycle, static_inspections));
+    }
+    build_app_rows_with_lifecycle_options(config, &selected, true).await
+}
+
+fn print_generator_notice(rows: &[AppRow], run_generators: bool) -> (bool, bool) {
+    let not_evaluated = rows
+        .iter()
+        .any(|row| row.file_status == FileStatus::GeneratorNotEvaluated);
+    let failures = rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.file_status,
+                FileStatus::GeneratorEvaluationFailed | FileStatus::GeneratorTrustRequired
+            )
+        })
+        .collect::<Vec<_>>();
+    if !run_generators && not_evaluated {
+        println!();
+        println!(
+            "{}",
+            colors::yellow("! Generated configuration was not evaluated.")
+        );
+        println!(
+            "{}",
+            colors::dim(
+                "  Update status may be incomplete. Re-run with `--run-generators` to evaluate generator output."
+            )
+        );
+    }
+    for row in &failures {
+        println!();
+        println!(
+            "{}",
+            colors::yellow(&format!("! {}: {}", row.label, row.status_text))
+        );
+    }
+    (not_evaluated || !failures.is_empty(), !failures.is_empty())
+}
+
+pub async fn handle_update_list(config: &Config, diff: bool, run_generators: bool) -> Result<bool> {
     let shell_rows = build_shell_rows(config).await?;
+    let shell_lifecycle = crate::shells::collect_update_lifecycle_result(config).await?;
+    let pending_shell = shell_lifecycle
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.status == shine_core::lifecycle::LifecycleStatus::Pending)
+        .map(|outcome| outcome.target.as_str())
+        .collect::<BTreeSet<_>>();
     let update_shell: Vec<&ShellRow> = shell_rows
         .iter()
-        .filter(|r| r.is_installed && r.status_sym == "↑")
+        .filter(|r| {
+            r.is_installed
+                && pending_shell.contains(
+                    format!(
+                        "shell/{}/{}",
+                        r.category,
+                        r.label.split('/').next_back().unwrap_or(&r.label)
+                    )
+                    .as_str(),
+                )
+        })
         .collect();
 
-    let cats_result = load_active_categories(config, None).await;
-    let app_rows = match cats_result {
-        Ok(cats) => build_app_rows(config, &cats).await?,
-        Err(_) => Vec::new(),
-    };
+    let cats = load_active_categories(config, None)
+        .await
+        .context("loading active App Presets for update")?;
+    let (app_rows, app_lifecycle, app_inspections) =
+        build_update_app_rows(config, &cats, run_generators).await?;
+    let pending_app = app_lifecycle
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.status == shine_core::lifecycle::LifecycleStatus::Pending)
+        .map(|outcome| outcome.target.as_str())
+        .collect::<BTreeSet<_>>();
     let update_app: Vec<&AppRow> = app_rows
         .iter()
-        .filter(|r| r.file_status == FileStatus::UpdateAvail)
+        .filter(|r| {
+            r.file_status == FileStatus::UpdateAvail
+                && pending_app.contains(format!("app/{}", r.category).as_str())
+        })
         .collect();
     let update_app = app_update_categories(&update_app);
-    let update_sys = sys::managed_updates(config).await.unwrap_or_default();
+    let update_sys = sys::managed_updates(config)
+        .await
+        .context("checking managed Sys Presets for update")?;
 
-    let any = !update_shell.is_empty() || !update_app.is_empty() || !update_sys.is_empty();
-    if !any {
+    let any_update = !update_shell.is_empty() || !update_app.is_empty() || !update_sys.is_empty();
+    let has_generator_attention = app_rows.iter().any(|row| {
+        matches!(
+            row.file_status,
+            FileStatus::GeneratorNotEvaluated
+                | FileStatus::GeneratorEvaluationFailed
+                | FileStatus::GeneratorTrustRequired
+        )
+    });
+    if !any_update && !has_generator_attention {
         return Ok(false);
     }
 
@@ -48,11 +153,17 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
         print_name_section(&mut separator, "Shell Presets", &shell_names);
         print_name_section(&mut separator, "App Configs", &app_names);
         print_name_section(&mut separator, "System Configs", &sys_names);
-        print_update_hint();
+        let (_, generator_failed) = print_generator_notice(&app_rows, run_generators);
+        if any_update {
+            print_update_hint(&update_targets(&shell_names, &app_names, &sys_names));
+        }
+        if generator_failed {
+            anyhow::bail!("one or more App generators could not be evaluated");
+        }
         return Ok(true);
     }
 
-    let update_diffs = UpdateDiffs::collect(config).await?;
+    let update_diffs = UpdateDiffs::collect_with_app_inspections(config, app_inspections).await?;
 
     if !update_shell.is_empty() {
         println!("{}", colors::bold("Shell Presets"));
@@ -123,14 +234,43 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
         }
     }
 
-    print_update_hint();
+    let (_, generator_failed) = print_generator_notice(&app_rows, run_generators);
+    if any_update {
+        let shell_names = shell_categories(&update_shell);
+        let app_names = update_app
+            .keys()
+            .map(|category| (*category).to_string())
+            .collect::<Vec<_>>();
+        let sys_names = sorted_names(update_sys.iter().map(|row| row.item_id.clone()).collect());
+        print_update_hint(&update_targets(&shell_names, &app_names, &sys_names));
+    }
+    if generator_failed {
+        anyhow::bail!("one or more App generators could not be evaluated");
+    }
 
     Ok(true)
 }
 
-fn print_update_hint() {
+fn print_update_hint(targets: &[String]) {
     println!();
-    println!("{}", colors::dim("Run `shine upgrade` to apply updates."));
+    println!("{}", colors::dim(&update_hint_text(targets)));
+}
+
+fn update_hint_text(targets: &[String]) -> String {
+    let command = match targets {
+        [target] => format!("shine upgrade {target}"),
+        _ => "shine upgrade".to_string(),
+    };
+    format!("Run `{command}` to apply updates.")
+}
+
+fn update_targets(shell: &[String], app: &[String], sys: &[String]) -> Vec<String> {
+    shell
+        .iter()
+        .map(|category| format!("shell/{category}"))
+        .chain(app.iter().map(|category| format!("app/{category}")))
+        .chain(sys.iter().map(|item| format!("sys/{item}")))
+        .collect()
 }
 
 fn app_update_categories<'a>(rows: &[&'a AppRow]) -> BTreeMap<&'a str, Vec<&'a AppRow>> {
@@ -159,23 +299,25 @@ fn print_app_update_detail(row: &AppRow) {
     );
 }
 
-pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
+pub async fn handle_status_list(config: &Config, diff: bool, run_generators: bool) -> Result<()> {
     crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
     let all_shell: Vec<&ShellRow> = shell_rows.iter().collect();
 
-    let cats_result = load_active_categories(config, None).await;
-    let app_rows = match cats_result {
-        Ok(cats) => build_app_rows(config, &cats).await?,
-        Err(_) => Vec::new(),
-    };
+    let cats = load_active_categories(config, None)
+        .await
+        .context("loading active App Presets for status")?;
+    let (app_rows, _, app_inspections) =
+        build_update_app_rows(config, &cats, run_generators).await?;
     let installed_app: Vec<&AppRow> = app_rows
         .iter()
         .filter(|r| r.file_status != FileStatus::NotInstalled)
         .collect();
     let all_app: Vec<&AppRow> = app_rows.iter().collect();
-    let update_sys = sys::managed_updates(config).await.unwrap_or_default();
+    let update_sys = sys::managed_updates(config)
+        .await
+        .context("checking managed Sys Presets for status")?;
 
     let any = !installed_shell.is_empty() || !installed_app.is_empty() || !update_sys.is_empty();
 
@@ -188,7 +330,7 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
     }
 
     let update_diffs = if diff {
-        Some(UpdateDiffs::collect(config).await?)
+        Some(UpdateDiffs::collect_with_app_inspections(config, app_inspections).await?)
     } else {
         None
     };
@@ -323,6 +465,9 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
                 FileStatus::Missing => missing += 1,
                 FileStatus::UserModified | FileStatus::Partial => user_modified += 1,
                 FileStatus::UpdateAvail => update_available += 1,
+                FileStatus::GeneratorNotEvaluated
+                | FileStatus::GeneratorEvaluationFailed
+                | FileStatus::GeneratorTrustRequired => user_modified += 1,
                 FileStatus::UpToDate => up_to_date += 1,
                 FileStatus::NotInstalled => {}
             }
@@ -352,6 +497,11 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
                 println!("     {}", colors::dim(detail));
             }
         }
+    }
+
+    let (_, generator_failed) = print_generator_notice(&app_rows, run_generators);
+    if generator_failed {
+        anyhow::bail!("one or more App generators could not be evaluated");
     }
 
     Ok(())
@@ -544,6 +694,9 @@ fn app_category_statuses(rows: &[&AppRow]) -> Vec<AppLifecycleStatus> {
                 FileStatus::UserModified => ("~", "user modified"),
                 FileStatus::Partial => ("~", "partial install"),
                 FileStatus::UpdateAvail => ("↑", "update available"),
+                FileStatus::GeneratorNotEvaluated => ("!", "generator not evaluated"),
+                FileStatus::GeneratorEvaluationFailed => ("!", "generator evaluation failed"),
+                FileStatus::GeneratorTrustRequired => ("!", "generator trust required"),
                 FileStatus::UpToDate => ("✓", "up-to-date"),
                 FileStatus::NotInstalled => unreachable!(),
             };
@@ -603,6 +756,7 @@ mod tests {
             status_sym: "~",
             status_text,
             is_installed,
+            link_conflict: false,
             changes: Vec::new(),
         }
     }
@@ -639,6 +793,32 @@ mod tests {
         second.label = "proxy/usetproxy".to_string();
 
         assert_eq!(shell_categories(&[&first, &second]), vec!["proxy"]);
+    }
+
+    #[test]
+    fn update_hint_targets_the_only_pending_category() {
+        let targets = update_targets(&[], &["clash-verge".to_string()], &[]);
+
+        assert_eq!(targets, ["app/clash-verge"]);
+        assert_eq!(
+            update_hint_text(&targets),
+            "Run `shine upgrade app/clash-verge` to apply updates."
+        );
+    }
+
+    #[test]
+    fn update_hint_keeps_global_upgrade_for_multiple_categories() {
+        let targets = update_targets(
+            &["proxy".to_string()],
+            &["clash-verge".to_string()],
+            &["split-dns".to_string()],
+        );
+
+        assert_eq!(targets, ["shell/proxy", "app/clash-verge", "sys/split-dns"]);
+        assert_eq!(
+            update_hint_text(&targets),
+            "Run `shine upgrade` to apply updates."
+        );
     }
 
     #[test]

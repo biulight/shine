@@ -29,6 +29,17 @@ jobs:
         run: cargo fmt -- --check
       - name: Check the package for errors
         run: cargo check --all
+      - name: Verify Preset authoring example
+        run: |
+          cargo run -- preset schema --format json
+          cargo run -- preset validate examples/presets --format json
+          cargo run -- preset lint examples/presets --format json --deny-warnings
+          cargo run -- preset test examples/presets/app/demo --format json
+          cargo run -- preset test examples/presets/shell/demo --format json
+          cargo run -- preset test examples/presets/sys/ubuntu --format json
+          cargo run -- preset pack examples/presets/app/demo --output target/demo.shine-preset.tar.gz --format json
+          cargo run -- preset pack examples/presets/shell/demo --output target/demo-shell.shine-preset.tar.gz --format json
+          cargo run -- preset pack examples/presets/sys/ubuntu --output target/demo-sys.shine-preset.tar.gz --format json
       - name: Lint rust sources
         run: cargo clippy --all-targets --all-features --tests --benches -- -D warnings
       - name: Install cargo-audit

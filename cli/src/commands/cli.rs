@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use super::{
     AppCommands, EnvCommands, LocalCommands, PresetCommands, SelfCommands, ServeCommands,
     ShellCommands, StateCommands, SysCommands, TaskCommands, TaskRunCommand, ThemeCommands,
+    TrustCommands,
 };
 
 /// Give personal automation a reviewable lifecycle
@@ -13,7 +14,7 @@ use super::{
 #[command(name = "shine")]
 #[command(version = version::display(), about, long_about = None)]
 #[command(
-    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>[/<command>], or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, state, self, serve, completions, theme, and local are advanced tools."
+    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>[/<command>], or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, trust, state, self, serve, completions, theme, and local are advanced tools."
 )]
 pub struct Cli {
     #[arg(long, global = true)]
@@ -50,6 +51,9 @@ pub enum Commands {
         /// Replace user-modified files that are already managed by shine
         #[arg(long)]
         replace_managed: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long)]
+        yes: bool,
     },
     /// Uninstall one shell or app preset
     Uninstall {
@@ -65,6 +69,9 @@ pub enum Commands {
         /// Print what would be removed without changing anything
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
     /// Generate or install shell completion scripts
     Completions {
@@ -91,6 +98,9 @@ pub enum Commands {
         /// Also print the installed or rendered file content
         #[arg(long)]
         verbose: bool,
+        /// Explicitly execute App generators while evaluating installed content
+        #[arg(long)]
+        run_generators: bool,
     },
     /// Manage preset sources, overlays, exports, and Git synchronization
     Preset {
@@ -203,6 +213,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommands,
     },
+    /// Review and manage target-scoped trust for external Preset code
+    Trust {
+        #[command(subcommand)]
+        command: TrustCommands,
+    },
     /// Run a saved task (alias for `shine task run`)
     Run(TaskRunCommand),
 }
@@ -299,6 +314,9 @@ pub struct UpdateCommand {
     /// Show installed entries that are already current or need attention (targeted checks are already detailed)
     #[arg(long)]
     pub verbose: bool,
+    /// Explicitly execute App generators while checking update status
+    #[arg(long)]
+    pub run_generators: bool,
     /// Bypass the 24-hour version cache and check GitHub now
     #[arg(long, conflicts_with = "target")]
     pub refresh_release: bool,
@@ -318,4 +336,7 @@ pub struct UpgradeCommand {
     /// Remove stale managed app files whose preset source no longer exists
     #[arg(long)]
     pub prune_stale: bool,
+    /// Approve every displayed lifecycle Plan without prompting
+    #[arg(long)]
+    pub yes: bool,
 }

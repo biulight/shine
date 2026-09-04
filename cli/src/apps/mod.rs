@@ -1,45 +1,63 @@
+#[cfg(test)]
 mod annotation;
 mod build;
+#[cfg(test)]
 mod generator;
-mod hooks;
 mod info;
 mod install;
+#[cfg(test)]
 mod json_merge;
 mod metadata;
+mod recovery;
 mod refresh;
 mod report;
 mod uninstall;
 mod upgrade;
 
-pub use build::{handle_build, handle_unbuild};
+pub use build::{handle_build, handle_build_approved, handle_unbuild, handle_unbuild_approved};
 #[doc(hidden)]
 pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};
-pub use install::handle_install;
-#[cfg(test)]
-pub(crate) use metadata::built_in_platform_availability;
-pub(crate) use metadata::validate_preset_category;
+pub use install::{handle_install, handle_install_approved};
 pub use metadata::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
     load_active_categories, load_embedded_categories, load_installed_categories,
 };
-pub use refresh::handle_refresh;
-pub use uninstall::handle_uninstall;
+pub use recovery::handle_recover_approved;
+pub use refresh::{handle_refresh, handle_refresh_approved};
+pub use uninstall::{handle_uninstall, handle_uninstall_approved};
+#[cfg(test)]
+pub(crate) use upgrade::handle_upgrade_installed_target_with_result;
 pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
-pub(crate) use upgrade::{handle_upgrade_installed_target, handle_upgrade_installed_with_output};
+pub(crate) use upgrade::{
+    handle_upgrade_installed_target_with_result_approved,
+    handle_upgrade_installed_with_output_with_result_prepared,
+};
 
+#[cfg(test)]
 use crate::config::Config;
-use crate::install_core::manifest::{self, AppEntry, AppInstallStrategy, hash_content};
-use crate::install_core::{file_ops, transforms};
+#[cfg(test)]
+use crate::install_core::manifest::{self, AppInstallStrategy, hash_content};
+#[cfg(test)]
+use crate::install_core::transforms;
 use anyhow::{Context, Result};
-use file_ops::{InstallOutcome, UninstallOutcome};
+#[cfg(test)]
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::path::{Path, PathBuf};
 const APP_TEMPLATE: &str = r#"# App preset metadata for shine.
+metadata_schema_version = 2
 description = "My app configuration."
 dest = "~/.config/my-app"
 # Optional category platform destination. Exact OS keys override the Unix fallback:
 # dest = { macos = "~/Library/Application Support/My App", linux = "~/.config/my-app", windows = "~/AppData/Roaming/My App", unix = "~/.config/my-app" }
+
+[permissions]
+schema_version = 1
+# Additional capabilities not already bounded by typed destination metadata:
+# commands = ["bun"]
+# network = [{ scope = "host", host = "api.example.com" }]
+# environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
 
 [[files]]
 source = "config.toml"
@@ -59,7 +77,7 @@ transforms = []
 pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
     let (path, overwritten) =
-        utils::init_template::write_shine_toml_template(&dir, force, APP_TEMPLATE)?;
+        shine_core::init_template::write_shine_toml_template(&dir, force, APP_TEMPLATE)?;
     if overwritten {
         println!("Updated app preset template: {}", path.display());
     } else {
@@ -71,6 +89,7 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
 /// Hash the effective install content for `file` — applies transforms if declared.
 ///
 /// Returns `None` when the source cannot be read (e.g. not yet extracted).
+#[cfg(test)]
 pub async fn materialize_file_content(
     config: &Config,
     cat: &metadata::AppCategory,
@@ -85,6 +104,7 @@ pub async fn materialize_file_content(
 
 /// Read and transform only the declared static source. Used by installation
 /// dry-runs so inspecting a plan can never execute a generator.
+#[cfg(test)]
 async fn materialize_static_file_content(
     config: &Config,
     cat: &metadata::AppCategory,
@@ -105,6 +125,7 @@ async fn materialize_static_file_content(
     apply_file_transforms(file, raw, env)
 }
 
+#[cfg(test)]
 fn apply_file_transforms(
     file: &metadata::AppFile,
     raw: Vec<u8>,
@@ -118,6 +139,7 @@ fn apply_file_transforms(
     }
 }
 
+#[cfg(test)]
 pub async fn source_bytes_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
@@ -127,6 +149,7 @@ pub async fn source_bytes_for_file(
     materialize_file_content(config, cat, file, env).await.ok()
 }
 
+#[cfg(test)]
 pub async fn source_hash_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
@@ -148,6 +171,7 @@ pub async fn source_hash_for_file(
     desired_content_hash(file, &effective).ok()
 }
 
+#[cfg(test)]
 pub fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u64> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(hash_content(bytes)),
@@ -157,6 +181,7 @@ pub fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u6
     }
 }
 
+#[cfg(test)]
 pub fn installed_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<Option<u64>> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(Some(hash_content(bytes))),
@@ -166,57 +191,7 @@ pub fn installed_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<
     }
 }
 
-async fn install_prepared_content(
-    file: &metadata::AppFile,
-    content: &[u8],
-    destination: &Path,
-    is_managed: bool,
-    dry_run: bool,
-    force: bool,
-) -> Result<InstallOutcome> {
-    match &file.install_strategy {
-        AppInstallStrategy::Copy => {
-            if file.requires_admin {
-                file_ops::install_bytes_admin(content, destination, is_managed, dry_run, force)
-                    .await
-            } else {
-                file_ops::install_bytes(content, destination, is_managed, dry_run, force).await
-            }
-        }
-        AppInstallStrategy::JsonMerge { managed_keys } => {
-            json_merge::install(content, destination, dry_run, managed_keys).await
-        }
-    }
-}
-
-async fn uninstall_app_entry(
-    entry: &AppEntry,
-    dry_run: bool,
-    force: bool,
-) -> Result<UninstallOutcome> {
-    match &entry.install_strategy {
-        AppInstallStrategy::Copy if entry.requires_admin => {
-            file_ops::uninstall_entry_admin(entry, dry_run, force).await
-        }
-        AppInstallStrategy::Copy => file_ops::uninstall_entry(entry, dry_run, force).await,
-        AppInstallStrategy::JsonMerge { managed_keys } => {
-            json_merge::uninstall(entry, dry_run, force, managed_keys).await
-        }
-    }
-}
-
-fn app_category_from_source(source: &str) -> Option<String> {
-    app_source_parts(source).map(|(category, _)| category.to_string())
-}
-
-fn app_source_parts(source: &str) -> Option<(&str, &str)> {
-    let mut parts = source.splitn(3, '/');
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some("app"), Some(category), Some(file)) => Some((category, file)),
-        _ => None,
-    }
-}
-
+#[cfg(test)]
 pub fn resolve_install_destination(
     category: &metadata::AppCategory,
     file: &metadata::AppFile,
@@ -246,6 +221,7 @@ pub fn resolve_install_destination(
     )
 }
 
+#[cfg(test)]
 fn expand_destination_root(dest_root: &str, config: &Config) -> Result<PathBuf> {
     let expanded = crate::config::full_expand_with_home(dest_root, &config.home_dir)
         .with_context(|| format!("failed to expand destination root: {dest_root}"))?;
@@ -262,6 +238,7 @@ fn expand_destination_root(dest_root: &str, config: &Config) -> Result<PathBuf> 
     Ok(root)
 }
 
+#[cfg(test)]
 fn data_dir_for_config(config: &Config) -> Result<PathBuf> {
     if config.home_dir == crate::home::effective_home_dir() {
         return directories::BaseDirs::new()
@@ -277,6 +254,7 @@ fn data_dir_for_config(config: &Config) -> Result<PathBuf> {
     }
 }
 
+#[cfg(test)]
 fn validate_unique_install_destinations<'a>(
     categories: impl IntoIterator<Item = &'a metadata::AppCategory>,
     config: &Config,
@@ -301,12 +279,12 @@ fn validate_unique_install_destinations<'a>(
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 fn is_install_destination_root_absolute(_expanded: &str, root: &Path) -> bool {
     root.is_absolute()
 }
 
-#[cfg(not(windows))]
+#[cfg(all(test, not(windows)))]
 fn is_install_destination_root_absolute(expanded: &str, root: &Path) -> bool {
     root.is_absolute() || expanded.starts_with('/')
 }
@@ -333,7 +311,9 @@ mod tests {
         let config = Config::new_for_test(&dir);
 
         for error in [
-            info::handle_info(&config, "surge").await.unwrap_err(),
+            info::handle_info(&config, "surge", false, false)
+                .await
+                .unwrap_err(),
             build::handle_build(&config, "surge").await.unwrap_err(),
             refresh::handle_refresh(&config, "surge", None, false)
                 .await
@@ -372,7 +352,7 @@ mod tests {
     ) {
         let cat_dir = dir.join("presets/app/sample");
         fs::create_dir_all(&cat_dir).await.unwrap();
-        let mut manifest = "description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n".to_string();
+        let mut manifest = "description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n".to_string();
         if extra_body.is_some() {
             manifest.push_str(
                 "\n[[files]]\nsource = \"theme.conf\"\ntarget = \"themes/theme.conf\"\ntransforms = [\"template\"]\n",
@@ -415,7 +395,7 @@ mod tests {
 
         assert!(!destination.exists());
         assert!(
-            AppManifest::load(config.shine_dir())
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -434,7 +414,7 @@ mod tests {
         let cat_dir = dir.join("presets/app/sample");
         fs::create_dir_all(&cat_dir).await.unwrap();
         let manifest = format!(
-            "description = \"Sample app\"\ndest = \"~/.config/sample\"\npost_upgrade = {{ command = \"/bin/sh\", args = [\"{}\", \"{}\"] }}\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n",
+            "description = \"Sample app\"\ndest = \"~/.config/sample\"\npost_upgrade = {{ command = \"/bin/sh\", args = [\"{}\", \"{}\"] }}\n\n[permissions]\nschema_version = 1\ncommands = [\"/bin/sh\"]\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n",
             script_path.display(),
             marker_path.display()
         );
@@ -458,7 +438,8 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
 
         let (path, overwritten) =
-            utils::init_template::write_shine_toml_template(&cat_dir, false, APP_TEMPLATE).unwrap();
+            shine_core::init_template::write_shine_toml_template(&cat_dir, false, APP_TEMPLATE)
+                .unwrap();
         fs::write(cat_dir.join("config.toml"), b"name = \"sample\"\n")
             .await
             .unwrap();
@@ -480,6 +461,13 @@ mod tests {
             Some("~/.config/my-app")
         );
         assert_eq!(
+            categories[0]
+                .permissions
+                .as_ref()
+                .map(|permissions| permissions.schema_version),
+            Some(1)
+        );
+        assert_eq!(
             categories[0].files[0].source_rel,
             PathBuf::from("config.toml")
         );
@@ -496,8 +484,8 @@ mod tests {
         let dir = make_temp_dir().await;
         fs::write(dir.join("shine.toml"), b"old").await.unwrap();
 
-        let err =
-            utils::init_template::write_shine_toml_template(&dir, false, APP_TEMPLATE).unwrap_err();
+        let err = shine_core::init_template::write_shine_toml_template(&dir, false, APP_TEMPLATE)
+            .unwrap_err();
         assert!(
             err.to_string().contains("use --force to overwrite"),
             "unexpected error: {err:#}"
@@ -505,7 +493,7 @@ mod tests {
         assert_eq!(fs::read(dir.join("shine.toml")).await.unwrap(), b"old");
 
         let (_path, overwritten) =
-            utils::init_template::write_shine_toml_template(&dir, true, APP_TEMPLATE).unwrap();
+            shine_core::init_template::write_shine_toml_template(&dir, true, APP_TEMPLATE).unwrap();
         assert!(overwritten);
         let content = fs::read_to_string(dir.join("shine.toml")).await.unwrap();
         assert!(content.contains("dest = \"~/.config/my-app\""));
@@ -650,7 +638,9 @@ mod tests {
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
         let before = fs::read(&dest).await.unwrap();
-        let manifest_before = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_before = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let hash_before = manifest_before.entries[0].content_hash;
 
         write_external_sample_app(
@@ -666,7 +656,9 @@ mod tests {
         assert_eq!(report.updated, 1, "changed source should update");
         assert_eq!(report.skipped, 0);
         assert_ne!(fs::read(&dest).await.unwrap(), before);
-        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
@@ -687,7 +679,7 @@ mod tests {
         fs::create_dir_all(&other_dir).await.unwrap();
         fs::write(
             other_dir.join("shine.toml"),
-            "description = \"Other app\"\ndest = \"~/.config/other\"\n\n[[files]]\nsource = \"config.json\"\ntarget = \"config.json\"\n",
+            "description = \"Other app\"\ndest = \"~/.config/other\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"config.json\"\ntarget = \"config.json\"\n",
         )
         .await
         .unwrap();
@@ -713,13 +705,192 @@ mod tests {
         let other_before = fs::read(&other_dest).await.unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report =
-            handle_upgrade_installed_target(&config, Some("sample"), false, false, &mut sep)
-                .await
-                .unwrap();
+        let (report, lifecycle) = handle_upgrade_installed_target_with_result(
+            &config,
+            Some("sample"),
+            false,
+            false,
+            &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 1);
+        assert!(lifecycle.outcomes.iter().any(|outcome| {
+            outcome.target == "app/sample"
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
+                && outcome.resource.as_deref() == Some("daemon.jsonc")
+        }));
         assert_eq!(fs::read(&other_dest).await.unwrap(), other_before);
+
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn structured_app_lifecycle_covers_update_upgrade_and_target_isolation() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\"value\":\"initial\"}\n").await;
+        let other_dir = dir.join("presets/app/other");
+        fs::create_dir_all(&other_dir).await.unwrap();
+        fs::write(
+            other_dir.join("shine.toml"),
+            "description = \"Other app\"\ndest = \"~/.config/other\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"config.json\"\ntarget = \"config.json\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(other_dir.join("config.json"), b"{\"value\":1}\n")
+            .await
+            .unwrap();
+
+        let sample_destination = dir.join(".config/sample/daemon.json");
+        fs::create_dir_all(sample_destination.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(&sample_destination, b"user original\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let install = install::handle_install_with_result(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+        assert!(install.outcomes.iter().any(|outcome| {
+            outcome.target == "app/sample"
+                && outcome.resource.as_deref() == Some("daemon.jsonc")
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
+                && outcome
+                    .effects
+                    .contains(&shine_core::lifecycle::LifecycleEffect::BackupCreated)
+        }));
+        install::handle_install_with_result(&config, Some("other"), false, false)
+            .await
+            .unwrap();
+
+        write_external_sample_app(&dir, b"{\"value\":\"private-source-token\"}\n").await;
+        fs::write(other_dir.join("config.json"), b"{\"value\":2}\n")
+            .await
+            .unwrap();
+        let other_destination = dir.join(".config/other/config.json");
+        let other_before = fs::read(&other_destination).await.unwrap();
+        let other_manifest_before =
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .into_iter()
+                .find(|entry| entry.source == "app/other/config.json")
+                .unwrap();
+
+        let categories = metadata::load_active_categories(&config, None)
+            .await
+            .unwrap();
+        let (_rows, update) = crate::status::build_app_rows_with_lifecycle(&config, &categories)
+            .await
+            .unwrap();
+        let pending = update
+            .outcomes
+            .iter()
+            .find(|outcome| {
+                outcome.target == "app/sample"
+                    && outcome.resource.as_deref() == Some("daemon.jsonc")
+            })
+            .unwrap();
+        assert_eq!(
+            pending.status,
+            shine_core::lifecycle::LifecycleStatus::Pending
+        );
+        assert_eq!(
+            pending.effects,
+            [
+                shine_core::lifecycle::LifecycleEffect::ResourceWritePreviewed,
+                shine_core::lifecycle::LifecycleEffect::ReceiptWritePreviewed,
+            ]
+        );
+        let serialized = serde_json::to_string(&update).unwrap();
+        assert!(!serialized.contains(&dir.display().to_string()));
+        assert!(!serialized.contains("private-source-token"));
+
+        let mut separator = crate::output::SectionSeparator::new();
+        let (report, upgrade) = upgrade::handle_upgrade_installed_target_with_result(
+            &config,
+            Some("sample"),
+            false,
+            false,
+            &mut separator,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.updated, 1);
+        assert!(upgrade.outcomes.iter().any(|outcome| {
+            outcome.target == "app/sample"
+                && outcome.resource.as_deref() == Some("daemon.jsonc")
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
+        }));
+        assert_eq!(fs::read(&other_destination).await.unwrap(), other_before);
+        let other_manifest_after =
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .into_iter()
+                .find(|entry| entry.source == "app/other/config.json")
+                .unwrap();
+        assert_eq!(
+            toml::to_string(&other_manifest_after).unwrap(),
+            toml::to_string(&other_manifest_before).unwrap()
+        );
+
+        let categories = metadata::load_active_categories(&config, None)
+            .await
+            .unwrap();
+        let (_rows, after_upgrade) =
+            crate::status::build_app_rows_with_lifecycle(&config, &categories)
+                .await
+                .unwrap();
+        assert!(after_upgrade.outcomes.iter().any(|outcome| {
+            outcome.target == "app/sample"
+                && outcome.resource.as_deref() == Some("daemon.jsonc")
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Unchanged
+        }));
+        assert!(after_upgrade.outcomes.iter().any(|outcome| {
+            outcome.target == "app/other"
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Pending
+        }));
+
+        let uninstall =
+            uninstall::handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+                .await
+                .unwrap();
+        assert!(uninstall.outcomes.iter().any(|outcome| {
+            outcome.target == "app/sample"
+                && outcome.resource.as_deref() == Some("daemon.jsonc")
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
+                && outcome
+                    .effects
+                    .contains(&shine_core::lifecycle::LifecycleEffect::BackupRestored)
+        }));
+        assert_eq!(
+            fs::read(&sample_destination).await.unwrap(),
+            b"user original\n"
+        );
+        assert!(other_destination.exists());
+        assert!(
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| entry.source == "app/other/config.json")
+        );
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
@@ -746,8 +917,8 @@ mod tests {
         .await;
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        config.allow_app_hooks = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         handle_install(&config, Some("sample"), false, false)
             .await
@@ -763,13 +934,22 @@ mod tests {
             &marker,
         )
         .await;
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, lifecycle) =
+            handle_upgrade_installed_target_with_result(&config, None, false, false, &mut sep)
+                .await
+                .unwrap();
 
         assert_eq!(report.updated, 1);
+        assert!(lifecycle.outcomes.iter().any(|outcome| {
+            outcome.resource.as_deref() == Some("hook:post-upgrade")
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
+                && outcome
+                    .effects
+                    .contains(&shine_core::lifecycle::LifecycleEffect::CodeExecuted)
+        }));
         assert_eq!(fs::read_to_string(&marker).await.unwrap(), "x");
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
@@ -797,8 +977,8 @@ mod tests {
         .await;
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        config.allow_app_hooks = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         handle_install(&config, Some("sample"), false, false)
             .await
@@ -850,14 +1030,15 @@ mod tests {
         .await;
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let error =
+            handle_upgrade_installed_target_with_result(&config, None, false, false, &mut sep)
+                .await
+                .unwrap_err();
 
-        assert_eq!(report.updated, 1);
+        assert!(error.to_string().contains("Plan is blocked"));
         assert!(
             !marker.exists(),
-            "external hook must be skipped unless allow_app_hooks is enabled"
+            "external hook must be skipped without a matching scoped trust grant"
         );
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
@@ -905,7 +1086,9 @@ mod tests {
             b"background = \n",
             "new file should be transformed before install"
         );
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&new_dest).is_some(),
             "new app file should be tracked in manifest"
@@ -945,17 +1128,15 @@ mod tests {
         fs::write(&new_dest, b"user-owned\n").await.unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
+        let error = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("Plan is blocked"));
+        assert_eq!(fs::read(&new_dest).await.unwrap(), b"user-owned\n");
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
-
-        assert_eq!(report.updated, 0, "unmanaged existing file must not update");
-        assert_eq!(
-            report.skipped, 2,
-            "existing managed file and unmanaged new file should be skipped"
-        );
-        assert_eq!(fs::read(&new_dest).await.unwrap(), b"user-owned\n");
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
         assert!(
             manifest.find_by_dest(&new_dest).is_none(),
             "unmanaged destination should not be added to manifest"
@@ -995,7 +1176,9 @@ mod tests {
         assert_eq!(report.updated, 1, "stale cleanup should count as a change");
         assert_eq!(report.skipped, 0);
         assert!(!dest.exists(), "unmodified stale file should be removed");
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&dest).is_none(),
             "stale manifest entry should be removed"
@@ -1035,7 +1218,9 @@ mod tests {
 
         assert_eq!(report.updated, 1, "manifest cleanup should count as change");
         assert_eq!(report.skipped, 0);
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&dest).is_none(),
             "missing stale destination should be removed from manifest"
@@ -1075,7 +1260,9 @@ mod tests {
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
         assert!(dest.exists(), "stale file should be left in place");
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&dest).is_some(),
             "stale manifest entry should remain without prune"
@@ -1117,7 +1304,9 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert_eq!(report.user_modified, 1);
         assert_eq!(fs::read(&dest).await.unwrap(), b"{\"user\":true}\n");
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&dest).is_some(),
             "user-modified stale entry should remain tracked"
@@ -1147,7 +1336,7 @@ mod tests {
         let cat_dir = dir.join("presets/app/sample");
         fs::write(
             cat_dir.join("shine.toml"),
-            b"description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[[files]]\nsource = \"daemon-renamed.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"jsonc-to-json\"]\n",
+            b"description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"daemon-renamed.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"jsonc-to-json\"]\n",
         )
         .await
         .unwrap();
@@ -1174,7 +1363,9 @@ mod tests {
             fs::read(&dest).await.unwrap(),
             b"{\n  \"proxy\": \"new\"\n}\n"
         );
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let entry = manifest.find_by_dest(&dest).unwrap();
         assert_eq!(entry.source, "app/sample/daemon-renamed.jsonc");
 

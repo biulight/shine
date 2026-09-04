@@ -5,16 +5,167 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **A security Plan is not dry-run and approval is snapshot-bound.** `PlanV1` contains only ordered
+  semantic steps, safe diagnostic codes, resolved permissions, and digests of exact source/state
+  observations. App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile
+  planners accept only observation host traits; they cannot write/remove, execute
+  generator/hook/artifact/bootstrap/profile code, request privilege, or apply
+  split-DNS state. Plans cannot carry content, env values, secret plaintext, raw argv, raw errors,
+  or private source paths. Every supported App, Shell, managed Sys, Sys bootstrap, App
+  refresh/artifact, and Sys profile mutation must enter through an approved Core method that
+  regenerates the Plan from fresh captured inputs and matches both its
+  fingerprint and exact required permission set before the first mutation; missing or uncomputable
+  permissions fail closed. CLI `--yes` skips only the default-No prompt. Dry-run remains a separate
+  preview contract. Specialized operations use `sys-bootstrap`, `app-refresh`,
+  `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
+  lifecycle Plans or `LifecycleResultV1` operations.
+- **A Preset authoring plan is hypothetical and never authorizes mutation.** `shine preset plan`
+  validates and plans from one immutable external snapshot, but observes only deterministic
+  `InMemoryHost` state for the selected platform. The direct command uses empty state; declarative
+  fixture tests may seed explicitly bounded observations. Its versioned report may reuse semantic
+  step and permission-resolution values, but it must not serialize `PlanInputsV1`, a Plan fingerprint,
+  `PlanApprovalV1`, private checkout paths, content, argv, environment values, secret plaintext, or
+  raw errors. No apply entry point accepts an authoring report. `ready` means only that the
+  hypothetical Plan has no blocker under the report's explicit absent-state assumptions.
+- **Preset lint is policy over validated models, not a second schema.** `shine preset lint` loads the
+  same immutable source scope and runs the existing all-platform validation before Core metadata
+  lint rules. Invalid metadata is reported as a validation error and is never reparsed through an
+  independent acceptance model. Lint reports contain logical targets/resources and stable codes;
+  private-path findings never echo the suspected path. Warnings affect exit status only with the
+  explicit `--deny-warnings` CI policy.
+- **Preset fixtures are declarative assertions, never executable setup.** `shine preset test`
+  accepts one category-local `shine.test.toml`, rejects unknown fields and unsupported schema
+  versions, and runs each unique named case only through the synthetic authoring-report path.
+  Host state may contain environment-name presence, opaque secret versions, bounded synthetic
+  files, command-presence identities, current-version receipt documents, exact derived trust grants,
+  and administrator state. Values and receipt contents never enter reports. Expectations compare
+  structured validity, readiness, Plan kinds, actions, permissions, and stable diagnostic codes.
+  The schema has no process invocation, setup, teardown, network, or arbitrary host-mutation field.
+- **Preset schema reference is generated, not copied.** `shine preset schema` serializes JSON Schema
+  from the Rust types shipped for authoring reports, fixtures, and bundle manifests, and captures
+  command help from the live Clap tree. It must route before configuration loading. It does not
+  redefine the App/Shell/Sys TOML grammar; runtime parsers plus `preset validate` remain authoritative.
+- **Preset source migration is reviewed, metadata-only, and backup-first.** `shine preset migrate`
+  derives candidates from one immutable effective snapshot, preserves unchanged TOML formatting,
+  validates candidates authoritatively, renders diffs through a CLI-only side channel, and rechecks
+  source SHA-256 immediately before backup and apply. Its versioned report contains only logical
+  targets, source layers, actions, stable codes, schema versions, hashes, and summary counts—never
+  file content, diffs, private values, or physical checkout paths. Dry-run creates no directory or
+  file. Apply requires default-No review (or explicit `--yes`) and a complete owner-only backup set
+  with hash/mode manifest before the first atomic metadata replacement or removal. Payloads, scripts,
+  environment values, runtime manifests, and trust grants are never migrated. Opaque-code
+  permissions, broad network access, and Sys v1 dispatchers are never inferred. Managed Git overlays
+  are diagnostic-only; a source change, backup/write failure, refusal, or remaining blocker fails the
+  command even when independent safe edits have converged.
+- **Preset bundle bytes exclude host identity and author-only state.** `shine preset pack` uses one
+  validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical
+  file order, normalized mode, zero uid/gid/mtime, and a fixed gzip header determine bytes; physical
+  checkout roots and enumeration order do not. `shine.test.toml` is excluded. `node_modules`,
+  symlinks, private key candidates, private HOME paths, and executable files not referenced by a
+  typed path-bearing metadata field block packing with stable codes that never echo suspected
+  content or paths. Descriptions, labels, arguments, and other incidental strings never declare an
+  executable payload.
+- **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
+  digest binds sorted effective logical paths, exact bytes, and each file's embedded, external, or
+  overlay origin. It must not include physical source roots: relocating unchanged source is not a
+  semantic change, while changing an effective layer is. State observations use the same framed
+  SHA-256 contract. Labels use canonical targets and logical resources; request flags, relevant
+  manifests/receipts, live fingerprints, platform/mode, and outcome-affecting input identities are
+  all bound. Plain environment values contribute only a hash, while secrets require opaque handles
+  or versions and never contribute plaintext.
+- **A Preset permission declaration is not a grant.** App categories, Shell commands, and Sys items
+  may declare schema-v1 capability identities, but those declarations do not create scoped
+  external-code trust or bypass administrator authorization, ownership checks, or Plan approval.
+  Untargeted upgrade includes declarations only from installed App categories, installed Shell
+  commands, and enabled managed Sys items; merely available embedded, external, or overlay Presets
+  cannot contribute required permissions or missing-declaration blockers. A fully current Shell
+  command contributes no command-local mutation permissions; shared cache, snapshot, rendered, or
+  profile actions contribute only their own exact transaction permissions.
+  Filesystem declarations use logical bases and never embed a physical Preset
+  checkout path; command entries contain no argv and environment entries contain names and
+  sensitivity only. Pure planners merge explicit declarations with Core-bounded typed metadata and
+  receipt ownership. A missing declaration or uncomputable requirement blocks protected mutation;
+  it is never converted into a broad implicit grant.
+
+- **Opaque Preset code is described conservatively, never sampled during planning.** A generator
+  or lifecycle hook contributes known command/environment/administrator requirements plus an
+  `execute` step and potential mutation step when its lifecycle trigger applies. Existing external-
+  code gates may still block it. Embedded generator execution also declares and binds its runtime
+  script materialization under the Shine directory. If the original Preset disappeared, supported
+  manifests/receipts may drive owned-resource removal, but missing teardown code is never
+  reconstructed or executed.
+  A generated App file still participates in first-install destination and fixed-backup observation;
+  its Plan must declare the remove/write effects of moving an unowned destination, and execution
+  must fail closed rather than replace an occupied `.shine.bak` path.
+  User modification, occupied destinations, foreign launchers, and managed Sys ownership conflicts
+  remain `preserve`/`blocked`; force must produce a distinct step or diagnostic and fingerprint.
+
+- **App executable environment is explicit.** Generators receive only fixed `SHINE_APP_*` contract
+  variables plus their `generator.env` mappings. Artifacts receive only the fixed contract plus
+  their `[artifact].env` mappings, whose sources must be declared by the category's
+  `[permissions].environment`. They never inherit the full active `[env]` table. Plain values are
+  fingerprinted by hash and secret values require opaque versions; neither value form is serialized
+  into the Plan.
+
+- **Host observation is explicit and domain execution receives captured inputs.** Filesystem and
+  split-DNS observation ports are separate from mutation ports, which inherit them; planner type
+  bounds remain observation-only. A shared runtime
+  bootstrap discovers external/overlay directories and constructs snapshots through the selected
+  filesystem host, so CLI, UI, tests, and future host adapters reuse one implementation. Runtime
+  contexts carry home, Shine roots, platform, environment, and the resulting immutable snapshot;
+  App/Shell/Sys domain logic never rediscovers them from ambient globals. Distribution-only
+  embedded bytes enter from the frontend. Validation additionally receives captured cwd, manifest
+  persistence always requires a filesystem host, and Sys inspection/preflight stays read-only;
+  only authorized script execution atomically materializes the category below the Shine runtime
+  root. Core never reopens an external preset tree through `Path` helpers.
+- **A host abstraction does not weaken ownership checks.** Real and in-memory managed-file paths
+  share the same content hash, backup suffix, receipt, user-modification preservation, and
+  manifest-version gates. Adding a new host operation must retain those checks rather than treating
+  a successful write primitive as ownership evidence.
+
+- **Reusable lifecycle results contain identities and codes, never payloads.** Structured outcomes
+  may record canonical targets, logical resource names, status, effects, and stable diagnostic
+  codes. They must not copy raw errors/logs, source or destination content, environment or secret
+  values, subscription URLs, credentials, or absolute destination paths into a reusable result.
+  Human CLI diagnostics remain subject to their domain-specific redaction rules.
+- **Lifecycle presentation is a CLI-only side channel, never a result payload.** App, Shell, and
+  managed Sys may emit home-relative paths, human diagnostics, hook notes, and section events to a
+  replaceable reporter, but those events are not serializable and must never be copied into
+  `LifecycleResultV1`. Confirmation and administrator authorization use the separate interaction
+  port so reusable execution does not depend on dialoguer or terminal rendering.
+- **Lifecycle status distinguishes observation from execution.** Read-only `update` uses
+  `dry_run = false` and `Pending`; explicit dry-run uses `dry_run = true` and `Previewed`.
+  `Changed` means this execution changed Shine-owned state. App hooks/teardown may record execution
+  effects without changing their established non-fatal exit semantics; managed Sys user
+  modification remains a typed preservation conflict while the CLI keeps its existing failure exit.
+- **App update presentation and reusable results share one Core assessment pass.** `AppRow` and
+  `LifecycleOutcomeV1` must derive from the same per-file assessment; do not rebuild rows to obtain
+  the structured result. Default read-oriented assessment never executes generators and reports
+  `app_generator_not_evaluated` when dynamic desired content needs explicit execution.
+  `--run-generators` is a separate opt-in assessment mode: it may execute selected generators once
+  to derive in-memory desired content but must not write destinations/manifests or run hooks and
+  artifacts. Typed inspection paths remain non-serializable and must not enter the lifecycle result.
+- **Managed-file update details are field labels, not payloads.** The read-only comparison may
+  report that destination or content changed, but must not copy the destination, desired bytes, or
+  environment values into structured lifecycle outcomes. Ownership and user-modification checks
+  still occur at apply/remove time against the receipt and live resource.
+- **Every runtime manifest is a pre-mutation gate.** App, Shell, and Sys load their own manifest
+  before destination/resource, embedded cache, snapshot/render, launcher, receipt, or profile
+  mutation. Missing `schema_version` is legacy v0, read-only loads never rewrite it, the next
+  successful mutation writes v1, and an unsupported future version fails first. The inner Sys
+  receipt `version` is independent of `sys-manifest.toml`'s schema version.
+
 - **Uninstall never touches user files.** `presets::remove_prefix` removes only embedded-asset
   files; `bin_links::unlink_managed` removes only symlinks pointing into the managed presets dir,
-  plus **regular files that carry the `# shine-managed` marker and a `# shine-target:` under the
-  managed root** (Windows `.ps1`/`.cmd` shims and Unix `runtime = "bun"` launcher scripts); app
+  plus **regular files that carry the native `# shine-managed`/`REM shine-managed` marker and a
+  matching `# shine-target:`/`REM shine-target:` under the managed root** (Windows `.ps1`/`.cmd`
+  shims and Unix `runtime = "bun"` launcher scripts); app
   uninstall is driven by `~/.shine/app-manifest.toml` entries only.
 - **Bun launchers are marked regular files, identified only by content, never by name.** A Unix
   `runtime = "bun"` command is a generated executable script (not a symlink); ownership and
   current-ness (`bin_links::launcher_target`/`unix_launcher_status`, mirrored by
-  `windows_shim_status`) key on the `# shine-managed` marker + a `# shine-target:` path under the
-  managed root. An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user
+  `windows_shim_status`) key on the platform-native managed marker + target path under the managed
+  root. An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user
   conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
   format change re-detects installed launchers as stale on upgrade; changing it is a format bump.
   The content embeds the entry's ordered `env` spec (the `--with` tokens of the
@@ -32,22 +183,240 @@ bugs. Check this list before changing the modules named in each entry.
   Uninstall routes to the sudo removal path based on the stored flag, not by re-checking the
   path. Dropping it during (de)serialization silently breaks privileged uninstall (commit
   `70ee910`).
-- **Privileged filesystem mutations must hold the cross-process admin lock**
-  (`install_core/file_ops.rs::admin_lock`, `$TMPDIR/shine-admin.lock`). In-process mutexes are not
-  enough: nextest runs each test in its own OS process, and real concurrent shine invocations
-  exist too (commit `fbd9c55`).
-- **No code path should ask the user to manually type `sudo` on Unix.** Every Unix privileged
-  write auto-elevates through `privilege::ensure_admin` + `install_core/file_ops.rs::sudo_command`
-  (app-config installs, `self_install.rs`'s binary copy via `install_binary_with_elevation`).
+- **Privileged filesystem transactions must hold the host-provided cross-process admin lock** for
+  their complete ownership-check, backup, mutation, and rollback sequence
+  (`PrivilegedFileSystemHost::acquire_privileged_operation`, `$TMPDIR/shine-admin.lock`). Locking
+  individual writes is insufficient because another process could race between backup and replace.
+  Self-install uses the same host lock (commit `fbd9c55`).
+- **No code path should ask the user to manually type `sudo` on Unix.** Frontend interaction
+  authorizes through `privilege::ensure_admin`; the real privileged host performs non-interactive
+  mutations with the cached authorization. Self-install uses its CLI-only command adapter.
   Windows has no `sudo` equivalent, so its privileged paths still surface a manual
   "rerun elevated" hint instead.
+
+## Declarative actions and recovery
+
+- **The executable Action IR is not the security Plan.** `PlanV1` remains a payload-free review and
+  approval contract. `ActionIrV1` is created for execution only after planning and may carry resolved
+  effect paths and content hashes, but never managed bytes, environment values, secret plaintext, or
+  raw argv. Do not embed the Action IR in `PlanV1` or reinterpret semantic Plan steps as executable
+  instructions.
+- **Recovery is an explicit, freshly approved operation.** Ordinary planning, status, install,
+  upgrade, and uninstall must not mutate an interrupted journal implicitly. `app-recovery` binds the
+  exact journal bytes and current destination observation, validates its approval again under the
+  host-provided cross-process operation lock, and only then mutates recovery state. The CLI exposes
+  this only as `shine app recover [--yes]`; a ready Plan must show journal removal and require
+  default-No approval, while blocked recovery preserves the journal. Background release gating must
+  not make this recovery entry point unavailable.
+- **A transaction-created file is rollback-owned only while unchanged.** The v1 App creation slice
+  may remove a destination only when its bytes still match the Action IR's desired hash. Missing is
+  safe journal cleanup; any other content is a blocking user modification and both destination and
+  journal remain for explicit resolution.
+- **A transaction-created App backup is restorable only while both regular-file paths match.**
+  Backup-aware v1 creation binds the fixed `.shine.bak` path plus original and desired hashes, and
+  starts only from an unowned regular file when that backup path is absent. Recovery may restore
+  only from `(missing, original)` or `(desired, original)` destination/backup state;
+  `(original, missing)` means mutation never started. Every other combination blocks and preserves
+  destination, backup, and journal. The journal never stores either byte payload, a matching durable
+  receipt commits ownership of both paths, and any non-matching receipt that claims the source or
+  either path blocks recovery.
+- **A managed App update moves, never serializes, its previous bytes.** The Phase 4 in-place update
+  slice applies only to an unchanged receipt-owned static Copy at the same
+  destination. Before replacement it journals, then renames the previous file to the canonical
+  same-directory `<name>.shine.rollback` path; that path must be absent and unclaimed. The Action IR
+  binds the previous App backup identity, prior mode and original/desired hashes but never either
+  byte payload. Apply restores the prior mode on the replacement. Before the replacement receipt is
+  durable, recovery restores only the exact original/missing, missing/original, or desired/original
+  state; after it is durable, commit/recovery removes only unchanged rollback material. Any changed
+  kind, bytes, mode-bound input, receipt, destination or rollback path blocks and preserves state.
+- **An ordinary managed App removal commits through receipt absence.** The Phase 4 removal slice
+  applies only to an unchanged, receipt-owned static Copy with no persistent backup and no force.
+  It moves the destination to the canonical same-directory rollback path before
+  removing the receipt. While the exact old receipt remains, recovery restores only an unchanged
+  regular rollback file with the recorded mode and hash. After receipt removal, the journal must
+  durably enter `receipt-committed` before commit/recovery removes unchanged rollback material; bare
+  receipt absence cannot authorize cleanup and instead makes explicit recovery reconstruct the exact
+  old receipt before restoring unchanged bytes. No conflicting manifest receipt may claim the action
+  source, destination or rollback path. Any
+  occupied destination, changed path, receipt conflict, backup, JSON merge or force
+  case stays outside this action and must not inherit its rollback proof.
+- **A backup-restoring App removal binds both file identities across two moves.** The applicable
+  static Copy receipt must own the canonical `.shine.bak`, and the managed destination,
+  persistent backup, and canonical `.shine.rollback` must be unchanged regular-file/missing states
+  matching the Action IR's two modes and hashes. Before receipt commit, recovery accepts only exact
+  managed/original/missing, missing/original/managed, or original/missing/managed
+  destination/backup/rollback states; it reconstructs a missing exact old receipt before returning
+  the user file to backup and managed rollback to destination. After `receipt-committed`, recovery
+  keeps the exact restored user destination and removes only unchanged managed rollback material.
+  Any changed kind, mode, hash, receipt, or claimed path blocks and preserves all three paths.
+- **A forced App removal binds the modified file separately from its receipt.** The applicable
+  Phase 4 action is limited to a receipt-owned static Copy regular file whose current
+  hash differs from the receipt hash. The Plan must carry the explicit user-modification override.
+  The journal stores both hashes and the current mode, but never file bytes, before moving the
+  modified destination to canonical same-directory rollback material and optionally restoring the
+  exact fixed backup. Before receipt commit, recovery reconstructs a missing old receipt and
+  restores the exact modified destination plus optional backup; after `receipt-committed`, it keeps
+  the completed uninstall state and removes only unchanged modified rollback material. Any changed
+  kind, mode, hash, receipt, destination, backup, or rollback path blocks. Unchanged destinations
+  use the ordinary removal action even under `--force`; non-static-Copy paths do not inherit this
+  proof.
+- **App upgrade stale pruning is receipt removal, not a generic upgrade write.** A stale static
+  Copy or JSON entry may reuse the corresponding removal Action only when its current owned state
+  still matches the receipt and the approved Upgrade Plan carries `app_stale_source_pruned` for the
+  exact target/resource. Planning must bind destination, optional persistent backup, canonical
+  rollback material, manifest and journal effects with removal permissions even though the outer
+  lifecycle operation is Upgrade. User-modified stale state is preserved, forced removal is not
+  inferred, and a missing destination performs receipt-only cleanup without administrator access.
+  Receipt absence still requires the positive journal commit marker before rollback material may
+  be discarded.
+- **App static Copy relocation is one receipt replacement, not create plus remove.** An approved
+  `RelocateManagedFile` binds the exact old receipt, old destination, optional canonical persistent
+  backup, old same-directory rollback, absent new destination, desired hash, and both privilege
+  identities. The journal precedes staging the old managed file, restoring its backup, and writing
+  the new file. Before the new receipt is durable, recovery removes only an unchanged new file and
+  restores the exact old path/backup state; after it is durable, recovery preserves the final paths
+  and removes only exact rollback material. The new receipt never inherits the old backup path. A
+  missing old destination is eligible only without a persistent backup; JSON relocation does not
+  inherit this whole-file proof.
+- **Privileged App static Copy changes the mutation port, not the rollback proof.** Create,
+  backup-aware create, update, and the three removal actions persist `requires_admin`, derive
+  Administrator permission, and require matching old/new receipts to carry the same flag. Planning
+  requests elevation only for an actual protected path mutation. Apply, receipt commit, and recovery
+  hold the host-provided cross-process administrator lock across revalidation and use privileged
+  write/move/remove/mode operations for destination, persistent backup, and transaction rollback
+  paths. A freshly reviewed recovery Plan requests Administrator only when its exact safe state
+  changes one of those paths; receipt-only repair and journal cleanup do not. CLI recovery obtains
+  authorization after Plan approval and before mutation.
+- **App JSON merge owns declared keys, never the whole object.** Install/update and ordinary or
+  forced removal bind the exact pre-operation JSON file as same-directory rollback material, but
+  recovery reads it only to restore declared unique top-level keys into the current object. It must
+  preserve every current unrelated value. Creation at an absent path removes the whole file only
+  when no unrelated keys exist; after removal receipt commit, current JSON is user-owned and only
+  unchanged rollback material may be removed. Invalid JSON, changed managed keys, changed rollback
+  kind/hash/mode, or a receipt conflict blocks without mutation. Prior and desired JSON values never
+  enter Action IR or the journal.
+- **App JSON relocation owns keys independently at both destinations.** `RelocateManagedJson`
+  binds the exact old/new receipt identities, separate old/new managed-key sets and subset hashes,
+  the optional old whole-file identity, canonical old rollback path, and an absent new destination.
+  Before the new receipt is durable, recovery removes only the desired keys from the new object and
+  restores only the previous keys into the old object, preserving unrelated current values on both
+  sides. After receipt commit, the old object is user-owned; recovery preserves it, verifies the new
+  managed subset, and removes only exact rollback material. Missing old state is supported without
+  rollback. Invalid JSON, changed managed keys, rollback changes, occupied paths, or receipt
+  conflicts block all recovery mutation. Neither prior nor desired JSON values enter Action IR or
+  the journal.
+- **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
+  first action mutation, update action state atomically, persist the matching domain receipt, and
+  only then commit by removing the journal. An existing or unsupported-version journal blocks a new
+  operation; it is never overwritten, upgraded, or discarded best-effort. App journal commit must
+  re-read and match the durable manifest receipt. If interruption happens after that receipt is
+  durable, explicit recovery preserves the now manifest-owned resource and removes only the stale
+  journal.
+- **A first-time Shell launcher is rollback-owned only while every created resource is exact.**
+  `CreateShellLauncher` applies only when the command has no receipt and all launcher paths are
+  absent. One action covers a Unix symlink, a generated Unix Bun/live file, or both Windows shim
+  files. `shell-operation-journal.toml` precedes the first path mutation and survives until the
+  complete command receipt is durable. Explicit `shell-recovery` removes only exact
+  target/hash/mode matches when that receipt is absent; any changed resource or conflicting receipt
+  blocks, while an exact durable receipt preserves the launcher and authorizes stale-journal
+  cleanup. Profile sentinel blocks, shared snapshots, launcher updates, and removals use separate
+  proofs.
+- **A receipt-owned Shell launcher update moves exact old resources before replacement.**
+  `UpdateShellLauncher` applies only when the old command receipt is still exact, the current Unix
+  launcher or every Windows shim matches the launcher deterministically reconstructed from that
+  receipt, and each canonical same-directory `.shine.rollback` path is absent. The journal binds
+  complete old/new receipts plus target/hash/mode identities, never launcher bytes. Each changed
+  old resource moves to rollback before its replacement is written. While the old receipt remains,
+  recovery restores only exact missing-or-replaced states; after the new receipt is durable,
+  commit/recovery keeps exact replacements and removes only unchanged rollback material. Any
+  changed resource, rollback path, or conflicting receipt blocks and preserves all paths. Foreign,
+  already modified, removal, shared snapshot/render, and profile-block paths do not inherit this
+  update proof.
+- **A receipt-owned Shell launcher removal commits through a positive journal marker.**
+  `RemoveShellLauncher` applies only when the exact old command receipt still exists, every Unix
+  launcher or Windows shim resource deterministically reconstructed from it remains exact, and all
+  canonical same-directory `.shine.rollback` paths are absent. The journal precedes moves of every
+  launcher resource to rollback. After manifest receipt removal, the journal must durably record
+  `receipt-committed` before commit or recovery may clean exact rollback material; bare receipt
+  absence instead requires explicit recovery to reconstruct the complete old receipt before
+  restoring exact resources. Any conflicting receipt, changed destination or rollback identity, or
+  occupied rollback path blocks and preserves state. Foreign and modified launchers do not inherit
+  this proof; shared snapshot/render state and profile sentinel blocks use separate actions.
+- **An external Shell snapshot is category-owned, and receipt presence is not its commit marker.**
+  `ReplaceShellSnapshot` applies only to approved snapshot-mode selections whose selected commands
+  require no rendering. It binds the whole sorted category tree, deterministic sibling stage and
+  rollback directories, and all selected command receipt transitions. The journal precedes staging;
+  the old tree remains exact rollback material until the selected receipts and a positive
+  per-action commit marker are durable. Before that marker, recovery must evaluate launcher actions
+  against the previous receipt set and restore the previous tree; afterward it may remove only the
+  exact old rollback tree. Extra or changed stage files, changed destination/rollback trees, or
+  conflicting receipts block all recovery. Embedded cache, rendered outputs, uninstall, and profile
+  sentinel blocks do not inherit this proof.
+- **Embedded Shell cache replacement is a category-scoped file-patch transaction.**
+  `ReplaceShellCache` contains only files that the established extraction policy will write:
+  missing files, plus differing files during upgrade or under `--replace-managed`. Every entry binds optional previous
+  and required desired hash/mode identity with a distinct canonical same-directory rollback path;
+  the action also binds all selected category command receipt transitions and a positive commit
+  marker. Before the marker, recovery projects the previous receipt boundary and reverses exact
+  created/moved/replaced files in reverse order; afterward it preserves exact desired files and
+  removes only exact rollback. Non-file destinations, occupied or aliased rollback paths, changed
+  files, or conflicting receipts block the whole action. Skipped existing and unrelated cache files
+  are never transaction material. Cache removal, rendered/live output, snapshot removal, and
+  profile sentinel blocks use separate proofs.
+- **A lifecycle-rendered Shell file commits at a file and receipt-set boundary.**
+  `ReplaceShellRenderedFile` binds the optional previous and required desired hash/mode identity,
+  canonical same-directory `.shine.rollback`, every selected command receipt transition consuming
+  that path, and a positive per-action commit marker. Before the marker, recovery projects those
+  transitions back to the previous manifest boundary before restoring an exact prior file or
+  removing an exact transaction-created file; afterward it preserves the exact desired file and
+  cleans only exact rollback. Changed or non-file destinations, occupied/changed rollback paths, or
+  conflicting receipts block all recovery. Embedded cache uses its separate file-patch action;
+  rendered removal, execution-time live rendering, snapshot removal, and profile sentinel blocks
+  do not inherit this proof.
+- **Rendered Shell removal owns exact bytes only after the last consumer is selected.**
+  `RemoveShellRenderedFile` binds the current regular-file hash/mode, canonical same-directory
+  rollback, and every exact previous command receipt consuming that path. The journal precedes the
+  move to rollback; receipt absence must be followed by a positive per-action commit marker before
+  cleanup. Before the marker, recovery reconstructs missing previous receipts before restoring the
+  exact file. Afterward it keeps the destination absent and removes only unchanged rollback. An
+  unselected consumer, changed/non-file destination, occupied/changed rollback, or receipt conflict
+  blocks or excludes the action. Unrelated rendered files are never category cleanup material.
+  Invocation-time live rendering remains atomic rather than journaled, but it holds the same
+  cross-process operation lock, refuses to run with a pending Shell journal, and re-reads its
+  manifest receipt under that lock.
+- **Shell cache and snapshot removal commit through their receipt set.** `RemoveShellCache` owns
+  only exact receipt-owned cache files selected for removal; `RemoveShellSnapshot` owns the exact
+  selected category tree. Both bind previous receipt transitions and positive commit evidence.
+  Before the marker, recovery reconstructs missing receipts and restores only exact rollback
+  material; afterward it preserves removal and cleans exact rollback. Unselected consumers,
+  unrelated files, changed trees, and changed rollback material are preserved or block mutation.
+- **Shell profile recovery owns sentinel blocks, never the whole current file.**
+  `ReconcileShellProfile` binds the previous and desired Shine-owned sentinel subset for every
+  affected profile. Recovery re-reads the current file, verifies only the owned-block transition,
+  and restores or removes those blocks in place. Unrelated content written before or after the
+  interrupted operation is preserved; a changed Shine block blocks recovery.
+- **Managed Sys recovery is receipt-positive and domain-scoped.**
+  `sys-operation-journal.toml` precedes managed-file, split-DNS, or explicit profile-sentinel
+  mutation and binds the exact previous and desired `SysRunEntry`. `shine sys recover [--yes]`
+  regenerates its Plan under the operation lock. Before receipt commit it restores only exact
+  prior file/DNS/sentinel state; after the desired receipt is durable it preserves desired state
+  and removes exact rollback material. A conflicting receipt or changed resource blocks all
+  recovery mutation. Core transaction entries acquire the privileged-operation lock exactly once;
+  split-DNS host mutation primitives run beneath that boundary and must not reacquire it. Profile
+  active/base/new/merge composition and bootstrap execution do not
+  inherit this proof and must remain visibly non-transactional or opaque in their Plan.
+- **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
+  generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
+  privilege, permission and unsupported-rollback classification until a narrower typed action
+  replaces them. Keep `executable-preset-inventory.md` current when built-in executable capability
+  changes.
 
 ## Shell profile editing
 
 - **Sentinel blocks are the only thing shine writes to user shell configs**
-  (`# >>> shine >>>` … `# <<< shine <<<`, `shells/profile.rs`; sys uses per-phase sentinels like
-  `# >>> shine <os> sys pre >>>`, `sys/profile_blocks.rs`). Both delegate to the shared primitives in
-  `cli/src/sentinel.rs` (`find_block`/`extract_block_with_newline`/`remove_block_bytewise`/
+  (`# >>> shine >>>` … `# <<< shine <<<`, Core Shell profile handling; sys uses per-phase sentinels
+  like `# >>> shine <os> sys pre >>>`). Both delegate to the shared primitives in
+  `core/src/sentinel.rs` (`find_block`/`extract_block_with_newline`/`remove_block_bytewise`/
   `remove_block_linewise`/`insert_block`/`trim_outer_blank_lines`).
 - **Two sentinel removal styles exist and must not be unified without golden-output proof.**
   `sentinel::remove_block_bytewise` (shells' semantics) consumes one preceding blank line and
@@ -58,9 +427,9 @@ bugs. Check this list before changing the modules named in each entry.
   own.
 - **Line-ending differences must not register as changes on the sys path.** Preset templates are
   pinned LF (repo `.gitattributes`: `presets/** text eol=lf`), so the rust-embed'd template is
-  byte-deterministic across build hosts. The sys reconciliation (`sys/profile.rs`) and the
-  sentinel idempotency check (`sys/profile_blocks.rs`) compare content line-ending-agnostically via
-  `install_core::eol_eq`/`normalize_eol`: a pure CRLF↔LF difference (e.g. a Windows editor
+  byte-deterministic across build hosts. Core Sys reconciliation (`runtime/sys_profile/`) compares
+  content line-ending-agnostically via `install::eol_eq`/`normalize_eol`: a pure CRLF↔LF difference
+  (e.g. a Windows editor
   re-saving an installed loader file or profile) reports **no update** and leaves the user's file
   bytes untouched. When on-disk endings differ, the three-way merge skips `git merge-file` (which
   would see spurious per-line diffs) and uses the pure-Rust fallback over normalized bytes.
@@ -68,7 +437,7 @@ bugs. Check this list before changing the modules named in each entry.
   only the comparison layer normalizes.
 - **Paths under `$HOME` are written as `$HOME/...`**, not absolute, for portability.
 - **PowerShell profiles: preserve a leading BOM** when rewriting the file
-  (`cli/src/sys/profile_blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
+  (`core/src/runtime/sys_profile/blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
   `Documents/WindowsPowerShell/` profile files so pwsh and Windows PowerShell stay in sync.
 - **Sys profile composition is activation-additive, not selection-replacing.** A targeted item or
   named selection profile enables successful item integrations but never disables previously
@@ -78,35 +447,40 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Config files
 
-- **All `config.toml` writes go through `utils::sync_table`**, which preserves user comments.
+- **All `config.toml` writes go through `shine_core::sync_table`**, which preserves user comments.
   Never serialize the whole file from a struct — that destroys comments.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and
   [`data-flows.md`](data-flows.md#config-discovery) must agree.
-- **External app preset hooks and generators are opt-in only.** `post_upgrade`
-  runs commands after upgrades, while an automatic file generator may run
-  during install/update/upgrade and supply effective source bytes. Embedded code may
-  run implicitly, but external preset or overlay code must be gated by
-  `allow_app_hooks = true`; otherwise a user-controlled presets checkout would
-  gain command execution during ordinary read-oriented update checks.
+- **External app preset hooks and generators require scoped trust.** `post_upgrade`
+  runs commands after upgrades, while an automatic file generator may run during an approved
+  install/upgrade and supply effective source bytes. Embedded code may run implicitly, but external
+  preset or overlay code requires a grant matching canonical target, capability, code digest,
+  trust layer, and exact permission set. Read-oriented checks execute it only through the explicit
+  `--run-generators` mode; ordinary inspection remains process-free.
+- **Script hooks belong to their parent lifecycle Plan.** A `post_install`/`post_upgrade` hook may
+  resolve a native or Bun script from the immutable App snapshot and receive declared environment
+  inputs plus the fixed `SHINE_APP_*` contract. Planning must bind its executable source, runtime,
+  environment identities, materialized embedded cache, and declared capabilities before App files
+  mutate. It must execute only after that category changes. A hook must never recursively launch an
+  artifact or another mutation with an independently approved Plan.
 - **Bun package installation is source-scoped and explicit.** Embedded scripts and external scripts
   without a locked declaration run with `--no-install`. Only an effective external/overlay script
   whose own physical category contains both `package.json` and `bun.lock` may run with
   `--install=fallback`; one file without the other and any `trustedDependencies` field are errors.
   Overlay package metadata never changes an inherited embedded script. Shine never runs
   `bun install`, owns `node_modules`, or cleans Bun's global cache/virtual store, and dependency
-  download never bypasses `allow_app_hooks`. See ADR 0031.
-- **External sys executable code is separately opt-in.** Static detection/provider metadata and
+  download never bypasses scoped trust. See ADR 0031 and ADR 0046.
+- **External sys executable code requires target-local scoped trust.** Static detection/provider metadata and
   declarative PATH/env/aliases are safe to inspect, but external or overlay bootstrap/managed scripts,
-  guarded eval/source, fragments, and base profile code require `allow_sys_code = true`. Read-only
-  status paths must never execute sys code, and update-check scripts require the same permission.
-  This permission is global-only: a project
-  config must never be able to authorize its own executable preset content.
+  guarded eval/source, fragments, and base profile code require a matching `sys/<item>` grant.
+  Read-only status paths must never execute sys code. Project config and Presets cannot authorize
+  their own executable content.
 - **Manual generators never run from implicit status or upgrade paths.**
-  `generator.auto = false` leaves `list`/`info`/`update` local-only and
-  causes upgrade to preserve the manifest snapshot. Only install (including `--replace-managed`) or
-  `shine app refresh` may run it; refresh must target manifest-owned files and
-  preserve user modifications unless `--force` is explicit.
+  `generator.auto = false` leaves ordinary `list`/`info`/`update` local-only and causes upgrade to
+  preserve the manifest snapshot. Install, `shine app refresh`, or explicit
+  `info`/`update --run-generators` evaluation may run it. Evaluation never writes; refresh must
+  target manifest-owned files and preserve user modifications unless `--force` is explicit.
 - **Generator failures never destroy the last-known-good managed file.** Status
   and upgrade warn and retain an existing manifest-owned destination. An enabled
   generator with no successful installed snapshot fails rather than installing
@@ -138,8 +512,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
 - **The generated built-in platform capability blocks must use runtime selector semantics.**
-  `preset_meta::tests::built_in_preset_platform_capability_docs_are_current` derives App category
-  and Shell command visibility from the pristine embedded metadata for macOS, Linux, and Windows,
+  `preset_meta::tests::built_in_preset_platform_capability_docs_are_current` asks Core to derive App
+  category and Shell command visibility from the pristine immutable snapshot for macOS, Linux, and Windows,
   then checks the delimited blocks in both public manual locales. Do not maintain a parallel
   platform map or weaken the test to trust prose labels; a preset metadata change and both generated
   blocks must land together. Regenerate them with
@@ -154,11 +528,18 @@ bugs. Check this list before changing the modules named in each entry.
 ## External shell deployment
 
 - **Shell command activation is command-scoped even though deployment is category-scoped.**
-  Embedded extraction and external snapshots may materialize every source file in a category so
-  commands can use sibling resources, but source-file presence alone never means that a command is
-  installed. `shell-manifest.toml` entries and compatible legacy launchers are the activation
-  receipts. Command-scoped install must upsert only its selected receipt; command-scoped uninstall
-  must remove only its selected managed launcher/receipt and preserve installed siblings.
+  External snapshots may materialize every source file in a category so commands can use sibling
+  resources. Shell command selection applies both the declared OS platform and native source
+  syntax: `.ps1` is PowerShell-only, while `.sh` is excluded from PowerShell. Embedded cache
+  materialization keeps metadata and shared auxiliary files but excludes command sources inactive
+  for that OS/shell combination; its Plan must authorize exactly that effective file set.
+  Source-file presence alone never means that a command is installed.
+  `shell-manifest.toml` entries and compatible legacy launchers are the activation receipts.
+  Command-scoped install must upsert only its selected receipt; command-scoped uninstall must remove
+  only its selected managed launcher/receipt and preserve installed siblings.
+  A receiptless compatible legacy launcher uses its own exact-resource removal journal and positive
+  commit marker; planning, execution, and recovery must share the same ownership probe and must not
+  invent a historical receipt.
 - **External source selection and installed state are separate.** Snapshot mode materializes
   effective shell categories below `<shine_dir>/installed/shell/`; launchers must never point at
   the user-owned external tree unless `external_shell_mode = "live"` is explicit.
@@ -169,12 +550,28 @@ bugs. Check this list before changing the modules named in each entry.
 - **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
   files, manifest entries, and managed launchers, including legacy launchers pointing into the
   external tree. The external presets and overlay directories remain untouched.
+- **Shell update/upgrade must preserve foreign launchers.** Ownership is checked with the same
+  managed-root proof used by uninstall. A regular launcher outside that proof is a structured
+  `Conflict`, is not counted as a pending update, is excluded from forced launcher refresh, and
+  retains its command receipt. Compatible legacy/stale symlinks keep their existing upgrade repair
+  behavior.
 - **Preset materialization excludes `node_modules/` at every depth.** External Shell snapshots and
   overlay copies retain `package.json` and `bun.lock`, but never copy a local installation tree into
   Shine-owned state or embedded extraction.
 
 ## Secrets
 
+- **Direct secret decryption writes byte-exact plaintext to stdout.** `env secret decrypt` must not
+  append a line ending or mix status presentation into successful output. Default non-QR phone
+  decrypts also capture the age client's progress diagnostics; explicit QR and opted-in messages
+  stay interactive, and captured diagnostics become visible when decryption fails. A shell may
+  independently move its next prompt.
+- **Phone identity setup crosses only a public configuration handoff.** Shine may invoke the
+  standalone plugin's transactional setup and record its versioned public stub path and recipient,
+  but it must not allocate, discover, copy, remove, or repair plugin TPM, replay, locator, pairing,
+  or recovery state. A failed Shine config write never authorizes cleanup. Phone setup does not
+  change the default secret backend or add a phone-only recipient set (see
+  [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md)).
 - **Decrypt routing is tag-based only** (`secret::parse_tagged_ciphertext`). `decrypt_secret`
   must never consult `Config::secret_backend` or any other config to pick a backend — only the
   `age:` prefix (or its absence) decides. This lets `secret_backend`/`age_recipients` change

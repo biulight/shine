@@ -1,13 +1,11 @@
 use super::collect::{AppInfoFile, ShellInfoFile};
-use crate::apps::{AppCategory, AppFile, source_bytes_for_file};
+use crate::apps::{AppCategory, AppFile};
 use crate::colors;
 use crate::config::Config;
-use crate::env::EnvConfig;
 use crate::path_display;
 use crate::status::{FileStatus, UpdateChange};
 use anyhow::{Context, Result};
 use similar::TextDiff;
-use std::collections::BTreeMap;
 use std::path::Path;
 
 pub(super) async fn print_app_file(
@@ -66,7 +64,12 @@ pub(super) async fn print_app_file(
         print_block("Diff", &app_current_path(item), &diff_output);
     }
     if verbose {
-        print_file_content(&item.destination, "Content").await?;
+        print_file_content(
+            &item.destination,
+            "Content",
+            item.current_content.as_deref(),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -127,7 +130,7 @@ pub(super) async fn print_shell_file(
         print_block("Diff", &content_path, &diff_output);
     }
     if verbose {
-        print_file_content(&content_path, "Content").await?;
+        print_file_content(&content_path, "Content", item.current_content.as_deref()).await?;
     }
     Ok(())
 }
@@ -140,6 +143,12 @@ pub(super) async fn print_app_update_diff(config: &Config, item: &AppInfoFile) -
     } else if !item.changes.is_empty() {
         println!("     {}", colors::dim("content: unchanged"));
     }
+    Ok(())
+}
+
+pub(crate) async fn print_app_expected_diff(config: &Config, item: &AppInfoFile) -> Result<()> {
+    let diff_output = app_diff_output(config, item).await?;
+    print_block("Diff", &app_current_path(item), &diff_output);
     Ok(())
 }
 
@@ -256,12 +265,10 @@ fn print_block(heading: &str, path: &Path, text: &str) {
     }
 }
 
-async fn print_file_content(path: &Path, heading: &str) -> Result<()> {
+async fn print_file_content(path: &Path, heading: &str, bytes: Option<&[u8]>) -> Result<()> {
     print_heading(heading, path);
-    let bytes = tokio::fs::read(path)
-        .await
-        .with_context(|| format!("reading installed content: {}", path.display()))?;
-    print!("{}", String::from_utf8_lossy(&bytes));
+    let bytes = bytes.with_context(|| format!("reading installed content: {}", path.display()))?;
+    print!("{}", String::from_utf8_lossy(bytes));
     if !bytes.ends_with(b"\n") {
         println!();
     }
@@ -279,6 +286,9 @@ fn status_parts(status: FileStatus) -> (&'static str, &'static str) {
         FileStatus::Missing => ("destination missing", "!"),
         FileStatus::UserModified => ("user modified", "~"),
         FileStatus::UpdateAvail => ("update available", "↑"),
+        FileStatus::GeneratorNotEvaluated => ("generator not evaluated", "!"),
+        FileStatus::GeneratorEvaluationFailed => ("generator evaluation failed", "!"),
+        FileStatus::GeneratorTrustRequired => ("generator trust required", "!"),
         FileStatus::Partial => ("partial install", "~"),
         FileStatus::UpToDate => ("up-to-date", "✓"),
         FileStatus::NotInstalled => ("not installed", "✗"),
@@ -311,23 +321,8 @@ fn colored_shell_status(status: &str) -> String {
     colors::status_label(status, shell_status_sym(status))
 }
 
-async fn app_diff_output(config: &Config, item: &AppInfoFile) -> Result<String> {
-    if item
-        .file
-        .generator
-        .as_ref()
-        .is_some_and(|generator| !generator.auto)
-    {
-        return Ok(
-            "Expected content is an explicitly refreshed generator snapshot; \
-             run `shine app refresh` to materialize it without polling during info.\n"
-                .to_string(),
-        );
-    }
-    let env = EnvConfig::load_or_init(config).await.ok();
-    let empty_map = BTreeMap::new();
-    let env_map = env.as_ref().map(|e| e.as_map()).unwrap_or(&empty_map);
-    let expected = match source_bytes_for_file(config, &item.category, &item.file, env_map).await {
+async fn app_diff_output(_config: &Config, item: &AppInfoFile) -> Result<String> {
+    let expected = match &item.desired_content {
         Some(bytes) => bytes,
         None => {
             return Ok("Unable to render expected content from the active preset.\n".to_string());
@@ -335,25 +330,14 @@ async fn app_diff_output(config: &Config, item: &AppInfoFile) -> Result<String> 
     };
 
     let current_path = app_current_path(item);
-    let current = match tokio::fs::read(&current_path).await {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(format!(
-                "Current file is missing: {}.\n",
-                current_path.display()
-            ));
-        }
-        Err(err) => {
-            return Ok(format!(
-                "Unable to read current file {}: {err}\n",
-                current_path.display()
-            ));
-        }
+    let current: &[u8] = match &item.current_content {
+        Some(bytes) => bytes,
+        None => &[],
     };
 
     Ok(render_diff_or_note(
-        &current,
-        &expected,
+        current,
+        expected,
         &current_path.to_string_lossy(),
         &format!(
             "expected: app/{}/{}",
@@ -377,14 +361,14 @@ async fn shell_diff_output(
 ) -> Result<String> {
     if config.is_external_presets
         && config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
-        && !item.installed_source_path.exists()
+        && item.current_content.is_none()
     {
         return Ok(format!(
             "Managed snapshot is missing: {}. Run `shine upgrade` to migrate the installed command.\n",
             item.installed_source_path.display()
         ));
     }
-    let expected = match shell_expected_bytes(config, item).await? {
+    let expected = match &item.desired_content {
         Some(bytes) => bytes,
         None => {
             return Ok(
@@ -393,25 +377,19 @@ async fn shell_diff_output(
         }
     };
 
-    let current = match tokio::fs::read(current_path).await {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+    let current = match &item.current_content {
+        Some(bytes) => bytes,
+        None => {
             return Ok(format!(
                 "Current script is missing: {}.\n",
-                current_path.display()
-            ));
-        }
-        Err(err) => {
-            return Ok(format!(
-                "Unable to read current script {}: {err}\n",
                 current_path.display()
             ));
         }
     };
 
     Ok(render_diff_or_note(
-        &current,
-        &expected,
+        current,
+        expected,
         &current_path.to_string_lossy(),
         &format!(
             "expected: shell/{}/{}",
@@ -419,49 +397,6 @@ async fn shell_diff_output(
             item.file.source_rel.display()
         ),
     ))
-}
-
-async fn shell_expected_bytes(config: &Config, item: &ShellInfoFile) -> Result<Option<Vec<u8>>> {
-    let source_key = format!(
-        "shell/{}/{}",
-        item.category.name,
-        item.file.source_rel.display()
-    );
-    let source = if config.is_external_presets {
-        match tokio::fs::read(&item.source_path).await {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => {
-                return Err(err).with_context(|| {
-                    format!(
-                        "reading shell preset source: {}",
-                        item.source_path.display()
-                    )
-                });
-            }
-        }
-    } else {
-        match crate::presets::read_asset_bytes(&source_key) {
-            Some(bytes) => bytes,
-            None => return Ok(None),
-        }
-    };
-
-    let transforms = if !item.file.transforms.is_empty() {
-        item.file.transforms.clone()
-    } else if crate::presets::parse_template_annotation(&source) {
-        vec!["template".to_string()]
-    } else {
-        Vec::new()
-    };
-    if transforms.is_empty() {
-        return Ok(Some(source));
-    }
-
-    let env = EnvConfig::load_or_init(config).await?;
-    let rendered = crate::install_core::apply_transforms(&transforms, &source, env.as_map())
-        .with_context(|| format!("rendering shell template: {}", item.source_path.display()))?;
-    Ok(Some(rendered))
 }
 
 fn render_diff_or_note(
@@ -532,34 +467,6 @@ fn colorize_unified_diff(diff: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shells::metadata::ShellCategory;
-
-    fn shell_file(category: &str, command: &str, source: &str) -> ShellInfoFile {
-        ShellInfoFile {
-            category: ShellCategory {
-                name: category.to_string(),
-                description: None,
-                files: vec![],
-                uses_metadata: true,
-            },
-            file: crate::shells::metadata::ShellFile {
-                source_rel: std::path::PathBuf::from(source),
-                command_name: command.to_string(),
-                description: vec![],
-                needs_source: false,
-                runtime: crate::bin_links::LinkRuntime::Native,
-                transforms: vec![],
-                env: vec![],
-            },
-            source_path: std::path::PathBuf::from(format!("/tmp/{source}")),
-            installed_source_path: std::path::PathBuf::from(format!("/tmp/{source}")),
-            rendered_path: std::path::PathBuf::from(format!("/tmp/rendered/{source}")),
-            link_path: std::path::PathBuf::from(format!("/tmp/bin/{command}")),
-            link_target: None,
-            status: "up-to-date",
-            changes: Vec::new(),
-        }
-    }
 
     #[test]
     fn app_status_sym_matches_list_semantics() {
@@ -637,22 +544,40 @@ mod tests {
     async fn embedded_shell_diff_ignores_stale_extracted_source() {
         let dir = std::env::temp_dir().join(format!("shine-info-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
-        let stale_source = dir.join("set_proxy.sh");
-        tokio::fs::write(&stale_source, b"#!/bin/bash\necho stale\n")
-            .await
-            .unwrap();
         let config = Config::new_for_test(&dir);
-        let mut item = shell_file("proxy", "setproxy", "set_proxy.sh");
-        item.source_path = stale_source;
-
-        let expected = shell_expected_bytes(&config, &item)
+        let mut runtime = crate::core_runtime::from_config(&config).await.unwrap();
+        runtime.context_mut_for_cli().env = crate::env::EnvConfig::load_or_init(&config)
             .await
             .unwrap()
+            .as_map()
+            .clone();
+        let selected_source = runtime
+            .inspect_shells()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|item| item.category.name == "proxy" && item.file.command_name == "setproxy")
+            .map(|item| item.source_path)
             .expect("embedded proxy source should exist");
-        let expected = String::from_utf8(expected).unwrap();
+        tokio::fs::create_dir_all(selected_source.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&selected_source, b"stale extracted source\n")
+            .await
+            .unwrap();
 
-        assert!(!expected.contains("echo stale"));
-        assert!(expected.contains("PROXY_NO_PROXY=\"localhost,127.0.0.1,::1\""));
+        let item = runtime
+            .inspect_shells()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|item| item.category.name == "proxy" && item.file.command_name == "setproxy")
+            .expect("embedded proxy source should exist");
+        assert_eq!(item.source_path, selected_source);
+        let expected = String::from_utf8(item.desired_content.unwrap()).unwrap();
+
+        assert!(!expected.contains("stale extracted source"));
+        assert!(expected.contains("localhost,127.0.0.1,::1"));
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }

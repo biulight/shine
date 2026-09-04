@@ -1,358 +1,46 @@
-//! Read-only preset discovery, validation reporting, and stable JSON output.
-//!
-//! This module deliberately does not depend on [`crate::config::Config`]. The
-//! command is routed here before normal configuration loading so validation can
-//! inspect untrusted preset source without initializing Shine or executing it.
+//! Terminal adapter for Core-owned preset discovery and validation.
 
-use crate::commands::PresetValidationFormat;
+use crate::commands::PresetReportFormat;
 use anyhow::Result;
-use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::fmt::Write as _;
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
-pub const PRESET_VALIDATION_SCHEMA_VERSION: u32 = 1;
+pub use shine_core::runtime::{
+    PRESET_VALIDATION_SCHEMA_VERSION, PresetCategoryValidation, PresetDiagnostic,
+    PresetDiagnosticSeverity, PresetValidationReportV1, PresetValidationSummary,
+};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PresetDiagnosticSeverity {
-    Error,
-    Warning,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PresetDiagnostic {
-    pub severity: PresetDiagnosticSeverity,
-    pub code: String,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
-}
-
-impl PresetDiagnostic {
-    fn error(code: &str, message: impl Into<String>, path: Option<PathBuf>) -> Self {
-        Self {
-            severity: PresetDiagnosticSeverity::Error,
-            code: code.to_string(),
-            message: message.into(),
-            path,
-        }
-    }
-
-    fn warning(code: &str, message: impl Into<String>, path: Option<PathBuf>) -> Self {
-        Self {
-            severity: PresetDiagnosticSeverity::Warning,
-            code: code.to_string(),
-            message: message.into(),
-            path,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PresetValidationSummary {
-    pub categories: usize,
-    pub errors: usize,
-    pub warnings: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PresetCategoryValidation {
-    pub kind: String,
-    pub name: String,
-    pub path: PathBuf,
-    pub valid: bool,
-    pub diagnostics: Vec<PresetDiagnostic>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PresetValidationReportV1 {
-    pub schema_version: u32,
-    pub valid: bool,
-    pub path: PathBuf,
-    pub summary: PresetValidationSummary,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<PresetDiagnostic>,
-    pub categories: Vec<PresetCategoryValidation>,
-}
-
-#[derive(Debug)]
-pub(crate) struct PresetValidationFailure {
-    pub(crate) code: &'static str,
-    pub(crate) message: String,
-    pub(crate) path: Option<PathBuf>,
-}
-
-impl PresetValidationFailure {
-    pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            path: None,
-        }
-    }
-
-    pub(crate) fn at(
-        code: &'static str,
-        message: impl Into<String>,
-        path: impl Into<PathBuf>,
-    ) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            path: Some(path.into()),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct CategoryPath {
-    kind: &'static str,
-    name: String,
-    root: PathBuf,
-}
-
-pub async fn handle_validate(path: &Path, format: PresetValidationFormat) -> Result<bool> {
+pub async fn handle_validate(path: &Path, format: PresetReportFormat) -> Result<bool> {
     let report = validate_path(path).await;
     match format {
-        PresetValidationFormat::Text => print_text_report(&report),
-        PresetValidationFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+        PresetReportFormat::Text => print_text_report(&report),
+        PresetReportFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
     }
     Ok(report.valid)
 }
 
 pub async fn validate_path(path: &Path) -> PresetValidationReportV1 {
-    let display_path = absolute_path(path);
-    let canonical = match std::fs::canonicalize(path) {
-        Ok(path) => path,
-        Err(error) => {
-            return report_with_input_error(
-                display_path.clone(),
-                format!(
-                    "cannot resolve preset path {}: {error}",
-                    display_path.display()
-                ),
-            );
-        }
-    };
-
-    let categories = match discover_categories(&canonical) {
-        Ok(categories) if !categories.is_empty() => categories,
-        Ok(_) => {
-            return report_with_input_error(
-                canonical,
-                "no preset categories found directly under app/, shell/, or sys/",
-            );
-        }
-        Err(failure) => return report_from_failure(canonical, failure),
-    };
-
-    let mut reports = Vec::with_capacity(categories.len());
-    for category in categories {
-        let result = match category.kind {
-            "app" => crate::apps::validate_preset_category(&category.name, &category.root),
-            "shell" => crate::shells::validate_preset_category(&category.name, &category.root),
-            "sys" => crate::sys::validate_preset_category(&category.name, &category.root),
-            _ => unreachable!(),
-        };
-        let mut diagnostics = Vec::new();
-        match result {
-            Ok(has_metadata) => {
-                if !has_metadata {
-                    diagnostics.push(PresetDiagnostic::warning(
-                        "legacy_metadata",
-                        format!(
-                            "{}/{} has no shine.toml; compatibility auto-discovery is accepted, but explicit metadata is recommended",
-                            category.kind, category.name
-                        ),
-                        Some(category.root.clone()),
-                    ));
-                }
-            }
-            Err(failure) => diagnostics.push(PresetDiagnostic::error(
-                failure.code,
-                failure.message,
-                failure.path.or_else(|| Some(category.root.clone())),
-            )),
-        }
-        let valid = diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic.severity != PresetDiagnosticSeverity::Error);
-        reports.push(PresetCategoryValidation {
-            kind: category.kind.to_string(),
-            name: category.name,
-            path: category.root,
-            valid,
-            diagnostics,
-        });
-    }
-
-    finish_report(canonical, Vec::new(), reports)
+    let cwd = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
+    shine_core::runtime::validate_preset_path(&shine_core::runtime::RealHost, &cwd, path).await
 }
 
-fn discover_categories(path: &Path) -> Result<Vec<CategoryPath>, PresetValidationFailure> {
-    if path.is_file() {
-        if path.file_name().and_then(|name| name.to_str()) != Some("shine.toml") {
-            return Err(PresetValidationFailure::at(
-                "invalid_input",
-                "preset manifest input must be named shine.toml",
-                path,
-            ));
-        }
-        let root = path.parent().expect("a canonical file has a parent");
-        return Ok(vec![category_from_root(root)?]);
-    }
-    if !path.is_dir() {
-        return Err(PresetValidationFailure::at(
-            "invalid_input",
-            "preset path must be a directory or shine.toml",
-            path,
-        ));
-    }
-
-    if path
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        .is_some_and(is_kind)
-    {
-        return Ok(vec![category_from_root(path)?]);
-    }
-
-    let mut categories = Vec::new();
-    for kind in ["app", "shell", "sys"] {
-        let kind_root = path.join(kind);
-        if !kind_root.is_dir() {
-            continue;
-        }
-        let entries = std::fs::read_dir(&kind_root).map_err(|error| {
-            PresetValidationFailure::at(
-                "read_failed",
-                format!("cannot read {}: {error}", kind_root.display()),
-                &kind_root,
-            )
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                PresetValidationFailure::at(
-                    "read_failed",
-                    format!("cannot read {}: {error}", kind_root.display()),
-                    &kind_root,
-                )
-            })?;
-            if !entry
-                .file_type()
-                .map_err(|error| {
-                    PresetValidationFailure::at(
-                        "read_failed",
-                        format!("cannot inspect {}: {error}", entry.path().display()),
-                        entry.path(),
-                    )
-                })?
-                .is_dir()
-            {
-                continue;
-            }
-            categories.push(CategoryPath {
-                kind,
-                name: entry.file_name().to_string_lossy().to_string(),
-                root: std::fs::canonicalize(entry.path()).map_err(|error| {
-                    PresetValidationFailure::at(
-                        "read_failed",
-                        format!("cannot resolve preset category: {error}"),
-                        entry.path(),
-                    )
-                })?,
-            });
-        }
-    }
-    categories.sort_by(|left, right| {
-        (left.kind, left.name.as_str()).cmp(&(right.kind, right.name.as_str()))
-    });
-    Ok(categories)
-}
-
-fn category_from_root(root: &Path) -> Result<CategoryPath, PresetValidationFailure> {
-    let kind = root
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        .filter(|kind| is_kind(kind))
-        .ok_or_else(|| {
-            PresetValidationFailure::at(
-                "invalid_input",
-                "category directory must be app/<name>, shell/<name>, or sys/<name>",
-                root,
-            )
-        })?;
-    let name = root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| {
-            PresetValidationFailure::at(
-                "invalid_input",
-                "preset category name must be valid UTF-8",
-                root,
-            )
-        })?;
-    Ok(CategoryPath {
-        kind: match kind {
-            "app" => "app",
-            "shell" => "shell",
-            "sys" => "sys",
-            _ => unreachable!(),
-        },
-        name: name.to_string(),
-        root: root.to_path_buf(),
-    })
-}
-
-fn is_kind(value: &str) -> bool {
-    matches!(value, "app" | "shell" | "sys")
-}
-
-fn absolute_path(path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map(|current| current.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
-    }
-}
-
-fn report_with_input_error(path: PathBuf, message: impl Into<String>) -> PresetValidationReportV1 {
-    report_from_failure(path, PresetValidationFailure::new("invalid_input", message))
-}
-
-fn report_from_failure(
-    path: PathBuf,
-    failure: PresetValidationFailure,
-) -> PresetValidationReportV1 {
-    finish_report(
-        path,
-        vec![PresetDiagnostic::error(
-            failure.code,
-            failure.message,
-            failure.path,
-        )],
-        Vec::new(),
-    )
-}
-
+#[cfg(test)]
 fn finish_report(
     path: PathBuf,
     diagnostics: Vec<PresetDiagnostic>,
     categories: Vec<PresetCategoryValidation>,
 ) -> PresetValidationReportV1 {
-    let all_diagnostics = diagnostics
+    let (errors, warnings) = diagnostics
         .iter()
-        .chain(categories.iter().flat_map(|category| &category.diagnostics));
-    let (errors, warnings) = all_diagnostics.fold((0, 0), |(errors, warnings), diagnostic| {
-        match diagnostic.severity {
-            PresetDiagnosticSeverity::Error => (errors + 1, warnings),
-            PresetDiagnosticSeverity::Warning => (errors, warnings + 1),
-        }
-    });
+        .chain(categories.iter().flat_map(|category| &category.diagnostics))
+        .fold((0, 0), |(errors, warnings), diagnostic| {
+            match diagnostic.severity {
+                PresetDiagnosticSeverity::Error => (errors + 1, warnings),
+                PresetDiagnosticSeverity::Warning => (errors, warnings + 1),
+            }
+        });
     PresetValidationReportV1 {
         schema_version: PRESET_VALIDATION_SCHEMA_VERSION,
         valid: errors == 0,
@@ -366,51 +54,86 @@ fn finish_report(
         categories,
     }
 }
-
 fn print_text_report(report: &PresetValidationReportV1) {
-    println!(
-        "Preset validation: {} ({})",
-        report.path.display(),
-        if report.valid { "valid" } else { "invalid" }
+    print!("{}", validation_text(report));
+}
+
+fn validation_text(report: &PresetValidationReportV1) -> String {
+    let mut output = String::new();
+    let status = if report.valid {
+        crate::colors::green("valid")
+    } else {
+        crate::colors::red("invalid")
+    };
+    let _ = writeln!(
+        output,
+        "{} {status}",
+        crate::colors::bold("Preset validation:")
+    );
+    let _ = writeln!(
+        output,
+        "  {} {}",
+        crate::colors::dim("Source:"),
+        report.path.display()
     );
     for diagnostic in &report.diagnostics {
-        print_diagnostic("  ", diagnostic);
+        let _ = writeln!(output);
+        crate::preset_report::write_diagnostic(
+            &mut output,
+            "  ",
+            diagnostic,
+            true,
+            diagnostic.path.as_deref() != Some(report.path.as_path()),
+        );
     }
     for category in &report.categories {
-        println!(
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
             "  {} {}/{}",
-            if category.valid { "OK" } else { "ERROR" },
+            if category.valid {
+                crate::colors::symbol("✓")
+            } else {
+                crate::colors::symbol("✗")
+            },
             category.kind,
             category.name
         );
         for diagnostic in &category.diagnostics {
-            print_diagnostic("    ", diagnostic);
+            crate::preset_report::write_diagnostic(
+                &mut output,
+                "    ",
+                diagnostic,
+                false,
+                diagnostic.path.as_deref() != Some(report.path.as_path()),
+            );
         }
     }
-    println!(
-        "Summary: {} categories, {} errors, {} warnings",
-        report.summary.categories, report.summary.errors, report.summary.warnings
-    );
-}
-
-fn print_diagnostic(prefix: &str, diagnostic: &PresetDiagnostic) {
-    let severity = match diagnostic.severity {
-        PresetDiagnosticSeverity::Error => "error",
-        PresetDiagnosticSeverity::Warning => "warning",
-    };
-    if let Some(path) = &diagnostic.path {
-        println!(
-            "{prefix}{severity}[{}]: {} ({})",
-            diagnostic.code,
-            diagnostic.message,
-            path.display()
-        );
-    } else {
-        println!(
-            "{prefix}{severity}[{}]: {}",
-            diagnostic.code, diagnostic.message
-        );
+    if !report.diagnostics.is_empty() || !report.categories.is_empty() {
+        let _ = writeln!(output);
     }
+    let categories =
+        crate::preset_report::count_phrase(report.summary.categories, "category", "categories");
+    let errors = crate::preset_report::count_phrase(report.summary.errors, "error", "errors");
+    let warnings =
+        crate::preset_report::count_phrase(report.summary.warnings, "warning", "warnings");
+    let _ = writeln!(
+        output,
+        "{} {} · {} · {}",
+        crate::colors::bold("Summary:"),
+        crate::colors::dim(&categories),
+        if report.summary.errors > 0 {
+            crate::colors::red(&errors)
+        } else {
+            crate::colors::dim(&errors)
+        },
+        if report.summary.warnings > 0 {
+            crate::colors::yellow(&warnings)
+        } else {
+            crate::colors::dim(&warnings)
+        }
+    );
+    output
 }
 
 #[cfg(test)]
@@ -425,6 +148,36 @@ mod tests {
 
     async fn fixture_root(name: &str) -> PathBuf {
         crate::test_support::make_temp_dir(name).await
+    }
+
+    #[test]
+    fn text_report_uses_singular_counts_and_omits_a_duplicate_diagnostic_path() {
+        let path = PathBuf::from("/preset/root/shell/chrome/shine.toml");
+        let report = finish_report(
+            path.clone(),
+            Vec::new(),
+            vec![PresetCategoryValidation {
+                kind: "shell".to_string(),
+                name: "chrome".to_string(),
+                path: path.parent().unwrap().to_path_buf(),
+                valid: false,
+                diagnostics: vec![PresetDiagnostic {
+                    severity: PresetDiagnosticSeverity::Error,
+                    code: "invalid_permission_declaration".to_string(),
+                    message: "shell/chrome/open-chrome has malformed permission fields".to_string(),
+                    path: Some(path.clone()),
+                }],
+            }],
+        );
+
+        let output = validation_text(&report);
+
+        assert!(output.contains("Preset validation: invalid"));
+        assert_eq!(output.matches(path.to_str().unwrap()).count(), 1);
+        assert!(output.contains("  ✗ shell/chrome"));
+        assert!(output.contains("code: invalid_permission_declaration"));
+        assert!(output.contains("Summary: 1 category · 1 error · 0 warnings"));
+        assert!(!output.contains("1 categories"));
     }
 
     #[tokio::test]
@@ -527,6 +280,27 @@ items = ["git"]
         assert!(manifest.valid, "{manifest:#?}");
         assert_eq!(manifest.categories[0].name, "test-os");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn all_built_in_presets_pass_static_validation() {
+        let presets = Path::new(env!("CARGO_MANIFEST_DIR")).join("presets");
+
+        let report = validate_path(&presets).await;
+
+        assert!(report.valid, "{report:#?}");
+        assert_eq!(report.schema_version, PRESET_VALIDATION_SCHEMA_VERSION);
+        assert_eq!(report.summary.errors, 0);
+        assert_eq!(report.summary.warnings, 0, "{report:#?}");
+        for kind in ["app", "shell", "sys"] {
+            assert!(
+                report
+                    .categories
+                    .iter()
+                    .any(|category| category.kind == kind),
+                "built-in validation did not discover any {kind} categories"
+            );
+        }
     }
 
     #[tokio::test]
@@ -715,14 +489,20 @@ target = "same.toml"
 source = "mac.sh"
 target = "tool"
 platforms = ["macos"]
+[files.permissions]
+schema_version = 1
 [[files]]
 source = "linux.sh"
 target = "tool"
 platforms = ["linux"]
+[files.permissions]
+schema_version = 1
 [[files]]
 source = "windows.ps1"
 target = "tool"
 platforms = ["windows"]
+[files.permissions]
+schema_version = 1
 "#,
         );
         write(category.join("mac.sh"), "#!/bin/sh\n");
@@ -731,6 +511,7 @@ platforms = ["windows"]
 
         let valid = validate_path(&category).await;
         assert!(valid.valid, "{valid:#?}");
+        assert_eq!(valid.summary.warnings, 0, "{valid:#?}");
 
         write(
             category.join("shine.toml"),
@@ -743,6 +524,25 @@ platforms = []
         let empty = validate_path(&category).await;
         assert!(!empty.valid);
         assert_eq!(empty.categories[0].diagnostics[0].code, "invalid_metadata");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_app_and_shell_categories_keep_only_the_legacy_warning() {
+        let root = fixture_root("preset-validation-legacy-permissions").await;
+        write(
+            root.join("app/editor/config.toml"),
+            "# shine-dest: ~/.config/editor/config.toml\ntheme = 'dark'\n",
+        );
+        write(root.join("shell/tools/tool.sh"), "#!/bin/sh\necho tool\n");
+
+        let report = validate_path(&root).await;
+        assert!(report.valid, "{report:#?}");
+        assert_eq!(report.summary.warnings, 2, "{report:#?}");
+        assert!(report.categories.iter().all(|category| {
+            category.diagnostics.len() == 1 && category.diagnostics[0].code == "legacy_metadata"
+        }));
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -778,6 +578,93 @@ platforms = ["macos"]
                 .contains("macos")
         );
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_permission_declarations_warn_without_blocking_compatibility() {
+        let root = fixture_root("preset-validation-permission-warning").await;
+        let category = root.join("app/editor");
+        write(
+            category.join("shine.toml"),
+            "dest = '~/.config/editor'\n[[files]]\nsource = 'config.toml'\n",
+        );
+        write(category.join("config.toml"), "theme = 'dark'\n");
+
+        let report = validate_path(&category).await;
+        assert!(report.valid, "{report:#?}");
+        assert_eq!(report.summary.warnings, 1);
+        assert_eq!(
+            report.categories[0].diagnostics[0].code,
+            "missing_permission_declaration"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn permission_schema_errors_have_stable_diagnostic_codes() {
+        let root = fixture_root("preset-validation-permission-errors").await;
+        let category = root.join("app/editor");
+        write(
+            category.join("shine.toml"),
+            r#"dest = "~/.config/editor"
+[permissions]
+schema_version = 2
+[[files]]
+source = "config.toml"
+"#,
+        );
+        write(category.join("config.toml"), "theme = 'dark'\n");
+
+        let unsupported = validate_path(&category).await;
+        assert!(!unsupported.valid);
+        assert_eq!(
+            unsupported.categories[0].diagnostics[0].code,
+            "unsupported_permission_schema"
+        );
+
+        write(
+            category.join("shine.toml"),
+            r#"dest = "~/.config/editor"
+[permissions]
+schema_version = 1
+commands = ["bun", "bun"]
+[[files]]
+source = "config.toml"
+"#,
+        );
+        let duplicate = validate_path(&category).await;
+        assert!(!duplicate.valid);
+        assert_eq!(
+            duplicate.categories[0].diagnostics[0].code,
+            "duplicate_permission"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn permission_declarations_must_use_the_domain_target_placement() {
+        let root = fixture_root("preset-validation-permission-placement").await;
+        let category = root.join("shell/tools");
+        write(
+            category.join("shine.toml"),
+            r#"[permissions]
+schema_version = 1
+[[files]]
+source = "tool.sh"
+target = "tool"
+[files.permissions]
+schema_version = 1
+"#,
+        );
+        write(category.join("tool.sh"), "#!/bin/sh\n");
+
+        let report = validate_path(&category).await;
+        assert!(!report.valid);
+        assert_eq!(
+            report.categories[0].diagnostics[0].code,
+            "invalid_permission_declaration"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -46,17 +46,15 @@ fn default_sync_terminal_theme() -> bool {
     true
 }
 
+fn default_shell_type() -> ShellType {
+    crate::shells::get_shell().unwrap_or_default()
+}
+
 fn is_true(value: &bool) -> bool {
     *value
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ExternalShellMode {
-    #[default]
-    Snapshot,
-    Live,
-}
+pub use shine_core::runtime::ExternalShellMode;
 
 /// A command whose protected environment values are injected by a shine proxy.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -96,6 +94,9 @@ pub struct Config {
     /// Used to avoid materializing inherited global values when saving.
     #[serde(skip)]
     project_save_state: Option<ProjectSaveState>,
+    /// Whether the active project explicitly replaces the global age identity set.
+    #[serde(skip)]
+    project_overrides_age_identities: bool,
     /// Directory used for shine runtime state.
     #[serde(skip)]
     shine_dir: PathBuf,
@@ -105,7 +106,7 @@ pub struct Config {
     pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_cleared_schema_version: Option<u32>,
-    #[serde(skip)]
+    #[serde(skip, default = "default_shell_type")]
     pub shell_type: ShellType,
     /// Optional persistent presets_dir override stored in the active config.
     /// Takes effect when neither SHINE_CONFIG_DIR nor SHINE_PRESETS is set.
@@ -156,15 +157,12 @@ pub struct Config {
     /// assets. Shell deployment then follows `external_shell_mode`.
     #[serde(skip)]
     pub is_external_presets: bool,
-    /// Allows app presets loaded from external preset directories to run post-upgrade hooks.
-    /// Embedded presets may run hooks without this opt-in.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub allow_app_hooks: bool,
-    /// Global-only opt-in allowing external sys presets and overlays to execute install scripts or
-    /// install persistent shell-profile code. Declarative package providers,
-    /// detection, PATH, env, and aliases do not require this opt-in.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub allow_sys_code: bool,
+    /// Retired coarse App trust flag, read only to emit a migration warning.
+    #[serde(rename = "allow_app_hooks", default, skip_serializing)]
+    pub legacy_allow_app_hooks: bool,
+    /// Retired coarse Sys trust flag, read only to emit a migration warning.
+    #[serde(rename = "allow_sys_code", default, skip_serializing)]
+    pub legacy_allow_sys_code: bool,
     /// Whether the managed sys `pre` profile auto-syncs the terminal theme
     /// (`shine theme sync --auto`) on interactive shell startup. Defaults to
     /// `true`. The `SHINE_SYNC_TERMINAL_THEME` env var overrides this at
@@ -206,12 +204,15 @@ pub struct Config {
     /// decrypt the resulting ciphertext with their own identity.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub age_recipients: Vec<String>,
-    /// Path to the age identity file used to decrypt `age:`-tagged secrets.
-    /// May contain multiple identities (e.g. a Secure Enclave identity plus a
-    /// plain fallback), one per line. Defaults to
+    /// Legacy primary age identity file used to decrypt `age:`-tagged secrets.
+    /// The file may itself contain multiple identity lines. Defaults to
     /// `<shine_dir>/age/identity.txt` when unset and that file exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub age_identity: Option<String>,
+    /// Additional age identity files. These are merged after `age_identity`
+    /// and allow hardware-backed identities to coexist without copying them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub age_identities: Vec<String>,
     /// Environment variables substituted into template-enabled presets.
     #[serde(
         default = "default_env_map",
@@ -320,13 +321,14 @@ impl Config {
             config_path: dir.join("config.toml"),
             is_project_config: false,
             project_save_state: None,
+            project_overrides_age_identities: false,
             shine_dir: dir.to_path_buf(),
             presets_dir: dir.join("presets"),
             bin_dir: dir.join("bin"),
             home_dir: dir.to_path_buf(),
             schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
             last_cleared_schema_version: None,
-            shell_type: ShellType::default(),
+            shell_type: default_shell_type(),
             presets_dir_override: None,
             external_shell_mode: ExternalShellMode::Snapshot,
             presets_overlay_dir_override: None,
@@ -335,8 +337,8 @@ impl Config {
             managed_overlay_dir: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
-            allow_app_hooks: false,
-            allow_sys_code: false,
+            legacy_allow_app_hooks: false,
+            legacy_allow_sys_code: false,
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_recipients: Vec::new(),
@@ -344,6 +346,7 @@ impl Config {
             secret_backend: None,
             age_recipients: Vec::new(),
             age_identity: None,
+            age_identities: Vec::new(),
             env: default_env_map(),
             env_proxy: Vec::new(),
             env_descriptions: BTreeMap::new(),
@@ -352,23 +355,36 @@ impl Config {
     }
 
     /// Age identity file(s) used to decrypt `age:`-tagged secrets, resolved
-    /// from `age_identity` (tilde-expanded) or, when unset, the default path
-    /// under `shine_dir` if it exists.
-    pub fn age_identities(&self) -> Vec<PathBuf> {
-        if let Some(identity) = self
+    /// from `age_identity` plus `age_identities` (tilde-expanded) or, when
+    /// neither is set, the default path under `shine_dir` if it exists.
+    pub fn resolved_age_identities(&self) -> Vec<PathBuf> {
+        let mut identities = self
             .age_identity
-            .as_deref()
+            .iter()
+            .chain(self.age_identities.iter())
+            .map(String::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-        {
-            return vec![PathBuf::from(tilde_expand(identity))];
+            .map(|value| PathBuf::from(tilde_expand(value)))
+            .fold(Vec::new(), |mut paths, path| {
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+                paths
+            });
+        if !identities.is_empty() {
+            return identities;
         }
         let default_path = self.shine_dir.join("age").join("identity.txt");
         if default_path.is_file() {
-            vec![default_path]
-        } else {
-            Vec::new()
+            identities.push(default_path);
         }
+        identities
+    }
+
+    /// Whether the active project explicitly replaces global age identities.
+    pub fn project_overrides_age_identities(&self) -> bool {
+        self.project_overrides_age_identities
     }
 
     /// Return a clone of this config with `presets_dir_override` replaced.
@@ -470,34 +486,44 @@ impl Config {
     }
 }
 
+impl AsRef<Path> for Config {
+    fn as_ref(&self) -> &Path {
+        self.shine_dir()
+    }
+}
+
 /// Print the effective base preset source, optional overlay, and external
 /// shell deployment mode. This makes built-in, external, and overlay-backed
 /// runs report provenance with the same vocabulary.
 pub fn print_presets_note(config: &Config) {
+    for line in presets_note_lines(config) {
+        println!("{line}");
+    }
+}
+
+pub(crate) fn presets_note_lines(config: &Config) -> Vec<String> {
+    let mut lines = Vec::new();
     if config.is_external_presets {
-        println!(
-            "{}",
-            crate::colors::external_presets_note(config.presets_dir())
-        );
+        lines.push(crate::colors::external_presets_note(config.presets_dir()));
         if let Some(dir) = config.active_presets_overlay_dir() {
-            println!("{}", crate::colors::presets_overlay_note(dir));
+            lines.push(crate::colors::presets_overlay_note(dir));
         }
         let deployment = match config.external_shell_mode {
             ExternalShellMode::Snapshot => "snapshot · changes require `shine upgrade`",
             ExternalShellMode::Live => "live · content applies on next invocation",
         };
-        println!(
-            "{}",
-            crate::colors::dim(&crate::colors::shell_deployment_note(deployment))
-        );
-        println!();
+        lines.push(crate::colors::dim(&crate::colors::shell_deployment_note(
+            deployment,
+        )));
+        lines.push(String::new());
     } else {
-        println!("{}", crate::colors::presets_source_note("built-in"));
+        lines.push(crate::colors::presets_source_note("built-in"));
         if let Some(dir) = config.active_presets_overlay_dir() {
-            println!("{}", crate::colors::presets_overlay_note(dir));
+            lines.push(crate::colors::presets_overlay_note(dir));
         }
-        println!();
+        lines.push(String::new());
     }
+    lines
 }
 
 impl Default for Config {
@@ -511,11 +537,12 @@ impl Default for Config {
             config_path: shine_dir.join("config.toml"),
             is_project_config: false,
             project_save_state: None,
+            project_overrides_age_identities: false,
             shine_dir,
             home_dir,
             schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
             last_cleared_schema_version: None,
-            shell_type: ShellType::default(),
+            shell_type: default_shell_type(),
             presets_dir_override: None,
             external_shell_mode: ExternalShellMode::Snapshot,
             presets_overlay_dir_override: None,
@@ -524,8 +551,8 @@ impl Default for Config {
             managed_overlay_dir: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
-            allow_app_hooks: false,
-            allow_sys_code: false,
+            legacy_allow_app_hooks: false,
+            legacy_allow_sys_code: false,
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_recipients: Vec::new(),
@@ -533,6 +560,7 @@ impl Default for Config {
             secret_backend: None,
             age_recipients: Vec::new(),
             age_identity: None,
+            age_identities: Vec::new(),
             env: default_env_map(),
             env_proxy: Vec::new(),
             env_descriptions: BTreeMap::new(),
@@ -638,7 +666,7 @@ mod tests {
             std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
         let config = Config::new_for_test(&dir);
 
-        assert!(config.age_identities().is_empty());
+        assert!(config.resolved_age_identities().is_empty());
     }
 
     #[test]
@@ -649,7 +677,7 @@ mod tests {
         config.age_identity = Some("/tmp/my-identity.txt".to_string());
 
         assert_eq!(
-            config.age_identities(),
+            config.resolved_age_identities(),
             vec![PathBuf::from("/tmp/my-identity.txt")]
         );
     }
@@ -661,7 +689,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.age_identity = Some("   ".to_string());
 
-        assert!(config.age_identities().is_empty());
+        assert!(config.resolved_age_identities().is_empty());
     }
 
     #[tokio::test]
@@ -677,8 +705,29 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(config.age_identities(), vec![default_path]);
+        assert_eq!(config.resolved_age_identities(), vec![default_path]);
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn resolved_age_identities_merges_and_deduplicates_paths() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config.age_identity = Some("/tmp/primary.txt".to_string());
+        config.age_identities = vec![
+            "/tmp/additional.txt".to_string(),
+            "/tmp/primary.txt".to_string(),
+            "  ".to_string(),
+        ];
+
+        assert_eq!(
+            config.resolved_age_identities(),
+            vec![
+                PathBuf::from("/tmp/primary.txt"),
+                PathBuf::from("/tmp/additional.txt"),
+            ]
+        );
     }
 }

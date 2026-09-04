@@ -1,4 +1,8 @@
+metadata_schema_version = 2
 description = "Archey4 system information tool configuration."
 
 [dest]
 unix = "~/.config/archey4"
+
+[permissions]
+schema_version = 1

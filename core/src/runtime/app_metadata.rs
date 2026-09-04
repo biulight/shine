@@ -1,0 +1,948 @@
+use super::{
+    AppArtifact, AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppHookAction,
+    AppListMode, ArtifactRuntime, CoreRuntime, RuntimePlatform,
+};
+use crate::install::AppInstallStrategy;
+use crate::permission::PermissionDeclarationV1;
+use anyhow::{Context, Result, bail};
+use serde::Deserialize;
+use std::collections::BTreeSet;
+use std::path::{Component, Path, PathBuf};
+
+#[derive(Debug, Deserialize)]
+struct CategoryToml {
+    #[serde(default = "legacy_metadata_schema_version")]
+    metadata_schema_version: u32,
+    description: Option<String>,
+    dest: DestToml,
+    list_mode: Option<ListModeToml>,
+    post_upgrade: Option<HookSpecToml>,
+    post_install: Option<HookSpecToml>,
+    artifact: Option<ArtifactToml>,
+    files: Option<Vec<FileToml>>,
+    permissions: Option<PermissionDeclarationV1>,
+}
+
+const CURRENT_METADATA_SCHEMA_VERSION: u32 = 2;
+
+fn legacy_metadata_schema_version() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ArtifactToml {
+    script: String,
+    teardown: Option<String>,
+    runtime: Option<ArtifactRuntimeToml>,
+    #[serde(default)]
+    env: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ArtifactRuntimeToml {
+    Native,
+    Bun,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum HookSpecToml {
+    Single(HookToml),
+    Multiple(Vec<HookToml>),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct HookToml {
+    command: Option<String>,
+    script: Option<String>,
+    runtime: Option<ArtifactRuntimeToml>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    show_output: bool,
+    #[serde(default)]
+    env: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum DestToml {
+    Single(String),
+    Rooted(RootedDestToml),
+    Platforms(PlatformDestToml),
+}
+
+#[derive(Debug, Deserialize)]
+struct RootedDestToml {
+    base: DestBaseToml,
+    path: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum DestBaseToml {
+    DataDir,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlatformDestToml {
+    macos: Option<String>,
+    linux: Option<String>,
+    windows: Option<String>,
+    unix: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ListModeToml {
+    Category,
+    Files,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum InstallModeToml {
+    Copy,
+    JsonMerge,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileToml {
+    source: String,
+    target: Option<String>,
+    dest: Option<DestToml>,
+    description: Option<String>,
+    display_name: Option<String>,
+    platforms: Option<Vec<String>>,
+    transform: Option<String>,
+    transforms: Option<Vec<String>>,
+    install_mode: Option<InstallModeToml>,
+    managed_keys: Option<Vec<String>>,
+    #[serde(default)]
+    requires_admin: bool,
+    restart_hint: Option<String>,
+    generator: Option<GeneratorToml>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GeneratorToml {
+    script: String,
+    runtime: Option<ArtifactRuntimeToml>,
+    #[serde(default)]
+    env: Vec<String>,
+    when_env: String,
+    #[serde(default = "default_true")]
+    auto: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl<H> CoreRuntime<H> {
+    /// Parse App metadata and legacy categories exclusively from the immutable
+    /// effective preset snapshot. Overlay/source choice is therefore fixed for
+    /// the whole command.
+    pub fn app_categories(&self, filter: Option<&str>) -> Result<Vec<AppCategory>> {
+        let names = category_names(self.presets().files().keys(), "app", filter);
+        if filter.is_some() && names.is_empty() && self.context().is_external_presets {
+            bail!(
+                "app preset category not found: {}",
+                filter.unwrap_or_default()
+            );
+        }
+        names
+            .into_iter()
+            .filter_map(|name| self.parse_app_category(&name).transpose())
+            .collect()
+    }
+
+    fn parse_app_category(&self, name: &str) -> Result<Option<AppCategory>> {
+        let prefix = format!("app/{name}/");
+        let metadata_path = format!("{prefix}shine.toml");
+        let Some(metadata) = self.presets().get(&metadata_path) else {
+            let files = collect_category_files(self.presets().files().keys(), &prefix)
+                .into_iter()
+                .map(|source_rel| {
+                    let bytes = self
+                        .presets()
+                        .get(&format!("{prefix}{}", logical(&source_rel)))
+                        .unwrap_or_default();
+                    AppFile {
+                        target_rel: source_rel.clone(),
+                        source_rel,
+                        destination_root: None,
+                        description: legacy_description(bytes),
+                        display_name: None,
+                        legacy_dest_annotation: dest_annotation(bytes),
+                        transforms: Vec::new(),
+                        install_strategy: AppInstallStrategy::Copy,
+                        requires_admin: false,
+                        restart_hint: None,
+                        generator: None,
+                    }
+                })
+                .collect::<Vec<_>>();
+            return Ok((!files.is_empty()).then(|| AppCategory {
+                name: name.to_string(),
+                description: None,
+                destination_root: None,
+                files,
+                list_mode: AppListMode::Category,
+                post_upgrade: Vec::new(),
+                post_install: Vec::new(),
+                uses_metadata: false,
+                has_explicit_files: false,
+                artifact: None,
+                permissions: None,
+                metadata_schema_version: legacy_metadata_schema_version(),
+                metadata_is_overlay: false,
+            }));
+        };
+
+        let parsed: CategoryToml = toml::from_slice(metadata)
+            .with_context(|| format!("failed to parse app/{name}/shine.toml"))?;
+        if !(1..=CURRENT_METADATA_SCHEMA_VERSION).contains(&parsed.metadata_schema_version) {
+            bail!(
+                "unsupported metadata_schema_version {} in {metadata_path}; this Shine version supports versions 1 through {}",
+                parsed.metadata_schema_version,
+                CURRENT_METADATA_SCHEMA_VERSION,
+            );
+        }
+        if let Some(permissions) = &parsed.permissions {
+            permissions
+                .validate()
+                .with_context(|| format!("invalid permissions in {metadata_path}"))?;
+        }
+        let permissions = parsed.permissions.clone();
+        let Some(destination_root) = parsed.dest.select(name, self.context().platform)? else {
+            return Ok(None);
+        };
+        let explicit = parsed.files.is_some();
+        let files = if let Some(files) = parsed.files {
+            let mut resolved = Vec::new();
+            for file in files {
+                if !platform_matches(
+                    file.platforms.as_deref(),
+                    self.context().platform,
+                    &metadata_path,
+                )? {
+                    continue;
+                }
+                let destination = file
+                    .dest
+                    .as_ref()
+                    .map(|dest| dest.select_file(name, self.context().platform))
+                    .transpose()?
+                    .flatten();
+                if file.dest.is_some() && destination.is_none() {
+                    continue;
+                }
+                let source_rel = normalize_relative(&file.source)
+                    .with_context(|| format!("invalid source for {metadata_path}"))?;
+                let target_rel = normalize_relative(file.target.as_deref().unwrap_or(&file.source))
+                    .with_context(|| format!("invalid target for {metadata_path}"))?;
+                let source_logical = format!("{prefix}{}", logical(&source_rel));
+                if self.presets().get(&source_logical).is_none() {
+                    bail!(
+                        "app/{name}/shine.toml references missing file: {}",
+                        source_rel.display()
+                    );
+                }
+                let transforms = transforms(&file, &metadata_path)?;
+                let install_strategy = install_strategy(&file, &metadata_path)?;
+                let generator = generator(file.generator, &metadata_path)?;
+                if let Some(generator) = &generator {
+                    let generator_path = format!("{prefix}{}", logical(&generator.script));
+                    if self.presets().get(&generator_path).is_none() {
+                        bail!(
+                            "app/{name}/shine.toml references missing generator script: {}",
+                            generator.script.display()
+                        );
+                    }
+                }
+                resolved.push(AppFile {
+                    source_rel,
+                    target_rel,
+                    destination_root: destination,
+                    description: file.description,
+                    display_name: file.display_name,
+                    legacy_dest_annotation: None,
+                    transforms,
+                    install_strategy,
+                    requires_admin: file.requires_admin,
+                    restart_hint: file.restart_hint,
+                    generator,
+                });
+            }
+            resolved
+        } else {
+            collect_category_files(self.presets().files().keys(), &prefix)
+                .into_iter()
+                .map(|source_rel| AppFile {
+                    target_rel: source_rel.clone(),
+                    source_rel,
+                    destination_root: None,
+                    description: None,
+                    display_name: None,
+                    legacy_dest_annotation: None,
+                    transforms: Vec::new(),
+                    install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
+                    generator: None,
+                })
+                .collect()
+        };
+        if files.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(AppCategory {
+            name: name.to_string(),
+            description: parsed.description,
+            destination_root: Some(destination_root),
+            files,
+            list_mode: parsed.list_mode.map_or_else(
+                || {
+                    if explicit {
+                        AppListMode::Files
+                    } else {
+                        AppListMode::Category
+                    }
+                },
+                |mode| match mode {
+                    ListModeToml::Category => AppListMode::Category,
+                    ListModeToml::Files => AppListMode::Files,
+                },
+            ),
+            post_upgrade: hooks(parsed.post_upgrade, "post_upgrade", &metadata_path)?,
+            post_install: hooks(parsed.post_install, "post_install", &metadata_path)?,
+            uses_metadata: true,
+            has_explicit_files: explicit,
+            artifact: artifact(parsed.artifact, &metadata_path)?,
+            permissions,
+            metadata_schema_version: parsed.metadata_schema_version,
+            metadata_is_overlay: self.presets().is_overlay(&metadata_path),
+        }))
+    }
+
+    pub fn app_source_bytes(&self, category: &str, file: &AppFile) -> Result<&[u8]> {
+        let path = format!("app/{category}/{}", logical(&file.source_rel));
+        self.presets()
+            .get(&path)
+            .with_context(|| format!("missing preset file {path}"))
+    }
+
+    pub fn app_destination(&self, category: &AppCategory, file: &AppFile) -> Result<PathBuf> {
+        let root = file.destination_root.as_ref().map_or_else(
+            || {
+                category
+                    .destination_root
+                    .as_ref()
+                    .map(|path| AppDestinationRoot::Path(path.clone()))
+            },
+            |root| Some(root.clone()),
+        );
+        let base = match root {
+            Some(AppDestinationRoot::DataDir(relative)) => self.context().data_dir.join(relative),
+            Some(AppDestinationRoot::Path(raw)) => expand_path(&raw, self.context())?,
+            None => {
+                if let Some(annotation) = &file.legacy_dest_annotation {
+                    return expand_path(annotation, self.context());
+                }
+                self.context().app_default_dest_root.join(&category.name)
+            }
+        };
+        let destination = base.join(&file.target_rel);
+        if destination
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            bail!(
+                "destination path must not contain '..': {}",
+                destination.display()
+            );
+        }
+        Ok(destination)
+    }
+}
+
+fn category_names<'a>(
+    paths: impl Iterator<Item = &'a String>,
+    kind: &str,
+    filter: Option<&str>,
+) -> Vec<String> {
+    let prefix = format!("{kind}/");
+    paths
+        .filter_map(|path| path.strip_prefix(&prefix))
+        .filter_map(|rest| rest.split_once('/').map(|(category, _)| category))
+        .filter(|category| filter.is_none_or(|filter| filter == *category))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn collect_category_files<'a>(
+    paths: impl Iterator<Item = &'a String>,
+    prefix: &str,
+) -> Vec<PathBuf> {
+    paths
+        .filter_map(|path| path.strip_prefix(prefix))
+        .filter(|relative| !relative.is_empty() && *relative != "shine.toml")
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn logical(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn normalize_relative(value: &str) -> Result<PathBuf> {
+    let path = Path::new(value);
+    if path.as_os_str().is_empty() {
+        bail!("path must not be empty");
+    }
+    if path.is_absolute() {
+        bail!("path must be relative");
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        bail!("path must not contain '..'");
+    }
+    Ok(path.to_path_buf())
+}
+
+fn transforms(file: &FileToml, context: &str) -> Result<Vec<String>> {
+    let values = match (&file.transform, &file.transforms) {
+        (Some(_), Some(_)) => bail!("{context}: use 'transform' or 'transforms', not both"),
+        (Some(value), None) => vec![value.clone()],
+        (None, Some(values)) => values.clone(),
+        (None, None) => Vec::new(),
+    };
+    crate::install::transforms::validate(&values)
+        .with_context(|| format!("{context}: invalid transform"))?;
+    Ok(values)
+}
+
+fn install_strategy(file: &FileToml, context: &str) -> Result<AppInstallStrategy> {
+    match file.install_mode.unwrap_or(InstallModeToml::Copy) {
+        InstallModeToml::Copy => {
+            if file.managed_keys.is_some() {
+                bail!("{context}: 'managed_keys' requires install_mode = \"json-merge\"");
+            }
+            Ok(AppInstallStrategy::Copy)
+        }
+        InstallModeToml::JsonMerge => {
+            let keys = file
+                .managed_keys
+                .clone()
+                .context("json-merge requires 'managed_keys'")?;
+            if keys.is_empty()
+                || keys
+                    .iter()
+                    .any(|key| key.trim().is_empty() || key.contains('.'))
+                || keys.iter().collect::<std::collections::BTreeSet<_>>().len() != keys.len()
+            {
+                bail!("{context}: managed_keys must contain unique non-empty top-level JSON keys");
+            }
+            Ok(AppInstallStrategy::JsonMerge { managed_keys: keys })
+        }
+    }
+}
+
+fn hooks(value: Option<HookSpecToml>, field: &str, context: &str) -> Result<Vec<AppHook>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let hooks = match value {
+        HookSpecToml::Single(hook) => vec![hook],
+        HookSpecToml::Multiple(hooks) => hooks,
+    };
+    if hooks.is_empty() {
+        bail!("{context}: {field} must not be empty");
+    }
+    hooks
+        .into_iter()
+        .map(|hook| {
+            let action = match (hook.command, hook.script) {
+                (Some(command), None) => {
+                    if command.trim().is_empty() {
+                        bail!("{context}: {field}.command must not be empty");
+                    }
+                    if hook.runtime.is_some() {
+                        bail!("{context}: {field}.runtime is only valid with script");
+                    }
+                    AppHookAction::Command(command)
+                }
+                (None, Some(script)) => {
+                    let normalized = normalize_relative(&script)
+                        .with_context(|| format!("{context}: invalid {field}.script"))?;
+                    let runtime = artifact_runtime(hook.runtime, &script, context)?;
+                    AppHookAction::Script {
+                        script: normalized,
+                        runtime,
+                    }
+                }
+                (Some(_), Some(_)) => {
+                    bail!("{context}: {field} must declare only one of command or script")
+                }
+                (None, None) => {
+                    bail!("{context}: {field} must declare one of command or script")
+                }
+            };
+            Ok(AppHook {
+                action,
+                args: hook.args,
+                show_output: hook.show_output,
+                env: crate::env::parse_env_specs(&hook.env)
+                    .with_context(|| format!("{context}: invalid {field}.env"))?,
+            })
+        })
+        .collect()
+}
+
+fn artifact(value: Option<ArtifactToml>, context: &str) -> Result<Option<AppArtifact>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.script.trim().is_empty()
+        || value
+            .teardown
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
+    {
+        bail!("{context}: artifact scripts must not be empty");
+    }
+    let runtime = artifact_runtime(value.runtime, &value.script, context)?;
+    if runtime == ArtifactRuntime::Bun
+        && let Some(teardown) = &value.teardown
+    {
+        require_bun_extension(teardown, context)?;
+    }
+    let env = crate::env::parse_env_specs(&value.env)
+        .with_context(|| format!("{context}: invalid artifact.env"))?;
+    Ok(Some(AppArtifact {
+        script: value.script,
+        teardown: value.teardown,
+        runtime,
+        env,
+    }))
+}
+
+fn generator(value: Option<GeneratorToml>, context: &str) -> Result<Option<AppGenerator>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let script = normalize_relative(&value.script)
+        .with_context(|| format!("{context}: invalid generator.script"))?;
+    let runtime = artifact_runtime(value.runtime, &value.script, context)?;
+    let env = crate::env::parse_env_specs(&value.env)
+        .with_context(|| format!("{context}: invalid generator.env"))?;
+    crate::env::validate_env_key(&value.when_env)
+        .with_context(|| format!("{context}: invalid generator.when_env"))?;
+    if !env.iter().any(|spec| spec.source == value.when_env) {
+        bail!(
+            "{context}: generator.when_env '{}' must be declared in generator.env",
+            value.when_env
+        );
+    }
+    Ok(Some(AppGenerator {
+        script,
+        runtime,
+        env,
+        when_env: value.when_env,
+        auto: value.auto,
+    }))
+}
+
+fn artifact_runtime(
+    value: Option<ArtifactRuntimeToml>,
+    script: &str,
+    context: &str,
+) -> Result<ArtifactRuntime> {
+    match value.unwrap_or(ArtifactRuntimeToml::Native) {
+        ArtifactRuntimeToml::Native => Ok(ArtifactRuntime::Native),
+        ArtifactRuntimeToml::Bun => {
+            require_bun_extension(script, context)?;
+            Ok(ArtifactRuntime::Bun)
+        }
+    }
+}
+
+fn require_bun_extension(script: &str, context: &str) -> Result<()> {
+    if !matches!(
+        Path::new(script)
+            .extension()
+            .and_then(|value| value.to_str()),
+        Some("ts" | "js" | "mts" | "mjs")
+    ) {
+        bail!("{context}: runtime = \"bun\" requires a .ts/.js/.mts/.mjs script, got '{script}'");
+    }
+    Ok(())
+}
+
+impl DestToml {
+    fn select(&self, category: &str, platform: RuntimePlatform) -> Result<Option<String>> {
+        match self {
+            Self::Single(path) => {
+                validate_destination(path, platform, category)?;
+                Ok(Some(path.clone()))
+            }
+            Self::Rooted(_) => bail!(
+                "app/{category}/shine.toml rooted destinations are supported only in [[files]]"
+            ),
+            Self::Platforms(paths) => paths.select(category, platform),
+        }
+    }
+
+    fn select_file(
+        &self,
+        category: &str,
+        platform: RuntimePlatform,
+    ) -> Result<Option<AppDestinationRoot>> {
+        match self {
+            Self::Single(path) => {
+                validate_destination(path, platform, category)?;
+                Ok(Some(AppDestinationRoot::Path(path.clone())))
+            }
+            Self::Rooted(rooted) => Ok(Some(match rooted.base {
+                DestBaseToml::DataDir => {
+                    AppDestinationRoot::DataDir(normalize_relative(&rooted.path)?)
+                }
+            })),
+            Self::Platforms(paths) => Ok(paths
+                .select(category, platform)?
+                .map(AppDestinationRoot::Path)),
+        }
+    }
+}
+
+impl PlatformDestToml {
+    fn select(&self, category: &str, platform: RuntimePlatform) -> Result<Option<String>> {
+        if self.macos.is_none()
+            && self.linux.is_none()
+            && self.windows.is_none()
+            && self.unix.is_none()
+        {
+            bail!("app/{category}/shine.toml platform destination map must not be empty");
+        }
+        let selected = match platform {
+            RuntimePlatform::Macos => self.macos.clone().or_else(|| self.unix.clone()),
+            RuntimePlatform::Linux => self.linux.clone().or_else(|| self.unix.clone()),
+            RuntimePlatform::Windows => self.windows.clone(),
+        };
+        if let Some(path) = &selected {
+            validate_destination(path, platform, category)?;
+        }
+        Ok(selected)
+    }
+}
+
+fn validate_destination(path: &str, platform: RuntimePlatform, category: &str) -> Result<()> {
+    let home = path == "~"
+        || path == "$HOME"
+        || path.starts_with("~/")
+        || path.starts_with("~\\")
+        || path.starts_with("$HOME/");
+    if !(home || is_platform_absolute(path, platform)) {
+        bail!("app/{category}/shine.toml dest must be absolute after expansion");
+    }
+    if path.split(['/', '\\']).any(|part| part == "..") {
+        bail!("app/{category}/shine.toml dest must not contain '..'");
+    }
+    Ok(())
+}
+
+fn is_platform_absolute(path: &str, platform: RuntimePlatform) -> bool {
+    let bytes = path.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    let unc = path.starts_with("\\\\") || path.starts_with("//");
+    match platform {
+        RuntimePlatform::Windows => drive || unc,
+        _ => path.starts_with('/'),
+    }
+}
+
+fn platform_matches(
+    values: Option<&[String]>,
+    platform: RuntimePlatform,
+    context: &str,
+) -> Result<bool> {
+    let Some(values) = values else {
+        return Ok(true);
+    };
+    if values.is_empty() {
+        bail!(
+            "{context} platforms must not be empty; expected `macos`, `linux`, `windows`, or `unix`"
+        );
+    }
+    let mut matches = false;
+    for value in values {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "macos" => matches |= platform == RuntimePlatform::Macos,
+            "linux" => matches |= platform == RuntimePlatform::Linux,
+            "windows" => matches |= platform == RuntimePlatform::Windows,
+            "unix" => matches |= platform.is_unix(),
+            _ => bail!(
+                "{context} has unsupported platform `{value}`; expected `macos`, `linux`, `windows`, or `unix`"
+            ),
+        }
+    }
+    Ok(matches)
+}
+
+fn expand_path(raw: &str, context: &super::RuntimeContext) -> Result<PathBuf> {
+    let home = context.home_dir.to_string_lossy();
+    let (expanded, expanded_home) = if raw == "~" || raw == "$HOME" {
+        (home.to_string(), true)
+    } else if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+        (context.home_dir.join(rest).display().to_string(), true)
+    } else if let Some(rest) = raw.strip_prefix("$HOME/") {
+        (context.home_dir.join(rest).display().to_string(), true)
+    } else {
+        (raw.to_string(), false)
+    };
+    let path = PathBuf::from(expanded);
+    let absolute = if expanded_home {
+        path.is_absolute()
+    } else {
+        is_platform_absolute(raw, context.platform)
+    };
+    if !absolute {
+        bail!(
+            "destination path must be absolute after expansion, got: {}",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
+fn dest_annotation(content: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(content).ok()?;
+    let mut lines = text.lines();
+    let first = lines.next()?;
+    let line = if first.starts_with("#!") {
+        lines.next()?
+    } else {
+        first
+    };
+    line.trim()
+        .strip_prefix("# shine-dest:")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn legacy_description(content: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(content).ok()?;
+    text.lines()
+        .filter(|line| !line.starts_with("#!"))
+        .map(str::trim)
+        .find_map(|line| {
+            line.strip_prefix("# ")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext};
+
+    fn hook_toml(
+        command: Option<&str>,
+        script: Option<&str>,
+        runtime: Option<ArtifactRuntimeToml>,
+    ) -> HookToml {
+        HookToml {
+            command: command.map(str::to_string),
+            script: script.map(str::to_string),
+            runtime,
+            args: Vec::new(),
+            show_output: false,
+            env: vec!["TOKEN=API_TOKEN".to_string()],
+        }
+    }
+
+    #[test]
+    fn parses_command_and_bun_script_hooks() {
+        let command = hooks(
+            Some(HookSpecToml::Single(hook_toml(Some("reload"), None, None))),
+            "post_upgrade",
+            "app/demo/shine.toml",
+        )
+        .unwrap();
+        assert!(
+            matches!(command[0].action, AppHookAction::Command(ref value) if value == "reload")
+        );
+
+        let script = hooks(
+            Some(HookSpecToml::Single(hook_toml(
+                None,
+                Some("refresh.ts"),
+                Some(ArtifactRuntimeToml::Bun),
+            ))),
+            "post_upgrade",
+            "app/demo/shine.toml",
+        )
+        .unwrap();
+        assert!(matches!(
+            script[0].action,
+            AppHookAction::Script {
+                ref script,
+                runtime: ArtifactRuntime::Bun,
+            } if script == Path::new("refresh.ts")
+        ));
+        assert_eq!(script[0].env[0].source, "TOKEN");
+        assert_eq!(script[0].env[0].target, "API_TOKEN");
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_invalid_script_hooks() {
+        for hook in [
+            hook_toml(Some("reload"), Some("refresh.ts"), None),
+            hook_toml(None, None, None),
+            hook_toml(Some("reload"), None, Some(ArtifactRuntimeToml::Bun)),
+            hook_toml(None, Some("refresh.sh"), Some(ArtifactRuntimeToml::Bun)),
+        ] {
+            assert!(
+                hooks(
+                    Some(HookSpecToml::Single(hook)),
+                    "post_upgrade",
+                    "app/demo/shine.toml",
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn parses_app_category_from_snapshot_and_selects_platform() {
+        let home = std::env::temp_dir().join("shine-app-metadata-test");
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = { linux = \"~/.config/demo\" }\n[[files]]\nsource = \"config.toml\"\n"
+                    .to_vec(),
+            )
+            .file("app/demo/config.toml", b"value = true\n".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            RuntimeContext::isolated(
+                home.clone(),
+                home.join(".shine"),
+                home.join("presets"),
+                home.join("bin"),
+                RuntimePlatform::Linux,
+            ),
+            snapshot,
+        );
+        let categories = runtime.app_categories(Some("demo")).unwrap();
+        assert_eq!(categories[0].files.len(), 1);
+        assert_eq!(
+            runtime
+                .app_destination(&categories[0], &categories[0].files[0])
+                .unwrap(),
+            home.join(".config/demo/config.toml")
+        );
+        assert_eq!(categories[0].metadata_schema_version, 1);
+        assert!(!categories[0].metadata_is_overlay);
+    }
+
+    #[test]
+    fn marks_versioned_overlay_metadata_and_rejects_future_versions() {
+        let home = std::env::temp_dir().join("shine-app-metadata-schema-test");
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"base".to_vec())
+            .overlay_file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .build();
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            RuntimeContext::isolated(
+                home.clone(),
+                home.join(".shine"),
+                home.join("presets"),
+                home.join("bin"),
+                RuntimePlatform::Linux,
+            ),
+            snapshot,
+        );
+        let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
+        assert_eq!(category.metadata_schema_version, 1);
+        assert!(category.metadata_is_overlay);
+
+        let future = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/future/shine.toml",
+                b"metadata_schema_version = 3\ndest = '~/.config/future'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/future/config.toml", b"future".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            RuntimeContext::isolated(
+                home.clone(),
+                home.join(".shine"),
+                home.join("presets"),
+                home.join("bin"),
+                RuntimePlatform::Linux,
+            ),
+            future,
+        );
+        assert!(
+            runtime
+                .app_categories(Some("future"))
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported metadata_schema_version 3")
+        );
+    }
+
+    #[test]
+    fn expansion_uses_runtime_platform_for_non_home_paths() {
+        let native_home = std::env::current_dir().unwrap().join("validation-home");
+        let context = |platform| {
+            RuntimeContext::isolated(
+                native_home.clone(),
+                native_home.join(".shine"),
+                native_home.join("presets"),
+                native_home.join(".shine/bin"),
+                platform,
+            )
+        };
+
+        assert!(expand_path("/etc/tool", &context(RuntimePlatform::Linux)).is_ok());
+        assert!(expand_path("/etc/tool", &context(RuntimePlatform::Macos)).is_ok());
+        assert!(expand_path("/etc/tool", &context(RuntimePlatform::Windows)).is_err());
+        assert!(expand_path(r"C:\ProgramData\tool", &context(RuntimePlatform::Windows)).is_ok());
+        assert!(expand_path(r"C:\ProgramData\tool", &context(RuntimePlatform::Linux)).is_err());
+
+        for platform in RuntimePlatform::ALL {
+            assert_eq!(
+                expand_path("~/.config/tool", &context(platform)).unwrap(),
+                native_home.join(".config/tool")
+            );
+        }
+    }
+}

@@ -1,0 +1,12 @@
+metadata_schema_version = 2
+description = "Starship prompt configuration."
+dest = "~/.config"
+list_mode = "category"
+
+[permissions]
+schema_version = 1
+
+[[files]]
+source = "starship.toml"
+target = "starship.toml"
+description = "Minimal Starship prompt with Git and time status."

@@ -201,9 +201,10 @@ impl BrokerSession {
         for item in selected {
             // The digest is frozen with the ciphertext at session start and is
             // included in the audit line without exposing the ciphertext.
-            let value = secret::decrypt_secret(&item.ciphertext, &self.config.age_identities())
-                .await
-                .with_context(|| format!("decrypting {}_SECRET", item.source))?;
+            let value =
+                secret::decrypt_secret(&item.ciphertext, &self.config.resolved_age_identities())
+                    .await
+                    .with_context(|| format!("decrypting {}_SECRET", item.source))?;
             values.insert(item.target, value);
             eprintln!(
                 "shine ssh broker: released direct secret {} ciphertext={}…",

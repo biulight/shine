@@ -169,7 +169,7 @@ pub async fn exec(config: &Config, target: &Path, command: &str, args: &[OsStrin
     for spec in parse_env_specs(&rule.with)? {
         let value = match resolve_stored_value(&env, &spec.source)? {
             super::StoredValue::Secret { key, value } => {
-                secret::decrypt_secret(value, &config.age_identities())
+                secret::decrypt_secret(value, &config.resolved_age_identities())
                     .await
                     .with_context(|| format!("decrypting {key}"))?
             }
@@ -320,7 +320,7 @@ async fn mutate_rules(
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .with_context(|| format!("parsing {}", path.display()))?;
-    utils::migration::sync_table(doc.as_table_mut(), &table);
+    shine_core::migration::sync_table(doc.as_table_mut(), &table);
     atomic_write(path, doc.to_string().as_bytes()).await
 }
 

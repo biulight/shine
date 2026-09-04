@@ -339,11 +339,18 @@ pub async fn handle_decrypt(config: &Config, key: &str) -> Result<()> {
     let Some(value) = env.get(key) else {
         bail!("{key} is not set in the active config [env]");
     };
-    let plaintext = secret::decrypt_secret(value, &config.age_identities())
+    let plaintext = secret::decrypt_secret(value, &config.resolved_age_identities())
         .await
         .with_context(|| format!("decrypting {key}"))?;
-    print!("{plaintext}");
+    write_decrypted_plaintext(std::io::stdout().lock(), &plaintext)?;
     Ok(())
+}
+
+fn write_decrypted_plaintext(mut output: impl std::io::Write, plaintext: &str) -> Result<()> {
+    output
+        .write_all(plaintext.as_bytes())
+        .context("writing decrypted plaintext")?;
+    output.flush().context("flushing decrypted plaintext")
 }
 
 pub async fn handle_export(config: &Config, key: &str, alias: Option<&str>) -> Result<()> {
@@ -356,7 +363,7 @@ pub async fn handle_export(config: &Config, key: &str, alias: Option<&str>) -> R
         EnvExportValue::Secret {
             key: secret_key,
             value,
-        } => secret::decrypt_secret(value, &config.age_identities())
+        } => secret::decrypt_secret(value, &config.resolved_age_identities())
             .await
             .with_context(|| format!("decrypting {secret_key}"))?,
         EnvExportValue::Plaintext(value) => value.to_string(),
@@ -589,6 +596,17 @@ mod tests {
         assert!(is_sensitive_env_key("token"));
         assert!(is_sensitive_env_key("SURGE_SUBSCRIPTION_URL"));
         assert!(!is_sensitive_env_key("MONKEY"));
+    }
+
+    #[test]
+    fn decrypted_plaintext_is_written_without_an_appended_line_ending() {
+        let mut output = Vec::new();
+        write_decrypted_plaintext(&mut output, "abc").unwrap();
+        assert_eq!(output, b"abc");
+
+        output.clear();
+        write_decrypted_plaintext(&mut output, "abc\n").unwrap();
+        assert_eq!(output, b"abc\n");
     }
 
     fn source(kind: EnvOverrideKind, managed: bool) -> EnvOverrideSource {

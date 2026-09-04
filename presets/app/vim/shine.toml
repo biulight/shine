@@ -1,2 +1,6 @@
+metadata_schema_version = 2
 description = "Vim configuration directory with base config and machine-local overrides."
 dest = "~/.vim"
+
+[permissions]
+schema_version = 1

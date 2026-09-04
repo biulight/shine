@@ -4,7 +4,11 @@ use crate::config::{self, Config};
 #[cfg(unix)]
 use crate::privilege;
 use crate::update_check::{self, ReleaseChannel, UpdateStatus};
-use crate::{apps, colors, env, info, install_core, list, output, platform, shells, sys, version};
+use crate::{apps, colors, env, info, list, output, platform, shells, sys, version};
+use shine_core::lifecycle::LifecycleOperation;
+use shine_core::runtime::{
+    AppPlanRequest, PlanningInputVersions, ShellPlanRequest, SysManagedPlanRequest,
+};
 
 pub async fn handle_update(
     config: &Config,
@@ -12,17 +16,45 @@ pub async fn handle_update(
     diff: bool,
     verbose: bool,
     refresh_release: bool,
+    run_generators: bool,
 ) -> Result<()> {
+    let compatibility = crate::preset_migration::active_compatibility_plan(target).await?;
+    let migration_required = crate::preset_migration::compatibility_required(&compatibility);
+    crate::preset_migration::print_compatibility(&compatibility);
+
     if let Some(target) = target {
-        return info::handle_update_target(config, target).await;
+        info::handle_update_target(config, target, run_generators).await?;
+        if migration_required {
+            bail!(
+                "{}",
+                crate::preset_migration::compatibility_failure_message(&compatibility)
+            );
+        }
+        return Ok(());
     }
 
-    let mut printed_update = if verbose {
-        Box::pin(list::handle_status_list(config, diff)).await?;
-        println!();
-        true
+    let config_updates = if verbose {
+        match Box::pin(list::handle_status_list(config, diff, run_generators)).await {
+            Ok(()) => {
+                println!();
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        }
     } else {
-        Box::pin(list::handle_update_list(config, diff)).await?
+        Box::pin(list::handle_update_list(config, diff, run_generators)).await
+    };
+    let (mut printed_update, config_update_error) = match config_updates {
+        Ok(printed) => (printed, None),
+        Err(error) => {
+            eprintln!(
+                "{}",
+                colors::yellow_stderr(&format!(
+                    "warning: configuration update check failed: {error:#}"
+                ))
+            );
+            (false, Some(error))
+        }
     };
 
     let current = version::semver();
@@ -76,8 +108,18 @@ pub async fn handle_update(
         }
     }
 
-    if !printed_update {
+    if !printed_update && config_update_error.is_none() && !migration_required {
         println!("{}", colors::dim("Nothing to update."));
+    }
+
+    if let Some(error) = config_update_error {
+        return Err(error);
+    }
+    if migration_required {
+        bail!(
+            "{}",
+            crate::preset_migration::compatibility_failure_message(&compatibility)
+        );
     }
 
     Ok(())
@@ -163,9 +205,18 @@ pub async fn handle_config_upgrade(
     target: Option<&str>,
     verbose: bool,
     prune_stale: bool,
+    yes: bool,
 ) -> Result<()> {
+    let compatibility = crate::preset_migration::active_compatibility_plan(target).await?;
+    crate::preset_migration::print_compatibility(&compatibility);
+    if crate::preset_migration::compatibility_required(&compatibility) {
+        bail!(
+            "{}",
+            crate::preset_migration::compatibility_failure_message(&compatibility)
+        );
+    }
     if let Some(target) = target {
-        return handle_config_target_upgrade(config, target, verbose, prune_stale).await;
+        return handle_config_target_upgrade(config, target, verbose, prune_stale, yes).await;
     }
     if verbose {
         println!("{}", colors::bold("Upgrading installed configs"));
@@ -179,23 +230,82 @@ pub async fn handle_config_upgrade(
     };
 
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
-    let shell_report =
-        Box::pin(shells::handle_upgrade_installed(config, verbose, &mut sep)).await?;
-    let app_report = Box::pin(apps::handle_upgrade_installed_with_output(
+    let os_id = sys::detect_os_id().await?;
+    let reviewed = crate::lifecycle_plan::review_upgrade_plans(
         config,
-        prune_stale,
+        [
+            crate::lifecycle_plan::LifecyclePlanRequest::shell(
+                ShellPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: None,
+                    force: false,
+                    purge: false,
+                    input_versions: PlanningInputVersions::default(),
+                },
+                config,
+            ),
+            crate::lifecycle_plan::LifecyclePlanRequest::app(
+                AppPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: None,
+                    force: false,
+                    purge: false,
+                    prune_stale,
+                    input_versions: PlanningInputVersions::default(),
+                },
+                config,
+            ),
+            crate::lifecycle_plan::LifecyclePlanRequest::sys(
+                SysManagedPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    os_id,
+                    target: None,
+                    input_versions: PlanningInputVersions::default(),
+                },
+                config,
+            ),
+        ],
+        yes,
         verbose,
+    )
+    .await?;
+    let mut prepared = crate::lifecycle_plan::prepare_plans(config, reviewed).await?;
+    let shell_prepared = prepared.remove(0);
+    let app_prepared = prepared.remove(0);
+    let sys_prepared = prepared.remove(0);
+
+    let (shell_report, shell_lifecycle) =
+        Box::pin(shells::handle_upgrade_installed_with_result_prepared(
+            config,
+            verbose,
+            shell_prepared,
+            &mut sep,
+        ))
+        .await?;
+    let (app_report, app_lifecycle) = Box::pin(
+        apps::handle_upgrade_installed_with_output_with_result_prepared(
+            config,
+            prune_stale,
+            verbose,
+            app_prepared,
+            &mut sep,
+        ),
+    )
+    .await?;
+    let (sys_report, _sys_lifecycle) = Box::pin(sys::handle_upgrade_managed_with_result_prepared(
+        config,
+        verbose,
+        sys_prepared,
         &mut sep,
     ))
     .await?;
-    let sys_report = Box::pin(sys::handle_upgrade_managed(config, verbose, &mut sep)).await?;
 
     let updated = env_report.updated
-        + shell_report.updated_categories.len()
+        + changed_shell_categories(&shell_lifecycle)
         + usize::from(shell_report.path_changed)
-        + app_report.updated_categories
+        + changed_app_categories(&app_lifecycle)
         + sys_report.updated;
-    let user_modified = env_report.user_modified + app_report.user_modified;
+    let user_modified = env_report.user_modified + preserved_app_resources(&app_lifecycle);
 
     let summary = config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts);
     if verbose || sep.has_printed() {
@@ -207,11 +317,9 @@ pub async fn handle_config_upgrade(
         println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
     }
 
-    if app_report.failed > 0 {
-        bail!(
-            "{} generated app configuration item(s) failed",
-            app_report.failed
-        );
+    let fatal_app_failures = app_upgrade_failure_count(&app_report);
+    if fatal_app_failures > 0 {
+        bail!("{} app configuration item(s) failed", fatal_app_failures);
     }
 
     if sys_report.failed > 0 {
@@ -229,6 +337,7 @@ async fn handle_config_target_upgrade(
     target: &str,
     verbose: bool,
     prune_stale: bool,
+    yes: bool,
 ) -> Result<()> {
     use crate::shim::{PresetKind, resolve_preset_kind};
 
@@ -253,14 +362,22 @@ async fn handle_config_target_upgrade(
             if prune_stale {
                 bail!("`--prune-stale` applies only to app targets");
             }
-            let report = Box::pin(sys::handle_upgrade_managed_target(
-                config,
-                Some(item),
-                verbose,
-                &mut sep,
-            ))
-            .await?;
-            (report.updated, 0, 0, report.failed, Default::default())
+            let (report, lifecycle) =
+                Box::pin(sys::handle_upgrade_managed_target_with_result_approved(
+                    config,
+                    Some(item),
+                    verbose,
+                    yes,
+                    &mut sep,
+                ))
+                .await?;
+            (
+                lifecycle.summary().changed,
+                lifecycle.summary().preserved + lifecycle.summary().conflicts,
+                0,
+                report.failed,
+                Default::default(),
+            )
         } else {
             let normalized = if let Some(rest) = target.strip_prefix("app/") {
                 let category = rest.split('/').next().unwrap_or_default();
@@ -274,19 +391,21 @@ async fn handle_config_target_upgrade(
             let (kind, category) = resolve_preset_kind(config, &normalized).await?;
             match kind {
                 PresetKind::App => {
-                    let report = Box::pin(apps::handle_upgrade_installed_target(
-                        config,
-                        Some(&category),
-                        prune_stale,
-                        verbose,
-                        &mut sep,
-                    ))
-                    .await?;
+                    let (report, lifecycle) =
+                        Box::pin(apps::handle_upgrade_installed_target_with_result_approved(
+                            config,
+                            Some(&category),
+                            prune_stale,
+                            verbose,
+                            yes,
+                            &mut sep,
+                        ))
+                        .await?;
                     (
-                        report.updated_categories,
-                        report.user_modified,
+                        changed_app_categories(&lifecycle),
+                        preserved_app_resources(&lifecycle),
                         0,
-                        report.failed,
+                        app_upgrade_failure_count(&report),
                         report.restart_hints,
                     )
                 }
@@ -294,17 +413,20 @@ async fn handle_config_target_upgrade(
                     if prune_stale {
                         bail!("`--prune-stale` applies only to app targets");
                     }
-                    let report = Box::pin(shells::handle_upgrade_installed_target(
-                        config,
-                        Some(&category),
-                        verbose,
-                        &mut sep,
-                    ))
+                    let (report, lifecycle) = Box::pin(
+                        shells::handle_upgrade_installed_target_with_result_approved(
+                            config,
+                            Some(&category),
+                            verbose,
+                            yes,
+                            &mut sep,
+                        ),
+                    )
                     .await?;
                     (
-                        report.updated_categories.len() + usize::from(report.path_changed),
+                        changed_shell_categories(&lifecycle) + usize::from(report.path_changed),
                         0,
-                        report.link_conflicts,
+                        lifecycle.summary().conflicts,
                         0,
                         Default::default(),
                     )
@@ -342,6 +464,68 @@ fn config_upgrade_summary_parts(
     );
     output::push_count(&mut parts, link_conflicts, colors::yellow, "link conflicts");
     parts
+}
+
+fn app_upgrade_failure_count(report: &apps::AppUpgradeReport) -> usize {
+    report.failed
+}
+
+fn changed_shell_categories(result: &shine_core::lifecycle::LifecycleResultV1) -> usize {
+    result
+        .outcomes
+        .iter()
+        .filter(|outcome| {
+            outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
+                && outcome.target.starts_with("shell/")
+                && outcome.effects.iter().any(|effect| {
+                    !matches!(effect, shine_core::lifecycle::LifecycleEffect::CacheWritten)
+                })
+        })
+        .filter_map(|outcome| outcome.target.split('/').nth(1))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+}
+
+fn is_app_auxiliary_resource(resource: Option<&str>) -> bool {
+    matches!(
+        resource,
+        Some(
+            "preset-cache"
+                | "purge"
+                | "hook:post-install"
+                | "hook:post-upgrade"
+                | "artifact:teardown"
+        )
+    )
+}
+
+fn changed_app_categories(result: &shine_core::lifecycle::LifecycleResultV1) -> usize {
+    result
+        .outcomes
+        .iter()
+        .filter(|outcome| {
+            outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
+                && outcome.target.starts_with("app/")
+                && !is_app_auxiliary_resource(outcome.resource.as_deref())
+        })
+        .map(|outcome| outcome.target.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+}
+
+fn preserved_app_resources(result: &shine_core::lifecycle::LifecycleResultV1) -> usize {
+    result
+        .outcomes
+        .iter()
+        .filter(|outcome| {
+            matches!(
+                outcome.status,
+                shine_core::lifecycle::LifecycleStatus::Preserved
+                    | shine_core::lifecycle::LifecycleStatus::Conflict
+            ) && outcome.target.starts_with("app/")
+                && !is_app_auxiliary_resource(outcome.resource.as_deref())
+        })
+        .count()
 }
 
 /// After a successful self-upgrade, try to sync the new binary to the self-install destination.
@@ -517,9 +701,8 @@ fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> R
 
 /// Installs the binary, auto-elevating via `sudo` on Unix if the plain copy
 /// fails because the destination isn't user-writable (e.g. `/usr/local/bin`
-/// owned by root). Mirrors the auto-elevation already used for privileged
-/// app-config writes in `apps/file_ops.rs::install_bytes_admin`, so the user
-/// is prompted once instead of being told to manually re-run with `sudo`.
+/// owned by root). The CLI-owned administrator adapter serializes this with
+/// other privileged Shine writes so parallel installs cannot race.
 async fn install_binary_with_elevation(
     src: &std::path::Path,
     dest: &std::path::Path,
@@ -531,7 +714,7 @@ async fn install_binary_with_elevation(
                 && has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied)
                 && !std::env::var("USER").is_ok_and(|user| user == "root") =>
         {
-            let _lock = install_core::file_ops::admin_lock().await?;
+            let _lock = crate::admin_fs::admin_lock().await?;
             install_binary_privileged(src, dest).await
         }
         Err(e) => Err(e),
@@ -554,7 +737,7 @@ async fn install_binary_privileged(src: &std::path::Path, dest: &std::path::Path
         .map(|m| m.permissions().mode())
         .unwrap_or(0o755);
 
-    let status = install_core::file_ops::sudo_command()
+    let status = crate::admin_fs::sudo_command()
         .arg("mkdir")
         .arg("-p")
         .arg(parent)
@@ -565,7 +748,7 @@ async fn install_binary_privileged(src: &std::path::Path, dest: &std::path::Path
         anyhow::bail!("administrator permission was not granted");
     }
 
-    let status = install_core::file_ops::sudo_command()
+    let status = crate::admin_fs::sudo_command()
         .args(["install", "-m", &format!("{mode:o}"), "--"])
         .arg(src)
         .arg(dest)
@@ -699,6 +882,16 @@ mod tests {
                 "3 link conflicts".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn app_upgrade_failure_count_uses_the_authoritative_report_total() {
+        let report = apps::AppUpgradeReport {
+            failed: 3,
+            ..Default::default()
+        };
+
+        assert_eq!(app_upgrade_failure_count(&report), 3);
     }
 
     #[test]

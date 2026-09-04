@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 /// `.exe` suffix on Windows), without spawning it.
 ///
 /// Used before shelling out to an external CLI (`gpg`, `age`, `age-keygen`,
-/// `age-plugin-se`, `base64`) so a missing dependency fails with a clear
+/// `age-plugin-se`, `age-plugin-phone`, `base64`) so a missing dependency fails with a clear
 /// "not installed" message instead of a raw spawn error.
 pub(crate) fn ensure_command(name: &str) -> Result<()> {
     let found = std::env::var_os("PATH")

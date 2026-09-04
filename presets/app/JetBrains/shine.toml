@@ -1,5 +1,9 @@
+metadata_schema_version = 2
 description = "JetBrains IDEs configuration."
 dest = "~"
+
+[permissions]
+schema_version = 1
 
 [[files]]
 source = ".ideavimrc"

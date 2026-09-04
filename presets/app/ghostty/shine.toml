@@ -1,8 +1,12 @@
+metadata_schema_version = 2
 description = "Ghostty terminal configuration with light/dark themes and optional background images."
 list_mode = "category"
 
 [dest]
 unix = "~/.config/ghostty"
+
+[permissions]
+schema_version = 1
 
 [[files]]
 source = "config.ghostty"

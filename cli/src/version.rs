@@ -48,12 +48,18 @@ fn format_semver(package_version: &str, metadata: Option<&str>) -> String {
         .map(str::trim)
         .filter(|metadata| !metadata.is_empty())
     {
-        Some("preview") => format!("{package_version}-preview"),
-        Some(metadata) if metadata.starts_with("preview.") => {
-            format!("{package_version}-preview")
-        }
+        Some("preview") => format_preview(package_version),
+        Some(metadata) if metadata.starts_with("preview.") => format_preview(package_version),
         Some(metadata) => format!("{package_version}+{metadata}"),
         None => package_version.to_string(),
+    }
+}
+
+fn format_preview(package_version: &str) -> String {
+    if package_version.contains('-') {
+        format!("{package_version}.preview")
+    } else {
+        format!("{package_version}-preview")
     }
 }
 
@@ -85,6 +91,10 @@ mod tests {
         assert_eq!(
             format_semver("1.0.0", Some("preview.abc1234")),
             "1.0.0-preview"
+        );
+        assert_eq!(
+            format_semver("2.0.0-rc.1", Some("preview")),
+            "2.0.0-rc.1.preview"
         );
     }
 

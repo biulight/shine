@@ -1,10 +1,10 @@
 [workspace]
-members = ["utils"]
+members = ["core"]
 default-members = ["."]
 resolver = "2"
 
 [workspace.package]
-version = "1.8.0"
+version = "2.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Felix Jiang <biulight007@gmail.com>"]
@@ -16,7 +16,7 @@ anyhow = "1.0.102"
 directories = "6.0.0"
 toml = "1.1.2"
 toml_edit = "0.25.11"
-utils = { package = "shine-core", path = "utils", version = "1.8.0" }
+shine-core = { path = "core", version = "2.0.0" }
 
 [package]
 name = "shine-cli"
@@ -51,7 +51,7 @@ name = "shine"
 path = "cli/src/main.rs"
 
 [dependencies]
-utils = { workspace = true }
+shine-core = { workspace = true }
 anyhow = { workspace = true }
 base64 = "0.22"
 clap = { version = "4.6.1", features = ["derive"] }

@@ -12,7 +12,8 @@ How to cut a stable release. Prerequisite reading:
    git tag --list 'v*' --sort=-version:refname | head -1   # latest stable tag — NOT `preview`
    git log <latest-tag>..HEAD --oneline
    ```
-2. **Decide the bump.** User-facing features since the tag → minor; only user-facing fixes →
+2. **Decide the bump.** Incompatible public CLI, configuration, automation, or library contracts
+   → major; backward-compatible user-facing features → minor; only backward-compatible fixes →
    patch. Ignore `fix(lint|clippy|fmt|typo|build|ci|internal)` commits.
 3. **Bump versions.** Update the workspace version in root `Cargo.toml`, which keeps
    `shine-cli` and `shine-core` in sync; refresh `Cargo.lock` (`cargo check`).
@@ -26,7 +27,14 @@ How to cut a stable release. Prerequisite reading:
 7. **Get explicit user approval before pushing anything** (Git Push Policy). Then push the
    branch, tag `vX.Y.Z`, and push the tag.
 8. **`release.yml` takes over**: tests → asset build → GitHub Release (git-cliff notes) →
-   automatic `release` → `main` sync PR.
+   automatic `release` → `main` sync PR. Stable notes cover the previous stable tag through the
+   new stable tag as one consolidated release section, excluding intervening RC boundaries and
+   `chore(release)` commits.
+
+For a release candidate, use `X.Y.Z-rc.N` and tag `vX.Y.Z-rc.N`. The workflow publishes crates and
+assets as a GitHub prerelease, leaves the latest stable release unchanged, and skips the
+`release` → `main` sync PR. RC notes remain incremental from the immediately preceding versioned
+tag. The moving `preview` release remains a separate daily channel.
 
 ## Post-release checks
 

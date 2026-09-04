@@ -9,25 +9,45 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
 1. Prefer `shine.toml` metadata over legacy source annotations for new presets.
 2. Keep commands, identifiers, and platform constraints explicit in metadata.
 3. Treat external preset and overlay code as untrusted unless the corresponding config permission
-   (`allow_app_hooks` or `allow_sys_code`) is explicitly enabled.
+   has a matching target-scoped trust grant.
 4. Keep generated output deterministic. Never print credentials, source URLs containing secrets, or
    raw subscription records in diagnostics.
 5. `cli/build.rs` must retain `cargo:rerun-if-changed=presets`; a normal Cargo rebuild then
    re-embeds changed assets.
 6. For a user-visible preset change, update the matching English and Simplified Chinese manual
    pages in the same change.
-7. Run `shine preset validate <path> --format json` before runtime-specific checks. It validates
+7. Use `shine preset schema --format json` when tooling needs shipped authoring report, fixture, or
+   bundle contracts; never maintain a handwritten copy of those generated schemas.
+8. Run `shine preset validate <path> --format json` before runtime-specific checks. It validates
    repository roots, category directories, and manifests without loading config or executing code.
-8. After changing a built-in App destination or App/Shell file selector, run
+9. Run `shine preset lint <path> --format json` and review its author-quality and portability
+   findings. Use `--deny-warnings` only for deliberately clean CI policy.
+10. Run `shine preset plan <category> --platform <platform> --format json` for every supported target
+   platform. Treat it as a hypothetical empty-host report, never as an approval or dry-run.
+11. Put repeatable structured assertions in category-local `shine.test.toml` and run
+    `shine preset test <category> --format json`. Fixtures may contain bounded synthetic observations
+    but never executable setup/teardown, actual credentials, or private machine paths.
+12. Build distributable bytes only with `shine preset pack`, outside the category. Fix every policy
+    diagnostic; `--force` controls output replacement only.
+13. Keep schema-v1 permission declarations at the execution target boundary: one App category
+   table, one table per Shell file/platform variant, and one table per Sys item. Declare identities
+   only; never place argv, values, ciphertext, credentials, or physical checkout paths in them.
+14. After changing a built-in App destination or App/Shell file selector, run
    `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`
    and commit both regenerated public-manual blocks.
+
+For a 1.x source, begin with `shine preset migrate <path> --dry-run`. The reviewed migrator may
+rebase only exact released metadata or apply safe structural App edits; it never supplies opaque
+permissions, splits a Sys dispatcher, grants trust, or edits payloads. Complete every reported
+manual blocker, then rerun validate, lint, plan, and fixture tests above.
 
 ## AI authoring boundary
 
 `skills/shine-preset-author/` is the portable author workflow. Keep `SKILL.md` concise and route to
 only one of `references/app.md`, `references/shell.md`, or `references/sys.md`. The skill must treat
-the installed CLI as authoritative: check `preset validate --help`, scaffold with `preset new` or
-`preset copy`, require JSON validation, and run only isolated dry-runs under a temporary
+the installed CLI as authoritative: generate `preset schema --format json` when available, scaffold
+with `preset new` or `preset copy`, require JSON validation/lint and
+one hypothetical plan per target platform, and run only isolated dry-runs under a temporary
 `SHINE_CONFIG_DIR`. It must never link a source/overlay, activate a preset, or run real install,
 upgrade, bootstrap, hook, generator, or artifact actions.
 
@@ -157,12 +177,22 @@ tables. Both run direct argv commands only when the category actually changed:
 - `post_install` runs after an install that writes at least one file, including
   `--replace-managed`.
 - `post_upgrade` runs after an upgrade that writes or installs at least one file.
-- External preset/overlay hooks require `allow_app_hooks = true`.
-- Hooks inherit only the parent environment. They do not receive `[env]` values or `SHINE_APP_*`.
+- External preset/overlay hooks require `shine trust grant app/<category>` after review.
+- Command hooks receive only their declared `[env]` mappings in addition to the process baseline;
+  they do not receive the fixed `SHINE_APP_*` contract.
 - `show_output = true` prints successful stdout; otherwise success is quiet.
 
-Use a hook for a lifecycle action such as reload/setup. Use an artifact when the action needs the
-artifact environment contract or explicit user invocation.
+A hook may instead declare `script` plus an optional `runtime = "bun"`. Script hooks are resolved
+from the same immutable Preset snapshot as generators and artifacts, receive their declared `env`
+mapping plus the fixed `SHINE_APP_*` contract, and execute inside the parent lifecycle Plan. The
+script path needs a Preset `execute` permission and Bun needs a command declaration. `command` and
+`script` are mutually exclusive; `runtime` is valid only with `script`. Never use a command hook to
+recursively launch `shine app artifact apply`: that mutation owns a separate Plan. Command-hook
+inputs remain required; script-hook inputs follow artifact semantics and may be absent, in which
+case the Plan binds the missing state and execution omits the variable.
+
+Use a command hook for a direct reload/setup command, a script hook for a snapshot-bound lifecycle
+script, and an artifact when the action must remain an explicit user invocation.
 
 ### Generated files
 
@@ -181,12 +211,13 @@ generator = {
 - A static `source` remains mandatory as fallback and stable manifest identity.
 - When enabled, UTF-8 stdout becomes the effective source before normal transforms and install
   strategies.
-- `auto` defaults to true. Automatic generators may run during status/update and upgrade.
+- `auto` defaults to true. Automatic generators may run during approved install/upgrade, but never
+  during read-only status/update.
 - `auto = false` keeps implicit status local-only and preserves the installed snapshot during
   upgrade. Install still generates; `shine app refresh <category> [source] [--force]` is the
   explicit refresh path.
 - Only declared `generator.env` values are injected; `_SECRET` values are not decrypted.
-- External preset/overlay generators require `allow_app_hooks = true` and are deadline/output
+- External preset/overlay generators require target-scoped trust and are deadline/output
   limited.
 - Failure preserves an existing managed destination as last-known-good. A first-time enabled
   generator failure is fatal.
@@ -205,6 +236,7 @@ An app category can expose explicit artifact commands:
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
+env = ["PROFILE_PATH", "API_TOKEN"]
 ```
 
 - `runtime` is `native` by default. Native executes the file directly and relies on its shebang;
@@ -212,17 +244,21 @@ runtime = "bun"
 - `script` runs only through `shine app artifact apply <app-id>` unless a preset explicitly invokes
   that command from a lifecycle hook.
 - `teardown` runs through `shine app artifact remove <app-id>` and best-effort before app uninstall.
-- Explicit artifact commands are ungated and propagate nonzero exit. Implicit uninstall teardown
-  for external presets is permission-gated and non-fatal.
-- Scripts receive the fixed `SHINE_APP_*` contract plus the active `[env]` table as stored. Secret
-  ciphertext is not decrypted.
+- Explicit artifact commands require a reviewed security Plan and propagate nonzero exit. Implicit
+  uninstall teardown is included in the lifecycle Plan, remains non-fatal, and is safely skipped
+  when external code is not allowed.
+- `env` is an explicit source or `SOURCE=TARGET` allowlist. Scripts receive only that allowlist plus
+  the fixed `SHINE_APP_*` contract; every source must also appear in the category's
+  `[permissions].environment`. Plain values are Plan-bound by hash; secret-classified names require
+  opaque versions and are not decrypted by artifact execution.
 - An overlay script wins only when that exact artifact path exists; otherwise the active base
   preset script remains available.
 - Bun artifacts and teardown use the same locked external dependency convention. Package metadata
   in an overlay does not affect an artifact inherited from the embedded category.
 
 See [ADR 0009](decisions/0009-app-artifact-build-explicit-command.md),
-[ADR 0012](decisions/0012-app-lifecycle-post-install-and-teardown.md), and the
+[ADR 0012](decisions/0012-app-lifecycle-post-install-and-teardown.md),
+[ADR 0045](decisions/0045-specialized-app-and-profile-security-plans.md), and the
 [app artifact data flow](architecture/data-flows.md#app-artifact-build-shine-app-artifact-apply-app-id).
 
 ### App verification
@@ -280,7 +316,8 @@ items = ["neovim"]
 - Named `[profiles.*]` tables select items only. Successful items are activation-additive; explicit
   `sys profile disable` is the removal path.
 - Do not add a platform-wide dispatcher or a parallel status/update protocol.
-- External or overlay install scripts and executable profile code require `allow_sys_code = true`;
+- External or overlay install scripts and executable profile code require
+  `shine trust grant sys/<item>`;
   static detection/provider metadata and declarative PATH/env/aliases remain inspectable.
 
 Verify with:

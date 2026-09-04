@@ -5,11 +5,12 @@
 //! This module is domain-neutral so `sys` doesn't need to reach into `apps`
 //! for these primitives — both depend on `install_core` instead.
 
+#[cfg(test)]
 pub mod file_ops;
-pub mod line_endings;
 pub mod manifest;
-pub mod transforms;
 
-pub use line_endings::{eol_eq, normalize_eol};
-pub use manifest::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
-pub use transforms::apply as apply_transforms;
+pub use manifest::AppEntry;
+#[cfg(test)]
+pub use manifest::{AppInstallStrategy, AppManifest, hash_content};
+#[cfg(test)]
+pub use shine_core::install::transforms;

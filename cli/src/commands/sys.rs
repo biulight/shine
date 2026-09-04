@@ -8,6 +8,9 @@ pub enum SysProfileCommands {
         item: String,
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed security Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
     /// Disable one item's Shine-managed shell integration without uninstalling software
     Disable {
@@ -15,11 +18,20 @@ pub enum SysProfileCommands {
         item: String,
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed security Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum SysCommands {
+    /// Review and recover an interrupted managed system operation
+    Recover {
+        /// Approve the displayed recovery Plan without prompting
+        #[arg(long)]
+        yes: bool,
+    },
     /// List available system items
     List {
         /// Show items for every supported operating system
@@ -37,8 +49,11 @@ pub enum SysCommands {
     /// Bootstrap software and shell integration for the current OS
     Bootstrap {
         /// Bootstrap only these system items, in the given order
-        #[arg(value_name = "ITEM", conflicts_with = "preset")]
+        #[arg(value_name = "ITEM", conflicts_with_all = ["preset", "exact_items"])]
         items: Vec<String>,
+        /// Bootstrap one exact system item; repeat to preserve an explicit order
+        #[arg(long = "item", value_name = "ITEM", action = clap::ArgAction::Append, conflicts_with_all = ["items", "preset"])]
+        exact_items: Vec<String>,
         /// Apply a named profile without showing interactive selection
         #[arg(long, value_name = "PROFILE", conflicts_with = "items")]
         preset: Option<String>,
@@ -51,6 +66,9 @@ pub enum SysCommands {
         /// Route init-script downloads through shine's preset proxy ([env] PROXY_HOST/HTTP_PROXY_PORT)
         #[arg(long)]
         proxy: bool,
+        /// Approve the displayed security Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
     /// Manage Shine-owned shell integrations for bootstrap items
     Profile {
@@ -65,6 +83,9 @@ pub enum SysCommands {
         /// Print what would run without executing
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
     /// Remove a managed system configuration item safely
     Uninstall {
@@ -74,5 +95,8 @@ pub enum SysCommands {
         /// Print what would run without executing
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
 }

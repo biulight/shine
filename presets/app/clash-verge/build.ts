@@ -24,6 +24,7 @@ export type RenderedPayload = Record<BindingKind, string>;
 export type RenderedSource = { payload: RenderedPayload; providers: string[] };
 export type RefreshResult = "refreshed" | "skipped" | "failed";
 export type ConnectionCloseResult = "closed" | "failed";
+export type SyncResult = "bindings-updated" | RefreshResult;
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
 function expandTilde(path: string): string {
@@ -189,25 +190,29 @@ export async function closeConnections(
   return "failed";
 }
 
-export async function refreshProviders(providers: string[]): Promise<RefreshResult> {
+export async function refreshProviders(
+  providers: string[],
+  fetcher: FetchLike = fetch,
+  controllerUrl: string = Bun.env.CLASH_CONTROLLER_URL ?? "",
+  token: string = Bun.env.CLASH_CONTROLLER_TOKEN ?? "",
+): Promise<RefreshResult> {
   if (providers.length === 0) {
     console.log("clash-verge: merge.yaml defines no rule-providers — skipping the immediate refresh");
     return "skipped";
   }
 
-  const url = (Bun.env.CLASH_CONTROLLER_URL ?? "").replace(/\/+$/, "");
+  const url = controllerUrl.replace(/\/+$/, "");
   if (!url) {
     console.log("clash-verge: CLASH_CONTROLLER_URL not set — skipping the immediate rule-provider refresh");
     console.log("clash-verge: (rules still refresh on their interval).");
     return "skipped";
   }
 
-  const token = Bun.env.CLASH_CONTROLLER_TOKEN ?? "";
   const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   let succeeded = true;
   for (const name of providers) {
     try {
-      const response = await fetch(providerRefreshUrl(url, name), { method: "PUT", headers });
+      const response = await fetcher(providerRefreshUrl(url, name), { method: "PUT", headers });
       if (response.ok) {
         console.log(`clash-verge: refreshed rule-provider '${name}'`);
       } else {
@@ -220,6 +225,23 @@ export async function refreshProviders(providers: string[]): Promise<RefreshResu
     }
   }
   return succeeded ? "refreshed" : "failed";
+}
+
+export async function syncPayload(
+  payload: RenderedPayload,
+  providers: string[],
+  targets: BoundFiles,
+  fetcher: FetchLike = fetch,
+  controllerUrl: string = Bun.env.CLASH_CONTROLLER_URL ?? "",
+  token: string = Bun.env.CLASH_CONTROLLER_TOKEN ?? "",
+): Promise<SyncResult> {
+  const state = installPayload(payload, targets);
+  if (state === "changed") return "bindings-updated";
+
+  const refresh = await refreshProviders(providers, fetcher, controllerUrl, token);
+  if (refresh !== "refreshed") return refresh;
+  const closed = await closeConnections(controllerUrl.replace(/\/+$/, ""), token, fetcher);
+  return closed === "closed" ? "refreshed" : "failed";
 }
 
 async function main(): Promise<void> {
@@ -238,26 +260,21 @@ async function main(): Promise<void> {
   }
 
   const { payload, providers } = renderPayload(resolvedPayloadSource());
-  const state = installPayload(payload, targets);
-  if (state === "changed") {
+  const result = await syncPayload(payload, providers, targets);
+  if (result === "bindings-updated") {
     console.log("clash-verge: wrote the active subscription's Merge, Rules, Proxies, and Groups enhancements");
     console.log("clash-verge: reselect the subscription in CVR once to apply the changed files;");
     console.log("clash-verge: then re-run `shine app artifact apply clash-verge` to refresh its rule-providers.");
     return;
   }
   console.log("clash-verge: active subscription enhancements already up to date");
-
-  const refresh = await refreshProviders(providers);
-  if (refresh === "failed") {
+  if (result === "failed") {
     console.error(
       "clash-verge: is Clash Verge Rev running, the subscription enhancements applied, and CLASH_CONTROLLER_URL/TOKEN correct?",
     );
     process.exitCode = 1;
-  } else if (refresh === "refreshed") {
+  } else if (result === "refreshed") {
     console.log("clash-verge: all rule-providers refreshed.");
-    const url = (Bun.env.CLASH_CONTROLLER_URL ?? "").replace(/\/+$/, "");
-    const closed = await closeConnections(url, Bun.env.CLASH_CONTROLLER_TOKEN ?? "");
-    if (closed === "failed") process.exitCode = 1;
   }
 }
 

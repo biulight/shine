@@ -1,22 +1,24 @@
-use crate::apps::{AppCategory, AppFile, load_active_categories, resolve_install_destination};
+use crate::apps::{AppCategory, AppFile};
 use crate::config::Config;
 use crate::env::EnvConfig;
-use crate::install_core::AppManifest;
 use crate::shells::metadata::ShellCategory;
-use crate::shells::metadata::load_active_categories as load_active_shells;
-use crate::status::{FileStatus, UpdateChange, assess_app_file, build_shell_rows};
-use anyhow::{Context, Result};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use crate::status::{FileStatus, UpdateChange};
+use anyhow::Result;
+use shine_core::runtime::NullObserver;
+use std::path::PathBuf;
 
 #[derive(Clone)]
-pub(super) struct AppInfoFile {
-    pub(super) category: AppCategory,
-    pub(super) file: AppFile,
-    pub(super) destination: PathBuf,
-    pub(super) status: FileStatus,
-    pub(super) manifest_entry: Option<crate::install_core::AppEntry>,
-    pub(super) changes: Vec<UpdateChange>,
+pub(crate) struct AppInfoFile {
+    pub(crate) category: AppCategory,
+    pub(crate) file: AppFile,
+    pub(crate) destination: PathBuf,
+    pub(crate) status: FileStatus,
+    pub(crate) manifest_entry: Option<crate::install_core::AppEntry>,
+    pub(crate) desired_content: Option<Vec<u8>>,
+    pub(crate) current_content: Option<Vec<u8>>,
+    pub(crate) changes: Vec<UpdateChange>,
+    pub(crate) assessment_error: Option<String>,
+    pub(crate) assessment_diagnostic: Option<&'static str>,
 }
 
 #[derive(Clone)]
@@ -28,121 +30,85 @@ pub(super) struct ShellInfoFile {
     pub(super) rendered_path: PathBuf,
     pub(super) link_path: PathBuf,
     pub(super) link_target: Option<PathBuf>,
+    pub(super) desired_content: Option<Vec<u8>>,
+    pub(super) current_content: Option<Vec<u8>>,
     pub(super) status: &'static str,
     pub(super) changes: Vec<UpdateChange>,
 }
 
-pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile>> {
-    let categories = load_active_categories(config, None).await?;
-    let manifest = AppManifest::load(config.shine_dir()).await?;
+pub(super) async fn collect_app_files(
+    config: &Config,
+    run_generators: bool,
+    categories: Vec<String>,
+) -> Result<Vec<AppInfoFile>> {
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await.ok();
-    let empty_map = BTreeMap::new();
-    let env_map = env.as_ref().map(|e| e.as_map()).unwrap_or(&empty_map);
-
-    let mut files = Vec::new();
-    for category in categories {
-        for file in &category.files {
-            let source_key = format!("app/{}/{}", category.name, file.source_rel.display());
-            if let Err(error) = resolve_install_destination(&category, file, config) {
-                if manifest.find_by_source(&source_key).is_some() {
-                    eprintln!(
-                        "warning: skipping {}/{}: {error:#}",
-                        category.name,
-                        file.source_rel.display()
-                    );
-                }
-                continue;
-            }
-            let assessment = assess_app_file(config, &category, file, &manifest, env_map).await;
-            let Some(destination) = assessment.destination else {
-                continue;
-            };
-            let status = assessment.status;
-            if status == FileStatus::NotInstalled {
-                continue;
-            }
-            let manifest_entry = manifest
-                .find_by_dest(&destination)
-                .or_else(|| manifest.find_by_source(&source_key))
-                .cloned();
-            files.push(AppInfoFile {
-                category: category.clone(),
-                file: file.clone(),
-                destination,
-                status,
-                manifest_entry,
-                changes: assessment.changes,
-            });
-        }
+    if let Some(env) = env {
+        runtime.context_mut_for_cli().env = env.as_map().clone();
     }
+    let inspections = runtime
+        .inspect_apps_with_options(
+            shine_core::runtime::AppInspectionOptions {
+                run_generators,
+                categories,
+            },
+            &mut NullObserver,
+        )
+        .await?;
+    Ok(app_info_files_from_inspections(inspections))
+}
 
-    Ok(files)
+pub(super) fn app_info_files_from_inspections(
+    inspections: Vec<shine_core::runtime::AppFileInspection>,
+) -> Vec<AppInfoFile> {
+    inspections
+        .into_iter()
+        .filter(|file| file.status != FileStatus::NotInstalled)
+        .filter_map(app_info_file_from_inspection)
+        .collect()
+}
+
+pub(crate) fn app_info_file_from_inspection(
+    file: shine_core::runtime::AppFileInspection,
+) -> Option<AppInfoFile> {
+    Some(AppInfoFile {
+        category: file.category,
+        file: file.file,
+        destination: file.destination?,
+        status: file.status,
+        manifest_entry: file.manifest_entry,
+        desired_content: file.desired_content,
+        current_content: file.current_content,
+        changes: file.changes,
+        assessment_error: file.assessment_error,
+        assessment_diagnostic: file.assessment_diagnostic,
+    })
 }
 
 pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfoFile>> {
-    let categories = load_active_shells(config, None).await?;
-
-    let shell_rows = build_shell_rows(config).await?;
-    let mut files = Vec::new();
-    for category in categories {
-        for file in &category.files {
-            let label = format!("{}/{}", category.name, file.command_name);
-            let Some(row) = shell_rows.iter().find(|row| row.label == label) else {
-                continue;
-            };
-            if !row.is_installed {
-                continue;
-            }
-            let source_path = config.preset_path(
-                Path::new("shell")
-                    .join(&category.name)
-                    .join(&file.source_rel),
-            );
-            let installed_source_path = crate::shells::deployment::deployment_source_path(
-                config,
-                &category.name,
-                &file.source_rel,
-            );
-            let rendered_path = config
-                .rendered_dir()
-                .join("shell")
-                .join(&category.name)
-                .join(&file.source_rel);
-            let link_path = crate::bin_links::command_path_for_name(
-                config.bin_dir(),
-                std::ffi::OsStr::new(&file.command_name),
-            );
-
-            let link_target = read_link_target(&link_path).await?;
-
-            files.push(ShellInfoFile {
-                category: category.clone(),
-                file: file.clone(),
-                source_path,
-                installed_source_path,
-                rendered_path,
-                link_path,
-                link_target,
-                status: row.status_text,
-                changes: row.changes.clone(),
-            });
-        }
+    let mut runtime = crate::core_runtime::from_config(config).await?;
+    if let Ok(env) = EnvConfig::load_or_init(config).await {
+        runtime.context_mut_for_cli().env = env.as_map().clone();
     }
-    Ok(files)
-}
-
-async fn read_link_target(path: &Path) -> Result<Option<PathBuf>> {
-    let is_link = tokio::fs::symlink_metadata(path)
-        .await
-        .map(|meta| meta.file_type().is_symlink())
-        .unwrap_or(false);
-    if !is_link {
-        return Ok(None);
-    }
-    let target = tokio::fs::read_link(path)
-        .await
-        .with_context(|| format!("reading symlink: {}", path.display()))?;
-    Ok(Some(target))
+    Ok(runtime
+        .inspect_shells()
+        .await?
+        .into_iter()
+        .filter(|file| file.installed)
+        .map(|file| ShellInfoFile {
+            category: file.category,
+            file: file.file,
+            source_path: file.source_path,
+            installed_source_path: file.installed_source_path,
+            rendered_path: file.rendered_path,
+            link_path: file.link_path,
+            link_target: file.link_target,
+            desired_content: file.desired_content,
+            current_content: file.current_content,
+            status: file.status_text,
+            changes: file.changes,
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -160,7 +126,7 @@ mod tests {
         let config = Config::new_for_test(&dir);
         tokio::fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        let files = collect_app_files(&config).await.unwrap();
+        let files = collect_app_files(&config, false, Vec::new()).await.unwrap();
         assert!(files.iter().all(|file| file.category.name != "docker"));
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
@@ -169,22 +135,31 @@ mod tests {
     #[tokio::test]
     async fn shell_info_excludes_uninstalled_snapshot_siblings() {
         let dir = crate::test_support::make_temp_dir("shine-info-shell").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let source_extension = if config.shell_type == crate::shells::ShellType::PowerShell {
+            "ps1"
+        } else {
+            "sh"
+        };
+        let first_source = format!("one.{source_extension}");
+        let second_source = format!("two.{source_extension}");
         let category = dir.join("presets/shell/custom");
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n",
+            format!(
+                "[[files]]\nsource = \"{first_source}\"\ntarget = \"one\"\npermissions = {{ schema_version = 1 }}\n\n[[files]]\nsource = \"{second_source}\"\ntarget = \"two\"\npermissions = {{ schema_version = 1 }}\n"
+            ),
         )
         .await
         .unwrap();
-        fs::write(category.join("one.sh"), b"#!/bin/sh\necho one\n")
+        fs::write(category.join(first_source), b"echo one\n")
             .await
             .unwrap();
-        fs::write(category.join("two.sh"), b"#!/bin/sh\necho two\n")
+        fs::write(category.join(second_source), b"echo two\n")
             .await
             .unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
         handle_install(&config, Some("custom/one"), false)

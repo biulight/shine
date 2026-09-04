@@ -1,8 +1,13 @@
+metadata_schema_version = 2
 description = "Docker Engine daemon configuration"
 
 [dest]
 windows = "~/.docker"
 unix = "/etc/docker"
+
+[permissions]
+schema_version = 1
+administrator = true
 
 [[files]]
 source      = "daemon.jsonc"

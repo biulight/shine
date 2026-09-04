@@ -19,7 +19,9 @@ Use GitHub features with one clear responsibility each:
 - **Projects** visualize the workflow
 - **Milestones** group work into releases or phases
 
-`docs/PLAN.md` is the rulebook. It is not the live task list.
+`docs/PLAN.md` is the rulebook. It is not the live task list. Long-term product direction and phase
+gates live in [`ROADMAP.md`](ROADMAP.md); implementation still flows through issues, projects, and
+milestones.
 
 ## Core Rules
 

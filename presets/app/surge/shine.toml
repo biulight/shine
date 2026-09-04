@@ -1,6 +1,8 @@
+metadata_schema_version = 2
 description = "Surge local proxy/rule files, installed beside the active profile."
 dest = { macos = "~/Library/Application Support/Surge/Profiles" }
 list_mode = "files"
+
 post_upgrade = [
   { command = "/Applications/Surge.app/Contents/Applications/surge-cli", args = ["reload"] },
 ]
@@ -19,6 +21,21 @@ post_install = [
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
+env = ["SURGE_PROFILE"]
+
+[permissions]
+schema_version = 1
+filesystem = [
+  { access = ["execute"], base = "preset", path = "build.ts" },
+  { access = ["execute"], base = "preset", path = "unbuild.ts" },
+  { access = ["execute"], base = "preset", path = "generate-subscription.ts" },
+]
+network = [{ scope = "any" }]
+commands = ["/Applications/Surge.app/Contents/Applications/surge-cli", "bun"]
+environment = [
+  { name = "SURGE_PROFILE", sensitivity = "plain" },
+  { name = "SURGE_SUBSCRIPTION_URL", sensitivity = "secret" },
+]
 
 [[files]]
 source = "local-proxies.conf"

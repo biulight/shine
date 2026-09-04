@@ -24,30 +24,42 @@ pub async fn handle_install_shim(
     target: &str,
     replace_managed: bool,
 ) -> Result<()> {
+    handle_install_shim_approved(config, target, replace_managed, true).await
+}
+
+pub async fn handle_install_shim_approved(
+    config: &Config,
+    target: &str,
+    replace_managed: bool,
+    yes: bool,
+) -> Result<()> {
     let (explicit_kind, category) = parse_preset_target(target)?;
     if explicit_kind == Some(PresetKind::Shell) && category.contains('/') {
-        return Box::pin(shells::handle_install(
+        return Box::pin(shells::handle_install_approved(
             config,
             Some(category),
             replace_managed,
+            yes,
         ))
         .await;
     }
     match resolve_shim_target(config, explicit_kind, category).await? {
         ShimResolution::Found(PresetKind::Shell) => {
-            Box::pin(shells::handle_install(
+            Box::pin(shells::handle_install_approved(
                 config,
                 Some(category),
                 replace_managed,
+                yes,
             ))
             .await
         }
         ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_install(
+            Box::pin(apps::handle_install_approved(
                 config,
                 Some(category),
                 false,
                 replace_managed,
+                yes,
             ))
             .await
         }
@@ -63,16 +75,28 @@ pub async fn handle_uninstall_shim(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
+    handle_uninstall_shim_approved(config, target, force, purge, dry_run, true).await
+}
+
+pub async fn handle_uninstall_shim_approved(
+    config: &Config,
+    target: &str,
+    force: bool,
+    purge: bool,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
     let (explicit_kind, category) = parse_preset_target(target)?;
     if explicit_kind == Some(PresetKind::Shell) && category.contains('/') {
         if force {
             bail!("`--force` applies only to app presets");
         }
-        return Box::pin(shells::handle_uninstall(
+        return Box::pin(shells::handle_uninstall_approved(
             config,
             Some(category),
             purge,
             dry_run,
+            yes,
         ))
         .await;
     }
@@ -81,21 +105,23 @@ pub async fn handle_uninstall_shim(
             if force {
                 bail!("`--force` applies only to app presets");
             }
-            Box::pin(shells::handle_uninstall(
+            Box::pin(shells::handle_uninstall_approved(
                 config,
                 Some(category),
                 purge,
                 dry_run,
+                yes,
             ))
             .await
         }
         ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_uninstall(
+            Box::pin(apps::handle_uninstall_approved(
                 config,
                 Some(category),
                 force,
                 purge,
                 dry_run,
+                yes,
             ))
             .await
         }
@@ -174,34 +200,25 @@ async fn resolve_shim_target(
 }
 
 async fn resolve_shim_category(config: &Config, category: &str) -> Result<ShimResolution> {
-    // Not migrated to metadata::load_active_categories: this guards with an
-    // existence check before calling load_installed_categories in external
-    // mode, deliberately returning 0 matches instead of propagating that
-    // function's `bail!` on an empty result — load_active_categories would
-    // change resolve_shim_category's error semantics here.
-    let shell_matches = if config.is_external_presets {
-        let shell_path = config.preset_path(std::path::Path::new("shell").join(category));
-        if shell_path.exists() {
-            shells::metadata::load_installed_categories(config, Some(category))
-                .await?
-                .len()
-        } else {
-            0
-        }
+    // Keep the external-source existence guards so a miss remains 0 matches
+    // instead of propagating the active loader's not-found error. The loader
+    // must still use the active snapshot: built-in presets can have an overlay
+    // with categories that do not exist in the embedded namespace.
+    let shell_path = config.preset_path(std::path::Path::new("shell").join(category));
+    let shell_matches = if config.is_external_presets && !shell_path.exists() {
+        0
     } else {
-        shells::metadata::load_embedded_categories(Some(category))?.len()
+        shells::metadata::load_active_categories(config, Some(category))
+            .await?
+            .len()
     };
-    let app_matches = if config.is_external_presets {
-        let app_path = config.preset_path(std::path::Path::new("app").join(category));
-        if app_path.exists() {
-            apps::load_installed_categories(config, Some(category))
-                .await?
-                .len()
-        } else {
-            0
-        }
+    let app_path = config.preset_path(std::path::Path::new("app").join(category));
+    let app_matches = if config.is_external_presets && !app_path.exists() {
+        0
     } else {
-        apps::load_embedded_categories(Some(category))?.len()
+        apps::load_active_categories(config, Some(category))
+            .await?
+            .len()
     };
 
     Ok(classify_shim_resolution(shell_matches > 0, app_matches > 0))
@@ -311,6 +328,53 @@ mod tests {
             .unwrap();
 
         assert_eq!(resolution, ShimResolution::Missing);
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolve_shim_category_matches_overlay_only_categories_with_embedded_base() {
+        let dir = make_temp_dir().await;
+        let overlay = dir.join("overlay");
+        fs::create_dir_all(overlay.join("shell/custom-shell"))
+            .await
+            .unwrap();
+        fs::write(
+            overlay.join("shell/custom-shell/shine.toml"),
+            "description = 'Overlay Shell'\n[[files]]\nsource = 'custom.sh'\ntarget = 'custom'\n[files.permissions]\nschema_version = 1\n",
+        )
+        .await
+        .unwrap();
+        fs::write(overlay.join("shell/custom-shell/custom.sh"), "#!/bin/sh\n")
+            .await
+            .unwrap();
+        fs::create_dir_all(overlay.join("app/custom-app"))
+            .await
+            .unwrap();
+        fs::write(
+            overlay.join("app/custom-app/shine.toml"),
+            "metadata_schema_version = 2\ndescription = 'Overlay App'\ndest = '~/.config/custom-app'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\ntarget = 'config.toml'\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            overlay.join("app/custom-app/config.toml"),
+            "enabled = true\n",
+        )
+        .await
+        .unwrap();
+        let config = config_in(&dir).with_presets_overlay_dir_override(Some(overlay));
+
+        assert_eq!(
+            resolve_shim_category(&config, "custom-shell")
+                .await
+                .unwrap(),
+            ShimResolution::Found(PresetKind::Shell)
+        );
+        assert_eq!(
+            resolve_shim_category(&config, "custom-app").await.unwrap(),
+            ShimResolution::Found(PresetKind::App)
+        );
+
         fs::remove_dir_all(dir).await.unwrap();
     }
 
