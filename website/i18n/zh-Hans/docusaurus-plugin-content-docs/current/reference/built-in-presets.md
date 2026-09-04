@@ -19,7 +19,7 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-本文依据 Shine 2.0.0 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
+本文依据 Shine 2.0.1 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
 
 下方平台能力清单由运行时使用的内置 App 目标路径和 Shell 文件 selector 自动生成。
 Conformance 测试会确保两个手册语言版本中的清单始终与 preset 元数据同步。

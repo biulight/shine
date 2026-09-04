@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 2.0.0。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
+本页适用于 Shine 2.0.1。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
 
 ## 1.0 target 规则
 
@@ -129,7 +129,12 @@ journal 存在时拒绝运行，同时继续保持 invocation-scoped atomic writ
 只跳过提示；重定向输出等非交互执行必须传入该参数。在提供 dry-run 的命令中，`--yes` 与
 `--dry-run` 互斥；dry-run 保持原有预览格式，不是已批准 Plan。
 
-`app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。`app artifact apply/remove` 显式运行预设声明的外部集成脚本，Shine 不会把 apply 隐式作为普通安装或升级的一部分。
+`app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。执行前的最终校验会
+复用审阅阶段绑定的 generator 输入身份（包括 secret 版本），确保已就绪的 Plan 在执行时仍绑定
+同一组输入。单文件刷新会在最终结论中显示 source；多文件摘要省略为零的计数，任何文件失败时
+都会先显示 `Refresh incomplete`，随后命令以非零状态退出。`app artifact apply/remove` 显式运行
+预设声明的外部集成脚本，Shine 不会把 apply
+隐式作为普通安装或升级的一部分。
 
 如果受支持的 App creation、原地静态 Copy update，或未修改静态 Copy 的普通
 removal 在 operation journal 写入后中断，之后需要安全
@@ -185,12 +190,16 @@ enrollment，不会批准之后的 lifecycle Plan。
 `--run-generators` 后，Shine 会显式执行自动和手动 generator，在内存中应用 transform 并计算
 状态或 `--diff`，但不会写入目标文件或 manifest。全局 `update --run-generators` 会评估所有
 已安装 App 类别，定向 info/update 只评估选中的 App。外部 generator 仍需匹配当前代码与权限的
-`shine trust grant`；某项评估失败时，其余 generator 仍会继续，最后统一报告不完整结果。
+`shine trust grant`；某项评估失败时，其余 generator 仍会继续，最后统一报告不完整结果。如果
+评估发现 `auto = false` generator 的输出发生变化，update 和 status 会将其标记为
+`refresh available`，并显示准确的 `shine app refresh <CATEGORY> <FILE>` 命令；这类变化不会进入
+upgrade target。同一类别同时存在普通可升级变化和手动生成变化时，两种操作都会保留。
 
 - `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
-  Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示
-  一次升级命令。只有一个类别或受管系统项需要更新时，该提示会使用其 canonical target，
-  例如 `shine upgrade app/clash-verge`；存在多个 target 时仍提示聚合命令 `shine upgrade`。
+  Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target。只有一个类别或
+  受管系统项需要升级时，末尾的升级提示会使用其 canonical target，例如
+  `shine upgrade app/clash-verge`；存在多个 upgrade target 时仍提示聚合命令 `shine upgrade`。
+  手动生成内容发生变化时，则会为每个变化的 source 输出一条准确的 `shine app refresh` 提示。
   App 文件与 Shell 命令都按类别折叠。`update --diff` 会改用纵向
   详细行并展开受影响的文件与命令；来源或目标迁移、新文件、部署元数据和命令入口刷新等
   结构性变更会逐字段显示，只有内容确实变化时才输出 unified diff。定向的
@@ -438,4 +447,4 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-稳定版的 `shine --version` 显示 `shine 2.0.0 (<commit> <date>)`；preview 构建使用兼容 SemVer 的 `2.0.0-preview` 版本标签。
+稳定版的 `shine --version` 显示 `shine 2.0.1 (<commit> <date>)`；preview 构建使用兼容 SemVer 的 `2.0.1-preview` 版本标签。

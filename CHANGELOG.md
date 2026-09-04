@@ -7,6 +7,15 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-09-05
+
+### Bug Fixes
+
+- Restored the reviewed secret-input versions when completing an approved generated App refresh,
+  preventing the final freshness check from rejecting a valid approval.
+- Kept generator-backed files with `auto = false` out of ordinary App upgrades and directed them
+  to the explicit refresh workflow, with clear per-file status and completion reporting.
+
 ## [2.0.0] — 2026-09-04
 
 This stable release promotes the 2.0 lifecycle security and recovery boundary after upgrade,

@@ -3,6 +3,31 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-05 — Specialized execution must reuse its reviewed request
+
+- **Symptom**: an `app refresh` Plan with a configured secret generator input rendered as ready and
+  accepted confirmation, then failed immediately with `the Plan is blocked and cannot be approved`.
+- **Root cause**: review and preparation used a request populated with opaque input versions, but
+  refresh execution regenerated the Plan from the original request whose input versions were still
+  empty. The secret requirement therefore became uncomputable only at Core's final approval check.
+- **Fix**: extract the refresh request from `ReviewedLifecyclePlan`, matching the existing App
+  artifact adapter, and exercise the full refresh suite with a secret generator input.
+- **Rule**: once a frontend enriches a Plan request for review, every preparation and execution
+  boundary must reuse that reviewed request rather than a pre-review clone.
+
+## 2026-09-04 — Update guidance must preserve the operation that can apply each change
+
+- **Symptom**: `shine update --run-generators` found changed Surge subscription output and advised
+  `shine upgrade app/surge`, but upgrade correctly skipped the manual generator and reported
+  `Nothing to upgrade`.
+- **Root cause**: App inspection collapsed automatic and manual-generator differences into the same
+  `UpdateAvail` presentation row, and update guidance treated every such row as upgradeable.
+- **Fix**: retain upgrade and manual-refresh applicability on each App row, mark evaluated manual
+  changes with `app_manual_refresh_required`, and render exact `shine app refresh` commands without
+  discarding independent upgrade actions in the same category.
+- **Rule**: update/status presentation must derive remediation from the operation that can actually
+  apply a change; a generic pending status is not evidence that aggregate upgrade owns it.
+
 ## 2026-09-04 — Target shims must resolve against the effective Preset snapshot
 
 - **Symptom**: `shine update` listed an installed overlay-only Shell category, but
