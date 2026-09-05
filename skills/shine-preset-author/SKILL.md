@@ -1,91 +1,62 @@
 ---
 name: shine-preset-author
-description: Create, customize, debug, or validate Shine app, shell, and sys presets. Use when a user describes configuration files, helper commands, or system bootstrap behavior they want managed by Shine, or asks to adapt a built-in Shine preset. Guides safe scaffolding, static validation, hypothetical authoring plans, and isolated dry-runs without activating presets or changing the user's current Shine configuration.
+description: Create, customize, debug, or validate Shine app, shell, and sys presets, including adaptations of built-in categories. Use for preset source authoring and review; activation and live installation are outside this workflow.
 ---
 
 # Shine Preset Author
 
-Create reviewable Shine presets while treating the installed `shine` binary as
-the authority for templates and validation.
+Produce reviewable preset sources using the installed `shine` binary's templates and validator.
+Infer routine details from the request and existing files. Ask only for missing choices that
+materially affect the result; do not require a confirmation round before authorized authoring.
+Follow the user's language for questions and results.
 
-## Safety boundary
+## Authorization boundary
 
-- Never run `shine preset link`, `shine preset overlay link`, a real install,
-  upgrade, bootstrap, artifact, hook, generator, or preset script.
-- Never edit the user's active Shine configuration or copy work into its active
-  preset directory.
-- Static validation may read preset files but must not execute them.
-- `shine preset plan` is safe only as a hypothetical authoring report. Never
-  describe it as an approval or apply its output.
-- Run installation planning only with a fresh temporary `SHINE_CONFIG_DIR` and
-  a dry-run flag. Remove only that exact temporary directory afterward.
+- Author only in the requested workspace, outside active Shine configuration and preset roots.
+  Never link a source/overlay, activate a preset, grant trust, or run a real install, upgrade,
+  bootstrap, artifact, hook, generator, or preset script in this workflow.
+- Validation is static. `shine preset plan` is a hypothetical report, never an approval or input
+  to apply. Permission declarations describe requirements; they do not grant trust or authority.
+- Use a fresh temporary `SHINE_CONFIG_DIR` for **scaffolding as well as runtime dry-runs**:
+  `preset new` and `preset copy` can initialize config. Set it per command; clean up only the
+  exact temporary directory created for this task. Never supply real secrets to checks.
+- User instructions override workflow preferences; authoring authorization does not include
+  activation. If a request also needs live changes, finish the reviewable sources first and
+  identify the separate action and its authorization requirements. If this boundary blocks work,
+  cite this file and the relevant rule rather than inventing an approval requirement.
 
-## Workflow
+## Authoring
 
-1. Run `shine preset schema --format json`. It is generated from the installed
-   binary's authoring types and live command help. If it is unavailable, fall
-   back to `shine preset validate --help`, `lint --help`, `plan --help`, and
-   `test --help`; do not guess a schema missing from the installed version.
-2. Confirm the requested outcome, target operating systems, destination paths,
-   required environment values or secrets, and whether to start from a built-in
-   category. Ask and report in the user's language.
-3. Choose exactly one kind and read its reference:
-   - App configuration files → [references/app.md](references/app.md)
-   - Executable shell helper commands → [references/shell.md](references/shell.md)
-   - OS bootstrap or managed system resources → [references/sys.md](references/sys.md)
-4. Work in a conventional `<repository>/<kind>/<name>/` category directory.
-   - For a new category, enter the empty category directory and run
-     `shine preset new <kind>`.
-   - To customize a built-in category, enter the repository or overlay root and
-     run `shine preset copy <kind>/<built-in-name>`; the command creates the
-     `<kind>/<built-in-name>/` path. Keep only files that really need
-     customization so other behavior can continue following upstream.
-5. Edit the generated or copied files. Keep every referenced source, script,
-   fragment, package manifest, and lockfile inside the category. Use explicit
-   `shine.toml` metadata even though legacy app and shell auto-discovery remains
-   compatible. Keep every generated `schema_version = 1` permission declaration,
-   classify environment names as `plain` or `secret`, and declare only identities —
-   never arguments, values, ciphertext, credentials, or private checkout paths.
-6. Run `shine preset validate <category-path> --format json`. Treat
-   `valid: false` as blocking, fix diagnostics by their stable `code`, and rerun
-   until `valid: true`. Warnings require a conscious explanation.
-7. Run `shine preset lint <category-path> --format json`. Review every warning
-   by stable code; do not use `--deny-warnings` merely to hide accepted findings.
-8. For each requested target platform, run
-   `shine preset plan <category-path> --platform <macos|linux|windows> --format json`.
-   Review steps, permissions, opaque effects, and blockers. `ready: false` may
-   reflect intentionally absent environment, trust, commands, or administrator
-   state; explain it, but never invent those inputs or call the report approved.
-9. If the category contains `shine.test.toml`, run
-   `shine preset test <category-path> --format json` and fix every failed case.
-   Model only declared synthetic state: environment-name presence, opaque secret
-   versions, files, command detection, versioned receipt documents, exact trust
-   selections, and administrator state. Never add executable fixture setup,
-   teardown, real credentials, or private machine paths. Prefer exact action,
-   permission, and diagnostic sets when the expectation is intentionally stable.
-10. If the user requests a distributable bundle, write it outside the category
-    with `shine preset pack <category-path> --output <file> --format json`.
-    Never use `--force` to bypass a policy failure; it replaces only output.
-11. Perform the isolated dry-run below. Do not substitute a real install.
-12. Summarize the kind, generated files, supported platforms, validation, lint,
-    and authoring-plan results, dry-run result or reason it was skipped,
-    required environment values, and any remaining warning. Do not activate
-    the category.
+1. Establish the outcome, target platforms, destinations, and required input **names** from the
+   request or existing preset. Check `shine preset validate --help` once for the installed binary.
+   Use `shine preset schema --format json` when report, fixture, or bundle contracts are needed;
+   it describes those contracts and live help, not the entire preset TOML grammar. If a needed
+   command is unavailable, report that limitation without guessing support or upgrading Shine.
+2. Read only the reference for each kind being changed:
+   [app](references/app.md), [shell](references/shell.md), or [sys](references/sys.md).
+   A request spanning kinds may use more than one; unrelated kinds need no review.
+3. Edit an existing category in place. For a new `<repository>/<kind>/<name>/`, run
+   `SHINE_CONFIG_DIR=<temp>/shine shine preset new <kind>` from the empty category directory.
+   For a built-in copy, run `SHINE_CONFIG_DIR=<temp>/shine shine preset copy <kind>/<name>`
+   from the workspace root; it creates the category path. Preserve referenced support files
+   and unrelated edits; do not scaffold over an existing category.
+4. Keep explicit `shine.toml` metadata and referenced sources, scripts, fragments, and dependency
+   files inside the category. Retain schema-v1 permission declarations at the proper target
+   boundary; declare identities and environment sensitivity (`plain`/`secret`), never argv,
+   values, ciphertext, credentials, or physical checkout paths in permission tables.
 
-## Isolated dry-run
+## Verify and deliver
 
-Create a fresh OS temporary directory, define its Shine config directory as a
-child such as `<temp>/shine`, and copy only the completed category to
-`<temp>/shine/presets/<kind>/<name>/`. Set `SHINE_CONFIG_DIR` for the single
-command rather than exporting it globally.
-
-- App: `SHINE_CONFIG_DIR=<temp>/shine shine app install <name> --dry-run`
-- Shell: `SHINE_CONFIG_DIR=<temp>/shine shine shell install <name> --dry-run`
-- Sys: run `SHINE_CONFIG_DIR=<temp>/shine shine sys bootstrap --dry-run` only
-  when `<name>` matches Shine's current OS preset id. Otherwise report that the
-  category received static all-platform validation only.
-
-The temporary configuration may be initialized inside the temporary directory;
-the user's existing Shine state must remain untouched. Do not supply secrets to
-the dry-run. If a preset requires environment-backed generation, validate the
-fallback source statically and report that generation was intentionally not run.
+- For changed preset sources, run `shine preset validate <category-path> --format json` and
+  `shine preset lint <category-path> --format json`. Fix validation errors and review lint
+  findings by stable code; explain accepted warnings. Validation errors block a ready deliverable.
+  Rerun after fixes, not indefinitely when a missing tool or external input prevents progress.
+- Run `shine preset plan <category-path> --platform <macos|linux|windows> --format json` for
+  each requested target platform. Review steps, permissions, opaque effects, and blockers.
+  Explain `ready: false` against its synthetic assumptions; never invent environment, trust,
+  commands, or administrator state to make it ready.
+- Use [verification details](references/verification.md) for existing `shine.test.toml` fixtures,
+  requested bundles, and the isolated runtime dry-run. Rerun affected checks after changes;
+  instruction-only edits need skill/link validation, not preset execution checks.
+- Report files and supported platforms, checks and results, required input names, accepted
+  warnings, and any skipped check or remaining blocker. Deliver sources without activation.

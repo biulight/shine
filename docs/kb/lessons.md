@@ -3,6 +3,16 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-05 — Isolating only the authoring dry-run misses scaffolding state
+
+- **Symptom**: instruction audit found unisolated `preset new`/`copy` commands in a skill promising
+  to leave active Shine configuration untouched.
+- **Root cause**: `main.rs` dispatches both commands after `Config::load_or_init()`; source creation
+  can therefore initialize live config before the later isolated dry-run.
+- **Fix**: use task-local temporary `SHINE_CONFIG_DIR` for scaffolding as well as runtime checks.
+- **Rule**: inspect command routing for initialization effects; a command that writes only workspace
+  sources in its handler is not necessarily isolated at the CLI entry point.
+
 ## 2026-09-05 — Recovery Plans must not reuse local journal resource labels
 
 - **Symptom**: frontend conformance tests found a private destination path in a Sys recovery Plan.

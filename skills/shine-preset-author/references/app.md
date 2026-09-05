@@ -1,8 +1,8 @@
 # App preset authoring
 
 Use an app preset for files installed into application configuration locations.
-Start from `shine preset new app`; the emitted template is authoritative for the
-installed Shine release.
+Follow the skill's isolated scaffolding workflow; use the installed template and validator
+for the supported metadata version (current App metadata declares `metadata_schema_version = 2`).
 
 ## Essential shape
 
@@ -13,7 +13,7 @@ installed Shine release.
 - Each `[[files]]` entry declares a safe relative `source`; `target` defaults to
   the source path. A per-file `dest` may override the category destination.
 - `platforms` accepts `macos`, `linux`, `windows`, and the macOS/Linux compatibility group `unix`.
-  The array must not be empty. Validate all three exact OS branches on every host.
+  The array must not be empty. Static validation checks all three exact OS branches on every host.
 
 Prefer explicit file lists. Keep sources and generator/artifact scripts inside
 the category. Never use absolute source paths or `..`.
@@ -38,14 +38,14 @@ not enable external code: the user must separately review and grant target-scope
 - `install_mode = "json-merge"` requires non-empty, top-level `managed_keys`.
 - A generator declares `script`, optional `runtime = "bun"`, `env`, and a
   `when_env` key included in `env`. Always provide a static source fallback.
-- `post_install` and `post_upgrade` hooks are argv declarations. Validation does
-  not run them, and this skill must never run them.
+- `post_install` and `post_upgrade` hooks declare exactly one of `command` (direct argv)
+  or `script` (optional `runtime = "bun"`). Script hooks share the parent lifecycle Plan;
+  declare their script execution, runtime command, and environment permissions there.
+  Never launch `shine app artifact apply` from a hook or add `--yes` to compose nested approvals.
 - `[artifact]` may declare `script`, optional `teardown`, `runtime`, and an
   explicit `env` allowlist. Every environment source must also have a
-  sensitivity entry in the category permission declaration. This skill
-  validates referenced files but never applies or removes an artifact. A hook
-  that deliberately invokes artifact apply must pass `--yes` for its
-  non-interactive child Plan.
+  sensitivity entry in the category permission declaration. Artifact apply/remove remains
+  an explicit operation with its own reviewed Plan, outside this authoring workflow.
 - Bun code uses `.ts`, `.js`, `.mts`, or `.mjs`. If dependencies are needed,
   place both `package.json` and `bun.lock` at the category root; never declare
   `trustedDependencies`.

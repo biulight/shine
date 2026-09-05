@@ -1,173 +1,104 @@
 # AGENTS.md
 
-This file is the repository entry point for AI coding agents. Keep it concise: mandatory workflow,
-high-frequency commands, and pointers to authoritative detail belong here; architecture narratives
-and feature-specific authoring guidance belong in `docs/kb/`.
+`shine` bundles shell, app, and OS bootstrap presets into a Rust CLI with manifest-tracked
+installation and uninstall. The root package is `shine-cli` (sources in `cli/`); `core/` is
+`shine-core`. Keep this entry point focused on repository rules; route details to the KB.
 
-`shine` is a self-contained Rust CLI that bundles shell scripts, app config presets, and OS
-bootstrap presets into one binary (`rust-embed`), installs them under `~/.shine/`, and supports
-safe, manifest-tracked uninstall. The workspace root is the publishable `shine-cli` package
-(binary plus the `cli` library); `core/` is the reusable `shine-core` package.
+## Workflow and authorization
 
-## Required workflow
-
-1. Before any non-trivial change, read [`architecture/invariants.md`](docs/kb/architecture/invariants.md)
-   and grep [`lessons.md`](docs/kb/lessons.md) for the modules or behavior you will touch.
-2. Before proposing a design, check [`decisions/`](docs/kb/decisions/) for an existing ADR.
-3. Preserve unrelated working-tree changes. Do not overwrite or clean files you do not own.
-4. Update the KB in the same change whenever code makes it stale:
-   - non-obvious bug cause → `lessons.md`
-   - design choice → numbered ADR under `decisions/`
-   - changed data flow or invariant → the matching file under `architecture/`
-   - moved or renamed modules → `architecture/module-map.md`
-5. User-visible behavior changes must update both public manual locales in the same release change:
-   - English source: `docs/manual/`
-   - Simplified Chinese: `website/i18n/zh-Hans/docusaurus-plugin-content-docs/current/`
-   Keep doc IDs, page sets, commands, identifiers, examples, and warnings semantically aligned.
-6. Do not publish `docs/kb/`, PRDs, release runbooks, private paths, or internal procedures through
-   the public site. Root READMEs are summaries, not a second command/configuration reference.
-
-Full KB maintenance protocol: [`docs/kb/README.md`](docs/kb/README.md).
-
-## Knowledge map
-
-| Need | Authoritative source |
-|---|---|
-| Build, test, lint, and common verification | this file |
-| Module ownership and command routing | [`docs/kb/architecture/module-map.md`](docs/kb/architecture/module-map.md) |
-| Cross-module data flows | [`docs/kb/architecture/data-flows.md`](docs/kb/architecture/data-flows.md) |
-| Safety and behavioral invariants | [`docs/kb/architecture/invariants.md`](docs/kb/architecture/invariants.md) |
-| Declarative action/recovery design and executable inventory | [`docs/declarative-action-recovery-prd.md`](docs/declarative-action-recovery-prd.md), [`docs/kb/executable-preset-inventory.md`](docs/kb/executable-preset-inventory.md) |
-| Platform coverage, gaps, and implementation priorities | [`docs/kb/architecture/platform-support.md`](docs/kb/architecture/platform-support.md) |
-| Shell, app, and sys preset authoring | [`docs/kb/preset-authoring.md`](docs/kb/preset-authoring.md) |
-| Design rationale | [`docs/kb/decisions/`](docs/kb/decisions/) |
-| Commit, versioning, and testing conventions | [`docs/kb/conventions.md`](docs/kb/conventions.md) |
-| Release, CI, and troubleshooting | [`docs/kb/operations/`](docs/kb/operations/) |
-| Past bugs and derived rules | [`docs/kb/lessons.md`](docs/kb/lessons.md) |
-| Public user manual | [`docs/manual/`](docs/manual/), [`website/i18n/zh-Hans/`](website/i18n/zh-Hans/) |
+- Complete authorized edits and verification using context for routine choices. Ask only when
+  missing information changes the outcome or an action needs authorization not already given;
+  continue independent work while resolving it.
+- User instructions take precedence over skill workflow preferences. Skills and command examples
+  do not grant permission to push, activate presets, execute external code, or bypass Shine's
+  ownership, trust, and snapshot-bound approval checks. If an instruction blocks work, cite its
+  file and exact requirement and explain what remains blocked.
+- Preserve unrelated working-tree changes; do not overwrite or clean files you do not own.
+- Before a non-trivial change, read the relevant sections of
+  [invariants](docs/kb/architecture/invariants.md) and search [lessons](docs/kb/lessons.md) for the
+  affected behavior. Check [ADRs](docs/kb/decisions/) before proposing a design; consult
+  [data flows](docs/kb/architecture/data-flows.md) for changes spanning modules.
+- Update stale KB material in the same change using the
+  [maintenance protocol](docs/kb/README.md#how-to-update-this-kb-maintenance-protocol).
 
 ## Hard repository rules
 
-- **Never run `git push` without explicit user approval.** This includes branch pushes, tag pushes,
-  and force-pushes. A request to commit is not permission to push.
-- `CHANGELOG.md` is hand-written. Never generate it with `git cliff`; the `git cliff` invocation in
-  `release.yml` generates only the GitHub Release body.
-- Version decisions use the latest stable `v*` tag, never the moving `preview` tag:
-  `git tag --list 'v*' --sort=-version:refname | head -1`.
-- Work lands on `release`; `main` receives only automated post-release sync PRs. See
-  [ADR 0001](docs/kb/decisions/0001-release-branch-model.md).
-- Internal-only fixes caused by code in the same release use the git-cliff-skipped scopes documented
-  in [`conventions.md`](docs/kb/conventions.md). Do not hide real user-facing fixes in those scopes.
-- Uninstall and upgrade safety, external-code permissions, secret handling, and user-file ownership
-  are governed by [`invariants.md`](docs/kb/architecture/invariants.md); read the relevant section
-  before touching those paths.
+- **Never run `git push` without explicit user approval**, including branch, tag, and force pushes.
+  A request to commit is not permission to push; retain approval already given for the same action.
+- Work lands on `release`; `main` receives only automated post-release sync PRs
+  ([ADR 0001](docs/kb/decisions/0001-release-branch-model.md)).
+- `CHANGELOG.md` is hand-written. Never generate it with `git cliff`; the release workflow uses
+  git-cliff only for the GitHub Release body.
+- Version decisions use the latest stable `v*` tag, never the moving `preview` tag; follow
+  [versioning conventions](docs/kb/conventions.md#versioning).
+- Internal fixes caused by new code in the same release use the git-cliff-skipped scopes in
+  [commit conventions](docs/kb/conventions.md#commits). Real user-facing fixes use their feature area.
+- User-visible behavior changes must update both public manual locales in the same release change:
+  `docs/manual/` and `website/i18n/zh-Hans/docusaurus-plugin-content-docs/current/`. Keep doc IDs,
+  page sets, commands, identifiers, examples, and warnings semantically aligned.
+- Never publish `docs/kb/`, PRDs, release runbooks, private paths, or internal procedures through
+  the public site. Root READMEs are summaries, not a second command/configuration reference.
+
+## Read when relevant
+
+| Task | Authoritative reference |
+|---|---|
+| Locate modules or command handlers | [Module map](docs/kb/architecture/module-map.md) |
+| Change cross-module behavior or safety contracts | [Data flows](docs/kb/architecture/data-flows.md), [invariants](docs/kb/architecture/invariants.md) |
+| Author or review presets | [Preset authoring](docs/kb/preset-authoring.md); [portable authoring skill](skills/shine-preset-author/SKILL.md) for isolated authoring |
+| Change declarative actions or recovery | [Design](docs/declarative-action-recovery-prd.md), [executable inventory](docs/kb/executable-preset-inventory.md) |
+| Assess platform coverage | [Platform support](docs/kb/architecture/platform-support.md) |
+| Commit, version, or test conventions | [Conventions](docs/kb/conventions.md) |
+| Release, CI, or diagnostics | [Operations](docs/kb/operations/), [troubleshooting](docs/kb/operations/troubleshooting.md) |
+| Maintain internal documentation | [KB protocol](docs/kb/README.md) |
 
 ## Commands
 
-Versions are pinned in `mise.toml`. Run `mise install` once and activate mise before using the
-repository toolchain. Install Bun dependencies before editing TypeScript presets.
+Use the versions pinned in `mise.toml` (`mise exec -- <command>` or activate mise). Run
+`mise install` if required tools are missing. Install Bun dependencies with
+`bun install --frozen-lockfile` before editing TypeScript presets.
 
 ```bash
-# Setup
-mise install
-bun install --frozen-lockfile
-
-# Build and run
-cargo build
-cargo build --release
-cargo run -- shell list
-cargo run -- app list
-cargo run -- sys list
-cargo run -- sys bootstrap --dry-run
-cargo run -- env list
-cargo run -- self upgrade --channel preview
-
-# Rust tests
-cargo nextest run --all-features
-cargo test
-cargo test shells::tests::install_then_uninstall_roundtrip
-cargo nextest run -E 'test(install_then_uninstall)'
-
-# Bun preset checks
-bun run test:ts
-bun run typecheck
-bun run check:ts
-
-# Lint and policy
-cargo fmt
-cargo clippy --all-targets --all-features --tests --benches -- -D warnings
+cargo build --target-dir target
+cargo nextest run --target-dir target --all-features
+cargo test --target-dir target                         # fallback or targeted test filter
+cargo nextest run --target-dir target -E 'test(install_then_uninstall)'
+cargo fmt --check
+cargo clippy --target-dir target --all-targets --all-features --tests --benches -- -D warnings
 cargo deny check bans licenses sources
 typos
+bun run check:ts                                      # typecheck + preset tests
+```
 
-# Public documentation
-cd website
+For public manual or website changes, run in `website/`:
+
+```bash
 pnpm install --frozen-lockfile
 pnpm check:locales
 pnpm typecheck
 pnpm build
 ```
 
-Pre-commit validates `mise.toml` and runs `cargo fmt --check`, clippy with warnings denied,
-`cargo deny`, `typos`, and `cargo nextest run`. Changes to Bun tooling or TypeScript sources also
-run `mise exec -- bun run check:ts`. All applicable checks must pass before committing.
-
 ## Verification boundaries
 
-- In sandboxed environments, use `cargo ... --target-dir target` so build artifacts remain in the
-  repository-local ignored directory.
-- Most commands call `Config::load_or_init()` and can create state even when they appear read-only.
-  Isolate ad-hoc checks:
+- Select checks for the changed behavior and risk. Instruction-only or internal Markdown edits
+  need link, consistency, and applicable format checks; skill edits also need frontmatter and
+  reference validation. They do not require Rust/Bun suites or a public-site build by themselves.
+  Applicable area checks and configured pre-commit hooks must pass before committing;
+  [`.pre-commit-config.yaml`](.pre-commit-config.yaml) defines the hook file filters.
+- Add tests for meaningful behavior or safety regressions. Once required checks pass, repeat or
+  broaden them only for changed code, failures, or unresolved concerns.
+- In a sandbox, add `--target-dir target` to Cargo commands that build artifacts.
+- Most CLI commands, including `preset new` and `preset copy`, can initialize config. Keep
+  ad-hoc checks under a fresh temporary `SHINE_CONFIG_DIR`, set per command. `preset validate`,
+  `lint`, `plan`, `test`, and `schema` route before config initialization and do not execute presets.
+- `SHINE_CONFIG_DIR` overrides both Shine state and presets; runtime presets live under
+  `$SHINE_CONFIG_DIR/presets/`. `SHINE_PRESETS` overrides only presets. Copy the category under test
+  into the isolated tree before runtime list/info/dry-run checks. For pristine embedded metadata,
+  use a snapshot-based test; do not drop isolation to recover built-in discovery.
+- Metadata-driven App changes need a targeted metadata/destination test plus isolated `app list`,
+  `app info <category>`, and `app install <category> --dry-run`. See the
+  [authoring guide](docs/kb/preset-authoring.md#app-verification) for setup.
 
-  ```bash
-  mkdir -p .tmp-home/.shine
-  env SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine cargo run --target-dir target -- app list
-  ```
-
-- `SHINE_CONFIG_DIR` overrides both the shine directory and presets directory; its runtime presets
-  live at `$SHINE_CONFIG_DIR/presets/`. `SHINE_PRESETS` overrides only the presets directory.
-- Built-in `app list`/`app info` reads embedded presets only when external preset mode is inactive.
-  If `SHINE_CONFIG_DIR` is set, copy the preset under test to
-  `.tmp-home/.shine/presets/app/<category>/` before list/info/install dry-runs, or unset it when
-  verifying embedded metadata.
-- For metadata-driven app presets, verify destination/metadata logic with a targeted unit test plus:
-
-  ```bash
-  cargo run --target-dir target -- app list
-  cargo run --target-dir target -- app info <category>
-  cargo run --target-dir target -- app install <category> --dry-run
-  ```
-
-More diagnostic cases: [`operations/troubleshooting.md`](docs/kb/operations/troubleshooting.md).
-
-## Architecture at a glance
-
-| Area | Primary location |
-|---|---|
-| CLI definition and top-level dispatch | `cli/src/commands/`, `cli/src/main.rs` |
-| App install, upgrade, hooks, generators, artifacts | `cli/src/apps/` |
-| Shared app/sys install primitives and manifest | `cli/src/install_core/` |
-| Shell deployment and launcher activation | `cli/src/shells/`, `cli/src/bin_links.rs` |
-| System bootstrap and managed resources | `cli/src/sys/` |
-| Config discovery, layering, and save | `cli/src/config/` |
-| External-code trust contracts and global grant store | `core/src/trust.rs`, `core/src/runtime/trust.rs`, `cli/src/trust.rs` |
-| Env, secrets, workspaces, and proxy injection | `cli/src/env/`, `cli/src/secret/` |
-| SSH wrapper, transfer, and secret broker | `cli/src/ssh/` |
-| Preset source/overlay operations | `cli/src/presets.rs`, `cli/src/preset_commands.rs`, `cli/src/git_pull.rs` |
-| Update checks and self-install | `cli/src/update_check/`, `cli/src/self_install.rs` |
-| Declarative actions and recovery foundation | `core/src/action.rs`, `core/src/runtime/action_executor.rs` |
-| Personal task registry | `cli/src/task/` |
-| Embedded assets | `presets/` |
-| Shared core | `core/` |
-
-Use the detailed [module map](docs/kb/architecture/module-map.md) for per-file ownership and command
-routing. Use [data flows](docs/kb/architecture/data-flows.md) before changing behavior that spans
-multiple modules.
-
-## Finishing a change
-
-1. Run checks proportional to the files and risk involved; follow any area-specific verification
-   documented in the KB.
-2. For public documentation changes, run locale parity, type checking, and the production docs build.
-3. Run `git diff --check` and inspect `git status --short`.
-4. Report checks actually run, distinguish pre-existing failures, and call out any unverified
-   platform or external-system behavior.
+Finish with `git diff --check` and `git status --short`. Report the changes, checks actually run,
+pre-existing failures, and unverified platform or external behavior concisely in the user's language.

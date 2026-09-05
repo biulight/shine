@@ -2,8 +2,8 @@
 
 Use a sys preset for operating-system bootstrap items, shell integrations, or
 managed system resources. The category name is Shine's OS id (for example
-`macos`, `ubuntu`, or `windows`). Start from `shine preset new sys`; sys presets
-must use `version = 2`.
+`macos`, `ubuntu`, or `windows`). Use the skill's isolated scaffolding workflow;
+sys presets must use `version = 2`.
 
 ## Bootstrap items
 
@@ -36,6 +36,5 @@ in-category `config.source` and an absolute destination after expansion.
 Permission declarations do not grant trust; external or overlay scripts and executable profile
 content remain blocked until the user grants the current canonical target-scoped code snapshot.
 
-Use static validation for every sys category. Run bootstrap dry-run only when
-the category id matches the current host, and never run a real bootstrap from
-this skill.
+For host-matching bootstrap dry-runs, follow
+[verification](verification.md#isolated-runtime-dry-run).

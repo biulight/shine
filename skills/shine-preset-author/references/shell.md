@@ -1,7 +1,7 @@
 # Shell preset authoring
 
 Use a shell preset for commands that Shine exposes through its managed bin
-directory. Start from `shine preset new shell`; its template is authoritative.
+directory. Use the installed template through the skill's isolated scaffolding workflow.
 
 ## Essential shape
 
@@ -34,5 +34,6 @@ If Bun dependencies are needed, include both `package.json` and `bun.lock` at
 the category root. Do not declare `trustedDependencies`. Shine does not install
 Bun, so report it as a prerequisite.
 
-The isolated `shine shell install <name> --dry-run` resolves sources, Bun policy,
-and intended links without creating files, links, manifests, or profile edits.
+Shell install dry-run resolves sources, Bun policy, and intended links without materializing
+presets, launchers, receipts, or profile edits. Config initialization still requires the
+temporary directory described in [verification](verification.md#isolated-runtime-dry-run).

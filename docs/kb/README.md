@@ -8,8 +8,8 @@ It complements — and never duplicates — the existing docs:
 
 | Document | What it covers |
 |---|---|
-| [`AGENTS.md`](../../AGENTS.md) | Mandatory workflow, high-frequency commands, verification boundaries, and hard repository rules — the authoritative agent entry point (`CLAUDE.md` imports it) |
-| [`README.md`](../../README.md) | User-facing documentation (features, installation, command usage) |
+| [`AGENTS.md`](../../AGENTS.md) | Shared workflow, authorization, commands, and verification; `CLAUDE.md` and Copilot instructions route here |
+| [`README.md`](../../README.md) | Product and installation summary; detailed command usage belongs in the bilingual manual |
 | [`CHANGELOG.md`](../../CHANGELOG.md) | Hand-written, user-facing release history |
 | **`docs/kb/`** (this directory) | Decisions, invariants, data flows, runbooks, lessons — the non-derivable knowledge |
 
@@ -30,11 +30,9 @@ It complements — and never duplicates — the existing docs:
 
 ## How to use this KB (for AI agents)
 
-1. **Before changing behavior** in an area, check `architecture/invariants.md` and grep
-   `lessons.md` for the module you are touching.
-2. **Before proposing a design**, check `decisions/` — the choice may already have been made,
-   along with its rationale.
-3. **For release or CI work**, follow `operations/`.
+Follow the [root workflow](../../AGENTS.md#workflow-and-authorization), then read the references
+for the affected area. For release or CI work, use `operations/`; historical ADRs explain decisions
+and do not grant permission to execute their example commands.
 
 ## How to update this KB (maintenance protocol)
 
