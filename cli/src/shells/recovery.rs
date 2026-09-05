@@ -14,9 +14,19 @@ pub async fn handle_recover_approved(config: &Config, yes: bool) -> Result<()> {
     .next()
     .expect("one reviewed Shell recovery Plan");
     let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
-    let report = runtime
-        .recover_shell_operation_approved(&reviewed.approval)
-        .await?;
+    let report = match crate::lifecycle_plan::execute_reviewed(
+        config,
+        runtime,
+        reviewed,
+        shine_core::frontend::ExecutionOptions::default(),
+        &mut shine_core::runtime::NullObserver,
+        &mut crate::presentation::TerminalInteraction,
+    )
+    .await?
+    {
+        shine_core::frontend::OperationDetails::ShellRecovery(report) => *report,
+        _ => unreachable!("reviewed operation result type"),
+    };
     if report.rolled_back_actions.is_empty() {
         println!(
             "Shell recovery complete: cleared the interrupted operation journal; no transaction-created launcher resources were removed."

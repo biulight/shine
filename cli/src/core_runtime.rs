@@ -9,8 +9,16 @@ use anyhow::{Context, Result};
 use directories::BaseDirs;
 use shine_core::runtime::{
     CoreRuntime, PresetSnapshotRequest, PresetSnapshotSource, RealHost, RuntimeContext,
-    RuntimePlatform, capture_embedded_preset_snapshot, capture_preset_snapshot,
+    RuntimePlatform, capture_embedded_preset_snapshot,
 };
+
+pub(crate) async fn frontend_from_config(
+    config: &Config,
+) -> Result<shine_core::frontend::FrontendService<RealHost>> {
+    from_config(config)
+        .await
+        .map(shine_core::frontend::FrontendService::new)
+}
 
 pub(crate) async fn from_config(config: &Config) -> Result<CoreRuntime<RealHost>> {
     from_config_with_preset_mode(config, config.is_external_presets).await
@@ -30,14 +38,6 @@ async fn from_config_with_preset_mode(
     } else {
         PresetSnapshotSource::Embedded(embedded_preset_files())
     };
-    let snapshot = capture_preset_snapshot(
-        &RealHost,
-        PresetSnapshotRequest {
-            source,
-            overlay_root: config.active_presets_overlay_dir().map(ToOwned::to_owned),
-        },
-    )
-    .await?;
     let context = RuntimeContext {
         home_dir: config.home_dir.clone(),
         shine_dir: config.shine_dir().to_path_buf(),
@@ -66,7 +66,17 @@ async fn from_config_with_preset_mode(
         path_env: std::env::var("PATH").ok(),
         proxy_env: proxy_env(&config.env),
     };
-    Ok(CoreRuntime::new(RealHost, context, snapshot))
+    shine_core::frontend::FrontendService::capture(
+        RealHost,
+        context,
+        PresetSnapshotRequest {
+            source,
+            overlay_root: config.active_presets_overlay_dir().map(ToOwned::to_owned),
+        },
+    )
+    .await
+    .map(shine_core::frontend::FrontendService::into_runtime)
+    .map_err(shine_core::frontend::FrontendServiceError::into_source)
 }
 
 pub(crate) fn from_embedded_presets() -> CoreRuntime<RealHost> {

@@ -48,7 +48,6 @@ pub async fn handle_refresh_approved(
     .next()
     .expect("one reviewed App refresh Plan");
     let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
-    let plan_request = reviewed_app_refresh_request(&reviewed.request);
 
     println!(
         "{}",
@@ -56,14 +55,19 @@ pub async fn handle_refresh_approved(
     );
     let mut observer = RefreshObserver;
     let mut interaction = TerminalInteraction;
-    let report = runtime
-        .refresh_app_generators_approved(
-            plan_request,
-            &reviewed.approval,
-            &mut observer,
-            &mut interaction,
-        )
-        .await?;
+    let report = match crate::lifecycle_plan::execute_reviewed(
+        config,
+        runtime,
+        reviewed,
+        shine_core::frontend::ExecutionOptions::default(),
+        &mut observer,
+        &mut interaction,
+    )
+    .await?
+    {
+        shine_core::frontend::OperationDetails::AppRefresh(report) => *report,
+        _ => unreachable!("reviewed operation result type"),
+    };
     let single_label = report
         .files
         .first()
@@ -110,15 +114,6 @@ pub async fn handle_refresh_approved(
         bail!("{failed} generated app file(s) failed to refresh");
     }
     Ok(())
-}
-
-fn reviewed_app_refresh_request(
-    request: &crate::lifecycle_plan::LifecyclePlanRequest,
-) -> AppRefreshPlanRequest {
-    match request {
-        crate::lifecycle_plan::LifecyclePlanRequest::AppRefresh(request) => request.clone(),
-        _ => unreachable!("reviewed App refresh Plan must retain its refresh request"),
-    }
 }
 
 fn refresh_summary_text(
@@ -202,7 +197,6 @@ mod tests {
     use crate::apps::{handle_install, handle_upgrade_installed};
     use crate::install_core::manifest::AppManifest;
     use crate::status::{FileStatus, app_entry_status};
-    use shine_core::runtime::OpaqueSecretVersion;
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
 
@@ -289,25 +283,6 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
             .await
             .unwrap();
-    }
-
-    #[test]
-    fn refresh_execution_reuses_the_reviewed_input_versions() {
-        let mut input_versions = PlanningInputVersions::default();
-        input_versions
-            .insert_secret_version("SOURCE_URL", OpaqueSecretVersion::new("test-version"));
-        let request =
-            crate::lifecycle_plan::LifecyclePlanRequest::AppRefresh(AppRefreshPlanRequest {
-                category: "sample".to_string(),
-                file: Some(Path::new("first.txt").to_path_buf()),
-                force: false,
-                input_versions: input_versions.clone(),
-            });
-
-        assert_eq!(
-            reviewed_app_refresh_request(&request).input_versions,
-            input_versions
-        );
     }
 
     #[test]

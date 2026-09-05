@@ -3,6 +3,35 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-05 — Test hooks must not inherit the committing repository's Git environment
+
+- **Symptom**: Git fixture tests passed directly but failed during a linked-worktree commit, and
+  fixture files were staged into the outer release index.
+- **Root cause**: Git exports repository-local variables to hooks; child Git commands inherit them
+  even when a test changes its working directory to a temporary repository.
+- **Fix / rule**: the test hook unsets the variables reported by `git rev-parse --local-env-vars`
+  before starting nextest. Keep the hook enabled and let each fixture discover its own repository.
+
+## 2026-09-05 — Isolating only the authoring dry-run misses scaffolding state
+
+- **Symptom**: instruction audit found unisolated `preset new`/`copy` commands in a skill promising
+  to leave active Shine configuration untouched.
+- **Root cause**: `main.rs` dispatches both commands after `Config::load_or_init()`; source creation
+  can therefore initialize live config before the later isolated dry-run.
+- **Fix**: use task-local temporary `SHINE_CONFIG_DIR` for scaffolding as well as runtime checks.
+- **Rule**: inspect command routing for initialization effects; a command that writes only workspace
+  sources in its handler is not necessarily isolated at the CLI entry point.
+
+## 2026-09-05 — Recovery Plans must not reuse local journal resource labels
+
+- **Symptom**: frontend conformance tests found a private destination path in a Sys recovery Plan.
+- **Root cause**: the planner copied the durable ActionIR resource label, which can contain a
+  physical destination, into the public Plan step.
+- **Fix**: derive `managed-file`, `split-dns`, or `profile-blocks` from the action kind while
+  preserving existing journal bytes and exact scoped permissions (`3d10c42`, Phase 6C).
+- **Rule**: project local journal metadata explicitly; never assume ActionIR labels are safe
+  frontend report fields.
+
 ## 2026-09-05 — Specialized execution must reuse its reviewed request
 
 - **Symptom**: an `app refresh` Plan with a configured secret generator input rendered as ready and
@@ -510,6 +539,11 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
   tests instantiate App, Shell, managed Sys, and bootstrap planners with observation-only hosts.
 - **Rule**: capability-boundary tests should verify the bound and calls of the assessment seam, not
   ban a capability name from a module that also owns the post-approval gate.
+
+- **2026-09-05 follow-up**: Shell regression fixtures remove files from `InMemoryHost` inside the
+  planner's inline test module. Scan production source before the explicit `#[cfg(test)] mod tests`
+  boundary for forbidden mutation calls, and fail if that boundary is missing; fixture setup is
+  not a production planner effect.
 
 ## 2026-08-30 — Executor-side choices expanded reviewed lifecycle work
 
@@ -1464,3 +1498,18 @@ measured, not inferred.
 When cutting a release, always diff against the latest stable `v*` tag
 (`git tag --list 'v*' --sort=-version:refname | head -1`), never `preview` and never
 `git describe --tags --abbrev=0` alone (it can resolve to `preview`).
+
+## 2026-09-05 — Shell ownership and missing-source inspection must agree with planning
+
+- **Symptom**: update showed no pending change while upgrade rejected an overlay launcher as
+  foreign; removing a Preset could also hide a still-installed command from inspection.
+- **Root cause**: the planner had a separate marker/root check that omitted overlay and receipt
+  paths, while inspection used the uninstall ownership probe. Default update filtered conflicts
+  out, detailed output called them updates, and inspection enumerated only available sources.
+- **Fix**: reuse the observation-only complete launcher probe, append receipt-only inspection
+  records, render attention separately from applicable updates, and preserve missing-source
+  commands during upgrade. Block shared snapshot replacement when a missing installed sibling
+  still depends on that category. Uninstall planning discovers receipt-only external categories.
+- **Rule**: source availability, installed state, and ownership are separate facts. A source
+  disappearance must not hide an installation or authorize removal, and a conflict is not an
+  applicable update. Internal App cache maintenance remains distinct from configuration changes.

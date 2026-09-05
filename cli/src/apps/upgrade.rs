@@ -9,8 +9,7 @@ use crate::presentation::{
 use shine_core::lifecycle::LifecycleOperation;
 use shine_core::lifecycle::{LifecycleResultV1, LifecycleStatus};
 use shine_core::runtime::{
-    AppApprovedUpgradeOptions, AppFileAction, AppPlanRequest, PlanningInputVersions, RuntimeEvent,
-    RuntimeObserver,
+    AppFileAction, AppPlanRequest, PlanningInputVersions, RuntimeEvent, RuntimeObserver,
 };
 
 use super::report;
@@ -190,20 +189,21 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
         .filter(|category| category.artifact.is_some())
         .map(|category| category.name)
         .collect::<BTreeSet<_>>();
-    let core = runtime
-        .upgrade_apps_approved(
-            match &reviewed.request {
-                crate::lifecycle_plan::LifecyclePlanRequest::App(request) => request.clone(),
-                _ => unreachable!("reviewed App Plan"),
-            },
-            &reviewed.approval,
-            AppApprovedUpgradeOptions {
-                show_hook_success: verbose,
-            },
-            &mut observer,
-            &mut interaction,
-        )
-        .await?;
+    let core = match crate::lifecycle_plan::execute_reviewed(
+        config,
+        runtime,
+        reviewed,
+        shine_core::frontend::ExecutionOptions {
+            show_hook_success: verbose,
+        },
+        &mut observer,
+        &mut interaction,
+    )
+    .await?
+    {
+        shine_core::frontend::OperationDetails::AppUpgrade(report) => *report,
+        _ => unreachable!("reviewed operation result type"),
+    };
 
     let mut started = false;
     let begin = |reporter: &mut dyn LifecycleReporter, started: &mut bool| {

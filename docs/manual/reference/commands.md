@@ -201,6 +201,20 @@ supported Plan instead of being replaced.
 
 ## Status, updates, and completions
 
+Shell checks distinguish applicable updates from attention-required state. Launcher ownership
+conflicts are reported separately and are never counted as available updates. Installed commands
+whose Preset has been removed remain visible as `preset missing`; upgrade preserves their installed
+files and records. Restore the Preset or review `shine shell uninstall <CATEGORY>/<COMMAND>` for
+explicit removal. A foreign launcher is still preserved, and its conflict blocks upgrade. If a
+shared external snapshot replacement would affect a missing installed sibling, Shine blocks that
+replacement until the sibling's Preset is restored or the command is explicitly uninstalled.
+Deleting only a payload while leaving metadata that references it is a validation error.
+
+`upgrade` also maintains internal Preset caches. A `preset cache (… create)` count describes internal
+source copies, not that many application configuration updates; a cache-only Plan can therefore
+appear even when `update` finds no applicable configuration changes.
+
+
 ```text
 shine list [--available [<app|shell|sys>]]
 shine info <TARGET> [--diff] [--verbose] [--run-generators]
@@ -321,6 +335,8 @@ exact Sys receipt is durable. A pending journal blocks later mutating Sys comman
 `shine sys recover` to review a fresh recovery Plan; it restores only fingerprint-matching previous
 state before receipt commit, or keeps desired state and cleans exact rollback afterward. Changed
 resources, rollback material, owned sentinel blocks, or receipts block recovery and are preserved.
+Recovery steps use logical resource labels (`managed-file`, `split-dns`, or `profile-blocks`);
+the permission list still identifies the exact scoped resources that recovery may access.
 Generated active/base/new/merge profile files retain their three-way merge behavior and are shown
 as non-transactional; bootstrap scripts and package/provider calls remain explicitly opaque and
 outside this recovery boundary.

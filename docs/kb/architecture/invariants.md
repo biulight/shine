@@ -5,6 +5,21 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **Frontend approval is a consumed local capability.** Trusted human review retains the exact
+  request and opaque configuration revision. Execution consumes a non-cloneable, non-serializable
+  handoff and regenerates the Plan before delegating to approved Core methods. Read-only adapters
+  receive neither runtime nor approval access; their error values contain only safe diagnostics,
+  never raw error chains. CLI adapters render local details but cannot independently match approval
+  or reconstruct an execution request (ADR 0080).
+
+- **Frontend operation state never replaces recovery assessment.** Journal progress is durable
+  bookkeeping and may lag an OS effect; it does not prove a live worker exists. The domain builds
+  its summary and recovery Plan from one captured journal, and only the existing fingerprint,
+  receipt and positive-marker checks determine recovery readiness. Corrupt/future journals are
+  preserved. Stable events explicitly omit raw runtime codes, details, labels and process output;
+  target fields must belong to the generated Plan's canonical allow-list. Neither serialized
+  operation state nor progress events authorize mutation (ADR 0079).
+
 - **A security Plan is not dry-run and approval is snapshot-bound.** `PlanV1` contains only ordered
   semantic steps, safe diagnostic codes, resolved permissions, and digests of exact source/state
   observations. App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile
@@ -125,6 +140,18 @@ bugs. Check this list before changing the modules named in each entry.
   share the same content hash, backup suffix, receipt, user-modification preservation, and
   manifest-version gates. Adding a new host operation must retain those checks rather than treating
   a successful write primitive as ownership evidence.
+
+- **Frontend contracts are explicit redacted projections.** `FrontendService` consumes one fully
+  captured `CoreRuntime` and returns versioned reports containing canonical identities, typed safe
+  states, and stable diagnostic codes. Reports never copy raw errors, private paths, content, argv,
+  process output, environment values, or secret plaintext. `RuntimeEvent` and typed inspection
+  paths remain non-serializable; future event or inspection contracts require a new explicit safe
+  projection rather than adding `Serialize` to those internal types.
+- **A review request is not human approval.** AI/MCP adapters may request a fresh Plan for review,
+  but they cannot create or accept approval authority, expose mutation, or treat a model assertion
+  as confirmation. Only a trusted human-facing CLI/UI may construct the one-shot
+  `PlanApprovalV1` after affirmative review; apply still recaptures inputs, regenerates the exact
+  Plan, and validates its fingerprint and permissions before mutation.
 
 - **Reusable lifecycle results contain identities and codes, never payloads.** Structured outcomes
   may record canonical targets, logical resource names, status, effects, and stable diagnostic
@@ -556,6 +583,14 @@ bugs. Check this list before changing the modules named in each entry.
 - **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
   files, manifest entries, and managed launchers, including legacy launchers pointing into the
   external tree. The external presets and overlay directories remain untouched.
+- **Shell inspection and planning use the same launcher ownership probe.** Both recognize
+  category-scoped managed roots, the active overlay, and recorded source/rendered paths, including
+  the platform's complete launcher resource set. Receipt-only commands remain visible as missing
+  Presets and are preserved by upgrade; source deletion never authorizes uninstall. A shared
+  snapshot replacement that would discard a missing command's category state is blocked until
+  the source is restored or the command is explicitly uninstalled (ADR 0081).
+  Receipt-backed stale symlinks within Shine/preset roots retain upgrade repair; this does not
+  widen ownership for regular launcher files or links outside those roots.
 - **Shell update/upgrade must preserve foreign launchers.** Ownership is checked with the same
   managed-root proof used by uninstall. A regular launcher outside that proof is a structured
   `Conflict`, is not counted as a pending update, is excluded from forced launcher refresh, and

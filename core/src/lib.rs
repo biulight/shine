@@ -1,5 +1,7 @@
 pub mod action;
 pub mod env;
+#[doc(hidden)]
+pub mod frontend;
 pub mod init_template;
 pub mod install;
 pub mod lifecycle;

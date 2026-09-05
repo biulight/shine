@@ -24,10 +24,10 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
    findings. Use `--deny-warnings` only for deliberately clean CI policy.
 10. Run `shine preset plan <category> --platform <platform> --format json` for every supported target
    platform. Treat it as a hypothetical empty-host report, never as an approval or dry-run.
-11. Put repeatable structured assertions in category-local `shine.test.toml` and run
-    `shine preset test <category> --format json`. Fixtures may contain bounded synthetic observations
-    but never executable setup/teardown, actual credentials, or private machine paths.
-12. Build distributable bytes only with `shine preset pack`, outside the category. Fix every policy
+11. When changed behavior needs repeatable assertions, put them in category-local `shine.test.toml`.
+    Run existing or new fixtures with `shine preset test <category> --format json`. Fixtures may contain
+    bounded synthetic observations but never executable setup/teardown, actual credentials, or private machine paths.
+12. When a bundle is requested, build it with `shine preset pack`, outside the category. Fix every policy
     diagnostic; `--force` controls output replacement only.
 13. Keep schema-v1 permission declarations at the execution target boundary: one App category
    table, one table per Shell file/platform variant, and one table per Sys item. Declare identities
@@ -43,17 +43,16 @@ manual blocker, then rerun validate, lint, plan, and fixture tests above.
 
 ## AI authoring boundary
 
-`skills/shine-preset-author/` is the portable author workflow. Keep `SKILL.md` concise and route to
-only one of `references/app.md`, `references/shell.md`, or `references/sys.md`. The skill must treat
-the installed CLI as authoritative: generate `preset schema --format json` when available, scaffold
-with `preset new` or `preset copy`, require JSON validation/lint and
-one hypothetical plan per target platform, and run only isolated dry-runs under a temporary
-`SHINE_CONFIG_DIR`. It must never link a source/overlay, activate a preset, or run real install,
-upgrade, bootstrap, hook, generator, or artifact actions.
+The portable [skill](../../skills/shine-preset-author/SKILL.md) owns the AI authoring workflow
+and authorization boundary. Keep kind-specific rules in its App/Shell/Sys references and conditional
+fixture/bundle/dry-run procedures in its verification reference. Load only what the request needs;
+do not copy those procedures here. Source edits still require JSON validation/lint and hypothetical
+planning per target platform. Scaffolding and runtime dry-runs both need temporary config isolation.
 
-`cli/src/preset_validation.rs` owns path discovery and the schema-v1 report. Domain rules stay with
-`apps/metadata.rs`, `shells/metadata.rs`, and `sys/manifest.rs` so runtime and static validation do
-not become independent schemas. The validator is routed before `Config::load_or_init()` and must
+`core/src/runtime/validation.rs` owns discovery and the schema-v1 report;
+`cli/src/preset_validation.rs` is the terminal adapter. Domain parsers in Core own App/Shell/Sys
+rules so runtime and static validation do not become independent schemas.
+The validator is routed before `Config::load_or_init()` and must
 remain free of config initialization, update checks, process execution, network access, and writes.
 Validate the effective `macos`, `linux`, and `windows` branches on every host, including any
 declared `unix` compatibility fallback. New diagnostic codes are API surface; keep them stable
@@ -61,7 +60,8 @@ within schema version 1.
 
 The skill directory is distributed in the crate but is not embedded as runtime presets. Validate
 its Agent Skills frontmatter and directory-name parity after edits. See
-[ADR 0033](decisions/0033-skill-first-ai-preset-authoring.md).
+[ADR 0033](decisions/0033-skill-first-ai-preset-authoring.md) and
+[ADR 0082](decisions/0082-agent-instruction-scope-and-authority.md).
 
 ## Shell preset category
 
@@ -241,8 +241,9 @@ env = ["PROFILE_PATH", "API_TOKEN"]
 
 - `runtime` is `native` by default. Native executes the file directly and relies on its shebang;
   Bun accepts `.ts`, `.js`, `.mts`, or `.mjs` and requires Bun on `PATH`.
-- `script` runs only through `shine app artifact apply <app-id>` unless a preset explicitly invokes
-  that command from a lifecycle hook.
+- Artifact apply runs through explicit `shine app artifact apply <app-id>`. For lifecycle reuse,
+  declare the script as a hook in the parent Plan; never invoke a nested artifact command
+  ([ADR 0076](decisions/0076-script-hooks-share-the-parent-app-plan.md)).
 - `teardown` runs through `shine app artifact remove <app-id>` and best-effort before app uninstall.
 - Explicit artifact commands require a reviewed security Plan and propagate nonzero exit. Implicit
   uninstall teardown is included in the lifecycle Plan, remains non-fatal, and is safely skipped
@@ -263,15 +264,20 @@ See [ADR 0009](decisions/0009-app-artifact-build-explicit-command.md),
 
 ### App verification
 
-Be deliberate about preset mode. With `SHINE_CONFIG_DIR` set, copy the category under test to
-`$SHINE_CONFIG_DIR/presets/app/<category>/`; unset external preset settings when verifying embedded
-assets.
+With `SHINE_CONFIG_DIR` set, copy the category under test into the isolated preset tree. From the
+repository root (replace `<category>` with the category under test):
 
 ```bash
-cargo run --target-dir target -- app list
-cargo run --target-dir target -- app info <category>
-cargo run --target-dir target -- app install <category> --dry-run
+preset_check_dir=$(mktemp -d)
+mkdir -p "$preset_check_dir/shine/presets/app"
+cp -R "presets/app/<category>" "$preset_check_dir/shine/presets/app/"
+env SHINE_CONFIG_DIR="$preset_check_dir/shine" cargo run --target-dir target -- app list
+env SHINE_CONFIG_DIR="$preset_check_dir/shine" cargo run --target-dir target -- app info <category>
+env SHINE_CONFIG_DIR="$preset_check_dir/shine" cargo run --target-dir target -- app install <category> --dry-run
 ```
+
+Clean up only the temporary directory created above. For pristine embedded metadata, use a
+snapshot-based test instead of unsetting isolation and loading the user's config.
 
 Add targeted tests for destination resolution, metadata parsing, transforms, generators, hooks, or
 artifact behavior as applicable. TypeScript presets must pass `bun run check:ts`.

@@ -41,9 +41,10 @@
 - `2.0.0` 已在 macOS、Ubuntu 和 Windows 上完成真实 1.8 state 的 upgrade、lifecycle、uninstall
   与 recovery smoke test，并作为稳定版发布边界。后续 mutation frontend 仍须复用已经验证的
   lifecycle、安全与恢复 contract。
-- Authoring 已有版本化 JSON reports，但真实 host 上的 inventory、inspection、Plan review、operation
-  state 和 recovery 仍主要由 CLI 组装与呈现；`shine-core` runtime API 继续是 workspace-internal，
-  尚未形成供 CLI、MCP 和 UI 共同依赖的稳定 Frontend Service contract。
+- Phase 6 已完成：Frontend Service 统一版本化 inventory、inspection、Plan review、journal-derived
+  operation state、安全 events 和 lifecycle/recovery execution。CLI 已接入共享批准与执行入口；
+  受限只读 facade 不持有运行时或批准权限。一次性批准保留完整 reviewed request，conformance
+  fixtures 覆盖普通、专用和恢复操作及失效边界。`CoreRuntime` 继续是 workspace-internal。
 
 ## Guiding Principles
 
@@ -157,9 +158,16 @@ fixtures、schema reference、examples 和 CI workflow。
 
 ## Phase 6 — Frontend Service and Conformance Contract
 
+**Status:** complete；6A–6D 的实现与 conformance gate 已通过。此阶段不发布 MCP server 或 GUI。
+
 **Outcome:** 在 `shine-core` 之上建立 CLI、MCP 和 UI 共用的 frontend-neutral application service，
 统一真实 host 上的 inventory、inspection、Plan review、operation state、recovery 和 lifecycle result，
 同时保留 Core 的安全与领域边界。
+
+实现边界与切片顺序见
+[`frontend-service-conformance-prd.md`](frontend-service-conformance-prd.md)；contract redaction、
+event projection 与 approval ownership 由 [`ADR 0077`](kb/decisions/0077-frontend-service-contract-and-approval-ownership.md)
+约束。
 
 **Exit criteria:**
 
@@ -251,9 +259,9 @@ Shine 应专注：
 P0  Preset model, lifecycle, env/secrets, shine-core     Phase 1–2
 P1  Plan, permissions, validation, trust                Phase 3
 P2  Declarative actions, recovery, Preset DX            Phase 4–5
-NOW Shine 2.0 real-state stabilization                  Immediate release gate
-P3  Frontend Service and conformance contract           Phase 6
-P4  Agent Skill + local MCP integration                 Phase 7
+DONE Shine 2.0 real-state stabilization                 Completed release gate
+DONE Frontend Service and conformance contract          Phase 6
+NOW Agent Skill + local MCP integration                 Phase 7
 P5  Trusted shine-ui and consumer UX                    Phase 8
 P6  Registry and sharing                                Phase 9
 ```

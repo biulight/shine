@@ -1,4 +1,4 @@
-use crate::runtime::FileSystemHost;
+use crate::runtime::{FileSystemHost, FileSystemObservationHost};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -71,7 +71,7 @@ pub fn hash_content(bytes: &[u8]) -> u64 {
 }
 
 impl AppManifest {
-    pub async fn load(host: &impl FileSystemHost, shine_dir: &Path) -> Result<Self> {
+    pub async fn load(host: &impl FileSystemObservationHost, shine_dir: &Path) -> Result<Self> {
         let path = shine_dir.join(MANIFEST_FILE);
         let mut manifest: Self = match host.read(&path).await {
             Ok(bytes) => toml::from_slice(&bytes)?,

@@ -17,6 +17,9 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
 | `core/src/action.rs` | Versioned executable Action IR, typed permission derivation, opaque provenance, and rollback classification |
+| `core/src/frontend.rs` | Versioned redacted Frontend Service contracts and inventory; `frontend/inspection.rs` owns inspection/status projection and local details; `frontend/review.rs` dispatches pure Plan review |
+| `core/src/frontend/{operations,events}.rs` | Safe journal-state/recovery projection and explicit progress-event redaction; domain executors retain journal parsing and recovery decisions |
+| `core/src/frontend/{bootstrap,read_only,trusted}.rs` | Shared source capture, restricted safe report facade, human review and one-shot approval, exact validation and lifecycle/recovery dispatch; `conformance.rs` checks adapter equivalence |
 | `core/src/permission.rs` | Versioned target-local Preset permission declarations, normalization, and payload-free identity validation |
 | `core/src/trust.rs` | Versioned target-local external-code trust grants, exact matching, and stale-scope decisions |
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
@@ -61,7 +64,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/colors.rs` | Terminal color helpers |
 | `cli/src/output.rs` | Shared command output mode and rendering support |
 | `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
-| `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap |
+| `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap and Frontend Service construction |
 | `cli/src/lifecycle_plan.rs` | Stable security Plan rendering, default-No/non-TTY approval policy, input identities, and batch prevalidation |
 | `cli/src/platform.rs` | Platform classification shared across command domains |
 | `cli/src/privilege.rs` | Cross-platform administrator/elevation orchestration |

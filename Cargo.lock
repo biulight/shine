@@ -1572,7 +1572,7 @@ dependencies = [
 
 [[package]]
 name = "shine-cli"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -1605,7 +1605,7 @@ dependencies = [
 
 [[package]]
 name = "shine-core"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "directories",

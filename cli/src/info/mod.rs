@@ -204,14 +204,17 @@ pub async fn handle_update_target(
                     .shell_files
                     .iter()
                     .filter(|file| {
-                        file.category.name == category && file.status == "update available"
+                        file.category.name == category
+                            && (file.status == "update available" || file.attention_required)
                     })
                     .collect::<Vec<_>>();
                 files.sort_by_key(|file| file.file.command_name.clone());
                 for file in files {
                     print_update_separator(printed);
                     print_shell_update_row(file);
-                    render::print_shell_update_diff(config, file).await?;
+                    if !file.attention_required {
+                        render::print_shell_update_diff(config, file).await?;
+                    }
                     printed = true;
                 }
             }
@@ -219,10 +222,12 @@ pub async fn handle_update_target(
                 if let Some(file) = diffs.shell_files.iter().find(|file| {
                     file.category.name == category
                         && file.file.command_name == command
-                        && file.status == "update available"
+                        && (file.status == "update available" || file.attention_required)
                 }) {
                     print_shell_update_row(file);
-                    render::print_shell_update_diff(config, file).await?;
+                    if !file.attention_required {
+                        render::print_shell_update_diff(config, file).await?;
+                    }
                     printed = true;
                 }
             }
@@ -256,13 +261,20 @@ fn print_update_separator(printed: bool) {
 }
 
 fn print_shell_update_row(file: &collect::ShellInfoFile) {
+    let symbol = if file.attention_required { "!" } else { "↑" };
     println!(
         "  {}  {}/{}  {}",
-        colors::symbol("↑"),
+        colors::symbol(symbol),
         file.category.name,
         file.file.command_name,
-        colors::status_label("update available", "↑"),
+        colors::status_label(file.status, symbol)
     );
+    if file.attention_required {
+        println!(
+            "    Installed files are preserved. Restore the Preset or inspect the launcher before retrying; use `shine shell uninstall {}/{}` for explicit removal.",
+            file.category.name, file.file.command_name
+        );
+    }
 }
 
 fn print_app_update_row(config: &Config, file: &collect::AppInfoFile) {

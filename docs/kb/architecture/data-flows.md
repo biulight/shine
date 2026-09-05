@@ -64,6 +64,89 @@ record additional capabilities. Pure planners combine both sources into the requ
 resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
 protected execution fails closed.
 
+## Shell availability and ownership inspection
+
+Shell inspection joins the effective platform-selected Preset commands with manifest-only targets.
+Receipt-only records are inspection data and never enter execution as reconstructed metadata.
+The planner and inspection share the observation-only launcher probe with category, overlay, and
+receipt roots. CLI update separates conflicts/missing Presets from pending updates; detailed views
+keep the same status. Upgrade preserves absent-source commands and blocks shared snapshot
+replacement when it would affect a retained missing sibling. Explicit uninstall remains
+receipt-driven even after an external category disappears (ADR 0081).
+
+## Frontend Service inventory
+
+The CLI and future adapters construct `FrontendService` from the same captured `CoreRuntime`,
+immutable effective Preset snapshot, and host observation ports. Inventory parses App/Shell/Sys
+metadata through Core, loads version-gated manifests and receipts, and observes target-launcher
+presence without executing Preset code, detection commands, or host mutations. Ownership and
+launcher conflicts remain part of later inspection contracts.
+
+```text
+captured RuntimeContext + immutable PresetSnapshot + observation host
+    → Core metadata + manifest/receipt/launcher evidence
+    → canonical available/installed target union
+    → InventoryReportV1 + safe diagnostic codes
+    → adapter-only grouping, filtering, and rendering
+```
+
+The stable report never contains the manifest path, destination, content, argv, environment value,
+secret, or local source error. Manifest-only targets receive `frontend_inventory_preset_missing`;
+the CLI compatibility adapter still applies its released App/Shell visibility rules. Existing
+`RuntimeEvent` values and inspection paths remain private side channels and are not serialized.
+
+Plan review remains separate from approval: future AI adapters may return a review request, while
+only trusted human-facing frontends create a one-shot approval after affirmative review. Apply
+continues to recapture inputs and validate a regenerated exact Plan.
+
+## Frontend inspection and review
+
+`frontend/inspection.rs` projects Core App/Shell/Sys assessment into `InspectionReportV1` while
+returning local-only domain details for CLI rendering. Physical paths, raw errors and diff contents
+never enter the report. Opaque resource identities hash normalized logical source names. App
+update applicability and update lifecycle outcomes are service-owned; manual generator changes
+remain refresh-only. Sys inspection additionally includes bootstrap receipts as recorded state,
+without changing inventory v1's managed-only installed Sys compatibility contract.
+
+`frontend/review.rs` dispatches typed workspace-local `ReviewRequest` values to existing pure
+planners and wraps the unchanged `PlanV1`. CLI review and preparation use this service. Neither
+request nor report contains approval; opaque input versions remain attached to the reviewed domain
+request through execution. See ADR 0078.
+
+## Frontend operation state and safe events
+
+Each domain executor loads and validates its journal once, extracts recorded action progress, and
+passes that exact journal and bytes to its existing recovery planner. The service hashes the local
+operation identity and emits counts plus the payload-free recovery Plan. An idle report means no
+journal was observed; journal presence does not establish that a process is alive. Counts are
+durable bookkeeping, not a substitute for receipt/positive-marker and live-resource validation.
+Corrupt or future journals return a safe diagnostic without cleanup.
+
+`frontend/events.rs` explicitly projects each `RuntimeEvent` variant to a versioned event kind,
+execution-local sequence, optional reviewed canonical target and typed outcome. It never copies
+raw codes, details, output, labels, paths or environment values. `ProjectedObserver` forwards the
+original event only to trusted local presentation while sending the safe projection to the frontend
+sink. Events convey progress, not approval, a durable replay cursor or recovery authority. See
+ADR 0079.
+
+## Frontend authority and execution
+
+`FrontendService::capture` accepts distribution-resolved context and source settings and delegates
+effective snapshot capture to the shared host-backed bootstrap. Trusted distribution code supplies
+an opaque configuration revision. `ReadOnlyFrontend` returns only safe reports and safe diagnostic
+errors; it has no execution, generator evaluation, runtime or approval constructor access.
+
+Trusted human review retains the exact request and configuration revision alongside the Plan.
+After confirmation, its consumed `ApprovedOperation` carries that request through fresh validation
+and the shared execution dispatcher. CLI preparation recaptures configuration and Presets before
+execution; all domain adapters call `lifecycle_plan::execute_reviewed` and only render returned local
+details. They do not construct legacy approval, match fingerprints or rebuild execution requests.
+
+The service emits safe progress around all dispatched calls and preserves raw observer events for
+local renderers. Normal operations reuse `LifecycleResultV1`; specialized operations and recovery
+retain distinct identities in `ExecutionReportV1`. Successful call completion does not imply every
+item succeeded. Validation rejection produces no execution events or effects. See ADR 0080.
+
 ## Preset source compatibility and migration
 
 `shine preset migrate` is routed before mutable config initialization. Default scope uses read-only

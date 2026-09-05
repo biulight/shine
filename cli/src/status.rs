@@ -14,9 +14,9 @@ use crate::env::EnvConfig;
 use crate::install_core::{AppEntry, AppManifest};
 use crate::path_display;
 use anyhow::Result;
-use shine_core::lifecycle::{
-    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
-};
+use shine_core::lifecycle::LifecycleResultV1;
+#[cfg(test)]
+use shine_core::lifecycle::{LifecycleEffect, LifecycleOutcomeV1, LifecycleStatus};
 #[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -49,6 +49,7 @@ pub struct ShellRow {
     /// Existing launcher is outside Shine's ownership proof and must be
     /// preserved rather than reported as an applicable update.
     pub(crate) link_conflict: bool,
+    pub(crate) preset_missing: bool,
     pub(crate) changes: Vec<UpdateChange>,
 }
 
@@ -75,23 +76,29 @@ pub struct AppRow {
 
 /// Build shell preset rows.  Does not include the PATH sentinel line.
 pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
-    let inspections = crate::core_runtime::from_config(config)
+    let inspections = crate::core_runtime::frontend_from_config(config)
         .await?
         .inspect_shells()
-        .await?;
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
+        .files;
     Ok(inspections
         .into_iter()
         .map(|file| {
-            let (symbol, status_sym) = match file.status {
-                FileStatus::NotInstalled => ("✗", "✗"),
-                FileStatus::UpdateAvail => ("↑", "↑"),
-                FileStatus::Missing => ("!", "!"),
-                FileStatus::Partial
-                | FileStatus::UserModified
-                | FileStatus::GeneratorNotEvaluated
-                | FileStatus::GeneratorEvaluationFailed
-                | FileStatus::GeneratorTrustRequired => ("~", "~"),
-                FileStatus::UpToDate => ("✓", "✓"),
+            let (symbol, status_sym) = if file.link_conflict || file.preset_missing {
+                ("!", "!")
+            } else {
+                match file.status {
+                    FileStatus::NotInstalled => ("✗", "✗"),
+                    FileStatus::UpdateAvail => ("↑", "↑"),
+                    FileStatus::Missing => ("!", "!"),
+                    FileStatus::Partial
+                    | FileStatus::UserModified
+                    | FileStatus::GeneratorNotEvaluated
+                    | FileStatus::GeneratorEvaluationFailed
+                    | FileStatus::GeneratorTrustRequired => ("~", "~"),
+                    FileStatus::UpToDate => ("✓", "✓"),
+                }
             };
             ShellRow {
                 category: file.category.name.clone(),
@@ -101,6 +108,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 status_text: file.status_text,
                 is_installed: file.installed,
                 link_conflict: file.link_conflict,
+                preset_missing: file.preset_missing,
                 changes: file.changes,
             }
         })
@@ -138,7 +146,7 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
         .iter()
         .map(|category| category.name.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let inspections = runtime
+    let inspections = shine_core::frontend::FrontendService::new(runtime)
         .inspect_apps_with_options(
             shine_core::runtime::AppInspectionOptions {
                 run_generators,
@@ -149,93 +157,20 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
             },
             &mut shine_core::runtime::NullObserver,
         )
-        .await?
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
+        .files
         .into_iter()
         .filter(|file| selected.contains(file.category.name.as_str()))
         .collect::<Vec<_>>();
     let mut rows = Vec::new();
-    let mut lifecycle = LifecycleResultV1::new(LifecycleOperation::Update, false);
+    let lifecycle = shine_core::frontend::app_inspection_lifecycle(&inspections);
 
     for category in categories {
         let files = inspections
             .iter()
             .filter(|file| file.category.name == category.name)
             .collect::<Vec<_>>();
-        for inspection in &files {
-            let manifest_owned = inspection.manifest_entry.is_some()
-                || inspection
-                    .changes
-                    .iter()
-                    .any(|change| matches!(change, UpdateChange::NewFile { .. }));
-            if manifest_owned {
-                let target = format!("app/{}", category.name);
-                let resource = Some(inspection.file.source_rel.display().to_string());
-                let outcome = match inspection.status {
-                    FileStatus::UpToDate => Some(LifecycleOutcomeV1::new(
-                        target,
-                        resource,
-                        LifecycleStatus::Unchanged,
-                        [],
-                    )),
-                    FileStatus::UpdateAvail => {
-                        let relocated = inspection.changes.iter().any(|change| {
-                            matches!(change, UpdateChange::DestinationRelocated { .. })
-                        });
-                        let mut effects = Vec::new();
-                        if relocated {
-                            effects.push(LifecycleEffect::ResourceRemovePreviewed);
-                        }
-                        effects.push(LifecycleEffect::ResourceWritePreviewed);
-                        effects.push(LifecycleEffect::ReceiptWritePreviewed);
-                        let outcome = LifecycleOutcomeV1::new(
-                            target,
-                            resource,
-                            LifecycleStatus::Pending,
-                            effects,
-                        );
-                        Some(if is_manual_generator_update(inspection) {
-                            outcome.with_diagnostic_code("app_manual_refresh_required")
-                        } else {
-                            outcome
-                        })
-                    }
-                    FileStatus::GeneratorNotEvaluated => Some(
-                        LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Pending, [])
-                            .with_diagnostic_code("app_generator_not_evaluated"),
-                    ),
-                    FileStatus::GeneratorEvaluationFailed => Some(
-                        LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Failed, [])
-                            .with_diagnostic_code("app_generator_evaluation_failed"),
-                    ),
-                    FileStatus::GeneratorTrustRequired => Some(
-                        LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Failed, [])
-                            .with_diagnostic_code("app_generator_trust_required"),
-                    ),
-                    FileStatus::Missing => Some(LifecycleOutcomeV1::new(
-                        target,
-                        resource,
-                        LifecycleStatus::Pending,
-                        [
-                            LifecycleEffect::ResourceWritePreviewed,
-                            LifecycleEffect::ReceiptWritePreviewed,
-                        ],
-                    )),
-                    FileStatus::UserModified => Some(
-                        LifecycleOutcomeV1::new(
-                            target,
-                            resource,
-                            LifecycleStatus::Conflict,
-                            [LifecycleEffect::UserResourcePreserved],
-                        )
-                        .with_diagnostic_code("app_user_modified"),
-                    ),
-                    FileStatus::NotInstalled | FileStatus::Partial => None,
-                };
-                if let Some(outcome) = outcome {
-                    lifecycle.push(outcome);
-                }
-            }
-        }
 
         if category.has_explicit_files && category.list_mode == AppListMode::Files {
             for inspection in files {
@@ -271,37 +206,7 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
             }
         } else {
             let statuses = files.iter().map(|file| file.status).collect::<Vec<_>>();
-            let has_installed = statuses.iter().any(|status| {
-                matches!(
-                    status,
-                    FileStatus::UpToDate
-                        | FileStatus::UpdateAvail
-                        | FileStatus::GeneratorNotEvaluated
-                        | FileStatus::GeneratorEvaluationFailed
-                        | FileStatus::GeneratorTrustRequired
-                        | FileStatus::UserModified
-                )
-            });
-            let has_not_installed = statuses.contains(&FileStatus::NotInstalled);
-            let status = if has_installed && has_not_installed {
-                let installed_max = statuses
-                    .iter()
-                    .copied()
-                    .filter(|status| *status != FileStatus::NotInstalled)
-                    .max()
-                    .unwrap_or(FileStatus::Partial);
-                if installed_max == FileStatus::UpToDate {
-                    FileStatus::Partial
-                } else {
-                    installed_max
-                }
-            } else {
-                statuses
-                    .iter()
-                    .copied()
-                    .max()
-                    .unwrap_or(FileStatus::NotInstalled)
-            };
+            let status = shine_core::frontend::app_category_status(&statuses);
             let destination = if let Some(root) = &category.destination_root {
                 Some(path_display::format_tilde_path(root, &config.home_dir))
             } else if files.len() == 1 {
@@ -340,16 +245,13 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
 }
 
 fn is_manual_generator_update(inspection: &shine_core::runtime::AppFileInspection) -> bool {
-    inspection.status == FileStatus::UpdateAvail
-        && inspection
-            .file
-            .generator
-            .as_ref()
-            .is_some_and(|generator| !generator.auto)
+    shine_core::frontend::app_update_operation(inspection)
+        == Some(shine_core::frontend::InspectionOperationV1::Refresh)
 }
 
 fn is_upgrade_available(inspection: &shine_core::runtime::AppFileInspection) -> bool {
-    inspection.status == FileStatus::UpdateAvail && !is_manual_generator_update(inspection)
+    shine_core::frontend::app_update_operation(inspection)
+        == Some(shine_core::frontend::InspectionOperationV1::Upgrade)
 }
 
 fn manual_refresh_sources<'a>(

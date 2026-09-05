@@ -5,12 +5,14 @@ use crate::presentation::{
 };
 use anyhow::{Result, bail};
 
+#[cfg(test)]
+use super::SysInstalledRow;
 use super::detect::detect_os_id;
 use super::execution::{
     item_outcome_lines, presentation_bold, presentation_dim, presentation_symbol,
     presentation_symbol_stderr,
 };
-use super::{SysInstalledRow, SysItemOutcome, SysItemStatus, SysUpdateRow, SysUpgradeReport};
+use super::{SysItemOutcome, SysItemStatus, SysUpdateRow, SysUpgradeReport};
 use shine_core::lifecycle::{LifecycleOperation, LifecycleResultV1};
 use shine_core::runtime::{PlanningInputVersions, SysManagedPlanRequest};
 
@@ -243,11 +245,7 @@ pub(crate) async fn managed_updates_with_result(
     managed_updates_for_os_with_result(config, &os_id).await
 }
 
-pub(crate) async fn installed_managed(config: &Config) -> Result<Vec<SysInstalledRow>> {
-    let os_id = detect_os_id().await?;
-    installed_managed_for_os(config, &os_id).await
-}
-
+#[cfg(test)]
 async fn installed_managed_for_os(config: &Config, os_id: &str) -> Result<Vec<SysInstalledRow>> {
     crate::core_runtime::from_config(config)
         .await?
@@ -262,8 +260,11 @@ async fn managed_updates_for_os_with_result(
     let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await?;
     runtime.context_mut_for_cli().env = env.as_map().clone();
-    let (_, updates, lifecycle) = runtime.inspect_managed_sys(os_id).await?;
-    Ok((updates, lifecycle))
+    let inspection = shine_core::frontend::FrontendService::new(runtime)
+        .inspect_sys(os_id)
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+    Ok((inspection.updates, inspection.lifecycle))
 }
 
 async fn run_managed_with_result(
@@ -432,17 +433,19 @@ async fn run_managed_for_os_with_prepared_reporter(
         action,
         started: false,
     };
-    let core = runtime
-        .run_managed_sys_approved(
-            match &reviewed.request {
-                crate::lifecycle_plan::LifecyclePlanRequest::Sys(request) => request.clone(),
-                _ => unreachable!("reviewed Sys Plan"),
-            },
-            &reviewed.approval,
-            interaction,
-            &mut observer,
-        )
-        .await?;
+    let core = match crate::lifecycle_plan::execute_reviewed(
+        config,
+        runtime,
+        reviewed,
+        shine_core::frontend::ExecutionOptions::default(),
+        &mut observer,
+        interaction,
+    )
+    .await?
+    {
+        shine_core::frontend::OperationDetails::SysManaged(report) => *report,
+        _ => unreachable!("reviewed operation result type"),
+    };
     finish_managed_report(core, output_mode, &mut observer)
 }
 

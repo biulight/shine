@@ -154,6 +154,40 @@ where
             load_sys_operation_journal(self.host(), &self.context().shine_dir)
                 .await?
                 .context("no interrupted Sys operation is available for recovery")?;
+        self.plan_sys_operation_recovery_from_journal(journal, journal_bytes)
+            .await
+    }
+
+    pub(crate) async fn inspect_sys_operation_journal(
+        &self,
+    ) -> Result<Option<super::JournalInspection>> {
+        let Some((journal, journal_bytes)) =
+            load_sys_operation_journal(self.host(), &self.context().shine_dir).await?
+        else {
+            return Ok(None);
+        };
+        let total = journal.action_ir.actions.len() as u64;
+        let (prepared_actions, applied_actions, receipt_committed_actions) = match journal.state {
+            SysJournalStateV1::Prepared => (total, 0, 0),
+            SysJournalStateV1::Applied => (0, total, 0),
+            SysJournalStateV1::ReceiptCommitted => (0, 0, total),
+        };
+        Ok(Some(super::JournalInspection {
+            operation_id: journal.action_ir.operation_id.clone(),
+            prepared_actions,
+            applied_actions,
+            receipt_committed_actions,
+            recovery_plan: self
+                .plan_sys_operation_recovery_from_journal(journal, journal_bytes)
+                .await?,
+        }))
+    }
+
+    async fn plan_sys_operation_recovery_from_journal(
+        &self,
+        journal: SysOperationJournalV1,
+        journal_bytes: Vec<u8>,
+    ) -> Result<PlanV1> {
         let manifest = load_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let receipt_state = receipt_boundary(&manifest, &journal.receipt);
         let action = &journal.action_ir.actions[0];
@@ -194,7 +228,13 @@ where
         let steps = vec![
             PlanStepV1::new(
                 &action.target,
-                Some(&action.resource),
+                // Journal resource labels may contain legacy physical destinations. Keep those
+                // local; the Plan already carries exact scoped filesystem permissions.
+                Some(match &action.kind {
+                    ActionKindV1::ReconcileSysSplitDns { .. } => "split-dns",
+                    ActionKindV1::ReconcileSysProfileBlocks { .. } => "profile-blocks",
+                    _ => "managed-file",
+                }),
                 if blocked {
                     PlanActionV1::Blocked
                 } else if journal.state == SysJournalStateV1::ReceiptCommitted {

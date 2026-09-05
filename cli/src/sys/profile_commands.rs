@@ -63,9 +63,19 @@ async fn handle_profile_state(
         (runtime, Some(reviewed))
     };
     let report = if let Some(reviewed) = reviewed {
-        runtime
-            .set_sys_profile_approved(plan_request, &reviewed.approval)
-            .await?
+        match crate::lifecycle_plan::execute_reviewed(
+            config,
+            runtime,
+            reviewed,
+            shine_core::frontend::ExecutionOptions::default(),
+            &mut shine_core::runtime::NullObserver,
+            &mut crate::presentation::TerminalInteraction,
+        )
+        .await?
+        {
+            shine_core::frontend::OperationDetails::SysProfile(report) => *report,
+            _ => unreachable!("reviewed operation result type"),
+        }
     } else {
         runtime
             .preview_sys_profile(shine_core::runtime::SysProfileStateRequest {

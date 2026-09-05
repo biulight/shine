@@ -311,7 +311,10 @@ fn shell_status_sym(status: &str) -> &'static str {
         "preset present, bin symlink missing"
         | "bin symlink present, script missing"
         | "bin symlink present, preset missing" => "~",
-        "rendered script missing" => "!",
+        "rendered script missing"
+        | "launcher ownership conflict"
+        | "preset missing; launcher ownership conflict"
+        | "preset missing; installed entry preserved" => "!",
         "not installed" => "✗",
         _ => "~",
     }

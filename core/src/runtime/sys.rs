@@ -1914,7 +1914,10 @@ fn default_profile_enabled() -> bool {
 }
 
 impl SysRunManifest {
-    pub async fn load(host: &impl FileSystemHost, shine_dir: &Path) -> Result<Self> {
+    pub async fn load(
+        host: &impl crate::runtime::FileSystemObservationHost,
+        shine_dir: &Path,
+    ) -> Result<Self> {
         load_manifest_with_host(host, shine_dir).await
     }
 

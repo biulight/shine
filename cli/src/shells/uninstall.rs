@@ -88,16 +88,20 @@ async fn handle_uninstall_with_reporter(
     } else {
         crate::core_runtime::from_config(config).await?
     };
-    let core_report = if let Some(reviewed) = &reviewed {
-        runtime
-            .uninstall_shells_approved(
-                match &reviewed.request {
-                    crate::lifecycle_plan::LifecyclePlanRequest::Shell(request) => request.clone(),
-                    _ => unreachable!("reviewed Shell Plan"),
-                },
-                &reviewed.approval,
-            )
-            .await?
+    let core_report = if let Some(reviewed) = reviewed {
+        match crate::lifecycle_plan::execute_reviewed(
+            config,
+            runtime,
+            reviewed,
+            shine_core::frontend::ExecutionOptions::default(),
+            &mut shine_core::runtime::NullObserver,
+            &mut crate::presentation::TerminalInteraction,
+        )
+        .await?
+        {
+            shine_core::frontend::OperationDetails::ShellUninstall(report) => *report,
+            _ => unreachable!("reviewed operation result type"),
+        }
     } else {
         runtime
             .preview_uninstall_shells(shine_core::runtime::ShellUninstallRequest {

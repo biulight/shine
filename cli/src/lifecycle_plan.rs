@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 use shine_core::plan::{
     EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, PermissionV1, PlanActionV1,
-    PlanApprovalV1, PlanV1,
+    PlanV1,
 };
 use shine_core::runtime::{
     AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest, CoreRuntime,
@@ -90,18 +90,19 @@ impl LifecyclePlanRequest {
         }
     }
 
-    async fn generate(&self, runtime: &CoreRuntime<RealHost>) -> Result<PlanV1> {
+    fn service_request(&self) -> shine_core::frontend::ReviewRequest {
+        use shine_core::frontend::ReviewRequest;
         match self {
-            Self::App(request) => runtime.plan_apps(request.clone()).await,
-            Self::AppRecovery => runtime.plan_app_operation_recovery().await,
-            Self::AppRefresh(request) => runtime.plan_app_refresh(request.clone()).await,
-            Self::AppArtifact(request) => runtime.plan_app_artifact(request.clone()).await,
-            Self::Shell(request) => runtime.plan_shells(request.clone()).await,
-            Self::ShellRecovery => runtime.plan_shell_operation_recovery().await,
-            Self::Sys(request) => runtime.plan_managed_sys(request.clone()).await,
-            Self::SysRecovery => runtime.plan_sys_operation_recovery().await,
-            Self::SysProfile(request) => runtime.plan_sys_profile(request.clone()).await,
-            Self::SysBootstrap { request, .. } => runtime.plan_sys_bootstrap(request.clone()).await,
+            Self::App(request) => ReviewRequest::App(request.clone()),
+            Self::AppRecovery => ReviewRequest::AppRecovery,
+            Self::AppRefresh(request) => ReviewRequest::AppRefresh(request.clone()),
+            Self::AppArtifact(request) => ReviewRequest::AppArtifact(request.clone()),
+            Self::Shell(request) => ReviewRequest::Shell(request.clone()),
+            Self::ShellRecovery => ReviewRequest::ShellRecovery,
+            Self::Sys(request) => ReviewRequest::Sys(request.clone()),
+            Self::SysRecovery => ReviewRequest::SysRecovery,
+            Self::SysProfile(request) => ReviewRequest::SysProfile(request.clone()),
+            Self::SysBootstrap { request, .. } => ReviewRequest::SysBootstrap(request.clone()),
         }
     }
 
@@ -121,11 +122,10 @@ impl LifecyclePlanRequest {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct ReviewedLifecyclePlan {
     pub(crate) request: LifecyclePlanRequest,
-    pub(crate) approval: PlanApprovalV1,
-    config_digest: String,
+    pub(crate) approved: shine_core::frontend::ApprovedOperation,
 }
 
 pub(crate) struct PreparedLifecyclePlan {
@@ -175,12 +175,22 @@ async fn review_plans_with_render_mode(
     let config_digest = active_config_digest(config).await?;
     let mut runtime = runtime_with_env(config).await?;
     let mut planned = Vec::new();
+    let mut human_reviews = Vec::new();
     let mut needs_confirmation = false;
     let mut blocked = false;
     let mut blocked_diagnostics = std::collections::BTreeSet::new();
     for request in requests {
         request.configure_runtime(&mut runtime);
-        let plan = request.generate(&runtime).await?;
+        let trusted = shine_core::frontend::FrontendService::new(runtime)
+            .with_configuration_revision(Some(config_digest.clone()))
+            .into_trusted();
+        let human_review = trusted
+            .review(request.service_request())
+            .await
+            .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+        let plan = human_review.report().plan.clone();
+        human_reviews.push(human_review);
+        runtime = trusted.into_runtime();
         blocked |= !plan.is_ready();
         blocked_diagnostics.extend(
             plan.steps
@@ -212,6 +222,18 @@ async fn review_plans_with_render_mode(
     for line in rendered {
         println!("{line}");
     }
+    if planned.iter().any(|(_, plan)| {
+        plan.steps.iter().any(|step| {
+            step.resource
+                .as_deref()
+                .is_some_and(|resource| resource.starts_with("preset-cache:"))
+                && matches!(step.action, PlanActionV1::Create | PlanActionV1::Update)
+        })
+    }) {
+        println!(
+            "Preset cache steps maintain internal source copies; their counts are not application configuration updates."
+        );
+    }
 
     if blocked {
         bail!(blocked_plan_error(&planned, &blocked_diagnostics));
@@ -231,11 +253,13 @@ async fn review_plans_with_render_mode(
     }
     planned
         .into_iter()
-        .map(|(request, plan)| {
+        .zip(human_reviews)
+        .map(|((request, _), human_review)| {
             Ok(ReviewedLifecyclePlan {
                 request,
-                approval: PlanApprovalV1::for_reviewed_plan(&plan)?,
-                config_digest: config_digest.clone(),
+                approved: human_review
+                    .approve_after_human_confirmation()
+                    .map_err(shine_core::frontend::FrontendServiceError::into_source)?,
             })
         })
         .collect()
@@ -251,6 +275,12 @@ fn blocked_plan_error(
     }
 
     let mut reasons = Vec::new();
+    if diagnostics.contains("shell_snapshot_contains_missing_preset") {
+        reasons.push("a shared Shell snapshot still serves an installed command whose Preset is missing; restore its Preset or explicitly uninstall that command before replacing the snapshot".to_string());
+    }
+    if diagnostics.contains("shell_foreign_launcher_conflict") {
+        reasons.push("a Shell launcher has an ownership conflict; inspect the blocked target and resolve the conflict before retrying (existing files were preserved)".to_string());
+    }
     let legacy_overlay_metadata_targets = planned
         .iter()
         .flat_map(|(_, plan)| &plan.steps)
@@ -372,14 +402,41 @@ pub(crate) async fn prepare_runtime(
     config: &Config,
     reviewed: &ReviewedLifecyclePlan,
 ) -> Result<CoreRuntime<RealHost>> {
-    if active_config_digest(config).await? != reviewed.config_digest {
-        bail!("active configuration changed after security Plan review; no changes were made");
-    }
+    let revision = active_config_digest(config).await?;
     let mut runtime = runtime_with_env(config).await?;
     reviewed.request.configure_runtime(&mut runtime);
-    let current = reviewed.request.generate(&runtime).await?;
-    reviewed.approval.validate(&current)?;
-    Ok(runtime)
+    let trusted = shine_core::frontend::FrontendService::new(runtime)
+        .with_configuration_revision(Some(revision))
+        .into_trusted();
+    trusted
+        .validate_approved(&reviewed.approved)
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+    Ok(trusted.into_runtime())
+}
+
+pub(crate) async fn execute_reviewed(
+    config: &Config,
+    runtime: CoreRuntime<RealHost>,
+    reviewed: ReviewedLifecyclePlan,
+    options: shine_core::frontend::ExecutionOptions,
+    observer: &mut impl shine_core::runtime::RuntimeObserver,
+    interaction: &mut impl shine_core::runtime::RuntimeInteraction,
+) -> Result<shine_core::frontend::OperationDetails> {
+    let trusted = shine_core::frontend::FrontendService::new(runtime)
+        .with_configuration_revision(Some(active_config_digest(config).await?))
+        .into_trusted();
+    let execution = trusted
+        .apply(
+            reviewed.approved,
+            options,
+            observer,
+            interaction,
+            &mut Vec::new(),
+        )
+        .await
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+    Ok(execution.details)
 }
 
 async fn active_config_digest(config: &Config) -> Result<String> {

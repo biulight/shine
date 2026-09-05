@@ -330,6 +330,7 @@ mod tests {
             desired_content: None,
             current_content: None,
             status: "up-to-date",
+            attention_required: false,
             changes: Vec::new(),
         }
     }
