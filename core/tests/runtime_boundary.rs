@@ -205,6 +205,11 @@ fn core_domain_sources_do_not_bypass_captured_hosts() {
 fn security_planners_use_observation_bounds_and_no_raw_mutation_calls() {
     let core_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let planner = std::fs::read_to_string(core_root.join("src/runtime/planner.rs")).unwrap();
+    let planner = planner.replace("\r\n", "\n");
+    // Inline tests may mutate their virtual host to arrange observed state.
+    let (planner, _) = planner
+        .split_once("\n#[cfg(test)]\nmod tests {")
+        .expect("planner must retain its explicit inline test-module boundary");
 
     assert!(planner.contains("impl<H: FileSystemObservationHost> CoreRuntime<H>"));
     assert!(planner.contains("impl<H: FileSystemObservationHost + SplitDnsObservationHost>"));

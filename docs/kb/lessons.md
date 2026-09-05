@@ -3,6 +3,15 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-05 — Test hooks must not inherit the committing repository's Git environment
+
+- **Symptom**: Git fixture tests passed directly but failed during a linked-worktree commit, and
+  fixture files were staged into the outer release index.
+- **Root cause**: Git exports repository-local variables to hooks; child Git commands inherit them
+  even when a test changes its working directory to a temporary repository.
+- **Fix / rule**: the test hook unsets the variables reported by `git rev-parse --local-env-vars`
+  before starting nextest. Keep the hook enabled and let each fixture discover its own repository.
+
 ## 2026-09-05 — Isolating only the authoring dry-run misses scaffolding state
 
 - **Symptom**: instruction audit found unisolated `preset new`/`copy` commands in a skill promising
@@ -530,6 +539,11 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
   tests instantiate App, Shell, managed Sys, and bootstrap planners with observation-only hosts.
 - **Rule**: capability-boundary tests should verify the bound and calls of the assessment seam, not
   ban a capability name from a module that also owns the post-approval gate.
+
+- **2026-09-05 follow-up**: Shell regression fixtures remove files from `InMemoryHost` inside the
+  planner's inline test module. Scan production source before the explicit `#[cfg(test)] mod tests`
+  boundary for forbidden mutation calls, and fail if that boundary is missing; fixture setup is
+  not a production planner effect.
 
 ## 2026-08-30 — Executor-side choices expanded reviewed lifecycle work
 
