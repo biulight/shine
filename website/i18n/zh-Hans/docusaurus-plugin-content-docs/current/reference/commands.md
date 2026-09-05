@@ -9,6 +9,7 @@ sidebar_position: 1
 
 ## 1.0 target 规则
 
+
 日常命令使用 `app/<category>`、`shell/<category>`、`shell/<category>/<command>` 和
 `sys/<item>` 作为规范 target。install 与 uninstall 支持 Shell 命令 target；upgrade 则在所属
 类别内协调已经安装的命令。名称在 app 与 shell 间唯一时，安装和卸载也接受裸类别名；裸
@@ -167,6 +168,18 @@ destination 与持久 backup，只清理 stale transaction state。恢复确认�
 Plan，不会被替换；removal rollback path 也遵循相同规则。
 
 ## 状态、更新与补全
+
+Shell 检查会区分可应用的更新与需要处理的状态。启动器所有权冲突会单独提示，不计入可用更新。
+删除 Preset 后仍有安装记录的命令会显示为 `preset missing`；升级会保留其已安装文件和记录。
+可以恢复 Preset，或通过 `shine shell uninstall <CATEGORY>/<COMMAND>` 审查并明确卸载。
+不属于 Shine 管理的启动器仍会被保留，其冲突会阻断升级。如果替换外部共享快照会影响同分类下
+来源已删除但仍安装的命令，Shine 会阻断该替换，直到恢复对应 Preset 或明确卸载该命令。
+只删除脚本文件、却保留引用它的元数据，仍属于校验错误。
+
+`upgrade` 也会维护内部 Preset 缓存。`preset cache (… create)` 的数量表示内部来源副本，
+不代表同等数量的应用配置更新。因此，即使 `update` 没有发现可应用的配置变化，升级计划仍可能
+包含缓存维护。
+
 
 ```text
 shine list [--available [<app|shell|sys>]]

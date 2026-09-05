@@ -222,6 +222,18 @@ async fn review_plans_with_render_mode(
     for line in rendered {
         println!("{line}");
     }
+    if planned.iter().any(|(_, plan)| {
+        plan.steps.iter().any(|step| {
+            step.resource
+                .as_deref()
+                .is_some_and(|resource| resource.starts_with("preset-cache:"))
+                && matches!(step.action, PlanActionV1::Create | PlanActionV1::Update)
+        })
+    }) {
+        println!(
+            "Preset cache steps maintain internal source copies; their counts are not application configuration updates."
+        );
+    }
 
     if blocked {
         bail!(blocked_plan_error(&planned, &blocked_diagnostics));
@@ -263,6 +275,12 @@ fn blocked_plan_error(
     }
 
     let mut reasons = Vec::new();
+    if diagnostics.contains("shell_snapshot_contains_missing_preset") {
+        reasons.push("a shared Shell snapshot still serves an installed command whose Preset is missing; restore its Preset or explicitly uninstall that command before replacing the snapshot".to_string());
+    }
+    if diagnostics.contains("shell_foreign_launcher_conflict") {
+        reasons.push("a Shell launcher has an ownership conflict; inspect the blocked target and resolve the conflict before retrying (existing files were preserved)".to_string());
+    }
     let legacy_overlay_metadata_targets = planned
         .iter()
         .flat_map(|(_, plan)| &plan.steps)

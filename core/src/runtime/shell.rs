@@ -494,19 +494,19 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 };
                 let canonical = format!("shell/{}/{}", category.name, file.command_name);
                 let entry = manifest.find(&canonical);
-                let roots = self.shell_managed_roots(&category.name, entry);
-                let link_conflict = link_exists
-                    && !unlink_managed_command_with_host(
-                        self.host(),
-                        &self.context().bin_dir,
-                        std::ffi::OsStr::new(&file.command_name),
-                        &roots,
-                        true,
-                    )
-                    .await?
-                    .skipped
-                    .is_empty();
-                let installed = entry.is_some() || link_exists;
+                let launcher_probe = probe_shell_launcher(
+                    self.host(),
+                    self.context(),
+                    &category.name,
+                    &file.command_name,
+                    entry,
+                )
+                .await?;
+                let link_conflict = !launcher_probe.conflicts.is_empty();
+                let installed = entry.is_some()
+                    || link_exists
+                    || link_conflict
+                    || !launcher_probe.resources.is_empty();
                 let source_status = self
                     .inspect_shell_source(
                         &category.name,
@@ -646,10 +646,14 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 if !installed {
                     changes.clear();
                 }
-                let (status, status_text) = if !installed {
+                let (status, status_text) = if link_conflict {
+                    (
+                        InspectionFileStatus::UserModified,
+                        "launcher ownership conflict",
+                    )
+                } else if !installed {
                     (InspectionFileStatus::NotInstalled, "not installed")
                 } else if (installed && !link_exists)
-                    || link_conflict
                     || (link_exists && (!link_current || !manifest_current || !snapshot_current))
                     || source_status == InspectionFileStatus::UpdateAvail
                 {
@@ -686,9 +690,73 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     status_text,
                     installed,
                     link_conflict,
+                    preset_missing: false,
                     changes,
                 });
             }
+        }
+        // Receipt-only entries are inspection records, never executable Preset metadata.
+        let present = files
+            .iter()
+            .map(|file| (file.category.name.clone(), file.file.command_name.clone()))
+            .collect::<BTreeSet<_>>();
+        for entry in &manifest.entries {
+            if present.contains(&(entry.category.clone(), entry.command.clone())) {
+                continue;
+            }
+            let probe = probe_shell_launcher(
+                self.host(),
+                self.context(),
+                &entry.category,
+                &entry.command,
+                Some(entry),
+            )
+            .await?;
+            let link_conflict = !probe.conflicts.is_empty();
+            let file = ShellFile {
+                source_rel: entry.source_path.file_name().unwrap_or_default().into(),
+                command_name: entry.command.clone(),
+                description: Vec::new(),
+                needs_source: entry.needs_source,
+                runtime: if entry.runtime == "bun" {
+                    LinkRuntime::Bun
+                } else {
+                    LinkRuntime::Native
+                },
+                transforms: entry.transforms.clone(),
+                env: Vec::new(),
+                permissions: None,
+            };
+            files.push(ShellFileInspection {
+                category: ShellCategory {
+                    name: entry.category.clone(),
+                    description: None,
+                    files: Vec::new(),
+                    uses_metadata: false,
+                },
+                file,
+                source_path: entry.source_path.clone(),
+                installed_source_path: entry.source_path.clone(),
+                rendered_path: entry.rendered_path.clone(),
+                link_path: command_path_for_name(&self.context().bin_dir, entry.command.as_ref()),
+                link_target: None,
+                desired_content: None,
+                current_content: None,
+                status: if link_conflict {
+                    InspectionFileStatus::UserModified
+                } else {
+                    InspectionFileStatus::Missing
+                },
+                status_text: if link_conflict {
+                    "preset missing; launcher ownership conflict"
+                } else {
+                    "preset missing; installed entry preserved"
+                },
+                installed: true,
+                link_conflict,
+                preset_missing: true,
+                changes: Vec::new(),
+            });
         }
         Ok(files)
     }
@@ -1393,21 +1461,46 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     ) -> Result<ShellUpgradeLifecycleReport> {
         let manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
+        let selection = request
+            .category
+            .as_deref()
+            .map(parse_shell_lifecycle_target)
+            .transpose()?;
         let mut targets = manifest
             .entries
             .iter()
             .filter(|entry| {
-                request
-                    .category
-                    .as_ref()
-                    .is_none_or(|category| entry.category == *category)
+                selection.as_ref().is_none_or(|target| {
+                    entry.category == target.category
+                        && target
+                            .command
+                            .is_none_or(|command| entry.command == command)
+                })
             })
             .map(|entry| (entry.category.clone(), entry.command.clone()))
             .collect::<BTreeSet<_>>();
         // Legacy installs predate the Shell receipt. Recover only launchers
         // whose target is inside a captured Shine/preset-managed root.
-        for category in self.shell_categories(request.category.as_deref())? {
+        let available_categories =
+            self.shell_categories_or_missing(selection.as_ref().map(|target| target.category))?;
+        let available = available_categories
+            .iter()
+            .flat_map(|category| {
+                category
+                    .files
+                    .iter()
+                    .map(|file| (category.name.clone(), file.command_name.clone()))
+            })
+            .collect::<BTreeSet<_>>();
+        for category in available_categories {
             for file in category.files {
+                if selection
+                    .as_ref()
+                    .and_then(|target| target.command)
+                    .is_some_and(|command| command != file.command_name)
+                {
+                    continue;
+                }
                 let roots = self.shell_managed_roots(&category.name, None);
                 let probe = unlink_managed_command_with_host(
                     self.host(),
@@ -1436,6 +1529,18 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         let mut updated_categories = BTreeSet::new();
         for (category, command) in std::mem::take(&mut targets) {
             let target = format!("{category}/{command}");
+            if !available.contains(&(category.clone(), command.clone())) {
+                report.lifecycle.push(
+                    LifecycleOutcomeV1::new(
+                        format!("shell/{target}"),
+                        None::<String>,
+                        LifecycleStatus::Preserved,
+                        vec![LifecycleEffect::ManagedResourcePreserved],
+                    )
+                    .with_diagnostic_code("shell_preset_missing"),
+                );
+                continue;
+            }
             let run = self
                 .reconcile_shells(
                     ShellLifecycleRequest {
@@ -2058,25 +2163,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         category: &str,
         entry: Option<&ShellManifestEntry>,
     ) -> Vec<PathBuf> {
-        let mut roots = vec![
-            self.context().presets_dir.join("shell").join(category),
-            self.context()
-                .shine_dir
-                .join("rendered/shell")
-                .join(category),
-            self.context()
-                .shine_dir
-                .join("installed/shell")
-                .join(category),
-        ];
-        if let Some(overlay) = &self.context().overlay_dir {
-            roots.push(overlay.join("shell").join(category));
-        }
-        if let Some(entry) = entry {
-            roots.push(entry.source_path.clone());
-            roots.push(entry.rendered_path.clone());
-        }
-        roots
+        shell_managed_roots(self.context(), category, entry)
     }
 
     async fn shell_link_specs(&self, categories: &[ShellCategory]) -> Result<Vec<LinkSpec>> {
@@ -2119,6 +2206,54 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         }
         Ok(specs)
     }
+}
+
+pub(super) async fn probe_shell_launcher(
+    host: &impl super::FileSystemObservationHost,
+    context: &super::RuntimeContext,
+    category: &str,
+    command: &str,
+    entry: Option<&ShellManifestEntry>,
+) -> Result<super::launcher::ManagedLauncherProbe> {
+    let mut roots = shell_managed_roots(context, category, entry);
+    let probe =
+        probe_managed_command_with_host(host, &context.bin_dir, command.as_ref(), &roots).await?;
+    // Retain upgrade repair of receipt-backed legacy symlinks inside Shine's own
+    // roots. Do not broaden the ownership proof for regular launcher files.
+    if entry.is_some() && !probe.conflicts.is_empty() {
+        let mut only_symlinks = true;
+        for path in &probe.conflicts {
+            only_symlinks &= host
+                .metadata(path)
+                .await
+                .is_ok_and(|metadata| metadata.kind == FileKind::Symlink);
+        }
+        if only_symlinks {
+            roots.push(context.shine_dir.clone());
+            roots.push(context.presets_dir.clone());
+            return probe_managed_command_with_host(
+                host,
+                &context.bin_dir,
+                command.as_ref(),
+                &roots,
+            )
+            .await;
+        }
+    }
+    Ok(probe)
+}
+
+pub(super) fn shell_managed_roots(
+    context: &super::RuntimeContext,
+    category: &str,
+    entry: Option<&ShellManifestEntry>,
+) -> Vec<PathBuf> {
+    let mut roots = planned_shell_managed_roots(context, category);
+    if let Some(entry) = entry {
+        roots.push(entry.source_path.clone());
+        roots.push(entry.rendered_path.clone());
+    }
+    roots
 }
 
 pub(super) fn planned_shell_managed_roots(
@@ -2737,6 +2872,20 @@ impl<H: FileSystemHost> CoreRuntime<H> {
 
 impl<H> CoreRuntime<H> {
     pub fn shell_categories(&self, filter: Option<&str>) -> Result<Vec<ShellCategory>> {
+        let categories = self.shell_categories_or_missing(filter)?;
+        if filter.is_some() && categories.is_empty() && self.context().is_external_presets {
+            bail!(
+                "shell preset category not found: {}",
+                filter.unwrap_or_default()
+            );
+        }
+        Ok(categories)
+    }
+
+    pub(super) fn shell_categories_or_missing(
+        &self,
+        filter: Option<&str>,
+    ) -> Result<Vec<ShellCategory>> {
         let prefix = "shell/";
         let names = self
             .presets()
@@ -2747,12 +2896,6 @@ impl<H> CoreRuntime<H> {
             .filter(|category| filter.is_none_or(|filter| filter == *category))
             .map(str::to_string)
             .collect::<BTreeSet<_>>();
-        if filter.is_some() && names.is_empty() && self.context().is_external_presets {
-            bail!(
-                "shell preset category not found: {}",
-                filter.unwrap_or_default()
-            );
-        }
         names
             .into_iter()
             .map(|name| self.parse_shell_category(&name))

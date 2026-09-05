@@ -569,6 +569,8 @@ pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<L
             None::<String>,
             if row.link_conflict {
                 LifecycleStatus::Conflict
+            } else if row.preset_missing {
+                LifecycleStatus::Preserved
             } else if row.status_sym == "↑" {
                 LifecycleStatus::Pending
             } else {
@@ -582,6 +584,8 @@ pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<L
         );
         result.push(if row.link_conflict {
             outcome.with_diagnostic_code("shell_command_conflict")
+        } else if row.preset_missing {
+            outcome.with_diagnostic_code("shell_preset_missing")
         } else {
             outcome
         });

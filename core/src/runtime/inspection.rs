@@ -80,6 +80,7 @@ pub struct ShellFileInspection {
     pub status_text: &'static str,
     pub installed: bool,
     pub link_conflict: bool,
+    pub preset_missing: bool,
     pub changes: Vec<InspectionChange>,
 }
 

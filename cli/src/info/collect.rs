@@ -33,6 +33,7 @@ pub(super) struct ShellInfoFile {
     pub(super) desired_content: Option<Vec<u8>>,
     pub(super) current_content: Option<Vec<u8>>,
     pub(super) status: &'static str,
+    pub(super) attention_required: bool,
     pub(super) changes: Vec<UpdateChange>,
 }
 
@@ -110,6 +111,7 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
             desired_content: file.desired_content,
             current_content: file.current_content,
             status: file.status_text,
+            attention_required: file.link_conflict || file.preset_missing,
             changes: file.changes,
         })
         .collect())

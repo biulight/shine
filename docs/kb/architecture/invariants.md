@@ -583,6 +583,14 @@ bugs. Check this list before changing the modules named in each entry.
 - **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
   files, manifest entries, and managed launchers, including legacy launchers pointing into the
   external tree. The external presets and overlay directories remain untouched.
+- **Shell inspection and planning use the same launcher ownership probe.** Both recognize
+  category-scoped managed roots, the active overlay, and recorded source/rendered paths, including
+  the platform's complete launcher resource set. Receipt-only commands remain visible as missing
+  Presets and are preserved by upgrade; source deletion never authorizes uninstall. A shared
+  snapshot replacement that would discard a missing command's category state is blocked until
+  the source is restored or the command is explicitly uninstalled (ADR 0081).
+  Receipt-backed stale symlinks within Shine/preset roots retain upgrade repair; this does not
+  widen ownership for regular launcher files or links outside those roots.
 - **Shell update/upgrade must preserve foreign launchers.** Ownership is checked with the same
   managed-root proof used by uninstall. A regular launcher outside that proof is a structured
   `Conflict`, is not counted as a pending update, is excluded from forced launcher refresh, and

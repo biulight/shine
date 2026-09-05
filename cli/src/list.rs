@@ -137,6 +137,10 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
         .await
         .context("checking managed Sys Presets for update")?;
 
+    let shell_attention = shell_rows
+        .iter()
+        .filter(|row| row.is_installed && (row.link_conflict || row.preset_missing))
+        .collect::<Vec<_>>();
     let any_update =
         !update_shell.is_empty() || !actionable_app.is_empty() || !update_sys.is_empty();
     let has_generator_attention = app_rows.iter().any(|row| {
@@ -147,11 +151,12 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
                 | FileStatus::GeneratorTrustRequired
         )
     });
-    if !any_update && !has_generator_attention {
+    if !any_update && !has_generator_attention && shell_attention.is_empty() {
         return Ok(false);
     }
 
     crate::config::print_presets_note(config);
+    print_shell_attention(&shell_attention);
 
     if !diff {
         let shell_names = shell_categories(&update_shell);
@@ -272,6 +277,35 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
     Ok(true)
 }
 
+fn shell_attention_lines(rows: &[&ShellRow]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for row in rows
+        .iter()
+        .filter(|row| row.is_installed && (row.link_conflict || row.preset_missing))
+    {
+        lines.push(format!("  ! shell/{}  {}", row.label, row.status_text));
+        if row.link_conflict {
+            lines.push("    Launcher preserved; resolve its ownership conflict before upgrading this target.".to_string());
+        }
+        if row.preset_missing {
+            lines.push(format!("    Restore the Preset or review `shine shell uninstall {}` to remove the installed command.", row.label));
+        }
+    }
+    lines
+}
+
+fn print_shell_attention(rows: &[&ShellRow]) {
+    let lines = shell_attention_lines(rows);
+    if lines.is_empty() {
+        return;
+    }
+    println!("{}", colors::bold("Shell attention required"));
+    for line in lines {
+        println!("{line}");
+    }
+    println!();
+}
+
 fn print_action_hints(upgrade_targets: &[String], refresh_commands: &[String]) {
     if upgrade_targets.is_empty() && refresh_commands.is_empty() {
         return;
@@ -367,6 +401,13 @@ pub async fn handle_status_list(config: &Config, diff: bool, run_generators: boo
     let shell_rows = build_shell_rows(config).await?;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
     let all_shell: Vec<&ShellRow> = shell_rows.iter().collect();
+    print_shell_attention(
+        &installed_shell
+            .iter()
+            .copied()
+            .filter(|row| row.link_conflict || row.preset_missing)
+            .collect::<Vec<_>>(),
+    );
 
     let cats = load_active_categories(config, None)
         .await
@@ -927,6 +968,7 @@ mod tests {
             status_text,
             is_installed,
             link_conflict: false,
+            preset_missing: false,
             changes: Vec::new(),
         }
     }
@@ -943,6 +985,22 @@ mod tests {
             upgrade_available: file_status == FileStatus::UpdateAvail,
             refresh_sources: Vec::new(),
         }
+    }
+
+    #[test]
+    fn shell_attention_reports_conflicts_and_missing_presets_without_upgrade_hint() {
+        let mut conflict = shell_row("launcher ownership conflict", true);
+        conflict.link_conflict = true;
+        let mut missing = shell_row("preset missing; installed entry preserved", true);
+        missing.preset_missing = true;
+        let current = shell_row("up-to-date", true);
+        let lines = shell_attention_lines(&[&conflict, &missing, &current]).join("\n");
+        assert!(lines.contains("launcher ownership conflict"));
+        assert!(lines.contains("preset missing"));
+        assert!(lines.contains("shine shell uninstall"));
+        assert!(!lines.contains("shine upgrade"));
+        assert!(!lines.contains("up-to-date"));
+        assert!(shell_attention_lines(&[&current]).is_empty());
     }
 
     #[test]

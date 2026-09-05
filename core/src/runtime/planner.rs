@@ -1814,6 +1814,23 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         finish_specialized_plan(self, operation, state, permissions, steps)
     }
 
+    async fn shell_launcher_is_managed(
+        &self,
+        category: &str,
+        command: &str,
+        entry: Option<&ShellManifestEntry>,
+    ) -> Result<bool> {
+        let probe = super::shell::probe_shell_launcher(
+            self.host(),
+            self.context(),
+            category,
+            command,
+            entry,
+        )
+        .await?;
+        Ok(!probe.resources.is_empty() && probe.conflicts.is_empty())
+    }
+
     pub async fn plan_shells(&self, request: ShellPlanRequest) -> Result<PlanV1> {
         validate_shell_request(&request)?;
         let selection = request
@@ -1824,7 +1841,16 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         let mut selected_categories = if request.operation == LifecycleOperation::Uninstall {
             None
         } else {
-            Some(self.shell_categories(selection.as_ref().map(|target| target.category))?)
+            Some(
+                self.shell_categories_or_missing(selection.as_ref().map(|target| target.category))?
+                    .into_iter()
+                    .filter(|category| {
+                        selection
+                            .as_ref()
+                            .is_none_or(|target| target.category == category.name)
+                    })
+                    .collect::<Vec<_>>(),
+            )
         };
         if let (Some(command), Some(categories)) = (
             selection.as_ref().and_then(|target| target.command),
@@ -1833,17 +1859,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             for category in categories {
                 category.files.retain(|file| file.command_name == command);
             }
-        }
-        if request.operation != LifecycleOperation::Uninstall
-            && request.target.is_some()
-            && selected_categories.as_ref().is_none_or(|categories| {
-                categories.iter().all(|category| category.files.is_empty())
-            })
-        {
-            bail!(
-                "Shell lifecycle target not found: {}",
-                request.target.as_deref().unwrap_or_default()
-            );
         }
         let mut state = StateCapture::new("shell", request.operation)?;
         capture_request_mode(
@@ -1874,6 +1889,22 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .filter(|entry| shell_entry_selected(entry, selection.as_ref()))
                 .collect::<Vec<_>>(),
         )?;
+        if request.operation != LifecycleOperation::Uninstall
+            && request.target.is_some()
+            && !(request.operation == LifecycleOperation::Upgrade
+                && manifest
+                    .entries
+                    .iter()
+                    .any(|entry| shell_entry_selected(entry, selection.as_ref())))
+            && selected_categories.as_ref().is_none_or(|categories| {
+                categories.iter().all(|category| category.files.is_empty())
+            })
+        {
+            bail!(
+                "Shell lifecycle target not found: {}",
+                request.target.as_deref().unwrap_or_default()
+            );
+        }
         let mut permissions = PermissionAccumulator::default();
         let mut steps = Vec::new();
         let mut typed_launcher_transaction = false;
@@ -1901,10 +1932,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 let mut installed_files = Vec::new();
                 for file in std::mem::take(&mut category.files) {
                     let canonical = format!("shell/{}/{}", category.name, file.command_name);
-                    let launcher =
-                        command_path_for_name(&self.context().bin_dir, file.command_name.as_ref());
                     if manifest.find(&canonical).is_some()
-                        || launcher_is_managed(self.host(), &launcher, self.context()).await?
+                        || self
+                            .shell_launcher_is_managed(&category.name, &file.command_name, None)
+                            .await?
                     {
                         installed_files.push(file);
                     }
@@ -1912,11 +1943,81 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 category.files = installed_files;
             }
             categories.retain(|category| !category.files.is_empty());
-            if request.target.is_some() && categories.is_empty() {
+            if request.target.is_some()
+                && categories.is_empty()
+                && !manifest
+                    .entries
+                    .iter()
+                    .any(|entry| shell_entry_selected(entry, selection.as_ref()))
+            {
                 bail!(
                     "Shell lifecycle target is not installed: {}",
                     request.target.as_deref().unwrap_or_default()
                 );
+            }
+        }
+
+        let available_shell_targets = self
+            .shell_categories_or_missing(selection.as_ref().map(|target| target.category))?
+            .into_iter()
+            .flat_map(|category| {
+                category
+                    .files
+                    .into_iter()
+                    .map(move |file| format!("shell/{}/{}", category.name, file.command_name))
+            })
+            .collect::<BTreeSet<_>>();
+        let missing_entries = manifest
+            .entries
+            .iter()
+            .filter(|entry| {
+                !available_shell_targets
+                    .contains(&format!("shell/{}/{}", entry.category, entry.command))
+            })
+            .collect::<Vec<_>>();
+        if request.operation == LifecycleOperation::Upgrade {
+            for entry in missing_entries
+                .iter()
+                .filter(|entry| shell_entry_selected(entry, selection.as_ref()))
+            {
+                let canonical = format!("shell/{}/{}", entry.category, entry.command);
+                let probe = super::shell::probe_shell_launcher(
+                    self.host(),
+                    self.context(),
+                    &entry.category,
+                    &entry.command,
+                    Some(entry),
+                )
+                .await?;
+                for (index, resource) in prepare_launcher_resources(
+                    &self.context().bin_dir,
+                    &shell_link_spec_from_manifest_entry(entry)?,
+                )
+                .into_iter()
+                .enumerate()
+                {
+                    capture_path_state(
+                        self.host(),
+                        &mut state,
+                        format!("orphan-launcher:{canonical}:{index}"),
+                        resource.destination(),
+                    )
+                    .await?;
+                }
+                let mut step = PlanStepV1::new(
+                    canonical,
+                    None::<String>,
+                    if probe.conflicts.is_empty() {
+                        PlanActionV1::Preserve
+                    } else {
+                        PlanActionV1::Blocked
+                    },
+                )
+                .with_diagnostic_code("shell_preset_missing");
+                if !probe.conflicts.is_empty() {
+                    step = step.with_diagnostic_code("shell_foreign_launcher_conflict");
+                }
+                steps.push(step);
             }
         }
 
@@ -1926,8 +2027,15 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .iter()
                 .filter(|entry| shell_entry_selected(entry, selection.as_ref()))
                 .collect::<Vec<_>>();
-            let mut legacy_categories =
-                self.shell_categories(selection.as_ref().map(|target| target.category))?;
+            let mut legacy_categories = self
+                .shell_categories_or_missing(selection.as_ref().map(|target| target.category))?
+                .into_iter()
+                .filter(|category| {
+                    selection
+                        .as_ref()
+                        .is_none_or(|target| target.category == category.name)
+                })
+                .collect::<Vec<_>>();
             if let Some(command) = selection.as_ref().and_then(|target| target.command) {
                 for category in &mut legacy_categories {
                     category.files.retain(|file| file.command_name == command);
@@ -2543,6 +2651,20 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         .join("installed/shell")
                         .join(&category.name);
                     if !shell_snapshot_tree_current(self.host(), &destination, &expected).await? {
+                        if missing_entries
+                            .iter()
+                            .any(|entry| entry.category == category.name)
+                        {
+                            steps.push(
+                                PlanStepV1::new(
+                                    format!("shell/{}", category.name),
+                                    Some("shared-snapshot"),
+                                    PlanActionV1::Blocked,
+                                )
+                                .with_diagnostic_code("shell_snapshot_contains_missing_preset"),
+                            );
+                            continue;
+                        }
                         let stage = shell_snapshot_stage_path(&destination);
                         let rollback = shell_snapshot_rollback_path(&destination);
                         for (label, path) in [
@@ -2622,7 +2744,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         &mut state,
                         &mut file_permissions,
                     )?;
-                    let managed = launcher_is_managed(self.host(), &link, self.context()).await?;
+                    let managed = self
+                        .shell_launcher_is_managed(&category.name, &file.command_name, entry)
+                        .await?;
                     let source =
                         self.shell_deployment_source_path(&category.name, &file.source_rel);
                     let rendered = self.shell_rendered_path(&category.name, &file.source_rel);
@@ -6239,37 +6363,6 @@ fn app_code_blocked<H>(
         TrustCapabilityV1::AppGenerator
     };
     Ok(!runtime.app_capability_trusted(category, capability)?)
-}
-
-async fn launcher_is_managed(
-    host: &impl FileSystemObservationHost,
-    path: &Path,
-    context: &super::RuntimeContext,
-) -> Result<bool> {
-    let metadata = match host.metadata(path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.is_not_found() => return Ok(false),
-        Err(error) => return Err(error.into_anyhow("observing Shell launcher ownership")),
-    };
-    if metadata.kind == FileKind::Symlink {
-        return Ok(host.read_link(path).await.is_ok_and(|target| {
-            target.starts_with(&context.shine_dir) || target.starts_with(&context.presets_dir)
-        }));
-    }
-    let Some(bytes) = read_optional(host, path).await? else {
-        return Ok(false);
-    };
-    let Ok(text) = std::str::from_utf8(&bytes) else {
-        return Ok(false);
-    };
-    Ok(text.contains("# shine-managed")
-        && text
-            .lines()
-            .find_map(|line| line.strip_prefix("# shine-target:"))
-            .is_some_and(|target| {
-                let target = Path::new(target.trim());
-                target.starts_with(&context.shine_dir) || target.starts_with(&context.presets_dir)
-            }))
 }
 
 fn shell_entry_selected(
@@ -12502,6 +12595,239 @@ target = '$HOME/.config/disabled.txt'
         );
         assert_eq!(runtime.host().read(&cmd).await.unwrap(), cmd_bytes);
         assert!(runtime.host().metadata(&cmd_rollback).await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_overlay_launcher_ownership_matches_inspection_and_plan() {
+        for retain_overlay in [true, false] {
+            let original = installed_shell_runtime().await;
+            let mut context = original.context().clone();
+            let overlay = context.home_dir.join("overlay");
+            context.overlay_dir = retain_overlay.then_some(overlay.clone());
+            let source = overlay.join("shell/demo/demo.sh");
+            let (mut manifest, _) = load_shell_manifest(original.host(), &context.shine_dir)
+                .await
+                .unwrap();
+            manifest.entries[0].source_path = source.clone();
+            original.host().put_file(
+                context.shine_dir.join("shell-manifest.toml"),
+                toml::to_string(&manifest).unwrap().into_bytes(),
+            );
+            let launcher = command_path_for_name(&context.bin_dir, "demo".as_ref());
+            original.host().remove_file(&launcher).await.unwrap();
+            original.host().put_file(
+                &launcher,
+                format!(
+                    "#!/bin/sh\n# shine-managed\n# shine-target: {}\n",
+                    source.display()
+                )
+                .into_bytes(),
+            );
+            let runtime =
+                CoreRuntime::new(original.host().clone(), context, shell_launcher_snapshot());
+            assert!(!runtime.inspect_shells().await.unwrap()[0].link_conflict);
+            let plan = runtime
+                .plan_shells(ShellPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: None,
+                    ..shell_install_request()
+                })
+                .await
+                .unwrap();
+            assert!(plan.is_ready(), "{plan:?}");
+            assert!(!plan.steps.iter().any(|step| {
+                step.diagnostic_codes
+                    .contains(&"shell_foreign_launcher_conflict".to_string())
+            }));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_legacy_symlink_repair_stays_inside_managed_roots() {
+        for managed in [true, false] {
+            let runtime = installed_shell_runtime().await;
+            let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+            let target = if managed {
+                runtime.context().shine_dir.join("legacy.sh")
+            } else {
+                runtime.context().home_dir.join("user.sh")
+            };
+            runtime.host().put_file(&target, b"#!/bin/sh\n".to_vec());
+            runtime.host().remove_file(&launcher).await.unwrap();
+            runtime.host().symlink(&target, &launcher).await.unwrap();
+            assert_eq!(
+                runtime.inspect_shells().await.unwrap()[0].link_conflict,
+                !managed
+            );
+            let plan = runtime
+                .plan_shells(ShellPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: Some("demo".to_string()),
+                    ..shell_install_request()
+                })
+                .await
+                .unwrap();
+            assert_eq!(plan.is_ready(), managed, "{plan:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_missing_preset_is_preserved_and_can_be_uninstalled() {
+        let original = installed_shell_runtime().await;
+        let mut context = original.context().clone();
+        context.is_external_presets = true;
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            context,
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        );
+        let inspection = runtime.inspect_shells().await.unwrap();
+        assert_eq!(inspection.len(), 1);
+        assert!(inspection[0].preset_missing);
+        assert!(!inspection[0].link_conflict);
+        let launcher = inspection[0].link_path.clone();
+        let before = runtime.host().read_link(&launcher).await.unwrap();
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo/demo".to_string()),
+            ..shell_install_request()
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready(), "{plan:?}");
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Preserve
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_preset_missing".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .upgrade_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read_link(&launcher).await.unwrap(), before);
+        assert_eq!(
+            load_shell_manifest(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .0
+                .entries
+                .len(),
+            1
+        );
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready(), "{plan:?}");
+        runtime
+            .uninstall_shells_approved(request, &PlanApprovalV1::for_reviewed_plan(&plan).unwrap())
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_missing_preset_blocks_shared_snapshot_replacement() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("shell/demo/shine.toml", b"[[files]]\nsource = 'one.sh'\n[files.permissions]\nschema_version = 1\n[[files]]\nsource = 'two.sh'\n[files.permissions]\nschema_version = 1\n".to_vec())
+            .file("shell/demo/one.sh", b"#!/bin/sh\necho one\n".to_vec())
+            .file("shell/demo/two.sh", b"#!/bin/sh\necho two\n".to_vec()).build();
+        let original = external_shell_runtime(snapshot);
+        for (logical, bytes) in original.presets().files() {
+            original
+                .host()
+                .put_file(original.context().presets_dir.join(logical), bytes.clone());
+        }
+        let install = ShellPlanRequest {
+            target: Some("demo".to_string()),
+            ..shell_install_request()
+        };
+        let plan = original.plan_shells(install.clone()).await.unwrap();
+        original
+            .install_shells_approved(install, &PlanApprovalV1::for_reviewed_plan(&plan).unwrap())
+            .await
+            .unwrap();
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'two.sh'\n[files.permissions]\nschema_version = 1\n".to_vec(),
+            )
+            .file("shell/demo/two.sh", b"#!/bin/sh\necho changed\n".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            snapshot,
+        );
+        for (logical, bytes) in runtime.presets().files() {
+            runtime
+                .host()
+                .put_file(runtime.context().presets_dir.join(logical), bytes.clone());
+        }
+        runtime
+            .host()
+            .remove_file(&runtime.context().presets_dir.join("shell/demo/one.sh"))
+            .await
+            .unwrap();
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            ..shell_install_request()
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_snapshot_contains_missing_preset".to_string())
+        }));
+        let uninstall = ShellPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo/one".to_string()),
+            ..shell_install_request()
+        };
+        let plan = runtime.plan_shells(uninstall.clone()).await.unwrap();
+        assert!(plan.is_ready(), "{plan:?}");
+        runtime
+            .uninstall_shells_approved(
+                uninstall,
+                &PlanApprovalV1::for_reviewed_plan(&plan).unwrap(),
+            )
+            .await
+            .unwrap();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready(), "{plan:?}");
+        runtime
+            .upgrade_shells_approved(request, &PlanApprovalV1::for_reviewed_plan(&plan).unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn shell_missing_preset_foreign_launcher_remains_blocked() {
+        let original = installed_shell_runtime().await;
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        );
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        runtime.host().remove_file(&launcher).await.unwrap();
+        runtime.host().put_file(&launcher, b"user owned".to_vec());
+        let rows = runtime.inspect_shells().await.unwrap();
+        assert!(rows[0].preset_missing && rows[0].link_conflict);
+        let plan = runtime
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                ..shell_install_request()
+            })
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert_eq!(runtime.host().read(&launcher).await.unwrap(), b"user owned");
     }
 
     #[tokio::test]

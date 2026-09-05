@@ -201,6 +201,20 @@ supported Plan instead of being replaced.
 
 ## Status, updates, and completions
 
+Shell checks distinguish applicable updates from attention-required state. Launcher ownership
+conflicts are reported separately and are never counted as available updates. Installed commands
+whose Preset has been removed remain visible as `preset missing`; upgrade preserves their installed
+files and records. Restore the Preset or review `shine shell uninstall <CATEGORY>/<COMMAND>` for
+explicit removal. A foreign launcher is still preserved, and its conflict blocks upgrade. If a
+shared external snapshot replacement would affect a missing installed sibling, Shine blocks that
+replacement until the sibling's Preset is restored or the command is explicitly uninstalled.
+Deleting only a payload while leaving metadata that references it is a validation error.
+
+`upgrade` also maintains internal Preset caches. A `preset cache (… create)` count describes internal
+source copies, not that many application configuration updates; a cache-only Plan can therefore
+appear even when `update` finds no applicable configuration changes.
+
+
 ```text
 shine list [--available [<app|shell|sys>]]
 shine info <TARGET> [--diff] [--verbose] [--run-generators]

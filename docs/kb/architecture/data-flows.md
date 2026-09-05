@@ -64,6 +64,16 @@ record additional capabilities. Pure planners combine both sources into the requ
 resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
 protected execution fails closed.
 
+## Shell availability and ownership inspection
+
+Shell inspection joins the effective platform-selected Preset commands with manifest-only targets.
+Receipt-only records are inspection data and never enter execution as reconstructed metadata.
+The planner and inspection share the observation-only launcher probe with category, overlay, and
+receipt roots. CLI update separates conflicts/missing Presets from pending updates; detailed views
+keep the same status. Upgrade preserves absent-source commands and blocks shared snapshot
+replacement when it would affect a retained missing sibling. Explicit uninstall remains
+receipt-driven even after an external category disappears (ADR 0081).
+
 ## Frontend Service inventory
 
 The CLI and future adapters construct `FrontendService` from the same captured `CoreRuntime`,

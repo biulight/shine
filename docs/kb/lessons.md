@@ -1474,3 +1474,18 @@ measured, not inferred.
 When cutting a release, always diff against the latest stable `v*` tag
 (`git tag --list 'v*' --sort=-version:refname | head -1`), never `preview` and never
 `git describe --tags --abbrev=0` alone (it can resolve to `preview`).
+
+## 2026-09-05 — Shell ownership and missing-source inspection must agree with planning
+
+- **Symptom**: update showed no pending change while upgrade rejected an overlay launcher as
+  foreign; removing a Preset could also hide a still-installed command from inspection.
+- **Root cause**: the planner had a separate marker/root check that omitted overlay and receipt
+  paths, while inspection used the uninstall ownership probe. Default update filtered conflicts
+  out, detailed output called them updates, and inspection enumerated only available sources.
+- **Fix**: reuse the observation-only complete launcher probe, append receipt-only inspection
+  records, render attention separately from applicable updates, and preserve missing-source
+  commands during upgrade. Block shared snapshot replacement when a missing installed sibling
+  still depends on that category. Uninstall planning discovers receipt-only external categories.
+- **Rule**: source availability, installed state, and ownership are separate facts. A source
+  disappearance must not hide an installation or authorize removal, and a conflict is not an
+  applicable update. Internal App cache maintenance remains distinct from configuration changes.

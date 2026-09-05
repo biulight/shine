@@ -203,6 +203,10 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> FrontendService<H> {
         })?;
         let mut report = InspectionReportV1::default();
         for file in &files {
+            // Inventory supplies the canonical receipt-only item and diagnostic below.
+            if file.preset_missing && !file.link_conflict {
+                continue;
+            }
             let (state, operations) = if file.link_conflict {
                 (InspectionStateV1::Conflict, Vec::new())
             } else {
@@ -346,6 +350,13 @@ impl<H: crate::runtime::FileSystemObservationHost> FrontendService<H> {
                 "frontend_inspection_preset_missing",
                 Some(item.target.clone()),
             ));
+            if report
+                .items
+                .iter()
+                .any(|existing| existing.target == item.target)
+            {
+                continue;
+            }
             report.items.push(InspectionItemV1 {
                 target: item.target,
                 kind,

@@ -49,6 +49,7 @@ pub struct ShellRow {
     /// Existing launcher is outside Shine's ownership proof and must be
     /// preserved rather than reported as an applicable update.
     pub(crate) link_conflict: bool,
+    pub(crate) preset_missing: bool,
     pub(crate) changes: Vec<UpdateChange>,
 }
 
@@ -84,16 +85,20 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     Ok(inspections
         .into_iter()
         .map(|file| {
-            let (symbol, status_sym) = match file.status {
-                FileStatus::NotInstalled => ("✗", "✗"),
-                FileStatus::UpdateAvail => ("↑", "↑"),
-                FileStatus::Missing => ("!", "!"),
-                FileStatus::Partial
-                | FileStatus::UserModified
-                | FileStatus::GeneratorNotEvaluated
-                | FileStatus::GeneratorEvaluationFailed
-                | FileStatus::GeneratorTrustRequired => ("~", "~"),
-                FileStatus::UpToDate => ("✓", "✓"),
+            let (symbol, status_sym) = if file.link_conflict || file.preset_missing {
+                ("!", "!")
+            } else {
+                match file.status {
+                    FileStatus::NotInstalled => ("✗", "✗"),
+                    FileStatus::UpdateAvail => ("↑", "↑"),
+                    FileStatus::Missing => ("!", "!"),
+                    FileStatus::Partial
+                    | FileStatus::UserModified
+                    | FileStatus::GeneratorNotEvaluated
+                    | FileStatus::GeneratorEvaluationFailed
+                    | FileStatus::GeneratorTrustRequired => ("~", "~"),
+                    FileStatus::UpToDate => ("✓", "✓"),
+                }
             };
             ShellRow {
                 category: file.category.name.clone(),
@@ -103,6 +108,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 status_text: file.status_text,
                 is_installed: file.installed,
                 link_conflict: file.link_conflict,
+                preset_missing: file.preset_missing,
                 changes: file.changes,
             }
         })
