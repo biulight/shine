@@ -5,12 +5,20 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
-## [Unreleased]
+## [2.0.2] — 2026-09-05
 
 ### Bug Fixes
 
 - Use logical resource labels in Sys recovery Plans so private destination paths do not appear
   in resource descriptions; reviewed filesystem permissions retain their exact scope.
+- Preserve foreign Shell launchers and report ownership conflicts separately from available updates.
+- Keep installed Shell commands visible when their Preset is missing, preserving their files and
+  records during upgrade and blocking shared snapshot replacement that would discard missing commands.
+
+### Internal
+
+- Centralized frontend inventory, inspection, Plan review, operation state, and safe progress events
+  behind shared Core services, with one-shot human-reviewed execution and read-only adapter boundaries.
 
 ## [2.0.1] — 2026-09-05
 
