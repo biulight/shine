@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-06 — Shell authoring needs typed template blockers and explicit shell selection
+
+- **Symptom**: a complete external `shell/proxy` passes validation, but authoring Plan returns only
+  `authoring_plan_failed` on the current source build.
+- **Root cause**: static validation does not render templates. The empty synthetic environment lacks
+  proxy template inputs; Shell planning propagated the renderer's undefined-variable error instead
+  of producing a blocked step. Windows previews also inherited the compiling host's default shell,
+  filtering out `.ps1` commands before planning.
+- **Fix**: classify missing template inputs by error type and emit `shell_template_inputs_missing`
+  without raw names/values; select synthetic Zsh/PowerShell and profile paths by requested platform.
+- **Rule**: valid source is not proof of readiness. Keep absent-input blockers and approval rejection;
+  never fill in ambient values or implicit trust. Cross-platform synthetic tests verify selection,
+  not execution on a real target OS.
+
 ## 2026-09-05 — Test hooks must not inherit the committing repository's Git environment
 
 - **Symptom**: Git fixture tests passed directly but failed during a linked-worktree commit, and

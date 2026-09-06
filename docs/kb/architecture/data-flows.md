@@ -188,8 +188,11 @@ category path + explicit platform
     → authoring report (assumptions + steps + permissions + blockers)
 ```
 
-App and Shell use a first-install lifecycle request. Sys partitions the validated manifest into
-managed and init items, then emits separate managed-install and bootstrap sections. The synthetic
+App and Shell use a first-install lifecycle request. The authoring context explicitly selects Zsh
+for macOS/Linux and PowerShell with synthetic Windows profile paths for Windows; it never inherits
+the compiling host's shell. Missing Shell template inputs become a typed, redacted blocked step,
+not an authoring construction failure. Sys partitions the validated manifest into managed and init
+items, then emits separate managed-install and bootstrap sections. The synthetic
 context contains no env values, secret versions, trust grants, detected commands, manifests,
 destinations, or administrator state, so related blockers remain visible. The output deliberately
 drops source/state digests and fingerprints: it is not a security Plan approval and cannot enter an

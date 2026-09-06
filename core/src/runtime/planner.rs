@@ -36,6 +36,7 @@ use crate::action::{
     shell_snapshot_rollback_path, shell_snapshot_stage_path,
 };
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
+use crate::install::transforms::MissingTemplateVariables;
 use crate::install::{AppEntry, AppManifest};
 use crate::lifecycle::LifecycleOperation;
 use crate::permission::{PermissionDeclarationV1, PermissionPathBaseV1};
@@ -2781,11 +2782,28 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     .await?;
                     let mut rendered_current = true;
                     if !effective_transforms.is_empty() {
-                        let desired_rendered = crate::install::apply_transforms(
+                        let desired_rendered = match crate::install::apply_transforms(
                             &effective_transforms,
                             desired_source,
                             &self.context().env,
-                        )?;
+                        ) {
+                            Ok(rendered) => rendered,
+                            Err(error) if error.is::<MissingTemplateVariables>() => {
+                                // Missing inputs are a legitimate blocker, not a broken Plan.
+                                // Never project the transform's raw error or variable names.
+                                steps.push(
+                                    PlanStepV1::new(
+                                        &canonical,
+                                        Some("rendered-output"),
+                                        PlanActionV1::Blocked,
+                                    )
+                                    .with_diagnostic_code("shell_template_inputs_missing"),
+                                );
+                                permissions.merge(file_permissions);
+                                continue;
+                            }
+                            Err(error) => return Err(error),
+                        };
                         let desired_mode = self
                             .host()
                             .metadata(&source)
@@ -10228,6 +10246,36 @@ target = '$HOME/.config/disabled.txt'
             purge: false,
             input_versions: PlanningInputVersions::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn missing_shell_template_inputs_block_approval_without_mutation() {
+        let mut missing = runtime(transformed_shell_snapshot(b"@@PRIVATE_INPUT@@"));
+        missing.context_mut_for_cli().platform = RuntimePlatform::Linux;
+        missing.context_mut_for_cli().shell = super::super::ShellType::Zsh;
+        let plan = missing.plan_shells(shell_install_request()).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_err());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step.diagnostic_codes == ["shell_template_inputs_missing"]
+        }));
+        let json = serde_json::to_string(&plan).unwrap();
+        assert!(!json.contains("PRIVATE_INPUT"));
+        assert!(!json.contains("undefined template"));
+        assert!(
+            missing
+                .host()
+                .operations()
+                .iter()
+                .all(|op| matches!(op, HostOperation::Read(_)))
+        );
+
+        // Other rendering errors must not be mistaken for absent input.
+        let mut invalid = runtime(transformed_shell_snapshot(&[0xff]));
+        invalid.context_mut_for_cli().platform = RuntimePlatform::Linux;
+        invalid.context_mut_for_cli().shell = super::super::ShellType::Zsh;
+        assert!(invalid.plan_shells(shell_install_request()).await.is_err());
     }
 
     #[tokio::test]

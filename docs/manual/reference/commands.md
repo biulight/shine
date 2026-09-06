@@ -415,6 +415,14 @@ HOME, runs preset code, or produces an approval that can be applied. `ready: fal
 blocker under the stated assumptions and does not make an otherwise valid report fail; invalid
 input or static validation still exits with status 1. JSON output uses its own `schema_version: 1`.
 
+Shell previews use Zsh for macOS/Linux and PowerShell for Windows, independent of the machine
+running Shine. Missing Shell template values (including `shine-template` annotations) produce a
+`shell_template_inputs_missing` blocked step: the report remains `valid: true`, `ready: false`,
+and exits with status 0. Static validation checks the source structure, not template input
+availability. Use declarative fixture environment presence to test supplied-input cases; the direct
+preview never borrows values from your real environment. The diagnostic does not reveal missing
+variable names or values.
+
 `preset test` reads `shine.test.toml` from exactly one category and runs each declared case through
 the same synthetic authoring-plan path. Fixture schema v1 requires unique case names and a platform.
 Optional `[cases.host]` state may declare environment-name presence, opaque `secret_versions`,

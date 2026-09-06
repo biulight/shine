@@ -1,5 +1,17 @@
 use std::collections::BTreeMap;
 
+/// Typed failure so planners can report missing inputs without exposing their names.
+#[derive(Debug)]
+pub(crate) struct MissingTemplateVariables(Vec<String>);
+
+impl std::fmt::Display for MissingTemplateVariables {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "undefined template variable(s): {}", self.0.join(", "))
+    }
+}
+
+impl std::error::Error for MissingTemplateVariables {}
+
 /// Apply `@@VAR_NAME@@` substitution using `vars`.
 ///
 /// Placeholders must match `@@[A-Za-z_][A-Za-z0-9_]*@@`. Any placeholder
@@ -44,7 +56,7 @@ pub(super) fn apply(input: &[u8], vars: &BTreeMap<String, String>) -> anyhow::Re
     result.push_str(remaining);
 
     if !missing.is_empty() {
-        anyhow::bail!("undefined template variable(s): {}", missing.join(", "));
+        return Err(MissingTemplateVariables(missing).into());
     }
 
     Ok(result.into_bytes())
@@ -97,6 +109,7 @@ mod tests {
         let v = vars(&[]);
         let err = apply(b"@@MISSING@@", &v).unwrap_err();
         assert!(err.to_string().contains("MISSING"), "{err}");
+        assert!(err.is::<MissingTemplateVariables>());
     }
 
     #[test]

@@ -353,6 +353,12 @@ managed-resource 与 bootstrap section。该命令不会初始化配置、访问
 也不会生成可用于 apply 的批准。`ready: false` 只表示在这些假设下存在 blocker，本身不会让有效报告
 以失败退出；非法输入或静态校验失败仍返回退出码 1。JSON 输出使用独立的 `schema_version: 1`。
 
+Shell 预览在 macOS/Linux 上使用 Zsh，在 Windows 上使用 PowerShell，不依赖运行 Shine 的机器。
+缺少 Shell 模板值（包括 `shine-template` 标记启用的模板）时，会产生
+`shell_template_inputs_missing` 阻塞步骤：报告仍为 `valid: true`、`ready: false`，退出码为 0。
+静态校验检查源码结构，不检查模板输入是否可用。可通过声明式 fixture 的环境变量存在状态测试
+提供输入的情况；直接预览不会借用真实环境中的值。诊断不会泄露缺失变量的名称或值。
+
 `preset test` 从单个类别读取 `shine.test.toml`，并让每个声明 case 复用相同的 synthetic authoring
 plan 路径。Fixture schema v1 要求唯一 case name 与 platform。可选 `[cases.host]` 可声明环境变量名
 存在、opaque `secret_versions`、位于 `home|shine|data-dir|bin|absolute` 下的 synthetic file、已检测
