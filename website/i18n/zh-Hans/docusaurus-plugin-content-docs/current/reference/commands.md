@@ -420,7 +420,9 @@ shine env secret identity list
 Phone identity setup 只支持 Windows，配对流程由 `age-plugin-phone` 负责。`auto` 是默认
 transport，plugin 会先尝试发现一个匹配且位于前台的 Wi-Fi listener；如果没有响应，
 Windows 会在创建协议 session 前选择 Developer USB/ADB。前置条件、配对、回退与恢复要求见
-[在 Windows 上实验手机授权](../guides/environment.md#在-windows-上实验手机授权)。
+[在 Windows 上实验手机授权](../guides/environment.md#在-windows-上实验手机授权)。Wi-Fi 配对需要先
+打开手机的一次性操作，再启动命令；Developer USB 则要先启动命令，再在手机上点击
+**Pair · USB**。
 
 创建 broker 策略时，`--project` 用于保存便于识别的项目标签；`--remote-workspace` 要求远端
 请求除了匹配 workspace 内容和其它策略字段外，还必须报告这个完全一致的绝对 workspace 路径。

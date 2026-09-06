@@ -201,6 +201,12 @@ USB/ADB before creating the pairing offer. Ambiguous discovery or a local discov
 closed, and an attempt never switches transport after protocol work begins. `auto` is the default,
 so omitting `--transport auto` keeps the same policy.
 
+Developer USB uses the opposite order. Start the desktop command first; after the plugin has
+selected ADB and is waiting for the phone connection, choose **Pair · USB** on the phone. With
+`--transport adb`, ADB is selected directly after preflight. The phone makes one immediate
+connection attempt, so choosing **Pair · USB** before the desktop has armed its reverse rule reports
+`usb_transport_failed`.
+
 The pairing label defaults to the Windows computer name. Override it, pin Developer USB or QR, or
 select one of multiple ADB devices explicitly when needed:
 

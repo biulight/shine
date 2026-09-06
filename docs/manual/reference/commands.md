@@ -495,7 +495,9 @@ Phone identity setup is Windows-only and hands pairing to `age-plugin-phone`. Th
 is the default and asks the plugin to discover one matching foreground Wi-Fi listener first; if
 none responds, Windows selects Developer USB/ADB before creating the protocol session. See
 [Experiment with phone authorization on Windows](../guides/environment.md#experiment-with-phone-authorization-on-windows)
-for prerequisites, pairing, fallback, and recovery requirements.
+for prerequisites, pairing, fallback, and recovery requirements. For Wi-Fi pairing, open the phone's
+one-shot action before starting the command; for Developer USB, start the command before choosing
+**Pair · USB**.
 
 For broker policies, `--project` stores a human-readable project label. `--remote-workspace`
 requires remote requests to report that exact absolute workspace path in addition to matching the

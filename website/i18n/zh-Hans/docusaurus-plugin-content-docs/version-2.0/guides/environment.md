@@ -180,6 +180,11 @@ listener 响应时选择 Wi-Fi；没有 listener 响应时，会在创建 pairin
 Developer USB/ADB。多个响应或本机 discovery 错误会安全失败；协议处理开始后不会再切换
 transport。`auto` 是默认值，因此省略 `--transport auto` 时策略不变。
 
+Developer USB 的顺序相反：先启动桌面命令；plugin 选择 ADB 并开始等待手机连接后，再在手机端
+点击 **Pair · USB**。使用 `--transport adb` 时，plugin 会在预检完成后直接选择 ADB。手机只会
+立即尝试连接一次，因此如果在桌面建立 `adb reverse` 规则前点击 **Pair · USB**，手机会报告
+`usb_transport_failed`。
+
 配对标签默认使用 Windows 计算机名；也可以显式指定标签、固定使用 Developer USB 或 QR，
 以及在存在多台 ADB 设备时指定序列号：
 
