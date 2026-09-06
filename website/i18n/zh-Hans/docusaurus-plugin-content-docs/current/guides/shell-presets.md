@@ -45,52 +45,19 @@ shine install shell/proxy --replace-managed
 
 `--replace-managed` 会覆盖 Shine 管理的对应内容。先用 `shine info shell/proxy --diff` 检查状态，避免把有意的本地修改当作损坏处理。
 
-## 恢复中断的 Shell 事务
+## 安装、升级或卸载中断后怎么办 {#恢复中断的-shell-事务}
 
-首次安装时，Shine 会先写入 transaction journal，再创建命令 launcher；只有 command manifest
-receipt 持久化后才会清理 journal。如果安装在这个窗口中断，后续修改型 Shell 命令会停止，不会
-猜测 launcher 是否归 Shine 所有。install 或 upgrade 更新未修改、已有 receipt 的 launcher 时也会
-使用同一 journal：旧资源会先移到同目录 `.shine.rollback`，新 receipt 持久化前不会清理这些
-rollback material。内置 category cache 的写入也使用同一套 receipt-coherent journal：缺失 cache
-文件与 upgrade 或 `--replace-managed` 将要更新的差异文件会被逐一跟踪，替换前已有文件先移到同目录
-`.shine.rollback`；跳过的文件与无关 cache 文件不属于本次事务。外部预设使用 snapshot 模式且选中命令无需 rendered output 时，Shine 也会把
-共享 category snapshot 的创建或替换写入 journal；全部选中 command receipt 与独立 commit marker
-持久化前，旧 category 树会留在确定性的 rollback 目录。install 或 upgrade 产生的 transformed output
-使用独立的文件级事务：已有 rendered 文件会移到同目录 `.shine.rollback`，所有消费该路径的 command
-receipt 与独立 marker 持久化前，精确旧文件会一直保留。请审阅并执行专用 recovery Plan：
+如果 Shell 预设操作意外中断，Shine 可能会暂停后续修改操作，并提示先执行恢复：
 
 ```bash
 shine shell recover
-shine shell recover --yes # 非交互使用
 ```
 
-对于尚无 receipt 的 Unix symlink、Unix Bun/live launcher 或 Windows shim，只有它仍与中断创建
-的精确状态一致时，恢复才会移除它；launcher 被修改后会保留并阻塞恢复。如果 receipt 已写入，
-launcher 会保持安装状态，恢复只清理 stale journal。更新中断时，只有 replacement 与 rollback
-资源仍匹配记录的 target、内容 hash 和 mode，恢复才会还原旧 launcher；新 receipt 已持久化后，
-恢复会保留 replacement，仅清理未修改的 rollback material。replacement 或 rollback 路径发生变化
-会阻塞恢复并保留现场。对于符合条件的 snapshot 事务，commit marker 前的恢复会还原旧的选中
-receipt 与精确旧 category 树；marker 后保留 desired 树，只清理精确 rollback。stage、active tree 或
-rollback tree 被修改都会阻塞恢复。内置 cache 事务在 marker 前中断时，恢复会移除精确匹配的
-事务新建文件，或还原精确旧文件与旧 receipt；marker 后保留 desired 文件，只清理精确 rollback。
-任一 cache destination 或 rollback 被修改都会阻塞整个 cache Action，跳过与无关文件保持不变。
-rendered 文件事务在 marker 前中断时，恢复会还原旧 receipt 与精确旧文件，或移除精确匹配的
-事务新建文件；marker 后保留 desired 文件，只清理精确 rollback。rendered 或 rollback 文件被修改会
-阻塞恢复。卸载选择了 rendered 路径的最后一组 consumer receipt 时，Shine 会使用独立事务先记录并
-移动精确旧文件，再删除全部 consumer receipt。正向 marker 前，恢复会重建缺失 receipt 并只还原
-精确旧文件；marker 后保持路径缺失，只清理精确 rollback。未选中的 consumer 与无关 rendered 文件
-保持不变。执行期 live rendering 使用相同 lifecycle lock，pending journal 存在时拒绝运行，但仍是
-invocation-scoped atomic write，而非持久事务。cache 与 snapshot 卸载会把精确文件或目录树及其 receipt
-transition 写入 journal；正向 marker 前，恢复只还原未修改的 rollback material，marker 后保留已完成
-的移除。Shell profile reconciliation 也会记入事务，但只拥有 `# >>> shine >>>` sentinel block：恢复会
-把记录的 block transition 合并到当前 profile，并保留中断后出现的无关编辑。Shine-owned block 本身
-发生变化时，恢复会阻塞而不是覆盖它。
+查看恢复计划，确认后执行。Shine 会根据中断位置撤销未完成的变更，或保留已完成的操作并清理残留文件。
 
-uninstall 只会对未修改、已有 receipt 的 launcher 使用这项事务。它会先把每个平台 launcher
-resource 移到同目录 rollback material，再删除 receipt，随后另行记录持久化 commit marker。如果
-中断发生在 receipt 删除之后、marker 写入之前，恢复会先重建旧 receipt，再还原精确资源。marker
-写入后，恢复会保留已完成的卸载，只清理未修改的 rollback material。foreign 或已修改 launcher
-会被保留在这套 rollback proof 之外。
+如果相关文件在中断后被修改，Shine 会停止恢复并保留这些文件，避免覆盖你的修改。请保留报错信息和相关文件，根据提示排查，不要手动删除恢复记录或回滚文件。
+
+自动化环境可使用 `shine shell recover --yes` 跳过交互确认；安全检查仍会执行。
 
 ## 卸载
 
