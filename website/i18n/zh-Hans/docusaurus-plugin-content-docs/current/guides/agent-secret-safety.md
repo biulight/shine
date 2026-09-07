@@ -9,6 +9,30 @@ Claude Code、Codex 等 AI Agent 参与开发后，密钥安全不再只是“�
 
 Shine 的 `env secret seal`、`env run` 和 `age` 后端用于降低这种扩散风险：把仓库中的 secret 保存为密文，只在需要运行命令时解密并注入子进程。但它们不是沙箱，也不能替代系统权限隔离。使用前应先明确密钥身份文件、硬件授权和 Agent 权限之间的边界。
 
+## 先准备 Shine workspace
+
+Shine workspace 由项目根目录的 `shine.workspace.toml` 和它引用的 `*.shine.toml` 环境源文件组成。前者声明 `development` 等 mode、环境源的合并顺序和共享的加密 recipient，后者保存普通配置和密钥。这些文件用于管理项目环境，创建它们不会隔离 Agent 的访问权限。
+
+如果项目已有 `.env` 文件，由用户在可信终端进入项目根目录，先预览再导入。将 `DATABASE_URL` 替换为项目实际的敏感键；有多个敏感键时，重复指定 `--secret`：
+
+```bash
+shine env workspace init --from-dotenv --secret DATABASE_URL --dry-run
+shine env workspace init --from-dotenv --secret DATABASE_URL
+```
+
+这会生成 `shine.workspace.toml` 和对应环境源，例如由 `.env` 生成 `.env.shine.toml`。初始化只导入值，不会自动加密：用 `--secret` 选中的键在封存前仍以明文保存在 `[secret]`，未选中的键则以明文保存在 `[plain]`。继续操作前应检查分类。支持的输入格式和 mode 选择见[从 dotenv 初始化工作区](./environment.md#从-dotenv-初始化工作区)。没有 `.env` 文件时，按[使用分层项目环境](./environment.md#使用分层项目环境)手动创建 workspace 和环境源。
+
+接着按[使用 age identity](./environment.md#使用-age-identity)安装依赖、设置本机 identity，并配置后端与 recipient。完成后封存环境源，再通过 Shine 验证项目命令：
+
+```bash
+shine env secret seal
+shine env run --mode development -- bun run build
+```
+
+mode 应选用 workspace 已声明的值，`bun run build` 应替换为项目实际命令。初始化和封存都不会修改原 `.env` 文件。确认项目通过 Shine 正常运行后，由用户移除项目中的原始密钥明文，或将其迁移到 Agent 无权读取的位置。将文件加入 `.gitignore` 只能避免误提交，不能阻止 Agent 读取。
+
+确认敏感值已封存、且没有遗漏在 `[plain]` 中后，可以提交 `shine.workspace.toml` 和共享环境源。identity、未封存明文及个人覆盖文件不能提交；将 `.env.local.shine.toml` 和 `.env.*.local.shine.toml` 加入忽略列表。后续修改对应环境源并重新封存即可，无需重复初始化。其他工具需要 dotenv 时，参见[将 workspace 导出为 dotenv](./environment.md#将-workspace-导出为-dotenv)，并按其中说明处理 `--include-secrets` 产生的明文。
+
 ## Shine env 保护什么
 
 `shine env secret seal` 把 workspace 环境文件中的待处理 secret 封存到加密 payload 中。封存后，团队仓库里保留的是密文，不再是明文 token、密码或 API key。
@@ -47,10 +71,20 @@ gh pr list
 
 使用 `age` 后端时，`age_recipients = ["age1..."]` 表示密文要加密给谁。recipient 类似公钥地址：个人默认值可写入 `~/.shine/config.toml`，项目团队共享的名单应写入 `shine.workspace.toml` 的 `[env.encryption]`，后者可以提交到仓库。
 
+下面的示例属于本机 `~/.shine/config.toml`：
+
 ```toml
 secret_backend = "age"
 age_recipients = ["age1se1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
+```
+
+项目共享配置则在 `shine.workspace.toml` 中使用下面的独立配置段，将示例 recipient 替换为成员的实际值；identity 路径仍留在本机配置中：
+
+```toml
+[env.encryption]
+backend = "age"
+age_recipients = ["age1se1qexample...", "age1qteammate..."]
 ```
 
 `~/.shine/age/identity.txt` 则是解密 identity，等同于私钥身份，不能提交、不能共享，也不应放进 Agent 可随意读取的工作区。
