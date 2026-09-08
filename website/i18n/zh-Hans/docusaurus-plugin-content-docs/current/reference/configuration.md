@@ -237,6 +237,11 @@ data = "<由 Shine 管理的 GPG 密文>"
 `age_recipients`，每组至少一个非空项。GPG 项必须是本机已有公钥的完整 40 位十六进制
 主密钥指纹。两组均不合并全局收件人；仅同时配置两组不会启用 hybrid。
 
-在本机全局 `config.toml` 中设置 `hybrid_decrypt_backend = "gpg"` 或 `"age"`
-选择混合读取方式。项目不能覆盖或保存此偏好。它不改变单后端密文路由，也不授予秘密
-释放权限。全局 `secret_backend` 仍只接受 `gpg` 或 `age`；hybrid 必须使用工作区。
+在本机全局 `config.toml` 中设置 `hybrid_decrypt_backend = "gpg"` 或 `"age"`。
+本机工作区操作可用工作区旁的 `shine.config.local.toml` 覆盖此字段；文件或字段缺失则继承
+全局设置。共享的 `shine.config.toml` 不能覆盖或保存此偏好。将个人文件加入 `.gitignore`；
+它只接受该字段，格式错误或未知字段会报错。它不改变单后端路由，也不授予秘密释放权限。
+SSH broker 不接受远端个人配置。全局 `secret_backend` 仍只接受 `gpg` 或 `age`。
+
+Hybrid 编译缓存使用最终选定的单后端及工作区对应收件人名单。配置变化会重新判定缓存
+有效性，不会自动切换到另一后端。详见[环境指南](../guides/environment.md)。

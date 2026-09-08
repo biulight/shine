@@ -968,8 +968,14 @@ GPG and age wrap its versioned nonce-bound key record. The complete header and w
 associated data. Private temporary output is prepared before final workspace/source comparisons
 and replacing rename. Partial multi-file success is reported, never rolled back over external edits.
 
-Local global `hybrid_decrypt_backend` selects one hybrid unwrap after any broker release approval.
-Without it, capability-only preflight selects a sole candidate or requires a local TTY choice.
-Failure terminates without fallback. Runtime captures mode inputs once; a hybrid policy or consumed
-hybrid tag disables cache read/write before decryption and compiles those exact bytes. See
-[ADR 0084](../decisions/0084-hybrid-secret-envelope.md) for the wire contract and concurrency boundary.
+Local `hybrid_decrypt_backend` selects one hybrid unwrap after any broker release approval.
+Local workspace run/seal/export may override the global default from `shine.config.local.toml`
+beside the selected workspace; broker snapshots do not load or transmit this personal file.
+Without a preference, capability-only preflight selects a sole candidate or requires a local TTY
+choice. Failure terminates without backend fallback. Runtime captures mode inputs once; hybrid
+policy or consumed tags select the local encrypted cache path. It validates captured hybrid wire
+structure before selecting/decrypting a cache, freezes the backend, and binds the snapshot, backend
+and workspace recipients inside the encrypted cache. Cache writes use only the selected tool;
+cache decryption cancellation never retries from sources. See [ADR 0085](../decisions/0085-local-hybrid-preferences-and-cache.md)
+for local trust and cache boundaries, and [ADR 0084](../decisions/0084-hybrid-secret-envelope.md)
+for the unchanged envelope and sealing concurrency contract.

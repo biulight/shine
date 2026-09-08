@@ -51,6 +51,7 @@ if [ "$operation" = list ]; then
 fi
 if [ "$operation" = decrypt ]; then
  printf 'decrypt-%s\n' "$tool" >> "$TRACE"
+ if [ "$CASE" = fail-decrypt ]; then exit 24; fi
  /bin/cat "$last"
  exit 0
 fi
@@ -151,7 +152,7 @@ printf '%s' "$input"
     sealed = source.read_text()
     data = re.search(r'data = "(hybrid:[A-Za-z0-9+/=]+)"', sealed).group(1)
     trace.write_text("")
-    # Runtime with only age and a single-backend workspace policy must still bypass cache.
+    # An age-only reader builds a local age cache, ignoring the legacy cache.
     (tools / "gpg").rename(tools / "gpg-disabled")
     policy("gpg")
     cache_base = (
@@ -209,16 +210,17 @@ printf '%s' "$input"
         )
         assert result.stderr == b"", result.stderr.decode()
     assert cache.read_bytes() == cache_original
-    assert trace.read_text().splitlines() == ["decrypt-age", "decrypt-age"]
-    # The symmetric GPG-only reader also ignores the old age cache.
+    assert trace.read_text().splitlines() == [
+        "decrypt-age",
+        "encrypt-age",
+        "decrypt-age",
+    ]
+    # A personal preference overrides the global age selection on a GPG-only reader.
     (tools / "age").rename(tools / "age-disabled")
     (tools / "gpg-disabled").rename(tools / "gpg")
     current = (config / "config.toml").read_text()
-    (config / "config.toml").write_text(
-        current.replace(
-            'hybrid_decrypt_backend = "age"', 'hybrid_decrypt_backend = "gpg"'
-        )
-    )
+    local_config = root / "shine.config.local.toml"
+    local_config.write_text('hybrid_decrypt_backend = "gpg"\n')
     trace.write_text("")
     for _ in range(2):
         result = call(
@@ -236,11 +238,87 @@ printf '%s' "$input"
             ]
         )
         assert result.stdout == b"fixture secret" and result.stderr == b""
-    assert trace.read_text().splitlines() == ["decrypt-gpg", "decrypt-gpg"]
+    assert trace.read_text().splitlines() == [
+        "decrypt-gpg",
+        "encrypt-gpg",
+        "decrypt-gpg",
+    ]
     assert cache.read_bytes() == cache_original
-    (config / "config.toml").write_text(current)
+    local_config.unlink()
     (tools / "gpg").rename(tools / "gpg-disabled")
     (tools / "age-disabled").rename(tools / "age")
+    # The age cache survives switching to GPG and back. Cancellation is terminal.
+    run_args = [
+        "env",
+        "run",
+        "--workspace",
+        str(workspace),
+        "--mode",
+        "test",
+        "--",
+        "/bin/sh",
+        "-c",
+        'printf %s "$TOKEN"',
+    ]
+    trace.write_text("")
+    call(run_args, False, CASE="fail-decrypt")
+    assert trace.read_text().splitlines() == ["decrypt-age"]
+    trace.write_text("")
+    assert call(run_args).stdout == b"fixture secret"
+    assert trace.read_text().splitlines() == ["decrypt-age"]
+
+    # Two sources decrypt once each on a miss, but only once total on a hit.
+    second = root / "second.toml"
+    second.write_text(sealed)
+    policy("hybrid", ["source.toml", "second.toml"])
+    trace.write_text("")
+    assert call(run_args).stdout == b"fixture secret"
+    assert trace.read_text().splitlines() == [
+        "decrypt-age",
+        "decrypt-age",
+        "encrypt-age",
+    ]
+    trace.write_text("")
+    assert call(run_args).stdout == b"fixture secret"
+    assert trace.read_text().splitlines() == ["decrypt-age"]
+
+    # Workspace changes invalidate the cache; only the selected encryption tool runs.
+    workspace.write_text(workspace.read_text() + "\n# changed workspace\n")
+    trace.write_text("")
+    assert call(run_args).stdout == b"fixture secret"
+    assert trace.read_text().splitlines() == [
+        "decrypt-age",
+        "decrypt-age",
+        "encrypt-age",
+    ]
+
+    # Cache writes are private and encryption failure does not block execution.
+    local_age_cache = cache.with_name("env-test-hybrid-local-age.toml")
+    assert local_age_cache.stat().st_mode & 0o777 == 0o600
+    workspace.write_text(workspace.read_text() + "\n# force cache miss\n")
+    trace.write_text("")
+    result = call(run_args, CASE="fail-age")
+    assert result.stdout == b"fixture secret"
+    assert b"could not update environment cache" in result.stderr
+    assert trace.read_text().splitlines() == [
+        "decrypt-age",
+        "decrypt-age",
+        "encrypt-age",
+    ]
+
+    # Missing workspace recipients never fall back to the global recipient list.
+    policy("gpg")
+    workspace.write_text(
+        workspace.read_text().replace(
+            'age_recipients = ["age1test"]', "age_recipients = []"
+        )
+    )
+    (config / "config.toml").write_text('age_recipients = ["age1global"]\n' + current)
+    trace.write_text("")
+    assert call(run_args).stdout == b"fixture secret"
+    assert trace.read_text().splitlines() == ["decrypt-age"]
+    (config / "config.toml").write_text(current)
+
     # A corrupt tagged payload cannot be hidden by cache; dry-run and default exports never decrypt.
     source.write_text('[secret]\nTOKEN=true\n[payload]\ndata="hybrid:bad"\n')
     trace.write_text("")
@@ -287,5 +365,5 @@ printf '%s' "$input"
     expected = 'version = 1\n\n[values]\nTOKEN = "fixture secret"\n'.encode()
     assert result.stdout == expected, repr(result.stdout)
     print(
-        "PASS: encryption failure; workspace/source edit and removal; partial multi-file reporting; repeated age-only/GPG-only cache bypass; malformed hybrid rejection; dry-run/default export boundaries; exact decrypt stdout"
+        "PASS: encryption failure; workspace/source edit and removal; partial multi-file reporting; age-only/GPG-only local caches; personal preference; cache hit/miss and cancellation; malformed hybrid rejection; dry-run/default export boundaries; exact decrypt stdout"
     )

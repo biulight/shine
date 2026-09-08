@@ -1,3 +1,5 @@
+mod local_cache;
+
 use super::broker::{SourceSnapshot, WorkspaceSnapshot};
 use crate::commands::EnvWorkspaceExportFormat;
 use crate::persist::{atomic_write, atomic_write_private};
@@ -55,6 +57,8 @@ pub async fn handle_export(
     let workspace_path = find_workspace_optional(workspace_arg)
         .await?
         .context("shine.workspace.toml was not found; pass --workspace")?;
+    let local_config = local_cache::load_config(config, &workspace_path).await?;
+    let config = &local_config;
     let workspace = load_workspace(&workspace_path).await?;
     let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
     let output = absolute_from_current(output)?;
@@ -485,6 +489,11 @@ pub async fn handle_seal(
     recipients_arg: &[String],
 ) -> Result<()> {
     let workspace_path = find_workspace_optional(workspace_arg).await?;
+    let local_config = match &workspace_path {
+        Some(path) => local_cache::load_config(config, path).await?,
+        None => config.clone(),
+    };
+    let config = &local_config;
     let lock_scope = workspace_path
         .as_deref()
         .or(file)
@@ -625,6 +634,8 @@ pub async fn handle_run(
         find_workspace_optional(workspace_arg).await?
     };
     let (values, override_process_env) = if let Some(workspace_path) = workspace_path {
+        let local_config = local_cache::load_config(config, &workspace_path).await?;
+        let config = &local_config;
         let workspace_bytes = tokio::fs::read_to_string(&workspace_path).await?;
         let workspace = parse_workspace(&workspace_path, &workspace_bytes)?;
         let mode = mode_arg
@@ -634,13 +645,21 @@ pub async fn handle_run(
         let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
         let captured = capture_sources(&sources).await?;
         let input_hash = snapshot_input_hash(&workspace_path, &workspace_bytes, mode, &captured);
-        let bypass_cache = bypass_snapshot_cache(&workspace.env.encryption, &captured)?;
-        let encryption =
-            resolve_seal_encryption(None, &[], Some(&workspace.env.encryption), config)?;
-        let cache_path = cache_path(&workspace_path, mode)?;
-        let values = if bypass_cache {
-            compile_captured_sources(&captured, config).await?
+        let hybrid = involves_hybrid(&workspace.env.encryption, &captured)?;
+        let values = if hybrid {
+            local_cache::compile(
+                config,
+                &workspace_path,
+                mode,
+                &input_hash,
+                &workspace.env.encryption,
+                &captured,
+            )
+            .await?
         } else {
+            let encryption =
+                resolve_seal_encryption(None, &[], Some(&workspace.env.encryption), config)?;
+            let cache_path = cache_path(&workspace_path, mode)?;
             match read_valid_cache(&cache_path, mode, &input_hash, config).await {
                 Ok(Some(values)) => values,
                 Ok(None) => {
@@ -1336,7 +1355,7 @@ async fn capture_sources(sources: &[PathBuf]) -> Result<CapturedSources> {
     Ok(captured)
 }
 
-fn bypass_snapshot_cache(policy: &Encryption, sources: &CapturedSources) -> Result<bool> {
+fn involves_hybrid(policy: &Encryption, sources: &CapturedSources) -> Result<bool> {
     let mut hybrid = policy
         .backend
         .as_deref()
@@ -2176,19 +2195,19 @@ mod hybrid_snapshot_tests {
             .await
             .unwrap();
         let config = Config::new_for_test(&dir);
-        assert!(!bypass_snapshot_cache(&Encryption::default(), &captured).unwrap());
+        assert!(!involves_hybrid(&Encryption::default(), &captured).unwrap());
         assert_eq!(
             compile_captured_sources(&captured, &config).await.unwrap()["VALUE"],
             "captured"
         );
         let hybrid = capture_sources(std::slice::from_ref(&path)).await.unwrap();
-        assert!(bypass_snapshot_cache(&Encryption::default(), &hybrid).unwrap());
+        assert!(involves_hybrid(&Encryption::default(), &hybrid).unwrap());
         assert!(compile_captured_sources(&hybrid, &config).await.is_err());
         let policy = Encryption {
             backend: Some("hybrid".into()),
             ..Default::default()
         };
-        assert!(bypass_snapshot_cache(&policy, &captured).unwrap());
+        assert!(involves_hybrid(&policy, &captured).unwrap());
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
     #[tokio::test]

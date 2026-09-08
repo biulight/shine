@@ -13,14 +13,18 @@ use super::exec::{
 use crate::proc::ensure_command;
 
 pub async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<String> {
-    decrypt_base64_gpg(encoded_secret, false).await
+    decrypt_base64_gpg(encoded_secret, false, false).await
 }
 
 pub(super) async fn decrypt_hybrid_key(encoded: &str) -> Result<String> {
-    decrypt_base64_gpg(encoded, true).await
+    decrypt_base64_gpg(encoded, true, true).await
 }
 
-async fn decrypt_base64_gpg(encoded_secret: &str, key: bool) -> Result<String> {
+pub(super) async fn decrypt_cache(encoded: &str) -> Result<String> {
+    decrypt_base64_gpg(encoded, false, true).await
+}
+
+async fn decrypt_base64_gpg(encoded_secret: &str, key: bool, strict: bool) -> Result<String> {
     if encoded_secret.trim().is_empty() {
         bail!("secret is empty");
     }
@@ -36,7 +40,7 @@ async fn decrypt_base64_gpg(encoded_secret: &str, key: bool) -> Result<String> {
         bail!("decoded secret is empty");
     }
 
-    decrypt_gpg_file(encrypted_file.path(), key).await
+    decrypt_gpg_file(encrypted_file.path(), key, strict).await
 }
 
 pub async fn encrypt_gpg_secret_to_base64(
@@ -69,9 +73,9 @@ fn validate_recipients(recipients: &[String]) -> Result<Vec<&str>> {
     Ok(cleaned)
 }
 
-async fn decrypt_gpg_file(path: &Path, key: bool) -> Result<String> {
+async fn decrypt_gpg_file(path: &Path, key: bool, strict: bool) -> Result<String> {
     let mut command = Command::new("gpg");
-    if key {
+    if strict {
         command.args(["--no-options", "--output", "-"]);
     }
     let output = command

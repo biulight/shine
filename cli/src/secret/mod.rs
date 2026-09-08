@@ -92,6 +92,43 @@ pub async fn encrypt_secret(plaintext: &[u8], recipients: &EncryptRecipients) ->
     }
 }
 
+/// Hybrid-derived caches retain exact workspace recipient restrictions even
+/// though the local cache only uses one encryption backend.
+pub(crate) async fn encrypt_local_cache(
+    plaintext: &[u8],
+    recipients: &EncryptRecipients,
+) -> Result<String> {
+    match recipients {
+        EncryptRecipients::Gpg(recipients) => {
+            // Apply the same full-fingerprint validation as hybrid sealing.
+            if recipients.is_empty()
+                || recipients.iter().any(|value| {
+                    value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            {
+                bail!("hybrid cache GPG recipients must be full 40-hex primary fingerprints");
+            }
+            let resolved = gpg::resolve_hybrid_recipients(recipients).await?;
+            let encrypted = gpg::encrypt_hybrid_key(plaintext, &resolved).await?;
+            Ok(exec::encode_base64_single_line(&encrypted))
+        }
+        EncryptRecipients::Age(_) => encrypt_secret(plaintext, recipients).await,
+        EncryptRecipients::Hybrid(_) => bail!("local cache requires one backend"),
+    }
+}
+
+/// Read a local hybrid-derived cache without honoring GPG output-file options.
+pub(crate) async fn decrypt_local_cache(
+    ciphertext: &str,
+    config: &crate::config::Config,
+) -> Result<String> {
+    match parse_tagged_ciphertext(ciphertext) {
+        (BackendKind::Gpg, payload) => gpg::decrypt_cache(payload).await,
+        (BackendKind::Age, _) => decrypt_with_config(ciphertext, config).await,
+        (BackendKind::Hybrid, _) => bail!("local cache requires one backend"),
+    }
+}
+
 /// Decrypt stored ciphertext, routing purely on its tag. `age_identities` is
 /// consulted for age ciphertext and the age branch of a hybrid envelope.
 pub async fn decrypt_secret(ciphertext: &str, age_identities: &[PathBuf]) -> Result<String> {

@@ -56,6 +56,10 @@ Tool errors are terminal; never infer retry or cancellation from stderr wording.
 
 ## Local selection and integration
 
+The workspace preference and cache-bypass rules below describe the initial implementation;
+[ADR 0085](0085-local-hybrid-preferences-and-cache.md) supersedes those two rules.
+Broker authorization, wire routing and failure-without-fallback still apply.
+
 `hybrid_decrypt_backend` is global-only (`gpg` or `age`). Project loading cannot
 replace it and project saving cannot materialize it. Single-backend routing remains
 unchanged. Hybrid parsing precedes candidate selection; explicit selection invokes

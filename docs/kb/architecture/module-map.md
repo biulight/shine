@@ -201,6 +201,7 @@ Config discovery priority is documented as a behavioral contract in
 | `cli/src/env/proxy.rs` | Transparent command proxy rules and execution |
 | `cli/src/env/broker.rs` | Secret-broker workspace snapshots and local policy store |
 | `cli/src/secret/mod.rs` | Backend-independent tagged ciphertext router |
+| `cli/src/env/workspace/local_cache.rs` | Personal workspace hybrid preference and encrypted per-backend compilation cache; excluded from broker snapshots |
 | `cli/src/secret/hybrid.rs` | Versioned authenticated GPG/age envelope and local selection |
 | `cli/src/secret/gpg.rs` | GPG backend and exact hybrid public-recipient resolution |
 | `cli/src/secret/age.rs` | age and Secure Enclave backend |

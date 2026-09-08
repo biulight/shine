@@ -190,7 +190,10 @@ pub async fn encrypt(plain: &[u8], recipients: &Recipients) -> Result<String> {
     encode(&material[24..], nonce, &g, &a, plain)
 }
 
-async fn select(identities: &[PathBuf], preference: Option<&str>) -> Result<BackendKind> {
+pub(crate) async fn select(
+    identities: &[PathBuf],
+    preference: Option<&str>,
+) -> Result<BackendKind> {
     if let Some(preference) = preference {
         return match preference.parse::<BackendKind>()? {
             BackendKind::Hybrid => bail!("hybrid_decrypt_backend must be gpg or age"),
@@ -223,6 +226,11 @@ async fn select(identities: &[PathBuf], preference: Option<&str>) -> Result<Back
             })
         }
     }
+}
+
+/// Validate the wire format without selecting a backend or releasing a key.
+pub(crate) fn validate(encoded: &str) -> Result<()> {
+    Envelope::parse(encoded).map(|_| ())
 }
 
 pub async fn decrypt(
@@ -463,10 +471,19 @@ mod interoperability {
             config.hybrid_decrypt_backend = Some("age".into());
             crate::env::workspace::handle_seal(&config, Some(&workspace), None, None, &[]).await.unwrap();
             let snapshot = crate::env::workspace::snapshot_for_broker(Some(&workspace), "test").await.unwrap();
+            // Broker snapshots must not load even malformed personal project configuration.
+            let personal = path.join("shine.config.local.toml");
+            std::fs::write(&personal, "hybrid_decrypt_backend = [").unwrap();
             for backend in ["gpg", "age"] {
                 config.hybrid_decrypt_backend = Some(backend.into());
                 let values = crate::env::workspace::decrypt_broker_snapshot(&config, &snapshot, &["TOKEN".into()]).await.unwrap();
                 assert_eq!(values["TOKEN"], "workspace secret");
+            }
+            std::fs::remove_file(personal).unwrap();
+            let gpg_cache = super::super::encrypt_local_cache(b"cache secret", &super::super::EncryptRecipients::Gpg(vec![allowed.clone()])).await.unwrap();
+            let age_cache = super::super::encrypt_local_cache(b"cache secret", &super::super::EncryptRecipients::Age(vec![public.clone()])).await.unwrap();
+            for cache in [&gpg_cache, &age_cache] {
+                assert_eq!(super::super::decrypt_local_cache(cache, &config).await.unwrap(), "cache secret");
             }
             let export = path.join("export.env");
             crate::env::workspace::handle_export(&config, crate::commands::EnvWorkspaceExportFormat::Dotenv,
@@ -506,6 +523,7 @@ mod interoperability {
             unsafe {
                 std::env::set_var("GNUPGHOME", &foreign);
             }
+            assert!(super::super::decrypt_local_cache(&gpg_cache, &config).await.is_err());
             assert!(
                 decrypt(encoded, std::slice::from_ref(&identity), Some("gpg"))
                     .await

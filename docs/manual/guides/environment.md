@@ -554,11 +554,36 @@ lists. Either group independently reads the same data ciphertext. Hybrid GPG wra
 excludes local option files and implicit extra recipients; groups and fuzzy user IDs
 are rejected before existing secrets are decrypted.
 
-`env run` bypasses cache reads and writes if the workspace policy is hybrid or any
-source consumed by the mode contains a hybrid payload. Old caches remain. Sources
-belonging only to another mode do not affect this decision. Repeated runs can require
-repeated hardware approval. Export omits secrets by default; `--include-secrets`
-releases them, while dry-run never decrypts secrets.
+For hybrid policy or a hybrid source consumed by the current mode, `env run` stores
+an encrypted compilation cache using the locally selected GPG or age backend. Only
+that backend is needed to create the cache. Recipients come from the workspace's
+corresponding list, never global recipients. An absent list skips caching; a cache
+write failure warns but does not prevent running successfully compiled values.
+
+A cache hit decrypts the merged environment once. There is no TTL or saved unlock
+state: backend authorization still applies on every read. Workspace/source content,
+source order, selected backend, or recipients changing invalidates the cache. GPG
+and age caches are separate; legacy caches cannot substitute for hybrid sources.
+Malformed hybrid envelopes fail before cache decryption. Once cache decryption
+starts, failure or cancellation stops the command without retrying from sources.
+Export does not use this cache: it omits secrets unless `--include-secrets` is set,
+and dry-run never decrypts secrets.
+
+For a personal project preference, create `shine.config.local.toml` alongside the
+selected `shine.workspace.toml` (also when using `--workspace`):
+
+```toml
+hybrid_decrypt_backend = "age"
+```
+
+Add `/shine.config.local.toml` to that project's `.gitignore`. Local `env run`,
+`env secret seal`, and `env workspace export` use this preference. An absent file
+or field inherits global `config.toml`; without either preference, existing
+capability checks and interactive selection apply. Invalid configuration fails
+explicitly. The file currently accepts only `hybrid_decrypt_backend = "gpg" | "age"`.
+It is trusted local project configuration, so a program able to edit it can change
+the chosen authorization path. SSH broker requests do not load or transmit this file;
+the decrypting broker machine retains its own configured choice and release checks.
 
 Sealing locks out cooperating Shine sealers and rechecks captured workspace and source
 bytes before replacement. Edits during hardware approval abort the current file;

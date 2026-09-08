@@ -615,17 +615,19 @@ bugs. Check this list before changing the modules named in each entry.
   [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md)).
 - **Decrypt routing is self-describing.** Untagged data is GPG, `age:` is age and
   `hybrid:` is the versioned two-wrapper envelope (ADR 0084). Encryption defaults never
-  reinterpret stored ciphertext. Only hybrid consults the global-only local decrypt
-  preference; failure or cancellation never switches backends. Parse and bound the
+  reinterpret stored ciphertext. Only hybrid consults the local decrypt
+  preference (personal workspace override over global default for local handlers); failure or cancellation never switches backends. Parse and bound the
   envelope before any tool invocation, and authenticate both wrappers before release.
 - **Hybrid sealing binds the complete workspace and source snapshots.** Resolve and
   preflight exact public recipients before old-payload decryption; both wrappers must
   succeed. Hold cooperating workspace/source locks through private atomic replacement
   and compare complete bytes immediately before rename. Noncooperating editor races
   in that final interval are outside the portable lock guarantee (ADR 0084).
-- **Hybrid bypasses the entire compiled cache.** Policy or consumed source tags decide
-  before any cache decrypt, using the same bytes later compiled. Malformed hybrid
-  payloads cannot be hidden by a cache, and unrelated modes do not disable caching.
+- **Hybrid local caches follow the locally selected backend.** Validate captured source
+  structure before cache decryption, and bind source/policy snapshots, backend and workspace
+  recipients inside the encrypted cache. Never reuse legacy caches or global recipient fallbacks.
+  Cache decryption failure/cancellation is terminal. Personal workspace preferences are trusted
+  local input; broker requests cannot supply them (ADR 0085).
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
   prefix, breaks every secret encrypted before the change.
 - **Workspace export decrypts only on explicit request.** `shine env workspace export` omits

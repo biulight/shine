@@ -8,3 +8,6 @@
 .idea
 .DS_Store
 .tmp-*
+
+# Personal workspace decryption preference
+/shine.config.local.toml

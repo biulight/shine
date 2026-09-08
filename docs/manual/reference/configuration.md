@@ -257,7 +257,15 @@ corresponding `uninstall --dry-run` and `uninstall` commands.
 full 40-hex primary public-key fingerprints. Global recipients are not merged.
 Merely configuring both lists does not enable hybrid.
 
-Set `hybrid_decrypt_backend = "gpg"` or `"age"` in local global `config.toml` to
-select a hybrid read path. Projects cannot override or save this preference. It
-neither changes single-backend routing nor grants secret release authorization.
-Global `secret_backend` still accepts only `gpg` or `age`; hybrid requires a workspace.
+Set `hybrid_decrypt_backend = "gpg"` or `"age"` in global `config.toml`.
+Local workspace operations may override this field in `shine.config.local.toml`
+next to the workspace; an absent file or field inherits the global preference.
+Shared `shine.config.toml` cannot override or save it. Ignore the personal file in
+Git; it accepts only this field and rejects malformed or unknown fields. The
+preference neither changes single-backend routing nor grants secret release.
+SSH broker does not accept remote personal configuration. Global `secret_backend`
+still accepts only `gpg` or `age`.
+
+Hybrid compilation caches use the final selected backend and its workspace
+recipient list. Configuration changes re-evaluate cache validity without switching
+to another backend. See the [environment guide](../guides/environment.md).

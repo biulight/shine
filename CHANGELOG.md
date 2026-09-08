@@ -10,7 +10,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 ### Features
 
 - Add explicit workspace GPG/age hybrid sealing with one authenticated data ciphertext,
-  global-only local decrypt selection, isolated public recipient resolution, and cache bypass.
+  local decrypt selection, isolated public recipient resolution, and encrypted per-backend caches.
+- Allow personal workspace decrypt preferences in ignored `shine.config.local.toml`, with
+  global fallback; keep remote SSH broker requests separate from personal project configuration.
 - Bind sealing to captured workspace/source bytes with cooperating process locks and final
   comparisons; report partial multi-file completion without overwriting detected concurrent edits.
 

@@ -198,7 +198,8 @@ pub struct Config {
     /// field — it is resolved purely from the ciphertext's backend tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_backend: Option<String>,
-    /// Local choice for hybrid envelopes; never loaded from a project layer.
+    /// Global default for hybrid envelopes; shared project config cannot override it.
+    /// Local workspace handlers may apply a personal shine.config.local.toml override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hybrid_decrypt_backend: Option<String>,
     /// Default age recipients (`age1...` / `age1se1...`) used by `shine env
