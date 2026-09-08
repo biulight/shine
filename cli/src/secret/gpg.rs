@@ -1,6 +1,6 @@
 //! GPG-backed secret storage: base64-encoded ciphertext round-tripped through
-//! the `gpg` and `base64` CLI tools. Ciphertext carries no backend tag, so the
-//! router in `secret::mod` treats untagged base64 as GPG for backward
+//! the `gpg` CLI with in-process Base64 encoding. Ciphertext carries no backend
+//! tag, so `secret::mod` treats untagged base64 as GPG for backward
 //! compatibility with secrets encrypted before other backends existed.
 
 use anyhow::{Context, Result, bail};
@@ -17,7 +17,6 @@ pub async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<String> {
         bail!("secret is empty");
     }
 
-    ensure_command("base64")?;
     ensure_command("gpg")?;
 
     let encrypted_file = TempFile::new("shine-gpg-secret").await?;
@@ -41,11 +40,10 @@ pub async fn encrypt_gpg_secret_to_base64(
     }
     let recipients = validate_recipients(recipients)?;
 
-    ensure_command("base64")?;
     ensure_command("gpg")?;
 
     let encrypted = encrypt_gpg(plaintext, &recipients).await?;
-    encode_base64_single_line(&encrypted).await
+    Ok(encode_base64_single_line(&encrypted))
 }
 
 fn validate_recipients(recipients: &[String]) -> Result<Vec<&str>> {

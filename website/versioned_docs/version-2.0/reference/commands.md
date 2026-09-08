@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 2.0.0. Use `--help` on any subcommand for the exact interface of the
+This page reflects Shine 2.0.3. Use `--help` on any subcommand for the exact interface of the
 installed version.
 
 ## 1.0 target rules
@@ -155,8 +155,12 @@ execution must use it. `--yes` and `--dry-run` are mutually exclusive where dry-
 retains its existing preview format and is not an approved Plan.
 
 `app refresh` handles only generated files tracked by the manifest and preserves the last successful
-content on failure. Artifact apply/remove explicitly runs an external integration declared by the
-preset; ordinary installation and upgrade do not implicitly apply it.
+content on failure. Its final pre-execution validation reuses the reviewed generator input
+identities, including secret versions, so a ready Plan remains bound to the same inputs through
+execution. The final result names the source for a single-file refresh; multi-file summaries omit
+zero counts, and any failed file reports `Refresh incomplete` before the command exits nonzero.
+Artifact apply/remove explicitly runs an external integration declared by the preset;
+ordinary installation and upgrade do not implicitly apply it.
 
 If a supported App creation, in-place static Copy update, or ordinary removal of an unchanged
 static Copy is interrupted after its operation journal is written,
@@ -197,6 +201,20 @@ supported Plan instead of being replaced.
 
 ## Status, updates, and completions
 
+Shell checks distinguish applicable updates from attention-required state. Launcher ownership
+conflicts are reported separately and are never counted as available updates. Installed commands
+whose Preset has been removed remain visible as `preset missing`; upgrade preserves their installed
+files and records. Restore the Preset or review `shine shell uninstall <CATEGORY>/<COMMAND>` for
+explicit removal. A foreign launcher is still preserved, and its conflict blocks upgrade. If a
+shared external snapshot replacement would affect a missing installed sibling, Shine blocks that
+replacement until the sibling's Preset is restored or the command is explicitly uninstalled.
+Deleting only a payload while leaving metadata that references it is a validation error.
+
+`upgrade` also maintains internal Preset caches. A `preset cache (… create)` count describes internal
+source copies, not that many application configuration updates; a cache-only Plan can therefore
+appear even when `update` finds no applicable configuration changes.
+
+
 ```text
 shine list [--available [<app|shell|sys>]]
 shine info <TARGET> [--diff] [--verbose] [--run-generators]
@@ -221,16 +239,21 @@ not-evaluated warning instead of claiming that the installed file is current. Pa
 memory, and calculate status or `--diff` output without writing destinations or manifests. Global
 `update --run-generators` evaluates every installed App category; targeted info/update evaluates
 only the selected App. External generators still require a matching `shine trust grant`, and
-evaluation failures are reported after the remaining selected generators run.
+evaluation failures are reported after the remaining selected generators run. If evaluation finds
+changed output from an `auto = false` generator, update and status label it `refresh available` and
+show the exact `shine app refresh <CATEGORY> <FILE>` command; that change is not included in an
+upgrade target. A category with ordinary upgradeable changes as well as manual generated changes
+shows both actions.
 
 - `update --refresh-release` bypasses the 24-hour cache. By default, `update` groups targets under
   the same Homebrew-style sections as `shine list`: interactive terminals use horizontal columns,
   while redirected output stays one target per line. When exactly one category or managed-system
-  item needs an update, the final hint uses its canonical target, such as
-  `shine upgrade app/clash-verge`; multiple targets keep the aggregate `shine upgrade` hint. App
-  files and Shell commands collapse to their category. `update --diff` switches to detailed
-  vertical rows and expands affected files and commands. Structural changes such as source or
-  destination relocation, new files, deployment metadata, and command-entry refreshes are shown
+  item needs an upgrade, the final upgrade hint uses its canonical target, such as
+  `shine upgrade app/clash-verge`; multiple upgrade targets keep the aggregate `shine upgrade`
+  hint. Manual generated changes instead produce one exact `shine app refresh` hint per changed
+  source. App files and Shell commands collapse to their category. `update --diff` switches to
+  detailed vertical rows and expands affected files and commands. Structural changes such as source
+  or destination relocation, new files, deployment metadata, and command-entry refreshes are shown
   field by field; a unified diff is
   printed only when content changed. Targeted `update <TARGET>` uses the same details.
   For structural-only updates, Shine identifies a missing or mismatched command entry and a missing
@@ -312,6 +335,8 @@ exact Sys receipt is durable. A pending journal blocks later mutating Sys comman
 `shine sys recover` to review a fresh recovery Plan; it restores only fingerprint-matching previous
 state before receipt commit, or keeps desired state and cleans exact rollback afterward. Changed
 resources, rollback material, owned sentinel blocks, or receipts block recovery and are preserved.
+Recovery steps use logical resource labels (`managed-file`, `split-dns`, or `profile-blocks`);
+the permission list still identifies the exact scoped resources that recovery may access.
 Generated active/base/new/merge profile files retain their three-way merge behavior and are shown
 as non-transactional; bootstrap scripts and package/provider calls remain explicitly opaque and
 outside this recovery boundary.
@@ -390,6 +415,14 @@ HOME, runs preset code, or produces an approval that can be applied. `ready: fal
 blocker under the stated assumptions and does not make an otherwise valid report fail; invalid
 input or static validation still exits with status 1. JSON output uses its own `schema_version: 1`.
 
+Shell previews use Zsh for macOS/Linux and PowerShell for Windows, independent of the machine
+running Shine. Missing Shell template values (including `shine-template` annotations) produce a
+`shell_template_inputs_missing` blocked step: the report remains `valid: true`, `ready: false`,
+and exits with status 0. Static validation checks the source structure, not template input
+availability. Use declarative fixture environment presence to test supplied-input cases; the direct
+preview never borrows values from your real environment. The diagnostic does not reveal missing
+variable names or values.
+
 `preset test` reads `shine.test.toml` from exactly one category and runs each declared case through
 the same synthetic authoring-plan path. Fixture schema v1 requires unique case names and a platform.
 Optional `[cases.host]` state may declare environment-name presence, opaque `secret_versions`,
@@ -462,7 +495,9 @@ Phone identity setup is Windows-only and hands pairing to `age-plugin-phone`. Th
 is the default and asks the plugin to discover one matching foreground Wi-Fi listener first; if
 none responds, Windows selects Developer USB/ADB before creating the protocol session. See
 [Experiment with phone authorization on Windows](../guides/environment.md#experiment-with-phone-authorization-on-windows)
-for prerequisites, pairing, fallback, and recovery requirements.
+for prerequisites, pairing, fallback, and recovery requirements. For Wi-Fi pairing, open the phone's
+one-shot action before starting the command; for Developer USB, start the command before choosing
+**Pair · USB**.
 
 For broker policies, `--project` stores a human-readable project label. `--remote-workspace`
 requires remote requests to report that exact absolute workspace path in addition to matching the
@@ -519,5 +554,5 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-Stable `shine --version` output is `shine 2.0.0 (<commit> <date>)`; preview builds use the
-SemVer-compatible label `2.0.0-preview`.
+Stable `shine --version` output is `shine 2.0.3 (<commit> <date>)`; preview builds use the
+SemVer-compatible label `2.0.3-preview`.

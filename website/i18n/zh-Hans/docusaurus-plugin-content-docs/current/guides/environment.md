@@ -73,6 +73,10 @@ shine upgrade
 
 ## 使用 GPG 加密值
 
+Shine 在内部完成 GPG 和 age 密文的 Base64 编解码，这些操作无需外部 `base64` 命令。
+仍需安装所选的加密后端（`gpg` 或 `age`）及其身份所需的插件。已有 Shine 密文无需迁移。
+允许 Base64 换行和 ASCII 空白；缺失或错误 padding 等畸形编码会被拒绝。
+
 先确认本机的 `gpg` 可以使用对应公钥；私钥保存在 YubiKey 时，可参考
 [在 macOS 和 Windows 使用 YubiKey OpenPGP](https://blog.biulight.top/timeline/knowledge/yubikey-openpgp)完成接入。然后在
 `~/.shine/config.toml` 中指定默认接收者（可同时加密给多把 GPG 公钥）：
@@ -179,6 +183,11 @@ shine env secret identity init --phone --label "NUC WiFi Pair" --transport auto
 listener 响应时选择 Wi-Fi；没有 listener 响应时，会在创建 pairing offer 之前选择
 Developer USB/ADB。多个响应或本机 discovery 错误会安全失败；协议处理开始后不会再切换
 transport。`auto` 是默认值，因此省略 `--transport auto` 时策略不变。
+
+Developer USB 的顺序相反：先启动桌面命令；plugin 选择 ADB 并开始等待手机连接后，再在手机端
+点击 **Pair · USB**。使用 `--transport adb` 时，plugin 会在预检完成后直接选择 ADB。手机只会
+立即尝试连接一次，因此如果在桌面建立 `adb reverse` 规则前点击 **Pair · USB**，手机会报告
+`usb_transport_failed`。
 
 配对标签默认使用 Windows 计算机名；也可以显式指定标签、固定使用 Developer USB 或 QR，
 以及在存在多台 ADB 设备时指定序列号：

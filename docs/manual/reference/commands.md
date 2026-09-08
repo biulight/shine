@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 2.0.1. Use `--help` on any subcommand for the exact interface of the
+This page reflects Shine 2.0.3. Use `--help` on any subcommand for the exact interface of the
 installed version.
 
 ## 1.0 target rules
@@ -415,6 +415,14 @@ HOME, runs preset code, or produces an approval that can be applied. `ready: fal
 blocker under the stated assumptions and does not make an otherwise valid report fail; invalid
 input or static validation still exits with status 1. JSON output uses its own `schema_version: 1`.
 
+Shell previews use Zsh for macOS/Linux and PowerShell for Windows, independent of the machine
+running Shine. Missing Shell template values (including `shine-template` annotations) produce a
+`shell_template_inputs_missing` blocked step: the report remains `valid: true`, `ready: false`,
+and exits with status 0. Static validation checks the source structure, not template input
+availability. Use declarative fixture environment presence to test supplied-input cases; the direct
+preview never borrows values from your real environment. The diagnostic does not reveal missing
+variable names or values.
+
 `preset test` reads `shine.test.toml` from exactly one category and runs each declared case through
 the same synthetic authoring-plan path. Fixture schema v1 requires unique case names and a platform.
 Optional `[cases.host]` state may declare environment-name presence, opaque `secret_versions`,
@@ -487,7 +495,9 @@ Phone identity setup is Windows-only and hands pairing to `age-plugin-phone`. Th
 is the default and asks the plugin to discover one matching foreground Wi-Fi listener first; if
 none responds, Windows selects Developer USB/ADB before creating the protocol session. See
 [Experiment with phone authorization on Windows](../guides/environment.md#experiment-with-phone-authorization-on-windows)
-for prerequisites, pairing, fallback, and recovery requirements.
+for prerequisites, pairing, fallback, and recovery requirements. For Wi-Fi pairing, open the phone's
+one-shot action before starting the command; for Developer USB, start the command before choosing
+**Pair · USB**.
 
 For broker policies, `--project` stores a human-readable project label. `--remote-workspace`
 requires remote requests to report that exact absolute workspace path in addition to matching the
@@ -544,5 +554,5 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-Stable `shine --version` output is `shine 2.0.1 (<commit> <date>)`; preview builds use the
-SemVer-compatible label `2.0.1-preview`.
+Stable `shine --version` output is `shine 2.0.3 (<commit> <date>)`; preview builds use the
+SemVer-compatible label `2.0.3-preview`.

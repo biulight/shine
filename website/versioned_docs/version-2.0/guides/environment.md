@@ -80,6 +80,12 @@ shine upgrade
 
 ## Encrypt values with GPG
 
+Shine handles Base64 encoding and decoding internally for both GPG and age secrets; no external
+`base64` command is required for these operations. Install the selected encryption backend (`gpg`
+or `age`) and any identity plugins it needs. Existing Shine ciphertext needs no migration.
+Wrapped Base64 and ASCII whitespace are accepted; malformed encoding, including missing or invalid
+padding, is rejected.
+
 First make sure local `gpg` can use the recipient public key. For a private key on YubiKey, see the
 Chinese guide
 [在 macOS 和 Windows 使用 YubiKey OpenPGP](https://blog.biulight.top/timeline/knowledge/yubikey-openpgp).
@@ -200,6 +206,12 @@ matching foreground phone listener selects Wi-Fi; if no listener responds, setup
 USB/ADB before creating the pairing offer. Ambiguous discovery or a local discovery error fails
 closed, and an attempt never switches transport after protocol work begins. `auto` is the default,
 so omitting `--transport auto` keeps the same policy.
+
+Developer USB uses the opposite order. Start the desktop command first; after the plugin has
+selected ADB and is waiting for the phone connection, choose **Pair · USB** on the phone. With
+`--transport adb`, ADB is selected directly after preflight. The phone makes one immediate
+connection attempt, so choosing **Pair · USB** before the desktop has armed its reverse rule reports
+`usb_transport_failed`.
 
 The pairing label defaults to the Windows computer name. Override it, pin Developer USB or QR, or
 select one of multiple ADB devices explicitly when needed:

@@ -253,6 +253,22 @@ pub(super) async fn plan_preset_source_scope_with_state(
         shine.join("bin"),
         platform,
     );
+    // Preview the requested platform, never the compiling host's default shell.
+    context.shell = if platform == RuntimePlatform::Windows {
+        super::ShellType::PowerShell
+    } else {
+        super::ShellType::Zsh
+    };
+    if platform == RuntimePlatform::Windows {
+        context.shell_config_paths = vec![
+            context
+                .home_dir
+                .join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+            context
+                .home_dir
+                .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+        ];
+    }
     context.is_external_presets = true;
     context.running_as_admin = state.running_as_admin;
     context.path_env = state.path_env.clone();
@@ -417,6 +433,125 @@ fn section(kind: &str, target: String, plan: PlanV1) -> PresetAuthoringPlanSecti
 mod tests {
     use super::*;
     use crate::runtime::HostOperation;
+
+    fn proxy_source() -> InMemoryHost {
+        let source = InMemoryHost::new();
+        for (name, bytes) in [
+            (
+                "shine.toml",
+                include_bytes!("../../../presets/shell/proxy/shine.toml").as_slice(),
+            ),
+            (
+                "set_proxy.sh",
+                include_bytes!("../../../presets/shell/proxy/set_proxy.sh").as_slice(),
+            ),
+            (
+                "uset_proxy.sh",
+                include_bytes!("../../../presets/shell/proxy/uset_proxy.sh").as_slice(),
+            ),
+            (
+                "set_proxy.ps1",
+                include_bytes!("../../../presets/shell/proxy/set_proxy.ps1").as_slice(),
+            ),
+            (
+                "uset_proxy.ps1",
+                include_bytes!("../../../presets/shell/proxy/uset_proxy.ps1").as_slice(),
+            ),
+        ] {
+            source.put_file(Path::new("/repo/shell/proxy").join(name), bytes.to_vec());
+        }
+        source
+    }
+
+    #[tokio::test]
+    async fn proxy_authoring_templates_block_safely_on_all_platforms() {
+        for platform in RuntimePlatform::ALL {
+            let source = proxy_source();
+            let scope =
+                load_preset_source_scope(&source, Path::new("/repo"), Path::new("shell/proxy"))
+                    .await
+                    .unwrap();
+            assert!(validate_preset_source_scope(&scope).await.valid);
+            // The captured source, not any subsequent source-host change, is authoritative.
+            source.put_file(
+                "/repo/shell/proxy/shine.toml",
+                b"invalid source after capture".to_vec(),
+            );
+            let host = InMemoryHost::new();
+            let blocked = plan_preset_source_scope(scope.clone(), platform, host.clone()).await;
+            assert!(blocked.valid, "{platform:?}: {:?}", blocked.diagnostics);
+            assert!(!blocked.ready);
+            assert!(blocked.plans[0].steps.iter().any(|step| {
+                step.target == "shell/proxy/setproxy"
+                    && step.action == crate::plan::PlanActionV1::Blocked
+                    && step.diagnostic_codes == ["shell_template_inputs_missing"]
+            }));
+            assert!(
+                host.operations()
+                    .iter()
+                    .all(|op| matches!(op, HostOperation::Read(_)))
+            );
+            let mut state = PresetAuthoringSyntheticState::empty(InMemoryHost::new());
+            for name in [
+                "HTTP_PROXY_PORT",
+                "SOCKS5_PROXY_PORT",
+                "PROXY_HOST",
+                "PROXY_NO_PROXY",
+            ] {
+                state
+                    .environment
+                    .insert(name.to_string(), "private-template-value".to_string());
+            }
+            let supplied_host = state.host.clone();
+            let supplied = plan_preset_source_scope_with_state(scope, platform, state).await;
+            assert!(
+                supplied.valid && supplied.ready,
+                "{platform:?}: {supplied:?}"
+            );
+            assert!(
+                supplied_host
+                    .operations()
+                    .iter()
+                    .all(|op| matches!(op, HostOperation::Read(_)))
+            );
+            let json = serde_json::to_string(&supplied).unwrap();
+            let expected_source = if platform == RuntimePlatform::Windows {
+                "set_proxy.ps1"
+            } else {
+                "set_proxy.sh"
+            };
+            let excluded_source = if platform == RuntimePlatform::Windows {
+                "set_proxy.sh"
+            } else {
+                "set_proxy.ps1"
+            };
+            assert!(json.contains(expected_source), "{json}");
+            assert!(!json.contains(excluded_source), "{json}");
+            assert_eq!(
+                json.contains("Microsoft.PowerShell_profile.ps1"),
+                platform == RuntimePlatform::Windows
+            );
+            for report in [&blocked, &supplied] {
+                let json = serde_json::to_string(report).unwrap();
+                for forbidden in [
+                    "/repo",
+                    "/shine-author",
+                    "private-template-value",
+                    "HTTP_PROXY_PORT",
+                    "undefined template",
+                    "fingerprint",
+                    "source_digest",
+                    "state_digest",
+                    "PlanApproval",
+                    "argv",
+                ] {
+                    assert!(!json.contains(forbidden), "leaked {forbidden}: {json}");
+                }
+                assert_eq!(report.assumptions.trust_grants, "absent");
+                assert_eq!(report.assumptions.secrets, "absent");
+            }
+        }
+    }
 
     fn app_source() -> InMemoryHost {
         let host = InMemoryHost::new();

@@ -1,6 +1,8 @@
 mod jsonc;
 mod template;
 
+pub(crate) use template::MissingTemplateVariables;
+
 use std::collections::BTreeMap;
 
 /// Validate transform spec names without applying them.

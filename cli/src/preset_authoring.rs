@@ -171,6 +171,16 @@ fn write_plan_blockers(
     for step in blocked_steps {
         let _ = writeln!(output, "      {} Blocked step", crate::colors::red("✗"));
         let _ = writeln!(output, "        {}", step_identity(step));
+        if step
+            .diagnostic_codes
+            .iter()
+            .any(|code| code == "shell_template_inputs_missing")
+        {
+            let _ = writeln!(
+                output,
+                "        Shell template inputs are missing under the report assumptions."
+            );
+        }
     }
     for permission in permissions.missing_declarations.iter() {
         let _ = writeln!(
@@ -315,6 +325,28 @@ mod tests {
         assert!(output.contains("Lifecycle state empty · Environment absent · Secrets absent"));
         assert!(output.contains("Trust grants none · Commands absent · Administrator unavailable"));
         assert!(output.contains("hypothetical plan blocked under these assumptions"));
+    }
+
+    #[test]
+    fn missing_template_inputs_have_safe_actionable_text() {
+        let step = PlanStepV1::new(
+            "shell/proxy/setproxy",
+            Some("rendered-output"),
+            PlanActionV1::Blocked,
+        )
+        .with_diagnostic_code("shell_template_inputs_missing");
+        let mut output = String::new();
+        write_plan_blockers(
+            &mut output,
+            &[step],
+            &PermissionResolutionV1 {
+                required: PermissionSetV1::default(),
+                missing_declarations: PermissionSetV1::default(),
+                uncomputable_codes: Default::default(),
+            },
+        );
+        assert!(output.contains("shell_template_inputs_missing"));
+        assert!(output.contains("Shell template inputs are missing under the report assumptions."));
     }
 
     #[test]

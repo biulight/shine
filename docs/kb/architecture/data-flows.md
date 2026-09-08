@@ -188,8 +188,11 @@ category path + explicit platform
     → authoring report (assumptions + steps + permissions + blockers)
 ```
 
-App and Shell use a first-install lifecycle request. Sys partitions the validated manifest into
-managed and init items, then emits separate managed-install and bootstrap sections. The synthetic
+App and Shell use a first-install lifecycle request. The authoring context explicitly selects Zsh
+for macOS/Linux and PowerShell with synthetic Windows profile paths for Windows; it never inherits
+the compiling host's shell. Missing Shell template inputs become a typed, redacted blocked step,
+not an authoring construction failure. Sys partitions the validated manifest into managed and init
+items, then emits separate managed-install and bootstrap sections. The synthetic
 context contains no env values, secret versions, trust grants, detected commands, manifests,
 destinations, or administrator state, so related blockers remain visible. The output deliberately
 drops source/state digests and fingerprints: it is not a security Plan approval and cannot enter an
@@ -933,6 +936,11 @@ rejects an empty command or a duplicate without `--force`; `info`/`list` render 
 copy-paste-safe line by shell-quoting shell-significant arguments.
 
 ## Secret backend routing (GPG / age)
+
+Both adapters encode/decode Base64 in process using the existing Rust crate; only the encryption
+backend and its identity plugins require external commands. Decoding strips ASCII whitespace,
+validates standard padded Base64 completely, then writes ciphertext to the existing private
+temporary file. See [ADR 0083](../decisions/0083-in-process-secret-base64.md).
 
 Every call site that decrypts a stored secret (`env secret decrypt`, `env secret export`, workspace
 `env secret seal`/`env run`) goes through `secret::decrypt_secret(ciphertext, age_identities)`, which inspects the

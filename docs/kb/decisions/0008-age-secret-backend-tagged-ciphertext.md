@@ -46,6 +46,9 @@ binary cannot use biometry-gated Keychain APIs without Apple entitlements, so sh
 
 ## Consequences
 
+- [ADR 0083](0083-in-process-secret-base64.md) replaces the original external Base64 steps with
+  in-process encoding; GPG, age, and identity plugins remain external.
+
 - Existing GPG secrets keep decrypting unmodified — no migration is required.
 - Rotating an age identity or dropping a recipient from `age_recipients` does **not** rotate
   secrets already committed to history; re-`seal`ing re-encrypts to the current recipient list,

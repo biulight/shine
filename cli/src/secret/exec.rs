@@ -1,56 +1,27 @@
-//! Shared subprocess helpers for shelling out to external secret-handling
-//! CLIs (`gpg`, `age`, `base64`). Used by both `secret::gpg` and
-//! `secret::age` so their process-spawning conventions stay identical.
+//! Shared ciphertext encoding, temporary files, and subprocess helpers for
+//! the external `gpg` and `age` CLIs. Base64 is handled in process.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 
 pub(crate) async fn decode_base64_to_file(encoded_secret: &str, output_path: &Path) -> Result<()> {
-    if run_base64_decode(encoded_secret, output_path, "--decode").await? {
-        return Ok(());
-    }
-    if run_base64_decode(encoded_secret, output_path, "-D").await? {
-        return Ok(());
-    }
-    bail!("secret is not valid base64");
+    // Accept wrapped/copy-pasted ciphertext, but never ignore non-whitespace garbage.
+    // Decode completely before writing so malformed input cannot leave partial ciphertext.
+    let normalized: Vec<u8> = encoded_secret
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
+    let decoded = BASE64
+        .decode(normalized)
+        .context("secret is not valid base64")?;
+    tokio::fs::write(output_path, decoded)
+        .await
+        .with_context(|| format!("writing {}", output_path.display()))
 }
 
-async fn run_base64_decode(encoded_secret: &str, output_path: &Path, flag: &str) -> Result<bool> {
-    let output = Command::new("base64")
-        .arg(flag)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .with_context(|| format!("running base64 {flag}"))?;
-
-    let output = write_stdin_and_wait(output, encoded_secret.as_bytes()).await?;
-    if output.status.success() {
-        tokio::fs::write(output_path, output.stdout)
-            .await
-            .with_context(|| format!("writing {}", output_path.display()))?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
-pub(crate) async fn encode_base64_single_line(input: &[u8]) -> Result<String> {
-    let output = Command::new("base64")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .with_context(|| "running base64")?;
-
-    let output = write_stdin_and_wait(output, input).await?;
-    if !output.status.success() {
-        bail!("base64 encode failed");
-    }
-
-    let encoded = String::from_utf8(output.stdout).context("base64 output is not valid UTF-8")?;
-    Ok(encoded.split_whitespace().collect())
+pub(crate) fn encode_base64_single_line(input: &[u8]) -> String {
+    BASE64.encode(input)
 }
 
 pub(crate) async fn write_stdin_and_wait(
@@ -104,5 +75,69 @@ impl TempFile {
 impl Drop for TempFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn base64_standard_vectors_round_trip() {
+        for (plain, encoded) in [
+            (b"".as_slice(), ""),
+            (b"f", "Zg=="),
+            (b"ab", "YWI="),
+            (b"foo", "Zm9v"),
+            (b"\x00\xfb\xff", "APv/"),
+        ] {
+            assert_eq!(encode_base64_single_line(plain), encoded);
+            let file = TempFile::new("shine-base64-test").await.unwrap();
+            decode_base64_to_file(encoded, file.path()).await.unwrap();
+            assert_eq!(tokio::fs::read(file.path()).await.unwrap(), plain);
+        }
+    }
+
+    #[tokio::test]
+    async fn base64_accepts_wrapped_ciphertext_and_preserves_binary_bytes() {
+        let bytes: Vec<u8> = (0..=255).collect();
+        let encoded = encode_base64_single_line(&bytes);
+        assert!(!encoded.bytes().any(|byte| byte.is_ascii_whitespace()));
+        let wrapped = encoded
+            .as_bytes()
+            .chunks(64)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap())
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        let file = TempFile::new("shine-base64-test").await.unwrap();
+        decode_base64_to_file(&format!(" \t{wrapped}\r\n"), file.path())
+            .await
+            .unwrap();
+        assert_eq!(tokio::fs::read(file.path()).await.unwrap(), bytes);
+    }
+
+    #[tokio::test]
+    async fn base64_rejects_malformed_input_without_writing_or_echoing_it() {
+        let file = TempFile::new("shine-base64-test").await.unwrap();
+        tokio::fs::write(file.path(), b"unchanged").await.unwrap();
+        for invalid in [
+            "Zg",
+            "Zg=",
+            "Zg===",
+            "====",
+            "A",
+            "Zh==",
+            "Zg==AAAA",
+            "Zg==!",
+            "-_8=",
+            "Zg==\u{a0}",
+        ] {
+            let err = decode_base64_to_file(invalid, file.path())
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), "secret is not valid base64");
+            assert!(!format!("{err:#}").contains(invalid));
+            assert_eq!(tokio::fs::read(file.path()).await.unwrap(), b"unchanged");
+        }
     }
 }

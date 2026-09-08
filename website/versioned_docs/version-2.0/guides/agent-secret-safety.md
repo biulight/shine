@@ -14,6 +14,51 @@ the repository and decrypting values only for the child process that needs them.
 sandbox and do not replace operating-system isolation. Understand the boundary between identity
 files, hardware authorization, and agent permissions before use.
 
+## Prepare a Shine workspace
+
+A Shine workspace consists of `shine.workspace.toml` at the project root and the `*.shine.toml`
+environment sources it references. The workspace file declares modes such as `development`, the
+source merge order, and shared encryption recipients. The sources hold ordinary configuration and
+secrets. These are project environment files; creating them does not isolate an agent's access.
+
+If the project already has `.env` files, run the following yourself in a trusted terminal at the
+project root. Replace `DATABASE_URL` with an actual sensitive key; repeat `--secret` for each one:
+
+```bash
+shine env workspace init --from-dotenv --secret DATABASE_URL --dry-run
+shine env workspace init --from-dotenv --secret DATABASE_URL
+```
+
+This generates `shine.workspace.toml` and corresponding sources, such as `.env.shine.toml` from
+`.env`. Initialization only imports values: keys selected with `--secret` are still plaintext in
+`[secret]` until sealed, and unselected keys remain plaintext in `[plain]`. Review the classification
+before continuing. See [initialize a workspace from dotenv](./environment.md#initialize-a-workspace-from-dotenv)
+for supported inputs and mode selection. If there are no `.env` files, follow
+[layered project environments](./environment.md#use-layered-project-environments) to create the
+workspace and sources manually.
+
+Next, follow [use age identities](./environment.md#use-age-identities) to install the dependencies,
+set up your local identity, and configure the backend and recipients. Then seal the sources and
+verify your project command through Shine:
+
+```bash
+shine env secret seal
+shine env run --mode development -- bun run build
+```
+
+Use a mode declared in your workspace and replace `bun run build` with your project's command.
+Neither initialization nor sealing changes the original `.env` files. Once the project works through
+Shine, remove the original secret plaintext from the project yourself, or move it to a location the
+agent cannot read. Adding a file to `.gitignore` prevents accidental Git inclusion; it does not stop
+an agent from reading it.
+
+You can commit `shine.workspace.toml` and shared sources after confirming that sensitive values are
+sealed and none remain in `[plain]`. Keep identities, unsealed plaintext, and personal override
+files out of commits; ignore `.env.local.shine.toml` and `.env.*.local.shine.toml`. For later changes,
+edit the relevant source and seal it again; initialization does not need to be repeated. If another
+tool requires dotenv, see [export a workspace to dotenv](./environment.md#export-a-workspace-to-dotenv),
+including how to handle plaintext produced by `--include-secrets`.
+
 ## What Shine environment protection covers
 
 `shine env secret seal` seals pending secrets in workspace environment files into an encrypted
@@ -60,10 +105,21 @@ With the `age` backend, `age_recipients = ["age1..."]` identifies who can decryp
 may live in `~/.shine/config.toml`; a project team's shared recipient list belongs in
 `[env.encryption]` in the commit-ready `shine.workspace.toml`.
 
+The following example belongs in the local `~/.shine/config.toml`:
+
 ```toml
 secret_backend = "age"
 age_recipients = ["age1se1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
+```
+
+For shared project settings, use this separate section in `shine.workspace.toml`, replacing the
+example recipients with actual member recipients. Keep identity paths in local configuration:
+
+```toml
+[env.encryption]
+backend = "age"
+age_recipients = ["age1se1qexample...", "age1qteammate..."]
 ```
 
 `~/.shine/age/identity.txt` is the private decryption identity. Never commit or share it, and do not
