@@ -613,11 +613,19 @@ bugs. Check this list before changing the modules named in each entry.
   or recovery state. A failed Shine config write never authorizes cleanup. Phone setup does not
   change the default secret backend or add a phone-only recipient set (see
   [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md)).
-- **Decrypt routing is tag-based only** (`secret::parse_tagged_ciphertext`). `decrypt_secret`
-  must never consult `Config::secret_backend` or any other config to pick a backend — only the
-  `age:` prefix (or its absence) decides. This lets `secret_backend`/`age_recipients` change
-  freely without breaking previously-encrypted secrets (see
-  [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md)).
+- **Decrypt routing is self-describing.** Untagged data is GPG, `age:` is age and
+  `hybrid:` is the versioned two-wrapper envelope (ADR 0084). Encryption defaults never
+  reinterpret stored ciphertext. Only hybrid consults the global-only local decrypt
+  preference; failure or cancellation never switches backends. Parse and bound the
+  envelope before any tool invocation, and authenticate both wrappers before release.
+- **Hybrid sealing binds the complete workspace and source snapshots.** Resolve and
+  preflight exact public recipients before old-payload decryption; both wrappers must
+  succeed. Hold cooperating workspace/source locks through private atomic replacement
+  and compare complete bytes immediately before rename. Noncooperating editor races
+  in that final interval are outside the portable lock guarantee (ADR 0084).
+- **Hybrid bypasses the entire compiled cache.** Policy or consumed source tags decide
+  before any cache decrypt, using the same bytes later compiled. Malformed hybrid
+  payloads cannot be hidden by a cache, and unrelated modes do not disable caching.
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
   prefix, breaks every secret encrypted before the change.
 - **Workspace export decrypts only on explicit request.** `shine env workspace export` omits

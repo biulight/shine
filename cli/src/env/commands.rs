@@ -339,7 +339,7 @@ pub async fn handle_decrypt(config: &Config, key: &str) -> Result<()> {
     let Some(value) = env.get(key) else {
         bail!("{key} is not set in the active config [env]");
     };
-    let plaintext = secret::decrypt_secret(value, &config.resolved_age_identities())
+    let plaintext = secret::decrypt_with_config(value, config)
         .await
         .with_context(|| format!("decrypting {key}"))?;
     write_decrypted_plaintext(std::io::stdout().lock(), &plaintext)?;
@@ -363,7 +363,7 @@ pub async fn handle_export(config: &Config, key: &str, alias: Option<&str>) -> R
         EnvExportValue::Secret {
             key: secret_key,
             value,
-        } => secret::decrypt_secret(value, &config.resolved_age_identities())
+        } => secret::decrypt_with_config(value, config)
             .await
             .with_context(|| format!("decrypting {secret_key}"))?,
         EnvExportValue::Plaintext(value) => value.to_string(),
@@ -485,10 +485,14 @@ fn resolve_encrypt_recipients(
         return Ok(match backend {
             BackendKind::Gpg => EncryptRecipients::Gpg(cli_recipients),
             BackendKind::Age => EncryptRecipients::Age(cli_recipients),
+            BackendKind::Hybrid => {
+                bail!("hybrid requires workspace access lists; use env secret seal")
+            }
         });
     }
 
     match backend {
+        BackendKind::Hybrid => bail!("hybrid requires workspace access lists; use env secret seal"),
         BackendKind::Gpg => {
             if config.legacy_gpg_key_id.is_some() {
                 bail!(
@@ -947,7 +951,7 @@ mod tests {
 
         match recipients {
             EncryptRecipients::Gpg(values) => assert_eq!(values, vec!["cli@example.com"]),
-            EncryptRecipients::Age(_) => panic!("expected gpg recipients"),
+            _ => panic!("expected gpg recipients"),
         }
     }
 
@@ -967,7 +971,7 @@ mod tests {
             EncryptRecipients::Gpg(values) => {
                 assert_eq!(values, vec!["config@example.com", "team@example.com"])
             }
-            EncryptRecipients::Age(_) => panic!("expected gpg recipients"),
+            _ => panic!("expected gpg recipients"),
         }
     }
 
@@ -1013,7 +1017,7 @@ mod tests {
 
         match recipients {
             EncryptRecipients::Age(values) => assert_eq!(values, vec!["age1qexample"]),
-            EncryptRecipients::Gpg(_) => panic!("expected age recipients"),
+            _ => panic!("expected age recipients"),
         }
     }
 

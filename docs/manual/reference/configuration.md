@@ -220,8 +220,8 @@ data = "<GPG ciphertext managed by Shine>"
 ```
 
 `shine env secret seal` merges pending values into the encrypted payload and changes sealed entries
-to `true`. `shine env run` merges `[plain]` and decrypted values in source order. With usable GPG
-recipients it also maintains an encrypted, mode-specific cache.
+to `true`. `shine env run` merges `[plain]` and decrypted values in source order. With usable recipients and only single-backend policy/sources, it also maintains an encrypted,
+mode-specific cache.
 
 `shine env run --with KEY[=ALIAS]` injects a value from current Shine `[env]`, preferring
 `KEY_SECRET` and then `KEY`. Explicit injection overrides workspace and process values.
@@ -249,3 +249,15 @@ recipients it also maintains an encrypted, mode-specific cache.
 
 Do not delete manifests manually and expect Shine to rediscover old installations. Prefer the
 corresponding `uninstall --dry-run` and `uninstall` commands.
+
+## Hybrid workspace encryption
+
+`env.encryption.backend = "hybrid"` requires both workspace `gpg_recipients` and
+`age_recipients`, each with a nonblank entry. GPG entries must be locally available
+full 40-hex primary public-key fingerprints. Global recipients are not merged.
+Merely configuring both lists does not enable hybrid.
+
+Set `hybrid_decrypt_backend = "gpg"` or `"age"` in local global `config.toml` to
+select a hybrid read path. Projects cannot override or save this preference. It
+neither changes single-backend routing nor grants secret release authorization.
+Global `secret_backend` still accepts only `gpg` or `age`; hybrid requires a workspace.

@@ -477,7 +477,7 @@ shine env proxy disable <COMMAND> [--project]
 shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>] [--set <KEY>] [--force]
 shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
-shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age>] [-r <RECIPIENT>]...
+shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
 shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PATH>] [--force]
 shine env secret identity init --phone [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
 shine env secret identity list
@@ -556,3 +556,17 @@ shine self upgrade [--channel <stable|preview>]
 
 Stable `shine --version` output is `shine 2.0.3 (<commit> <date>)`; preview builds use the
 SemVer-compatible label `2.0.3-preview`.
+
+### Hybrid sealing and reading
+
+`shine env secret seal --backend hybrid` uses both workspace recipient lists and
+rejects `-r/--recipient`. Sealing requires GnuPG 2.2–2.5, age 1.x, public keys and
+required recipient plugins. Both encryption paths must succeed. Explicit
+`--backend gpg` or `--backend age` seals only for that group with existing recipient
+precedence. Standalone `env secret encrypt` does not accept hybrid.
+
+`env secret decrypt` reads `hybrid:` envelopes and preserves exact plaintext stdout.
+With no local preference, one available backend is selected automatically; two
+require a local terminal choice, or a `hybrid_decrypt_backend` setting for noninteractive
+use. Missing keys, cancellation and failures stop without trying the other backend.
+Readers need only their selected tool and identities/plugins.

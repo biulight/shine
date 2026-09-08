@@ -469,7 +469,8 @@ shine env run --mode production -- bun run build
 `env.override_process_env = true` 后改由 workspace 值覆盖；显式 `--with` 始终具有最高
 优先级。
 
-配置了可用的 GPG recipient 时，`env run` 会在系统缓存目录按 mode 保存 GPG 加密缓存。
+策略和源均为单后端且配置了可用 recipient 时，`env run` 会在系统缓存目录按 mode
+使用所选后端保存加密缓存。
 workspace、源文件内容或文件顺序变化后缓存会自动重建；无需手工编译或删除缓存。
 
 个人覆盖文件应加入 `.gitignore`：
@@ -483,3 +484,29 @@ workspace、源文件内容或文件顺序变化后缓存会自动重建；无�
 `true`。
 
 环境文件结构和覆盖顺序见[配置参考](../reference/configuration.md)。
+
+## 让 GPG 与 age 成员共享一份 payload
+
+转换前先升级所有读取端，包括 SSH broker 所在本机。既有未标记 GPG 和 `age:` 密文继续
+可读，普通读取不迁移文件。显式配置工作区，替换以下公钥占位符：
+
+```toml
+[env.encryption]
+backend = "hybrid"
+gpg_recipients = ["<full 40-hex primary fingerprint>"]
+age_recipients = ["age1..."]
+```
+
+运行 `shine env secret seal --workspace shine.workspace.toml`。读取旧密文需要其对应
+identity；重新封存需要两种加密工具及完整公钥名单。任意一组均可独立读取同一份数据密文。
+混合 GPG 密钥封装排除本机选项文件与隐式额外收件人；group 和模糊用户 ID 会在解密已有
+秘密前被拒绝。
+
+工作区策略为 hybrid，或本次 mode 消费的任意源含混合 payload 时，`env run` 跳过缓存
+读取和写入，保留旧缓存。仅属于其他 mode 的源不影响判断。重复运行可能需要重复硬件
+批准。导出默认省略秘密；`--include-secrets` 才释放秘密，dry-run 不解密秘密。
+
+封存会锁定其他遵守协议的 Shine 封存进程，并在替换前复核工作区与源文件捕获字节。
+硬件批准期间编辑将终止当前文件；此前完成的文件保留，剩余文件不再处理。封存期间请勿
+编辑：不遵守锁的编辑器可能在最后复核到替换之间产生竞态。失败后明文待封存项可能仍在，
+Shine 不会声称已清除。`.shine-seal.lock` 锁文件可能保留，不含秘密；封存仍在进行时不要删除。

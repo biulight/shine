@@ -409,7 +409,7 @@ shine env proxy disable <COMMAND> [--project]
 shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>] [--set <KEY>] [--force]
 shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
-shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age>] [-r <RECIPIENT>]...
+shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
 shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PATH>] [--force]
 shine env secret identity init --phone [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
 shine env secret identity list
@@ -471,3 +471,15 @@ shine self upgrade [--channel <stable|preview>]
 ```
 
 稳定版的 `shine --version` 显示 `shine 2.0.3 (<commit> <date>)`；preview 构建使用兼容 SemVer 的 `2.0.3-preview` 版本标签。
+
+### 混合封存与读取
+
+`shine env secret seal --backend hybrid` 使用工作区的两组收件人，拒绝 `-r/--recipient`。
+封存需要 GnuPG 2.2–2.5、age 1.x、公钥和所需收件人插件，两条加密路径必须都成功。
+显式 `--backend gpg` 或 `--backend age` 只面向所选组，沿用现有收件人优先级。
+独立 `env secret encrypt` 不接受 hybrid。
+
+`env secret decrypt` 可读取 `hybrid:` 封装，stdout 保持精确明文字节。没有本机偏好时，
+只有一种可用方式便自动选择；两种都可用时需在本机终端选择，非交互环境需设置
+`hybrid_decrypt_backend`。缺少私钥、取消或失败均终止，不尝试另一后端。
+读取者仅需所选工具、identity 和插件。

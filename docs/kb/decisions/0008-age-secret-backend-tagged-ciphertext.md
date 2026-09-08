@@ -46,6 +46,10 @@ binary cannot use biometry-gated Keychain APIs without Apple entitlements, so sh
 
 ## Consequences
 
+- [ADR 0084](0084-hybrid-secret-envelope.md) adds an explicitly selected workspace hybrid
+  envelope. Its local-only preference chooses one listed key wrapper, while these original
+  GPG/age ciphertext routes and encryption formats remain unchanged.
+
 - [ADR 0083](0083-in-process-secret-base64.md) replaces the original external Base64 steps with
   in-process encoding; GPG, age, and identity plugins remain external.
 

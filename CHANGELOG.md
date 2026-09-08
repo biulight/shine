@@ -5,6 +5,15 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [Unreleased]
+
+### Features
+
+- Add explicit workspace GPG/age hybrid sealing with one authenticated data ciphertext,
+  global-only local decrypt selection, isolated public recipient resolution, and cache bypass.
+- Bind sealing to captured workspace/source bytes with cooperating process locks and final
+  comparisons; report partial multi-file completion without overwriting detected concurrent edits.
+
 ## [2.0.3] — 2026-09-08
 
 ### Bug Fixes

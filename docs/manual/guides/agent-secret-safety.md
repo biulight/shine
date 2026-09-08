@@ -244,3 +244,16 @@ shine env secret seal
 
 Do not commit environment files containing unsealed strings. Add personal override files to
 `.gitignore`, and keep only sealed ciphertext in shared files.
+
+## Hybrid access boundaries
+
+Hybrid offers GPG or age access to one authenticated data payload. It is not two-person
+approval and does not combine both identity strengths. Any authorized private-key
+compromise can expose the secret. Changed, missing, replaced or spliced key wrappers
+fail format or integrity checks before release. The envelope does not authenticate
+its author or prevent replay of an entire old file.
+
+Removing a recipient and resealing generates a fresh key and ciphertext. It does not
+revoke historical access, prevent authorized readers copying values, or rotate upstream
+credentials. Rotate exposed service credentials at their source. This new envelope
+protocol has not undergone an independent security audit.

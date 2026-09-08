@@ -34,6 +34,18 @@ pub async fn decrypt_base64_age_secret(
     encoded_secret: &str,
     identities: &[PathBuf],
 ) -> Result<String> {
+    decrypt_base64_age(encoded_secret, identities, false).await
+}
+
+pub(super) async fn decrypt_hybrid_key(encoded: &str, identities: &[PathBuf]) -> Result<String> {
+    decrypt_base64_age(encoded, identities, true).await
+}
+
+async fn decrypt_base64_age(
+    encoded_secret: &str,
+    identities: &[PathBuf],
+    key: bool,
+) -> Result<String> {
     if encoded_secret.trim().is_empty() {
         bail!("secret is empty");
     }
@@ -63,7 +75,18 @@ pub async fn decrypt_base64_age_secret(
         bail!("decoded secret is empty");
     }
 
-    decrypt_age_file(encrypted_file.path(), identities, quiet_phone_progress).await
+    decrypt_age_file(encrypted_file.path(), identities, quiet_phone_progress, key).await
+}
+
+pub(super) async fn preflight_identities(identities: &[PathBuf]) -> Result<()> {
+    if identities.is_empty() {
+        bail!("no age identities configured");
+    }
+    ensure_command("age")?;
+    for plugin in required_identity_plugins(identities).await? {
+        ensure_command(plugin)?;
+    }
+    Ok(())
 }
 
 fn phone_terminal_output_requested(transport: Option<&OsStr>, messages: Option<&OsStr>) -> bool {
@@ -126,9 +149,10 @@ async fn decrypt_age_file(
     path: &Path,
     identities: &[PathBuf],
     quiet_phone_progress: bool,
+    key: bool,
 ) -> Result<String> {
     let mut command = Command::new("age");
-    command.arg("-d");
+    command.kill_on_drop(true).arg("-d");
     for identity in identities {
         command.arg("-i").arg(identity);
     }
@@ -145,6 +169,9 @@ async fn decrypt_age_file(
         .spawn()
         .with_context(|| "running age -d")?;
 
+    if key {
+        return super::exec::read_key_output(output).await;
+    }
     let output = output
         .wait_with_output()
         .await

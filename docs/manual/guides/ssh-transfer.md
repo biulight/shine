@@ -264,3 +264,12 @@ shine local status
 
 The output includes session ID, reachability, protocol version, and the local default directory. A
 shell not entered through `shine ssh` reports the missing session variables.
+
+### Hybrid secrets through the broker
+
+Hybrid payloads retain local release approval and complete workspace/source snapshot
+checks. Set `hybrid_decrypt_backend` in the broker machine's global configuration;
+remote requests cannot select its backend or identities. Local selection and unwrap
+occur only after release authorization, with no fallback on cancellation. Only approved
+values reach the remote side, never data keys or private keys. Resealing or changing
+recipients changes the reviewed snapshot and requires review under existing policy rules.

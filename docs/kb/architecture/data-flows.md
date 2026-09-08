@@ -943,9 +943,9 @@ validates standard padded Base64 completely, then writes ciphertext to the exist
 temporary file. See [ADR 0083](../decisions/0083-in-process-secret-base64.md).
 
 Every call site that decrypts a stored secret (`env secret decrypt`, `env secret export`, workspace
-`env secret seal`/`env run`) goes through `secret::decrypt_secret(ciphertext, age_identities)`, which inspects the
-ciphertext for an `age:` prefix (`secret::parse_tagged_ciphertext`) and dispatches to
-`secret::age`/`secret::gpg` accordingly; untagged ciphertext is always GPG. Decryption never
+`env secret seal`/`env run`) goes through `secret::decrypt_with_config(ciphertext, config)`, which inspects the
+ciphertext for an `age:` or `hybrid:` prefix (`secret::parse_tagged_ciphertext`) and dispatches to
+`secret::age`/`secret::gpg` or the authenticated hybrid envelope accordingly; untagged ciphertext is always GPG. Decryption never
 reads `Config::secret_backend` — only the tag decides. Encryption (`env secret encrypt`, workspace
 `env secret seal`) instead resolves a `secret::EncryptRecipients` (CLI `-r`/`--backend` > workspace
 `env.encryption` > `config.toml` `gpg_recipients`/`age_recipients`/`secret_backend` > GPG default)
@@ -959,3 +959,17 @@ merges the legacy `age_identity` path with that ordered list and passes each pat
 `age -i`; an explicit project identity setting replaces the global set. Shine never discovers or
 manages phone-plugin TPM, replay, locator, pairing, recovery, or cleanup state. See
 [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md).
+
+
+Hybrid workspace sealing captures policy and source bytes under cooperating workspace/source
+locks, resolves exact GPG public encryption keys with option files disabled, and preflights both
+encryption branches before decrypting old payloads. A fresh OS-random data key encrypts one payload;
+GPG and age wrap its versioned nonce-bound key record. The complete header and wrappers are AEAD
+associated data. Private temporary output is prepared before final workspace/source comparisons
+and replacing rename. Partial multi-file success is reported, never rolled back over external edits.
+
+Local global `hybrid_decrypt_backend` selects one hybrid unwrap after any broker release approval.
+Without it, capability-only preflight selects a sole candidate or requires a local TTY choice.
+Failure terminates without fallback. Runtime captures mode inputs once; a hybrid policy or consumed
+hybrid tag disables cache read/write before decryption and compiles those exact bytes. See
+[ADR 0084](../decisions/0084-hybrid-secret-envelope.md) for the wire contract and concurrency boundary.

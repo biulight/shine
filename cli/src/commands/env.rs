@@ -319,7 +319,7 @@ pub struct EnvSealCommand {
     /// Workspace definition (defaults to the nearest shine.workspace.toml)
     #[arg(long, value_name = "FILE")]
     pub workspace: Option<PathBuf>,
-    /// Secret backend to use: "gpg" (default) or "age"
+    /// Secret backend: "gpg", "age", or workspace-only "hybrid"
     #[arg(long)]
     pub backend: Option<String>,
     /// Recipient (repeatable): GPG key ID/fingerprint/email, or age recipient

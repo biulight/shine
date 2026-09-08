@@ -520,8 +520,8 @@ Existing process variables override the workspace by default. With
 `env.override_process_env = true`, workspace values win. Explicit `--with` always has highest
 precedence.
 
-When usable GPG recipients are configured, `env run` stores an encrypted, mode-specific GPG cache in
-the system cache directory. It rebuilds automatically when workspace content, source content, or file
+For single-backend policy and sources, usable recipients let `env run` store an encrypted,
+mode-specific cache with the selected backend in the system cache directory. It rebuilds automatically when workspace content, source content, or file
 order changes.
 
 Ignore personal overrides:
@@ -534,3 +534,36 @@ Ignore personal overrides:
 Never commit a source containing unsealed strings. Before committing, inspect `[secret]` and confirm
 every sealed entry is `true`. See the [configuration reference](../reference/configuration.md) for
 file formats and precedence.
+
+## Share a payload across GPG and age members
+
+Upgrade all readers, including the local SSH broker machine, before conversion.
+Existing untagged GPG and `age:` ciphertext stay readable; ordinary reads never migrate
+files. Explicitly configure the workspace (replace the public placeholders):
+
+```toml
+[env.encryption]
+backend = "hybrid"
+gpg_recipients = ["<full 40-hex primary fingerprint>"]
+age_recipients = ["age1..."]
+```
+
+Run `shine env secret seal --workspace shine.workspace.toml`. Reading old ciphertext
+requires its own identity; resealing requires both encryption tools and complete public
+lists. Either group independently reads the same data ciphertext. Hybrid GPG wrapping
+excludes local option files and implicit extra recipients; groups and fuzzy user IDs
+are rejected before existing secrets are decrypted.
+
+`env run` bypasses cache reads and writes if the workspace policy is hybrid or any
+source consumed by the mode contains a hybrid payload. Old caches remain. Sources
+belonging only to another mode do not affect this decision. Repeated runs can require
+repeated hardware approval. Export omits secrets by default; `--include-secrets`
+releases them, while dry-run never decrypts secrets.
+
+Sealing locks out cooperating Shine sealers and rechecks captured workspace and source
+bytes before replacement. Edits during hardware approval abort the current file;
+earlier completed files remain completed and remaining files are not processed. Do
+not edit during sealing: editors ignoring the lock can race in the final comparison
+to replacement interval. Failed sealing may leave pending plaintext entries; Shine
+does not claim they were cleared. `.shine-seal.lock` files may remain, contain no
+secrets, and must not be deleted while a seal is active.

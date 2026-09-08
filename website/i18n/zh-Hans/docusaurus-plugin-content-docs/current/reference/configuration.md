@@ -203,8 +203,7 @@ data = "<由 Shine 管理的 GPG 密文>"
 ```
 
 `shine env secret seal` 会把 `[secret]` 中的待处理值合并进加密 payload，并将已封存项改为
-`true`。`shine env run` 按文件顺序合并 `[plain]` 和解密后的 secret；配置了可用的 GPG
-recipient 时，还会维护按 mode 区分的加密缓存。
+`true`。`shine env run` 按文件顺序合并 `[plain]` 和解密后的 secret；策略和源均为单后端且配置了可用 recipient 时，还会维护按 mode 区分的加密缓存。
 
 `shine env run --with KEY[=ALIAS]` 还可注入当前 Shine 配置 `[env]` 中的值。它优先读取
 `KEY_SECRET`，不存在时读取 `KEY`；显式注入值覆盖 workspace 和当前进程中的同名变量。
@@ -231,3 +230,13 @@ recipient 时，还会维护按 mode 区分的加密缓存。
 ```
 
 不要手工删除 manifest 后再期望 Shine 识别旧安装；优先使用对应的 `uninstall --dry-run` 和 `uninstall`。
+
+## 工作区混合加密
+
+`env.encryption.backend = "hybrid"` 要求工作区同时提供 `gpg_recipients` 和
+`age_recipients`，每组至少一个非空项。GPG 项必须是本机已有公钥的完整 40 位十六进制
+主密钥指纹。两组均不合并全局收件人；仅同时配置两组不会启用 hybrid。
+
+在本机全局 `config.toml` 中设置 `hybrid_decrypt_backend = "gpg"` 或 `"age"`
+选择混合读取方式。项目不能覆盖或保存此偏好。它不改变单后端密文路由，也不授予秘密
+释放权限。全局 `secret_backend` 仍只接受 `gpg` 或 `age`；hybrid 必须使用工作区。

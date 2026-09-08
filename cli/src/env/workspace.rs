@@ -15,7 +15,7 @@ use std::{
 };
 use tokio::process::Command;
 use toml_edit::{DocumentMut, value};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 const WORKSPACE_FILE: &str = "shine.workspace.toml";
 const WORKSPACE_FORMAT_VERSION: u32 = 2;
@@ -65,7 +65,7 @@ pub async fn handle_export(
         );
     }
 
-    let mut values = compile_export_sources(&sources, config, include_secrets).await?;
+    let mut values = compile_export_sources(&sources, config, include_secrets && !dry_run).await?;
     let mut contents = match format {
         EnvWorkspaceExportFormat::Dotenv => render_dotenv(&values)?,
     };
@@ -427,6 +427,14 @@ enum SecretState {
     Plain(String),
 }
 
+impl Drop for SecretState {
+    fn drop(&mut self) {
+        if let Self::Plain(value) = self {
+            value.zeroize();
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 struct PayloadField {
     #[serde(default)]
@@ -437,6 +445,14 @@ struct PayloadField {
 struct SecretPayload {
     version: u32,
     values: BTreeMap<String, String>,
+}
+
+impl Drop for SecretPayload {
+    fn drop(&mut self) {
+        for value in self.values.values_mut() {
+            value.zeroize();
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -469,11 +485,21 @@ pub async fn handle_seal(
     recipients_arg: &[String],
 ) -> Result<()> {
     let workspace_path = find_workspace_optional(workspace_arg).await?;
-    let workspace = match &workspace_path {
-        Some(path) => Some(load_workspace(path).await?),
+    let lock_scope = workspace_path
+        .as_deref()
+        .or(file)
+        .context("workspace or source file required")?;
+    let _lock = SealLock::acquire(lock_scope)?;
+    let workspace_snapshot = match &workspace_path {
+        Some(path) => Some(tokio::fs::read_to_string(path).await?),
         None => None,
     };
-    let encryption = resolve_seal_encryption(
+    let workspace = workspace_path
+        .as_ref()
+        .zip(workspace_snapshot.as_ref())
+        .map(|(path, text)| parse_workspace(path, text))
+        .transpose()?;
+    let mut encryption = resolve_seal_encryption(
         backend_arg,
         recipients_arg,
         workspace
@@ -495,8 +521,54 @@ pub async fn handle_seal(
         bail!("no workspace environment source files were found");
     }
 
+    let mut source_locks = Vec::new();
+    let scope = std::fs::canonicalize(lock_scope)?;
+    let mut locked_paths = BTreeSet::new();
     for path in &files {
-        seal_file(path, config, encryption.as_ref()).await?;
+        let canonical = std::fs::canonicalize(path)?;
+        if canonical != scope && locked_paths.insert(canonical.clone()) {
+            source_locks.push(SealLock::acquire(&canonical)?);
+        }
+    }
+    let captured = capture_sources(&files).await?;
+    for (path, contents) in &captured {
+        parse_source(
+            path,
+            contents
+                .as_deref()
+                .context("source disappeared before sealing")?,
+        )?;
+    }
+    if let Some(EncryptRecipients::Hybrid(recipients)) = &mut encryption {
+        recipients.prepare().await?;
+    } else if workspace
+        .as_ref()
+        .and_then(|w| w.env.encryption.backend.as_deref())
+        == Some("hybrid")
+    {
+        eprintln!("This seal explicitly targets only the selected single-backend recipient group.");
+    }
+    for (completed, (path, contents)) in captured.iter().enumerate() {
+        let result = async {
+            if let Some((path, original)) =
+                workspace_path.as_deref().zip(workspace_snapshot.as_deref())
+            {
+                verify_snapshot(path, original).await?;
+            }
+            let contents = contents
+                .as_deref()
+                .context("source disappeared before sealing")?;
+            let updated = prepare_sealed_file(path, contents, config, encryption.as_ref()).await?;
+            replace_sealed_file(
+                path,
+                updated.as_bytes(),
+                contents,
+                workspace_path.as_deref().zip(workspace_snapshot.as_deref()),
+            )
+            .await
+        }
+        .await;
+        result.with_context(|| format!("sealing stopped: {completed} completed, current file {} not updated, {} unprocessed; retry after resolving the error", path.display(), captured.len() - completed - 1))?;
         println!("sealed {}", path.display());
     }
     Ok(())
@@ -553,38 +625,45 @@ pub async fn handle_run(
         find_workspace_optional(workspace_arg).await?
     };
     let (values, override_process_env) = if let Some(workspace_path) = workspace_path {
-        let workspace = load_workspace(&workspace_path).await?;
+        let workspace_bytes = tokio::fs::read_to_string(&workspace_path).await?;
+        let workspace = parse_workspace(&workspace_path, &workspace_bytes)?;
         let mode = mode_arg
             .or(workspace.env.default_mode.as_deref())
             .context("environment mode is required; pass --mode or set env.default_mode")?;
         validate_mode(mode)?;
         let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
-        let input_hash = calculate_input_hash(&workspace_path, mode, &sources).await?;
+        let captured = capture_sources(&sources).await?;
+        let input_hash = snapshot_input_hash(&workspace_path, &workspace_bytes, mode, &captured);
+        let bypass_cache = bypass_snapshot_cache(&workspace.env.encryption, &captured)?;
         let encryption =
             resolve_seal_encryption(None, &[], Some(&workspace.env.encryption), config)?;
         let cache_path = cache_path(&workspace_path, mode)?;
-        let values = match read_valid_cache(&cache_path, mode, &input_hash, config).await {
-            Ok(Some(values)) => values,
-            Ok(None) => {
-                let values = compile_sources(&sources, config).await?;
-                if let Some(encryption) = &encryption
-                    && let Err(error) = write_cache(
-                        &cache_path,
-                        &workspace_path,
-                        mode,
-                        &input_hash,
-                        &values,
-                        encryption,
-                    )
-                    .await
-                {
-                    eprintln!("Warning: could not update environment cache: {error:#}");
+        let values = if bypass_cache {
+            compile_captured_sources(&captured, config).await?
+        } else {
+            match read_valid_cache(&cache_path, mode, &input_hash, config).await {
+                Ok(Some(values)) => values,
+                Ok(None) => {
+                    let values = compile_captured_sources(&captured, config).await?;
+                    if let Some(encryption) = &encryption
+                        && let Err(error) = write_cache(
+                            &cache_path,
+                            &workspace_path,
+                            mode,
+                            &input_hash,
+                            &values,
+                            encryption,
+                        )
+                        .await
+                    {
+                        eprintln!("Warning: could not update environment cache: {error:#}");
+                    }
+                    values
                 }
-                values
-            }
-            Err(error) => {
-                eprintln!("Warning: ignoring unreadable environment cache: {error:#}");
-                compile_sources(&sources, config).await?
+                Err(error) => {
+                    eprintln!("Warning: ignoring unreadable environment cache: {error:#}");
+                    compile_captured_sources(&captured, config).await?
+                }
             }
         };
         (values, workspace.env.override_process_env)
@@ -637,7 +716,7 @@ async fn resolve_explicit_values(
             super::StoredValue::Secret {
                 key: secret_key,
                 value: ciphertext,
-            } => secret::decrypt_secret(ciphertext, &config.resolved_age_identities())
+            } => secret::decrypt_with_config(ciphertext, config)
                 .await
                 .with_context(|| format!("decrypting {secret_key}"))?,
             super::StoredValue::Plaintext(value) => value.to_string(),
@@ -691,6 +770,18 @@ fn parse_workspace(path: &Path, contents: &str) -> Result<Workspace> {
     if workspace.env.files.is_empty() {
         bail!("env.files must contain at least one source path");
     }
+    if workspace
+        .env
+        .encryption
+        .backend
+        .as_deref()
+        .is_some_and(|b| b.trim().eq_ignore_ascii_case("hybrid"))
+    {
+        secret::hybrid::Recipients::new(
+            clean_recipients(&workspace.env.encryption.gpg_recipients),
+            clean_recipients(&workspace.env.encryption.age_recipients),
+        )?;
+    }
     Ok(workspace)
 }
 
@@ -710,15 +801,29 @@ fn resolve_seal_encryption(
         config.secret_backend.as_deref(),
     )?;
 
+    if backend == BackendKind::Hybrid {
+        if !cli_recipients.is_empty() {
+            bail!("hybrid rejects --recipient; edit both workspace recipient lists");
+        }
+        let workspace = workspace_encryption.context("hybrid requires workspace access lists")?;
+        return Ok(Some(EncryptRecipients::Hybrid(
+            secret::hybrid::Recipients::new(
+                clean_recipients(&workspace.gpg_recipients),
+                clean_recipients(&workspace.age_recipients),
+            )?,
+        )));
+    }
     let cli_recipients = clean_recipients(cli_recipients);
     if !cli_recipients.is_empty() {
         return Ok(Some(match backend {
             BackendKind::Gpg => EncryptRecipients::Gpg(cli_recipients),
             BackendKind::Age => EncryptRecipients::Age(cli_recipients),
+            BackendKind::Hybrid => unreachable!(),
         }));
     }
 
     match backend {
+        BackendKind::Hybrid => unreachable!(),
         BackendKind::Gpg => {
             let workspace_recipients = workspace_encryption
                 .map(|encryption| clean_recipients(&encryption.gpg_recipients))
@@ -749,6 +854,9 @@ fn resolve_backend(
     workspace_backend: Option<&str>,
     config_backend: Option<&str>,
 ) -> Result<BackendKind> {
+    if config_backend.is_some_and(|value| value.trim().eq_ignore_ascii_case("hybrid")) {
+        bail!("global secret_backend cannot be hybrid; use workspace access lists");
+    }
     for candidate in [cli_backend, workspace_backend, config_backend] {
         if let Some(value) = candidate.map(str::trim).filter(|value| !value.is_empty()) {
             return value.parse();
@@ -942,22 +1050,39 @@ pub async fn decrypt_broker_snapshot(
     Ok(values)
 }
 
+#[cfg(test)]
 async fn seal_file(
     path: &Path,
     config: &Config,
     encryption: Option<&EncryptRecipients>,
 ) -> Result<()> {
-    let contents = tokio::fs::read_to_string(path)
-        .await
-        .with_context(|| format!("reading {}", path.display()))?;
-    let source = parse_source(path, &contents)?;
-    let mut old_values = decrypt_source_payload(path, &source, config).await?;
-    let mut new_values = BTreeMap::new();
+    let contents = tokio::fs::read_to_string(path).await?;
+    let updated = prepare_sealed_file(path, &contents, config, encryption).await?;
+    verify_snapshot(path, &contents).await?;
+    replace_sealed_file(path, updated.as_bytes(), &contents, None).await
+}
+
+async fn prepare_sealed_file(
+    path: &Path,
+    contents: &str,
+    config: &Config,
+    encryption: Option<&EncryptRecipients>,
+) -> Result<String> {
+    let source = parse_source(path, contents)?;
+    let mut old_values = SecretPayload {
+        version: SECRET_PAYLOAD_VERSION,
+        values: decrypt_source_payload(path, &source, config).await?,
+    };
+    let mut new_values = SecretPayload {
+        version: SECRET_PAYLOAD_VERSION,
+        values: BTreeMap::new(),
+    };
 
     for (key, state) in &source.secret {
         super::validate_env_key(key)?;
         let secret = match state {
             SecretState::Sealed(true) => old_values
+                .values
                 .remove(key)
                 .with_context(|| format!("{key} is marked sealed but is missing from payload"))?,
             SecretState::Sealed(false) => Password::new()
@@ -967,25 +1092,22 @@ async fn seal_file(
                 .with_context(|| format!("reading {key}"))?,
             SecretState::Plain(value) => value.clone(),
         };
-        new_values.insert(key.clone(), secret);
+        new_values.values.insert(key.clone(), secret);
     }
 
-    let encoded = if new_values.is_empty() {
+    let encoded = if new_values.values.is_empty() {
         String::new()
     } else {
         let encryption = encryption.context(
             "recipients are required; pass --recipient/--backend, set env.encryption in shine.workspace.toml, or set gpg_recipients/age_recipients",
         )?;
-        let plaintext = toml::to_string(&SecretPayload {
-            version: SECRET_PAYLOAD_VERSION,
-            values: new_values,
-        })?;
+        let plaintext = Zeroizing::new(toml::to_string(&new_values)?);
         secret::encrypt_secret(plaintext.as_bytes(), encryption).await?
     };
 
     let mut document = contents
         .parse::<DocumentMut>()
-        .with_context(|| format!("parsing {} for update", path.display()))?;
+        .map_err(|_| anyhow::anyhow!("invalid source syntax for update"))?;
     for key in source.secret.keys() {
         let item = &mut document["secret"][key];
         let decor = item.as_value().map(|value| value.decor().clone());
@@ -998,12 +1120,79 @@ async fn seal_file(
         document["payload"] = toml_edit::table();
     }
     document["payload"]["data"] = value(encoded);
-    atomic_write(path, document.to_string().as_bytes()).await
+    Ok(document.to_string())
+}
+
+struct SealLock(std::fs::File);
+impl SealLock {
+    fn acquire(scope: &Path) -> Result<Self> {
+        use fs2::FileExt;
+        let scope = std::fs::canonicalize(scope).context("resolving seal lock scope")?;
+        let path = scope.with_extension("shine-seal.lock");
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(path).context("opening seal lock")?;
+        file.try_lock_exclusive()
+            .context("another Shine seal is active; retry when it finishes")?;
+        Ok(Self(file))
+    }
+}
+impl Drop for SealLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
+async fn verify_snapshot(path: &Path, original: &str) -> Result<()> {
+    let current = tokio::fs::read(path)
+        .await
+        .context("cannot recheck seal snapshot; source not updated")?;
+    if current != original.as_bytes() {
+        bail!("seal snapshot changed; source not updated; retry");
+    }
+    Ok(())
+}
+
+async fn replace_sealed_file(
+    path: &Path,
+    contents: &[u8],
+    original: &str,
+    workspace: Option<(&Path, &str)>,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let temp = path.with_extension(format!("shine-seal-{}", uuid::Uuid::new_v4()));
+    let result = async {
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&temp).await?;
+        file.write_all(contents).await?;
+        file.sync_all().await?;
+        drop(file);
+        if let Some((path, original)) = workspace {
+            verify_snapshot(path, original).await?;
+        }
+        verify_snapshot(path, original).await?;
+        // std/tokio rename uses replacing MoveFileExW on Windows. Never unlink the destination.
+        tokio::fs::rename(&temp, path).await?;
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temp).await;
+    }
+    result.context("replacing sealed source")
 }
 
 fn parse_source(path: &Path, contents: &str) -> Result<SourceFile> {
     let source: SourceFile = toml::from_str(contents)
-        .with_context(|| format!("parsing environment source {}", path.display()))?;
+        .map_err(|_| anyhow::anyhow!("invalid environment source syntax in {}", path.display()))?;
     if source.version != ENV_SOURCE_FORMAT_VERSION {
         bail!(
             "unsupported environment source version {} in {}",
@@ -1035,22 +1224,32 @@ async fn decrypt_source_payload(
     if source.payload.data.trim().is_empty() {
         return Ok(BTreeMap::new());
     }
-    let plaintext = secret::decrypt_secret(&source.payload.data, &config.resolved_age_identities())
-        .await
-        .with_context(|| format!("decrypting {}", path.display()))?;
-    let payload: SecretPayload = toml::from_str(&plaintext)
-        .with_context(|| format!("parsing decrypted payload from {}", path.display()))?;
+    let plaintext = Zeroizing::new(
+        secret::decrypt_with_config(&source.payload.data, config)
+            .await
+            .with_context(|| format!("decrypting {}", path.display()))?,
+    );
+    let mut payload: SecretPayload = toml::from_str(&plaintext)
+        .map_err(|_| anyhow::anyhow!("invalid decrypted environment payload"))?;
     if payload.version != SECRET_PAYLOAD_VERSION {
         bail!("unsupported encrypted payload version {}", payload.version);
     }
-    Ok(payload.values)
+    Ok(std::mem::take(&mut payload.values))
 }
 
 async fn load_sealed_source(path: &Path, config: &Config) -> Result<BTreeMap<String, String>> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
-    let source = parse_source(path, &contents)?;
+    load_sealed_contents(path, &contents, config).await
+}
+
+async fn load_sealed_contents(
+    path: &Path,
+    contents: &str,
+    config: &Config,
+) -> Result<BTreeMap<String, String>> {
+    let source = parse_source(path, contents)?;
     for (key, state) in &source.secret {
         if !matches!(state, SecretState::Sealed(true)) {
             bail!(
@@ -1122,29 +1321,76 @@ async fn compile_export_sources(
     Ok(merged)
 }
 
-async fn calculate_input_hash(
+type CapturedSources = Vec<(PathBuf, Option<Zeroizing<String>>)>;
+
+async fn capture_sources(sources: &[PathBuf]) -> Result<CapturedSources> {
+    let mut captured = Vec::new();
+    for path in sources {
+        let contents = match tokio::fs::read_to_string(path).await {
+            Ok(contents) => Some(Zeroizing::new(contents)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).context("capturing environment source"),
+        };
+        captured.push((path.clone(), contents));
+    }
+    Ok(captured)
+}
+
+fn bypass_snapshot_cache(policy: &Encryption, sources: &CapturedSources) -> Result<bool> {
+    let mut hybrid = policy
+        .backend
+        .as_deref()
+        .is_some_and(|b| b.trim().eq_ignore_ascii_case("hybrid"));
+    for (path, contents) in sources {
+        if let Some(contents) = contents {
+            hybrid |= parse_source(path, contents)?
+                .payload
+                .data
+                .starts_with(secret::hybrid::PREFIX);
+        }
+    }
+    Ok(hybrid)
+}
+
+async fn compile_captured_sources(
+    sources: &CapturedSources,
+    config: &Config,
+) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
+    let mut loaded = false;
+    for (path, contents) in sources {
+        if let Some(contents) = contents {
+            values.extend(load_sealed_contents(path, contents, config).await?);
+            loaded = true;
+        }
+    }
+    if !loaded {
+        bail!("none of the configured environment source files exist");
+    }
+    Ok(values)
+}
+
+fn snapshot_input_hash(
     workspace_path: &Path,
+    workspace_bytes: &str,
     mode: &str,
-    sources: &[PathBuf],
-) -> Result<String> {
+    sources: &CapturedSources,
+) -> String {
     let mut hash = Sha256::new();
     hash.update(CACHE_FORMAT_VERSION.to_le_bytes());
     hash.update(mode.as_bytes());
-    hash.update(
-        tokio::fs::read(workspace_path)
-            .await
-            .with_context(|| format!("reading {}", workspace_path.display()))?,
-    );
-    for path in sources {
+    hash.update(workspace_bytes.as_bytes());
+    for (path, contents) in sources {
         hash.update(path.to_string_lossy().as_bytes());
-        match tokio::fs::read(path).await {
-            Ok(contents) => hash.update(contents),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => hash.update(b"<missing>"),
-            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
-        }
+        hash.update(
+            contents
+                .as_ref()
+                .map_or("<missing>", |text| text.as_str())
+                .as_bytes(),
+        );
     }
     hash.update(workspace_path.to_string_lossy().as_bytes());
-    Ok(format!("sha256:{:x}", hash.finalize()))
+    format!("sha256:{:x}", hash.finalize())
 }
 
 fn cache_path(workspace_path: &Path, mode: &str) -> Result<PathBuf> {
@@ -1184,13 +1430,13 @@ async fn read_valid_cache(
     if cache.version != CACHE_FORMAT_VERSION || cached.input_hash != input_hash {
         return Ok(None);
     }
-    let plaintext = secret::decrypt_secret(&cached.data, &config.resolved_age_identities()).await?;
-    let payload: SecretPayload = toml::from_str(&plaintext)?;
+    let plaintext = secret::decrypt_with_config(&cached.data, config).await?;
+    let mut payload: SecretPayload = toml::from_str(&plaintext)?;
     let keys: Vec<_> = payload.values.keys().cloned().collect();
     if payload.version != SECRET_PAYLOAD_VERSION || keys != cached.keys {
         bail!("compiled environment cache failed integrity validation");
     }
-    Ok(Some(payload.values))
+    Ok(Some(std::mem::take(&mut payload.values)))
 }
 
 async fn write_cache(
@@ -1890,5 +2136,99 @@ mod tests {
         );
         // SAFETY: the shared test env lock serializes process environment mutation.
         unsafe { std::env::remove_var("SHINE_RUN_OVERRIDE_TEST") };
+    }
+}
+
+#[cfg(test)]
+mod hybrid_snapshot_tests {
+    use super::*;
+    #[test]
+    fn hybrid_policy_validation_and_overrides() {
+        let config = Config::new_for_test(Path::new("unused"));
+        let mut policy = Encryption {
+            backend: Some("hybrid".into()),
+            gpg_recipients: vec!["A".repeat(40)],
+            age_recipients: vec!["age1test".into()],
+            ..Default::default()
+        };
+        assert!(matches!(
+            resolve_seal_encryption(None, &[], Some(&policy), &config).unwrap(),
+            Some(EncryptRecipients::Hybrid(_))
+        ));
+        assert!(resolve_seal_encryption(None, &["".into()], Some(&policy), &config).is_err());
+        assert!(matches!(
+            resolve_seal_encryption(Some("gpg"), &[], Some(&policy), &config).unwrap(),
+            Some(EncryptRecipients::Gpg(_))
+        ));
+        policy.age_recipients.clear();
+        assert!(resolve_seal_encryption(None, &[], Some(&policy), &config).is_err());
+        assert!(resolve_seal_encryption(Some("hybrid"), &[], None, &config).is_err());
+    }
+    #[tokio::test]
+    async fn captured_sources_drive_cache_and_compilation() {
+        let dir = crate::test_support::make_temp_dir("shine-hybrid-snapshot").await;
+        let path = dir.join("source.toml");
+        tokio::fs::write(&path, "[plain]\nVALUE = 'captured'\n")
+            .await
+            .unwrap();
+        let captured = capture_sources(std::slice::from_ref(&path)).await.unwrap();
+        tokio::fs::write(&path, "[payload]\ndata = 'hybrid:malformed'\n")
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&dir);
+        assert!(!bypass_snapshot_cache(&Encryption::default(), &captured).unwrap());
+        assert_eq!(
+            compile_captured_sources(&captured, &config).await.unwrap()["VALUE"],
+            "captured"
+        );
+        let hybrid = capture_sources(std::slice::from_ref(&path)).await.unwrap();
+        assert!(bypass_snapshot_cache(&Encryption::default(), &hybrid).unwrap());
+        assert!(compile_captured_sources(&hybrid, &config).await.is_err());
+        let policy = Encryption {
+            backend: Some("hybrid".into()),
+            ..Default::default()
+        };
+        assert!(bypass_snapshot_cache(&policy, &captured).unwrap());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+    #[tokio::test]
+    async fn replacement_preserves_source_and_policy_edits_and_missing_files() {
+        let dir = crate::test_support::make_temp_dir("shine-hybrid-race").await;
+        let source = dir.join("source.toml");
+        let workspace = dir.join("shine.workspace.toml");
+        tokio::fs::write(&source, "original").await.unwrap();
+        tokio::fs::write(&workspace, "policy").await.unwrap();
+        let lock = SealLock::acquire(&workspace).unwrap();
+        assert!(SealLock::acquire(&workspace).is_err());
+        tokio::fs::write(&workspace, "edited policy").await.unwrap();
+        assert!(
+            replace_sealed_file(&source, b"sealed", "original", Some((&workspace, "policy")))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&source).await.unwrap(),
+            "original"
+        );
+        tokio::fs::write(&source, "edited source").await.unwrap();
+        assert!(
+            replace_sealed_file(&source, b"sealed", "original", None)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&source).await.unwrap(),
+            "edited source"
+        );
+        tokio::fs::remove_file(&source).await.unwrap();
+        assert!(
+            replace_sealed_file(&source, b"sealed", "original", None)
+                .await
+                .is_err()
+        );
+        assert!(!source.exists());
+        drop(lock);
+        assert!(SealLock::acquire(&workspace).is_ok());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 }

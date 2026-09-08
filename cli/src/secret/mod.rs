@@ -1,10 +1,11 @@
 //! Secret storage backends for `shine env secret encrypt`/`decrypt`.
 //!
-//! Two backends exist: GPG (the original, still the default) and age, added
+//! Two external backends exist: GPG (the original, still the default) and age, added
 //! for multi-recipient encryption with Apple Touch ID support via
 //! `age-plugin-se` Secure Enclave identities. Ciphertext carries a backend
 //! tag (`age:<base64>`); untagged base64 continues to route to GPG so
-//! secrets encrypted before age existed keep decrypting unmodified.
+//! secrets encrypted before age existed keep decrypting unmodified. The versioned
+//! `hybrid:` envelope wraps one data key with both tools (ADR 0084).
 //!
 //! Encryption always needs a resolved recipient list ([`EncryptRecipients`]);
 //! decryption is purely tag-based and never consults `secret_backend`, so
@@ -13,6 +14,7 @@
 mod age;
 mod exec;
 mod gpg;
+pub(crate) mod hybrid;
 
 use anyhow::{Result, bail};
 use std::path::PathBuf;
@@ -26,6 +28,7 @@ pub enum BackendKind {
     #[default]
     Gpg,
     Age,
+    Hybrid,
 }
 
 impl FromStr for BackendKind {
@@ -35,7 +38,10 @@ impl FromStr for BackendKind {
         match value.trim().to_ascii_lowercase().as_str() {
             "gpg" => Ok(Self::Gpg),
             "age" => Ok(Self::Age),
-            other => bail!("unknown secret backend \"{other}\"; expected \"gpg\" or \"age\""),
+            "hybrid" => Ok(Self::Hybrid),
+            other => {
+                bail!("unknown secret backend \"{other}\"; expected \"gpg\", \"age\" or \"hybrid\"")
+            }
         }
     }
 }
@@ -45,6 +51,7 @@ impl FromStr for BackendKind {
 pub enum EncryptRecipients {
     Gpg(Vec<String>),
     Age(Vec<String>),
+    Hybrid(hybrid::Recipients),
 }
 
 impl EncryptRecipients {
@@ -52,6 +59,7 @@ impl EncryptRecipients {
         match self {
             Self::Gpg(_) => BackendKind::Gpg,
             Self::Age(_) => BackendKind::Age,
+            Self::Hybrid(_) => BackendKind::Hybrid,
         }
     }
 }
@@ -60,6 +68,9 @@ impl EncryptRecipients {
 /// Untagged ciphertext is treated as GPG for backward compatibility with
 /// secrets encrypted before the age backend existed.
 pub fn parse_tagged_ciphertext(ciphertext: &str) -> (BackendKind, &str) {
+    if let Some(rest) = ciphertext.strip_prefix(hybrid::PREFIX) {
+        return (BackendKind::Hybrid, rest);
+    }
     match ciphertext.strip_prefix(AGE_TAG_PREFIX) {
         Some(rest) => (BackendKind::Age, rest),
         None => (BackendKind::Gpg, ciphertext),
@@ -70,6 +81,7 @@ pub fn parse_tagged_ciphertext(ciphertext: &str) -> (BackendKind, &str) {
 /// ciphertext (tagged for age, untagged for GPG).
 pub async fn encrypt_secret(plaintext: &[u8], recipients: &EncryptRecipients) -> Result<String> {
     match recipients {
+        EncryptRecipients::Hybrid(recipients) => hybrid::encrypt(plaintext, recipients).await,
         EncryptRecipients::Gpg(recipients) => {
             gpg::encrypt_gpg_secret_to_base64(plaintext, recipients).await
         }
@@ -81,10 +93,31 @@ pub async fn encrypt_secret(plaintext: &[u8], recipients: &EncryptRecipients) ->
 }
 
 /// Decrypt stored ciphertext, routing purely on its tag. `age_identities` is
-/// only consulted when the ciphertext is tagged `age:`.
+/// consulted for age ciphertext and the age branch of a hybrid envelope.
 pub async fn decrypt_secret(ciphertext: &str, age_identities: &[PathBuf]) -> Result<String> {
+    decrypt_with_preference(ciphertext, age_identities, None).await
+}
+
+pub async fn decrypt_with_config(
+    ciphertext: &str,
+    config: &crate::config::Config,
+) -> Result<String> {
+    decrypt_with_preference(
+        ciphertext,
+        &config.resolved_age_identities(),
+        config.hybrid_decrypt_backend.as_deref(),
+    )
+    .await
+}
+
+async fn decrypt_with_preference(
+    ciphertext: &str,
+    age_identities: &[PathBuf],
+    preference: Option<&str>,
+) -> Result<String> {
     let (backend, payload) = parse_tagged_ciphertext(ciphertext);
     match backend {
+        BackendKind::Hybrid => hybrid::decrypt(payload, age_identities, preference).await,
         BackendKind::Gpg => gpg::decrypt_base64_gpg_secret(payload).await,
         BackendKind::Age => age::decrypt_base64_age_secret(payload, age_identities).await,
     }
@@ -201,6 +234,7 @@ esac
                     match recipients {
                         EncryptRecipients::Gpg(_) => expected.to_string(),
                         EncryptRecipients::Age(_) => format!("age:{expected}"),
+                        EncryptRecipients::Hybrid(_) => unreachable!(),
                     }
                 );
                 assert_eq!(
