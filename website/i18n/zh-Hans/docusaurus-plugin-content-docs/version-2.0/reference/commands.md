@@ -5,9 +5,10 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 2.0.0。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
+本页适用于 Shine 2.0.3。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
 
 ## 1.0 target 规则
+
 
 日常命令使用 `app/<category>`、`shell/<category>`、`shell/<category>/<command>` 和
 `sys/<item>` 作为规范 target。install 与 uninstall 支持 Shell 命令 target；upgrade 则在所属
@@ -129,7 +130,12 @@ journal 存在时拒绝运行，同时继续保持 invocation-scoped atomic writ
 只跳过提示；重定向输出等非交互执行必须传入该参数。在提供 dry-run 的命令中，`--yes` 与
 `--dry-run` 互斥；dry-run 保持原有预览格式，不是已批准 Plan。
 
-`app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。`app artifact apply/remove` 显式运行预设声明的外部集成脚本，Shine 不会把 apply 隐式作为普通安装或升级的一部分。
+`app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。执行前的最终校验会
+复用审阅阶段绑定的 generator 输入身份（包括 secret 版本），确保已就绪的 Plan 在执行时仍绑定
+同一组输入。单文件刷新会在最终结论中显示 source；多文件摘要省略为零的计数，任何文件失败时
+都会先显示 `Refresh incomplete`，随后命令以非零状态退出。`app artifact apply/remove` 显式运行
+预设声明的外部集成脚本，Shine 不会把 apply
+隐式作为普通安装或升级的一部分。
 
 如果受支持的 App creation、原地静态 Copy update，或未修改静态 Copy 的普通
 removal 在 operation journal 写入后中断，之后需要安全
@@ -163,6 +169,18 @@ Plan，不会被替换；removal rollback path 也遵循相同规则。
 
 ## 状态、更新与补全
 
+Shell 检查会区分可应用的更新与需要处理的状态。启动器所有权冲突会单独提示，不计入可用更新。
+删除 Preset 后仍有安装记录的命令会显示为 `preset missing`；升级会保留其已安装文件和记录。
+可以恢复 Preset，或通过 `shine shell uninstall <CATEGORY>/<COMMAND>` 审查并明确卸载。
+不属于 Shine 管理的启动器仍会被保留，其冲突会阻断升级。如果替换外部共享快照会影响同分类下
+来源已删除但仍安装的命令，Shine 会阻断该替换，直到恢复对应 Preset 或明确卸载该命令。
+只删除脚本文件、却保留引用它的元数据，仍属于校验错误。
+
+`upgrade` 也会维护内部 Preset 缓存。`preset cache (… create)` 的数量表示内部来源副本，
+不代表同等数量的应用配置更新。因此，即使 `update` 没有发现可应用的配置变化，升级计划仍可能
+包含缓存维护。
+
+
 ```text
 shine list [--available [<app|shell|sys>]]
 shine info <TARGET> [--diff] [--verbose] [--run-generators]
@@ -185,12 +203,16 @@ enrollment，不会批准之后的 lifecycle Plan。
 `--run-generators` 后，Shine 会显式执行自动和手动 generator，在内存中应用 transform 并计算
 状态或 `--diff`，但不会写入目标文件或 manifest。全局 `update --run-generators` 会评估所有
 已安装 App 类别，定向 info/update 只评估选中的 App。外部 generator 仍需匹配当前代码与权限的
-`shine trust grant`；某项评估失败时，其余 generator 仍会继续，最后统一报告不完整结果。
+`shine trust grant`；某项评估失败时，其余 generator 仍会继续，最后统一报告不完整结果。如果
+评估发现 `auto = false` generator 的输出发生变化，update 和 status 会将其标记为
+`refresh available`，并显示准确的 `shine app refresh <CATEGORY> <FILE>` 命令；这类变化不会进入
+upgrade target。同一类别同时存在普通可升级变化和手动生成变化时，两种操作都会保留。
 
 - `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
-  Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示
-  一次升级命令。只有一个类别或受管系统项需要更新时，该提示会使用其 canonical target，
-  例如 `shine upgrade app/clash-verge`；存在多个 target 时仍提示聚合命令 `shine upgrade`。
+  Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target。只有一个类别或
+  受管系统项需要升级时，末尾的升级提示会使用其 canonical target，例如
+  `shine upgrade app/clash-verge`；存在多个 upgrade target 时仍提示聚合命令 `shine upgrade`。
+  手动生成内容发生变化时，则会为每个变化的 source 输出一条准确的 `shine app refresh` 提示。
   App 文件与 Shell 命令都按类别折叠。`update --diff` 会改用纵向
   详细行并展开受影响的文件与命令；来源或目标迁移、新文件、部署元数据和命令入口刷新等
   结构性变更会逐字段显示，只有内容确实变化时才输出 unified diff。定向的
@@ -262,7 +284,9 @@ Shine 自己管理的集成内容。第三方软件升级请使用其包管理�
 资源变化前写入 journal，并且只有精确 Sys receipt 持久化后才提交。pending journal 会阻塞后续修改型
 Sys 命令。运行 `shine sys recover` 可审阅新的 recovery Plan：receipt commit 前只还原 fingerprint
 仍匹配的旧状态，commit 后保留 desired 状态并清理精确 rollback。resource、rollback material、
-owned sentinel block 或 receipt 被修改时，恢复会阻塞并保留现场。生成的 active/base/new/merge
+owned sentinel block 或 receipt 被修改时，恢复会阻塞并保留现场。恢复步骤使用逻辑资源标签
+（`managed-file`、`split-dns` 或 `profile-blocks`）；权限列表仍会标明恢复可能访问的精确范围。
+生成的 active/base/new/merge
 profile 文件继续使用三方合并，并会明确显示为非事务化；bootstrap script 与 package/provider 调用仍
 明确属于 opaque effect，不在这套恢复边界内。
 
@@ -328,6 +352,12 @@ trust grant、已检测命令和管理员状态。App 与 Shell 类别展示 ins
 managed-resource 与 bootstrap section。该命令不会初始化配置、访问真实 HOME、运行任何预设代码，
 也不会生成可用于 apply 的批准。`ready: false` 只表示在这些假设下存在 blocker，本身不会让有效报告
 以失败退出；非法输入或静态校验失败仍返回退出码 1。JSON 输出使用独立的 `schema_version: 1`。
+
+Shell 预览在 macOS/Linux 上使用 Zsh，在 Windows 上使用 PowerShell，不依赖运行 Shine 的机器。
+缺少 Shell 模板值（包括 `shine-template` 标记启用的模板）时，会产生
+`shell_template_inputs_missing` 阻塞步骤：报告仍为 `valid: true`、`ready: false`，退出码为 0。
+静态校验检查源码结构，不检查模板输入是否可用。可通过声明式 fixture 的环境变量存在状态测试
+提供输入的情况；直接预览不会借用真实环境中的值。诊断不会泄露缺失变量的名称或值。
 
 `preset test` 从单个类别读取 `shine.test.toml`，并让每个声明 case 复用相同的 synthetic authoring
 plan 路径。Fixture schema v1 要求唯一 case name 与 platform。可选 `[cases.host]` 可声明环境变量名
@@ -440,4 +470,4 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-稳定版的 `shine --version` 显示 `shine 2.0.0 (<commit> <date>)`；preview 构建使用兼容 SemVer 的 `2.0.0-preview` 版本标签。
+稳定版的 `shine --version` 显示 `shine 2.0.3 (<commit> <date>)`；preview 构建使用兼容 SemVer 的 `2.0.3-preview` 版本标签。

@@ -5,13 +5,21 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
-## [Unreleased]
+## [2.0.3] — 2026-09-08
 
 ### Bug Fixes
 
 - Handle GPG and age secret Base64 encoding internally, removing the external `base64` command
   requirement while preserving Shine ciphertext formats. Malformed Base64 now fails consistently
   across platforms.
+- Report missing Shell template inputs as safe blocked authoring steps instead of generic failures,
+  and select Zsh or PowerShell previews from the requested platform.
+
+### Docs
+
+- Clarify interrupted Shell recovery, Sys v2 Preset migration, phone pairing order, and workspace
+  setup for agent secret safety.
+- Refresh the bilingual 2.0 stable manual with the latest patch-release behavior.
 
 ## [2.0.2] — 2026-09-05
 
