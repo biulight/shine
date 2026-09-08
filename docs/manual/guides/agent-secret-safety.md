@@ -166,48 +166,13 @@ payloads on a machine that can decrypt them. Editing the list alone does not upd
 Follow [Add recipients to existing workspace secrets](./environment.md#add-recipients-to-existing-workspace-secrets)
 before sharing the updated files with the new member.
 
-For teams exploring fresh hardware authorization on every decrypt, Shine's author also develops the
-standalone [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) project. It grew out of
-direct Windows hardware-identity work in Shine that reached a platform capability limit. The Shine
-proof of concept found that Windows Hello's Passport provider could perform only the legacy RSA
-PKCS#1 v1.5 unwrap; RSA OAEP-SHA256, P-256 ECDH, and the tested WebAuthn PRF path were unavailable.
-Rather than ship that legacy construction or introduce a Shine-specific ciphertext format, the
-author moved the work behind the standard age plugin protocol and into a separately reviewable
-project.
+Windows users can also use [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone)
+to authorize decryption with biometrics on their phone. A prerelease is available to try; configure
+an independent recovery key before using it. For supported devices, usage limitations, and setup
+instructions, see [experiment with phone authorization on Windows](./environment.md#experiment-with-phone-authorization-on-windows).
 
-The current design keeps the long-term age decryption key in Android StrongBox and requires a fresh
-strong biometric authorization on the phone for each file-key unwrap. The Windows TPM holds only
-two role-separated, non-exportable P-256 keys for authenticating the paired desktop and privately
-selecting its recipient stanza. It never receives the phone's long-term private key, and there is
-no DPAPI, software-identity, password, or cached-authorization fallback. Shine continues to use the
-standard `age` CLI, `identity-v1`, and `recipient-v1`; the plugin adds no Shine dependency or custom
-ciphertext.
-
-This avoids relying on Windows Hello for the missing cryptographic operations, but it does not
-remove the current platform prerequisites. The current owner-only technical preview requires a
-Windows 11 x64 client, TPM 2.0, Microsoft Platform Crypto Provider, and a capability-qualified
-Android StrongBox phone. Its `auto` policy now makes one bounded Wi-Fi-first route decision before
-pairing or unwrap: exactly one matching foreground listener selects Wi-Fi, while no listener selects
-Developer USB/ADB on Windows before protocol work begins. Ambiguity fails closed, and there is no
-in-flight fallback; QR remains an explicit route. Protocol v2, public signing, multi-device
-coverage, and the complete lifecycle matrix are not finished. Use it only with synthetic or
-disposable data, never real or production secrets. Follow the project's
-[`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md)
-for the exact artifact, pairing, transport, recovery, and cleanup procedure.
-
-The plugin uses only Shine's existing age identity and recipient settings. See
-[experiment with phone authorization on Windows](./environment.md#experiment-with-phone-authorization-on-windows)
-for the exact machine and workspace configuration. The identity stub contains public pairing
-material, not the phone's long-term private key.
-
-On the supported preview platform, `shine env secret identity init --phone` launches the plugin's
-own transactional setup and records only its public stub path in global `age_identities`. It does
-not manage private plugin state, switch the default backend, or add a phone-only recipient set.
-
-The recovery path must not depend on the same phone StrongBox keys, Windows TPM keys, or plugin
-state. Never make the experimental phone recipient the only recipient for retained data. A normal
-age identity remains suitable for ordinary team development when its file and user-directory
-permissions are protected. For stable hardware-backed protection on Windows, prefer an
+A normal age identity remains suitable for ordinary team development when its file and
+user-directory permissions are protected. For stable hardware-backed protection on Windows, prefer an
 organization-approved YubiKey/PIV or GPG with YubiKey workflow.
 
 ## Choose a secret backend
