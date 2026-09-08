@@ -5,6 +5,14 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [Unreleased]
+
+### Bug Fixes
+
+- Handle GPG and age secret Base64 encoding internally, removing the external `base64` command
+  requirement while preserving Shine ciphertext formats. Malformed Base64 now fails consistently
+  across platforms.
+
 ## [2.0.2] — 2026-09-05
 
 ### Bug Fixes

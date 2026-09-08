@@ -937,6 +937,11 @@ copy-paste-safe line by shell-quoting shell-significant arguments.
 
 ## Secret backend routing (GPG / age)
 
+Both adapters encode/decode Base64 in process using the existing Rust crate; only the encryption
+backend and its identity plugins require external commands. Decoding strips ASCII whitespace,
+validates standard padded Base64 completely, then writes ciphertext to the existing private
+temporary file. See [ADR 0083](../decisions/0083-in-process-secret-base64.md).
+
 Every call site that decrypts a stored secret (`env secret decrypt`, `env secret export`, workspace
 `env secret seal`/`env run`) goes through `secret::decrypt_secret(ciphertext, age_identities)`, which inspects the
 ciphertext for an `age:` prefix (`secret::parse_tagged_ciphertext`) and dispatches to

@@ -140,3 +140,77 @@ mod tests {
         );
     }
 }
+
+// Run the real backend adapters against controlled stand-ins with no base64 on PATH.
+#[cfg(all(test, unix))]
+mod process_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn both_backends_work_without_external_base64() {
+        let _guard = crate::test_support::env_lock();
+        struct RestorePath(Option<std::ffi::OsString>);
+        impl Drop for RestorePath {
+            fn drop(&mut self) {
+                // SAFETY: the environment lock is held until after this guard drops.
+                unsafe {
+                    match &self.0 {
+                        Some(path) => std::env::set_var("PATH", path),
+                        None => std::env::remove_var("PATH"),
+                    }
+                }
+            }
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = runtime.block_on(crate::test_support::make_temp_dir("shine-secret-process"));
+        let _restore = RestorePath(std::env::var_os("PATH"));
+        for tool in ["gpg", "age"] {
+            let path = dir.join(tool);
+            std::fs::write(
+                &path,
+                r#"#!/bin/sh
+case "$1" in
+    --encrypt|-e) /bin/cat ;;
+    --decrypt|-d) for arg in "$@"; do file="$arg"; done; /bin/cat "$file" ;;
+    *) exit 1 ;;
+esac
+"#,
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let identity = dir.join("identity.txt");
+        std::fs::write(&identity, "test identity").unwrap();
+        // SAFETY: all environment-mutation tests hold env_lock().
+        unsafe { std::env::set_var("PATH", &dir) };
+        let result: Result<()> = runtime.block_on(async {
+            assert!(crate::proc::ensure_command("base64").is_err());
+            for recipients in [
+                EncryptRecipients::Gpg(vec!["test@example.com".into()]),
+                EncryptRecipients::Age(vec!["age1test".into()]),
+            ] {
+                let plaintext = "secret\nwith trailing newline\n";
+                let encoded = encrypt_secret(plaintext.as_bytes(), &recipients).await?;
+                let expected = "c2VjcmV0CndpdGggdHJhaWxpbmcgbmV3bGluZQo=";
+                assert_eq!(
+                    encoded,
+                    match recipients {
+                        EncryptRecipients::Gpg(_) => expected.to_string(),
+                        EncryptRecipients::Age(_) => format!("age:{expected}"),
+                    }
+                );
+                assert_eq!(
+                    decrypt_secret(&encoded, std::slice::from_ref(&identity)).await?,
+                    plaintext
+                );
+            }
+            Ok(())
+        });
+        std::fs::remove_dir_all(&dir).unwrap();
+        result.unwrap();
+    }
+}

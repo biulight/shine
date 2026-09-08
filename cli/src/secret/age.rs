@@ -24,11 +24,10 @@ pub async fn encrypt_age_secret_to_base64(
     }
     let recipients = validate_recipients(recipients)?;
 
-    ensure_command("base64")?;
     ensure_command("age")?;
 
     let encrypted = encrypt_age(plaintext, &recipients).await?;
-    encode_base64_single_line(&encrypted).await
+    Ok(encode_base64_single_line(&encrypted))
 }
 
 pub async fn decrypt_base64_age_secret(
@@ -50,7 +49,6 @@ pub async fn decrypt_base64_age_secret(
             std::env::var_os("AGE_PLUGIN_PHONE_MESSAGES").as_deref(),
         );
 
-    ensure_command("base64")?;
     ensure_command("age")?;
     for plugin in required_plugins {
         ensure_command(plugin)?;

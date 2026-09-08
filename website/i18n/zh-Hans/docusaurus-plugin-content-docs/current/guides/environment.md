@@ -73,6 +73,10 @@ shine upgrade
 
 ## 使用 GPG 加密值
 
+Shine 在内部完成 GPG 和 age 密文的 Base64 编解码，这些操作无需外部 `base64` 命令。
+仍需安装所选的加密后端（`gpg` 或 `age`）及其身份所需的插件。已有 Shine 密文无需迁移。
+允许 Base64 换行和 ASCII 空白；缺失或错误 padding 等畸形编码会被拒绝。
+
 先确认本机的 `gpg` 可以使用对应公钥；私钥保存在 YubiKey 时，可参考
 [在 macOS 和 Windows 使用 YubiKey OpenPGP](https://blog.biulight.top/timeline/knowledge/yubikey-openpgp)完成接入。然后在
 `~/.shine/config.toml` 中指定默认接收者（可同时加密给多把 GPG 公钥）：

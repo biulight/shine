@@ -80,6 +80,12 @@ shine upgrade
 
 ## Encrypt values with GPG
 
+Shine handles Base64 encoding and decoding internally for both GPG and age secrets; no external
+`base64` command is required for these operations. Install the selected encryption backend (`gpg`
+or `age`) and any identity plugins it needs. Existing Shine ciphertext needs no migration.
+Wrapped Base64 and ASCII whitespace are accepted; malformed encoding, including missing or invalid
+padding, is rejected.
+
 First make sure local `gpg` can use the recipient public key. For a private key on YubiKey, see the
 Chinese guide
 [在 macOS 和 Windows 使用 YubiKey OpenPGP](https://blog.biulight.top/timeline/knowledge/yubikey-openpgp).
