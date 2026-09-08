@@ -415,7 +415,7 @@ shine env secret identity init --phone [--label <LABEL>] [--transport <auto|adb|
 shine env secret identity list
 ```
 
-`--with` 可重复使用，写成 `KEY=ALIAS` 可改变子进程看到的变量名。`--no-workspace` 只使用显式值和已有进程环境，不能与 `--workspace` 或 `--mode` 同时使用。`workspace init` 只接受 `--from-dotenv`，可先用 `--dry-run` 预览生成文件。`workspace export` 必须显式指定格式、mode 和输出路径；默认只导出合并后生效的普通值，添加 `--include-secrets` 才会解密并包含 secret，且不会混入当前进程变量。broker 策略必须用一个或多个 `--release` 选择密钥，或用 `--release-all-declared` 固化当前环境源声明的全部密钥；二者不能组合。Touch ID identity 只适用于 macOS，并依赖 `age-plugin-se`。
+`--with` 可重复使用，写成 `KEY=ALIAS` 可改变子进程看到的变量名。`--no-workspace` 只使用显式值和已有进程环境，不能与 `--workspace` 或 `--mode` 同时使用。`workspace init` 只接受 `--from-dotenv`，可先用 `--dry-run` 预览生成文件。`workspace export` 必须显式指定格式、mode 和输出路径；默认只导出合并后生效的普通值，添加 `--include-secrets` 才会解密并包含 secret，且不会混入当前进程变量。broker 策略必须用一个或多个 `--release` 选择密钥，或用 `--release-all-declared` 固化当前环境源声明的全部密钥；二者不能组合。age 操作要求 age 1.3 或更高版本。Touch ID identity 只适用于 macOS；生成和解密依赖 `age-plugin-se`，其 `age1tag...` recipient 可由 age 原生加密。
 
 Phone identity setup 只支持 Windows，配对流程由 `age-plugin-phone` 负责。`auto` 是默认
 transport，plugin 会先尝试发现一个匹配且位于前台的 Wi-Fi listener；如果没有响应，
@@ -475,7 +475,7 @@ shine self upgrade [--channel <stable|preview>]
 ### 混合封存与读取
 
 `shine env secret seal --backend hybrid` 使用工作区的两组收件人，拒绝 `-r/--recipient`。
-封存需要 GnuPG 2.2–2.5、age 1.x、公钥和所需收件人插件，两条加密路径必须都成功。
+封存需要 GnuPG 2.2–2.5、age 1.3 或更高版本、公钥和所需收件人插件，两条加密路径必须都成功。
 显式 `--backend gpg` 或 `--backend age` 只面向所选组，沿用现有收件人优先级。
 独立 `env secret encrypt` 不接受 hybrid。
 

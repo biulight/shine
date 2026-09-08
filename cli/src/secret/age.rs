@@ -6,6 +6,8 @@
 //! is never confused with untagged GPG ciphertext.
 
 use anyhow::{Context, Result, bail};
+use bech32::{self, Variant};
+use semver::Version;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
@@ -14,6 +16,8 @@ use super::exec::{
     TempFile, decode_base64_to_file, encode_base64_single_line, write_stdin_and_wait,
 };
 use crate::proc::ensure_command;
+
+const MINIMUM_AGE_VERSION: &str = "1.3.0";
 
 pub async fn encrypt_age_secret_to_base64(
     plaintext: &[u8],
@@ -24,7 +28,8 @@ pub async fn encrypt_age_secret_to_base64(
     }
     let recipients = validate_recipients(recipients)?;
 
-    ensure_command("age")?;
+    preflight_age().await?;
+    preflight_recipient_plugins(&recipients)?;
 
     let encrypted = encrypt_age(plaintext, &recipients).await?;
     Ok(encode_base64_single_line(&encrypted))
@@ -61,9 +66,9 @@ async fn decrypt_base64_age(
             std::env::var_os("AGE_PLUGIN_PHONE_MESSAGES").as_deref(),
         );
 
-    ensure_command("age")?;
+    preflight_age().await?;
     for plugin in required_plugins {
-        ensure_command(plugin)?;
+        ensure_identity_plugin(plugin)?;
     }
 
     let encrypted_file = TempFile::new("shine-age-secret").await?;
@@ -82,11 +87,93 @@ pub(super) async fn preflight_identities(identities: &[PathBuf]) -> Result<()> {
     if identities.is_empty() {
         bail!("no age identities configured");
     }
-    ensure_command("age")?;
+    preflight_age().await?;
     for plugin in required_identity_plugins(identities).await? {
-        ensure_command(plugin)?;
+        ensure_identity_plugin(plugin)?;
     }
     Ok(())
+}
+
+pub(super) async fn preflight_recipients(recipients: &[String]) -> Result<()> {
+    let recipients = validate_recipients(recipients)?;
+    preflight_age().await?;
+    preflight_recipient_plugins(&recipients)
+}
+
+pub(super) async fn preflight_age() -> Result<()> {
+    ensure_command("age")?;
+    let output = Command::new("age")
+        .arg("--version")
+        .output()
+        .await
+        .context("checking age version")?;
+    if !output.status.success() {
+        bail!("age 1.3 or newer is required; `age --version` failed");
+    }
+    let stdout = String::from_utf8(output.stdout).context("age --version output is not UTF-8")?;
+    validate_age_version(&stdout)?;
+    Ok(())
+}
+
+fn validate_age_version(output: &str) -> Result<Version> {
+    let version = parse_age_version(output)?;
+    let minimum = Version::parse(MINIMUM_AGE_VERSION).expect("minimum age version is valid");
+    if version < minimum {
+        bail!("age 1.3 or newer is required; found {version}");
+    }
+    Ok(version)
+}
+
+fn parse_age_version(output: &str) -> Result<Version> {
+    let raw = output
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .last()
+        .unwrap_or_default()
+        .trim_start_matches('v');
+    Version::parse(raw).context("could not parse age version; age 1.3 or newer is required")
+}
+
+fn preflight_recipient_plugins(recipients: &[&str]) -> Result<()> {
+    if recipients
+        .iter()
+        .any(|recipient| recipient.starts_with("age1se1"))
+        && ensure_command("age-plugin-se").is_err()
+    {
+        bail!(
+            "legacy age1se recipient requires age-plugin-se for encryption; with age 1.3 or newer, run `shine state migrate --dry-run` and then `shine state migrate` to convert configured recipients to age1tag"
+        );
+    }
+    if recipients
+        .iter()
+        .any(|recipient| recipient.starts_with("age1phone1"))
+        && ensure_command("age-plugin-phone").is_err()
+    {
+        bail!(
+            "age1phone recipient requires age-plugin-phone on every computer that seals for it; install age-plugin-phone and retry"
+        );
+    }
+    Ok(())
+}
+
+fn ensure_identity_plugin(plugin: &str) -> Result<()> {
+    if plugin == "age-plugin-se" && ensure_command(plugin).is_err() {
+        bail!(
+            "legacy Secure Enclave identity requires age-plugin-se to decrypt this payload; install the plugin, then upgrade to age 1.3 or newer and run `shine state migrate --dry-run` / `shine state migrate` before resealing"
+        );
+    }
+    ensure_command(plugin)
+}
+
+pub(super) fn secure_enclave_recipient_to_tag(recipient: &str) -> Result<String> {
+    let (hrp, data, variant) =
+        bech32::decode(recipient).context("legacy Secure Enclave recipient is not valid Bech32")?;
+    if hrp != "age1se" || variant != Variant::Bech32 {
+        bail!("legacy Secure Enclave recipient must use the age1se Bech32 encoding");
+    }
+    bech32::encode("age1tag", data, Variant::Bech32).context("encoding native tagged age recipient")
 }
 
 fn phone_terminal_output_requested(transport: Option<&OsStr>, messages: Option<&OsStr>) -> bool {
@@ -219,6 +306,105 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("secret is empty"), "{err:#}");
+    }
+
+    #[test]
+    fn parses_supported_age_versions() {
+        assert_eq!(
+            parse_age_version("v1.3.2\n").unwrap(),
+            Version::new(1, 3, 2)
+        );
+        assert_eq!(
+            parse_age_version("age v2.0.0\n").unwrap(),
+            Version::new(2, 0, 0)
+        );
+        assert!(parse_age_version("age unknown\n").is_err());
+        assert!(validate_age_version("v1.2.1\n").is_err());
+        assert_eq!(
+            validate_age_version("v1.3.0\n").unwrap(),
+            Version::new(1, 3, 0)
+        );
+    }
+
+    #[test]
+    fn converts_secure_enclave_recipient_to_native_tag() {
+        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
+        let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
+        let converted = secure_enclave_recipient_to_tag(legacy).unwrap();
+        assert_eq!(converted, tagged);
+        let (_, legacy_data, _) = bech32::decode(legacy).unwrap();
+        let (_, tagged_data, _) = bech32::decode(&converted).unwrap();
+        assert_eq!(legacy_data, tagged_data);
+    }
+
+    #[test]
+    fn rejects_invalid_secure_enclave_recipient() {
+        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
+        let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
+        let mut bad_checksum = legacy.to_string();
+        bad_checksum.pop();
+        bad_checksum.push('q');
+
+        assert!(secure_enclave_recipient_to_tag("age1se1invalid").is_err());
+        assert!(secure_enclave_recipient_to_tag(&bad_checksum).is_err());
+        assert!(secure_enclave_recipient_to_tag(tagged).is_err());
+    }
+
+    #[test]
+    fn tagged_recipients_need_no_secure_enclave_plugin() {
+        preflight_recipient_plugins(&["age1tag1example"]).unwrap();
+    }
+
+    #[test]
+    fn missing_known_recipient_plugins_have_actionable_errors() {
+        let _guard = crate::test_support::env_lock();
+        let old_path = std::env::var_os("PATH");
+        // SAFETY: env_lock serializes process-environment mutation tests.
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()),
+            )
+        };
+
+        let se = preflight_recipient_plugins(&["age1se1example"]).unwrap_err();
+        let phone = preflight_recipient_plugins(&["age1phone1example"]).unwrap_err();
+
+        // SAFETY: same env_lock guard as above.
+        unsafe {
+            match old_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+        assert!(se.to_string().contains("shine state migrate --dry-run"));
+        assert!(phone.to_string().contains("every computer that seals"));
+    }
+
+    #[test]
+    fn missing_legacy_identity_plugin_has_migration_guidance() {
+        let _guard = crate::test_support::env_lock();
+        let old_path = std::env::var_os("PATH");
+        // SAFETY: env_lock serializes process-environment mutation tests.
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()),
+            )
+        };
+
+        let err = ensure_identity_plugin("age-plugin-se").unwrap_err();
+
+        // SAFETY: same env_lock guard as above.
+        unsafe {
+            match old_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+        assert!(err.to_string().contains("requires age-plugin-se"));
+        assert!(err.to_string().contains("shine state migrate --dry-run"));
+        assert!(err.to_string().contains("before resealing"));
     }
 
     #[tokio::test]

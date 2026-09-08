@@ -124,7 +124,7 @@ The `age` backend is suitable for committing team ciphertext encrypted to multip
 recipients. Existing GPG ciphertext needs no migration: legacy untagged ciphertext continues to use
 GPG, while new age ciphertext has an `age:` tag.
 
-First ensure the standard `age` CLI is installed and available on `PATH`. Create a normal software
+First ensure age 1.3 or newer is installed and available on `PATH`. Create a normal software
 identity and record its recipient:
 
 ```bash
@@ -157,11 +157,16 @@ decrypt. Cancel unexpected authorization prompts and inspect the command that ca
 security boundary when AI agents can run local commands, see
 [Protect environment secrets when using AI agents](./agent-secret-safety.md#what-touch-id-improves).
 
+New Touch ID identities use an `age1tag...` recipient. Age 1.3 can encrypt to that public recipient
+on macOS, Linux, or Windows without installing `age-plugin-se`; only decryption needs the plugin and
+the original Mac. Tagged recipients trade that portability for discoverability: someone who already
+knows the recipient can test whether a ciphertext targets it.
+
 Configure machine-wide defaults in `~/.shine/config.toml`:
 
 ```toml
 secret_backend = "age"
-age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
 age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 ```
@@ -177,11 +182,27 @@ projects. Never commit the private `age_identity`.
 Select a backend and recipients for one command:
 
 ```bash
-shine env secret encrypt --backend age -r age1se1qexample... -r age1qteammate... --from MY_TOKEN
-shine env secret seal --backend age -r age1se1qexample... -r age1qteammate...
+shine env secret encrypt --backend age -r age1tag1qexample... -r age1qteammate... --from MY_TOKEN
+shine env secret seal --backend age -r age1tag1qexample... -r age1qteammate...
 ```
 
 `-r/--recipient` is repeatable for both GPG and age.
+
+Older Secure Enclave identities may have an `age1se...` recipient, which requires
+`age-plugin-se` even on a machine that only encrypts. From the project containing the workspace,
+preview and apply the public-recipient conversion:
+
+```bash
+shine state migrate --dry-run
+shine state migrate
+```
+
+The migration updates configured `age1se...` values to equivalent `age1tag...` values without
+reading identities or decrypting secrets. It checks the global config, current project config, and
+nearest workspace together; dry-run reports per-file counts, and applying preserves array order,
+comments, and duplicates. All legacy recipients are validated before any file is written. Reseal
+afterward to write new ciphertext using the native tagged recipient. Existing ciphertext remains
+unchanged and decryptable as before.
 
 ### Add recipients to existing workspace secrets
 
@@ -281,7 +302,8 @@ age_recipients = ["age1phone...", "age1..."]
 ```
 
 Encrypting new plaintext uses only the recipients' public material and does not prompt on the
-phone. Resealing an existing payload first decrypts it and may require phone authorization; see
+phone, but every computer that encrypts or seals for an `age1phone...` recipient must have
+`age-plugin-phone` installed. Resealing an existing payload first decrypts it and may require phone authorization; see
 [Add recipients to existing workspace secrets](#add-recipients-to-existing-workspace-secrets). For later
 Wi-Fi-first decrypts with an `auto` pairing, enable **Wi-Fi auto-listen** and keep the phone app in
 the foreground. The plugin discovers the matching listener before creating the unwrap request and
@@ -517,7 +539,7 @@ files = [
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 # For age, uncomment and add every member recipient:
 # backend = "age"
-# age_recipients = ["age1se1qexample...", "age1qteammate..."]
+# age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 ```
 
 Later files override earlier ones. `{mode}` expands from `--mode`, or from `default_mode` when the

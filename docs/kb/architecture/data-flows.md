@@ -952,7 +952,10 @@ reads `Config::secret_backend` — only the tag decides. Encryption (`env secret
 and calls `secret::encrypt_secret`, which tags age output and leaves GPG output untagged. See
 [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md) for the full rationale.
 `shine env secret identity init [--touch-id]` generates a local age identity file
-(`age-keygen`/`age-plugin-se keygen`). The `--phone` form instead invokes the standalone plugin's
+(`age-keygen`/`age-plugin-se keygen --recipient-type=tag`). Every age path verifies age 1.3 or
+newer. `state migrate` rewrites configured `age1se` recipients to equivalent native `age1tag`
+recipients while preserving their decoded public key and leaving ciphertext untouched. The
+`--phone` form instead invokes the standalone plugin's
 transactional setup and consumes only its versioned public identity-path/recipient result before
 atomically appending the stub path to global `age_identities`. `Config::resolved_age_identities()`
 merges the legacy `age_identity` path with that ordered list and passes each path separately to

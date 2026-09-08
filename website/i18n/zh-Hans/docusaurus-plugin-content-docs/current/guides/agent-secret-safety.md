@@ -75,7 +75,7 @@ gh pr list
 
 ```toml
 secret_backend = "age"
-age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
 ```
 
@@ -84,7 +84,7 @@ age_identity = "~/.shine/age/identity.txt"
 ```toml
 [env.encryption]
 backend = "age"
-age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 ```
 
 `~/.shine/age/identity.txt` 则是解密 identity，等同于私钥身份，不能提交、不能共享，也不应放进 Agent 可随意读取的工作区。
@@ -107,6 +107,10 @@ shine env secret identity init --touch-id
 ```
 
 这种身份由 `age-plugin-se` 生成。解密时需要本机 Secure Enclave，并触发 Touch ID 或系统 PIN 授权。即使 identity 文件被复制到另一台机器，通常也不能直接解密。
+
+新建 Touch ID identity 使用 `age1tag...` 公开 recipient，因此 age 1.3 或更高版本可在其它平台
+加密，而不需要 Secure Enclave 插件。Tagged recipient 更容易被识别：知道它的人可以判断密文
+是否发给它。
 
 它带来的主要改进是：
 

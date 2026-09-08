@@ -13,7 +13,7 @@ it. That rules out device-local designs (e.g. a Keychain item reference) and req
 multi-recipient encryption — the same ciphertext encrypted to every team member's public key.
 
 `age` plus `age-plugin-se` fits this: `age-plugin-se` mints a Secure Enclave identity whose
-private key never leaves the enclave, and its public recipient (`age1se1...`) can be encrypted to
+private key never leaves the enclave, and its native tagged recipient (`age1tag1...`) can be encrypted to
 alongside ordinary `age-keygen` recipients (`age1...`) for teammates without Touch ID. A CLI
 binary cannot use biometry-gated Keychain APIs without Apple entitlements, so shelling out to
 `age`/`age-plugin-se` — mirroring the existing `gpg`/`base64` external-process pattern in
@@ -34,11 +34,16 @@ binary cannot use biometry-gated Keychain APIs without Apple entitlements, so sh
 - GPG encryption now also accepts a recipient list (`gpg -r` repeated), matching age's
   multi-recipient shape, so `-r/--recipient` behaves the same way regardless of backend.
 - `shine env secret identity init [--touch-id]` generates a local age identity (`age-keygen` or
-  `age-plugin-se keygen`) and prints its recipient; the macOS requirement for `--touch-id` is
+  `age-plugin-se keygen --recipient-type=tag`) and prints its recipient; the macOS requirement for `--touch-id` is
   checked at **runtime** (`std::env::consts::OS`), not compile time, since plain age identities
   work on every OS and the rest of the CLI is not platform-gated at compile time either. The later
   `--phone` setup handoff is governed separately by [ADR 0075](0075-phone-identity-setup-handoff.md)
   and does not change this backend or ciphertext decision.
+- Shine requires age 1.3 or newer and uses its native `age1tag` wrapping for new Secure Enclave
+  recipients. Encryption therefore does not need the platform-specific plugin; decryption still
+  does. `state migrate` converts the Bech32 HRP and checksum of configured legacy `age1se`
+  recipients without changing their public-key payload or existing ciphertext. This deliberately
+  accepts tagged-recipient target discoverability in exchange for cross-platform sealing.
 - Recipient/backend precedence for `encrypt`/`seal`: CLI flag > workspace `env.encryption` >
   `config.toml` (`gpg_recipients`/`age_recipients`/`secret_backend`) > default (GPG). Resolution
   helpers return `Option`, not `Result`, when used for `seal`, so sealing a file with no `[secret]`
@@ -58,5 +63,6 @@ binary cannot use biometry-gated Keychain APIs without Apple entitlements, so sh
   secrets already committed to history; re-`seal`ing re-encrypts to the current recipient list,
   but old ciphertext (e.g. in git history) remains decryptable by the identity it was originally
   sealed for.
-- `age`/`age-plugin-se` are external dependencies (like `gpg`) the user must install; shine detects
-  their absence with a clear preflight error rather than a raw subprocess failure.
+- age 1.3 or newer is required for every age operation. `age-plugin-se` is required only to generate
+  and decrypt Secure Enclave identities; legacy `age1se` encryption remains compatible when the
+  plugin is installed and otherwise reports the explicit migration path.

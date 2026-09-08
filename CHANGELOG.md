@@ -16,6 +16,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Bind sealing to captured workspace/source bytes with cooperating process locks and final
   comparisons; report partial multi-file completion without overwriting detected concurrent edits.
 
+### Bug Fixes
+
+- Generate native `age1tag` recipients for new Secure Enclave identities and migrate legacy
+  `age1se` configuration, allowing age 1.3+ clients to seal for macOS recipients without installing
+  `age-plugin-se` on the encrypting computer. Missing phone recipient plugins now fail with an
+  actionable cross-platform sealing diagnostic.
+
 ## [2.0.3] — 2026-09-08
 
 ### Bug Fixes

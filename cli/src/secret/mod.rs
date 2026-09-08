@@ -92,6 +92,18 @@ pub async fn encrypt_secret(plaintext: &[u8], recipients: &EncryptRecipients) ->
     }
 }
 
+/// Convert a legacy Secure Enclave plugin recipient to age's native tagged
+/// recipient form without changing the encoded public key.
+pub(crate) fn secure_enclave_recipient_to_tag(recipient: &str) -> Result<String> {
+    age::secure_enclave_recipient_to_tag(recipient)
+}
+
+/// Validate the age executable and the complete recipient-side plugin set
+/// before a workspace seal can decrypt any existing payload.
+pub(crate) async fn preflight_age_recipients(recipients: &[String]) -> Result<()> {
+    age::preflight_recipients(recipients).await
+}
+
 /// Hybrid-derived caches retain exact workspace recipient restrictions even
 /// though the local cache only uses one encryption backend.
 pub(crate) async fn encrypt_local_cache(
@@ -217,21 +229,23 @@ mod process_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    #[test]
-    fn both_backends_work_without_external_base64() {
-        let _guard = crate::test_support::env_lock();
-        struct RestorePath(Option<std::ffi::OsString>);
-        impl Drop for RestorePath {
-            fn drop(&mut self) {
-                // SAFETY: the environment lock is held until after this guard drops.
-                unsafe {
-                    match &self.0 {
-                        Some(path) => std::env::set_var("PATH", path),
-                        None => std::env::remove_var("PATH"),
-                    }
+    struct RestorePath(Option<std::ffi::OsString>);
+
+    impl Drop for RestorePath {
+        fn drop(&mut self) {
+            // SAFETY: the environment lock is held until after this guard drops.
+            unsafe {
+                match &self.0 {
+                    Some(path) => std::env::set_var("PATH", path),
+                    None => std::env::remove_var("PATH"),
                 }
             }
         }
+    }
+
+    #[test]
+    fn both_backends_work_without_external_base64() {
+        let _guard = crate::test_support::env_lock();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -244,6 +258,7 @@ mod process_tests {
                 &path,
                 r#"#!/bin/sh
 case "$1" in
+    --version) if test "${0##*/}" = age; then echo v1.3.0; else echo 'gpg 2.4.0'; fi ;;
     --encrypt|-e) /bin/cat ;;
     --decrypt|-d) for arg in "$@"; do file="$arg"; done; /bin/cat "$file" ;;
     *) exit 1 ;;
@@ -261,7 +276,7 @@ esac
             assert!(crate::proc::ensure_command("base64").is_err());
             for recipients in [
                 EncryptRecipients::Gpg(vec!["test@example.com".into()]),
-                EncryptRecipients::Age(vec!["age1test".into()]),
+                EncryptRecipients::Age(vec!["age1tag1test".into()]),
             ] {
                 let plaintext = "secret\nwith trailing newline\n";
                 let encoded = encrypt_secret(plaintext.as_bytes(), &recipients).await?;
@@ -279,9 +294,41 @@ esac
                     plaintext
                 );
             }
+
+            let legacy = EncryptRecipients::Age(vec!["age1se1legacy".into()]);
+            let missing = encrypt_secret(b"secret", &legacy).await.unwrap_err();
+            assert!(
+                missing
+                    .to_string()
+                    .contains("shine state migrate --dry-run")
+            );
+            std::fs::write(dir.join("age-plugin-se"), "").unwrap();
+            assert!(encrypt_secret(b"secret", &legacy).await.is_ok());
             Ok(())
         });
         std::fs::remove_dir_all(&dir).unwrap();
         result.unwrap();
+    }
+
+    #[test]
+    fn age_version_is_enforced_at_the_process_boundary() {
+        let _guard = crate::test_support::env_lock();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = runtime.block_on(crate::test_support::make_temp_dir("shine-age-version"));
+        let age = dir.join("age");
+        let _restore = RestorePath(std::env::var_os("PATH"));
+        // SAFETY: all environment-mutation tests hold env_lock().
+        unsafe { std::env::set_var("PATH", &dir) };
+
+        for (output, accepted) in [("v1.2.0", false), ("unexpected", false), ("v1.3.0", true)] {
+            std::fs::write(&age, format!("#!/bin/sh\necho '{output}'\n")).unwrap();
+            std::fs::set_permissions(&age, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(runtime.block_on(age::preflight_age()).is_ok(), accepted);
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

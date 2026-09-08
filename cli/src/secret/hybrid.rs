@@ -51,7 +51,7 @@ impl Recipients {
     /// Runs before any old ciphertext is decrypted. No private-key operation.
     pub async fn prepare(&mut self) -> Result<()> {
         check_version("gpg", &["2.2.", "2.3.", "2.4.", "2.5."]).await?;
-        check_version("age", &["1.", "v1."]).await?;
+        age::preflight_age().await?;
         self.gpg = gpg::resolve_hybrid_recipients(&self.gpg).await?;
         let probe = b"shine hybrid recipient preflight v1";
         gpg::encrypt_hybrid_key(probe, &self.gpg).await?;
@@ -78,7 +78,7 @@ async fn check_version(tool: &str, allowed: &[&str]) -> Result<()> {
         .unwrap_or_default();
     ensure!(
         output.status.success() && allowed.iter().any(|prefix| version.starts_with(prefix)),
-        "hybrid sealing requires GnuPG 2.2–2.5 and age 1.x"
+        "hybrid sealing requires GnuPG 2.2–2.5 and age 1.3 or newer"
     );
     Ok(())
 }
@@ -570,9 +570,12 @@ mod controlled_process_tests {
     fn tool(dir: &std::path::Path, name: &str, fails: bool) {
         let path = dir.join(name);
         let script = if fails {
-            "#!/bin/sh\nexit 42\n"
+            "#!/bin/sh\nexit 42\n".to_string()
         } else {
-            "#!/bin/sh\nfor arg in \"$@\"; do file=\"$arg\"; done\n/bin/cat \"$file\"\n"
+            let version = if name == "age" { "v1.3.0" } else { "gpg 2.4.0" };
+            format!(
+                "#!/bin/sh\nif test \"$1\" = --version; then echo '{version}'; exit 0; fi\nfor arg in \"$@\"; do file=\"$arg\"; done\n/bin/cat \"$file\"\n"
+            )
         };
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();

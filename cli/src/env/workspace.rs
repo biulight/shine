@@ -540,13 +540,15 @@ pub async fn handle_seal(
         }
     }
     let captured = capture_sources(&files).await?;
+    let mut contains_secrets = false;
     for (path, contents) in &captured {
-        parse_source(
+        let source = parse_source(
             path,
             contents
                 .as_deref()
                 .context("source disappeared before sealing")?,
         )?;
+        contains_secrets |= !source.secret.is_empty();
     }
     if let Some(EncryptRecipients::Hybrid(recipients)) = &mut encryption {
         recipients.prepare().await?;
@@ -556,6 +558,9 @@ pub async fn handle_seal(
         == Some("hybrid")
     {
         eprintln!("This seal explicitly targets only the selected single-backend recipient group.");
+    }
+    if contains_secrets && let Some(EncryptRecipients::Age(recipients)) = &encryption {
+        secret::preflight_age_recipients(recipients).await?;
     }
     for (completed, (path, contents)) in captured.iter().enumerate() {
         let result = async {

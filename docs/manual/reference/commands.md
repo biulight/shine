@@ -489,7 +489,8 @@ requires `--from-dotenv` and supports `--dry-run`. Workspace export requires an 
 mode, and output path. It exports only resolved plain values unless `--include-secrets` is present;
 it never includes inherited process values. Broker policy creation chooses one or more explicit
 `--release` keys or freezes every currently declared key with `--release-all-declared`; the forms
-are mutually exclusive. Touch ID identities are macOS-only and require `age-plugin-se`.
+are mutually exclusive. Age operations require age 1.3 or newer. Touch ID identities are macOS-only;
+generation and decryption require `age-plugin-se`, while their `age1tag...` recipients encrypt natively.
 
 Phone identity setup is Windows-only and hands pairing to `age-plugin-phone`. The `auto` transport
 is the default and asks the plugin to discover one matching foreground Wi-Fi listener first; if
@@ -560,7 +561,7 @@ SemVer-compatible label `2.0.3-preview`.
 ### Hybrid sealing and reading
 
 `shine env secret seal --backend hybrid` uses both workspace recipient lists and
-rejects `-r/--recipient`. Sealing requires GnuPG 2.2–2.5, age 1.x, public keys and
+rejects `-r/--recipient`. Sealing requires GnuPG 2.2–2.5, age 1.3 or newer, public keys and
 required recipient plugins. Both encryption paths must succeed. Explicit
 `--backend gpg` or `--backend age` seals only for that group with existing recipient
 precedence. Standalone `env secret encrypt` does not accept hybrid.

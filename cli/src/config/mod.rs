@@ -202,7 +202,7 @@ pub struct Config {
     /// Local workspace handlers may apply a personal shine.config.local.toml override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hybrid_decrypt_backend: Option<String>,
-    /// Default age recipients (`age1...` / `age1se1...`) used by `shine env
+    /// Default age recipients (`age1...` / `age1tag1...`) used by `shine env
     /// encrypt`/`seal` when the age backend is active and no `-r/--recipient`
     /// is given. Encrypting to every team member's recipient lets any of them
     /// decrypt the resulting ciphertext with their own identity.

@@ -21,7 +21,7 @@ sync_terminal_theme = true
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 
 secret_backend = "age"
-age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
 age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 
@@ -60,8 +60,10 @@ enabled = false
 
 Legacy `gpg_key_id` and workspace `[env.encryption].recipient` accept only one recipient. Normal
 configuration reads never rewrite them. Preview and apply conversion to `gpg_recipients` with
-`shine state migrate --dry-run` and `shine state migrate`. `env run` and `env secret seal` prompt to
-migrate an old workspace when needed.
+`shine state migrate --dry-run` and `shine state migrate`. The same migration converts legacy
+`age1se...` recipients to age 1.3 native `age1tag...` recipients; this removes the Secure Enclave
+plugin requirement from encrypting computers but makes targeting testable by someone who knows the
+recipient. `env run` and `env secret seal` prompt to migrate an old workspace when needed.
 
 ## External-code trust
 
@@ -190,7 +192,7 @@ files = [
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 # Or use age:
 # backend = "age"
-# age_recipients = ["age1se1qexample...", "age1qteammate..."]
+# age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 ```
 
 Sources merge in list order. Current process variables win by default;

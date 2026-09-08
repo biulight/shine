@@ -109,7 +109,7 @@ The following example belongs in the local `~/.shine/config.toml`:
 
 ```toml
 secret_backend = "age"
-age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
 ```
 
@@ -119,7 +119,7 @@ example recipients with actual member recipients. Keep identity paths in local c
 ```toml
 [env.encryption]
 backend = "age"
-age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 ```
 
 `~/.shine/age/identity.txt` is the private decryption identity. Never commit or share it, and do not
@@ -146,6 +146,10 @@ shine env secret identity init --touch-id
 `age-plugin-se` generates the identity. Decryption requires the local Secure Enclave and a Touch ID
 or system PIN authorization. Copying its identity file to another machine is normally insufficient
 to decrypt.
+
+New Touch ID identities use an `age1tag...` public recipient, so age 1.3 or newer can encrypt on
+other platforms without the Secure Enclave plugin. A tagged recipient is more discoverable:
+someone who knows it can test whether a ciphertext targets it.
 
 This makes an identity harder to abuse offline, requires local user authorization, and prevents an
 agent from decrypting elsewhere with only the file. It is not absolute isolation: an agent able to

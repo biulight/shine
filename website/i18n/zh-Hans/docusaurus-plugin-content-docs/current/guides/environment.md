@@ -111,7 +111,7 @@ eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
 
 Shine 支持 `age` 作为第二种密钥后端。它适合把密文提交到团队仓库中，并加密给多个成员各自的 recipient。已有 GPG 密文不需要迁移：不带标签的旧密文继续按 GPG 解密，`age` 后端生成的新密文会带有 `age:` 标签。
 
-先确认标准 `age` CLI 已安装并位于 `PATH` 中。生成一个普通软件 identity，并记录输出中的
+先确认 age 1.3 或更高版本已安装并位于 `PATH` 中。生成一个普通软件 identity，并记录输出中的
 recipient：
 
 ```bash
@@ -142,11 +142,16 @@ shine env secret identity list
 应取消授权并检查触发它的命令。如果 AI Agent 可以在本机运行命令，请继续阅读
 [在 AI Agent 参与开发时保护环境密钥](./agent-secret-safety.md#touch-id-改善什么)，了解这种方式的安全边界。
 
+新建 Touch ID identity 会输出 `age1tag...` recipient。age 1.3 可以在 macOS、Linux 或
+Windows 上直接向这个公开 recipient 加密，无需在加密端安装 `age-plugin-se`；只有解密端需要
+插件和原来的 Mac。Tagged recipient 以可识别性换取这种跨平台能力：已经知道 recipient 的人
+可以判断某份密文是否发给它。
+
 如需在本机所有项目中使用同一默认后端和 recipient，将它们写入 `~/.shine/config.toml`：
 
 ```toml
 secret_backend = "age"
-age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
 age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 ```
@@ -162,11 +167,24 @@ identity、Secure Enclave identity 和硬件 plugin stub 可以共存，不需�
 也可以只在单次命令中选择后端和 recipient：
 
 ```bash
-shine env secret encrypt --backend age -r age1se1qexample... -r age1qteammate... --from MY_TOKEN
-shine env secret seal --backend age -r age1se1qexample... -r age1qteammate...
+shine env secret encrypt --backend age -r age1tag1qexample... -r age1qteammate... --from MY_TOKEN
+shine env secret seal --backend age -r age1tag1qexample... -r age1qteammate...
 ```
 
 `-r/--recipient` 对 GPG 和 age 都可以重复使用。
+
+旧版 Secure Enclave identity 可能使用 `age1se...` recipient，导致仅执行加密的电脑也必须
+安装 `age-plugin-se`。在 workspace 所在项目中预览并应用公开 recipient 转换：
+
+```bash
+shine state migrate --dry-run
+shine state migrate
+```
+
+迁移只会把配置中的 `age1se...` 改为等价的 `age1tag...`，不会读取 identity 或解密 secret。
+它会一并检查全局配置、当前项目配置和最近的 workspace；dry-run 按文件报告转换数量，应用时
+保留数组顺序、注释和重复项，并在写入任何文件前校验全部旧 recipient。迁移后再次 seal，才会
+生成使用原生 tagged recipient 的新密文；已有密文不会改变，仍可照常解密。
 
 ### 为已有 workspace 密钥添加接收者
 
@@ -251,7 +269,8 @@ backend = "age"
 age_recipients = ["age1phone...", "age1..."]
 ```
 
-首次加密明文只使用 recipient 的公开材料，不会在手机上弹出授权提示。重新封存已有 payload
+首次加密明文只使用 recipient 的公开材料，不会在手机上弹出授权提示，但每台向
+`age1phone...` 加密或执行 seal 的电脑都必须安装 `age-plugin-phone`。重新封存已有 payload
 需要先解密，因此可能要求手机授权；参见[为已有 workspace 密钥添加接收者](#为已有-workspace-密钥添加接收者)。
 使用 `auto` 配对后，如果希望后续
 解密也优先走 Wi-Fi，请开启 **Wi-Fi auto-listen** 并保持手机应用在前台。plugin 会在创建
@@ -463,7 +482,7 @@ files = [
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 # 团队使用 age 时，取消以下两行注释，并填入每位成员的 recipient
 # backend = "age"
-# age_recipients = ["age1se1qexample...", "age1qteammate..."]
+# age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 ```
 
 后面的环境文件覆盖前面的文件。`{mode}` 会替换为 `--mode` 指定的值；省略 `--mode`

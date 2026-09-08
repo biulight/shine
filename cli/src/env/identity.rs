@@ -138,12 +138,7 @@ pub async fn handle_identity_init(
         ensure_command("age-plugin-se")?;
         run_keygen(
             "age-plugin-se",
-            &[
-                "keygen".to_string(),
-                format!("--access-control={access_control}"),
-                "-o".to_string(),
-                output_path.to_string_lossy().into_owned(),
-            ],
+            &touch_id_keygen_args(access_control, &output_path),
         )
         .await?;
     } else {
@@ -194,6 +189,16 @@ pub async fn handle_identity_init(
         );
     }
     Ok(())
+}
+
+fn touch_id_keygen_args(access_control: &str, output_path: &Path) -> Vec<String> {
+    vec![
+        "keygen".to_string(),
+        "--recipient-type=tag".to_string(),
+        format!("--access-control={access_control}"),
+        "-o".to_string(),
+        output_path.to_string_lossy().into_owned(),
+    ]
 }
 
 pub async fn handle_identity_list(config: &Config) -> Result<()> {
@@ -466,6 +471,21 @@ mod tests {
         assert!(
             err.to_string().contains("unknown --access-control"),
             "{err:#}"
+        );
+    }
+
+    #[test]
+    fn touch_id_keygen_requests_native_tagged_recipient() {
+        let args = touch_id_keygen_args("any-biometry", Path::new("identity.txt"));
+        assert_eq!(
+            args,
+            [
+                "keygen",
+                "--recipient-type=tag",
+                "--access-control=any-biometry",
+                "-o",
+                "identity.txt",
+            ]
         );
     }
 

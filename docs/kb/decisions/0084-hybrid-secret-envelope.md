@@ -33,7 +33,7 @@ fixtures, not decryptable GPG/age packets. Real interoperability uses disposable
 
 ## Tools and recipients
 
-Hybrid requires GnuPG 2.2–2.5 and age 1.x. GPG recipients must be complete 40-hex
+Hybrid requires GnuPG 2.2–2.5 and age 1.3 or newer. GPG recipients must be complete 40-hex
 primary fingerprints, never names, groups, key IDs, or subkey selectors. Inspect
 local public keys only using `--no-options` as the first argument, batch colon output,
 `--no-auto-key-locate`, and `--no-auto-check-trustdb`. Reject absent, revoked, expired,

@@ -20,7 +20,7 @@ sync_terminal_theme = true
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 
 secret_backend = "age"
-age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
 age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 
@@ -57,7 +57,7 @@ enabled = false
 | `[env]` | 模板变量及 shell helper 使用的值 |
 | `[[env_proxy]]` | 一个透明命令代理规则；`command` 为裸命令名，`with` 为允许注入的 `KEY` 或 `KEY=ALIAS` 列表，`enabled` 默认为 `true` |
 
-`gpg_key_id` 与 workspace 的 `[env.encryption].recipient` 是旧版单 recipient 字段。Shine 不会在普通读取配置时改写文件；用 `shine state migrate --dry-run` 预览并用 `shine state migrate` 迁移为 `gpg_recipients`。遇到旧 workspace 时，`env run` 和 `env secret seal` 会提示迁移。
+`gpg_key_id` 与 workspace 的 `[env.encryption].recipient` 是旧版单 recipient 字段。Shine 不会在普通读取配置时改写文件；用 `shine state migrate --dry-run` 预览并用 `shine state migrate` 迁移为 `gpg_recipients`。同一迁移也会把旧版 `age1se...` 转为 age 1.3 原生支持的 `age1tag...`；这能免除加密端的 Secure Enclave 插件依赖，但已经知道 recipient 的人可以判断密文是否发给它。遇到旧 workspace 时，`env run` 和 `env secret seal` 会提示迁移。
 
 ## 外部代码信任
 
@@ -175,7 +175,7 @@ files = [
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 # 也可使用 age 后端
 # backend = "age"
-# age_recipients = ["age1se1qexample...", "age1qteammate..."]
+# age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 ```
 
 环境源按 `files` 顺序合并。默认保留当前进程已经存在的变量；设置 `env.override_process_env = true` 后，改由 workspace 值覆盖。

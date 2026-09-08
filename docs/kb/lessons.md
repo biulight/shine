@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-09 — Public plugin recipients can still require platform-specific executables
+
+- **Symptom**: a Windows user could decrypt through `age-plugin-phone` but could not reseal a
+  workspace that also listed a macOS `age1se` recipient because `age-plugin-se` was absent.
+- **Root cause**: age plugin recipients contain public material but still route file-key wrapping
+  through the named plugin executable. Multi-recipient encryption therefore requires every
+  recipient-side plugin, even when no private-key operation occurs.
+- **Fix**: require age 1.3, generate native `age1tag` Secure Enclave recipients, provide an explicit
+  `state migrate` conversion for legacy configuration, and preflight remaining known plugins before
+  decrypting old payloads.
+- **Rule**: cross-platform recipient policy must account for encryption-side plugin availability.
+  Never skip an unavailable recipient; prefer a standard native public recipient when the identity
+  plugin supports it, and disclose any target-discoverability tradeoff.
+
 ## 2026-09-06 — Shell authoring needs typed template blockers and explicit shell selection
 
 - **Symptom**: a complete external `shell/proxy` passes validation, but authoring Plan returns only
