@@ -166,7 +166,38 @@ shine env secret encrypt --backend age -r age1se1qexample... -r age1qteammate...
 shine env secret seal --backend age -r age1se1qexample... -r age1qteammate...
 ```
 
-`-r/--recipient` 对 GPG 和 age 都可以重复使用。移除某个 recipient 不会撤销它对历史密文的访问；需要重新加密或重新 `seal` 才能轮换访问范围。
+`-r/--recipient` 对 GPG 和 age 都可以重复使用。
+
+### 为已有 workspace 密钥添加接收者
+
+仅修改 `age_recipients` 不会更新已有密文。在 `shine.workspace.toml` 中保留原有接收者，
+追加新成员的公开 recipient：
+
+```toml
+[env.encryption]
+backend = "age"
+age_recipients = ["age1existing...", "age1newmember...", "age1backup..."]
+```
+
+将所有占位符替换为实际 recipient，然后在本机 identity 仍能解密旧 payload 的设备上运行：
+
+```bash
+shine env secret seal
+```
+
+`seal` 会解密旧 payload，再按当前完整接收者名单重新加密。即使 `[secret]` 中所有项都是
+`true`，也会保留原值并重新加密；保持这些项为 `true` 即可，无需导出明文或重新输入值。
+新增成员只需提供公开 recipient，不需要提供私有 identity。解密旧 payload 时，仍可能
+要求 Touch ID、手机授权或对应 identity 的其他确认。
+
+不指定文件时，`seal` 会处理 workspace 在已配置的各个 mode（包括 `default_mode`）下
+引用的已存在源文件。使用 `shine env secret seal <FILE>` 可只处理一个源文件。如果封存
+因错误中止，部分文件可能已更新；应解决报告的错误并重新运行，再共享结果。
+
+将更新后的 workspace 配置和重新封存的共享源文件一起提交。名单中的每个接收者都能
+独立解密新密文；请新成员在自己的设备上验证访问。新接收者无法解密 Git 历史中的旧密文。
+同样，移除接收者并重新封存也不会撤销其对历史密文的访问，或轮换上游服务中的真实凭据；
+必要时应在上游服务中轮换已泄露的凭据。
 
 ### 在 Windows 上实验手机授权
 
@@ -220,7 +251,9 @@ backend = "age"
 age_recipients = ["age1phone...", "age1..."]
 ```
 
-封存只使用 recipient 的公开材料，不会在手机上弹出授权提示。使用 `auto` 配对后，如果希望后续
+首次加密明文只使用 recipient 的公开材料，不会在手机上弹出授权提示。重新封存已有 payload
+需要先解密，因此可能要求手机授权；参见[为已有 workspace 密钥添加接收者](#为已有-workspace-密钥添加接收者)。
+使用 `auto` 配对后，如果希望后续
 解密也优先走 Wi-Fi，请开启 **Wi-Fi auto-listen** 并保持手机应用在前台。plugin 会在创建
 unwrap request 前发现匹配的 listener；未发现时在 Windows 上选择 Developer USB/ADB，不会并行竞速或
 在请求开始后自动重试其它路径。解密由手机保护的 secret（包括通过 `shine env run` 使用它）时，

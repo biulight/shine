@@ -125,7 +125,10 @@ shine env secret identity init
 shine env secret identity list
 ```
 
-把输出中的 `age1...` recipient 加入 `age_recipients` 后，同一份密文可以同时加密给 macOS Touch ID recipient 和 Windows 普通 age recipient。
+把输出中的 `age1...` recipient 与 macOS Touch ID recipient 一起加入 `age_recipients`，
+然后在能解密旧 payload 的设备上重新封存已有 workspace 密钥。仅修改名单不会更新密文。
+按照[为已有 workspace 密钥添加接收者](./environment.md#为已有-workspace-密钥添加接收者)
+完成操作后，再将更新后的文件共享给新成员。
 
 如果团队希望每次解密都需要一次新的硬件授权，可以了解由 Shine 作者另行开发的独立项目 [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone)。它源自 Shine 对 Windows 硬件 identity 的直接探索：这项工作在实现过程中碰到了平台能力上限。Shine 的 PoC 发现，Windows Hello 的 Passport provider 只能完成旧式 RSA PKCS#1 v1.5 解包；RSA OAEP-SHA256、P-256 ECDH 和测试过的 WebAuthn PRF 路径都不可用。因此，作者没有把旧式构造或 Shine 专用密文格式放进产品，而是把后续实现移到标准 age plugin 协议之后，并拆分为一个可以独立审查的项目。
 

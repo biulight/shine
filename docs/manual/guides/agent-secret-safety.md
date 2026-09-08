@@ -161,7 +161,10 @@ shine env secret identity init
 shine env secret identity list
 ```
 
-Add its `age1...` recipient alongside macOS Touch ID recipients so one ciphertext supports both.
+Add its `age1...` recipient alongside macOS Touch ID recipients, then reseal existing workspace
+payloads on a machine that can decrypt them. Editing the list alone does not update ciphertext.
+Follow [Add recipients to existing workspace secrets](./environment.md#add-recipients-to-existing-workspace-secrets)
+before sharing the updated files with the new member.
 
 For teams exploring fresh hardware authorization on every decrypt, Shine's author also develops the
 standalone [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) project. It grew out of

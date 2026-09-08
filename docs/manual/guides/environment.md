@@ -181,8 +181,42 @@ shine env secret encrypt --backend age -r age1se1qexample... -r age1qteammate...
 shine env secret seal --backend age -r age1se1qexample... -r age1qteammate...
 ```
 
-`-r/--recipient` is repeatable for both GPG and age. Removing a recipient does not revoke historical
-ciphertext; re-encrypt or reseal it to rotate access.
+`-r/--recipient` is repeatable for both GPG and age.
+
+### Add recipients to existing workspace secrets
+
+Changing `age_recipients` alone does not update existing ciphertext. Keep the existing recipients
+and append the new members' public recipients in `shine.workspace.toml`:
+
+```toml
+[env.encryption]
+backend = "age"
+age_recipients = ["age1existing...", "age1newmember...", "age1backup..."]
+```
+
+Replace every placeholder with an actual recipient, then run this on a machine whose configured
+identity can still decrypt the old payloads:
+
+```bash
+shine env secret seal
+```
+
+`seal` decrypts the old payloads and encrypts them again for the complete current recipient list.
+Even when every `[secret]` entry is `true`, its value is retained and re-encrypted; leave these
+entries as `true`, without exporting plaintext or entering the values again. Only the new members'
+public recipients are needed, not their private identities. Decrypting old payloads may still
+require Touch ID, phone authorization, or another identity-specific prompt.
+
+Without a file argument, `seal` processes existing sources referenced by the workspace across its
+configured modes, including `default_mode`. Use `shine env secret seal <FILE>` to process only one
+source. If sealing stops with an error, some files may already be updated; resolve the reported
+error and rerun it before sharing the result.
+
+Commit the updated workspace configuration together with the resealed shared source files. Each
+listed recipient can independently decrypt the new ciphertext; have new members verify access on
+their own machines. New recipients cannot decrypt old ciphertext in Git history. Likewise, removing
+a recipient and resealing does not revoke its access to historical ciphertext or rotate the real
+upstream credentials; rotate exposed credentials at their source when necessary.
 
 ### Experiment with phone authorization on Windows
 
@@ -246,7 +280,9 @@ backend = "age"
 age_recipients = ["age1phone...", "age1..."]
 ```
 
-Sealing uses only the recipients' public material and does not prompt on the phone. For later
+Encrypting new plaintext uses only the recipients' public material and does not prompt on the
+phone. Resealing an existing payload first decrypts it and may require phone authorization; see
+[Add recipients to existing workspace secrets](#add-recipients-to-existing-workspace-secrets). For later
 Wi-Fi-first decrypts with an `auto` pairing, enable **Wi-Fi auto-listen** and keep the phone app in
 the foreground. The plugin discovers the matching listener before creating the unwrap request and
 otherwise selects Developer USB/ADB on Windows; it does not race routes or retry in flight.
