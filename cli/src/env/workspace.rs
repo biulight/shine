@@ -1152,7 +1152,9 @@ impl SealLock {
     fn acquire(scope: &Path) -> Result<Self> {
         use fs2::FileExt;
         let scope = std::fs::canonicalize(scope).context("resolving seal lock scope")?;
-        let path = scope.with_extension("shine-seal.lock");
+        // Preserve the extension: env.dev and env.prod are distinct lock scopes.
+        let mut path = scope.into_os_string();
+        path.push(".shine-seal.lock");
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -2215,6 +2217,50 @@ mod hybrid_snapshot_tests {
         assert!(involves_hybrid(&policy, &captured).unwrap());
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
+    #[tokio::test]
+    async fn seal_distinguishes_sources_and_workspace_with_matching_stems() {
+        let dir = crate::test_support::make_temp_dir("shine-seal-lock-names").await;
+        let workspace = dir.join("shine.workspace.toml");
+        let names = ["env.dev", "env.prod", "shine.workspace.env"];
+        tokio::fs::write(
+            &workspace,
+            "version = 2\n[env]\nfiles = ['env.dev', 'env.prod', 'shine.workspace.env']\n",
+        )
+        .await
+        .unwrap();
+        let original = "[plain]\nVALUE = 'public'\n";
+        for name in names {
+            tokio::fs::write(dir.join(name), original).await.unwrap();
+        }
+        let config = Config::new_for_test(&dir);
+        let lock = SealLock::acquire(&dir.join("env.prod")).unwrap();
+        assert!(
+            handle_seal(&config, Some(&workspace), None, None, &[])
+                .await
+                .is_err()
+        );
+        for name in names {
+            assert_eq!(
+                tokio::fs::read_to_string(dir.join(name)).await.unwrap(),
+                original
+            );
+        }
+        drop(lock);
+
+        handle_seal(&config, Some(&workspace), None, None, &[])
+            .await
+            .unwrap();
+        for name in names {
+            let contents = tokio::fs::read_to_string(dir.join(name)).await.unwrap();
+            assert!(contents.contains("[payload]"));
+            assert_eq!(
+                parse_source(&dir.join(name), &contents).unwrap().plain["VALUE"],
+                "public"
+            );
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
     #[tokio::test]
     async fn replacement_preserves_source_and_policy_edits_and_missing_files() {
         let dir = crate::test_support::make_temp_dir("shine-hybrid-race").await;

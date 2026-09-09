@@ -3,6 +3,16 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-09 — Seal lock names must preserve the complete source filename
+
+- **Symptom**: sealing a workspace containing `env.dev` and `env.prod` reported another active
+  sealer even when only one process was running.
+- **Root cause**: replacing the source extension mapped both paths to `env.shine-seal.lock`;
+  workspace and source filenames with matching stems could collide in the same way.
+- **Fix**: append `.shine-seal.lock` to the complete canonical path. A regression test covers
+  both kinds of collision and confirms an already-held source lock still prevents sealing.
+- **Rule**: sidecar lock names must retain every distinguishing part of the resource filename.
+
 ## 2026-09-09 — Public plugin recipients can still require platform-specific executables
 
 - **Symptom**: a Windows user could decrypt through `age-plugin-phone` but could not reseal a
