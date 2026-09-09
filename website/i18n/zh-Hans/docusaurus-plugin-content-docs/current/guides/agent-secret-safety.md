@@ -134,7 +134,7 @@ shine env secret identity list
 按照[为已有 workspace 密钥添加接收者](./environment.md#为已有-workspace-密钥添加接收者)
 完成操作后，再将更新后的文件共享给新成员。
 
-Windows 用户也可以使用 [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone)，通过手机生物验证授权解密。该项目已有预发布版本可供试用，使用前请配置独立的恢复密钥。支持的设备、使用限制和配置步骤见[在 Windows 上实验手机授权](./environment.md#在-windows-上实验手机授权)。
+Windows 和 macOS 用户也可以试用 [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone)，通过手机生物验证授权解密。macOS 需要包含实验性实现的插件版本。仅使用合成或可丢弃数据，使用前请配置独立的恢复密钥。支持的设备、使用限制和配置步骤见[在 Windows 和 macOS 上实验手机授权](./environment.md#在-windows-上实验手机授权)。
 
 普通团队开发仍可使用普通 age identity，但要保护好 identity 文件和用户目录权限。Windows 上需要稳定硬件保护时，应继续采用组织认可的 YubiKey/PIV 或 GPG + YubiKey 方案。
 

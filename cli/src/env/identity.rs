@@ -55,7 +55,12 @@ pub async fn handle_phone_identity_init(
         crate::secret::preflight_age().await?;
     }
     ensure_command("age-plugin-phone")?;
-    let label = resolve_phone_label(label)?;
+    let system_label = if label.is_none() {
+        read_phone_computer_name().await
+    } else {
+        None
+    };
+    let label = resolve_phone_label(label, system_label.as_deref())?;
     let result = run_phone_setup(
         "age-plugin-phone",
         recipient_type,
@@ -231,22 +236,43 @@ pub async fn handle_identity_list(config: &Config) -> Result<()> {
 }
 
 fn ensure_phone_supported(os: &str) -> Result<()> {
-    if os != "windows" {
+    if !matches!(os, "windows" | "macos") {
         bail!(
-            "phone-backed identity setup currently requires the Windows Alpha platform; use age-plugin-phone directly for diagnostic interoperability on other platforms"
+            "phone-backed identity setup requires Windows or macOS (experimental); use age-plugin-phone directly for diagnostic interoperability on other platforms"
         );
     }
     Ok(())
 }
 
-fn resolve_phone_label(explicit: Option<&str>) -> Result<String> {
+async fn read_phone_computer_name() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("/usr/sbin/scutil")
+            .args(["--get", "ComputerName"])
+            .stdin(Stdio::null())
+            .output()
+            .await
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Some(String::from_utf8(output.stdout).ok()?.trim_end().to_owned())
+    }
+    #[cfg(windows)]
+    {
+        std::env::var("COMPUTERNAME").ok()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        None
+    }
+}
+
+fn resolve_phone_label(explicit: Option<&str>, system_label: Option<&str>) -> Result<String> {
     let label = explicit.map(str::to_owned).unwrap_or_else(|| {
-        std::env::var("COMPUTERNAME")
-            .ok()
-            .filter(|value| {
-                let trimmed = value.trim();
-                !trimmed.is_empty() && trimmed.len() <= 64
-            })
+        system_label
+            .filter(|value| !value.trim().is_empty() && value.len() <= 64)
+            .map(str::to_owned)
             .unwrap_or_else(|| "Shine desktop".to_string())
     });
     if label.trim().is_empty() {
@@ -537,20 +563,40 @@ mod tests {
     }
 
     #[test]
-    fn phone_setup_requires_windows() {
+    fn phone_setup_allows_windows_and_macos_only() {
         assert!(ensure_phone_supported("windows").is_ok());
-        let err = ensure_phone_supported("macos").unwrap_err();
-        assert!(err.to_string().contains("Windows Alpha"), "{err:#}");
+        assert!(ensure_phone_supported("macos").is_ok());
+        for os in ["linux", "unknown"] {
+            let err = ensure_phone_supported(os).unwrap_err();
+            assert!(err.to_string().contains("Windows or macOS"), "{err:#}");
+        }
     }
 
     #[test]
     fn explicit_phone_label_uses_the_plugin_byte_limit() {
         assert_eq!(
-            resolve_phone_label(Some("Work laptop")).unwrap(),
+            resolve_phone_label(Some("Work laptop"), Some("System name")).unwrap(),
             "Work laptop"
         );
-        assert!(resolve_phone_label(Some(" ")).is_err());
-        assert!(resolve_phone_label(Some(&"桌".repeat(22))).is_err());
+        assert!(resolve_phone_label(Some(" "), Some("System name")).is_err());
+        assert!(resolve_phone_label(Some(&"桌".repeat(22)), None).is_err());
+        assert!(resolve_phone_label(Some(&"a".repeat(64)), None).is_ok());
+    }
+
+    #[test]
+    fn phone_label_uses_a_valid_system_name_or_fallback() {
+        for name in ["Work Mac", "工作电脑", &"a".repeat(64)] {
+            assert_eq!(resolve_phone_label(None, Some(name)).unwrap(), name);
+        }
+        for name in [
+            None,
+            Some(""),
+            Some("  "),
+            Some(&"桌".repeat(22)),
+            Some(&format!(" {} ", "a".repeat(64))),
+        ] {
+            assert_eq!(resolve_phone_label(None, name).unwrap(), "Shine desktop");
+        }
     }
 
     #[test]

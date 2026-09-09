@@ -9,6 +9,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
+- Open the experimental phone identity pairing wizard on macOS, with a platform-native default
+  desktop label and the same public plugin handoff used on Windows.
+
 - Request native tagged recipients by default for phone identity setup, with explicit
   `--recipient-type phone` compatibility mode. Requires a desktop plugin and phone app with tag
   support; encryption to the resulting `age1tag` needs only age 1.3+, not the phone plugin.

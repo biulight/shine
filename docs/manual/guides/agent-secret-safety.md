@@ -170,10 +170,11 @@ payloads on a machine that can decrypt them. Editing the list alone does not upd
 Follow [Add recipients to existing workspace secrets](./environment.md#add-recipients-to-existing-workspace-secrets)
 before sharing the updated files with the new member.
 
-Windows users can also use [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone)
-to authorize decryption with biometrics on their phone. A prerelease is available to try; configure
+Windows and macOS users can also experiment with [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone)
+to authorize decryption with biometrics on their phone. macOS needs a build containing the
+experimental implementation. Use only synthetic or disposable data and configure
 an independent recovery key before using it. For supported devices, usage limitations, and setup
-instructions, see [experiment with phone authorization on Windows](./environment.md#experiment-with-phone-authorization-on-windows).
+instructions, see [experiment with phone authorization on Windows and macOS](./environment.md#experiment-with-phone-authorization-on-windows).
 
 A normal age identity remains suitable for ordinary team development when its file and
 user-directory permissions are protected. For stable hardware-backed protection on Windows, prefer an

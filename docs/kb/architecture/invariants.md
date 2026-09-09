@@ -614,7 +614,7 @@ bugs. Check this list before changing the modules named in each entry.
   independently move its next prompt.
 - **Phone identity setup crosses only a public configuration handoff.** Shine may invoke the
   standalone plugin's transactional setup and record its versioned public stub path and recipient,
-  but it must not allocate, discover, copy, remove, or repair plugin TPM, replay, locator, pairing,
+  but it must not allocate, discover, copy, remove, or repair plugin TPM/Secure Enclave keys, replay, locator, pairing,
   or recovery state. A failed Shine config write never authorizes cleanup. Phone setup does not
   change the default secret backend or add a phone-only recipient set (see
   [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md)).

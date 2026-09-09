@@ -955,14 +955,14 @@ and calls `secret::encrypt_secret`, which tags age output and leaves GPG output 
 (`age-keygen`/`age-plugin-se keygen --recipient-type=tag`). Every age path verifies age 1.3 or
 newer. `state migrate` rewrites configured `age1se` recipients to equivalent native `age1tag`
 recipients while preserving their decoded public key and leaving ciphertext untouched. The
-`--phone` form instead invokes the standalone plugin's
+`--phone` form on Windows and experimental macOS instead invokes the standalone plugin's
 transactional setup with explicit `--recipient-type tag` by default (`phone` is opt-in),
 preflighting age 1.3 before tag pairing. It validates the requested recipient type, Bech32
 encoding and tag public-key structure, and consumes only the versioned public identity-path/recipient result before
 atomically appending the stub path to global `age_identities`. `Config::resolved_age_identities()`
 merges the legacy `age_identity` path with that ordered list and passes each path separately to
 `age -i`; an explicit project identity setting replaces the global set. Shine never discovers or
-manages phone-plugin TPM, replay, locator, pairing, recovery, or cleanup state. See
+manages phone-plugin TPM/Secure Enclave keys, replay, locator, pairing, recovery, or cleanup state. See
 [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md).
 
 

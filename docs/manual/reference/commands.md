@@ -494,10 +494,12 @@ it never includes inherited process values. Broker policy creation chooses one o
 are mutually exclusive. Age operations require age 1.3 or newer. Touch ID identities are macOS-only;
 generation and decryption require `age-plugin-se`, while their `age1tag...` recipients encrypt natively.
 
-Phone identity setup is Windows-only and hands pairing to `age-plugin-phone`. The `auto` transport
+Phone identity setup supports Windows and experimental macOS and hands pairing to
+`age-plugin-phone`. The label defaults to the computer name, or `Shine desktop` if unavailable or
+invalid. The `auto` transport
 is the default and asks the plugin to discover one matching foreground Wi-Fi listener first; if
-none responds, Windows selects Developer USB/ADB before creating the protocol session. See
-[Experiment with phone authorization on Windows](../guides/environment.md#experiment-with-phone-authorization-on-windows)
+none responds, Windows selects Developer USB/ADB and macOS selects QR before creating the protocol session. See
+[Experiment with phone authorization on Windows and macOS](../guides/environment.md#experiment-with-phone-authorization-on-windows)
 for prerequisites, pairing, fallback, and recovery requirements. For Wi-Fi pairing, open the phone's
 one-shot action before starting the command; for Developer USB, start the command before choosing
 **Pair · USB**.

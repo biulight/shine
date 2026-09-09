@@ -8,7 +8,7 @@
 
 `shine env secret identity init --touch-id` can choose Shine's default identity path because
 `age-plugin-se keygen` creates one local identity file. Phone custody also owns pairing, transport,
-TPM keys, replay state, a private locator, interruption recovery, and a randomly allocated public
+platform hardware keys, replay state, a private locator, interruption recovery, and a randomly allocated public
 stub. Reproducing or discovering those paths in Shine would split the plugin's lifecycle and safety
 boundary. Parsing its human terminal output would also make integration depend on presentation.
 
@@ -47,5 +47,10 @@ file would leave stale aliases after plugin cleanup.
 - Multiple local identities can coexist without copying private identities or public plugin stubs.
 - If pairing succeeds but the atomic global-config write fails, the pairing remains active and the
   CLI prints a TOML-safe manual configuration. Starting another setup is never suggested as repair.
-- The phone shortcut remains limited to the plugin's Windows Alpha support and synthetic-data
-  posture; stable use still requires the plugin's independent lifecycle and recovery validation.
+- The phone shortcut accepts Windows and experimental macOS through the same public handoff.
+  Platform hardware checks and transport selection remain plugin-owned: `auto` without a Wi-Fi
+  listener selects ADB on Windows and QR on macOS. Linux and unknown platforms are refused.
+  Automatic labels use Windows `COMPUTERNAME` or macOS `scutil --get ComputerName`, with
+  `Shine desktop` as the fallback for unavailable, blank, or over-64-byte names.
+  Synthetic-data restrictions remain; stable use still requires the plugin's independent lifecycle
+  and recovery validation.

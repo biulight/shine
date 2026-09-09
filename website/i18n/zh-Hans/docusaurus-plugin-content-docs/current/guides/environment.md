@@ -217,20 +217,34 @@ shine env secret seal
 同样，移除接收者并重新封存也不会撤销其对历史密文的访问，或轮换上游服务中的真实凭据；
 必要时应在上游服务中轮换已泄露的凭据。
 
-### 在 Windows 上实验手机授权
+### 在 Windows 和 macOS 上实验手机授权 {#在-windows-上实验手机授权}
 
 [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) 目前仍是 owner-only 技术预览，只能用于合成或可丢弃数据，不能保护真实或生产 secret。当前 Windows Alpha 要求 Windows 11 x64 客户端、TPM 2.0、Microsoft Platform Crypto Provider，以及能力检查合格的 Android StrongBox 手机。制品校验、配对、传输、恢复演练和清理步骤以项目的 [`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md) 为准。
 
-安装同一版本的桌面 plugin 和 Android 应用后，可以通过 Shine 启动 plugin 自己的事务式配对：
+Shine 也开放了实验性 macOS 配对入口。请按照插件的
+[macOS 源码快速入门](https://github.com/biulight/age-plugin-phone/blob/main/docs/macos-quickstart.md)
+安装包含 macOS 实现的桌面插件和匹配的 Android StrongBox 应用。插件要求在已登录用户会话中
+使用真正的 Secure Enclave；Intel/T2、其它硬件和系统版本尚未普遍验证。编译部署下限不代表
+已经验证的最低 macOS 支持版本。只使用可丢弃数据，并保留独立验证过的恢复 recipient；
+硬件检查由插件负责。
+
+例如，在已授权 Android ADB 设备的 Mac 上运行：
+
+```sh
+shine env secret identity init --phone --label "Work Mac" --transport adb --adb-serial SERIAL
+```
+
+安装匹配的桌面 plugin 和 Android 应用后，可以通过 Shine 启动 plugin 自己的事务式配对：
 
 ```powershell
 shine env secret identity init --phone --label "NUC WiFi Pair" --transport auto
 ```
 
 如果希望通过局域网完成配对，先在手机端打开显式的 **Pair · Wi-Fi** 操作，再运行上述
-命令。Windows 上的 `auto` 会先执行一次有界的 Wi-Fi discovery：只有一个匹配且位于前台的手机
+命令。Windows 和 macOS 上的 `auto` 会先执行一次有界的 Wi-Fi discovery：只有一个匹配且位于前台的手机
 listener 响应时选择 Wi-Fi；没有 listener 响应时，会在创建 pairing offer 之前选择
-Developer USB/ADB。多个响应或本机 discovery 错误会安全失败；协议处理开始后不会再切换
+Windows 的 Developer USB/ADB 或 macOS 的 QR。QR 需要受支持的摄像头，并按插件提示完成
+扫码。多个响应或本机 discovery 错误会安全失败；协议处理开始后不会再切换
 transport。`auto` 是默认值，因此省略 `--transport auto` 时策略不变。
 
 Developer USB 的顺序相反：先启动桌面命令；plugin 选择 ADB 并开始等待手机连接后，再在手机端
@@ -238,7 +252,8 @@ Developer USB 的顺序相反：先启动桌面命令；plugin 选择 ADB 并开
 立即尝试连接一次，因此如果在桌面建立 `adb reverse` 规则前点击 **Pair · USB**，手机会报告
 `usb_transport_failed`。
 
-配对标签默认使用 Windows 计算机名；也可以显式指定标签、固定使用 Developer USB 或 QR，
+配对标签默认使用 Windows 或 macOS 计算机名；无法取得有效名称时使用 `Shine desktop`。
+显式标签不能为空白，且最多为 64 个 UTF-8 字节。也可以显式指定标签、固定使用 Developer USB 或 QR，
 以及在存在多台 ADB 设备时指定序列号：
 
 ```powershell
@@ -248,13 +263,13 @@ shine env secret identity init --phone --transport qr
 shine env secret identity init --phone --adb-serial SERIAL
 ```
 
-配对、TPM、replay、locator、中断恢复和清理状态仍完全由 plugin 管理。完整指纹确认成功后，
+配对、硬件密钥、replay、locator、中断恢复和清理状态仍完全由 plugin 管理。完整指纹确认成功后，
 Shine 只会把公开 identity stub 路径加入当前用户的全局 `age_identities`。如果当前项目显式
 覆盖了 `age_identity` 或 `age_identities`，命令会在配对前退出，避免创建一个随后被项目忽略
-的 identity。对应的手工配置形式如下：
+的 identity。对应的手工配置形式如下，请使用插件在当前平台上实际返回的绝对 identity 路径：
 
 ```toml
-age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
+age_identities = ["/absolute/path/returned/by/plugin/identity.txt"]
 ```
 
 这个快捷命令不会修改 `secret_backend`，也不会自动添加 recipient。plugin setup 如果中断，
@@ -298,13 +313,13 @@ phone recipient。导出不会改写 stub 或已有密文；`identity list` 仍�
 
 使用 `auto` 配对后，如果希望后续
 解密也优先走 Wi-Fi，请开启 **Wi-Fi auto-listen** 并保持手机应用在前台。plugin 会在创建
-unwrap request 前发现匹配的 listener；未发现时在 Windows 上选择 Developer USB/ADB，不会并行竞速或
+unwrap request 前发现匹配的 listener；未发现时在 Windows 上选择 Developer USB/ADB，在 macOS 上选择 QR，不会并行竞速或
 在请求开始后自动重试其它路径。解密由手机保护的 secret（包括通过 `shine env run` 使用它）时，
 标准 age plugin 会为每次 file key 解包要求一次新的强生物验证。Developer USB 和 Wi-Fi 的 plugin 提示默认
 静默；设置 `AGE_PLUGIN_PHONE_MESSAGES=1` 可显式开启。QR 请求必须由手机扫描，因此仍会显示在终端中。
 `shine env secret decrypt` 成功时只写入解密值，同时屏蔽 age 客户端自身的等待提示，并且不会额外添加换行。
 Shell 主题仍可能主动把下一条 prompt 放到新行。对于需要保留的数据，绝不能只配置这个实验性手机
-recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台 Windows 电脑的 TPM 密钥或该 plugin 的本地状态。
+recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台电脑的 TPM/Secure Enclave 密钥或该 plugin 的本地状态。
 
 如果 AI Agent 会参与开发，先阅读[在 AI Agent 参与开发时保护环境密钥](./agent-secret-safety.md)，确认 identity 文件、Touch ID、手机授权提示和命令执行权限的安全边界。
 

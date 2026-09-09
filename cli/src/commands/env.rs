@@ -375,7 +375,7 @@ pub enum EnvIdentitySubcommand {
         /// Generate a Secure Enclave identity requiring Touch ID (macOS only)
         #[arg(long, conflicts_with = "phone")]
         touch_id: bool,
-        /// Pair a phone-backed identity and add its public stub to global Shine config
+        /// Pair a phone-backed identity on Windows or macOS (experimental) and add its public stub to global Shine config
         #[arg(
             long,
             conflicts_with_all = ["touch_id", "access_control", "output", "force"]
@@ -390,7 +390,7 @@ pub enum EnvIdentitySubcommand {
             value_name = "TYPE"
         )]
         recipient_type: Option<PhoneRecipientType>,
-        /// Desktop label shown during phone pairing (defaults to the Windows computer name)
+        /// Desktop label shown during phone pairing (defaults to the computer name, or Shine desktop)
         #[arg(long, requires = "phone", value_name = "LABEL")]
         label: Option<String>,
         /// Phone pairing transport: auto, adb, or qr

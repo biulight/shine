@@ -239,7 +239,7 @@ their own machines. New recipients cannot decrypt old ciphertext in Git history.
 a recipient and resealing does not revoke its access to historical ciphertext or rotate the real
 upstream credentials; rotate exposed credentials at their source when necessary.
 
-### Experiment with phone authorization on Windows
+### Experiment with phone authorization on Windows and macOS {#experiment-with-phone-authorization-on-windows}
 
 [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) is currently an owner-only
 technical preview for synthetic or disposable data, not real or production secrets. Its Windows
@@ -247,6 +247,20 @@ Alpha requires a Windows 11 x64 client, TPM 2.0, Microsoft Platform Crypto Provi
 capability-qualified Android StrongBox phone. Follow the project's
 [`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md)
 for artifact verification, pairing, transport, recovery drills, and cleanup.
+
+Shine also opens the experimental macOS pairing flow. Install a desktop plugin build containing
+the macOS implementation and a matching Android StrongBox app, following the plugin
+[macOS source quick start](https://github.com/biulight/age-plugin-phone/blob/main/docs/macos-quickstart.md).
+It requires real Secure Enclave support in a logged-in user session; Intel/T2 and other hardware
+or OS versions are not generally verified. A compilation deployment floor is not a tested minimum
+supported macOS version. Use only disposable data and keep an independently verified recovery
+recipient. The plugin performs the hardware checks.
+
+For example, on a Mac with an authorized Android ADB device:
+
+```sh
+shine env secret identity init --phone --label "Work Mac" --transport adb --adb-serial SERIAL
+```
 
 After installing the matching desktop plugin and Android application, start its transactional
 pairing through Shine:
@@ -256,9 +270,10 @@ shine env secret identity init --phone --label "NUC WiFi Pair" --transport auto
 ```
 
 Before running the command, open the phone's explicit **Pair · Wi-Fi** action if you want to pair
-over the local network. On Windows, `auto` performs one bounded Wi-Fi discovery first. Exactly one
+over the local network. On Windows and macOS, `auto` performs one bounded Wi-Fi discovery first. Exactly one
 matching foreground phone listener selects Wi-Fi; if no listener responds, setup selects Developer
-USB/ADB before creating the pairing offer. Ambiguous discovery or a local discovery error fails
+USB/ADB on Windows or QR on macOS before creating the pairing offer. QR requires a supported
+camera and the plugin's scan flow. Ambiguous discovery or a local discovery error fails
 closed, and an attempt never switches transport after protocol work begins. `auto` is the default,
 so omitting `--transport auto` keeps the same policy.
 
@@ -268,7 +283,8 @@ selected ADB and is waiting for the phone connection, choose **Pair · USB** on 
 connection attempt, so choosing **Pair · USB** before the desktop has armed its reverse rule reports
 `usb_transport_failed`.
 
-The pairing label defaults to the Windows computer name. Override it, pin Developer USB or QR, or
+The pairing label defaults to the computer name on Windows and macOS, or `Shine desktop` if no
+valid name is available. Explicit labels must be nonblank and at most 64 UTF-8 bytes. Override it, pin Developer USB or QR, or
 select one of multiple ADB devices explicitly when needed:
 
 ```powershell
@@ -278,14 +294,15 @@ shine env secret identity init --phone --transport qr
 shine env secret identity init --phone --adb-serial SERIAL
 ```
 
-Shine leaves all pairing, TPM, replay, locator, interruption, and cleanup state under the plugin's
+Shine leaves all pairing, hardware keys, replay, locator, interruption, and cleanup state under the plugin's
 ownership. After successful fingerprint confirmation, it adds only the public identity-stub path to
 the current user's global `age_identities`. If the active project explicitly overrides
 `age_identity` or `age_identities`, the command stops before pairing instead of creating an identity
-that the project would ignore. A manual configuration has this shape:
+that the project would ignore. A manual configuration has this shape (use the actual absolute
+identity path returned by the plugin on your platform):
 
 ```toml
-age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
+age_identities = ["/absolute/path/returned/by/plugin/identity.txt"]
 ```
 
 The shortcut does not change `secret_backend` and does not add recipients. Interrupted plugin setup
@@ -335,7 +352,7 @@ Resealing an existing payload first decrypts it and may require phone authorizat
 Changing recipients does not revoke access to historical ciphertext. For later
 Wi-Fi-first decrypts with an `auto` pairing, enable **Wi-Fi auto-listen** and keep the phone app in
 the foreground. The plugin discovers the matching listener before creating the unwrap request and
-otherwise selects Developer USB/ADB on Windows; it does not race routes or retry in flight.
+otherwise selects Developer USB/ADB on Windows or QR on macOS; it does not race routes or retry in flight.
 Decrypting a phone-backed secret, including through `shine env run`, invokes the standard age
 plugin and must require a fresh strong biometric authorization for each file-key unwrap. Developer
 USB and Wi-Fi plugin guidance is quiet by default; set `AGE_PLUGIN_PHONE_MESSAGES=1` to opt into it.
@@ -343,7 +360,7 @@ Explicit QR requests remain visible because the phone must scan them. A successf
 `shine env secret decrypt` writes only the decrypted value, suppresses the age client's own waiting
 diagnostic, and does not append a line ending. A shell theme may still place its next prompt on a
 fresh line. Never make the experimental phone recipient the only recipient for retained data; the
-recovery path must not depend on the same phone StrongBox keys, Windows TPM keys, or plugin state.
+recovery path must not depend on the same phone StrongBox keys, desktop TPM/Secure Enclave keys, or plugin state.
 
 If AI agents participate in development, read
 [Protect environment secrets when using AI agents](./agent-secret-safety.md) first to understand
