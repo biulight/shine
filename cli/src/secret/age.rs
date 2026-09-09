@@ -152,7 +152,7 @@ fn preflight_recipient_plugins(recipients: &[&str]) -> Result<()> {
         && ensure_command("age-plugin-phone").is_err()
     {
         bail!(
-            "age1phone recipient requires age-plugin-phone on every computer that seals for it; install age-plugin-phone and retry"
+            "age1phone recipient requires age-plugin-phone on every computer that seals for it; install age-plugin-phone and retry, or upgrade the desktop plugin and phone app to tagged-recipient support, export with `age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag`, verify and replace the configured recipient before resealing; `shine state migrate` does not convert phone recipients"
         );
     }
     Ok(())

@@ -603,7 +603,7 @@ bugs. Check this list before changing the modules named in each entry.
 ## Secrets
 
 - **Age sealing never drops unavailable recipients.** Age 1.3 native `age1tag` recipients remove
-  the Secure Enclave plugin dependency from encryption, but `age1phone` and legacy plugin
+  the Secure Enclave and phone plugin dependencies from encryption, but explicit `age1phone` and legacy plugin
   recipients still require their named recipient plugins. Missing plugins fail before old-payload
   decryption; Shine never seals to only the locally available subset. `state migrate` changes only
   configured Secure Enclave public recipient encoding, not identities or ciphertext (ADR 0008).

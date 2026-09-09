@@ -59,6 +59,8 @@ enabled = false
 
 `gpg_key_id` 与 workspace 的 `[env.encryption].recipient` 是旧版单 recipient 字段。Shine 不会在普通读取配置时改写文件；用 `shine state migrate --dry-run` 预览并用 `shine state migrate` 迁移为 `gpg_recipients`。同一迁移也会把旧版 `age1se...` 转为 age 1.3 原生支持的 `age1tag...`；这能免除加密端的 Secure Enclave 插件依赖，但已经知道 recipient 的人可以判断密文是否发给它。遇到旧 workspace 时，`env run` 和 `env secret seal` 会提示迁移。
 
+phone recipient 不由 `state migrate` 自动转换。升级并验证插件和手机应用的 tag 支持后，用 `age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag` 导出，替换对应 `age_recipients` 值并重新 seal；保留独立恢复 recipient。
+
 ## 外部代码信任
 
 外部 App hook、generator、artifact、Sys 安装脚本及可执行 profile 内容使用 target-scoped grant，

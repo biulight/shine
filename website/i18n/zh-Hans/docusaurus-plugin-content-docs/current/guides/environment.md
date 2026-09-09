@@ -261,17 +261,41 @@ age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....t
 必须按照其文档使用 `age-plugin-phone setup --resume` 或 `age-plugin-phone setup --cleanup`；
 不要把重新发起一次配对当作恢复手段。
 
-在可提交到仓库的项目 `shine.workspace.toml` 中，同时加入配对输出的 `age1phone...` recipient 和一个已经独立验证过的恢复 recipient：
+在可提交到仓库的项目 `shine.workspace.toml` 中，同时加入配对输出的 `age1tag...` recipient 和一个已经独立验证过的恢复 recipient：
 
 ```toml
 [env.encryption]
 backend = "age"
-age_recipients = ["age1phone...", "age1..."]
+age_recipients = ["age1tag...", "age1..."]
 ```
 
-首次加密明文只使用 recipient 的公开材料，不会在手机上弹出授权提示，但每台向
-`age1phone...` 加密或执行 seal 的电脑都必须安装 `age-plugin-phone`。重新封存已有 payload
-需要先解密，因此可能要求手机授权；参见[为已有 workspace 密钥添加接收者](#为已有-workspace-密钥添加接收者)。
+Shine 默认请求 `--recipient-type tag`，配对前要求 age 1.3+，并且桌面插件和手机应用都必须
+支持 tagged recipient。此接入依赖插件提供该能力，旧预览版本可能拒绝这个参数；Shine 不会
+重新发起配对，也不会自动退回其它 recipient 类型。支持后，向 `age1tag...` 加密的电脑只需
+age 1.3+，无需 phone 插件，也不会弹出手机授权。配对和手机解密仍需插件及匹配的手机应用。
+
+如需保留插件的 phone recipient 格式，请显式选择：
+
+```powershell
+shine env secret identity init --phone --recipient-type phone
+```
+
+每台向 `age1phone...` 加密的电脑仍需安装 `age-plugin-phone`。插件自身可以继续默认 `phone`，
+Shine 会显式传入所选类型。与 phone v2 的私有 recipient 选择不同，知道 tagged recipient 的人
+可以判断密文是否发给它。
+
+对于已有配对，先升级并验证桌面插件和手机应用的 tag 支持，再导出公开 tag recipient，无需重新配对：
+
+```powershell
+age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag
+```
+
+替换全局或项目 `age_recipients`，或 workspace `[env.encryption].age_recipients` 中对应的
+recipient，保留已经独立验证的恢复 recipient，再重新 seal。`shine state migrate` 不转换
+phone recipient。导出不会改写 stub 或已有密文；`identity list` 仍显示 stub 中记录的 recipient。
+重新封存已有 payload 需要先解密，因此可能要求手机授权；参见
+[为已有 workspace 密钥添加接收者](#为已有-workspace-密钥添加接收者)。修改 recipient 不会撤销对历史密文的访问。
+
 使用 `auto` 配对后，如果希望后续
 解密也优先走 Wi-Fi，请开启 **Wi-Fi auto-listen** 并保持手机应用在前台。plugin 会在创建
 unwrap request 前发现匹配的 listener；未发现时在 Windows 上选择 Developer USB/ADB，不会并行竞速或

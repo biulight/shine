@@ -65,6 +65,8 @@ configuration reads never rewrite them. Preview and apply conversion to `gpg_rec
 plugin requirement from encrypting computers but makes targeting testable by someone who knows the
 recipient. `env run` and `env secret seal` prompt to migrate an old workspace when needed.
 
+Phone recipients are not converted by `state migrate`. After upgrading and verifying tag support in the plugin and phone app, export with `age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag`, replace the corresponding `age_recipients` value, and reseal while retaining an independent recovery recipient.
+
 ## External-code trust
 
 External App hooks, generators, artifacts, Sys install scripts, and executable profile content use

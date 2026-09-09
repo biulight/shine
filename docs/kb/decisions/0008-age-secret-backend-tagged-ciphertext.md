@@ -38,7 +38,8 @@ binary cannot use biometry-gated Keychain APIs without Apple entitlements, so sh
   checked at **runtime** (`std::env::consts::OS`), not compile time, since plain age identities
   work on every OS and the rest of the CLI is not platform-gated at compile time either. The later
   `--phone` setup handoff is governed separately by [ADR 0075](0075-phone-identity-setup-handoff.md)
-  and does not change this backend or ciphertext decision.
+  and does not change this backend or ciphertext decision. Phone setup now also requests tag
+  by default, with explicit phone mode; its plugin and mobile support are a separate prerequisite.
 - Shine requires age 1.3 or newer and uses its native `age1tag` wrapping for new Secure Enclave
   recipients. Encryption therefore does not need the platform-specific plugin; decryption still
   does. `state migrate` converts the Bech32 HRP and checksum of configured legacy `age1se`

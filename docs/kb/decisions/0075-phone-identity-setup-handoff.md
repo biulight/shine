@@ -20,6 +20,15 @@ file would leave stale aliases after plugin cleanup.
 
 - `shine env secret identity init --phone` invokes the standalone plugin's transactional `setup`
   command and consumes only its versioned public JSON result: the identity-stub path and recipient.
+- Shine explicitly requests `--recipient-type tag` by default and supports opt-in `phone`.
+  This does not change the standalone plugin default. Tag setup preflights age 1.3 before pairing;
+  both plugin and phone app must support `p256tag`. Unsupported setup never retries or falls back.
+  Schema v1 is unchanged; the returned type, Bech32 encoding, tag key structure, and stub comment
+  must agree before global configuration is saved.
+- Existing phone recipients are not SE-style HRP migrations: v1/v2 have different payloads and
+  wrapping. Users export tag via the plugin's read-only `recipients -i ... --recipient-type tag`,
+  then explicitly replace configuration and reseal after upgrading both ends. Tagged recipients
+  accept public target discoverability in exchange for native encryption.
 - Pairing interaction remains on the inherited terminal. Shine never selects plugin private paths,
   reads private state, performs cleanup, or treats configuration failure as permission to revoke a
   pairing.

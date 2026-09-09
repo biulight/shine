@@ -292,19 +292,47 @@ The shortcut does not change `secret_backend` and does not add recipients. Inter
 must be handled with `age-plugin-phone setup --resume` or `age-plugin-phone setup --cleanup` as
 described by the plugin; do not start a second pairing as recovery.
 
-Put the printed `age1phone...` recipient and an independently verified recovery recipient in the
+Put the printed `age1tag...` recipient and an independently verified recovery recipient in the
 project's commit-ready `shine.workspace.toml`:
 
 ```toml
 [env.encryption]
 backend = "age"
-age_recipients = ["age1phone...", "age1..."]
+age_recipients = ["age1tag...", "age1..."]
 ```
 
-Encrypting new plaintext uses only the recipients' public material and does not prompt on the
-phone, but every computer that encrypts or seals for an `age1phone...` recipient must have
-`age-plugin-phone` installed. Resealing an existing payload first decrypts it and may require phone authorization; see
-[Add recipients to existing workspace secrets](#add-recipients-to-existing-workspace-secrets). For later
+Shine requests `--recipient-type tag` by default. This requires age 1.3+ before pairing and a
+desktop plugin and phone app that both support tagged recipients. This integration depends on that
+plugin capability; older preview builds may reject the option. Shine does not retry setup or fall
+back to another recipient type. Once supported, `age1tag...` encryption needs only age 1.3+ on the
+encrypting computer, with no phone plugin or phone prompt. Pairing and phone decryption still need
+the plugin and matching phone app.
+
+To retain the plugin's phone recipient format, explicitly select:
+
+```powershell
+shine env secret identity init --phone --recipient-type phone
+```
+
+`age1phone...` encryption still requires `age-plugin-phone` on every encrypting computer.
+The plugin's own default can remain `phone`; Shine explicitly requests its chosen type.
+Unlike phone v2's private recipient selection, a tagged recipient lets someone who knows the
+recipient test whether a ciphertext targets it.
+
+For an existing pairing, first upgrade and verify the desktop plugin and phone app's tag support,
+then export its public tag recipient without pairing again:
+
+```powershell
+age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag
+```
+
+Replace the corresponding recipient in global/project `age_recipients` or workspace
+`[env.encryption].age_recipients`, retaining the independently verified recovery recipient, then
+reseal. `shine state migrate` does not convert phone recipients. Export does not rewrite the stub
+or existing ciphertext; `identity list` continues to show the recipient recorded in the stub.
+Resealing an existing payload first decrypts it and may require phone authorization; see
+[Add recipients to existing workspace secrets](#add-recipients-to-existing-workspace-secrets).
+Changing recipients does not revoke access to historical ciphertext. For later
 Wi-Fi-first decrypts with an `auto` pairing, enable **Wi-Fi auto-listen** and keep the phone app in
 the foreground. The plugin discovers the matching listener before creating the unwrap request and
 otherwise selects Developer USB/ADB on Windows; it does not race routes or retry in flight.

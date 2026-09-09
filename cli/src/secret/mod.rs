@@ -92,8 +92,12 @@ pub async fn encrypt_secret(plaintext: &[u8], recipients: &EncryptRecipients) ->
     }
 }
 
-/// Convert a legacy Secure Enclave plugin recipient to age's native tagged
-/// recipient form without changing the encoded public key.
+/// Check the age client before starting tagged phone pairing.
+pub(crate) async fn preflight_age() -> Result<()> {
+    age::preflight_age().await
+}
+
+/// Convert a legacy Secure Enclave recipient without changing its public key.
 pub(crate) fn secure_enclave_recipient_to_tag(recipient: &str) -> Result<String> {
     age::secure_enclave_recipient_to_tag(recipient)
 }

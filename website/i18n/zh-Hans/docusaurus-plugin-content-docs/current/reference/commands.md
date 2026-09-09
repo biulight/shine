@@ -411,9 +411,11 @@ shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
 shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PATH>] [--force]
-shine env secret identity init --phone [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
+shine env secret identity init --phone [--recipient-type <tag|phone>] [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
 shine env secret identity list
 ```
+
+`--recipient-type` 仅用于 `--phone`，默认 `tag`，也可显式选择 `phone`。tag 配对前要求 age 1.3+，并依赖支持 tag 的桌面插件和手机应用；旧插件拒绝参数时不会自动重试或降级。tag 加密无需 phone 插件，phone 加密仍需插件；tag 会让知道 recipient 的人判断密文是否发给它。迁移已有配对请参见[手机授权指南](../guides/environment.md#在-windows-上实验手机授权)。
 
 `--with` 可重复使用，写成 `KEY=ALIAS` 可改变子进程看到的变量名。`--no-workspace` 只使用显式值和已有进程环境，不能与 `--workspace` 或 `--mode` 同时使用。`workspace init` 只接受 `--from-dotenv`，可先用 `--dry-run` 预览生成文件。`workspace export` 必须显式指定格式、mode 和输出路径；默认只导出合并后生效的普通值，添加 `--include-secrets` 才会解密并包含 secret，且不会混入当前进程变量。broker 策略必须用一个或多个 `--release` 选择密钥，或用 `--release-all-declared` 固化当前环境源声明的全部密钥；二者不能组合。age 操作要求 age 1.3 或更高版本。Touch ID identity 只适用于 macOS；生成和解密依赖 `age-plugin-se`，其 `age1tag...` recipient 可由 age 原生加密。
 

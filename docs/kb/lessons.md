@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-10 — Phone tagged recipients need an explicit plugin capability
+
+- **Symptom**: phone public recipients still required a plugin on every encrypting host.
+- **Root cause**: `age1phone` uses custom versioned payloads and wrapping; replacing its HRP
+  like `age1se` does not produce an equivalent native recipient.
+- **Fix**: Shine requests tag output explicitly and validates the public setup handoff; the
+  plugin and phone app must implement native tag decryption independently.
+- **Rule**: preserve old phone recipients and ciphertext. Export through the plugin after upgrade;
+  never infer decryption support from a recipient prefix or silently migrate/fall back.
+
+
 ## 2026-09-09 — Seal lock names must preserve the complete source filename
 
 - **Symptom**: sealing a workspace containing `env.dev` and `env.prod` reported another active

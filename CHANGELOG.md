@@ -9,6 +9,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
+- Request native tagged recipients by default for phone identity setup, with explicit
+  `--recipient-type phone` compatibility mode. Requires a desktop plugin and phone app with tag
+  support; encryption to the resulting `age1tag` needs only age 1.3+, not the phone plugin.
+
 - Add explicit workspace GPG/age hybrid sealing with one authenticated data ciphertext,
   local decrypt selection, isolated public recipient resolution, and encrypted per-backend caches.
 - Allow personal workspace decrypt preferences in ignored `shine.config.local.toml`, with

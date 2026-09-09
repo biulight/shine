@@ -479,9 +479,11 @@ shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
 shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PATH>] [--force]
-shine env secret identity init --phone [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
+shine env secret identity init --phone [--recipient-type <tag|phone>] [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
 shine env secret identity list
 ```
+
+`--recipient-type` applies only to `--phone` and defaults to `tag`; choose `phone` explicitly for plugin recipients. Tag setup checks age 1.3+ before pairing and requires a desktop plugin and phone app with tag support. Older plugins fail without retry or fallback. Tag encryption needs no phone plugin; phone encryption still does. Tagged recipients let someone who knows the recipient test whether a ciphertext targets it. See the [phone guide](../guides/environment.md#experiment-with-phone-authorization-on-windows) for existing pairings.
 
 `--with` is repeatable and accepts `KEY=ALIAS`. `--no-workspace` uses explicit values and the process
 environment only and conflicts with `--workspace` and `--mode`. Workspace initialization currently
