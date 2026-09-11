@@ -52,8 +52,9 @@ Moving from 1.x or bringing your own Presets? Read [Upgrade from Shine
   project values as GPG or age ciphertext, then decrypt them on demand for selected child processes.
 - **See first, then change.** Before an install, upgrade, or removal, Shine shows what it plans to do
   and waits for your approval.
-- **Leave your files alone.** Source files and unrelated content stay in place; Shine stops when a
-  file has changed or its ownership is unclear.
+- **Return to your original configuration.** If an App preset finds an existing
+  unmanaged file, Shine backs it up; safe uninstall restores it. Files changed after installation
+  are kept for review.
 
 ## Try a built-in preset
 
