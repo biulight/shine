@@ -60,11 +60,6 @@ const config = {
               path: '',
               banner: 'none',
             },
-            '2.0': {
-              label: '2.0',
-              path: '2.0',
-              banner: 'none',
-            },
             '1.8': {
               label: '1.8.x',
               path: '1.8',

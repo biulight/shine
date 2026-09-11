@@ -44,24 +44,22 @@ shine app install starship --replace-managed
 
 ### Migrating legacy App metadata to Shine 2
 
-Current App metadata declares its own grammar at the root of `shine.toml`:
+Current App metadata includes this field at the root of `shine.toml`:
 
 ```toml
 metadata_schema_version = 2
 ```
 
-This is distinct from `[permissions].schema_version`, which declares the permissions grammar.
-An older overlay that replaces `app/<category>/shine.toml` without the root field is legacy v1
-metadata. Review it with `shine preset migrate --dry-run`, then run `shine preset migrate` to apply
-the displayed metadata-only diff after a default-No confirmation. Pass the repository, category, or
-manifest path when it is not the active source. The migrator can remove only an exact same-category
-recursive `shine app artifact apply` hook; it keeps payload overrides such as `merge.yaml` and
-`rules/`, reports that artifact application remains explicit, and creates a private backup before
-writing. Do not grant external-code trust to work around an incompatibility.
+This is separate from `[permissions].schema_version`. If an older overlay replaces
+`app/<category>/shine.toml` without `metadata_schema_version`, preview the required changes with
+`shine preset migrate --dry-run`, then run `shine preset migrate` after reviewing the diff. You can
+also pass a repository, category, or manifest path explicitly.
 
-Opaque hooks, generators, or artifacts still need target-local permissions written by an author and
-verified with `shine preset validate` and `shine preset plan`. `shine state migrate` remains limited
-to Shine-owned runtime state and never rewrites Preset sources or overlays.
+The migration changes metadata only, keeps payload customizations, and backs up files before
+writing. Hooks, generators, and artifacts that cannot be migrated safely are reported for manual
+authoring. Validate the result with `shine preset validate` and `shine preset plan`; do not grant
+external-code trust merely to bypass an incompatibility. See [Customize presets](./custom-presets.md#migrate-a-1x-source)
+for the complete author workflow.
 
 ## Uninstall and restore
 
@@ -71,39 +69,24 @@ shine app uninstall starship
 shine app uninstall starship --purge
 ```
 
-Install, upgrade, uninstall, generator refresh, and artifact apply/remove show a snapshot-bound Plan
-before mutation. The prompt defaults to No; use command-level `--yes` for non-interactive execution.
-`--yes` still renders and revalidates the Plan and cannot bypass missing permissions, blocked
-teardown, or external-code gates. App stale files are removed during upgrade only when
-`--prune-stale` was part of the reviewed command. Unchanged static Copy and JSON stale entries use
-the same receipt-gated journal as uninstall; user-modified stale content remains preserved.
+Install, upgrade, uninstall, generator refresh, and artifact apply/remove show a Plan before making
+changes. The prompt defaults to No. Use command-level `--yes` only after reviewing the same scope in
+an attended automation; it does not bypass permission, trust, or safety checks.
 
-When metadata moves a static Copy file to a different effective destination, upgrade journals the
-old receipt and destination, optional fixed backup, rollback path, and absent new destination as one
-relocation. The old managed file must be unchanged (or already missing without a backup), and the
-new destination must be free. An occupied new path or changed old file is preserved as a conflict.
+By default, Shine preserves files modified after installation and reports a conflict. Safe uninstall
+restores the original backup when one was created. A destination move also requires the old managed
+file to be unchanged and the new path to be free. If either location has changed, Shine leaves both
+untouched for review.
 
-By default, files modified after installation are preserved and reported as user-modified. A safe
-uninstall restores any backup created during installation. Before a supported journaled static Copy
-replaces an unowned regular-file destination, Shine requires its fixed `<name>.shine.bak` path to be
-absent; an existing backup blocks the Plan and both files are preserved. `--purge` also removes the
-category's preset directory; uninstalling every category also removes the manifest.
-
-`app uninstall --force` explicitly authorizes deletion of user-modified managed content. For an
-eligible static Copy, the reviewed Plan marks that override and the transaction stages the modified
-file at `<name>.shine.rollback` until receipt commit; an optional fixed backup is restored in the
-same transaction. Administrator static Copy files use the same journal and recovery contract for
-creation, in-place update, and removal while their protected writes, moves, mode restoration, and
-cleanup run with administrator access. JSON merge is also journaled for install, in-place update,
-ordinary uninstall, and forced uninstall. Other install strategies retain their existing lifecycle
-path. Preview destructive intent with `--dry-run`.
+`app uninstall --force` explicitly permits deletion of user-modified managed content. Preview it
+with `--dry-run`. `--purge` also removes the category's installed Preset files. During upgrade,
+obsolete managed entries are removed only when `--prune-stale` is part of the approved command;
+modified entries remain preserved.
 
 ## Recover an interrupted App operation
 
-Shine writes an operation journal before the supported App file mutation. If the process stops
-after that point, mutating App install, upgrade, uninstall, refresh, and artifact commands remain
-blocked so they cannot silently discard recovery state. Read-only status/update inspection does not
-recover or remove the journal. Review and apply the dedicated recovery Plan with:
+If an App operation is interrupted, Shine may block later changes to protect the unfinished state.
+Read-only commands remain available. Review and apply the recovery action with:
 
 ```bash
 shine app recover
@@ -111,83 +94,15 @@ shine app recover
 shine app recover --yes
 ```
 
-Recovery accepts only states whose recorded kinds, modes, hashes, receipts, and path layout still
-match the operation journal. Before the relevant replacement receipt or `receipt-committed` marker
-is durable, recovery rolls the unfinished operation back. After that commit, it preserves the
-completed result and removes only unchanged transaction material. A change to any guarded path
-blocks recovery and preserves the interrupted state for explicit handling.
+Recovery either completes or rolls back the interrupted operation when the affected files still
+match the state Shine recorded. Files changed afterward are never overwritten; recovery stops and
+preserves the evidence for manual review. JSON recovery changes only keys owned by the Preset and
+keeps unrelated values.
 
-### Creation and in-place replacement
-
-- **Originally absent destination.** Recovery removes a transaction-created file only when it is
-  still byte-for-byte the content Shine wrote.
-- **Backup-aware creation.** Recovery restores the fixed backup only when it still matches the
-  original bytes and the destination is missing or still matches the managed bytes. If the backup
-  move never started, recovery keeps the original destination.
-- **Receipt-owned static Copy replacement.** Shine temporarily moves the previous managed file to
-  the same-directory `<name>.shine.rollback` path. Before the replacement receipt is durable,
-  recovery proceeds only while the destination and rollback file still match the recorded desired
-  and previous fingerprints. After the receipt is durable, recovery preserves the destination and
-  removes only unchanged rollback material plus the stale journal.
-
-### Uninstalling static Copy files
-
-- **Ordinary uninstall without a persistent backup.** Shine first moves the unchanged managed file
-  to `<name>.shine.rollback` and keeps it there until receipt removal is durable. Recovery restores
-  the file while the exact old receipt remains. If the receipt is absent but the matching
-  `receipt-committed` state is missing, recovery conservatively recreates the old receipt and
-  restores the unchanged file. Recovery removes rollback material only after both receipt removal
-  and the journal's matching commit state are durable, and only while its kind, mode, and bytes are
-  unchanged.
-- **Uninstall with a fixed persistent backup.** The journal records both moves: the managed file
-  goes to `.shine.rollback`, then `.shine.bak` returns to the destination. Before receipt commit,
-  recovery accepts only the exact three-path states produced before, between, or after those moves.
-  When necessary, it returns the restored user file to `.shine.bak`, then restores the managed file
-  and old receipt. After commit, recovery keeps the unchanged user file at the destination and
-  removes only unchanged managed rollback material. The modes and content fingerprints of both
-  files must match.
-- **Forced uninstall of a user-modified file.** Recovery binds the old receipt hash separately
-  from the modified file's mode and hash. Before receipt commit, it first recreates the old receipt
-  if the receipt is absent without `receipt-committed`, then restores that exact modified file and
-  reverses an optional backup restoration. After commit, it preserves the completed uninstall and
-  removes only rollback material that exactly matches the modified file.
-
-### JSON merge and stale pruning
-
-- **JSON merge.** Declared top-level keys are the ownership boundary. Shine moves an existing whole
-  JSON object to `.shine.rollback`, but recovery reads it only to restore those keys into the
-  current object, preserving unrelated values changed after interruption. For creation at an absent
-  path, recovery removes the whole file only when it contains no unrelated keys. After uninstall
-  receipt commit, the current JSON object is user-owned; recovery removes only unchanged rollback
-  material, even if the user has reintroduced a formerly managed key.
-- **`upgrade --prune-stale`.** Unchanged static Copy and JSON entries use the same removal recovery
-  contract. If the receipt is absent but its `receipt-committed` marker is not durable, recovery
-  recreates the old receipt and restores only exact rollback state. A missing destination needs
-  receipt-only cleanup. This path never forces removal of user-modified stale content.
-
-### Relocating destinations
-
-- **Static Copy relocation.** Before the new receipt is durable, recovery removes only an unchanged
-  new file, returns a restored user file to the old fixed backup when necessary, and restores the
-  exact old managed file. After the new receipt is durable, recovery preserves both final
-  destinations and removes only unchanged old rollback material.
-- **JSON relocation.** A separate key-owned transaction applies. Before the new receipt is durable,
-  recovery removes only the desired keys at the new destination and restores only the previous keys
-  at the old destination, preserving unrelated current values on both sides. After receipt commit,
-  the old object is user-owned. Recovery preserves both objects when the new object's managed subset
-  is unchanged and removes only exact old rollback material.
-
-### Administrator paths and blocked recovery
-
-- **Administrator paths.** When creation, update, relocation, or removal recovery must change an
-  administrator path, the recovery Plan includes administrator permission. Shine requests
-  authorization only after that Plan is approved. Repair that only reconstructs a receipt or clears
-  a journal does not request administrator access.
-- **Sensitive rollback material and conflicts.** A rollback file may contain prior managed
-  configuration and should be treated as sensitive. If any guarded path changed after interruption,
-  recovery returns nonzero and preserves the paths plus the journal. Replacing a regular file with a
-  symlink or directory also counts as a change. Do not edit or delete the journal or rollback
-  material manually.
+The recovery Plan lists administrator access only when protected paths actually need changes.
+Rollback files can contain configuration data, so treat them as sensitive. Do not edit or delete
+recovery state manually; if recovery reports a conflict, inspect the named paths and keep a backup
+before resolving it.
 
 ## Configuration transforms
 
@@ -298,11 +213,10 @@ explicitly:
 shine app artifact apply surge
 ```
 
-Shine does not implicitly run artifact operations. A lifecycle may run the same script through a
-script-form hook bound into its parent Plan, but must not call `app artifact apply`: an
-artifact has its own snapshot-bound Plan and must not inherit a parent App operation's approval. A
-failed manual apply fails the command. Manual apply/remove displays and revalidates a security Plan;
-automation must add `--yes`.
+Shine does not implicitly run artifact commands. Each manual apply or remove shows its own Plan and
+fails the command if the script fails. Automation must add `--yes` after reviewing that operation.
+Preset authors should call the underlying script from a lifecycle hook rather than nesting
+`app artifact apply` inside the hook.
 When an install or upgrade changes managed files for a category that declares an artifact, Shine
 prints the explicit apply command. It prints nothing when no managed files changed.
 Scripts receive configured `[artifact].env` sources only, and those sources must also be listed in
@@ -405,16 +319,13 @@ actually writes files. The latter runs only when `shine upgrade` updates at leas
 category. Unchanged categories do not trigger hooks.
 
 Bind every environment input a hook consumes with its `env` list and declare the same names under
-the category permission declaration. Plan review hashes `plain` values and binds `secret` values by
-an opaque revision; neither value is serialized into the Plan. A missing command-hook input or
-secret identity blocks approval. Script-hook inputs are optional like artifact inputs: missing
-values are snapshot-bound as missing and omitted from the child environment.
+the category permission declaration. Values are not displayed in the Plan. Missing required command
+inputs block approval; optional script inputs are omitted from the child environment.
 
-Each hook declares exactly one action. `command` runs direct argv. `script` resolves a native or Bun
-script from the reviewed Preset snapshot, injects its declared `env` values plus the fixed
-`SHINE_APP_*` contract, and executes inside the parent lifecycle Plan. `runtime` is valid only for a
-script hook; Bun scripts use the same extension and locked-dependency rules as artifacts and
-generators.
+Each hook declares exactly one action. `command` runs the declared command and arguments. `script`
+runs a native or Bun script with its declared `env` values plus the fixed `SHINE_APP_*` variables.
+`runtime` is valid only for a script hook; Bun scripts use the same extension and locked-dependency
+rules as artifacts and generators.
 
 ```toml
 post_upgrade = [

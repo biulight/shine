@@ -448,24 +448,11 @@ shine env proxy uninstall gh
 | 解密并直接转发一个密钥 | `shine ssh --with-secret API_TOKEN dev` | 远端登录 shell 或指定命令 |
 | 由远端子命令按需请求本机解密 | `shine ssh --secret-broker ... dev` | 仅获准启动的远端子进程 |
 
-`--with-secret KEY[=ALIAS]` 会在建立会话时解密本机 `KEY_SECRET`，适合可信远端上的临时
-操作。远端登录 shell 及同账号进程可能读取该明文，不应把它理解为受隔离的密钥通道。
+直接转发密钥适合可信远端上的临时操作，但远端登录 Shell 和同账号进程可能读取明文。若解密私钥
+必须保留在本机，而且只有指定远端子进程应接收明文，请使用 SSH Secret Broker；远端管理员或
+同账号进程仍可能检查该子进程。
 
-若私钥、age identity 或 YubiKey 只保留在本机，而远端项目保存已封存的 workspace 密文，
-使用 SSH Secret Broker。远端只提交待运行命令和密钥请求，本机会校验允许列表或精确策略，
-确认后在本机解密，再把明文短时注入获准的远端子进程：
-
-```bash
-# 本机：允许远端按需请求 API_TOKEN；每次请求都在本机确认。
-shine ssh --secret-broker --allow-secret API_TOKEN dev
-
-# 远端：只向这个子进程注入 API_TOKEN。
-shine env run --no-workspace --secret-broker --secret API_TOKEN -- bun run build
-```
-
-Secret Broker 不会把解密私钥传到远端，也不会把明文放进远端登录 shell；但目标子进程、
-远端管理员和同账号恶意进程仍可能读取明文。固定项目应使用绑定 workspace 摘要、mode、完整
-命令和可释放键的本机策略。完整的策略登记、检查、更新与安全边界见
+设置命令、本机策略、登记流程和完整安全边界见
 [SSH 会话：密钥代理与文件传输](./ssh-transfer.md#按需向远端命令提供密钥)。
 
 ## 从 dotenv 初始化工作区

@@ -80,9 +80,8 @@ shine trust list
 shine trust revoke app/example
 ```
 
-A grant binds the canonical target, capability, effective code digest, source layer, and exact
-declared permission set. Code, layer, or permission changes require another review. A grant does
-not replace the security Plan shown for each mutation. Retired `allow_app_hooks` and
+A grant applies only to the reviewed target and permissions. Code, source, or permission changes
+require another review. A grant does not replace the Plan shown for each operation. Retired `allow_app_hooks` and
 `allow_sys_code` fields are ignored and removed on the next configuration save.
 
 ## Environment entry formats and descriptions

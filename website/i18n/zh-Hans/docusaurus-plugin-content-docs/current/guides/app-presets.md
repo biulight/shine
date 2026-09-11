@@ -38,23 +38,21 @@ shine app install starship --replace-managed
 
 ### 将旧版 App metadata 迁移到 Shine 2
 
-当前 App metadata 会在 `shine.toml` 根级声明自身语法版本：
+当前 App metadata 会在 `shine.toml` 根级包含以下字段：
 
 ```toml
 metadata_schema_version = 2
 ```
 
-它不同于 `[permissions].schema_version`，后者声明的是权限语法版本。若 overlay 覆盖了
-`app/<category>/shine.toml`，但没有这个根级字段，它就是旧版 v1 metadata。先运行
-`shine preset migrate --dry-run` 审阅，再运行 `shine preset migrate`，在默认 No 的确认后应用所显示的
-metadata-only diff；若它不是当前激活来源，可传入仓库、类别或 manifest 路径。迁移器只会移除精确
-指向同一类别的递归 `shine app artifact apply` hook；`merge.yaml`、`rules/` 等 payload 覆盖会保留，
-报告也会提醒 artifact 仍需显式执行。写入前会创建私有备份。不要通过授予外部代码信任来绕过
-不兼容。
+它与 `[permissions].schema_version` 相互独立。若旧 overlay 覆盖了
+`app/<category>/shine.toml`，但没有 `metadata_schema_version`，先运行
+`shine preset migrate --dry-run` 预览，再在审阅 diff 后运行 `shine preset migrate`。也可以显式传入
+仓库、类别或 manifest 路径。
 
-opaque hook、generator 或 artifact 仍需作者编写 target-local 权限，并通过 `shine preset validate`
-和 `shine preset plan` 验证。`shine state migrate` 仍只迁移 Shine 自己拥有的运行状态，绝不会重写
-Preset source 或 overlay。
+迁移只修改 metadata，保留 payload 自定义内容，并在写入前备份文件。无法安全迁移的 hook、generator
+和 artifact 会留给作者手动处理。使用 `shine preset validate` 和 `shine preset plan` 验证结果；不要
+仅为绕过不兼容而授予外部代码信任。完整作者流程见
+[自定义预设](./custom-presets.md#迁移-1x-来源)。
 
 ## 卸载与恢复
 
@@ -64,32 +62,22 @@ shine app uninstall starship
 shine app uninstall starship --purge
 ```
 
-install、upgrade、uninstall、generator refresh 和 artifact apply/remove 会在 mutation 前显示
-绑定快照的 Plan，确认默认是 No；非交互执行使用命令级 `--yes`。该参数仍会显示并重新校验
-Plan，不能绕过缺失权限、被阻塞的 teardown 或外部代码 gate。upgrade 仅在审阅命令包含
-`--prune-stale` 时移除 App stale 文件。未修改的静态 Copy 与 JSON stale 条目会复用卸载所用的
-receipt-gated journal；用户修改过的 stale 内容仍会保留。
+install、upgrade、uninstall、generator refresh 和 artifact apply/remove 都会在改动前显示 Plan，
+确认默认是 No。只有审阅过同一范围后，才应在有人值守的自动化中使用命令级 `--yes`；它不能绕过
+权限、信任或安全检查。
 
-当 metadata 把静态 Copy 文件迁移到新的 effective destination 时，upgrade 会把旧 receipt 与
-destination、可选固定 backup、rollback 路径和必须为空的新 destination 纳入同一个 relocation
-事务。旧受管文件必须未修改（或者在没有 backup 时已经缺失），新路径也必须空闲；新路径被占用或旧
-文件被修改时会保留现状并报告冲突。
+默认情况下，Shine 会保留安装后被修改的文件并报告冲突。安全卸载会还原安装时创建的原文件备份。
+迁移目标路径时，旧受管文件必须未修改，新路径也必须空闲；任一位置发生变化，Shine 都会保持原状，
+留给用户检查。
 
-默认情况下，安装后被用户修改过的文件会保留并标记为用户修改。若安装时创建过备份，安全卸载会恢复原文件。在受支持、已 journal 的静态 Copy 替换不受管 regular-file destination 前，Shine 要求固定的 `<name>.shine.bak` 路径不存在；已有 backup 会阻塞 Plan，并保留两个文件。`--purge` 还会删除相应预设目录；卸载全部类别时也会删除 manifest。
-
-`app uninstall --force` 会显式授权删除被用户修改过的受管内容。对于符合条件的静态 Copy，审阅的
-Plan 会标明该 override；事务会先把修改后的文件暂存到 `<name>.shine.rollback`，直至 receipt
-commit，并在同一事务中还原可选的固定 backup。管理员静态 Copy 的创建、原地更新和移除使用同一
-journal 与 recovery contract；受保护路径的 write、move、mode 还原与 cleanup 会在管理员权限下
-执行。JSON merge 的 install、原地 update、普通 uninstall 和强制 uninstall 也会写入 journal。
-其他安装策略仍使用原有 lifecycle 路径。执行破坏性操作前请使用 `--dry-run` 预览。
+`app uninstall --force` 会显式允许删除用户修改过的受管内容，执行前务必使用 `--dry-run` 预览。
+`--purge` 还会删除该类别已安装的预设文件。upgrade 仅在获批命令包含 `--prune-stale` 时移除已从
+预设中删除且未被修改的受管条目；用户修改过的条目仍会保留。
 
 ## 恢复中断的 App 操作
 
-在受支持的 App 文件 mutation 之前，Shine 会先写入 operation journal。如果进程在这之后中断，
-App install、upgrade、uninstall、refresh 和 artifact 等 mutation 命令会保持阻塞，避免静默
-丢弃恢复状态；只读 status/update 检查不会恢复或删除 journal。使用以下命令审阅并应用独立的
-recovery Plan：
+App 操作中断后，Shine 可能会阻塞后续改动，以保护尚未处理的状态。只读命令仍可使用。通过以下命令
+审阅并应用恢复操作：
 
 ```bash
 shine app recover
@@ -97,62 +85,11 @@ shine app recover
 shine app recover --yes
 ```
 
-恢复只接受与事务日志所记录的文件类型、模式、哈希、回执和路径布局完全一致的状态。相关替换回执或
-`receipt-committed` 标记持久化之前，恢复会回退尚未提交的操作；提交后则保留已经完成的结果，并且
-只清理未修改的事务文件。任何受保护路径在中断后发生变化，都会阻塞恢复并保留现场，等待显式处理。
+只要相关文件仍与中断时一致，恢复会完成或回退原操作。中断后被修改的文件绝不会被覆盖；恢复会停止
+并保留现场，交给用户检查。JSON 恢复只调整预设拥有的键，不影响其它设置。
 
-### 创建与原地替换
-
-- **目标路径原本不存在。** 只有事务创建的文件仍与 Shine 写入的内容逐字节相同，恢复才会将其删除。
-- **创建时保留了固定备份。** 只有固定备份仍匹配原始内容，且目标路径缺失或仍匹配受管内容时，恢复
-  才会还原备份。若备份移动尚未开始，恢复会保留原始目标文件。
-- **原地替换已有回执的静态 `Copy`。** Shine 会先把上一个受管文件移到同目录的
-  `<name>.shine.rollback`。替换回执持久化前，只有目标文件和回滚文件仍分别匹配记录的目标指纹和原有
-  指纹时，恢复才会继续。回执持久化后，恢复会保留目标文件，只清理未修改的回滚文件和过期事务日志。
-
-### 卸载静态 `Copy` 文件
-
-- **没有固定备份的普通卸载。** Shine 会先把未修改的受管文件移到 `<name>.shine.rollback`，并保留到
-  回执移除持久化完成。精确的旧回执仍存在时，恢复会还原该文件。如果回执已经消失，但缺少匹配的
-  `receipt-committed` 状态，恢复会采用保守回滚：重建旧回执并还原未修改的文件。只有回执移除和事务
-  日志中对应的提交状态都已持久化，恢复才会清理回滚文件，而且仅在其类型、模式和内容均未变化时执行。
-- **带固定备份的卸载。** 事务日志会记录两次移动：先把受管文件移到 `.shine.rollback`，再把
-  `.shine.bak` 还原到目标路径。回执提交前，恢复只接受这两次移动之前、之间或之后产生的精确三路径
-  状态；必要时会先把已经还原的用户文件移回 `.shine.bak`，再恢复受管文件与旧回执。提交后，恢复会
-  保留目标路径中未修改的用户文件，只清理未修改的受管回滚文件。这两个文件的模式与内容指纹都必须
-  匹配。
-- **强制卸载被用户修改的文件。** 恢复会分别校验旧回执的哈希，以及修改后文件的模式和哈希。回执
-  提交前，如果回执已经消失但没有 `receipt-committed` 状态，恢复会先重建旧回执，再还原这个精确的
-  修改后文件并反转可选的备份还原。提交后，恢复会保留已完成的卸载，只移除与修改后文件精确匹配的
-  回滚文件。
-
-### JSON merge 与 stale 清理
-
-- **JSON merge。** 声明的顶层键是所有权边界。Shine 会把已有的完整 JSON 对象移到
-  `.shine.rollback`，但恢复只从中读取并还原这些键，同时保留中断后发生变化的其它当前值。如果目标
-  路径原本不存在，只有当前对象不含其它键时，恢复才会删除整个文件。卸载回执提交后，当前 JSON 对象
-  已归用户所有；即使用户重新加入曾受管的键，恢复也只会清理未修改的回滚文件。
-- **`upgrade --prune-stale`。** 未修改的静态 `Copy` 和 JSON 条目使用相同的移除恢复规则。如果回执
-  已经消失，但对应的 `receipt-committed` 标记尚未持久化，恢复会重建旧回执，并且只还原精确匹配的
-  回滚状态。目标路径已经缺失时只清理回执；此路径绝不会强制移除用户修改过的 stale 内容。
-
-### 迁移目标路径
-
-- **静态 `Copy` 迁移。** 新回执持久化之前，恢复只会移除未修改的新文件；必要时会把已经还原到旧
-  目标路径的用户文件放回固定备份，再恢复精确的旧受管文件。新回执持久化后，恢复会保留两端的最终
-  状态，只清理未修改的旧回滚文件。
-- **JSON merge 迁移。** 此场景使用独立的键所有权事务。新回执持久化前，恢复只移除新目标路径中的
-  目标键，并只还原旧目标路径中的原有键，同时保留两端其它当前设置。回执提交后，旧 JSON 对象已归
-  用户所有；只要新对象的受管键集合未修改，恢复就会保留两端，只清理精确匹配的旧回滚文件。
-
-### 管理员路径与被阻塞的恢复
-
-- **管理员路径。** 当创建、更新、目标路径迁移或移除的恢复需要修改管理员路径时，恢复 Plan 会包含
-  管理员权限。Shine 只在该 Plan 获得批准后请求授权。仅重建回执或清理事务日志的恢复不会请求管理员
-  权限。
-- **敏感回滚文件与冲突。** 回滚文件可能包含之前的受管配置，应按敏感内容处理。如果任一受保护路径
-  在中断后被修改，恢复命令会返回非零，并保留这些路径和事务日志。把普通文件替换为符号链接或目录也
-  视为修改。不要手动编辑或删除事务日志或回滚文件。
+只有确实需要修改受保护路径时，恢复 Plan 才会列出管理员权限。回滚文件可能包含配置数据，应按敏感
+内容处理。不要手动编辑或删除恢复状态；若命令报告冲突，请先备份并检查它指出的路径。
 
 ## 配置变换
 
@@ -243,10 +180,9 @@ shine app refresh surge subscription-proxies.conf
 shine app artifact apply surge
 ```
 
-Shine 不会隐式运行 artifact 操作。生命周期可以通过纳入父 Plan 的脚本型钩子复用同一个脚本，
-但不要在钩子中调用 `app artifact apply`：artifact 有独立的
-快照绑定 Plan，不能继承父 App 操作的批准。手动 apply/remove 会显示并重新校验安全 Plan；自动化
-调用必须添加 `--yes`，执行失败会让命令直接失败。
+Shine 不会隐式运行 artifact 命令。每次手动 apply/remove 都会显示自己的 Plan；脚本失败时命令也会
+失败。自动化调用只有在审阅该操作后才应添加 `--yes`。预设作者应让生命周期钩子直接调用底层脚本，
+不要在钩子中嵌套 `app artifact apply`。
 当某个声明 artifact 的类别在安装或升级中确实改动了受管文件时，Shine 会打印显式 apply 命令；没有受管文件
 发生变化时则不提示。脚本只会收到 `[artifact].env` 列出且已配置的 source，并且
 这些 source 还必须在类别 `[permissions].environment` 中声明；此外会加入 `SHINE_APP_HTTP_DIR`、
@@ -302,12 +238,12 @@ artifact 和 post-upgrade 脚本都使用 Bun，运行机器必须已安装 Bun�
 
 预设作者可以声明 `post_install` 和 `post_upgrade` 钩子：前者在安装实际写入文件后运行，后者只在 `shine upgrade` 实际更新该类别至少一个文件后运行；未变化的类别不会触发。
 
-每个钩子必须且只能声明一种动作。`command` 直接运行 argv；`script` 从已审查的 Preset 快照解析 native 或 Bun 脚本，将自身 `env` 声明的值与固定 `SHINE_APP_*` 环境一起注入，并作为父生命周期 Plan 的一部分执行。`runtime` 只能与 `script` 同用；Bun 脚本沿用 artifact 和 generator 的扩展名及锁定依赖规则。
+钩子读取的每个环境输入都必须列入钩子的 `env`，并在类别权限声明中声明同名变量；Plan 不会显示
+变量值。command hook 缺少必需输入时不能批准；脚本型 hook 的可选输入缺失时不会注入子进程。
 
-钩子读取的每个环境输入都必须列入钩子的 `env`，并在类别权限声明中声明同名变量。Plan 审阅会对
-`plain` 值取 hash，并以 opaque revision 绑定 `secret` 值；Plan 不会序列化任何原值。command hook
-输入缺失或 secret identity 不可用时不能批准。脚本型 hook 的输入与 artifact 一样可选：缺失状态
-会绑定进快照，但不会注入子进程环境。
+每个钩子必须且只能声明一种动作。`command` 运行声明的命令和参数；`script` 运行 native 或 Bun 脚本，
+并只接收自身 `env` 声明的值与固定 `SHINE_APP_*` 变量。`runtime` 只能与 `script` 同用；Bun 脚本沿用
+artifact 和 generator 的扩展名及锁定依赖规则。
 
 ```toml
 post_upgrade = [

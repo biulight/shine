@@ -49,28 +49,22 @@ shine preset test . --format json
 类别会得到 `legacy_metadata` warning。该命令不会加载当前来源或 overlay 设置、初始化配置、
 检查更新、写文件、联网或执行预设代码。
 
-默认输出文本；`--format json` 输出 skill 使用的稳定 `schema_version: 1` 报告。校验错误的
-退出码为 1，warning 不会导致失败。
+默认输出文本；工具和 CI 可以使用 `--format json`。校验错误的退出码为 1，warning 不会导致失败。
 
-工具需要当前安装 binary 精确的 authoring report、fixture 或 bundle contract 时，运行
-`shine preset schema --format json`。生成文档还会嵌入当前 authoring command help。Preset metadata
-本身仍由 parser 驱动，因此应使用 validate，不要把生成 reference 当作 App/Shell/Sys grammar 的
-替代品。
+创作工具需要当前安装版本支持的精确报告与 fixture 格式时，运行
+`shine preset schema --format json`。App、Shell 和 Sys metadata 是否可用仍以
+`preset validate` 的结果为准。
 
-校验后运行 `preset lint`。它用独立的 schema-v1 报告指出作者质量与可移植性问题，但不会重新定义
-runtime 接受的内容。warning 默认只是建议；CI 可在有意识地接受或修复全部现有 finding 后使用
-`--deny-warnings`。
+校验后运行 `preset lint`，检查作者质量、可移植性和过宽权限。warning 默认只是建议；CI 可在审阅后
+添加 `--deny-warnings`。
 
-校验通过后，对每个目标平台分别运行 `preset plan`。它只接受一个类别或其 manifest，并针对确定性
-空内存状态模拟首次安装。应审查其中的语义 step、permission、opaque action 与 blocker。报告被
-blocked 通常表示空假设中没有提供所需环境变量、trust grant、命令或管理员状态；这仍是有效的作者
-反馈，而且绝不构成真实安装的批准。
+然后对每个目标平台运行 `preset plan`。它会预览一次假设的首次安装，显示操作、权限和 blocker，
+但不会修改机器。blocker 通常表示预览缺少环境变量、信任决定、命令或管理员状态；这属于作者反馈，
+不是实际安装批准。
 
-需要可重复的跨平台预期时，在类别中加入 `shine.test.toml`。Case 是纯声明式的，并且只针对内存中的
-authoring 状态运行。`[cases.host]` 可以模拟环境变量存在、opaque secret version、file、命令探测、
-runtime receipt、精确 trust grant 与管理员状态，而且不会执行 setup code。`examples/presets` 下提供
-App、Shell、Sys 三类可运行示例；应断言结构化 action、permission 与 code，而非复制文本输出。
-`preset test` 只接受单个类别，不能传仓库根目录。
+需要可重复的跨平台预期时，在类别中加入 `shine.test.toml`。测试描述初始条件和预期结果，不会执行
+setup code。`examples/presets` 下提供 App、Shell、Sys 三类可运行示例。`preset test` 只接受单个类别，
+不能传仓库根目录。
 
 需要可分发 artifact 时，把已审查类别打包到 source tree 外部：
 
@@ -78,8 +72,8 @@ App、Shell、Sys 三类可运行示例；应断言结构化 action、permission
 shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 ```
 
-返回的 hash 标识确定性 bundle bytes。`shine.test.toml` 只供作者使用，不会进入 bundle。Pack policy
-失败必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。
+返回的 hash 用于标识 bundle。`shine.test.toml` 只供作者使用，不会进入 bundle。Pack policy 失败
+必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。
 
 ## 迁移 1.x 来源
 
@@ -125,8 +119,8 @@ system = [{ capability = "split-dns", resource = "private-domain" }]
 
 Filesystem base 只接受 `home`、`shine`、`data-dir`、`preset` 或 `absolute`；非绝对路径必须是
 规范化相对路径，`.` 表示所选 base 的根。Command 只能填写一个不带参数的 program identity。
-Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。普通 destination、launcher、
-receipt 和固定 package provider 已由现有强类型 metadata 约束，不需要重复描述其内部机制。
+Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。普通 destination 与固定
+package provider 已由各自 metadata 覆盖，只需声明预设额外需要的能力。
 
 权限声明不是授权，也不能证明 opaque script 已完整披露行为。外部可执行代码还要求用户审阅后运行
 `shine trust grant <TARGET>`。Grant 会绑定当前代码身份与准确的权限声明，不能替代管理员授权或每次
@@ -285,7 +279,7 @@ shell/my-tools/
 store；卸载 Shine 或某个预设都不会清理这些共享缓存。
 
 Snapshot Shell 预设的 package 或 lock 变化会显示在 `shine update` 中，并在 `shine upgrade` 后
-生效。Live 模式会在下一次命令调用时读取当前文件，同时状态仍会提示刷新安装 receipt。完全离线的
+生效。Live 模式会在下一次命令调用时读取当前文件，同时状态仍会提示刷新已安装命令。完全离线的
 机器需要提前填充相应 Bun 缓存，或由作者 bundle/vendor 脚本。首版不保证原生扩展、workspace、
 `file:`、`link:` 以及需要生命周期脚本的依赖可用。
 

@@ -56,31 +56,25 @@ files and locked Bun dependency policy, and reports compatible metadata-free app
 with a `legacy_metadata` warning. It does not load active source/overlay settings, initialize config,
 check for updates, write files, access the network, or execute preset code.
 
-The default output is text. `--format json` emits the stable `schema_version: 1` report used by the
-skill; validation errors exit with status 1, while warnings do not.
+The default output is text. `--format json` is available for tools and CI. Validation errors exit
+with status 1; warnings do not.
 
-Run `shine preset schema --format json` when tooling needs the exact authoring report, fixture, or
-bundle contract shipped by the installed binary. The generated document also embeds current
-authoring-command help. Preset metadata itself remains parser-driven, so use validation rather than
-treating the generated reference as a replacement App/Shell/Sys grammar.
+Run `shine preset schema --format json` when authoring tools need the exact report and fixture
+formats supported by the installed version. Continue to use `preset validate` as the acceptance
+check for App, Shell, and Sys metadata.
 
-Run `preset lint` after validation. Its separate schema-v1 report flags author-quality and
-portability concerns without redefining what the runtime accepts. Warnings are advisory by default;
-CI can use `--deny-warnings` after consciously accepting or fixing all current findings.
+Run `preset lint` after validation to find author-quality, portability, and overly broad permission
+issues. Warnings are advisory by default; CI can add `--deny-warnings` after reviewing them.
 
-After validation, run `preset plan` once for each target platform. It accepts only one category or
-its manifest and models a first install against deterministic empty in-memory state. Review its
-semantic steps, permissions, opaque actions, and blockers. A blocked report commonly means the
-empty assumptions omit a required environment value, trust grant, command, or administrator state;
-it is still useful authoring feedback and is never an approval for real installation.
+Then run `preset plan` for each target platform. It previews a hypothetical first installation and
+shows actions, permissions, and blockers without changing the machine. A blocker commonly means the
+preview lacks a required environment value, trust decision, command, or administrator state; the
+report is authoring feedback, not approval for a real installation.
 
-Add `shine.test.toml` when the category needs repeatable cross-platform expectations. Cases are
-declarative and run only against in-memory authoring state. `[cases.host]` can model environment
-presence, opaque secret versions, files, command detection, runtime receipts, exact trust grants,
-and administrator state without executing setup code. Runnable examples for App, Shell, and Sys
-are available under `examples/presets`; use them to assert structured actions, permissions, and
-codes rather than copying text output. `preset test` requires a single category, not a repository
-root.
+Add `shine.test.toml` when the category needs repeatable cross-platform expectations. Tests describe
+the starting conditions and expected results without running setup code. Runnable App, Shell, and
+Sys examples are available under `examples/presets`. `preset test` accepts one category, not a
+repository root.
 
 When you need a distributable artifact, pack the reviewed category outside its source tree:
 
@@ -88,9 +82,9 @@ When you need a distributable artifact, pack the reviewed category outside its s
 shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 ```
 
-The returned hash identifies deterministic bundle bytes. `shine.test.toml` remains author-only and
-is not included. A pack-policy failure must be fixed in the source; `--force` only replaces the
-output file and never bypasses validation or policy.
+The returned hash identifies the bundle. `shine.test.toml` remains author-only and is not included.
+A pack-policy failure must be fixed in the source; `--force` only replaces the output file and never
+bypasses validation or policy.
 
 ## Migrate a 1.x source
 
@@ -140,8 +134,8 @@ system = [{ capability = "split-dns", resource = "private-domain" }]
 Filesystem bases are `home`, `shine`, `data-dir`, `preset`, or `absolute`; non-absolute paths are
 normalized relative paths, with `.` meaning the selected base root. Commands contain one program
 identity without arguments. Environment entries contain names and `plain`/`secret` sensitivity,
-never values or ciphertext. Existing typed metadata already bounds ordinary destinations,
-launchers, receipts, and fixed package providers, so do not repeat those mechanics.
+never values or ciphertext. Ordinary destinations and fixed package providers are already covered
+by their metadata, so declare only the additional capabilities the Preset needs.
 
 A declaration is not an authorization grant and does not prove opaque script behavior complete.
 External executable code additionally requires a target-scoped `shine trust grant <TARGET>` after
@@ -325,7 +319,7 @@ caches.
 
 For snapshot Shell presets, package or lock changes appear in `shine update` and take effect after
 `shine upgrade`. In live mode they are read on the next command invocation, while status still
-reports that the installed receipt should be refreshed. Fully offline machines need the relevant
+reports that the installed command should be refreshed. Fully offline machines need the relevant
 Bun cache already populated, or a bundled/vendored script. Native extensions, workspaces, `file:`,
 `link:`, and dependencies requiring lifecycle scripts are not guaranteed in this version.
 

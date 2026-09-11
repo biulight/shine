@@ -39,24 +39,22 @@ the stable release.
 
 ## Review before mutation
 
-Install, upgrade, uninstall, generator refresh, artifact, and managed Sys operations now render a
-snapshot-bound Plan. Interactive approval defaults to **No**. Review its steps, permissions, and
-blockers, then approve it interactively or use `--yes` in an attended automation:
+Install, upgrade, uninstall, generator refresh, artifact, and managed Sys operations now show a
+Plan before making changes. Interactive approval defaults to **No**. Review its actions,
+permissions, and blockers, then approve it interactively or use `--yes` in an attended automation:
 
 ```bash
-shine app upgrade <CATEGORY>
-shine app upgrade <CATEGORY> --yes
+shine upgrade app/<CATEGORY>
+shine upgrade app/<CATEGORY> --yes
 ```
 
-`--yes` skips only the prompt. It does not skip Plan rendering, permission checks, or validation
-against a fresh snapshot immediately before mutation.
+`--yes` skips only the prompt. The Plan, permission checks, and final validation still run.
 
 ## Re-establish external-code trust
 
 The broad 1.x `allow_app_hooks` and `allow_sys_code` settings are retired, ignored, and removed on
 the next configuration save. They are deliberately not converted into grants. External App, Shell,
-and Sys executable targets require target-scoped trust bound to their source layer, code digest,
-capability, and declared permissions:
+and Sys executable targets require separate target-scoped trust:
 
 ```bash
 shine trust inspect <TARGET>
@@ -82,9 +80,9 @@ from the parent process. Secret values never appear in a Plan or trust record.
 `shine upgrade` no longer changes Sys profile activation as a side effect. Manage it explicitly:
 
 ```bash
-shine sys profile status
-shine sys profile enable
-shine sys profile disable
+shine sys status
+shine sys profile enable <ITEM>
+shine sys profile disable <ITEM>
 ```
 
 Inspect legacy runtime and environment state before applying its migration:
@@ -94,15 +92,14 @@ shine state migrate --dry-run
 shine state migrate
 ```
 
-Legacy App, Shell, and Sys manifests remain readable. Shine updates a manifest to the current
-schema only after the associated mutation succeeds. Existing 1.8 Shell launchers without a receipt
-can be planned and uninstalled directly; reinstalling first is not required. Modified or foreign
-launchers and user-owned files are preserved and reported instead of overwritten.
+Legacy App, Shell, and Sys installations remain readable and can be upgraded or removed without
+reinstalling first. Modified or foreign command entries and user-owned files are preserved and
+reported instead of overwritten.
 
 ## Recover interrupted operations
 
-Journaled mutations stop later writes until their recovery Plan is reviewed. Use the command for
-the affected lifecycle:
+An interrupted managed operation may stop later writes until recovery is reviewed. Use the command
+for the affected resource type:
 
 ```bash
 shine app recover
@@ -110,8 +107,8 @@ shine shell recover
 shine sys recover
 ```
 
-Recovery restores or removes only fingerprint-matched resources. Changed destinations, backups,
-or rollback files block recovery and remain untouched for manual review.
+Recovery acts only on files that have not changed since the interruption. Changed destinations,
+backups, or recovery files remain untouched for manual review.
 
 ## Update external Presets
 

@@ -27,8 +27,8 @@ shine shell install proxy
 
 Shine 会把脚本放到 `~/.shine/presets/shell/`，在 `~/.shine/bin/` 创建命令入口，并将该目录加入支持的 shell profile。
 
-写入前，Shine 会显示有序步骤、完整权限、输入摘要与 fingerprint，并以默认 No 等待明确确认。
-自动化中可追加 `--yes`；Plan 仍会显示，并会在 mutation 前重新校验。
+写入前，Shine 会显示将要进行的改动和所需权限，并以默认 No 等待明确确认。自动化中只有审阅过
+同一操作后才应添加 `--yes`；实际修改前仍会显示并校验 Plan。
 
 打开一个新终端，或重新加载当前 shell 配置：
 

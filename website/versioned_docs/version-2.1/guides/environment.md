@@ -492,27 +492,13 @@ Choose according to how widely plaintext may be visible remotely:
 | Decrypt and forward a secret directly | `shine ssh --with-secret API_TOKEN dev` | Remote login shell or specified command |
 | Let an authorized remote child request local decryption | `shine ssh --secret-broker ... dev` | Only the approved remote child process |
 
-`--with-secret KEY[=ALIAS]` decrypts local `KEY_SECRET` when establishing the session. It suits
-temporary work on a trusted host. The remote login shell and same-account processes may read the
-plaintext; this is not an isolated secret channel.
+Direct secret forwarding suits temporary work on a trusted host, but the remote login shell and
+same-account processes may read the plaintext. Use the SSH Secret Broker when the decryption key
+must stay local and only a selected remote child should receive the value. The remote administrator
+or same-account processes can still inspect that child.
 
-Use the SSH Secret Broker when the private key, age identity, or YubiKey stays local while the remote
-project contains sealed workspace ciphertext. The remote side submits a command and secret request;
-the local agent checks an allow-list or exact policy, confirms locally, decrypts locally, and injects
-plaintext briefly into the approved remote child:
-
-```bash
-# Local: permit API_TOKEN requests, with local confirmation for every direct request.
-shine ssh --secret-broker --allow-secret API_TOKEN dev
-
-# Remote: inject API_TOKEN only into this child process.
-shine env run --no-workspace --secret-broker --secret API_TOKEN -- bun run build
-```
-
-The broker never transfers the decryption key or puts plaintext in the remote login shell. The target
-child, remote administrator, or malicious same-account process can still read plaintext. Fixed
-projects should use a local policy bound to the workspace digest, mode, full command, and releasable
-keys. See [SSH sessions, secret brokering, and file transfer](./ssh-transfer.md#provide-secrets-to-remote-commands-on-demand).
+For setup commands, local policies, enrollment, and the complete security boundary, see
+[SSH sessions, secret brokering, and file transfer](./ssh-transfer.md#provide-secrets-to-remote-commands-on-demand).
 
 ## Initialize a workspace from dotenv
 

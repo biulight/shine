@@ -38,23 +38,22 @@ shine self upgrade --channel stable
 
 ## 在变更前审阅 Plan
 
-安装、升级、卸载、generator 刷新、artifact 和受管 Sys 操作现在都会显示绑定状态快照的
-Plan。交互式确认默认为 **No**。审阅其中的步骤、权限和 blocker 后再确认，或在有人值守的
+安装、升级、卸载、generator 刷新、artifact 和受管 Sys 操作现在都会在改动前显示 Plan。
+交互式确认默认为 **No**。审阅其中的操作、权限和 blocker 后再确认，或在有人值守的
 自动化中使用 `--yes`：
 
 ```bash
-shine app upgrade <CATEGORY>
-shine app upgrade <CATEGORY> --yes
+shine upgrade app/<CATEGORY>
+shine upgrade app/<CATEGORY> --yes
 ```
 
-`--yes` 只跳过确认提示，不会跳过 Plan 展示、权限检查，也不会跳过 mutation 前基于最新
-快照的再次校验。
+`--yes` 只跳过确认提示，Plan 展示、权限检查和执行前的最终校验仍会进行。
 
 ## 重新建立外部代码信任
 
 1.x 中宽泛的 `allow_app_hooks` 和 `allow_sys_code` 已停用：它们会被忽略，并在下次保存配置
 时移除。Shine 不会将其自动转换成 grant。外部 App、Shell 和 Sys 可执行 target 需要按
-target 授权，授权绑定 source layer、代码摘要、capability 和声明的精确权限：
+target 单独授权：
 
 ```bash
 shine trust inspect <TARGET>
@@ -79,9 +78,9 @@ permission declaration；未声明的值不会从父进程继承。Plan 和信�
 `shine upgrade` 不再隐式改变 Sys profile 的启用状态，请显式管理：
 
 ```bash
-shine sys profile status
-shine sys profile enable
-shine sys profile disable
+shine sys status
+shine sys profile enable <ITEM>
+shine sys profile disable <ITEM>
 ```
 
 先检查旧 runtime 和 environment 状态，再应用迁移：
@@ -91,14 +90,12 @@ shine state migrate --dry-run
 shine state migrate
 ```
 
-旧 App、Shell 和 Sys manifest 仍可读取。只有相关 mutation 成功后，Shine 才会把 manifest
-更新到当前 schema。没有 receipt 的既有 1.8 Shell launcher 可直接生成卸载 Plan 并卸载，
-无需先重新安装。被用户修改或不属于 Shine 的 launcher 和用户文件会保留并报告，不会覆盖。
+旧 App、Shell 和 Sys 安装仍可读取，也能直接升级或移除，无需先重新安装。被用户修改或不属于
+Shine 的命令入口和用户文件会保留并报告，不会覆盖。
 
 ## 恢复中断的操作
 
-journaled mutation 中断后，后续写操作会暂停，直到恢复 Plan 得到审阅。请使用对应生命周期
-的命令：
+受管操作中断后，后续写操作可能会暂停，直到恢复得到审阅。请使用对应资源类型的命令：
 
 ```bash
 shine app recover
@@ -106,8 +103,8 @@ shine shell recover
 shine sys recover
 ```
 
-恢复只会还原或移除指纹仍匹配的资源。destination、backup 或 rollback 文件发生变化时，
-恢复会被阻止，并保留这些内容供人工检查。
+恢复只处理自中断后未发生变化的文件。destination、backup 或恢复文件发生变化时，命令会停止，
+并保留这些内容供人工检查。
 
 ## 更新外部 Preset
 

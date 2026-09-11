@@ -42,7 +42,9 @@ shine sys bootstrap --proxy --dry-run
 - 位置参数、重复的 `--item` 与 `--preset` 不能组合；受管资源使用 `sys apply`，而不是 `sys bootstrap`。
 - 非交互环境没有指定 profile 时使用预设的默认 profile。
 
-完成选择后，实际变更会先展示绑定输入快照的安全 Plan，其中包含语义步骤、权限和输入指纹。交互确认默认为否；自动化必须传入 `--yes`。该参数只跳过提示，Plan 仍会展示并用最新输入重新验证。`--dry-run` 是更早阶段的 provider/脚本预览，不能与 `--yes` 同时使用。
+完成选择后，实际变更会先展示计划改动和所需权限。交互确认默认为否；自动化必须传入 `--yes`。
+该参数只跳过提示，Plan 仍会展示并在执行前校验。`--dry-run` 是更早阶段的预览，不能与 `--yes`
+同时使用。
 
 Ubuntu 还提供 `minimal` profile，适合生产服务器：仅安装 Neovim、fzf、bat、eza 和 zoxide，不包含 shell 历史同步、提示符、Node.js 工具链或 Homebrew。运行前仍应先执行 `shine sys bootstrap --preset minimal --dry-run` 复核当前版本的实际步骤。
 
@@ -111,14 +113,11 @@ shine sys recover --yes        # 非交互批准
 非 dry-run 的 managed 操作会显示绑定快照的 Plan，确认默认是 No。`--yes` 只跳过提示，不能
 跳过 Plan 展示、权限 blocker 或执行前复核。若项目需要管理员权限，会在 Plan 批准后另行请求。
 
-受管文件与 split DNS 会在 mutation 前写入 journal，并且只有精确 Sys receipt 持久化后才提交。显式
-`sys profile enable/disable` 也会记录 Shine-owned shell sentinel 的变化。如果中断留下 pending
-journal，后续修改型 Sys 命令会停止并提示运行 `shine sys recover`。receipt commit 前，恢复只还原
-fingerprint 仍匹配的旧状态；commit 后保留 desired 状态并清理精确 rollback。它不会覆盖已变化的
-resource 或无关 shell-profile 内容。
+受管操作中断后，后续 Sys 改动会停止并提示运行 `shine sys recover`。只有相关状态在中断后未发生
+变化时，恢复才会完成或回退原操作；它不会覆盖修改过的资源或无关的 Shell profile 内容。
 
-生成的 active/base/new/merge profile 文件继续使用现有三方合并，并会显示为非事务化。bootstrap
-script 与 package/provider 调用属于 opaque effect，不会由 `sys recover` 回滚。
+bootstrap script 与包管理器操作不会由 `sys recover` 撤销；如果它们中途失败，请根据报告的项目和
+对应包管理器继续处理。
 
 需要把异地局域网中的私有域名定向到 ZeroTier DNS 时，可参考
 [使用 ZeroTier、CoreDNS 和 Shine 搭建异地私有域名网络](https://blog.biulight.top/timeline/knowledge/zerotier-coredns-split-dns)。
