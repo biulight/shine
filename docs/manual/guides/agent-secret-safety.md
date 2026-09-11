@@ -171,8 +171,8 @@ Follow [Add recipients to existing workspace secrets](./environment.md#add-recip
 before sharing the updated files with the new member.
 
 Windows and macOS users can also experiment with [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone)
-to authorize decryption with biometrics on their phone. macOS needs a build containing the
-experimental implementation. Use only synthetic or disposable data and configure
+to authorize decryption with biometrics on their phone. The plugin offers a limited technical Beta with Windows/macOS source installation;
+macOS remains experimental. Use only synthetic or disposable data and configure
 an independent recovery key before using it. For supported devices, usage limitations, and setup
 instructions, see [experiment with phone authorization on Windows and macOS](./environment.md#experiment-with-phone-authorization-on-windows).
 

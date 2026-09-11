@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 2.0.3。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
+本页面向即将发布的 Shine 版本。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
 
 ## 1.0 target 规则
 
@@ -432,6 +432,18 @@ Windows 会在创建协议 session 前选择 Developer USB/ADB，macOS 则选择
 
 `env proxy install` 在 `~/.shine/bin/` 创建同名 PATH shim，按规则仅向目标子进程注入 `--with` 指定的值；每个值优先读取 `<KEY>_SECRET`，否则读取 `<KEY>`。`disable` 保留 shim 但跳过解密和注入；项目规则需在当前目录或其祖先存在 `shine.config.toml`，并覆盖同名全局规则。`uninstall` 移除 Shine 管理的 shim 和用户级规则。
 
+### 混合封存与读取
+
+`shine env secret seal --backend hybrid` 使用工作区的两组收件人，拒绝 `-r/--recipient`。
+封存需要 GnuPG 2.2–2.5、age 1.3 或更高版本、公钥和所需收件人插件，两条加密路径必须都成功。
+显式 `--backend gpg` 或 `--backend age` 只面向所选组，沿用现有收件人优先级。
+独立 `env secret encrypt` 不接受 hybrid。
+
+`env secret decrypt` 可读取 `hybrid:` 封装，stdout 保持精确明文字节。没有本机偏好时，
+只有一种可用方式便自动选择；两种都可用时需在本机终端选择，非交互环境需设置
+`hybrid_decrypt_backend`。缺少私钥、取消或失败均终止，不尝试另一后端。
+读取者仅需所选工具、identity 和插件。
+
 ## 任务、本地服务与主题
 
 ```text
@@ -473,16 +485,4 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-稳定版的 `shine --version` 显示 `shine 2.0.3 (<commit> <date>)`；preview 构建使用兼容 SemVer 的 `2.0.3-preview` 版本标签。
-
-### 混合封存与读取
-
-`shine env secret seal --backend hybrid` 使用工作区的两组收件人，拒绝 `-r/--recipient`。
-封存需要 GnuPG 2.2–2.5、age 1.3 或更高版本、公钥和所需收件人插件，两条加密路径必须都成功。
-显式 `--backend gpg` 或 `--backend age` 只面向所选组，沿用现有收件人优先级。
-独立 `env secret encrypt` 不接受 hybrid。
-
-`env secret decrypt` 可读取 `hybrid:` 封装，stdout 保持精确明文字节。没有本机偏好时，
-只有一种可用方式便自动选择；两种都可用时需在本机终端选择，非交互环境需设置
-`hybrid_decrypt_backend`。缺少私钥、取消或失败均终止，不尝试另一后端。
-读取者仅需所选工具、identity 和插件。
+稳定版的 `shine --version` 显示 `shine <version> (<commit> <date>)`；preview 构建使用兼容 SemVer 的 `<version>-preview` 版本标签。

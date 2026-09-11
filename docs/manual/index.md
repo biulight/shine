@@ -24,8 +24,8 @@ of deleting it.
 
 **Make every step of personal automation visible—and leave a safe way back.**
 
-This manual applies to the stable **Shine 2.0.3** release. Use the version selector for the frozen
-1.8.x manual.
+This **Next** manual covers the upcoming Shine release, including changes after 2.0.3.
+Use the version selector for the released 2.0 or frozen 1.8.x manual.
 
 [![The three core values of Shine 2.0: repeatable deployment, one entry point for personal developer resources, and changes you can see before they happen and recover if interrupted.](/img/shine-core-values-v2-en.webp)](/img/shine-core-values-v2-en.webp)
 

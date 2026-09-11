@@ -32,6 +32,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   `age-plugin-se` on the encrypting computer. Missing phone recipient plugins now fail with an
   actionable cross-platform sealing diagnostic.
 
+### Docs
+
+- Refresh the bilingual phone setup guide for the plugin's limited technical Beta, source
+  installation, and validated platform/transport scope; retain experimental data restrictions.
+- Clarify hybrid upgrade prerequisites for existing workspaces and group hybrid commands with
+  the environment reference; label the Next manual as the upcoming release.
+
 ## [2.0.3] — 2026-09-08
 
 ### Bug Fixes

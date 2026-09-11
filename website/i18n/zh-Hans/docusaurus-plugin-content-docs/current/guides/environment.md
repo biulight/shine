@@ -219,14 +219,28 @@ shine env secret seal
 
 ### 在 Windows 和 macOS 上实验手机授权 {#在-windows-上实验手机授权}
 
-[`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) 目前仍是 owner-only 技术预览，只能用于合成或可丢弃数据，不能保护真实或生产 secret。当前 Windows Alpha 要求 Windows 11 x64 客户端、TPM 2.0、Microsoft Platform Crypto Provider，以及能力检查合格的 Android StrongBox 手机。制品校验、配对、传输、恢复演练和清理步骤以项目的 [`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md) 为准。
+[`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) 已提供面向技术用户的有限
+Beta，仍只能用于合成或可丢弃数据，不能保护真实或生产 secret。安装、桌面与手机制品匹配、
+配对和恢复验证请参照项目的
+[Beta 发布说明](https://github.com/biulight/age-plugin-phone/blob/main/docs/releases/v0.1.0-beta.1.md)
+和 [Windows Beta 快速入门](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-beta-quickstart.md)。
+始终保留独立验证过的恢复 recipient。
+
+Windows 要求 Windows 11 x64、TPM 2.0、Microsoft Platform Crypto Provider，以及能力检查
+合格的 Android StrongBox 手机。Windows 和 macOS 均支持通过 Cargo 从源码安装，构建前提
+以插件文档为准。可选的 Windows ZIP 使用测试签名，不要将其私有签名根证书导入系统信任库。
+macOS 没有安装器包。
 
 Shine 也开放了实验性 macOS 配对入口。请按照插件的
 [macOS 源码快速入门](https://github.com/biulight/age-plugin-phone/blob/main/docs/macos-quickstart.md)
-安装包含 macOS 实现的桌面插件和匹配的 Android StrongBox 应用。插件要求在已登录用户会话中
-使用真正的 Secure Enclave；Intel/T2、其它硬件和系统版本尚未普遍验证。编译部署下限不代表
-已经验证的最低 macOS 支持版本。只使用可丢弃数据，并保留独立验证过的恢复 recipient；
-硬件检查由插件负责。
+搭配匹配的 Android StrongBox 应用。插件要求在已登录用户会话中使用真正的 Secure Enclave；
+Intel/T2、其它硬件和系统版本尚未普遍验证。编译部署下限不代表已经验证的最低 macOS 支持版本。
+iPhone 验证仅限现有开发设备，Beta 不提供可供外部用户安装的 iOS 应用。硬件检查由插件负责。
+
+Beta 已验证的传输范围是 Android Developer USB 和记录中设备的前台 Wi-Fi；tagged recipient
+的 QR 流程、BLE 和后台唤醒不在该范围内。macOS 的 `auto` 在没有 Wi-Fi listener 响应时可能
+选择 QR，因此请先准备好手机 Wi-Fi listener，或在此流程中显式使用 Android ADB。
+操作失败后，不要通过恢复旧的插件 replay 状态来修复；请遵循插件的恢复说明。
 
 例如，在已授权 Android ADB 设备的 Mac 上运行：
 
@@ -291,8 +305,8 @@ age_recipients = ["age1tag...", "age1..."]
 ```
 
 Shine 默认请求 `--recipient-type tag`，配对前要求 age 1.3+，并且桌面插件和手机应用都必须
-支持 tagged recipient。此接入依赖插件提供该能力，旧预览版本可能拒绝这个参数；Shine 不会
-重新发起配对，也不会自动退回其它 recipient 类型。支持后，向 `age1tag...` 加密的电脑只需
+支持 tagged recipient。该能力从 `0.1.0-beta.1` 开始提供，旧 `alpha.5` 版本不包含它。
+Shine 不会重新发起配对，也不会自动退回其它 recipient 类型。向 `age1tag...` 加密的电脑只需
 age 1.3+，无需 phone 插件，也不会弹出手机授权。配对和手机解密仍需插件及匹配的手机应用。
 
 如需保留插件的 phone recipient 格式，请显式选择：
@@ -301,7 +315,7 @@ age 1.3+，无需 phone 插件，也不会弹出手机授权。配对和手机�
 shine env secret identity init --phone --recipient-type phone
 ```
 
-每台向 `age1phone...` 加密的电脑仍需安装 `age-plugin-phone`。插件自身可以继续默认 `phone`，
+每台向 `age1phone...` 加密的电脑仍需安装 `age-plugin-phone`。插件自身仍默认 `phone`，
 Shine 会显式传入所选类型。与 phone v2 的私有 recipient 选择不同，知道 tagged recipient 的人
 可以判断密文是否发给它。
 
@@ -584,7 +598,9 @@ workspace、源文件内容或文件顺序变化后缓存会自动重建；无�
 
 ## 让 GPG 与 age 成员共享一份 payload
 
-转换前先升级所有读取端，包括 SSH broker 所在本机。既有未标记 GPG 和 `age:` 密文继续
+从 Shine 2.0.x 转换工作区前，先将所有读取端（包括 SSH broker 所在本机）升级到支持
+hybrid 的版本。旧读取端无法读取 `hybrid:` 密文。封存需要 GnuPG 2.2–2.5 和 age 1.3+，
+读取端只需所选后端。既有未标记 GPG 和 `age:` 密文继续
 可读，普通读取不迁移文件。显式配置工作区，替换以下公钥占位符：
 
 ```toml

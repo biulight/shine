@@ -241,20 +241,31 @@ upstream credentials; rotate exposed credentials at their source when necessary.
 
 ### Experiment with phone authorization on Windows and macOS {#experiment-with-phone-authorization-on-windows}
 
-[`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) is currently an owner-only
-technical preview for synthetic or disposable data, not real or production secrets. Its Windows
-Alpha requires a Windows 11 x64 client, TPM 2.0, Microsoft Platform Crypto Provider, and a
-capability-qualified Android StrongBox phone. Follow the project's
-[`Windows Alpha quick start`](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-alpha-quickstart.md)
-for artifact verification, pairing, transport, recovery drills, and cleanup.
+[`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) now offers a limited
+technical Beta for synthetic or disposable data, not real or production secrets. Follow its
+[Beta release notes](https://github.com/biulight/age-plugin-phone/blob/main/docs/releases/v0.1.0-beta.1.md)
+and [Windows Beta quick start](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-beta-quickstart.md)
+for installation, matching desktop/phone artifacts, pairing, and recovery checks. Keep an
+independently verified recovery recipient.
 
-Shine also opens the experimental macOS pairing flow. Install a desktop plugin build containing
-the macOS implementation and a matching Android StrongBox app, following the plugin
-[macOS source quick start](https://github.com/biulight/age-plugin-phone/blob/main/docs/macos-quickstart.md).
-It requires real Secure Enclave support in a logged-in user session; Intel/T2 and other hardware
-or OS versions are not generally verified. A compilation deployment floor is not a tested minimum
-supported macOS version. Use only disposable data and keep an independently verified recovery
-recipient. The plugin performs the hardware checks.
+Windows requires Windows 11 x64, TPM 2.0, Microsoft Platform Crypto Provider, and a
+capability-qualified Android StrongBox phone. Windows and macOS support Cargo source installation;
+follow the plugin's build prerequisites. The optional Windows ZIP is test-signed: do not import
+its private signing root into a system trust store. macOS has no installer package.
+
+Shine also opens the experimental macOS pairing flow. Follow the plugin's
+[macOS source quick start](https://github.com/biulight/age-plugin-phone/blob/main/docs/macos-quickstart.md)
+with a matching Android StrongBox app. It requires real Secure Enclave support in a logged-in
+user session; Intel/T2 and other hardware or OS versions are not generally verified. A compilation
+deployment floor is not a tested minimum supported macOS version. iPhone evidence is limited to
+existing development devices; the Beta does not provide an externally installable iOS app.
+The plugin performs the hardware checks.
+
+The Beta's validated transport scope is Android Developer USB and foreground Wi-Fi on the recorded
+devices. QR with tagged recipients, BLE, and background wake are outside that scope. On macOS,
+`auto` can select QR when no Wi-Fi listener responds: keep the phone's Wi-Fi listener ready or
+explicitly use Android ADB for this workflow. Do not restore older plugin replay state to recover
+a failed operation; follow the plugin's recovery instructions.
 
 For example, on a Mac with an authorized Android ADB device:
 
@@ -326,9 +337,9 @@ age_recipients = ["age1tag...", "age1..."]
 ```
 
 Shine requests `--recipient-type tag` by default. This requires age 1.3+ before pairing and a
-desktop plugin and phone app that both support tagged recipients. This integration depends on that
-plugin capability; older preview builds may reject the option. Shine does not retry setup or fall
-back to another recipient type. Once supported, `age1tag...` encryption needs only age 1.3+ on the
+desktop plugin and phone app that both support tagged recipients, available starting with
+`0.1.0-beta.1`. The older `alpha.5` release does not include this capability. Shine does not retry setup or fall
+back to another recipient type. `age1tag...` encryption needs only age 1.3+ on the
 encrypting computer, with no phone plugin or phone prompt. Pairing and phone decryption still need
 the plugin and matching phone app.
 
@@ -339,7 +350,7 @@ shine env secret identity init --phone --recipient-type phone
 ```
 
 `age1phone...` encryption still requires `age-plugin-phone` on every encrypting computer.
-The plugin's own default can remain `phone`; Shine explicitly requests its chosen type.
+The plugin's own default remains `phone`; Shine explicitly requests its chosen type.
 Unlike phone v2's private recipient selection, a tagged recipient lets someone who knows the
 recipient test whether a ciphertext targets it.
 
@@ -647,7 +658,9 @@ file formats and precedence.
 
 ## Share a payload across GPG and age members
 
-Upgrade all readers, including the local SSH broker machine, before conversion.
+Before converting a workspace from Shine 2.0.x, upgrade all readers, including the local SSH
+broker machine, to a release supporting hybrid encryption. Older readers cannot read `hybrid:`
+ciphertext. Sealing requires GnuPG 2.2–2.5 and age 1.3+; readers need only the backend they select.
 Existing untagged GPG and `age:` ciphertext stay readable; ordinary reads never migrate
 files. Explicitly configure the workspace (replace the public placeholders):
 
