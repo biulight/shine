@@ -612,6 +612,10 @@ bugs. Check this list before changing the modules named in each entry.
   decrypts also capture the age client's progress diagnostics; explicit QR and opted-in messages
   stay interactive, and captured diagnostics become visible when decryption fails. A shell may
   independently move its next prompt.
+- **A valid nonmatching plugin identity is an ordinary miss within the selected age backend.** The
+  plugin must return no file key and no stanza error so reference age can try the next configured
+  identity. Malformed supported stanzas, unavailable identity state, cancellation, and final
+  backend failure remain terminal; hybrid never switches backends after such a failure.
 - **Phone identity setup crosses only a public configuration handoff.** Shine may invoke the
   standalone plugin's transactional setup and record its versioned public stub path and recipient,
   but it must not allocate, discover, copy, remove, or repair plugin TPM/Secure Enclave keys, replay, locator, pairing,

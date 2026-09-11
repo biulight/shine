@@ -305,6 +305,13 @@ identity path returned by the plugin on your platform):
 age_identities = ["/absolute/path/returned/by/plugin/identity.txt"]
 ```
 
+Multiple phone identity stubs are valid: age must treat a valid stub that does not match the
+ciphertext as an ordinary miss and continue to the next configured identity. Older
+`age-plugin-phone` builds may instead stop at the first nonmatching stub. If hybrid unwrap fails
+only while several phone identities are configured, set `AGE_PLUGIN_PHONE_MESSAGES=1` to confirm
+the plugin diagnostic and upgrade the plugin. As a temporary workaround, configure only the
+matching identity path; do not delete pairing or recovery state merely to narrow this list.
+
 The shortcut does not change `secret_backend` and does not add recipients. Interrupted plugin setup
 must be handled with `age-plugin-phone setup --resume` or `age-plugin-phone setup --cleanup` as
 described by the plugin; do not start a second pairing as recovery.

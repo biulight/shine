@@ -59,15 +59,16 @@ async fn decrypt_base64_age(
             "no age identity configured; run `shine env secret identity init` or set age_identity in config.toml"
         );
     }
-    let required_plugins = required_identity_plugins(identities).await?;
-    let quiet_phone_progress = required_plugins.contains(&"age-plugin-phone")
+    let identity_plugins = inspect_identity_plugins(identities).await?;
+    let quiet_phone_progress = identity_plugins.required.contains(&"age-plugin-phone")
         && !phone_terminal_output_requested(
             std::env::var_os("AGE_PLUGIN_PHONE_TRANSPORT").as_deref(),
             std::env::var_os("AGE_PLUGIN_PHONE_MESSAGES").as_deref(),
         );
+    let multiple_phone_identities = identity_plugins.phone_identity_count > 1;
 
     preflight_age().await?;
-    for plugin in required_plugins {
+    for plugin in identity_plugins.required {
         ensure_identity_plugin(plugin)?;
     }
 
@@ -80,7 +81,14 @@ async fn decrypt_base64_age(
         bail!("decoded secret is empty");
     }
 
-    decrypt_age_file(encrypted_file.path(), identities, quiet_phone_progress, key).await
+    decrypt_age_file(
+        encrypted_file.path(),
+        identities,
+        quiet_phone_progress,
+        key,
+        multiple_phone_identities,
+    )
+    .await
 }
 
 pub(super) async fn preflight_identities(identities: &[PathBuf]) -> Result<()> {
@@ -212,7 +220,18 @@ fn validate_recipients(recipients: &[String]) -> Result<Vec<&str>> {
 }
 
 async fn required_identity_plugins(identities: &[PathBuf]) -> Result<Vec<&'static str>> {
+    Ok(inspect_identity_plugins(identities).await?.required)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct IdentityPluginInspection {
+    required: Vec<&'static str>,
+    phone_identity_count: usize,
+}
+
+async fn inspect_identity_plugins(identities: &[PathBuf]) -> Result<IdentityPluginInspection> {
     let mut plugins = Vec::new();
+    let mut phone_identity_count = 0;
     for identity in identities {
         if !identity.is_file() {
             bail!("age identity file not found: {}", identity.display());
@@ -220,6 +239,11 @@ async fn required_identity_plugins(identities: &[PathBuf]) -> Result<Vec<&'stati
         let contents = tokio::fs::read_to_string(identity)
             .await
             .with_context(|| format!("reading age identity {}", identity.display()))?;
+        for line in contents.lines().map(str::trim) {
+            if line.starts_with("AGE-PLUGIN-PHONE-") {
+                phone_identity_count += 1;
+            }
+        }
         for (marker, plugin) in [
             ("AGE-PLUGIN-SE-", "age-plugin-se"),
             ("AGE-PLUGIN-PHONE-", "age-plugin-phone"),
@@ -229,7 +253,10 @@ async fn required_identity_plugins(identities: &[PathBuf]) -> Result<Vec<&'stati
             }
         }
     }
-    Ok(plugins)
+    Ok(IdentityPluginInspection {
+        required: plugins,
+        phone_identity_count,
+    })
 }
 
 async fn decrypt_age_file(
@@ -237,6 +264,7 @@ async fn decrypt_age_file(
     identities: &[PathBuf],
     quiet_phone_progress: bool,
     key: bool,
+    multiple_phone_identities: bool,
 ) -> Result<String> {
     let mut command = Command::new("age");
     command.kill_on_drop(true).arg("-d");
@@ -257,7 +285,10 @@ async fn decrypt_age_file(
         .with_context(|| "running age -d")?;
 
     if key {
-        return super::exec::read_key_output(output).await;
+        return contextualize_hybrid_key_error(
+            super::exec::read_key_output(output).await,
+            multiple_phone_identities,
+        );
     }
     let output = output
         .wait_with_output()
@@ -273,6 +304,18 @@ async fn decrypt_age_file(
     }
 
     String::from_utf8(output.stdout).context("decrypted secret is not valid UTF-8")
+}
+
+fn contextualize_hybrid_key_error(
+    result: Result<String>,
+    multiple_phone_identities: bool,
+) -> Result<String> {
+    if multiple_phone_identities {
+        return result.context(
+            "multiple phone-backed age identities are configured; if an older age-plugin-phone stops at a nonmatching identity, upgrade the plugin or temporarily configure only the matching identity",
+        );
+    }
+    result
 }
 
 async fn encrypt_age(plaintext: &[u8], recipients: &[&str]) -> Result<Vec<u8>> {
@@ -502,12 +545,25 @@ mod tests {
         .await
         .unwrap();
 
+        let inspection = inspect_identity_plugins(&[secure_enclave, phone])
+            .await
+            .unwrap();
         assert_eq!(
-            required_identity_plugins(&[secure_enclave, phone])
-                .await
-                .unwrap(),
+            inspection.required,
             vec!["age-plugin-se", "age-plugin-phone"]
         );
+        assert_eq!(inspection.phone_identity_count, 2);
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn hybrid_failure_explains_multiple_phone_identity_compatibility() {
+        let err =
+            contextualize_hybrid_key_error(Err(anyhow::anyhow!("hybrid unwrap failed")), true)
+                .unwrap_err();
+        let diagnostic = format!("{err:#}");
+        assert!(diagnostic.contains("multiple phone-backed age identities"));
+        assert!(diagnostic.contains("upgrade the plugin"));
+        assert!(diagnostic.contains("hybrid unwrap failed"));
     }
 }

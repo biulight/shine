@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-11 — Plugin identity misses must not become stanza errors
+
+- **Symptom**: hybrid age unwrap stopped at an older, revoked phone identity even though a later
+  configured identity matched and worked when configured alone.
+- **Root cause**: reference age invokes the identity plugin separately for each configured stub.
+  The phone plugin reported a valid nonmatch as a stanza error, which is fatal to that age decrypt
+  operation, instead of returning no file key so age could try the next identity.
+- **Fix**: the phone plugin now returns an empty result for a valid v2 nonmatch while preserving
+  state and malformed-stanza errors; Shine detects multiple phone stubs and adds upgrade and
+  temporary-isolation context to hybrid unwrap failures.
+- **Rule**: test plugin identities through reference age's one-identity-per-invocation behavior.
+  Distinguish an ordinary identity miss from malformed input, unavailable state, and cancellation;
+  never compensate by silently switching a hybrid backend.
+
 ## 2026-09-10 — Phone tagged recipients need an explicit plugin capability
 
 - **Symptom**: phone public recipients still required a plugin on every encrypting host.

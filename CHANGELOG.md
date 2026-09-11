@@ -25,6 +25,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Diagnose hybrid age unwrap failures involving multiple phone identity stubs with actionable
+  plugin upgrade and temporary isolation guidance, without retrying another backend.
 - Generate native `age1tag` recipients for new Secure Enclave identities and migrate legacy
   `age1se` configuration, allowing age 1.3+ clients to seal for macOS recipients without installing
   `age-plugin-se` on the encrypting computer. Missing phone recipient plugins now fail with an

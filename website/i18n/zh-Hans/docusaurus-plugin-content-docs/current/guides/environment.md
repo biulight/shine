@@ -272,6 +272,12 @@ Shine 只会把公开 identity stub 路径加入当前用户的全局 `age_ident
 age_identities = ["/absolute/path/returned/by/plugin/identity.txt"]
 ```
 
+配置多个 phone identity stub 是有效用法：age 应把与当前密文不匹配但格式有效的 stub 视为
+普通未命中，并继续尝试下一个 identity。旧版 `age-plugin-phone` 可能反而在第一个不匹配的
+stub 处终止。如果 hybrid unwrap 只在配置多个 phone identity 时失败，可设置
+`AGE_PLUGIN_PHONE_MESSAGES=1` 确认插件诊断并升级插件。临时规避时只配置匹配的 identity
+路径即可；不要仅为了缩小这个列表而删除配对或恢复状态。
+
 这个快捷命令不会修改 `secret_backend`，也不会自动添加 recipient。plugin setup 如果中断，
 必须按照其文档使用 `age-plugin-phone setup --resume` 或 `age-plugin-phone setup --cleanup`；
 不要把重新发起一次配对当作恢复手段。
