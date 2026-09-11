@@ -7,6 +7,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-09-11
+
 ### Features
 
 - Open the experimental phone identity pairing wizard on macOS, with a platform-native default
@@ -37,7 +39,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Refresh the bilingual phone setup guide for the plugin's limited technical Beta, source
   installation, and validated platform/transport scope; retain experimental data restrictions.
 - Clarify hybrid upgrade prerequisites for existing workspaces and group hybrid commands with
-  the environment reference; label the Next manual as the upcoming release.
+  the environment reference; publish the bilingual 2.1 manual and preserve the 2.0 snapshot.
 
 ## [2.0.3] — 2026-09-08
 

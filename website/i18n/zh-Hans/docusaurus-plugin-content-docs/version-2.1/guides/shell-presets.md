@@ -1,0 +1,99 @@
+---
+title: 管理 Shell 预设
+sidebar_position: 1
+---
+
+# 管理 Shell 预设
+
+Shell 预设把脚本安装到 Shine 的受管目录，并在 `~/.shine/bin/` 创建可直接调用的命令入口。Shine 当前支持 Bash、Zsh 和 PowerShell 的 profile 与命令目录管理；原生命令入口使用 `.sh` 或 `.ps1`，Bun 可作为另一种跨平台命令运行时。
+
+内置类别、平台限制、当前会话命令和所需环境变量见[内置预设](../reference/built-in-presets.md#shell-预设)。
+
+## 查看与安装
+
+```bash
+shine shell list
+shine shell install proxy
+shine shell install utils/shine-env-export # 只安装这一个命令
+shine shell install            # 安装当前平台可用的全部类别
+```
+
+也可以使用自动识别 shell 或 app 类别的简写：
+
+```bash
+shine install proxy
+shine install shell/utils/shine-env-export
+```
+
+类别 target 会启用当前平台可用的全部命令；只需要其中一个命令时，使用明确的
+`category/command` target。修改型命令不接受裸命令名，因为不同类别可能出现同名命令。
+
+安装后需打开新终端或重新加载 shell profile。需要补全时运行：
+
+```bash
+shine completions install
+```
+
+## 修复安装
+
+当受管脚本、命令入口或 PATH 片段需要按当前预设重建时：
+
+```bash
+shine shell install proxy --replace-managed
+shine install shell/proxy --replace-managed
+```
+
+`--replace-managed` 会覆盖 Shine 管理的对应内容。先用 `shine info shell/proxy --diff` 检查状态，避免把有意的本地修改当作损坏处理。
+
+## 安装、升级或卸载中断后怎么办 {#恢复中断的-shell-事务}
+
+如果 Shell 预设操作意外中断，Shine 可能会暂停后续修改操作，并提示先执行恢复：
+
+```bash
+shine shell recover
+```
+
+查看恢复计划，确认后执行。Shine 会根据中断位置撤销未完成的变更，或保留已完成的操作并清理残留文件。
+
+如果相关文件在中断后被修改，Shine 会停止恢复并保留这些文件，避免覆盖你的修改。请保留报错信息和相关文件，根据提示排查，不要手动删除恢复记录或回滚文件。
+
+自动化环境可使用 `shine shell recover --yes` 跳过交互确认；安全检查仍会执行。
+
+## 卸载
+
+```bash
+shine shell uninstall proxy --dry-run
+shine shell uninstall proxy
+shine shell uninstall utils/shine-env-export
+shine shell uninstall proxy --purge
+```
+
+非 dry-run 的 install、uninstall 以及 `shine upgrade` 会显示绑定快照的生命周期 Plan。确认默认
+是 No；自动化必须传入 `--yes`，但有序步骤和权限仍会显示并重新校验。`--dry-run` 是独立预览，
+不能与 `--yes` 组合。
+
+按命令卸载会保留同类别下其他已安装命令；只要兄弟命令仍需要，共享 preset 或 snapshot 文件
+就可能继续保留。`--purge` 会额外删除空的受管预设目录；未指定 target 时会处理整棵 shell
+预设目录。它不会删除 `~/.shine/config.toml`。
+
+## 内置常用命令
+
+| 类别 | 命令 | 用途 |
+| --- | --- | --- |
+| `image-tools` | `img-compress`、`img-resize`、`img-convert` | 使用 Bun 1.3.14 或更高版本批量处理 JPEG、PNG、WebP |
+| `proxy` | `setproxy`、`usetproxy` | 设置或清除当前终端会话的代理变量 |
+| `utils` | `copyfile` | 通过 OSC52 将文件内容复制到本地剪贴板 |
+| `utils` | `shine-env-export` | 将 Shine env 值载入当前 shell |
+| `utils` | `shine-theme-sync` | 输出当前终端明暗主题的 shell `export` 语句 |
+| `agent` | `ccenv` | 选择 Codex、DeepSeek 或 Qwen provider，并在隔离的子进程环境中启动 Claude Code；需要 Bun |
+
+某些类别按平台提供不同脚本；`shine shell list` 只显示当前平台可用的条目。
+
+`ccenv` 默认通过本机 `http://127.0.0.1:8317` 的 CLIProxyAPI 使用 Codex，也可交互选择 DeepSeek 或 Qwen。相应凭据使用 `CLIPROXYAPI_AUTH_TOKEN`、`DEEPSEEK_API_KEY` 或 `QWEN_API_KEY`；加密值使用同名的 `_SECRET` 后缀，旧版 `_GPG_SECRET` 仍可读取。所选 provider 的变量只传给启动的 Claude 进程，不会修改当前终端。Claude 参数会原样转发；若首个参数与 `ccenv` 的 `--run` 兼容参数冲突，先写 `--`：
+
+```bash
+ccenv --print "hello"
+ccenv -- --run
+```
+
+想用 Bun 编写跨平台命令预设？请参阅[可选运行时的 Shell 入口](./custom-presets.md#可选运行时的-shell-入口)。

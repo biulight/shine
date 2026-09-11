@@ -1,0 +1,645 @@
+---
+title: 管理环境变量与密钥
+sidebar_position: 5
+---
+
+# 管理环境变量与密钥
+
+Shine 可以保存预设模板变量，也可以使用 GPG 或 age 封存项目环境中的敏感值。封存后的
+密钥既可以提供给本机子进程，也可以通过 SSH Secret Broker 由远端命令按需请求本机解密。
+不要把真实密钥写进公开仓库或文档示例。
+
+密钥操作统一位于 `shine env secret` 下；workspace 形式的 `shine env run` 和 `env run --with`
+用于按需向子进程注入变量。若目标命令在 SSH 远端，先阅读下文“向远端命令提供变量与密钥”，
+选择直接转发或按需解密。
+
+## 查看和设置变量
+
+```bash
+shine env list
+shine env get HTTP_PROXY_PORT
+shine env set HTTP_PROXY_PORT 6152
+shine env delete HTTP_PROXY_PORT
+```
+
+`PROXY_NO_PROXY` 控制 `setproxy` 设置的 `NO_PROXY` 和 `no_proxy`，默认为
+`localhost,127.0.0.1,::1`。修改它或其他代理变量后，`shine update` 会把已安装的
+`proxy` shell 预设标记为可更新；运行 `shine upgrade` 应用新值。
+
+内置图片命令默认使用 `IMAGE_QUALITY=80`、`IMAGE_MAX_WIDTH=1920`、
+`IMAGE_MAX_HEIGHT=1080`。可用 `--quality`、`--width`、`--height` 只覆盖当次运行，也可用
+`shine env set` 为当前机器保留不同默认值。
+
+`shine env list` 默认隐藏敏感值；`--reveal` 会显示完整值，应只在安全终端中使用。输出会按实际来源分为 `config.toml`、全局覆盖文件、overlay 和项目覆盖文件，便于确认哪个值正在生效。变量通常保存到当前配置的 `[env]` 表。
+
+全局 `~/.shine/config.toml` 和项目 `shine.config.toml` 的 `[env]` 支持简写字符串，也支持
+同时记录值和说明：
+
+```toml
+[env]
+HTTP_PROXY_PORT = "6152"
+MY_API_TOKEN = { value = "<令牌>", description = "内部 API 的访问令牌" }
+```
+
+`value` 的使用方式与简写字符串完全相同；`description` 会显示在 `shine env list` 中。
+对已有详细条目执行 `shine env set MY_API_TOKEN <新值>` 时，Shine 会更新 `value` 并保留
+说明。
+
+若同名键已由全局、overlay 或项目 `shine.env.toml` 覆盖，直接 `set`、`delete` 或 `env secret encrypt --set` 会被拒绝，防止写入一个不会生效的低优先级值。确认应修改该覆盖文件时，添加 `--force`：
+
+```bash
+shine env set HTTP_PROXY_PORT 7890 --force
+shine env delete HTTP_PROXY_PORT --force
+shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --force
+```
+
+对于 `shine preset overlay link --git` 管理的镜像，`--force` 写入会在下次 `shine preset pull` 时被丢弃；应改在 overlay 上游仓库维护该值。
+
+不带 `[env]` 表头的全局、overlay 和项目 `shine.env.toml` 覆盖文件也支持这两种格式：
+
+```toml
+HTTP_PROXY_PORT = "7890"
+PROXY_HOST = { value = "127.0.0.1", description = "本地代理主机" }
+```
+
+详细项同时覆盖值和说明；字符串只覆盖值，并保留低优先级配置或 preset catalog 提供的
+说明。数字、数组、缺少 `value` 等无效条目会直接报错，不会被静默忽略。
+
+修改用于模板渲染的值后，运行：
+
+```bash
+shine upgrade
+```
+
+## 使用 GPG 加密值
+
+Shine 在内部完成 GPG 和 age 密文的 Base64 编解码，这些操作无需外部 `base64` 命令。
+仍需安装所选的加密后端（`gpg` 或 `age`）及其身份所需的插件。已有 Shine 密文无需迁移。
+允许 Base64 换行和 ASCII 空白；缺失或错误 padding 等畸形编码会被拒绝。
+
+先确认本机的 `gpg` 可以使用对应公钥；私钥保存在 YubiKey 时，可参考
+[在 macOS 和 Windows 使用 YubiKey OpenPGP](https://blog.biulight.top/timeline/knowledge/yubikey-openpgp)完成接入。然后在
+`~/.shine/config.toml` 中指定默认接收者（可同时加密给多把 GPG 公钥）：
+
+```toml
+gpg_recipients = ["user@example.com", "team-backup@example.com"]
+```
+
+将已有明文变量加密并保存为另一个 key：
+
+```bash
+shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET
+shine env secret decrypt MY_TOKEN_SECRET
+```
+
+加密只需要接收者公钥；解密时才需要连接持有对应私钥的 YubiKey，并按提示输入 PIN 或触摸设备。
+
+旧版的单值 `gpg_key_id` 已废弃。先用 `shine state migrate --dry-run` 查看，再运行
+`shine state migrate` 将它转换为 `gpg_recipients`；工作区中旧的
+`[env.encryption].recipient` 也会在 `env run` 或 `env secret seal` 需要使用时提示迁移。
+
+需要导出到当前 shell 时：
+
+```bash
+eval "$(shine env secret export MY_TOKEN)"
+eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
+```
+
+安装 `utils` shell 预设后，也可以使用 `shine-env-export MY_TOKEN --as API_TOKEN`。
+
+## 使用 age identity
+
+Shine 支持 `age` 作为第二种密钥后端。它适合把密文提交到团队仓库中，并加密给多个成员各自的 recipient。已有 GPG 密文不需要迁移：不带标签的旧密文继续按 GPG 解密，`age` 后端生成的新密文会带有 `age:` 标签。
+
+先确认 age 1.3 或更高版本已安装并位于 `PATH` 中。生成一个普通软件 identity，并记录输出中的
+recipient：
+
+```bash
+shine env secret identity init
+shine env secret identity list
+```
+
+普通 identity 使用 `age-keygen`，默认写入 `~/.shine/age/identity.txt`。
+
+### 在 macOS 上使用 Touch ID
+
+如果希望每次解密都需要本机用户授权，macOS 上可以改用由 Secure Enclave 托管的 identity。
+这种方式还需要安装 `age-plugin-se`；Homebrew 可以同时安装两个依赖：
+
+```bash
+brew install age age-plugin-se
+```
+
+不要再执行上面的普通 identity 初始化，而是运行 Touch ID 形式，然后记录它的 recipient：
+
+```bash
+shine env secret identity init --touch-id
+shine env secret identity list
+```
+
+`--touch-id` 只适用于 macOS。解密时需要本机 Secure Enclave，并会触发 Touch ID 或系统密码
+授权；即使 identity 文件被复制到另一台机器，通常也不能直接解密。看到意外的授权提示时，
+应取消授权并检查触发它的命令。如果 AI Agent 可以在本机运行命令，请继续阅读
+[在 AI Agent 参与开发时保护环境密钥](./agent-secret-safety.md#touch-id-改善什么)，了解这种方式的安全边界。
+
+新建 Touch ID identity 会输出 `age1tag...` recipient。age 1.3 可以在 macOS、Linux 或
+Windows 上直接向这个公开 recipient 加密，无需在加密端安装 `age-plugin-se`；只有解密端需要
+插件和原来的 Mac。Tagged recipient 以可识别性换取这种跨平台能力：已经知道 recipient 的人
+可以判断某份密文是否发给它。
+
+如需在本机所有项目中使用同一默认后端和 recipient，将它们写入 `~/.shine/config.toml`：
+
+```toml
+secret_backend = "age"
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
+age_identity = "~/.shine/age/identity.txt"
+age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
+```
+
+旧的 `age_identity` 单路径会与新增的 `age_identities` 路径列表按顺序合并并去重。这样普通
+identity、Secure Enclave identity 和硬件 plugin stub 可以共存，不需要复制任何文件。
+
+如果 recipient 是某个项目团队共享的名单，应将它写入项目根目录的
+`shine.workspace.toml` 的 `[env.encryption]`；这样可以随项目提交，而不会影响本机的其他
+项目。该配置会优先于全局默认值，完整格式见下文“使用分层项目环境”。不要将私有
+`age_identity` 提交到仓库。
+
+也可以只在单次命令中选择后端和 recipient：
+
+```bash
+shine env secret encrypt --backend age -r age1tag1qexample... -r age1qteammate... --from MY_TOKEN
+shine env secret seal --backend age -r age1tag1qexample... -r age1qteammate...
+```
+
+`-r/--recipient` 对 GPG 和 age 都可以重复使用。
+
+旧版 Secure Enclave identity 可能使用 `age1se...` recipient，导致仅执行加密的电脑也必须
+安装 `age-plugin-se`。在 workspace 所在项目中预览并应用公开 recipient 转换：
+
+```bash
+shine state migrate --dry-run
+shine state migrate
+```
+
+迁移只会把配置中的 `age1se...` 改为等价的 `age1tag...`，不会读取 identity 或解密 secret。
+它会一并检查全局配置、当前项目配置和最近的 workspace；dry-run 按文件报告转换数量，应用时
+保留数组顺序、注释和重复项，并在写入任何文件前校验全部旧 recipient。迁移后再次 seal，才会
+生成使用原生 tagged recipient 的新密文；已有密文不会改变，仍可照常解密。
+
+### 为已有 workspace 密钥添加接收者
+
+仅修改 `age_recipients` 不会更新已有密文。在 `shine.workspace.toml` 中保留原有接收者，
+追加新成员的公开 recipient：
+
+```toml
+[env.encryption]
+backend = "age"
+age_recipients = ["age1existing...", "age1newmember...", "age1backup..."]
+```
+
+将所有占位符替换为实际 recipient，然后在本机 identity 仍能解密旧 payload 的设备上运行：
+
+```bash
+shine env secret seal
+```
+
+`seal` 会解密旧 payload，再按当前完整接收者名单重新加密。即使 `[secret]` 中所有项都是
+`true`，也会保留原值并重新加密；保持这些项为 `true` 即可，无需导出明文或重新输入值。
+新增成员只需提供公开 recipient，不需要提供私有 identity。解密旧 payload 时，仍可能
+要求 Touch ID、手机授权或对应 identity 的其他确认。
+
+不指定文件时，`seal` 会处理 workspace 在已配置的各个 mode（包括 `default_mode`）下
+引用的已存在源文件。使用 `shine env secret seal <FILE>` 可只处理一个源文件。如果封存
+因错误中止，部分文件可能已更新；应解决报告的错误并重新运行，再共享结果。
+
+将更新后的 workspace 配置和重新封存的共享源文件一起提交。名单中的每个接收者都能
+独立解密新密文；请新成员在自己的设备上验证访问。新接收者无法解密 Git 历史中的旧密文。
+同样，移除接收者并重新封存也不会撤销其对历史密文的访问，或轮换上游服务中的真实凭据；
+必要时应在上游服务中轮换已泄露的凭据。
+
+### 在 Windows 和 macOS 上实验手机授权 {#在-windows-上实验手机授权}
+
+[`age-plugin-phone`](https://github.com/biulight/age-plugin-phone) 已提供面向技术用户的有限
+Beta，仍只能用于合成或可丢弃数据，不能保护真实或生产 secret。安装、桌面与手机制品匹配、
+配对和恢复验证请参照项目的
+[Beta 发布说明](https://github.com/biulight/age-plugin-phone/blob/main/docs/releases/v0.1.0-beta.1.md)
+和 [Windows Beta 快速入门](https://github.com/biulight/age-plugin-phone/blob/main/docs/windows-beta-quickstart.md)。
+始终保留独立验证过的恢复 recipient。
+
+Windows 要求 Windows 11 x64、TPM 2.0、Microsoft Platform Crypto Provider，以及能力检查
+合格的 Android StrongBox 手机。Windows 和 macOS 均支持通过 Cargo 从源码安装，构建前提
+以插件文档为准。可选的 Windows ZIP 使用测试签名，不要将其私有签名根证书导入系统信任库。
+macOS 没有安装器包。
+
+Shine 也开放了实验性 macOS 配对入口。请按照插件的
+[macOS 源码快速入门](https://github.com/biulight/age-plugin-phone/blob/main/docs/macos-quickstart.md)
+搭配匹配的 Android StrongBox 应用。插件要求在已登录用户会话中使用真正的 Secure Enclave；
+Intel/T2、其它硬件和系统版本尚未普遍验证。编译部署下限不代表已经验证的最低 macOS 支持版本。
+iPhone 验证仅限现有开发设备，Beta 不提供可供外部用户安装的 iOS 应用。硬件检查由插件负责。
+
+Beta 已验证的传输范围是 Android Developer USB 和记录中设备的前台 Wi-Fi；tagged recipient
+的 QR 流程、BLE 和后台唤醒不在该范围内。macOS 的 `auto` 在没有 Wi-Fi listener 响应时可能
+选择 QR，因此请先准备好手机 Wi-Fi listener，或在此流程中显式使用 Android ADB。
+操作失败后，不要通过恢复旧的插件 replay 状态来修复；请遵循插件的恢复说明。
+
+例如，在已授权 Android ADB 设备的 Mac 上运行：
+
+```sh
+shine env secret identity init --phone --label "Work Mac" --transport adb --adb-serial SERIAL
+```
+
+安装匹配的桌面 plugin 和 Android 应用后，可以通过 Shine 启动 plugin 自己的事务式配对：
+
+```powershell
+shine env secret identity init --phone --label "NUC WiFi Pair" --transport auto
+```
+
+如果希望通过局域网完成配对，先在手机端打开显式的 **Pair · Wi-Fi** 操作，再运行上述
+命令。Windows 和 macOS 上的 `auto` 会先执行一次有界的 Wi-Fi discovery：只有一个匹配且位于前台的手机
+listener 响应时选择 Wi-Fi；没有 listener 响应时，会在创建 pairing offer 之前选择
+Windows 的 Developer USB/ADB 或 macOS 的 QR。QR 需要受支持的摄像头，并按插件提示完成
+扫码。多个响应或本机 discovery 错误会安全失败；协议处理开始后不会再切换
+transport。`auto` 是默认值，因此省略 `--transport auto` 时策略不变。
+
+Developer USB 的顺序相反：先启动桌面命令；plugin 选择 ADB 并开始等待手机连接后，再在手机端
+点击 **Pair · USB**。使用 `--transport adb` 时，plugin 会在预检完成后直接选择 ADB。手机只会
+立即尝试连接一次，因此如果在桌面建立 `adb reverse` 规则前点击 **Pair · USB**，手机会报告
+`usb_transport_failed`。
+
+配对标签默认使用 Windows 或 macOS 计算机名；无法取得有效名称时使用 `Shine desktop`。
+显式标签不能为空白，且最多为 64 个 UTF-8 字节。也可以显式指定标签、固定使用 Developer USB 或 QR，
+以及在存在多台 ADB 设备时指定序列号：
+
+```powershell
+shine env secret identity init --phone --label "Work laptop"
+shine env secret identity init --phone --transport adb
+shine env secret identity init --phone --transport qr
+shine env secret identity init --phone --adb-serial SERIAL
+```
+
+配对、硬件密钥、replay、locator、中断恢复和清理状态仍完全由 plugin 管理。完整指纹确认成功后，
+Shine 只会把公开 identity stub 路径加入当前用户的全局 `age_identities`。如果当前项目显式
+覆盖了 `age_identity` 或 `age_identities`，命令会在配对前退出，避免创建一个随后被项目忽略
+的 identity。对应的手工配置形式如下，请使用插件在当前平台上实际返回的绝对 identity 路径：
+
+```toml
+age_identities = ["/absolute/path/returned/by/plugin/identity.txt"]
+```
+
+配置多个 phone identity stub 是有效用法：age 应把与当前密文不匹配但格式有效的 stub 视为
+普通未命中，并继续尝试下一个 identity。旧版 `age-plugin-phone` 可能反而在第一个不匹配的
+stub 处终止。如果 hybrid unwrap 只在配置多个 phone identity 时失败，可设置
+`AGE_PLUGIN_PHONE_MESSAGES=1` 确认插件诊断并升级插件。临时规避时只配置匹配的 identity
+路径即可；不要仅为了缩小这个列表而删除配对或恢复状态。
+
+这个快捷命令不会修改 `secret_backend`，也不会自动添加 recipient。plugin setup 如果中断，
+必须按照其文档使用 `age-plugin-phone setup --resume` 或 `age-plugin-phone setup --cleanup`；
+不要把重新发起一次配对当作恢复手段。
+
+在可提交到仓库的项目 `shine.workspace.toml` 中，同时加入配对输出的 `age1tag...` recipient 和一个已经独立验证过的恢复 recipient：
+
+```toml
+[env.encryption]
+backend = "age"
+age_recipients = ["age1tag...", "age1..."]
+```
+
+Shine 默认请求 `--recipient-type tag`，配对前要求 age 1.3+，并且桌面插件和手机应用都必须
+支持 tagged recipient。该能力从 `0.1.0-beta.1` 开始提供，旧 `alpha.5` 版本不包含它。
+Shine 不会重新发起配对，也不会自动退回其它 recipient 类型。向 `age1tag...` 加密的电脑只需
+age 1.3+，无需 phone 插件，也不会弹出手机授权。配对和手机解密仍需插件及匹配的手机应用。
+
+如需保留插件的 phone recipient 格式，请显式选择：
+
+```powershell
+shine env secret identity init --phone --recipient-type phone
+```
+
+每台向 `age1phone...` 加密的电脑仍需安装 `age-plugin-phone`。插件自身仍默认 `phone`，
+Shine 会显式传入所选类型。与 phone v2 的私有 recipient 选择不同，知道 tagged recipient 的人
+可以判断密文是否发给它。
+
+对于已有配对，先升级并验证桌面插件和手机应用的 tag 支持，再导出公开 tag recipient，无需重新配对：
+
+```powershell
+age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag
+```
+
+替换全局或项目 `age_recipients`，或 workspace `[env.encryption].age_recipients` 中对应的
+recipient，保留已经独立验证的恢复 recipient，再重新 seal。`shine state migrate` 不转换
+phone recipient。导出不会改写 stub 或已有密文；`identity list` 仍显示 stub 中记录的 recipient。
+重新封存已有 payload 需要先解密，因此可能要求手机授权；参见
+[为已有 workspace 密钥添加接收者](#为已有-workspace-密钥添加接收者)。修改 recipient 不会撤销对历史密文的访问。
+
+使用 `auto` 配对后，如果希望后续
+解密也优先走 Wi-Fi，请开启 **Wi-Fi auto-listen** 并保持手机应用在前台。plugin 会在创建
+unwrap request 前发现匹配的 listener；未发现时在 Windows 上选择 Developer USB/ADB，在 macOS 上选择 QR，不会并行竞速或
+在请求开始后自动重试其它路径。解密由手机保护的 secret（包括通过 `shine env run` 使用它）时，
+标准 age plugin 会为每次 file key 解包要求一次新的强生物验证。Developer USB 和 Wi-Fi 的 plugin 提示默认
+静默；设置 `AGE_PLUGIN_PHONE_MESSAGES=1` 可显式开启。QR 请求必须由手机扫描，因此仍会显示在终端中。
+`shine env secret decrypt` 成功时只写入解密值，同时屏蔽 age 客户端自身的等待提示，并且不会额外添加换行。
+Shell 主题仍可能主动把下一条 prompt 放到新行。对于需要保留的数据，绝不能只配置这个实验性手机
+recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台电脑的 TPM/Secure Enclave 密钥或该 plugin 的本地状态。
+
+如果 AI Agent 会参与开发，先阅读[在 AI Agent 参与开发时保护环境密钥](./agent-secret-safety.md)，确认 identity 文件、Touch ID、手机授权提示和命令执行权限的安全边界。
+
+## 只向一个命令提供变量
+
+不修改当前终端、也不创建 workspace 文件时，使用可重复的 `--with`：
+
+```bash
+shine env run --with MY_TOKEN -- bun run build
+shine env run --with MY_TOKEN=API_TOKEN -- bun run build
+shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
+shine env run --no-workspace --with MY_TOKEN -- bun run build
+```
+
+每个 `KEY` 都优先解密 `<KEY>_SECRET`，不存在时才读取明文 `<KEY>`。等号右侧是子进程中
+的变量名。显式 `--with` 值优先于当前进程和 workspace 的同名变量。
+
+`--no-workspace` 会完全跳过 `shine.workspace.toml` 查找，只合并当前进程环境和显式
+`--with`；它不能与 `--workspace` 或 `--mode` 同时使用。这个模式也用于需要固定读取
+Shine 配置环境、但不应受当前工作目录影响的受管 Bun 命令入口。
+
+## 选择单次注入还是透明代理
+
+偶尔执行一次敏感操作时，优先使用单次注入。例如，Cargo 的 `cargo:token` credential
+provider 启用时，可以通过 `CARGO_REGISTRY_TOKEN` 读取 crates.io token，因此执行 yank 时
+不必把 token 留在 Shell 中，也不必长期启用命令代理：
+
+```bash
+shine env run --no-workspace \
+  --with CARGO_REGISTRY_TOKEN \
+  -- cargo yank my-crate@1.2.3
+```
+
+`--with CARGO_REGISTRY_TOKEN` 会优先解密 `CARGO_REGISTRY_TOKEN_SECRET`，只在本次运行中
+注入 Cargo。Cargo 及其启动的后代进程仍然可以读取该值。日常持久使用 Cargo 认证时，Cargo
+官方更推荐操作系统 credential provider；只有明确希望把 token 加密保存在 Shine 中时，才选择
+Shine 注入。详见 [Cargo registry authentication](https://doc.rust-lang.org/stable/cargo/reference/registry-authentication.html)
+和 [`cargo yank`](https://doc.rust-lang.org/stable/cargo/commands/cargo-yank.html)。
+
+### 为固定凭据变量安装透明代理
+
+如果一个 CLI 每次调用都需要同一个固定凭据变量，可以安装透明代理。有些 CLI（例如 GitHub
+CLI）不会接受从命令行传入的 token，而是读取 `GH_TOKEN` 这类环境变量：
+
+```bash
+shine env proxy install gh --with GH_TOKEN
+gh pr list
+```
+
+Shine 会在 `~/.shine/bin/` 创建同名 shim，并记录当前 `PATH` 中找到的真实命令。运行 `gh`
+时，shim 只在它的子进程中解析 `GH_TOKEN_SECRET`；若不存在密文，才读取明文 `GH_TOKEN`。
+该值不会写回或导出到父 Shell。`--with` 可重复使用，也可写成 `KEY=ALIAS`，以不同的变量名
+传给目标命令。
+
+代理规则作用于整个命令，不能只匹配某个子命令。如果明确要代理 Cargo，应在不需要 token 时
+停止注入：
+
+```bash
+shine env proxy install cargo --with CARGO_REGISTRY_TOKEN
+shine env proxy disable cargo
+
+# 之后只在需要凭据的操作前启用：
+shine env proxy enable cargo
+cargo yank my-crate@1.2.3
+shine env proxy disable cargo
+```
+
+启用期间，每个 Cargo 子命令及其后代进程都可能继承 token。`disable` 会保留 shim，只停止
+解密和注入，并直接转发到真实 Cargo。偶尔执行 yank 时，应优先采用上面的单次 `env run`。
+
+只代理你明确允许的裸命令名；命令名只能包含 ASCII 字母、数字、`-`、`_` 或 `.`。安装前请确认
+`~/.shine/bin/` 已在 `PATH` 的靠前位置，且目标命令不是另一个 Shine 代理。若同名入口已存在
+但并非 Shine 创建，安装会拒绝覆盖它。
+
+默认规则保存在全局 `~/.shine/config.toml`。在含有 `shine.config.toml` 的项目内加入
+`--project`，可将该命令的规则限定到项目；同一命令的项目规则会覆盖全局规则：
+
+```bash
+shine env proxy install gh --with GH_TOKEN --project
+shine env proxy list
+```
+
+需要临时保留 shim、但禁止任何解密或注入时，可禁用规则。禁用后命令会直接转发给真实程序：
+
+```bash
+shine env proxy disable gh
+shine env proxy enable gh
+shine env proxy disable gh --project
+```
+
+不再需要代理时，移除 Shine 管理的 shim 及其用户级规则：
+
+```bash
+shine env proxy uninstall gh
+```
+
+如果真实命令被升级、移动或删除，重新执行安装命令以记录新的目标路径。
+
+## 向远端命令提供变量与密钥
+
+通过 `shine ssh` 运行远端命令时，根据远端需要看到明文的范围选择方式：
+
+| 目标 | 本机命令 | 明文可见范围 |
+| --- | --- | --- |
+| 转发普通变量 | `shine ssh --with API_URL dev` | 远端登录 shell 或指定命令 |
+| 解密并直接转发一个密钥 | `shine ssh --with-secret API_TOKEN dev` | 远端登录 shell 或指定命令 |
+| 由远端子命令按需请求本机解密 | `shine ssh --secret-broker ... dev` | 仅获准启动的远端子进程 |
+
+`--with-secret KEY[=ALIAS]` 会在建立会话时解密本机 `KEY_SECRET`，适合可信远端上的临时
+操作。远端登录 shell 及同账号进程可能读取该明文，不应把它理解为受隔离的密钥通道。
+
+若私钥、age identity 或 YubiKey 只保留在本机，而远端项目保存已封存的 workspace 密文，
+使用 SSH Secret Broker。远端只提交待运行命令和密钥请求，本机会校验允许列表或精确策略，
+确认后在本机解密，再把明文短时注入获准的远端子进程：
+
+```bash
+# 本机：允许远端按需请求 API_TOKEN；每次请求都在本机确认。
+shine ssh --secret-broker --allow-secret API_TOKEN dev
+
+# 远端：只向这个子进程注入 API_TOKEN。
+shine env run --no-workspace --secret-broker --secret API_TOKEN -- bun run build
+```
+
+Secret Broker 不会把解密私钥传到远端，也不会把明文放进远端登录 shell；但目标子进程、
+远端管理员和同账号恶意进程仍可能读取明文。固定项目应使用绑定 workspace 摘要、mode、完整
+命令和可释放键的本机策略。完整的策略登记、检查、更新与安全边界见
+[SSH 会话：密钥代理与文件传输](./ssh-transfer.md#按需向远端命令提供密钥)。
+
+## 从 dotenv 初始化工作区
+
+已有 Vite 风格的 `.env` 文件时，可在项目根目录生成 Shine workspace 和对应的 TOML 环境源：
+
+```bash
+shine env workspace init --from-dotenv --dry-run
+shine env workspace init --from-dotenv
+```
+
+它读取 `.env`、`.env.local`、`.env.<mode>` 与 `.env.<mode>.local`，自动发现 mode，并保持该覆盖顺序。原 dotenv 文件不会被修改；生成目标已存在时命令会拒绝覆盖，确认后才添加 `--force`。只导入指定 mode 时可重复使用 `--mode`：
+
+```bash
+shine env workspace init --from-dotenv --mode development --mode production
+```
+
+导入时可将明确知道的敏感键放进 `[secret]`，之后配置 recipient 并封存。未标记的值会作为明文导入；不要把实际凭据误当作普通配置提交。
+
+```bash
+shine env workspace init --from-dotenv --secret DATABASE_URL
+shine env secret seal
+```
+
+为避免改变 dotenv 语义，包含插值（例如 `${BASE_URL}`）或带转义的双引号值的文件会被拒绝；先将它们解析为最终值后再导入。即使没有选择 `--secret`，生成文件仍会保留带说明的空 `[secret]` 表。
+
+## 将 workspace 导出为 dotenv
+
+当其他工具需要普通 dotenv 文件，或者准备停止使用 Shine env 时，可导出某个 mode 合并后的最终结果：
+
+```bash
+shine env workspace export \
+  --format dotenv \
+  --mode production \
+  --output .env.production.local
+```
+
+`--format` 为必填项，以便明确导出格式。命令按 workspace 声明的顺序合并环境源，但不会混入当前进程变量或 `--with` 值。默认只导出最终生效的 `[plain]` 项，不会解密 payload；若后层 secret 覆盖了前层 plain，同名旧明文也不会被导出。
+
+只有目标确实需要完整可运行环境时，才显式包含已经封存的 secret：
+
+```bash
+shine env workspace export \
+  --format dotenv \
+  --mode production \
+  --output .env.production.local \
+  --include-secrets
+```
+
+这会把 secret 以明文写入文件。在 Unix 上，含 secret 的新输出文件权限为仅所有者可读写的 `0600`；无论使用什么平台，都应将它排除在版本控制之外。目标已存在时命令默认拒绝覆盖，确认后才添加 `--force`；`--dry-run` 只报告 mode、目标路径和变量数量，不显示值，也不写文件。
+
+导出文件不含 Shine 元数据，也不依赖 Shine 运行。若要停用 Shine env，请逐个导出并验证所需 mode，将含 secret 的输出加入 `.gitignore`，移除 `shine env run` 包装，最后再自行归档或删除 `shine.workspace.toml` 与对应的 `*.shine.toml` 环境源。导出命令不会删除这些源文件。
+
+## 使用分层项目环境
+
+在项目根目录创建 `shine.workspace.toml`，声明可用 mode、按顺序合并的文件和项目共享的
+GPG recipient：
+
+```toml
+version = 2
+
+[env]
+modes = ["development", "production"]
+default_mode = "development"
+files = [
+  ".env.shine.toml",
+  ".env.local.shine.toml",
+  ".env.{mode}.shine.toml",
+  ".env.{mode}.local.shine.toml",
+]
+
+[env.encryption]
+gpg_recipients = ["user@example.com", "team-backup@example.com"]
+# 团队使用 age 时，取消以下两行注释，并填入每位成员的 recipient
+# backend = "age"
+# age_recipients = ["age1tag1qexample...", "age1qteammate..."]
+```
+
+后面的环境文件覆盖前面的文件。`{mode}` 会替换为 `--mode` 指定的值；省略 `--mode`
+时使用 `default_mode`。环境源文件可以同时包含明文值和待封存的 secret：
+
+```toml
+version = 1
+
+[plain]
+VITE_APP_NAME = "Example App"
+
+[secret]
+DATABASE_URL = true
+API_TOKEN = false
+SENTRY_TOKEN = "<待封存的值>"
+
+[payload]
+data = "<由 Shine 管理的 GPG 密文>"
+```
+
+- `true` 保留 payload 中已有的密文值。
+- `false` 会在下次 `seal` 时安全提示输入。
+- 字符串会在封存后替换为 `true`，避免明文继续留在文件中。
+
+封存待处理的 secret，再用合并后的环境启动命令：
+
+```bash
+shine env secret seal
+shine env run --mode production -- bun run build
+```
+
+`seal` 默认处理 workspace 引用的环境文件。可用 `shine env secret seal <FILE>` 只处理一个文件，
+或通过 `--workspace <FILE>` 指定其他 workspace；`-r/--recipient` 可临时覆盖接收者。
+
+默认情况下，当前进程已经存在的环境变量优先于 workspace。设置
+`env.override_process_env = true` 后改由 workspace 值覆盖；显式 `--with` 始终具有最高
+优先级。
+
+策略和源均为单后端且配置了可用 recipient 时，`env run` 会在系统缓存目录按 mode
+使用所选后端保存加密缓存。
+workspace、源文件内容或文件顺序变化后缓存会自动重建；无需手工编译或删除缓存。
+
+个人覆盖文件应加入 `.gitignore`：
+
+```gitignore
+.env.local.shine.toml
+.env.*.local.shine.toml
+```
+
+不要提交含有尚未封存字符串的环境文件。可在提交前搜索 `[secret]` 项并确认它们都已变为
+`true`。
+
+环境文件结构和覆盖顺序见[配置参考](../reference/configuration.md)。
+
+## 让 GPG 与 age 成员共享一份 payload
+
+从 Shine 2.0.x 转换工作区前，先将所有读取端（包括 SSH broker 所在本机）升级到支持
+hybrid 的版本。旧读取端无法读取 `hybrid:` 密文。封存需要 GnuPG 2.2–2.5 和 age 1.3+，
+读取端只需所选后端。既有未标记 GPG 和 `age:` 密文继续
+可读，普通读取不迁移文件。显式配置工作区，替换以下公钥占位符：
+
+```toml
+[env.encryption]
+backend = "hybrid"
+gpg_recipients = ["<full 40-hex primary fingerprint>"]
+age_recipients = ["age1..."]
+```
+
+运行 `shine env secret seal --workspace shine.workspace.toml`。读取旧密文需要其对应
+identity；重新封存需要两种加密工具及完整公钥名单。任意一组均可独立读取同一份数据密文。
+混合 GPG 密钥封装排除本机选项文件与隐式额外收件人；group 和模糊用户 ID 会在解密已有
+秘密前被拒绝。
+
+工作区策略为 hybrid，或当前 mode 消费的源含混合 payload 时，`env run` 使用本机选定的
+GPG 或 age 后端保存加密编译缓存。建立缓存只需要该后端；收件人取工作区对应名单，
+不回退到全局名单。名单缺失时跳过缓存；缓存写入失败只警告，不阻止使用成功编译的环境运行。
+
+命中缓存后只解密一次合并结果。不设置 TTL，也不保存解锁状态：每次读取仍遵循后端的
+授权要求。工作区或源内容、源顺序、所选后端、收件人变化会使缓存失效。GPG 和 age 缓存
+分开保存，旧缓存不能替代 hybrid 源。畸形混合封装在缓存解密前失败；缓存解密开始后，
+失败或取消都会终止命令，不再重试解密源文件。导出不使用此缓存，默认省略秘密；
+`--include-secrets` 才释放秘密，dry-run 不解密秘密。
+
+可在选定的 `shine.workspace.toml` 旁创建个人配置 `shine.config.local.toml`，
+使用 `--workspace` 时也以该工作区所在目录为准：
+
+```toml
+hybrid_decrypt_backend = "age"
+```
+
+将 `/shine.config.local.toml` 加入该项目的 `.gitignore`。本机 `env run`、
+`env secret seal` 和 `env workspace export` 使用此偏好。文件或字段缺失时继承全局
+`config.toml`；两层都未设置时沿用能力检查和交互选择。配置无效会明确报错。
+此文件目前只接受 `hybrid_decrypt_backend = "gpg" | "age"`。它属于受信任的本机项目配置，
+能够修改它的程序也能改变所选授权路径。SSH broker 请求不加载或传输此文件；实际解密
+机器仍使用自己的配置并执行原有释放检查。
+
+封存会锁定其他遵守协议的 Shine 封存进程，并在替换前复核工作区与源文件捕获字节。
+硬件批准期间编辑将终止当前文件；此前完成的文件保留，剩余文件不再处理。封存期间请勿
+编辑：不遵守锁的编辑器可能在最后复核到替换之间产生竞态。失败后明文待封存项可能仍在，
+Shine 不会声称已清除。`.shine-seal.lock` 锁文件可能保留，不含秘密；封存仍在进行时不要删除。
