@@ -128,10 +128,29 @@ impl FileSystemObservationHost for InMemoryHost {
     ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
         Box::pin(async move {
             let state = self.state.lock().expect("in-memory host lock");
-            if state.nodes.contains_key(path) {
-                Ok(path.to_path_buf())
-            } else {
-                Err(not_found(path))
+            let mut current = path.to_path_buf();
+            let mut seen = std::collections::BTreeSet::new();
+            loop {
+                if !seen.insert(current.clone()) {
+                    return Err(HostError::new(
+                        std::io::ErrorKind::InvalidData,
+                        anyhow::anyhow!("in-memory symlink loop: {}", path.display()),
+                    ));
+                }
+                match state.nodes.get(&current) {
+                    Some(MemoryNode::Symlink(target)) => {
+                        current = if target.is_absolute() {
+                            target.clone()
+                        } else {
+                            current
+                                .parent()
+                                .unwrap_or_else(|| Path::new(""))
+                                .join(target)
+                        };
+                    }
+                    Some(_) => return Ok(current),
+                    None => return Err(not_found(&current)),
+                }
             }
         })
     }

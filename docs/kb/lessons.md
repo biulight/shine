@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-13 — Command detection must resolve executable symlinks consistently
+
+- **Symptom**: Ubuntu `sys bootstrap` installed `bat`, created the intended
+  `~/.local/bin/bat -> /usr/bin/batcat` alias, then failed because post-install detection still
+  reported `bat` missing.
+- **Root cause**: both security planning and execution searched the correct command directories but
+  accepted only direct `File` metadata. The observation host deliberately uses `symlink_metadata`,
+  so a valid executable symlink was classified as absent.
+- **Fix**: share one command-candidate resolver between planning and execution, follow symlinks to a
+  regular executable target, and bind the resolved target identity into the Plan state. Broken links
+  and links to non-executable targets remain absent.
+- **Rule**: PATH-style command detection must model platform command resolution, including valid
+  symlinks, and its planner and executor must use the same target-validation semantics.
+
 ## 2026-09-11 — Plugin identity misses must not become stanza errors
 
 - **Symptom**: hybrid age unwrap stopped at an older, revoked phone identity even though a later
