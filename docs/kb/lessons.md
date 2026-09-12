@@ -3,6 +3,21 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-13 — Empty permission sets do not imply missing declarations
+
+- **Symptom**: an exported Sys collection could not grant profile-code trust for package-only
+  `neovim` or `fzf`, leaving `sys bootstrap` blocked even though both items had schema-v1
+  permission declarations.
+- **Root cause**: trust derivation normalized an explicit empty declaration and an absent declaration
+  to the same empty permission set, and the CLI rejected both before enrollment. Package-provider
+  effects are intentionally derived from typed metadata, so an explicit declaration can validly be
+  empty.
+- **Fix**: retain declaration presence on the transient trust requirement and reject only a missing
+  declaration; the durable grant remains bound to the exact target, capability, code digest, trust
+  layer, and normalized permission set.
+- **Rule**: preserve author declaration presence independently from its normalized capability set.
+  Empty and absent have different fail-closed meanings.
+
 ## 2026-09-13 — Command detection must resolve executable symlinks consistently
 
 - **Symptom**: Ubuntu `sys bootstrap` installed `bat`, created the intended

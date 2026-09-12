@@ -37,6 +37,10 @@ pub struct TrustRequirementV1 {
     pub target: String,
     pub capability: TrustCapabilityV1,
     pub code_digest: SnapshotDigestV1,
+    /// Whether the Preset explicitly supplied a validated permission declaration.
+    /// An explicit declaration may intentionally normalize to an empty set when all
+    /// required effects are derived from typed metadata.
+    pub permissions_declared: bool,
     pub permissions: PermissionSetV1,
 }
 
@@ -152,6 +156,7 @@ mod tests {
             target: "app/demo".to_string(),
             capability: TrustCapabilityV1::AppGenerator,
             code_digest: SnapshotDigestV1::builder("code").finish(),
+            permissions_declared: true,
             permissions: PermissionSetV1::new([PermissionV1::Command {
                 program: "bun".to_string(),
             }]),

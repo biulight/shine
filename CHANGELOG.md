@@ -7,6 +7,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- Allow target-scoped trust grants for external executable code whose validated Preset metadata
+  explicitly declares an empty permission set, while continuing to reject missing declarations.
+  This restores exported package-only Sys items such as Neovim and fzf when shared profile code is
+  external.
+
 ## [2.1.0] — 2026-09-11
 
 ### Features

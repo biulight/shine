@@ -73,8 +73,9 @@ shine trust list
 shine trust revoke app/example
 ```
 
-Grant 只适用于已经审阅的 target 与权限；代码、来源或权限变化后必须重新审阅。Grant 不能替代每次
-操作前显示的 Plan。旧的 `allow_app_hooks` 和
+Grant 只适用于已经审阅的 target 与权限；代码、来源或权限变化后必须重新审阅。当类型化 Preset
+元数据已经能够推导操作所需的全部权限时，经过验证的显式空权限声明也可以授予信任；完全缺失声明
+仍会阻止操作。Grant 不能替代每次操作前显示的 Plan。旧的 `allow_app_hooks` 和
 `allow_sys_code` 已被忽略，并会在下次保存配置时移除。
 
 ## Env 条目格式与说明

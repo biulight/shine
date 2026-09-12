@@ -94,6 +94,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **A Preset permission declaration is not a grant.** App categories, Shell commands, and Sys items
   may declare schema-v1 capability identities, but those declarations do not create scoped
   external-code trust or bypass administrator authorization, ownership checks, or Plan approval.
+  Declaration presence is distinct from the normalized permission set: a validated explicit empty
+  declaration is legitimate when typed metadata derives every required capability, while an absent
+  declaration remains a fail-closed error. Trust enrollment must preserve that distinction rather
+  than treating both cases as an empty set.
   Untargeted upgrade includes declarations only from installed App categories, installed Shell
   commands, and enabled managed Sys items; merely available embedded, external, or overlay Presets
   cannot contribute required permissions or missing-declaration blockers. A fully current Shell

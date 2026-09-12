@@ -52,15 +52,7 @@ pub async fn handle_grant(config: &Config, target: &str, yes: bool) -> Result<()
     if report.requirements.is_empty() {
         bail!("{target} has no external executable code to trust");
     }
-    if report
-        .requirements
-        .iter()
-        .any(|requirement| requirement.permissions.is_empty())
-    {
-        bail!(
-            "{target} external code has no valid permission declaration; fix and validate the Preset before granting trust"
-        );
-    }
+    validate_grant_requirements(target, &report.requirements)?;
     for requirement in &report.requirements {
         render_requirement(
             requirement,
@@ -93,6 +85,18 @@ pub async fn handle_grant(config: &Config, target: &str, yes: bool) -> Result<()
     });
     save_store(config, &store).await?;
     println!("Trusted current external code for {target}.");
+    Ok(())
+}
+
+fn validate_grant_requirements(target: &str, requirements: &[TrustRequirementV1]) -> Result<()> {
+    if requirements
+        .iter()
+        .any(|requirement| !requirement.permissions_declared)
+    {
+        bail!(
+            "{target} external code has no valid permission declaration; fix and validate the Preset before granting trust"
+        );
+    }
     Ok(())
 }
 
@@ -212,6 +216,18 @@ pub(crate) async fn grant_current_for_test(config: &Config, target: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shine_core::plan::{PermissionSetV1, SnapshotDigestV1};
+    use shine_core::trust::TrustCapabilityV1;
+
+    fn requirement(permissions_declared: bool) -> TrustRequirementV1 {
+        TrustRequirementV1 {
+            target: "sys/package-only".to_string(),
+            capability: TrustCapabilityV1::SysProfileCode,
+            code_digest: SnapshotDigestV1::builder("code").finish(),
+            permissions_declared,
+            permissions: PermissionSetV1::default(),
+        }
+    }
 
     #[test]
     fn trust_targets_must_be_canonical_and_target_local() {
@@ -219,6 +235,22 @@ mod tests {
         assert!(validate_target("sys/mise").is_ok());
         assert!(validate_target("demo").is_err());
         assert!(validate_target("app/demo/other").is_err());
+    }
+
+    #[test]
+    fn explicit_empty_permission_declaration_is_grantable() {
+        assert!(validate_grant_requirements("sys/package-only", &[requirement(true)]).is_ok());
+    }
+
+    #[test]
+    fn missing_permission_declaration_remains_ungrantable() {
+        let error =
+            validate_grant_requirements("sys/package-only", &[requirement(false)]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no valid permission declaration")
+        );
     }
 
     #[cfg(unix)]

@@ -81,7 +81,9 @@ shine trust revoke app/example
 ```
 
 A grant applies only to the reviewed target and permissions. Code, source, or permission changes
-require another review. A grant does not replace the Plan shown for each operation. Retired `allow_app_hooks` and
+require another review. A validated explicit empty permission declaration can be granted when typed
+Preset metadata derives all required operation permissions; a missing declaration remains blocked.
+A grant does not replace the Plan shown for each operation. Retired `allow_app_hooks` and
 `allow_sys_code` fields are ignored and removed on the next configuration save.
 
 ## Environment entry formats and descriptions
