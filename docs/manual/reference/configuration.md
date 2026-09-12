@@ -21,7 +21,7 @@ sync_terminal_theme = true
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 
 secret_backend = "age"
-age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
 age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 
@@ -60,8 +60,12 @@ enabled = false
 
 Legacy `gpg_key_id` and workspace `[env.encryption].recipient` accept only one recipient. Normal
 configuration reads never rewrite them. Preview and apply conversion to `gpg_recipients` with
-`shine state migrate --dry-run` and `shine state migrate`. `env run` and `env secret seal` prompt to
-migrate an old workspace when needed.
+`shine state migrate --dry-run` and `shine state migrate`. The same migration converts legacy
+`age1se...` recipients to age 1.3 native `age1tag...` recipients; this removes the Secure Enclave
+plugin requirement from encrypting computers but makes targeting testable by someone who knows the
+recipient. `env run` and `env secret seal` prompt to migrate an old workspace when needed.
+
+Phone recipients are not converted by `state migrate`. After upgrading and verifying tag support in the plugin and phone app, export with `age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag`, replace the corresponding `age_recipients` value, and reseal while retaining an independent recovery recipient.
 
 ## External-code trust
 
@@ -76,9 +80,10 @@ shine trust list
 shine trust revoke app/example
 ```
 
-A grant binds the canonical target, capability, effective code digest, source layer, and exact
-declared permission set. Code, layer, or permission changes require another review. A grant does
-not replace the security Plan shown for each mutation. Retired `allow_app_hooks` and
+A grant applies only to the reviewed target and permissions. Code, source, or permission changes
+require another review. A validated explicit empty permission declaration can be granted when typed
+Preset metadata derives all required operation permissions; a missing declaration remains blocked.
+A grant does not replace the Plan shown for each operation. Retired `allow_app_hooks` and
 `allow_sys_code` fields are ignored and removed on the next configuration save.
 
 ## Environment entry formats and descriptions
@@ -190,7 +195,7 @@ files = [
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 # Or use age:
 # backend = "age"
-# age_recipients = ["age1se1qexample...", "age1qteammate..."]
+# age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 ```
 
 Sources merge in list order. Current process variables win by default;
@@ -220,8 +225,8 @@ data = "<GPG ciphertext managed by Shine>"
 ```
 
 `shine env secret seal` merges pending values into the encrypted payload and changes sealed entries
-to `true`. `shine env run` merges `[plain]` and decrypted values in source order. With usable GPG
-recipients it also maintains an encrypted, mode-specific cache.
+to `true`. `shine env run` merges `[plain]` and decrypted values in source order. With usable recipients and only single-backend policy/sources, it also maintains an encrypted,
+mode-specific cache.
 
 `shine env run --with KEY[=ALIAS]` injects a value from current Shine `[env]`, preferring
 `KEY_SECRET` and then `KEY`. Explicit injection overrides workspace and process values.
@@ -249,3 +254,23 @@ recipients it also maintains an encrypted, mode-specific cache.
 
 Do not delete manifests manually and expect Shine to rediscover old installations. Prefer the
 corresponding `uninstall --dry-run` and `uninstall` commands.
+
+## Hybrid workspace encryption
+
+`env.encryption.backend = "hybrid"` requires both workspace `gpg_recipients` and
+`age_recipients`, each with a nonblank entry. GPG entries must be locally available
+full 40-hex primary public-key fingerprints. Global recipients are not merged.
+Merely configuring both lists does not enable hybrid.
+
+Set `hybrid_decrypt_backend = "gpg"` or `"age"` in global `config.toml`.
+Local workspace operations may override this field in `shine.config.local.toml`
+next to the workspace; an absent file or field inherits the global preference.
+Shared `shine.config.toml` cannot override or save it. Ignore the personal file in
+Git; it accepts only this field and rejects malformed or unknown fields. The
+preference neither changes single-backend routing nor grants secret release.
+SSH broker does not accept remote personal configuration. Global `secret_backend`
+still accepts only `gpg` or `age`.
+
+Hybrid compilation caches use the final selected backend and its workspace
+recipient list. Configuration changes re-evaluate cache validity without switching
+to another backend. See the [environment guide](../guides/environment.md).

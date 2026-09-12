@@ -2,7 +2,9 @@
 //! to decrypt `age:`-tagged secrets, including Secure Enclave (Touch ID)
 //! identities minted by `age-plugin-se` or paired through `age-plugin-phone`.
 
+use crate::commands::PhoneRecipientType;
 use anyhow::{Context, Result, bail};
+use bech32::{FromBase32, Variant};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -38,6 +40,7 @@ struct ManualAgeIdentities<'a> {
 
 pub async fn handle_phone_identity_init(
     config: &Config,
+    recipient_type: PhoneRecipientType,
     label: Option<&str>,
     transport: &str,
     adb_serial: Option<&str>,
@@ -48,10 +51,25 @@ pub async fn handle_phone_identity_init(
             "the active project explicitly overrides age identity configuration; remove or update that project override before pairing a phone-backed identity"
         );
     }
+    if recipient_type == PhoneRecipientType::Tag {
+        crate::secret::preflight_age().await?;
+    }
     ensure_command("age-plugin-phone")?;
-    let label = resolve_phone_label(label)?;
-    let result = run_phone_setup("age-plugin-phone", &label, transport, adb_serial).await?;
-    validate_phone_setup_result(&result).await?;
+    let system_label = if label.is_none() {
+        read_phone_computer_name().await
+    } else {
+        None
+    };
+    let label = resolve_phone_label(label, system_label.as_deref())?;
+    let result = run_phone_setup(
+        "age-plugin-phone",
+        recipient_type,
+        &label,
+        transport,
+        adb_serial,
+    )
+    .await?;
+    validate_phone_setup_result(&result, recipient_type).await?;
 
     let identity_value = result
         .identity_path
@@ -138,12 +156,7 @@ pub async fn handle_identity_init(
         ensure_command("age-plugin-se")?;
         run_keygen(
             "age-plugin-se",
-            &[
-                "keygen".to_string(),
-                format!("--access-control={access_control}"),
-                "-o".to_string(),
-                output_path.to_string_lossy().into_owned(),
-            ],
+            &touch_id_keygen_args(access_control, &output_path),
         )
         .await?;
     } else {
@@ -196,6 +209,16 @@ pub async fn handle_identity_init(
     Ok(())
 }
 
+fn touch_id_keygen_args(access_control: &str, output_path: &Path) -> Vec<String> {
+    vec![
+        "keygen".to_string(),
+        "--recipient-type=tag".to_string(),
+        format!("--access-control={access_control}"),
+        "-o".to_string(),
+        output_path.to_string_lossy().into_owned(),
+    ]
+}
+
 pub async fn handle_identity_list(config: &Config) -> Result<()> {
     let identities = config.resolved_age_identities();
     if identities.is_empty() {
@@ -213,22 +236,43 @@ pub async fn handle_identity_list(config: &Config) -> Result<()> {
 }
 
 fn ensure_phone_supported(os: &str) -> Result<()> {
-    if os != "windows" {
+    if !matches!(os, "windows" | "macos") {
         bail!(
-            "phone-backed identity setup currently requires the Windows Alpha platform; use age-plugin-phone directly for diagnostic interoperability on other platforms"
+            "phone-backed identity setup requires Windows or macOS (experimental); use age-plugin-phone directly for diagnostic interoperability on other platforms"
         );
     }
     Ok(())
 }
 
-fn resolve_phone_label(explicit: Option<&str>) -> Result<String> {
+async fn read_phone_computer_name() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("/usr/sbin/scutil")
+            .args(["--get", "ComputerName"])
+            .stdin(Stdio::null())
+            .output()
+            .await
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Some(String::from_utf8(output.stdout).ok()?.trim_end().to_owned())
+    }
+    #[cfg(windows)]
+    {
+        std::env::var("COMPUTERNAME").ok()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        None
+    }
+}
+
+fn resolve_phone_label(explicit: Option<&str>, system_label: Option<&str>) -> Result<String> {
     let label = explicit.map(str::to_owned).unwrap_or_else(|| {
-        std::env::var("COMPUTERNAME")
-            .ok()
-            .filter(|value| {
-                let trimmed = value.trim();
-                !trimmed.is_empty() && trimmed.len() <= 64
-            })
+        system_label
+            .filter(|value| !value.trim().is_empty() && value.len() <= 64)
+            .map(str::to_owned)
             .unwrap_or_else(|| "Shine desktop".to_string())
     });
     if label.trim().is_empty() {
@@ -242,6 +286,7 @@ fn resolve_phone_label(explicit: Option<&str>) -> Result<String> {
 
 async fn run_phone_setup(
     program: &str,
+    recipient_type: PhoneRecipientType,
     label: &str,
     transport: &str,
     adb_serial: Option<&str>,
@@ -254,6 +299,8 @@ async fn run_phone_setup(
         .arg("--transport")
         .arg(transport)
         .arg("--json")
+        .arg("--recipient-type")
+        .arg(recipient_type.as_str())
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
@@ -271,7 +318,9 @@ async fn run_phone_setup(
     let status = status.context("waiting for age-plugin-phone setup")?;
     let bytes = bytes?;
     if !status.success() {
-        bail!("age-plugin-phone setup failed");
+        bail!(
+            "age-plugin-phone setup failed; use a plugin version supporting --recipient-type and a matching phone app. No fallback or second setup was attempted"
+        );
     }
     serde_json::from_slice(&bytes).context("invalid age-plugin-phone setup result")
 }
@@ -300,18 +349,17 @@ async fn read_bounded_output(mut stdout: tokio::process::ChildStdout) -> Result<
     Ok(output)
 }
 
-async fn validate_phone_setup_result(result: &PhoneSetupResult) -> Result<()> {
+async fn validate_phone_setup_result(
+    result: &PhoneSetupResult,
+    recipient_type: PhoneRecipientType,
+) -> Result<()> {
     if result.schema_version != PHONE_SETUP_RESULT_VERSION {
         bail!(
             "unsupported age-plugin-phone setup result version {}",
             result.schema_version
         );
     }
-    if !result.recipient.starts_with("age1phone")
-        || result.recipient.chars().any(char::is_whitespace)
-    {
-        bail!("age-plugin-phone returned an invalid recipient");
-    }
+    validate_phone_recipient(&result.recipient, recipient_type)?;
     if !result.identity_path.is_absolute() {
         bail!("age-plugin-phone returned a non-absolute identity path");
     }
@@ -334,6 +382,29 @@ async fn validate_phone_setup_result(result: &PhoneSetupResult) -> Result<()> {
     let recipient = extract_recipient(&result.identity_path).await?;
     if recipient != result.recipient {
         bail!("age-plugin-phone setup result does not match its identity stub");
+    }
+    Ok(())
+}
+
+fn validate_phone_recipient(recipient: &str, recipient_type: PhoneRecipientType) -> Result<()> {
+    let (hrp, data, variant) = bech32::decode(recipient)
+        .context("age-plugin-phone returned an invalid Bech32 recipient")?;
+    let expected = match recipient_type {
+        PhoneRecipientType::Tag => "age1tag",
+        PhoneRecipientType::Phone => "age1phone",
+    };
+    if hrp != expected || variant != Variant::Bech32 {
+        bail!("age-plugin-phone returned a recipient that does not match the requested type");
+    }
+    let bytes = Vec::<u8>::from_base32(&data).context("invalid phone recipient payload")?;
+    if bech32::encode(&hrp, data, variant)? != recipient {
+        bail!("age-plugin-phone returned a non-canonical recipient");
+    }
+    if bytes.is_empty()
+        || (recipient_type == PhoneRecipientType::Tag
+            && (bytes.len() != 33 || !matches!(bytes[0], 2 | 3)))
+    {
+        bail!("age-plugin-phone returned an invalid recipient public-key payload");
     }
     Ok(())
 }
@@ -440,21 +511,92 @@ mod tests {
         assert!(ensure_touch_id_supported(false, "windows").is_ok());
     }
 
+    const TAG: &str = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
+    const PHONE: &str = "age1phone1qypkk9737tsjcsj8lz7wdetr53q0yacr0kqjm6en5r62zw29mzvv99sa27n9c";
+
     #[test]
-    fn phone_setup_requires_windows() {
+    fn phone_recipient_validation_checks_type_encoding_and_tag_structure() {
+        use bech32::ToBase32;
+        validate_phone_recipient(TAG, PhoneRecipientType::Tag).unwrap();
+        validate_phone_recipient(PHONE, PhoneRecipientType::Phone).unwrap();
+        for (recipient, kind) in [
+            (PHONE, PhoneRecipientType::Tag),
+            (TAG, PhoneRecipientType::Phone),
+            ("age1tag1invalid", PhoneRecipientType::Tag),
+            ("age1phone1invalid", PhoneRecipientType::Phone),
+            (&TAG.to_uppercase(), PhoneRecipientType::Tag),
+        ] {
+            assert!(validate_phone_recipient(recipient, kind).is_err());
+        }
+        for bytes in [vec![], vec![2; 32], vec![2; 34], vec![4; 33]] {
+            let invalid = bech32::encode("age1tag", bytes.to_base32(), Variant::Bech32).unwrap();
+            assert!(validate_phone_recipient(&invalid, PhoneRecipientType::Tag).is_err());
+        }
+        let wrong_variant =
+            bech32::encode("age1tag", vec![2; 33].to_base32(), Variant::Bech32m).unwrap();
+        assert!(validate_phone_recipient(&wrong_variant, PhoneRecipientType::Tag).is_err());
+    }
+
+    #[tokio::test]
+    async fn tagged_phone_setup_keeps_the_phone_identity_stub() {
+        let dir = std::env::temp_dir().join(format!("shine-phone-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("phone.txt");
+        let content = format!("# recipient: {TAG}\nAGE-PLUGIN-PHONE-1EXAMPLE\n");
+        tokio::fs::write(&path, &content).await.unwrap();
+        let result = PhoneSetupResult {
+            schema_version: 1,
+            identity_path: path.clone(),
+            recipient: TAG.into(),
+        };
+        validate_phone_setup_result(&result, PhoneRecipientType::Tag)
+            .await
+            .unwrap();
+        assert!(
+            validate_phone_setup_result(&result, PhoneRecipientType::Phone)
+                .await
+                .is_err()
+        );
+        assert_eq!(extract_recipient(&path).await.unwrap(), TAG);
+        assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), content);
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[test]
+    fn phone_setup_allows_windows_and_macos_only() {
         assert!(ensure_phone_supported("windows").is_ok());
-        let err = ensure_phone_supported("macos").unwrap_err();
-        assert!(err.to_string().contains("Windows Alpha"), "{err:#}");
+        assert!(ensure_phone_supported("macos").is_ok());
+        for os in ["linux", "unknown"] {
+            let err = ensure_phone_supported(os).unwrap_err();
+            assert!(err.to_string().contains("Windows or macOS"), "{err:#}");
+        }
     }
 
     #[test]
     fn explicit_phone_label_uses_the_plugin_byte_limit() {
         assert_eq!(
-            resolve_phone_label(Some("Work laptop")).unwrap(),
+            resolve_phone_label(Some("Work laptop"), Some("System name")).unwrap(),
             "Work laptop"
         );
-        assert!(resolve_phone_label(Some(" ")).is_err());
-        assert!(resolve_phone_label(Some(&"桌".repeat(22))).is_err());
+        assert!(resolve_phone_label(Some(" "), Some("System name")).is_err());
+        assert!(resolve_phone_label(Some(&"桌".repeat(22)), None).is_err());
+        assert!(resolve_phone_label(Some(&"a".repeat(64)), None).is_ok());
+    }
+
+    #[test]
+    fn phone_label_uses_a_valid_system_name_or_fallback() {
+        for name in ["Work Mac", "工作电脑", &"a".repeat(64)] {
+            assert_eq!(resolve_phone_label(None, Some(name)).unwrap(), name);
+        }
+        for name in [
+            None,
+            Some(""),
+            Some("  "),
+            Some(&"桌".repeat(22)),
+            Some(&format!(" {} ", "a".repeat(64))),
+        ] {
+            assert_eq!(resolve_phone_label(None, name).unwrap(), "Shine desktop");
+        }
     }
 
     #[test]
@@ -466,6 +608,21 @@ mod tests {
         assert!(
             err.to_string().contains("unknown --access-control"),
             "{err:#}"
+        );
+    }
+
+    #[test]
+    fn touch_id_keygen_requests_native_tagged_recipient() {
+        let args = touch_id_keygen_args("any-biometry", Path::new("identity.txt"));
+        assert_eq!(
+            args,
+            [
+                "keygen",
+                "--recipient-type=tag",
+                "--access-control=any-biometry",
+                "-o",
+                "identity.txt",
+            ]
         );
     }
 
@@ -510,17 +667,20 @@ mod tests {
         let path = dir.join("identity.txt");
         tokio::fs::write(
             &path,
-            "# public age-plugin-phone identity stub\n# recipient: age1phone1example\nAGE-PLUGIN-PHONE-1EXAMPLE\n",
+            "# public age-plugin-phone identity stub\n# recipient: age1phone1qypkk9737tsjcsj8lz7wdetr53q0yacr0kqjm6en5r62zw29mzvv99sa27n9c\nAGE-PLUGIN-PHONE-1EXAMPLE\n",
         )
         .await
         .unwrap();
         let result = PhoneSetupResult {
             schema_version: PHONE_SETUP_RESULT_VERSION,
             identity_path: path,
-            recipient: "age1phone1example".to_string(),
+            recipient: "age1phone1qypkk9737tsjcsj8lz7wdetr53q0yacr0kqjm6en5r62zw29mzvv99sa27n9c"
+                .to_string(),
         };
 
-        validate_phone_setup_result(&result).await.unwrap();
+        validate_phone_setup_result(&result, PhoneRecipientType::Phone)
+            .await
+            .unwrap();
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -539,10 +699,13 @@ mod tests {
         let result = PhoneSetupResult {
             schema_version: PHONE_SETUP_RESULT_VERSION,
             identity_path: path,
-            recipient: "age1phone1different".to_string(),
+            recipient: "age1phone1qypkk9737tsjcsj8lz7wdetr53q0yacr0kqjm6en5r62zw29mzvv99sa27n9c"
+                .to_string(),
         };
 
-        let err = validate_phone_setup_result(&result).await.unwrap_err();
+        let err = validate_phone_setup_result(&result, PhoneRecipientType::Phone)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("does not match"), "{err:#}");
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -556,39 +719,74 @@ mod tests {
             std::env::temp_dir().join(format!("shine-phone-command-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let program = dir.join("fake-age-plugin-phone");
+        for (kind, recipient) in [
+            (PhoneRecipientType::Tag, TAG),
+            (PhoneRecipientType::Phone, PHONE),
+        ] {
+            let result_json = serde_json::json!({"schema_version": 1, "identity_path": "/tmp/phone-identity.txt", "recipient": recipient});
+            let script = format!(
+                r#"#!/bin/sh
+[ "$1" = setup ] && [ "$2" = --label ] && [ "$3" = 'Work laptop' ] || exit 11
+[ "$4" = --transport ] && [ "$5" = qr ] && [ "$6" = --json ] || exit 12
+[ "$7" = --recipient-type ] && [ "$8" = {} ] || exit 13
+[ "$9" = --adb-serial ] && [ "${{10}}" = 'device serial' ] && [ "$#" = 10 ] || exit 14
+printf '%s\n' '{}'
+"#,
+                kind.as_str(),
+                result_json
+            );
+            tokio::fs::write(&program, script).await.unwrap();
+            tokio::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))
+                .await
+                .unwrap();
+            let result = run_phone_setup(
+                program.to_str().unwrap(),
+                kind,
+                "Work laptop",
+                "qr",
+                Some("device serial"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.schema_version, PHONE_SETUP_RESULT_VERSION);
+            assert_eq!(
+                result.identity_path,
+                PathBuf::from("/tmp/phone-identity.txt")
+            );
+            assert_eq!(result.recipient, recipient);
+        }
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unsupported_phone_setup_never_retries() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("shine-phone-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let program = dir.join("old-plugin");
+        let calls = dir.join("calls");
         tokio::fs::write(
             &program,
-            concat!(
-                "#!/bin/sh\n",
-                "test \"$1\" = setup || exit 11\n",
-                "test \"$2\" = --label || exit 12\n",
-                "test \"$3\" = 'Work laptop' || exit 13\n",
-                "test \"$4\" = --transport || exit 14\n",
-                "test \"$5\" = qr || exit 15\n",
-                "test \"$6\" = --json || exit 16\n",
-                "test \"$#\" = 6 || exit 17\n",
-                "printf '%s\\n' '{\"schema_version\":1,\"identity_path\":\"/tmp/phone-identity.txt\",\"recipient\":\"age1phone1example\"}'\n",
-            ),
+            format!("#!/bin/sh\nprintf x >> '{}'\nexit 2\n", calls.display()),
         )
         .await
         .unwrap();
-        let mut permissions = tokio::fs::metadata(&program).await.unwrap().permissions();
-        permissions.set_mode(0o700);
-        tokio::fs::set_permissions(&program, permissions)
+        tokio::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))
             .await
             .unwrap();
-
-        let result = run_phone_setup(program.to_str().unwrap(), "Work laptop", "qr", None)
-            .await
-            .unwrap();
-        assert_eq!(result.schema_version, PHONE_SETUP_RESULT_VERSION);
-        assert_eq!(
-            result.identity_path,
-            PathBuf::from("/tmp/phone-identity.txt")
-        );
-        assert_eq!(result.recipient, "age1phone1example");
-
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
+        let err = run_phone_setup(
+            program.to_str().unwrap(),
+            PhoneRecipientType::Tag,
+            "test",
+            "auto",
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("--recipient-type"));
+        assert_eq!(tokio::fs::read_to_string(calls).await.unwrap(), "x");
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]

@@ -20,7 +20,7 @@ sync_terminal_theme = true
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 
 secret_backend = "age"
-age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 age_identity = "~/.shine/age/identity.txt"
 age_identities = ["C:/Users/<user>/AppData/Local/age-plugin-phone/identity-....txt"]
 
@@ -57,7 +57,9 @@ enabled = false
 | `[env]` | 模板变量及 shell helper 使用的值 |
 | `[[env_proxy]]` | 一个透明命令代理规则；`command` 为裸命令名，`with` 为允许注入的 `KEY` 或 `KEY=ALIAS` 列表，`enabled` 默认为 `true` |
 
-`gpg_key_id` 与 workspace 的 `[env.encryption].recipient` 是旧版单 recipient 字段。Shine 不会在普通读取配置时改写文件；用 `shine state migrate --dry-run` 预览并用 `shine state migrate` 迁移为 `gpg_recipients`。遇到旧 workspace 时，`env run` 和 `env secret seal` 会提示迁移。
+`gpg_key_id` 与 workspace 的 `[env.encryption].recipient` 是旧版单 recipient 字段。Shine 不会在普通读取配置时改写文件；用 `shine state migrate --dry-run` 预览并用 `shine state migrate` 迁移为 `gpg_recipients`。同一迁移也会把旧版 `age1se...` 转为 age 1.3 原生支持的 `age1tag...`；这能免除加密端的 Secure Enclave 插件依赖，但已经知道 recipient 的人可以判断密文是否发给它。遇到旧 workspace 时，`env run` 和 `env secret seal` 会提示迁移。
+
+phone recipient 不由 `state migrate` 自动转换。升级并验证插件和手机应用的 tag 支持后，用 `age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag` 导出，替换对应 `age_recipients` 值并重新 seal；保留独立恢复 recipient。
 
 ## 外部代码信任
 
@@ -71,8 +73,9 @@ shine trust list
 shine trust revoke app/example
 ```
 
-Grant 会绑定 canonical target、capability、有效代码 digest、来源层和准确的权限声明；代码、来源层或
-权限变化后必须重新审阅。Grant 不能替代每次 mutation 的安全 Plan。旧的 `allow_app_hooks` 和
+Grant 只适用于已经审阅的 target 与权限；代码、来源或权限变化后必须重新审阅。当类型化 Preset
+元数据已经能够推导操作所需的全部权限时，经过验证的显式空权限声明也可以授予信任；完全缺失声明
+仍会阻止操作。Grant 不能替代每次操作前显示的 Plan。旧的 `allow_app_hooks` 和
 `allow_sys_code` 已被忽略，并会在下次保存配置时移除。
 
 ## Env 条目格式与说明
@@ -175,7 +178,7 @@ files = [
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 # 也可使用 age 后端
 # backend = "age"
-# age_recipients = ["age1se1qexample...", "age1qteammate..."]
+# age_recipients = ["age1tag1qexample...", "age1qteammate..."]
 ```
 
 环境源按 `files` 顺序合并。默认保留当前进程已经存在的变量；设置 `env.override_process_env = true` 后，改由 workspace 值覆盖。
@@ -203,8 +206,7 @@ data = "<由 Shine 管理的 GPG 密文>"
 ```
 
 `shine env secret seal` 会把 `[secret]` 中的待处理值合并进加密 payload，并将已封存项改为
-`true`。`shine env run` 按文件顺序合并 `[plain]` 和解密后的 secret；配置了可用的 GPG
-recipient 时，还会维护按 mode 区分的加密缓存。
+`true`。`shine env run` 按文件顺序合并 `[plain]` 和解密后的 secret；策略和源均为单后端且配置了可用 recipient 时，还会维护按 mode 区分的加密缓存。
 
 `shine env run --with KEY[=ALIAS]` 还可注入当前 Shine 配置 `[env]` 中的值。它优先读取
 `KEY_SECRET`，不存在时读取 `KEY`；显式注入值覆盖 workspace 和当前进程中的同名变量。
@@ -231,3 +233,18 @@ recipient 时，还会维护按 mode 区分的加密缓存。
 ```
 
 不要手工删除 manifest 后再期望 Shine 识别旧安装；优先使用对应的 `uninstall --dry-run` 和 `uninstall`。
+
+## 工作区混合加密
+
+`env.encryption.backend = "hybrid"` 要求工作区同时提供 `gpg_recipients` 和
+`age_recipients`，每组至少一个非空项。GPG 项必须是本机已有公钥的完整 40 位十六进制
+主密钥指纹。两组均不合并全局收件人；仅同时配置两组不会启用 hybrid。
+
+在本机全局 `config.toml` 中设置 `hybrid_decrypt_backend = "gpg"` 或 `"age"`。
+本机工作区操作可用工作区旁的 `shine.config.local.toml` 覆盖此字段；文件或字段缺失则继承
+全局设置。共享的 `shine.config.toml` 不能覆盖或保存此偏好。将个人文件加入 `.gitignore`；
+它只接受该字段，格式错误或未知字段会报错。它不改变单后端路由，也不授予秘密释放权限。
+SSH broker 不接受远端个人配置。全局 `secret_backend` 仍只接受 `gpg` 或 `age`。
+
+Hybrid 编译缓存使用最终选定的单后端及工作区对应收件人名单。配置变化会重新判定缓存
+有效性，不会自动切换到另一后端。详见[环境指南](../guides/environment.md)。

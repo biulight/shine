@@ -943,19 +943,44 @@ validates standard padded Base64 completely, then writes ciphertext to the exist
 temporary file. See [ADR 0083](../decisions/0083-in-process-secret-base64.md).
 
 Every call site that decrypts a stored secret (`env secret decrypt`, `env secret export`, workspace
-`env secret seal`/`env run`) goes through `secret::decrypt_secret(ciphertext, age_identities)`, which inspects the
-ciphertext for an `age:` prefix (`secret::parse_tagged_ciphertext`) and dispatches to
-`secret::age`/`secret::gpg` accordingly; untagged ciphertext is always GPG. Decryption never
+`env secret seal`/`env run`) goes through `secret::decrypt_with_config(ciphertext, config)`, which inspects the
+ciphertext for an `age:` or `hybrid:` prefix (`secret::parse_tagged_ciphertext`) and dispatches to
+`secret::age`/`secret::gpg` or the authenticated hybrid envelope accordingly; untagged ciphertext is always GPG. Decryption never
 reads `Config::secret_backend` — only the tag decides. Encryption (`env secret encrypt`, workspace
 `env secret seal`) instead resolves a `secret::EncryptRecipients` (CLI `-r`/`--backend` > workspace
 `env.encryption` > `config.toml` `gpg_recipients`/`age_recipients`/`secret_backend` > GPG default)
 and calls `secret::encrypt_secret`, which tags age output and leaves GPG output untagged. See
 [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md) for the full rationale.
 `shine env secret identity init [--touch-id]` generates a local age identity file
-(`age-keygen`/`age-plugin-se keygen`). The `--phone` form instead invokes the standalone plugin's
-transactional setup and consumes only its versioned public identity-path/recipient result before
+(`age-keygen`/`age-plugin-se keygen --recipient-type=tag`). Every age path verifies age 1.3 or
+newer. `state migrate` rewrites configured `age1se` recipients to equivalent native `age1tag`
+recipients while preserving their decoded public key and leaving ciphertext untouched. The
+`--phone` form on Windows and experimental macOS instead invokes the standalone plugin's
+transactional setup with explicit `--recipient-type tag` by default (`phone` is opt-in),
+preflighting age 1.3 before tag pairing. It validates the requested recipient type, Bech32
+encoding and tag public-key structure, and consumes only the versioned public identity-path/recipient result before
 atomically appending the stub path to global `age_identities`. `Config::resolved_age_identities()`
 merges the legacy `age_identity` path with that ordered list and passes each path separately to
 `age -i`; an explicit project identity setting replaces the global set. Shine never discovers or
-manages phone-plugin TPM, replay, locator, pairing, recovery, or cleanup state. See
+manages phone-plugin TPM/Secure Enclave keys, replay, locator, pairing, recovery, or cleanup state. See
 [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md).
+
+
+Hybrid workspace sealing captures policy and source bytes under cooperating workspace/source
+locks, resolves exact GPG public encryption keys with option files disabled, and preflights both
+encryption branches before decrypting old payloads. A fresh OS-random data key encrypts one payload;
+GPG and age wrap its versioned nonce-bound key record. The complete header and wrappers are AEAD
+associated data. Private temporary output is prepared before final workspace/source comparisons
+and replacing rename. Partial multi-file success is reported, never rolled back over external edits.
+
+Local `hybrid_decrypt_backend` selects one hybrid unwrap after any broker release approval.
+Local workspace run/seal/export may override the global default from `shine.config.local.toml`
+beside the selected workspace; broker snapshots do not load or transmit this personal file.
+Without a preference, capability-only preflight selects a sole candidate or requires a local TTY
+choice. Failure terminates without backend fallback. Runtime captures mode inputs once; hybrid
+policy or consumed tags select the local encrypted cache path. It validates captured hybrid wire
+structure before selecting/decrypting a cache, freezes the backend, and binds the snapshot, backend
+and workspace recipients inside the encrypted cache. Cache writes use only the selected tool;
+cache decryption cancellation never retries from sources. See [ADR 0085](../decisions/0085-local-hybrid-preferences-and-cache.md)
+for local trust and cache boundaries, and [ADR 0084](../decisions/0084-hybrid-secret-envelope.md)
+for the unchanged envelope and sealing concurrency contract.

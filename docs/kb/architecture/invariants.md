@@ -94,6 +94,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **A Preset permission declaration is not a grant.** App categories, Shell commands, and Sys items
   may declare schema-v1 capability identities, but those declarations do not create scoped
   external-code trust or bypass administrator authorization, ownership checks, or Plan approval.
+  Declaration presence is distinct from the normalized permission set: a validated explicit empty
+  declaration is legitimate when typed metadata derives every required capability, while an absent
+  declaration remains a fail-closed error. Trust enrollment must preserve that distinction rather
+  than treating both cases as an empty set.
   Untargeted upgrade includes declarations only from installed App categories, installed Shell
   commands, and enabled managed Sys items; merely available embedded, external, or overlay Presets
   cannot contribute required permissions or missing-declaration blockers. A fully current Shell
@@ -602,22 +606,41 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Age sealing never drops unavailable recipients.** Age 1.3 native `age1tag` recipients remove
+  the Secure Enclave and phone plugin dependencies from encryption, but explicit `age1phone` and legacy plugin
+  recipients still require their named recipient plugins. Missing plugins fail before old-payload
+  decryption; Shine never seals to only the locally available subset. `state migrate` changes only
+  configured Secure Enclave public recipient encoding, not identities or ciphertext (ADR 0008).
 - **Direct secret decryption writes byte-exact plaintext to stdout.** `env secret decrypt` must not
   append a line ending or mix status presentation into successful output. Default non-QR phone
   decrypts also capture the age client's progress diagnostics; explicit QR and opted-in messages
   stay interactive, and captured diagnostics become visible when decryption fails. A shell may
   independently move its next prompt.
+- **A valid nonmatching plugin identity is an ordinary miss within the selected age backend.** The
+  plugin must return no file key and no stanza error so reference age can try the next configured
+  identity. Malformed supported stanzas, unavailable identity state, cancellation, and final
+  backend failure remain terminal; hybrid never switches backends after such a failure.
 - **Phone identity setup crosses only a public configuration handoff.** Shine may invoke the
   standalone plugin's transactional setup and record its versioned public stub path and recipient,
-  but it must not allocate, discover, copy, remove, or repair plugin TPM, replay, locator, pairing,
+  but it must not allocate, discover, copy, remove, or repair plugin TPM/Secure Enclave keys, replay, locator, pairing,
   or recovery state. A failed Shine config write never authorizes cleanup. Phone setup does not
   change the default secret backend or add a phone-only recipient set (see
   [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md)).
-- **Decrypt routing is tag-based only** (`secret::parse_tagged_ciphertext`). `decrypt_secret`
-  must never consult `Config::secret_backend` or any other config to pick a backend — only the
-  `age:` prefix (or its absence) decides. This lets `secret_backend`/`age_recipients` change
-  freely without breaking previously-encrypted secrets (see
-  [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md)).
+- **Decrypt routing is self-describing.** Untagged data is GPG, `age:` is age and
+  `hybrid:` is the versioned two-wrapper envelope (ADR 0084). Encryption defaults never
+  reinterpret stored ciphertext. Only hybrid consults the local decrypt
+  preference (personal workspace override over global default for local handlers); failure or cancellation never switches backends. Parse and bound the
+  envelope before any tool invocation, and authenticate both wrappers before release.
+- **Hybrid sealing binds the complete workspace and source snapshots.** Resolve and
+  preflight exact public recipients before old-payload decryption; both wrappers must
+  succeed. Hold cooperating workspace/source locks through private atomic replacement
+  and compare complete bytes immediately before rename. Noncooperating editor races
+  in that final interval are outside the portable lock guarantee (ADR 0084).
+- **Hybrid local caches follow the locally selected backend.** Validate captured source
+  structure before cache decryption, and bind source/policy snapshots, backend and workspace
+  recipients inside the encrypted cache. Never reuse legacy caches or global recipient fallbacks.
+  Cache decryption failure/cancellation is terminal. Personal workspace preferences are trusted
+  local input; broker requests cannot supply them (ADR 0085).
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
   prefix, breaks every secret encrypted before the change.
 - **Workspace export decrypts only on explicit request.** `shine env workspace export` omits

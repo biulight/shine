@@ -5,6 +5,49 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [Unreleased]
+
+### Bug Fixes
+
+- Allow target-scoped trust grants for external executable code whose validated Preset metadata
+  explicitly declares an empty permission set, while continuing to reject missing declarations.
+  This restores exported package-only Sys items such as Neovim and fzf when shared profile code is
+  external.
+
+## [2.1.0] — 2026-09-11
+
+### Features
+
+- Open the experimental phone identity pairing wizard on macOS, with a platform-native default
+  desktop label and the same public plugin handoff used on Windows.
+
+- Request native tagged recipients by default for phone identity setup, with explicit
+  `--recipient-type phone` compatibility mode. Requires a desktop plugin and phone app with tag
+  support; encryption to the resulting `age1tag` needs only age 1.3+, not the phone plugin.
+
+- Add explicit workspace GPG/age hybrid sealing with one authenticated data ciphertext,
+  local decrypt selection, isolated public recipient resolution, and encrypted per-backend caches.
+- Allow personal workspace decrypt preferences in ignored `shine.config.local.toml`, with
+  global fallback; keep remote SSH broker requests separate from personal project configuration.
+- Bind sealing to captured workspace/source bytes with cooperating process locks and final
+  comparisons; report partial multi-file completion without overwriting detected concurrent edits.
+
+### Bug Fixes
+
+- Diagnose hybrid age unwrap failures involving multiple phone identity stubs with actionable
+  plugin upgrade and temporary isolation guidance, without retrying another backend.
+- Generate native `age1tag` recipients for new Secure Enclave identities and migrate legacy
+  `age1se` configuration, allowing age 1.3+ clients to seal for macOS recipients without installing
+  `age-plugin-se` on the encrypting computer. Missing phone recipient plugins now fail with an
+  actionable cross-platform sealing diagnostic.
+
+### Docs
+
+- Refresh the bilingual phone setup guide for the plugin's limited technical Beta, source
+  installation, and validated platform/transport scope; retain experimental data restrictions.
+- Clarify hybrid upgrade prerequisites for existing workspaces and group hybrid commands with
+  the environment reference; publish the bilingual 2.1 manual and preserve the 2.0 snapshot.
+
 ## [2.0.3] — 2026-09-08
 
 ### Bug Fixes

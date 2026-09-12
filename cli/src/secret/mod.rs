@@ -1,10 +1,11 @@
 //! Secret storage backends for `shine env secret encrypt`/`decrypt`.
 //!
-//! Two backends exist: GPG (the original, still the default) and age, added
+//! Two external backends exist: GPG (the original, still the default) and age, added
 //! for multi-recipient encryption with Apple Touch ID support via
 //! `age-plugin-se` Secure Enclave identities. Ciphertext carries a backend
 //! tag (`age:<base64>`); untagged base64 continues to route to GPG so
-//! secrets encrypted before age existed keep decrypting unmodified.
+//! secrets encrypted before age existed keep decrypting unmodified. The versioned
+//! `hybrid:` envelope wraps one data key with both tools (ADR 0084).
 //!
 //! Encryption always needs a resolved recipient list ([`EncryptRecipients`]);
 //! decryption is purely tag-based and never consults `secret_backend`, so
@@ -13,6 +14,7 @@
 mod age;
 mod exec;
 mod gpg;
+pub(crate) mod hybrid;
 
 use anyhow::{Result, bail};
 use std::path::PathBuf;
@@ -26,6 +28,7 @@ pub enum BackendKind {
     #[default]
     Gpg,
     Age,
+    Hybrid,
 }
 
 impl FromStr for BackendKind {
@@ -35,7 +38,10 @@ impl FromStr for BackendKind {
         match value.trim().to_ascii_lowercase().as_str() {
             "gpg" => Ok(Self::Gpg),
             "age" => Ok(Self::Age),
-            other => bail!("unknown secret backend \"{other}\"; expected \"gpg\" or \"age\""),
+            "hybrid" => Ok(Self::Hybrid),
+            other => {
+                bail!("unknown secret backend \"{other}\"; expected \"gpg\", \"age\" or \"hybrid\"")
+            }
         }
     }
 }
@@ -45,6 +51,7 @@ impl FromStr for BackendKind {
 pub enum EncryptRecipients {
     Gpg(Vec<String>),
     Age(Vec<String>),
+    Hybrid(hybrid::Recipients),
 }
 
 impl EncryptRecipients {
@@ -52,6 +59,7 @@ impl EncryptRecipients {
         match self {
             Self::Gpg(_) => BackendKind::Gpg,
             Self::Age(_) => BackendKind::Age,
+            Self::Hybrid(_) => BackendKind::Hybrid,
         }
     }
 }
@@ -60,6 +68,9 @@ impl EncryptRecipients {
 /// Untagged ciphertext is treated as GPG for backward compatibility with
 /// secrets encrypted before the age backend existed.
 pub fn parse_tagged_ciphertext(ciphertext: &str) -> (BackendKind, &str) {
+    if let Some(rest) = ciphertext.strip_prefix(hybrid::PREFIX) {
+        return (BackendKind::Hybrid, rest);
+    }
     match ciphertext.strip_prefix(AGE_TAG_PREFIX) {
         Some(rest) => (BackendKind::Age, rest),
         None => (BackendKind::Gpg, ciphertext),
@@ -70,6 +81,7 @@ pub fn parse_tagged_ciphertext(ciphertext: &str) -> (BackendKind, &str) {
 /// ciphertext (tagged for age, untagged for GPG).
 pub async fn encrypt_secret(plaintext: &[u8], recipients: &EncryptRecipients) -> Result<String> {
     match recipients {
+        EncryptRecipients::Hybrid(recipients) => hybrid::encrypt(plaintext, recipients).await,
         EncryptRecipients::Gpg(recipients) => {
             gpg::encrypt_gpg_secret_to_base64(plaintext, recipients).await
         }
@@ -80,11 +92,85 @@ pub async fn encrypt_secret(plaintext: &[u8], recipients: &EncryptRecipients) ->
     }
 }
 
+/// Check the age client before starting tagged phone pairing.
+pub(crate) async fn preflight_age() -> Result<()> {
+    age::preflight_age().await
+}
+
+/// Convert a legacy Secure Enclave recipient without changing its public key.
+pub(crate) fn secure_enclave_recipient_to_tag(recipient: &str) -> Result<String> {
+    age::secure_enclave_recipient_to_tag(recipient)
+}
+
+/// Validate the age executable and the complete recipient-side plugin set
+/// before a workspace seal can decrypt any existing payload.
+pub(crate) async fn preflight_age_recipients(recipients: &[String]) -> Result<()> {
+    age::preflight_recipients(recipients).await
+}
+
+/// Hybrid-derived caches retain exact workspace recipient restrictions even
+/// though the local cache only uses one encryption backend.
+pub(crate) async fn encrypt_local_cache(
+    plaintext: &[u8],
+    recipients: &EncryptRecipients,
+) -> Result<String> {
+    match recipients {
+        EncryptRecipients::Gpg(recipients) => {
+            // Apply the same full-fingerprint validation as hybrid sealing.
+            if recipients.is_empty()
+                || recipients.iter().any(|value| {
+                    value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            {
+                bail!("hybrid cache GPG recipients must be full 40-hex primary fingerprints");
+            }
+            let resolved = gpg::resolve_hybrid_recipients(recipients).await?;
+            let encrypted = gpg::encrypt_hybrid_key(plaintext, &resolved).await?;
+            Ok(exec::encode_base64_single_line(&encrypted))
+        }
+        EncryptRecipients::Age(_) => encrypt_secret(plaintext, recipients).await,
+        EncryptRecipients::Hybrid(_) => bail!("local cache requires one backend"),
+    }
+}
+
+/// Read a local hybrid-derived cache without honoring GPG output-file options.
+pub(crate) async fn decrypt_local_cache(
+    ciphertext: &str,
+    config: &crate::config::Config,
+) -> Result<String> {
+    match parse_tagged_ciphertext(ciphertext) {
+        (BackendKind::Gpg, payload) => gpg::decrypt_cache(payload).await,
+        (BackendKind::Age, _) => decrypt_with_config(ciphertext, config).await,
+        (BackendKind::Hybrid, _) => bail!("local cache requires one backend"),
+    }
+}
+
 /// Decrypt stored ciphertext, routing purely on its tag. `age_identities` is
-/// only consulted when the ciphertext is tagged `age:`.
+/// consulted for age ciphertext and the age branch of a hybrid envelope.
 pub async fn decrypt_secret(ciphertext: &str, age_identities: &[PathBuf]) -> Result<String> {
+    decrypt_with_preference(ciphertext, age_identities, None).await
+}
+
+pub async fn decrypt_with_config(
+    ciphertext: &str,
+    config: &crate::config::Config,
+) -> Result<String> {
+    decrypt_with_preference(
+        ciphertext,
+        &config.resolved_age_identities(),
+        config.hybrid_decrypt_backend.as_deref(),
+    )
+    .await
+}
+
+async fn decrypt_with_preference(
+    ciphertext: &str,
+    age_identities: &[PathBuf],
+    preference: Option<&str>,
+) -> Result<String> {
     let (backend, payload) = parse_tagged_ciphertext(ciphertext);
     match backend {
+        BackendKind::Hybrid => hybrid::decrypt(payload, age_identities, preference).await,
         BackendKind::Gpg => gpg::decrypt_base64_gpg_secret(payload).await,
         BackendKind::Age => age::decrypt_base64_age_secret(payload, age_identities).await,
     }
@@ -147,21 +233,23 @@ mod process_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    #[test]
-    fn both_backends_work_without_external_base64() {
-        let _guard = crate::test_support::env_lock();
-        struct RestorePath(Option<std::ffi::OsString>);
-        impl Drop for RestorePath {
-            fn drop(&mut self) {
-                // SAFETY: the environment lock is held until after this guard drops.
-                unsafe {
-                    match &self.0 {
-                        Some(path) => std::env::set_var("PATH", path),
-                        None => std::env::remove_var("PATH"),
-                    }
+    struct RestorePath(Option<std::ffi::OsString>);
+
+    impl Drop for RestorePath {
+        fn drop(&mut self) {
+            // SAFETY: the environment lock is held until after this guard drops.
+            unsafe {
+                match &self.0 {
+                    Some(path) => std::env::set_var("PATH", path),
+                    None => std::env::remove_var("PATH"),
                 }
             }
         }
+    }
+
+    #[test]
+    fn both_backends_work_without_external_base64() {
+        let _guard = crate::test_support::env_lock();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -174,6 +262,7 @@ mod process_tests {
                 &path,
                 r#"#!/bin/sh
 case "$1" in
+    --version) if test "${0##*/}" = age; then echo v1.3.0; else echo 'gpg 2.4.0'; fi ;;
     --encrypt|-e) /bin/cat ;;
     --decrypt|-d) for arg in "$@"; do file="$arg"; done; /bin/cat "$file" ;;
     *) exit 1 ;;
@@ -191,7 +280,7 @@ esac
             assert!(crate::proc::ensure_command("base64").is_err());
             for recipients in [
                 EncryptRecipients::Gpg(vec!["test@example.com".into()]),
-                EncryptRecipients::Age(vec!["age1test".into()]),
+                EncryptRecipients::Age(vec!["age1tag1test".into()]),
             ] {
                 let plaintext = "secret\nwith trailing newline\n";
                 let encoded = encrypt_secret(plaintext.as_bytes(), &recipients).await?;
@@ -201,6 +290,7 @@ esac
                     match recipients {
                         EncryptRecipients::Gpg(_) => expected.to_string(),
                         EncryptRecipients::Age(_) => format!("age:{expected}"),
+                        EncryptRecipients::Hybrid(_) => unreachable!(),
                     }
                 );
                 assert_eq!(
@@ -208,9 +298,41 @@ esac
                     plaintext
                 );
             }
+
+            let legacy = EncryptRecipients::Age(vec!["age1se1legacy".into()]);
+            let missing = encrypt_secret(b"secret", &legacy).await.unwrap_err();
+            assert!(
+                missing
+                    .to_string()
+                    .contains("shine state migrate --dry-run")
+            );
+            std::fs::write(dir.join("age-plugin-se"), "").unwrap();
+            assert!(encrypt_secret(b"secret", &legacy).await.is_ok());
             Ok(())
         });
         std::fs::remove_dir_all(&dir).unwrap();
         result.unwrap();
+    }
+
+    #[test]
+    fn age_version_is_enforced_at_the_process_boundary() {
+        let _guard = crate::test_support::env_lock();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = runtime.block_on(crate::test_support::make_temp_dir("shine-age-version"));
+        let age = dir.join("age");
+        let _restore = RestorePath(std::env::var_os("PATH"));
+        // SAFETY: all environment-mutation tests hold env_lock().
+        unsafe { std::env::set_var("PATH", &dir) };
+
+        for (output, accepted) in [("v1.2.0", false), ("unexpected", false), ("v1.3.0", true)] {
+            std::fs::write(&age, format!("#!/bin/sh\necho '{output}'\n")).unwrap();
+            std::fs::set_permissions(&age, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(runtime.block_on(age::preflight_age()).is_ok(), accepted);
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
