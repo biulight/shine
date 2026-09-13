@@ -231,6 +231,17 @@ impl PermissionAccumulator {
         }
     }
 
+    fn scope(&self, target: Option<String>) -> crate::plan::PlanPermissionScopeV1 {
+        crate::plan::PlanPermissionScopeV1 {
+            target,
+            permissions: crate::plan::PermissionResolutionV1::resolve(
+                PermissionSetV1::new(self.required.clone()),
+                &PermissionSetV1::new(self.declared.clone()),
+                self.uncomputable.iter().cloned(),
+            ),
+        }
+    }
+
     fn merge(&mut self, other: Self) {
         self.required.extend(other.required);
         self.declared.extend(other.declared);
@@ -3754,8 +3765,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
 
         let mut permissions = PermissionAccumulator::default();
         let mut steps = Vec::new();
+        let mut permission_scopes = Vec::new();
+        let mut shared_permissions = PermissionAccumulator::default();
         for item in &selected {
-            permissions.declaration(
+            let mut item_permissions = PermissionAccumulator::default();
+            item_permissions.declaration(
                 item.permissions.as_ref(),
                 "sys_bootstrap_permission_declaration_missing",
             );
@@ -3764,7 +3778,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 &request.input_versions,
                 item,
                 &mut state,
-                &mut permissions,
+                &mut item_permissions,
             )?;
             let present = observe_sys_detection(
                 self,
@@ -3773,7 +3787,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     .with_context(|| format!("sys item `{}` has no standard detection", item.id))?,
                 &mut state,
                 &format!("sys/{}", item.id),
-                &mut permissions,
+                &mut item_permissions,
             )
             .await?;
             let install = item
@@ -3785,7 +3799,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 &request.os_id,
                 item,
                 install,
-                &mut permissions,
+                &mut item_permissions,
+                &mut shared_permissions,
             )?;
 
             let missing_env = item.required_env.iter().any(|name| {
@@ -3809,13 +3824,16 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             if external_code_blocked {
                 step = step.with_diagnostic_code("sys_external_code_not_allowed");
             }
+            permission_scopes.push(item_permissions.scope(Some(format!("sys/{}", item.id))));
+            permissions.merge(item_permissions);
             steps.push(step);
         }
 
         if !selected.is_empty() {
+            let mut profile_permissions = PermissionAccumulator::default();
             add_shine_write_permission(
                 self.context(),
-                &mut permissions,
+                &mut shared_permissions,
                 &self.context().shine_dir.join("sys-manifest.toml"),
             );
             capture_sys_profile_state(
@@ -3823,7 +3841,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 &request.os_id,
                 &request.sys_shell,
                 &mut state,
-                &mut permissions,
+                &mut profile_permissions,
             )
             .await?;
             let mut profile = PlanStepV1::new(
@@ -3842,11 +3860,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 profile.action = PlanActionV1::Blocked;
             }
             profile = profile.with_diagnostic_code("sys_bootstrap_profile_recovery_unsupported");
+            permission_scopes.push(profile_permissions.scope(Some("sys/profile".to_string())));
+            permissions.merge(profile_permissions);
             steps.push(profile);
         }
 
+        if !shared_permissions.required.is_empty() {
+            permission_scopes.push(shared_permissions.scope(None));
+        }
+        permissions.merge(shared_permissions);
+
         let (required, declared, uncomputable) = permissions.finish();
-        Ok(PlanV1::new(
+        let mut plan = PlanV1::new(
             PlanOperationV1::SysBootstrap,
             PlanInputsV1 {
                 preset: self.presets().digest_v1()?,
@@ -3856,7 +3881,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             required,
             &declared,
             uncomputable,
-        ))
+        );
+        plan.permission_scopes = permission_scopes;
+        Ok(plan)
     }
 }
 
@@ -5386,6 +5413,7 @@ fn add_sys_bootstrap_install_permissions<H>(
     item: &SysItem,
     install: &SysInstall,
     permissions: &mut PermissionAccumulator,
+    shared_permissions: &mut PermissionAccumulator,
 ) -> Result<()> {
     match install {
         SysInstall::Package { provider, .. } => {
@@ -5416,7 +5444,7 @@ fn add_sys_bootstrap_install_permissions<H>(
             });
             add_shine_write_permission(
                 runtime.context(),
-                permissions,
+                shared_permissions,
                 &runtime.context().shine_dir.join("runtime/sys").join(os_id),
             );
         }
@@ -7084,6 +7112,97 @@ install = { kind = 'package', provider = 'homebrew', package = 'tool' }
                 .any(|step| { step.target == "sys/tool" && step.action == PlanActionV1::Update })
         );
         assert_ne!(missing.inputs.state, present.inputs.state);
+    }
+
+    #[tokio::test]
+    async fn sys_bootstrap_permission_scopes_preserve_origins_and_approval() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("sys/ubuntu/shine.toml", br#"version = 2
+[[items]]
+id = 'script'
+label = 'Script'
+detect = { kind = 'command', command = 'script-tool' }
+install = { kind = 'script', path = 'install/tool.sh' }
+permissions = { schema_version = 1, filesystem = [{ access = ['execute'], base = 'preset', path = 'install/tool.sh' }], commands = ['curl'], network = [{ scope = 'host', host = 'example.com' }] }
+[[items]]
+id = 'package'
+label = 'Package'
+detect = { kind = 'command', command = 'package-tool' }
+install = { kind = 'package', provider = 'apt', package = 'package-tool' }
+permissions = { schema_version = 1 }
+"#.to_vec())
+            .file("sys/ubuntu/install/tool.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        let (mut runtime, host) = observation_runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .proxy_env
+            .insert("HTTPS_PROXY".to_string(), "private-proxy-value".to_string());
+        let mut request = bootstrap_request();
+        request.os_id = "ubuntu".to_string();
+        request.item_ids = vec!["script".to_string(), "package".to_string()];
+        let plan = runtime.plan_sys_bootstrap(request).await.unwrap();
+        assert!(plan.is_ready());
+        assert_eq!(
+            plan.permission_scopes
+                .iter()
+                .map(|scope| scope.target.as_deref())
+                .collect::<Vec<_>>(),
+            vec![
+                Some("sys/script"),
+                Some("sys/package"),
+                Some("sys/profile"),
+                None
+            ]
+        );
+        let script = &plan.permission_scopes[0].permissions.required;
+        let package = &plan.permission_scopes[1].permissions.required;
+        assert!(script.contains(&PermissionV1::Command {
+            program: "curl".to_string()
+        }));
+        assert!(!package.contains(&PermissionV1::Command {
+            program: "curl".to_string()
+        }));
+        assert!(package.contains(&PermissionV1::Command {
+            program: "apt-get".to_string()
+        }));
+        assert!(package.contains(&PermissionV1::Administrator));
+        assert!(package.contains(&PermissionV1::Network {
+            scope: NetworkScopeV1::Any
+        }));
+        let runtime_write = PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Write,
+            path: "shine:runtime/sys/ubuntu".to_string(),
+        };
+        assert!(!script.contains(&runtime_write));
+        assert!(
+            plan.permission_scopes[3]
+                .permissions
+                .required
+                .contains(&runtime_write)
+        );
+        assert_eq!(
+            PermissionSetV1::new(
+                plan.permission_scopes.iter().flat_map(|scope| scope
+                    .permissions
+                    .required
+                    .iter()
+                    .cloned())
+            ),
+            plan.permissions.required
+        );
+        let json = serde_json::to_string(&plan).unwrap();
+        assert!(!json.contains("private-proxy-value"));
+        assert_eq!(serde_json::from_str::<PlanV1>(&json).unwrap(), plan);
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let mut changed = plan.clone();
+        changed.permission_scopes.swap(0, 1);
+        assert!(approval.validate(&changed).is_err());
+        assert!(
+            host.operations()
+                .iter()
+                .all(|operation| matches!(operation, super::super::HostOperation::Read(_)))
+        );
     }
 
     #[tokio::test]

@@ -21,7 +21,7 @@ use model::{
 
 use anyhow::{Context, Result};
 
-pub use commands::{handle_info, handle_init, handle_list, handle_status};
+pub use commands::{BootstrapCliOptions, handle_info, handle_init, handle_list, handle_status};
 pub use detect::detect_os_id;
 pub use managed::{
     handle_apply, handle_apply_approved, handle_uninstall, handle_uninstall_approved,

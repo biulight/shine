@@ -52,7 +52,9 @@ Sys bootstrap uses the dedicated `sys-bootstrap` Plan operation rather than a li
 Interactive or profile selection resolves to an exact ordered item list before planning. The pure
 planner observes command/path presence without executing detection, binds run-manifest,
 environment/proxy and profile state, and derives package-provider, script, administrator and
-profile permissions. Approved execution re-plans before any detection command, installer,
+profile permissions. It retains item-local permission resolutions plus separate profile and shared
+write scopes before merging the aggregate set. The CLI uses these fingerprint-bound scopes for
+bootstrap review; `--verbose` expands identities and diagnostic codes (ADR 0086). Approved execution re-plans before any detection command, installer,
 materialization, profile write, or receipt mutation. Its existing domain report remains separate
 from `LifecycleResultV1`.
 

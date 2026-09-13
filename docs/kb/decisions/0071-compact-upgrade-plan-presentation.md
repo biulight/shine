@@ -31,7 +31,8 @@ back to the same plain text when stdout does not support color or color is disab
 preflight ordering are unchanged.
 
 `upgrade --verbose` retains the unabridged rendering with every ordered step and full identity.
-Other lifecycle operations keep their existing full presentation. A blocked aggregate review
+Other lifecycle operations keep their existing full presentation.
+[ADR 0086](0086-bootstrap-plan-permission-provenance.md) later adds item-scoped bootstrap review. A blocked aggregate review
 collects all Plans before reporting and adds actionable guidance for missing Preset declarations and
 untrusted external App code without exposing private paths or command arguments.
 

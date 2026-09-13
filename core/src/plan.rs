@@ -338,6 +338,14 @@ impl From<LifecycleOperation> for PlanOperationV1 {
     }
 }
 
+/// Exact permission provenance for a review section; `None` denotes shared effects.
+/// This is review data, not a separate approval or execution boundary.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PlanPermissionScopeV1 {
+    pub target: Option<String>,
+    pub permissions: PermissionResolutionV1,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PlanV1 {
     pub schema_version: u32,
@@ -345,6 +353,8 @@ pub struct PlanV1 {
     pub inputs: PlanInputsV1,
     pub steps: Vec<PlanStepV1>,
     pub permissions: PermissionResolutionV1,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_scopes: Vec<PlanPermissionScopeV1>,
 }
 
 impl PlanV1 {
@@ -357,6 +367,7 @@ impl PlanV1 {
         uncomputable_permission_codes: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         Self {
+            permission_scopes: Vec::new(),
             schema_version: PLAN_SCHEMA_VERSION,
             operation: operation.into(),
             inputs,

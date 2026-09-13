@@ -46,6 +46,15 @@ shine sys bootstrap --proxy --dry-run
 该参数只跳过提示，Plan 仍会展示并在执行前校验。`--dry-run` 是更早阶段的预览，不能与 `--yes`
 同时使用。
 
+安全 Plan 会先提示管理员权限、网络访问范围与 profile 恢复限制，再按选中的安装项展示所需权限。
+Profile 配置与公共运行时目录、清单写入分别列在独立区块。包管理器权限由元数据推导，因此空的权限声明
+不表示安装软件包无需权限。多个安装项都需要同一权限时，会在各项下分别展示。
+`Permissions none required` 仅表示规划器未为该区块推导出所需权限，不是安全保证。
+
+默认输出缩短快照标识。添加 `--verbose`（例如 `shine sys bootstrap --preset recommended --verbose`）
+可查看完整标识与诊断码。两种视图审阅的是同一个完整 Plan，对选中的操作仍只进行一次确认。
+`--verbose` 不改变更早阶段的 `--dry-run` 预览。
+
 Ubuntu 还提供 `minimal` profile，适合生产服务器：仅安装 Neovim、fzf、bat、eza 和 zoxide，不包含 shell 历史同步、提示符、Node.js 工具链或 Homebrew。运行前仍应先执行 `shine sys bootstrap --preset minimal --dry-run` 复核当前版本的实际步骤。
 
 下载需要经过 HTTP 代理时，添加 `--proxy`。Shine 会根据 `[env]` 中的 `PROXY_HOST`、`HTTP_PROXY_PORT` 和 `PROXY_NO_PROXY` 为初始化脚本设置大小写两套代理变量；默认地址为 `http://127.0.0.1:6152`。先配合 `--dry-run` 检查实际注入值。

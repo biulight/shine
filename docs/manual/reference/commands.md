@@ -123,7 +123,7 @@ shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
 shine sys recover [--yes]
-shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes]
+shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes] [--verbose]
 shine sys profile enable <ITEM> [--dry-run] [--yes]
 shine sys profile disable <ITEM> [--dry-run] [--yes]
 shine sys apply [ITEM] [--dry-run] [--yes]

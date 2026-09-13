@@ -53,6 +53,18 @@ After selection, a mutating run displays the planned changes and required permis
 approval defaults to No. Automation must pass `--yes`; this skips only the prompt, while the Plan is
 still shown and validated. `--dry-run` is an earlier preview and cannot be combined with `--yes`.
 
+The security Plan starts with administrator/network warnings and profile recovery limitations,
+then lists permissions under each selected bootstrap item. Profile configuration and shared runtime
+or manifest writes have separate sections. Package-provider permissions are derived from metadata,
+so an empty permission declaration does not mean that installing a package needs no permissions.
+Shared capabilities may appear under multiple items when each needs them. `Permissions none required`
+means only that the planner derived no capabilities for that section; it is not a safety guarantee.
+
+Snapshot identities are shortened in the default display. Add `--verbose`, for example
+`shine sys bootstrap --preset recommended --verbose`, to show full identities and diagnostic codes.
+Both views review the same complete Plan and use a single confirmation for the selected operation.
+`--verbose` does not change the earlier `--dry-run` preview.
+
 Ubuntu includes a `minimal` profile for production servers. It installs only Neovim, fzf, bat, eza,
 and zoxide, without shell-history synchronization, a prompt, the Node.js toolchain, or Homebrew.
 Always review the current steps with `shine sys bootstrap --preset minimal --dry-run` first.
