@@ -51,6 +51,7 @@ impl<H> CoreRuntime<H> {
     ) -> Result<Vec<TrustRequirementV1>> {
         let target = format!("app/{}", category.name);
         let prefix = format!("app/{}/", category.name);
+        let permissions_declared = category.permissions.is_some();
         let permissions = declared_permissions(category.permissions.as_ref())?;
         let generator_paths = category
             .files
@@ -89,6 +90,7 @@ impl<H> CoreRuntime<H> {
                 &target,
                 TrustCapabilityV1::AppHook,
                 category_paths.iter().copied(),
+                permissions_declared,
                 permissions.clone(),
             )?);
         }
@@ -98,6 +100,7 @@ impl<H> CoreRuntime<H> {
                 &target,
                 TrustCapabilityV1::AppGenerator,
                 category_paths.iter().copied(),
+                permissions_declared,
                 permissions.clone(),
             )?);
         }
@@ -107,6 +110,7 @@ impl<H> CoreRuntime<H> {
                 &target,
                 TrustCapabilityV1::AppArtifact,
                 category_paths.iter().copied(),
+                permissions_declared,
                 permissions,
             )?);
         }
@@ -120,6 +124,7 @@ impl<H> CoreRuntime<H> {
     ) -> Result<Vec<TrustRequirementV1>> {
         let target = format!("sys/{}", item.id);
         let prefix = format!("sys/{os_id}/");
+        let permissions_declared = item.permissions.is_some();
         let permissions = declared_permissions(item.permissions.as_ref())?;
         let mut explicit_paths = Vec::new();
         if let Some(SysInstall::Script { path, .. }) = &item.install {
@@ -145,6 +150,7 @@ impl<H> CoreRuntime<H> {
                 &target,
                 TrustCapabilityV1::SysBootstrapScript,
                 category_paths.iter().copied(),
+                permissions_declared,
                 permissions.clone(),
             )?);
         }
@@ -162,6 +168,7 @@ impl<H> CoreRuntime<H> {
                 &target,
                 TrustCapabilityV1::SysProfileCode,
                 category_paths.iter().copied(),
+                permissions_declared,
                 permissions,
             )?);
         }
@@ -202,6 +209,7 @@ impl<H> CoreRuntime<H> {
         target: &str,
         capability: TrustCapabilityV1,
         paths: impl IntoIterator<Item = &'a str>,
+        permissions_declared: bool,
         permissions: PermissionSetV1,
     ) -> Result<TrustRequirementV1> {
         let paths = paths.into_iter().collect::<BTreeSet<_>>();
@@ -209,6 +217,7 @@ impl<H> CoreRuntime<H> {
             target: target.to_string(),
             capability,
             code_digest: self.presets().code_digest_v1(paths)?,
+            permissions_declared,
             permissions,
         })
     }
@@ -289,4 +298,73 @@ fn is_code_support_file(path: &str) -> bool {
                 | "cjs"
         )
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{InMemoryHost, PresetSnapshot, RuntimeContext, RuntimePlatform};
+    use std::path::PathBuf;
+
+    fn external_sys_runtime(manifest: &str) -> CoreRuntime<InMemoryHost> {
+        let home = PathBuf::from("/home/test");
+        let shine = home.join(".shine");
+        let mut context = RuntimeContext::isolated(
+            home,
+            shine.clone(),
+            shine.join("presets"),
+            shine.join("bin"),
+            RuntimePlatform::Linux,
+        );
+        context.is_external_presets = true;
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("sys/ubuntu/shine.toml", manifest.as_bytes().to_vec())
+            .file(
+                "sys/ubuntu/profile/base.pre.sh",
+                b"export PATH=\"$HOME/.local/bin:$PATH\"\n".to_vec(),
+            )
+            .build();
+        CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    }
+
+    #[tokio::test]
+    async fn external_profile_preserves_explicit_empty_permission_declaration() {
+        let runtime = external_sys_runtime(
+            "version = 2\n\
+             [[items]]\n\
+             id = 'neovim'\n\
+             label = 'Neovim'\n\
+             permissions = { schema_version = 1 }\n\
+             detect = { kind = 'command', command = 'nvim' }\n\
+             install = { kind = 'package', provider = 'apt', package = 'neovim' }\n",
+        );
+
+        let report = runtime
+            .external_code_requirements("sys/neovim")
+            .await
+            .unwrap();
+        assert_eq!(report.requirements.len(), 1);
+        assert!(report.requirements[0].permissions_declared);
+        assert!(report.requirements[0].permissions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn external_profile_preserves_missing_permission_declaration() {
+        let runtime = external_sys_runtime(
+            "version = 2\n\
+             [[items]]\n\
+             id = 'neovim'\n\
+             label = 'Neovim'\n\
+             detect = { kind = 'command', command = 'nvim' }\n\
+             install = { kind = 'package', provider = 'apt', package = 'neovim' }\n",
+        );
+
+        let report = runtime
+            .external_code_requirements("sys/neovim")
+            .await
+            .unwrap();
+        assert_eq!(report.requirements.len(), 1);
+        assert!(!report.requirements[0].permissions_declared);
+        assert!(report.requirements[0].permissions.is_empty());
+    }
 }

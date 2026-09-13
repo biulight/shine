@@ -18,19 +18,33 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
         );
     }
 
+    // Validate every file in the migration scope before applying any cleanup
+    // or recipient rewrite so one malformed legacy recipient cannot leave a
+    // partially migrated global/project/workspace set.
+    validate_recipient_migration_inputs(config).await?;
+
     let steps = pending_steps(schema_version);
     if steps.is_empty() {
         let mut migrated_local_state = false;
         for path in config_migration_paths(config) {
             if config_needs_migration(&path).await? {
+                let age_count = config_age_migration_count(&path).await?;
                 if dry_run {
                     println!(
-                        "[dry-run] migrate GPG recipient configuration in {}",
-                        path.display()
+                        "[dry-run] migrate recipient configuration in {} ({age_count} age1se recipient(s) to age1tag)",
+                        path.display(),
                     );
                 } else {
                     migrate_config_gpg_recipient(&path).await?;
-                    println!("Migrated GPG recipient configuration in {}", path.display());
+                    println!(
+                        "Migrated recipient configuration in {} ({age_count} age1se recipient(s) to age1tag)",
+                        path.display()
+                    );
+                }
+                if age_count > 0 {
+                    println!(
+                        "  Note: native tagged recipients let someone who knows the recipient test whether a ciphertext targets it."
+                    );
                 }
                 migrated_local_state = true;
             }
@@ -38,11 +52,23 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
         if let Some(path) = find_workspace_from_current_dir()
             && workspace_needs_migration(&path).await?
         {
+            let age_count = workspace_age_migration_count(&path).await?;
             if dry_run {
-                println!("[dry-run] migrate workspace format in {}", path.display());
+                println!(
+                    "[dry-run] migrate workspace format and recipients in {} ({age_count} age1se recipient(s) to age1tag)",
+                    path.display()
+                );
             } else {
                 migrate_workspace_gpg_recipient(&path).await?;
-                println!("Migrated workspace format in {}", path.display());
+                println!(
+                    "Migrated workspace format and recipients in {} ({age_count} age1se recipient(s) to age1tag)",
+                    path.display()
+                );
+            }
+            if age_count > 0 {
+                println!(
+                    "  Note: native tagged recipients let someone who knows the recipient test whether a ciphertext targets it."
+                );
             }
             migrated_local_state = true;
         }
@@ -68,7 +94,7 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
 
     for step in &steps {
         println!("{}", colors::dim(&format!("schema {}", step.to_version)));
-        for action in actions_for_step(config, step) {
+        for action in actions_for_step(config, step).await? {
             if dry_run {
                 println!("  [dry-run] {}", action.description);
             } else {
@@ -90,6 +116,9 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
     let mut updated = config.clone();
     if let Some(recipients) = gpg_recipients_from_config(config.config_path()).await? {
         updated.gpg_recipients = recipients;
+    }
+    if let Some(recipients) = age_recipients_from_config(config.config_path()).await? {
+        updated.age_recipients = recipients;
     }
     updated.legacy_gpg_key_id = None;
     updated.schema_version = CURRENT_RUNTIME_SCHEMA_VERSION;
@@ -131,8 +160,11 @@ fn pending_steps(schema_version: u32) -> Vec<CleanupStep> {
         .collect()
 }
 
-fn actions_for_step<'a>(config: &'a Config, step: &CleanupStep) -> Vec<CleanupAction<'a>> {
-    match step.to_version {
+async fn actions_for_step<'a>(
+    config: &'a Config,
+    step: &CleanupStep,
+) -> Result<Vec<CleanupAction<'a>>> {
+    Ok(match step.to_version {
         1 => {
             let path = config.shine_dir().join(UPDATE_CACHE_FILE);
             vec![CleanupAction {
@@ -146,25 +178,25 @@ fn actions_for_step<'a>(config: &'a Config, step: &CleanupStep) -> Vec<CleanupAc
                 }),
             }]
         }
-        2 => migration_actions(config),
+        2 => migration_actions(config).await?,
         _ => Vec::new(),
-    }
+    })
 }
 
-fn migration_actions<'a>(config: &'a Config) -> Vec<CleanupAction<'a>> {
+async fn migration_actions<'a>(config: &'a Config) -> Result<Vec<CleanupAction<'a>>> {
     let mut actions = Vec::new();
     for path in config_migration_paths(config) {
-        let description = format!("migrate GPG recipient configuration in {}", path.display());
+        let age_count = config_age_migration_count(&path).await?;
+        let description = migration_description("recipient configuration", &path, age_count);
         actions.push(CleanupAction {
             description,
             apply: Box::pin(async move { migrate_config_gpg_recipient(&path).await }),
         });
     }
     if let Some(path) = find_workspace_from_current_dir() {
-        let description = format!(
-            "migrate GPG workspace recipient configuration in {}",
-            path.display()
-        );
+        let age_count = workspace_age_migration_count(&path).await?;
+        let description =
+            migration_description("workspace recipient configuration", &path, age_count);
         actions.push(CleanupAction {
             description,
             apply: Box::pin(
@@ -172,7 +204,20 @@ fn migration_actions<'a>(config: &'a Config) -> Vec<CleanupAction<'a>> {
             ),
         });
     }
-    actions
+    Ok(actions)
+}
+
+fn migration_description(kind: &str, path: &Path, age_count: usize) -> String {
+    let mut description = format!(
+        "migrate {kind} in {} ({age_count} age1se recipient(s) to age1tag)",
+        path.display()
+    );
+    if age_count > 0 {
+        description.push_str(
+            "; tagged recipients let someone who knows the recipient test whether a ciphertext targets it",
+        );
+    }
+    description
 }
 
 fn config_migration_paths(config: &Config) -> Vec<PathBuf> {
@@ -193,9 +238,25 @@ fn find_workspace_from_current_dir() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
+async fn validate_recipient_migration_inputs(config: &Config) -> Result<()> {
+    for path in config_migration_paths(config) {
+        config_age_migration_count(&path)
+            .await
+            .with_context(|| format!("validating recipient migration in {}", path.display()))?;
+    }
+    if let Some(path) = find_workspace_from_current_dir() {
+        workspace_age_migration_count(&path)
+            .await
+            .with_context(|| format!("validating recipient migration in {}", path.display()))?;
+    }
+    Ok(())
+}
+
 async fn migrate_config_gpg_recipient(path: &Path) -> Result<()> {
     migrate_recipient_key(path, |document| {
-        migrate_key(document, "gpg_key_id", "gpg_recipients")
+        let mut changed = migrate_key(document, "gpg_key_id", "gpg_recipients")?;
+        changed |= migrate_age_recipients(document.as_table_mut())? > 0;
+        Ok(changed)
     })
     .await
     .map(|_| ())
@@ -215,6 +276,7 @@ async fn migrate_workspace_gpg_recipient(path: &Path) -> Result<bool> {
         let encryption = document["env"]["encryption"].as_table_mut();
         if let Some(table) = encryption {
             changed |= migrate_table_key(table, "recipient", "gpg_recipients")?;
+            changed |= migrate_age_recipients(table)? > 0;
         }
         if version < 2 {
             document["version"] = toml_edit::value(2);
@@ -257,7 +319,12 @@ async fn workspace_needs_migration(path: &Path) -> Result<bool> {
         .and_then(toml_edit::Item::as_integer)
         .unwrap_or(1)
         < 2
-        || document["env"]["encryption"]["recipient"].is_value())
+        || document["env"]["encryption"]["recipient"].is_value()
+        || age_migration_count(
+            document["env"]["encryption"]
+                .as_table()
+                .and_then(|table| table.get("age_recipients")),
+        )? > 0)
 }
 
 async fn config_needs_migration(path: &Path) -> Result<bool> {
@@ -267,7 +334,73 @@ async fn config_needs_migration(path: &Path) -> Result<bool> {
     let document = contents
         .parse::<toml_edit::DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
-    Ok(document.as_table().contains_key("gpg_key_id"))
+    Ok(document.as_table().contains_key("gpg_key_id")
+        || age_migration_count(document.as_table().get("age_recipients"))? > 0)
+}
+
+async fn config_age_migration_count(path: &Path) -> Result<usize> {
+    let contents = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("reading {}", path.display()))?;
+    let document = contents
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    age_migration_count(document.as_table().get("age_recipients"))
+}
+
+async fn workspace_age_migration_count(path: &Path) -> Result<usize> {
+    let contents = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("reading {}", path.display()))?;
+    let document = contents
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    age_migration_count(
+        document["env"]["encryption"]
+            .as_table()
+            .and_then(|table| table.get("age_recipients")),
+    )
+}
+
+fn age_migration_count(item: Option<&toml_edit::Item>) -> Result<usize> {
+    let Some(item) = item else {
+        return Ok(0);
+    };
+    let recipients = item.as_array().context("age_recipients must be an array")?;
+    let mut count = 0;
+    for value in recipients {
+        let recipient = value
+            .as_str()
+            .context("age_recipients entries must be strings")?;
+        if recipient.starts_with("age1se1") {
+            crate::secret::secure_enclave_recipient_to_tag(recipient)?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn migrate_age_recipients(table: &mut toml_edit::Table) -> Result<usize> {
+    let Some(item) = table.get_mut("age_recipients") else {
+        return Ok(0);
+    };
+    let recipients = item
+        .as_array_mut()
+        .context("age_recipients must be an array")?;
+    let mut count = 0;
+    for value in recipients.iter_mut() {
+        let recipient = value
+            .as_str()
+            .context("age_recipients entries must be strings")?;
+        if recipient.starts_with("age1se1") {
+            let tagged = crate::secret::secure_enclave_recipient_to_tag(recipient)?;
+            let decor = value.decor().clone();
+            *value = toml_edit::Value::from(tagged);
+            *value.decor_mut() = decor;
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn migrate_key(document: &mut toml_edit::DocumentMut, old: &str, new: &str) -> Result<bool> {
@@ -307,6 +440,14 @@ fn migrate_table_key(table: &mut toml_edit::Table, old: &str, new: &str) -> Resu
 }
 
 async fn gpg_recipients_from_config(path: &Path) -> Result<Option<Vec<String>>> {
+    recipients_from_config(path, "gpg_recipients").await
+}
+
+async fn age_recipients_from_config(path: &Path) -> Result<Option<Vec<String>>> {
+    recipients_from_config(path, "age_recipients").await
+}
+
+async fn recipients_from_config(path: &Path, key: &str) -> Result<Option<Vec<String>>> {
     let contents = match tokio::fs::read_to_string(path).await {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -314,17 +455,17 @@ async fn gpg_recipients_from_config(path: &Path) -> Result<Option<Vec<String>>> 
     };
     let table: toml::Table =
         toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
-    let Some(value) = table.get("gpg_recipients") else {
+    let Some(value) = table.get(key) else {
         return Ok(None);
     };
     let recipients = value
         .as_array()
-        .context("gpg_recipients must be an array")?
+        .with_context(|| format!("{key} must be an array"))?
         .iter()
         .map(|value| {
             value
                 .as_str()
-                .context("gpg_recipients entries must be strings")
+                .with_context(|| format!("{key} entries must be strings"))
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -409,9 +550,13 @@ mod tests {
     async fn workspace_migration_converts_legacy_recipient() {
         let dir = make_temp_dir().await;
         let workspace = dir.join("shine.workspace.toml");
+        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
+        let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
         fs::write(
             &workspace,
-            "[env.encryption]\n# deployment key\nrecipient = \"alice@example.com\"\n",
+            format!(
+                "version = 2\n[env.encryption]\n# deployment key\nrecipient = \"alice@example.com\"\nage_recipients = [\"{legacy}\"]\n"
+            ),
         )
         .await
         .unwrap();
@@ -422,7 +567,93 @@ mod tests {
         assert!(!content.contains("recipient ="));
         assert!(content.contains("# deployment key"));
         assert!(content.contains("gpg_recipients = [\"alice@example.com\"]"));
+        assert!(content.contains(tagged));
         assert!(content.contains("version = 2"));
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn migration_converts_secure_enclave_recipients_in_place() {
+        let dir = make_temp_dir().await;
+        let config_path = dir.join("config.toml");
+        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
+        let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
+        fs::write(
+            &config_path,
+            format!("# team recipients\nage_recipients = [\n  \"{legacy}\", # Touch ID\n  \"age1phone1example\",\n]\n"),
+        )
+        .await
+        .unwrap();
+
+        migrate_config_gpg_recipient(&config_path).await.unwrap();
+
+        let content = fs::read_to_string(&config_path).await.unwrap();
+        assert!(content.contains(tagged));
+        assert!(content.contains("# Touch ID"));
+        assert!(content.contains("age1phone1example"));
+        assert!(!content.contains(legacy));
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_secure_enclave_recipient_leaves_file_unchanged() {
+        let dir = make_temp_dir().await;
+        let config_path = dir.join("config.toml");
+        let original = "age_recipients = [\"age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp\", \"age1se1invalid\"]\n";
+        fs::write(&config_path, original).await.unwrap();
+
+        assert!(migrate_config_gpg_recipient(&config_path).await.is_err());
+        assert_eq!(fs::read_to_string(&config_path).await.unwrap(), original);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn invalid_project_recipient_prevents_any_config_write() {
+        let _lock = crate::test_support::env_lock();
+        let original_dir = std::env::current_dir().unwrap();
+        let dir = make_temp_dir().await;
+        let project_dir = dir.join("project");
+        fs::create_dir_all(&project_dir).await.unwrap();
+        let config = Config::new_for_test(&dir);
+        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
+        let global_original = format!("schema_version = 2\nage_recipients = [\"{legacy}\"]\n");
+        fs::write(config.config_path(), &global_original)
+            .await
+            .unwrap();
+        fs::write(
+            project_dir.join("shine.config.toml"),
+            "age_recipients = [\"age1se1invalid\"]\n",
+        )
+        .await
+        .unwrap();
+        std::env::set_current_dir(&project_dir).unwrap();
+
+        let result = handle_migrate(&config, false).await;
+        crate::test_support::restore_current_dir(&original_dir);
+
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read_to_string(config.config_path()).await.unwrap(),
+            global_original
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dry_run_does_not_convert_secure_enclave_recipients() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
+        let original = format!("schema_version = 2\nage_recipients = [\"{legacy}\"]\n");
+        fs::write(config.config_path(), &original).await.unwrap();
+
+        handle_migrate(&config, true).await.unwrap();
+
+        assert_eq!(
+            fs::read_to_string(config.config_path()).await.unwrap(),
+            original
+        );
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -473,9 +704,13 @@ mod tests {
         let project_dir = dir.join("project");
         fs::create_dir_all(&project_dir).await.unwrap();
         let project_config = project_dir.join("shine.config.toml");
+        let legacy = "age1se1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwg5dz2dp";
+        let tagged = "age1tag1qgg72x2qfk9wg3wh0qg9u0v7l5dkq4jx69fv80p6wdus3ftg6flwgc25f05";
         fs::write(
             &project_config,
-            "# project key\ngpg_key_id = \"project@example.com\"\n",
+            format!(
+                "# project key\ngpg_key_id = \"project@example.com\"\nage_recipients = [\"{legacy}\"]\n"
+            ),
         )
         .await
         .unwrap();
@@ -490,6 +725,7 @@ mod tests {
         assert!(!content.contains("gpg_key_id"));
         assert!(content.contains("# project key"));
         assert!(content.contains("gpg_recipients = [\"project@example.com\"]"));
+        assert!(content.contains(tagged));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

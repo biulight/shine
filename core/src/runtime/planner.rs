@@ -7,6 +7,7 @@
 use super::app::{
     desired_app_hash, installed_app_entry_hash, installed_app_hash, installed_json_hash,
 };
+use super::command_detection::{command_candidates, observe_command_candidate};
 use super::launcher::{
     prepare_launcher_resources, prepared_launcher_resource_is_exact,
     probe_managed_command_with_host,
@@ -5316,12 +5317,10 @@ async fn observe_command_presence<H: FileSystemObservationHost>(
         .into_iter()
         .enumerate()
     {
-        let metadata = match runtime.host().metadata(&candidate).await {
-            Ok(metadata) => Some(metadata),
-            Err(error) if error.is_not_found() => None,
-            Err(error) => return Err(error.into_anyhow("observing Sys detection command")),
-        };
-        let value = metadata.as_ref().map_or_else(
+        let observation = observe_command_candidate(runtime.host(), &candidate)
+            .await
+            .map_err(|error| error.into_anyhow("observing Sys detection command"))?;
+        let mut value = observation.source.as_ref().map_or_else(
             || "missing".to_string(),
             |metadata| {
                 format!(
@@ -5332,51 +5331,26 @@ async fn observe_command_presence<H: FileSystemObservationHost>(
                 )
             },
         );
+        if observation
+            .source
+            .as_ref()
+            .is_some_and(|metadata| metadata.kind == FileKind::Symlink)
+        {
+            match &observation.resolved {
+                Some(resolved) => value.push_str(&format!(
+                    ":resolved:{}:{:?}:{}:{}",
+                    sha256_hex(resolved.path.as_os_str().as_encoded_bytes()),
+                    resolved.metadata.kind,
+                    resolved.metadata.len,
+                    resolved.metadata.unix_mode.unwrap_or_default(),
+                )),
+                None => value.push_str(":resolved:missing"),
+            }
+        }
         state.public(format!("detection:{target}:candidate:{index}"), value)?;
-        present |= metadata.is_some_and(|metadata| {
-            metadata.kind == FileKind::File
-                && (runtime.context().platform == super::RuntimePlatform::Windows
-                    || metadata.unix_mode.is_none_or(|mode| mode & 0o111 != 0))
-        });
+        present |= observation.is_executable(runtime.context().platform);
     }
     Ok(present)
-}
-
-fn command_candidates(context: &super::RuntimeContext, command: &str) -> Vec<PathBuf> {
-    let mut directories = context
-        .path_env
-        .as_deref()
-        .map(std::env::split_paths)
-        .map(Iterator::collect::<Vec<_>>)
-        .unwrap_or_default();
-    directories.extend([
-        context.home_dir.join(".local/bin"),
-        context.home_dir.join(".cargo/bin"),
-        context.home_dir.join(".bun/bin"),
-        context.home_dir.join(".local/share/pnpm"),
-        context
-            .home_dir
-            .join("AppData/Local/Microsoft/WinGet/Links"),
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-        PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
-    ]);
-    directories
-        .into_iter()
-        .flat_map(|directory| {
-            if context.platform == super::RuntimePlatform::Windows {
-                vec![
-                    directory.join(command),
-                    directory.join(format!("{command}.exe")),
-                    directory.join(format!("{command}.cmd")),
-                    directory.join(format!("{command}.bat")),
-                    directory.join(format!("{command}.ps1")),
-                ]
-            } else {
-                vec![directory.join(command)]
-            }
-        })
-        .collect()
 }
 
 async fn observe_presence(
@@ -7038,6 +7012,23 @@ install = {{ kind = 'package', provider = 'homebrew', package = 'tool' }}
             .build()
     }
 
+    fn bootstrap_command_snapshot() -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'tool'
+label = 'Tool'
+permissions = { schema_version = 1 }
+detect = { kind = 'command', command = 'tool', version_args = ['--version'] }
+install = { kind = 'package', provider = 'homebrew', package = 'tool' }
+"#
+                .to_vec(),
+            )
+            .build()
+    }
+
     fn bootstrap_request() -> SysBootstrapPlanRequest {
         SysBootstrapPlanRequest {
             os_id: "test".to_string(),
@@ -7093,6 +7084,37 @@ install = {{ kind = 'package', provider = 'homebrew', package = 'tool' }}
                 .any(|step| { step.target == "sys/tool" && step.action == PlanActionV1::Update })
         );
         assert_ne!(missing.inputs.state, present.inputs.state);
+    }
+
+    #[tokio::test]
+    async fn sys_bootstrap_plan_detects_an_executable_command_symlink() {
+        let (runtime, host) = observation_runtime(bootstrap_command_snapshot());
+        let target = runtime.context().home_dir.join("bin/tool-target");
+        let other_target = runtime.context().home_dir.join("bin/other-tool-target");
+        let command = runtime.context().home_dir.join(".local/bin/tool");
+        host.put_file_with_mode(&target, b"tool".to_vec(), 0o100755);
+        host.put_file_with_mode(&other_target, b"tool".to_vec(), 0o100755);
+        host.symlink(&target, &command).await.unwrap();
+
+        let plan = runtime
+            .plan_sys_bootstrap(bootstrap_request())
+            .await
+            .unwrap();
+
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| { step.target == "sys/tool" && step.action == PlanActionV1::Update })
+        );
+        assert!(plan.is_ready());
+
+        host.remove_file(&command).await.unwrap();
+        host.symlink(&other_target, &command).await.unwrap();
+        let retargeted = runtime
+            .plan_sys_bootstrap(bootstrap_request())
+            .await
+            .unwrap();
+        assert_ne!(plan.inputs.state, retargeted.inputs.state);
     }
 
     #[tokio::test]

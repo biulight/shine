@@ -1,8 +1,9 @@
+use super::command_detection::{command_candidates, observe_command_candidate};
 use super::{
-    CoreRuntime, FileKind, FileSystemHost, ProcessHost, ProcessRequest, ResolvedSelection,
-    RuntimeEvent, RuntimeInteraction, RuntimeObserver, SelectionSource, SysDetection,
-    SysDetectionProbe, SysInstall, SysItem, SysItemMode, SysItemOutcome, SysItemStatus,
-    SysManifest, SysPackageProvider, SysRunEntry, SystemReceipt,
+    CoreRuntime, FileSystemHost, ProcessHost, ProcessRequest, ResolvedSelection, RuntimeEvent,
+    RuntimeInteraction, RuntimeObserver, SelectionSource, SysDetection, SysDetectionProbe,
+    SysInstall, SysItem, SysItemMode, SysItemOutcome, SysItemStatus, SysManifest,
+    SysPackageProvider, SysRunEntry, SystemReceipt,
 };
 use crate::trust::TrustCapabilityV1;
 use anyhow::{Context, Result, bail};
@@ -489,45 +490,12 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
     }
 
     async fn find_command(&self, command: &str) -> Result<Option<PathBuf>> {
-        let mut directories = self
-            .context()
-            .path_env
-            .as_deref()
-            .map(std::env::split_paths)
-            .map(Iterator::collect::<Vec<_>>)
-            .unwrap_or_default();
-        directories.extend([
-            self.context().home_dir.join(".local/bin"),
-            self.context().home_dir.join(".cargo/bin"),
-            self.context().home_dir.join(".bun/bin"),
-            self.context().home_dir.join(".local/share/pnpm"),
-            self.context()
-                .home_dir
-                .join("AppData/Local/Microsoft/WinGet/Links"),
-            PathBuf::from("/opt/homebrew/bin"),
-            PathBuf::from("/usr/local/bin"),
-            PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
-        ]);
-        for directory in directories {
-            let candidates = if self.context().platform == super::RuntimePlatform::Windows {
-                vec![
-                    directory.join(command),
-                    directory.join(format!("{command}.exe")),
-                    directory.join(format!("{command}.cmd")),
-                    directory.join(format!("{command}.bat")),
-                    directory.join(format!("{command}.ps1")),
-                ]
-            } else {
-                vec![directory.join(command)]
-            };
-            for candidate in candidates {
-                if let Ok(metadata) = self.host().metadata(&candidate).await
-                    && metadata.kind == FileKind::File
-                    && (self.context().platform == super::RuntimePlatform::Windows
-                        || metadata.unix_mode.is_none_or(|mode| mode & 0o111 != 0))
-                {
-                    return Ok(Some(candidate));
-                }
+        for candidate in command_candidates(self.context(), command) {
+            let observation = observe_command_candidate(self.host(), &candidate)
+                .await
+                .map_err(|error| error.into_anyhow("inspecting Sys detection command"))?;
+            if observation.is_executable(self.context().platform) {
+                return Ok(Some(candidate));
             }
         }
         Ok(None)

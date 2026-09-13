@@ -264,6 +264,19 @@ impl Config {
                 .context("Failed to read global config file")?;
             let mut config: Config =
                 toml::from_str(&contents).context("Failed to parse global config file")?;
+            if config
+                .secret_backend
+                .as_deref()
+                .is_some_and(|b| b.trim().eq_ignore_ascii_case("hybrid"))
+            {
+                bail!("global secret_backend cannot be hybrid; use workspace access lists");
+            }
+            if let Some(value) = &config.hybrid_decrypt_backend {
+                match value.parse::<crate::secret::BackendKind>()? {
+                    crate::secret::BackendKind::Gpg | crate::secret::BackendKind::Age => {}
+                    _ => bail!("hybrid_decrypt_backend must be gpg or age"),
+                }
+            }
             config.env_descriptions = parse_env_descriptions(&contents);
             config.config_path = config_path.clone();
             config.is_project_config = false;
@@ -957,13 +970,13 @@ mod tests {
         let state_dir = make_temp_dir().await;
         fs::write(
             state_dir.join("config.toml"),
-            "secret_backend = \"gpg\"\nage_recipients = [\"age1global\"]\nage_identity = \"~/.shine/age/global.txt\"\n",
+            "hybrid_decrypt_backend = \"gpg\"\nsecret_backend = \"gpg\"\nage_recipients = [\"age1global\"]\nage_identity = \"~/.shine/age/global.txt\"\n",
         )
         .await
         .unwrap();
         fs::write(
             project_dir.join("shine.config.toml"),
-            "presets_dir = \".\"\nsecret_backend = \"age\"\nage_recipients = [\"age1project-a\", \"age1project-b\"]\n",
+            "hybrid_decrypt_backend = \"age\"\npresets_dir = \".\"\nsecret_backend = \"age\"\nage_recipients = [\"age1project-a\", \"age1project-b\"]\n",
         )
         .await
         .unwrap();
@@ -975,6 +988,10 @@ mod tests {
         let config = Config::load_or_init().await.unwrap();
 
         assert_eq!(config.secret_backend.as_deref(), Some("age"));
+        assert_eq!(config.hybrid_decrypt_backend.as_deref(), Some("gpg"));
+        config.save().await.unwrap();
+        let saved = fs::read_to_string(config.config_path()).await.unwrap();
+        assert!(!saved.contains("hybrid_decrypt_backend"));
         assert_eq!(
             config.age_recipients,
             vec!["age1project-a".to_string(), "age1project-b".to_string()]

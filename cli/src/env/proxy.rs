@@ -168,11 +168,9 @@ pub async fn exec(config: &Config, target: &Path, command: &str, args: &[OsStrin
     let mut injected = BTreeMap::new();
     for spec in parse_env_specs(&rule.with)? {
         let value = match resolve_stored_value(&env, &spec.source)? {
-            super::StoredValue::Secret { key, value } => {
-                secret::decrypt_secret(value, &config.resolved_age_identities())
-                    .await
-                    .with_context(|| format!("decrypting {key}"))?
-            }
+            super::StoredValue::Secret { key, value } => secret::decrypt_with_config(value, config)
+                .await
+                .with_context(|| format!("decrypting {key}"))?,
             super::StoredValue::Plaintext(value) => value.to_string(),
         };
         injected.insert(spec.target, value);

@@ -3,6 +3,84 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-13 — Empty permission sets do not imply missing declarations
+
+- **Symptom**: an exported Sys collection could not grant profile-code trust for package-only
+  `neovim` or `fzf`, leaving `sys bootstrap` blocked even though both items had schema-v1
+  permission declarations.
+- **Root cause**: trust derivation normalized an explicit empty declaration and an absent declaration
+  to the same empty permission set, and the CLI rejected both before enrollment. Package-provider
+  effects are intentionally derived from typed metadata, so an explicit declaration can validly be
+  empty.
+- **Fix**: retain declaration presence on the transient trust requirement and reject only a missing
+  declaration; the durable grant remains bound to the exact target, capability, code digest, trust
+  layer, and normalized permission set.
+- **Rule**: preserve author declaration presence independently from its normalized capability set.
+  Empty and absent have different fail-closed meanings.
+
+## 2026-09-13 — Command detection must resolve executable symlinks consistently
+
+- **Symptom**: Ubuntu `sys bootstrap` installed `bat`, created the intended
+  `~/.local/bin/bat -> /usr/bin/batcat` alias, then failed because post-install detection still
+  reported `bat` missing.
+- **Root cause**: both security planning and execution searched the correct command directories but
+  accepted only direct `File` metadata. The observation host deliberately uses `symlink_metadata`,
+  so a valid executable symlink was classified as absent.
+- **Fix**: share one command-candidate resolver between planning and execution, follow symlinks to a
+  regular executable target, and bind the resolved target identity into the Plan state. Broken links
+  and links to non-executable targets remain absent.
+- **Rule**: PATH-style command detection must model platform command resolution, including valid
+  symlinks, and its planner and executor must use the same target-validation semantics.
+
+## 2026-09-11 — Plugin identity misses must not become stanza errors
+
+- **Symptom**: hybrid age unwrap stopped at an older, revoked phone identity even though a later
+  configured identity matched and worked when configured alone.
+- **Root cause**: reference age invokes the identity plugin separately for each configured stub.
+  The phone plugin reported a valid nonmatch as a stanza error, which is fatal to that age decrypt
+  operation, instead of returning no file key so age could try the next identity.
+- **Fix**: the phone plugin now returns an empty result for a valid v2 nonmatch while preserving
+  state and malformed-stanza errors; Shine detects multiple phone stubs and adds upgrade and
+  temporary-isolation context to hybrid unwrap failures.
+- **Rule**: test plugin identities through reference age's one-identity-per-invocation behavior.
+  Distinguish an ordinary identity miss from malformed input, unavailable state, and cancellation;
+  never compensate by silently switching a hybrid backend.
+
+## 2026-09-10 — Phone tagged recipients need an explicit plugin capability
+
+- **Symptom**: phone public recipients still required a plugin on every encrypting host.
+- **Root cause**: `age1phone` uses custom versioned payloads and wrapping; replacing its HRP
+  like `age1se` does not produce an equivalent native recipient.
+- **Fix**: Shine requests tag output explicitly and validates the public setup handoff; the
+  plugin and phone app must implement native tag decryption independently.
+- **Rule**: preserve old phone recipients and ciphertext. Export through the plugin after upgrade;
+  never infer decryption support from a recipient prefix or silently migrate/fall back.
+
+
+## 2026-09-09 — Seal lock names must preserve the complete source filename
+
+- **Symptom**: sealing a workspace containing `env.dev` and `env.prod` reported another active
+  sealer even when only one process was running.
+- **Root cause**: replacing the source extension mapped both paths to `env.shine-seal.lock`;
+  workspace and source filenames with matching stems could collide in the same way.
+- **Fix**: append `.shine-seal.lock` to the complete canonical path. A regression test covers
+  both kinds of collision and confirms an already-held source lock still prevents sealing.
+- **Rule**: sidecar lock names must retain every distinguishing part of the resource filename.
+
+## 2026-09-09 — Public plugin recipients can still require platform-specific executables
+
+- **Symptom**: a Windows user could decrypt through `age-plugin-phone` but could not reseal a
+  workspace that also listed a macOS `age1se` recipient because `age-plugin-se` was absent.
+- **Root cause**: age plugin recipients contain public material but still route file-key wrapping
+  through the named plugin executable. Multi-recipient encryption therefore requires every
+  recipient-side plugin, even when no private-key operation occurs.
+- **Fix**: require age 1.3, generate native `age1tag` Secure Enclave recipients, provide an explicit
+  `state migrate` conversion for legacy configuration, and preflight remaining known plugins before
+  decrypting old payloads.
+- **Rule**: cross-platform recipient policy must account for encryption-side plugin availability.
+  Never skip an unavailable recipient; prefer a standard native public recipient when the identity
+  plugin supports it, and disclose any target-discoverability tradeoff.
+
 ## 2026-09-06 — Shell authoring needs typed template blockers and explicit shell selection
 
 - **Symptom**: a complete external `shell/proxy` passes validation, but authoring Plan returns only

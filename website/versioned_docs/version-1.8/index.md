@@ -38,7 +38,9 @@ This manual applies to **Shine 1.8.0**.
   project values as GPG or age ciphertext, then decrypt them on demand for selected child processes.
 - **Look before you update.** By default, inspect what changed first; Shine applies it only when you
   choose to upgrade.
-- **Remove only what Shine installed.** Your source folder and unrelated files stay in place.
+- **Return to your original configuration.** If an App preset finds an existing
+  unmanaged file, Shine backs it up; safe uninstall restores it. Files changed after installation
+  are kept for review.
 
 ## Try a built-in preset
 

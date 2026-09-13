@@ -632,6 +632,7 @@ async fn run(cli: Cli) -> Result<()> {
                     EnvIdentitySubcommand::Init {
                         touch_id,
                         phone,
+                        recipient_type,
                         label,
                         transport,
                         adb_serial,
@@ -642,6 +643,7 @@ async fn run(cli: Cli) -> Result<()> {
                         if phone {
                             env::identity::handle_phone_identity_init(
                                 &config,
+                                recipient_type.unwrap_or_default(),
                                 label.as_deref(),
                                 transport.unwrap_or_default().as_str(),
                                 adb_serial.as_deref(),

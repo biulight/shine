@@ -1,5 +1,6 @@
 [default.extend-words]
 tabe = "tabe"
+fpr = "fpr" # GnuPG machine-readable fingerprint record
 
 [files]
 extend-exclude = ["CHANGELOG.md", "notebooks/*"]

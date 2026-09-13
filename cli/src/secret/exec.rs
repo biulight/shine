@@ -43,6 +43,46 @@ pub(crate) async fn write_stdin_and_wait(
         .context("waiting for child process")
 }
 
+/// Bounded, zeroizing output for data-key unwraps; never echo backend stderr.
+pub(crate) async fn read_key_output(mut child: tokio::process::Child) -> Result<String> {
+    use tokio::io::AsyncReadExt;
+    use zeroize::Zeroizing;
+    async fn bounded(
+        reader: impl tokio::io::AsyncRead + Unpin,
+        limit: usize,
+    ) -> Result<Zeroizing<Vec<u8>>> {
+        let mut bytes = Zeroizing::new(Vec::new());
+        reader
+            .take((limit + 1) as u64)
+            .read_to_end(&mut bytes)
+            .await?;
+        anyhow::ensure!(bytes.len() <= limit, "hybrid unwrap output exceeds limit");
+        Ok(bytes)
+    }
+    let stdout = child.stdout.take().context("opening unwrap output")?;
+    let stderr = child.stderr.take();
+    let result = tokio::try_join!(bounded(stdout, 96), async {
+        if let Some(stderr) = stderr {
+            bounded(stderr, 65536).await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    });
+    let bytes = match result {
+        Ok((bytes, ())) => bytes,
+        Err(error) => {
+            let _ = child.kill().await;
+            return Err(error);
+        }
+    };
+    anyhow::ensure!(
+        child.wait().await?.success(),
+        "hybrid unwrap failed or was cancelled; no other backend was attempted"
+    );
+    Ok(std::str::from_utf8(&bytes)
+        .context("invalid hybrid key text")?
+        .to_owned())
+}
+
 pub(crate) struct TempFile {
     path: PathBuf,
 }

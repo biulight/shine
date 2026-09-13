@@ -22,6 +22,9 @@ permission set does not match the grant.
 Preset and project configuration cannot create grants. The CLI may persist a grant only after it
 derives the current requirement from the immutable Preset snapshot, renders the scope, and receives
 explicit confirmation. Non-interactive enrollment requires an explicit acknowledgement flag.
+An explicitly present, validated permission declaration may normalize to an empty set when typed
+metadata derives all required operation permissions; this remains different from a missing
+declaration, which cannot be enrolled.
 
 Grant matching is Core-owned and frontend-neutral. A matching grant only permits opaque external
 code to remain in a ready Plan. Every mutation still requires a freshly regenerated,

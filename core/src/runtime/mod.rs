@@ -8,6 +8,7 @@ mod app;
 mod app_metadata;
 mod authoring;
 mod bootstrap;
+mod command_detection;
 mod fixture;
 mod host;
 mod inspection;

@@ -55,6 +55,7 @@ impl Config {
             // materialize it in a project configuration that could authorize its own presets.
             sparse.remove("allow_app_hooks");
             sparse.remove("allow_sys_code");
+            sparse.remove("hybrid_decrypt_backend");
             return Ok(sparse);
         }
 

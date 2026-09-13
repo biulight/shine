@@ -319,7 +319,7 @@ pub struct EnvSealCommand {
     /// Workspace definition (defaults to the nearest shine.workspace.toml)
     #[arg(long, value_name = "FILE")]
     pub workspace: Option<PathBuf>,
-    /// Secret backend to use: "gpg" (default) or "age"
+    /// Secret backend: "gpg", "age", or workspace-only "hybrid"
     #[arg(long)]
     pub backend: Option<String>,
     /// Recipient (repeatable): GPG key ID/fingerprint/email, or age recipient
@@ -351,6 +351,23 @@ impl PhoneIdentityTransport {
     }
 }
 
+/// Public recipient format requested from the phone plugin.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum PhoneRecipientType {
+    #[default]
+    Tag,
+    Phone,
+}
+
+impl PhoneRecipientType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tag => "tag",
+            Self::Phone => "phone",
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum EnvIdentitySubcommand {
     /// Generate a new age identity, optionally backed by Touch ID or a paired phone
@@ -358,13 +375,22 @@ pub enum EnvIdentitySubcommand {
         /// Generate a Secure Enclave identity requiring Touch ID (macOS only)
         #[arg(long, conflicts_with = "phone")]
         touch_id: bool,
-        /// Pair a phone-backed identity and add its public stub to global Shine config
+        /// Pair a phone-backed identity on Windows or macOS (experimental) and add its public stub to global Shine config
         #[arg(
             long,
             conflicts_with_all = ["touch_id", "access_control", "output", "force"]
         )]
         phone: bool,
-        /// Desktop label shown during phone pairing (defaults to the Windows computer name)
+        /// Phone recipient: tag (default, age 1.3+, plugin-free encryption) or phone
+        #[arg(
+            long,
+            requires = "phone",
+            conflicts_with_all = ["touch_id", "access_control", "output", "force"],
+            value_enum,
+            value_name = "TYPE"
+        )]
+        recipient_type: Option<PhoneRecipientType>,
+        /// Desktop label shown during phone pairing (defaults to the computer name, or Shine desktop)
         #[arg(long, requires = "phone", value_name = "LABEL")]
         label: Option<String>,
         /// Phone pairing transport: auto, adb, or qr
@@ -416,4 +442,69 @@ pub struct EnvRunCommand {
     /// Command and arguments to run
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<OsString>,
+}
+
+#[cfg(test)]
+mod phone_recipient_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct IdentityCli {
+        #[command(flatten)]
+        identity: EnvIdentityCommand,
+    }
+
+    #[test]
+    fn phone_recipient_cli_defaults_and_explicit_types() {
+        for (extra, expected) in [
+            (vec![], PhoneRecipientType::Tag),
+            (vec!["--recipient-type", "tag"], PhoneRecipientType::Tag),
+            (vec!["--recipient-type", "phone"], PhoneRecipientType::Phone),
+        ] {
+            let mut args = vec!["identity", "init", "--phone"];
+            args.extend(extra);
+            let parsed = IdentityCli::try_parse_from(args).unwrap();
+            let EnvIdentitySubcommand::Init { recipient_type, .. } = parsed.identity.command else {
+                panic!("expected init")
+            };
+            assert_eq!(recipient_type.unwrap_or_default(), expected);
+        }
+    }
+
+    #[test]
+    fn phone_recipient_cli_rejects_invalid_combinations() {
+        for args in [
+            vec!["init", "--recipient-type", "tag"],
+            vec!["init", "--phone", "--recipient-type", "unknown"],
+            vec!["init", "--touch-id", "--recipient-type", "tag"],
+            vec![
+                "init",
+                "--recipient-type",
+                "tag",
+                "--output",
+                "identity.txt",
+            ],
+            vec!["init", "--recipient-type", "tag", "--force"],
+            vec![
+                "init",
+                "--recipient-type",
+                "tag",
+                "--access-control",
+                "passcode",
+            ],
+            vec!["init", "--phone", "--touch-id"],
+            vec!["init", "--phone", "--output", "identity.txt"],
+            vec!["init", "--phone", "--force"],
+            vec!["init", "--phone", "--access-control", "passcode"],
+        ] {
+            assert!(
+                IdentityCli::try_parse_from(
+                    std::iter::once("identity").chain(args.iter().copied())
+                )
+                .is_err(),
+                "accepted {args:?}"
+            );
+        }
+    }
 }
