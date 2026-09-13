@@ -1236,26 +1236,59 @@ mod tests {
         plan
     }
 
+    // Ubuntu's full selection contains absolute Unix detection paths. InMemoryHost
+    // isolates I/O, but PathBuf still uses the compiled host's path grammar.
+    #[cfg(unix)]
     #[tokio::test]
     async fn bootstrap_renderer_uses_embedded_ubuntu_permission_provenance() {
+        assert_embedded_bootstrap_permission_provenance("ubuntu").await;
+    }
+
+    #[tokio::test]
+    async fn bootstrap_renderer_uses_embedded_windows_permission_provenance() {
+        assert_embedded_bootstrap_permission_provenance("windows").await;
+    }
+
+    async fn assert_embedded_bootstrap_permission_provenance(os_id: &str) {
         use shine_core::runtime::{
             InMemoryHost, RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot,
         };
-        let home = std::env::temp_dir().join("shine-bootstrap-render-home");
+        let (platform, shell, profile, package_command, administrator, runtime_writes) = match os_id
+        {
+            "ubuntu" => (
+                RuntimePlatform::Linux,
+                shine_core::runtime::ShellType::Bash,
+                ".bashrc",
+                "apt-get",
+                true,
+                1,
+            ),
+            "windows" => (
+                RuntimePlatform::Windows,
+                shine_core::runtime::ShellType::PowerShell,
+                "Documents/PowerShell/Microsoft.PowerShell_profile.ps1",
+                "winget",
+                false,
+                0,
+            ),
+            _ => unreachable!("unsupported test platform"),
+        };
+        let home = std::env::temp_dir().join(format!("shine-bootstrap-render-{os_id}"));
         let mut context = RuntimeContext::isolated(
             home.clone(),
             home.join(".shine"),
             home.join(".shine/presets"),
             home.join(".shine/bin"),
-            RuntimePlatform::Linux,
+            platform,
         );
-        context.shell_config_paths = vec![home.join(".bashrc")];
+        context.shell = shell;
+        context.shell_config_paths = vec![home.join(profile)];
         let runtime = CoreRuntime::new(
             InMemoryHost::new(),
             context,
             capture_embedded_preset_snapshot(crate::core_runtime::embedded_preset_files()),
         );
-        let loaded = runtime.load_sys_preset("ubuntu").await.unwrap();
+        let loaded = runtime.load_sys_preset(os_id).await.unwrap();
         let items = loaded
             .manifest
             .profiles
@@ -1265,9 +1298,9 @@ mod tests {
             .clone();
         let plan = runtime
             .plan_sys_bootstrap(SysBootstrapPlanRequest {
-                os_id: "ubuntu".into(),
+                os_id: os_id.into(),
                 item_ids: items.clone(),
-                sys_shell: "bash".into(),
+                sys_shell: <&str>::from(shell).to_string(),
                 force_profile: false,
                 input_versions: PlanningInputVersions::default(),
             })
@@ -1278,7 +1311,12 @@ mod tests {
             .unwrap()
             .join("\n");
         assert!(rendered.contains("Shared changes"));
-        assert_eq!(rendered.matches("shine:runtime/sys/ubuntu").count(), 1);
+        assert_eq!(
+            rendered
+                .matches(&format!("shine:runtime/sys/{os_id}"))
+                .count(),
+            runtime_writes
+        );
         assert_eq!(rendered.matches("shine:sys-manifest.toml").count(), 1);
         for item in &items {
             assert!(
@@ -1294,13 +1332,14 @@ mod tests {
                 .find(|scope| scope.target.as_deref() == Some(&format!("sys/{item}")))
                 .unwrap();
             assert!(scope.permissions.required.contains(&PermissionV1::Command {
-                program: "apt-get".into()
+                program: package_command.into()
             }));
-            assert!(
+            assert_eq!(
                 scope
                     .permissions
                     .required
-                    .contains(&PermissionV1::Administrator)
+                    .contains(&PermissionV1::Administrator),
+                administrator,
             );
         }
         assert!(
