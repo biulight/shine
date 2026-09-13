@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 2.1.0. Run `shine <COMMAND> --help` for every option supported by the
+This page reflects Shine 2.1.1. Run `shine <COMMAND> --help` for every option supported by the
 installed version. The task guides explain complete workflows; this page is a compact command index.
 
 ## Targets

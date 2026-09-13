@@ -162,8 +162,11 @@ shine trust grant sys/neovim
 ```
 
 A permission declaration describes what a preset needs to do; a trust grant records your review
-and permission to execute its code. Changed code or permissions require a new review. Run the
-installation preview again after granting trust.
+and permission to execute its code. A package-only item may use an explicit empty declaration
+because the provider's operation permissions are derived from typed metadata; this remains
+grantable if shared external profile code creates a trust requirement. A completely missing
+declaration remains blocked. Changed code or permissions require a new review. Run the installation
+preview again after granting trust.
 
 Migration preparation is complete when local validation has no errors, Shine reads the correct
 source, and the installation preview matches your intent. When ready to install, run

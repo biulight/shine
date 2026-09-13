@@ -7,12 +7,21 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.1.1] — 2026-09-13
+
 ### Bug Fixes
 
+- Recognize executable command symlinks consistently during Sys planning and execution, so Ubuntu
+  aliases such as `bat` pointing to `batcat` satisfy post-install detection.
 - Allow target-scoped trust grants for external executable code whose validated Preset metadata
   explicitly declares an empty permission set, while continuing to reject missing declarations.
   This restores exported package-only Sys items such as Neovim and fzf when shared profile code is
   external.
+
+### Docs
+
+- Streamline the bilingual 2.x manual around user tasks and recovery guidance, highlight reversible
+  App configuration, and refresh the 2.1 patch-release references.
 
 ## [2.1.0] — 2026-09-11
 
