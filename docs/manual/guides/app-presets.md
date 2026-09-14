@@ -366,8 +366,9 @@ shine trust inspect app/<CATEGORY>
 shine trust grant app/<CATEGORY>
 ```
 
-`trust inspect` is read-only. Before granting trust, resolve every missing permission declaration
-shown by the Plan. If an active overlay's `app/<CATEGORY>/shine.toml` is an old full copy that
+`trust inspect` is read-only. It groups capabilities that share the same code and permission scope,
+then prints the appropriate next step. Before granting trust, resolve every missing permission
+declaration shown by the Plan. If an active overlay's `app/<CATEGORY>/shine.toml` is an old full copy that
 overrides built-in metadata, remove or migrate that metadata file first; overlay payload files such
 as `merge.yaml` and `rules/` remain usable.
 

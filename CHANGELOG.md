@@ -7,6 +7,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- Guide blocked external-code operations from trust inspection through explicit enrollment, and
+  make `trust inspect` group shared security scopes, render human-readable permissions, and report
+  the appropriate next step for missing trust, invalid permission declarations, or fully trusted
+  targets.
+
 ## [2.1.1] — 2026-09-13
 
 ### Bug Fixes

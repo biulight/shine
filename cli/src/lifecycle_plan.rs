@@ -361,7 +361,7 @@ fn blocked_plan_error(
         .collect::<std::collections::BTreeSet<_>>();
     for target in external_app_targets {
         reasons.push(format!(
-            "{target}: external Preset code is not trusted; run `shine trust inspect {target}`"
+            "{target}: external Preset code is not trusted; run `shine trust inspect {target}` to review the current scope, then `shine trust grant {target}` if you accept it"
         ));
     }
     if !missing.is_empty() {
@@ -1603,6 +1603,42 @@ mod tests {
         assert!(error.contains("retain overlay payload files such as `merge.yaml` and `rules/`"));
         assert!(error.contains("`shine state migrate` does not modify Preset overlays"));
         assert!(error.contains("no changes were made"));
+    }
+
+    #[test]
+    fn blocked_app_error_explains_inspection_and_trust_enrollment() {
+        let plan = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("preset"),
+                state: digest("state"),
+            },
+            vec![
+                PlanStepV1::new("app/surge", Some("hook:0"), PlanActionV1::Blocked)
+                    .with_diagnostic_code("app_external_code_not_allowed"),
+            ],
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let planned = vec![(
+            LifecyclePlanRequest::App(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("surge".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            }),
+            plan,
+        )];
+        let diagnostics =
+            std::collections::BTreeSet::from(["app_external_code_not_allowed".to_string()]);
+
+        let error = blocked_plan_error(&planned, &diagnostics);
+
+        assert!(error.contains("`shine trust inspect app/surge` to review the current scope"));
+        assert!(error.contains("then `shine trust grant app/surge` if you accept it"));
     }
 
     #[test]
