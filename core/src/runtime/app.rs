@@ -1084,11 +1084,10 @@ where
             let destination = self.app_destination(&category, &file)?;
             let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
                 if request.file.is_some() {
-                    bail!(
-                        "app '{}' generated file is not installed: {}",
-                        request.category,
-                        file.source_rel.display()
-                    );
+                    bail!(generated_file_not_installed_message(
+                        &request.category,
+                        &file.source_rel
+                    ));
                 }
                 continue;
             };
@@ -3341,6 +3340,13 @@ struct PreparedScript {
 
 fn display_exit_code(code: Option<i32>) -> String {
     code.map_or_else(|| "signal".to_string(), |code| code.to_string())
+}
+
+pub(super) fn generated_file_not_installed_message(category: &str, source: &Path) -> String {
+    format!(
+        "app '{category}' generated file is not installed: {}; run `shine install app/{category}` to install it before refreshing",
+        source.display()
+    )
 }
 
 fn process_detail(output: &crate::runtime::ProcessOutput) -> String {

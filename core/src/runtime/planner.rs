@@ -5,7 +5,8 @@
 //! through a host.
 
 use super::app::{
-    desired_app_hash, installed_app_entry_hash, installed_app_hash, installed_json_hash,
+    desired_app_hash, generated_file_not_installed_message, installed_app_entry_hash,
+    installed_app_hash, installed_json_hash,
 };
 use super::command_detection::{command_candidates, observe_command_candidate};
 use super::launcher::{
@@ -1558,11 +1559,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             let destination = self.app_destination(&category, &file)?;
             let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
                 if request.file.is_some() {
-                    bail!(
-                        "app '{}' generated file is not installed: {}",
-                        request.category,
-                        file.source_rel.display()
-                    );
+                    bail!(generated_file_not_installed_message(
+                        &request.category,
+                        &file.source_rel
+                    ));
                 }
                 continue;
             };
@@ -9871,6 +9871,39 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
             b"user-original"
         );
         assert!(runtime.host().read(&backup).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn targeted_app_refresh_points_uninstalled_generator_to_install() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                br#"dest = '~/.config/demo'
+[[files]]
+source = 'generated.txt'
+generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }
+"#
+                .to_vec(),
+            )
+            .file("app/demo/generated.txt", b"fallback".to_vec())
+            .file("app/demo/gen.ts", b"process.stdout.write('generated')".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+
+        let error = runtime
+            .plan_app_refresh(AppRefreshPlanRequest {
+                category: "demo".to_string(),
+                file: Some(PathBuf::from("generated.txt")),
+                force: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "app 'demo' generated file is not installed: generated.txt; run `shine install app/demo` to install it before refreshing"
+        );
     }
 
     #[tokio::test]

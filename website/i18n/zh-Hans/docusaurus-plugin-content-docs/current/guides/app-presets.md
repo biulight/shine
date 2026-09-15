@@ -121,6 +121,9 @@ shine update --run-generators
 generator 和 `auto = false` 的手动 generator 都会参与。外部或 overlay generator 仍需要匹配的
 scoped trust。单项失败不会阻止其余 generator 继续评估，但命令会在报告不完整结果后返回非零状态。
 
+refresh 只处理已由 App manifest 记录的生成文件。新增带 generator 的 `[[files]]` 项后，先运行一次
+`shine install app/<CATEGORY>`，然后才能刷新该 source。
+
 自动 generator 也可以在获批的安装或升级中运行；`auto = false` 的手动 generator 可在安装、显式
 评估或显式 refresh 中运行：
 

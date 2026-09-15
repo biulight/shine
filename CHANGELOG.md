@@ -13,6 +13,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   make `trust inspect` group shared security scopes, render human-readable permissions, and report
   the appropriate next step for missing trust, invalid permission declarations, or fully trusted
   targets.
+- Point targeted refreshes of newly added generated App files to the required initial install.
 
 ## [2.1.1] — 2026-09-13
 

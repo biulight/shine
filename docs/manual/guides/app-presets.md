@@ -140,6 +140,9 @@ flag is explicit. External or overlay generators still require matching scoped t
 failures do not stop evaluation of the remaining selection, but the command returns nonzero after
 reporting incomplete results.
 
+Refresh applies only to generated files already tracked by the App manifest. After adding a new
+generated `[[files]]` entry, run `shine install app/<CATEGORY>` once before refreshing that source.
+
 Automatic generators may also run during an approved install or upgrade. A manual generator with
 `auto = false` runs during installation, explicit evaluation, or explicit refresh:
 
