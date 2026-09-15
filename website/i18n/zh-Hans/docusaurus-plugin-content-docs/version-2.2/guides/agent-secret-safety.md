@@ -1,0 +1,179 @@
+---
+title: 在 AI Agent 参与开发时保护环境密钥
+sidebar_position: 7
+---
+
+# 在 AI Agent 参与开发时保护环境密钥
+
+Claude Code、Codex 等 AI Agent 参与开发后，密钥安全不再只是“不要提交 `.env`”这么简单。Agent 可能能读取工作区文件、运行命令、查看命令输出；如果把长期有效的明文 secret 放在项目里，它们很容易被复制到日志、补丁、上下文或远端服务中。
+
+Shine 的 `env secret seal`、`env run` 和 `age` 后端用于降低这种扩散风险：把仓库中的 secret 保存为密文，只在需要运行命令时解密并注入子进程。但它们不是沙箱，也不能替代系统权限隔离。使用前应先明确密钥身份文件、硬件授权和 Agent 权限之间的边界。
+
+## 先准备 Shine workspace
+
+Shine workspace 由项目根目录的 `shine.workspace.toml` 和它引用的 `*.shine.toml` 环境源文件组成。前者声明 `development` 等 mode、环境源的合并顺序和共享的加密 recipient，后者保存普通配置和密钥。这些文件用于管理项目环境，创建它们不会隔离 Agent 的访问权限。
+
+如果项目已有 `.env` 文件，由用户在可信终端进入项目根目录，先预览再导入。将 `DATABASE_URL` 替换为项目实际的敏感键；有多个敏感键时，重复指定 `--secret`：
+
+```bash
+shine env workspace init --from-dotenv --secret DATABASE_URL --dry-run
+shine env workspace init --from-dotenv --secret DATABASE_URL
+```
+
+这会生成 `shine.workspace.toml` 和对应环境源，例如由 `.env` 生成 `.env.shine.toml`。初始化只导入值，不会自动加密：用 `--secret` 选中的键在封存前仍以明文保存在 `[secret]`，未选中的键则以明文保存在 `[plain]`。继续操作前应检查分类。支持的输入格式和 mode 选择见[从 dotenv 初始化工作区](./environment.md#从-dotenv-初始化工作区)。没有 `.env` 文件时，按[使用分层项目环境](./environment.md#使用分层项目环境)手动创建 workspace 和环境源。
+
+接着按[使用 age identity](./environment.md#使用-age-identity)安装依赖、设置本机 identity，并配置后端与 recipient。完成后封存环境源，再通过 Shine 验证项目命令：
+
+```bash
+shine env secret seal
+shine env run --mode development -- bun run build
+```
+
+mode 应选用 workspace 已声明的值，`bun run build` 应替换为项目实际命令。初始化和封存都不会修改原 `.env` 文件。确认项目通过 Shine 正常运行后，由用户移除项目中的原始密钥明文，或将其迁移到 Agent 无权读取的位置。将文件加入 `.gitignore` 只能避免误提交，不能阻止 Agent 读取。
+
+确认敏感值已封存、且没有遗漏在 `[plain]` 中后，可以提交 `shine.workspace.toml` 和共享环境源。identity、未封存明文及个人覆盖文件不能提交；将 `.env.local.shine.toml` 和 `.env.*.local.shine.toml` 加入忽略列表。后续修改对应环境源并重新封存即可，无需重复初始化。其他工具需要 dotenv 时，参见[将 workspace 导出为 dotenv](./environment.md#将-workspace-导出为-dotenv)，并按其中说明处理 `--include-secrets` 产生的明文。
+
+## Shine env 保护什么
+
+`shine env secret seal` 把 workspace 环境文件中的待处理 secret 封存到加密 payload 中。封存后，团队仓库里保留的是密文，不再是明文 token、密码或 API key。
+
+```bash
+shine env secret seal
+```
+
+`shine env run` 在启动目标命令前合并环境文件、解密 secret，并只把结果提供给这个子进程：
+
+```bash
+shine env run --mode development -- bun run build
+```
+
+这种方式主要减少三类风险：
+
+- 明文 secret 长期留在项目文件中。
+- 开发者为了运行任务，把 secret 导出到整个 shell 会话。
+- AI Agent 修改代码时顺手读到、复制或提交 `.env` 明文。
+
+但只要某个 Agent 被允许运行会读取环境变量的命令，它仍可能看到目标命令可见的 secret。`env run` 的安全边界是“按需注入”，不是“让不可信命令无法读取变量”。
+
+偶尔执行一次需要凭据的操作时，建议由用户在可信终端通过单次 `env run --with` 注入。若某个
+CLI 每次调用都需要同一个固定凭据变量，则可以安装透明命令代理，继续使用原来的调用方式：
+
+```bash
+shine env proxy install gh --with GH_TOKEN
+gh pr list
+```
+
+如果 Agent 获准运行 `gh`，它仍然可以使用注入的 token，也能查看命令暴露的信息。透明代理
+减少的是持久明文和整个 Shell 会话范围的导出，并不会让目标命令变成可信程序。设置方式、
+启停语义和 Cargo 示例见[选择单次注入还是透明代理](./environment.md#选择单次注入还是透明代理)。
+
+## age identity 是解密能力
+
+使用 `age` 后端时，`age_recipients = ["age1..."]` 表示密文要加密给谁。recipient 类似公钥地址：个人默认值可写入 `~/.shine/config.toml`，项目团队共享的名单应写入 `shine.workspace.toml` 的 `[env.encryption]`，后者可以提交到仓库。
+
+下面的示例属于本机 `~/.shine/config.toml`：
+
+```toml
+secret_backend = "age"
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
+age_identity = "~/.shine/age/identity.txt"
+```
+
+项目共享配置则在 `shine.workspace.toml` 中使用下面的独立配置段，将示例 recipient 替换为成员的实际值；identity 路径仍留在本机配置中：
+
+```toml
+[env.encryption]
+backend = "age"
+age_recipients = ["age1tag1qexample...", "age1qteammate..."]
+```
+
+`~/.shine/age/identity.txt` 则是解密 identity，等同于私钥身份，不能提交、不能共享，也不应放进 Agent 可随意读取的工作区。
+
+```bash
+shine env secret identity init
+shine env secret identity list
+```
+
+Shine 在 Unix/macOS 上会把自己生成的 identity 文件权限设置为 `0600`，也就是仅当前用户可读写。这可以避免其他本机用户直接读取 identity 文件。
+
+这个权限限制仍然挡不住已经以当前用户身份运行、并被授权读取该路径的 Agent、脚本或进程。普通 age identity 保护的是仓库和传输中的密文，不是完整保护本机运行环境。
+
+## Touch ID 改善什么
+
+macOS 上可以生成 Secure Enclave / Touch ID identity：
+
+```bash
+shine env secret identity init --touch-id
+```
+
+这种身份由 `age-plugin-se` 生成。解密时需要本机 Secure Enclave，并触发 Touch ID 或系统 PIN 授权。即使 identity 文件被复制到另一台机器，通常也不能直接解密。
+
+新建 Touch ID identity 使用 `age1tag...` 公开 recipient，因此 age 1.3 或更高版本可在其它平台
+加密，而不需要 Secure Enclave 插件。Tagged recipient 更容易被识别：知道它的人可以判断密文
+是否发给它。
+
+它带来的主要改进是：
+
+- identity 不容易被复制后离线滥用。
+- 解密需要用户在本机授权。
+- Agent 即使能读到 identity 文件，也不能仅靠文件在别处解密。
+
+它不是绝对隔离。若 Agent 能在本机运行解密命令，仍可能触发系统授权提示。看到意外的 Touch ID/PIN 提示时，应取消授权并检查刚才运行的命令。
+
+## Windows 成员如何协作
+
+Windows 成员可以使用普通 age identity 参与多 recipient 协作：
+
+```bash
+shine env secret identity init
+shine env secret identity list
+```
+
+把输出中的 `age1...` recipient 与 macOS Touch ID recipient 一起加入 `age_recipients`，
+然后在能解密旧 payload 的设备上重新封存已有 workspace 密钥。仅修改名单不会更新密文。
+按照[为已有 workspace 密钥添加接收者](./environment.md#为已有-workspace-密钥添加接收者)
+完成操作后，再将更新后的文件共享给新成员。
+
+Windows 和 macOS 用户也可以试用 [`age-plugin-phone`](https://github.com/biulight/age-plugin-phone)，通过手机生物验证授权解密。插件已提供有限技术 Beta，支持 Windows/macOS 源码安装，macOS 仍属实验性支持。仅使用合成或可丢弃数据，使用前请配置独立的恢复密钥。支持的设备、使用限制和配置步骤见[在 Windows 和 macOS 上实验手机授权](./environment.md#在-windows-上实验手机授权)。
+
+普通团队开发仍可使用普通 age identity，但要保护好 identity 文件和用户目录权限。Windows 上需要稳定硬件保护时，应继续采用组织认可的 YubiKey/PIV 或 GPG + YubiKey 方案。
+
+## 如何选择密钥后端
+
+可以按下面的粗略顺序理解安全强度：
+
+1. GPG + YubiKey / 硬件智能卡
+2. age + Secure Enclave / Touch ID
+3. 普通 age identity 文件
+4. 明文 secret
+
+`age + Touch ID` 通常比 `GPG + YubiKey` 更顺手，适合团队开发和预发环境。生产高价值 secret、长期凭据或需要强硬件隔离的场景，仍建议使用 GPG + YubiKey 或组织认可的硬件密钥方案。
+
+实验性手机方案的目标也是提供硬件托管和逐次授权隔离，但在协议与发布门槛全部完成前，不把它列入上述稳定后端排序。
+
+## 给 AI Agent 的权限建议
+
+把 Agent 当作一个有能力的本机协作者，而不是一个天然可信的安全边界。为它准备权限时，优先遵守这些规则：
+
+- 不把 `~/.shine/age/identity.txt`、GPG 私钥、云厂商 credential 文件加入工作区。
+- 不让 Agent 长时间运行带有高权限 secret 的交互式 shell。
+- 需要 secret 时，优先让 Agent 修改代码，由用户在可信终端中执行 `shine env run`。
+- 对低风险开发任务使用普通 age identity；对高敏感任务使用 Touch ID 或 YubiKey；`age-plugin-phone` 仅限其文档规定的合成数据预览。
+- 看到非预期的 Touch ID、手机生物验证、PIN 或 YubiKey 触摸提示时取消授权。
+
+如果 identity 文件泄露、设备不再可信，或成员离开团队，仅从 `age_recipients` 删除 recipient 不会撤销它对历史密文的访问。需要重新封存或重新加密，并在必要时轮换上游服务中的真实 token。
+
+```bash
+shine env secret seal
+```
+
+不要提交含有尚未封存字符串的环境文件。个人覆盖文件应加入 `.gitignore`，团队共享文件中只保留已封存的密文。
+
+## 混合访问边界
+
+混合加密允许通过 GPG 或 age 任意一种方式访问同一份认证数据 payload。它不是双人批准，
+也不叠加两种 identity 的强度。任意获授权私钥泄露都可能暴露秘密。修改、移除、替换或
+拼接密钥封装会在释放前触发格式或完整性失败。此封装不认证作者，也不阻止整份旧文件回放。
+
+移除收件人后重新封存会生成新的密钥和密文，但不撤销历史访问，不阻止获授权成员复制值，
+也不轮换上游凭据。已暴露的服务凭据需在其来源处轮换。此新封装协议尚未经独立安全审计。

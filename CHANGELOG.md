@@ -7,17 +7,29 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-09-15
+
+### Features
+
+- Group Sys bootstrap permissions by selected item, with separate shared-resource sections and a
+  `--verbose` view for full snapshot identities and diagnostic codes.
+
 ### Bug Fixes
 
-- Guide blocked external-code operations from trust inspection through explicit enrollment, and
-  make `trust inspect` group shared security scopes, render human-readable permissions, and report
-  the appropriate next step for missing trust, invalid permission declarations, or fully trusted
-  targets.
+- Guide users through blocked external-code operations from trust inspection to explicit
+  enrollment; make `trust inspect` group shared security scopes, render human-readable permissions,
+  and report the appropriate next step for missing trust, invalid permission declarations, or fully
+  trusted targets.
 - Report safe Surge generator failure categories such as HTTP status, timeout, oversized response,
   and incompatible subscription content while continuing to redact URLs, response bodies, nodes,
   and arbitrary process stderr. Use a neutral subscription User-Agent so content-negotiating
   providers return URI data, and identify complete Surge configurations with actionable guidance.
 - Point targeted refreshes of newly added generated App files to the required initial install.
+
+### Docs
+
+- Publish the bilingual 2.2 manual with grouped Sys bootstrap permission guidance, expanded Surge
+  subscription setup and troubleshooting, and clearer external-code trust enrollment steps.
 
 ## [2.1.1] — 2026-09-13
 
