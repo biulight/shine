@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-13 — Full bootstrap fixtures must respect host path grammar
+
+- **Symptom**: Windows CI failed the new Ubuntu recommended-plan rendering test from `d90fcd3`
+  with `managed Sys target must be absolute or HOME-relative`.
+- **Root cause**: Ubuntu's `zsh-vi-mode` detection includes an absolute `/home/linuxbrew/...` probe.
+  Selecting `RuntimePlatform::Linux` and using `InMemoryHost` does not replace the Windows
+  `PathBuf::is_absolute()` rules used when capturing that probe.
+- **Fix**: run the full Ubuntu fixture on Unix and add equivalent Windows recommended-plan
+  coverage on every host, with explicit shell, provider, privilege, and shared-write expectations.
+- **Rule**: isolate filesystem I/O and choose host-compatible fixtures independently. Do not weaken
+  runtime path validation or drop Windows rendering coverage to accommodate a foreign OS fixture.
+
 ## 2026-09-13 — Empty permission sets do not imply missing declarations
 
 - **Symptom**: an exported Sys collection could not grant profile-code trust for package-only

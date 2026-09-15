@@ -304,38 +304,19 @@ pub async fn handle_status(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_init(
-    config: &Config,
-    requested: &[String],
-    preset: Option<&str>,
-    dry_run: bool,
-    force_profile: bool,
-    proxy: bool,
-    yes: bool,
-) -> Result<()> {
+pub async fn handle_init(config: &Config, options: BootstrapCliOptions<'_>) -> Result<()> {
     let os_id = detect_os_id().await?;
-    handle_init_for_os(
-        config,
-        &os_id,
-        BootstrapCliOptions {
-            requested,
-            preset,
-            dry_run,
-            force_profile,
-            proxy,
-            yes,
-        },
-    )
-    .await
+    handle_init_for_os(config, &os_id, options).await
 }
 
-struct BootstrapCliOptions<'a> {
-    requested: &'a [String],
-    preset: Option<&'a str>,
-    dry_run: bool,
-    force_profile: bool,
-    proxy: bool,
-    yes: bool,
+pub struct BootstrapCliOptions<'a> {
+    pub requested: &'a [String],
+    pub preset: Option<&'a str>,
+    pub dry_run: bool,
+    pub force_profile: bool,
+    pub proxy: bool,
+    pub yes: bool,
+    pub verbose: bool,
 }
 
 async fn handle_init_for_os(
@@ -350,6 +331,7 @@ async fn handle_init_for_os(
         force_profile,
         proxy,
         yes,
+        verbose,
     } = options;
     crate::config::print_presets_note(config);
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
@@ -424,7 +406,7 @@ async fn handle_init_for_os(
         force_profile,
         input_versions: shine_core::runtime::PlanningInputVersions::default(),
     };
-    let reviewed = crate::lifecycle_plan::review_plans(
+    let reviewed = crate::lifecycle_plan::review_bootstrap_plans(
         config,
         [crate::lifecycle_plan::LifecyclePlanRequest::sys_bootstrap(
             plan_request.clone(),
@@ -432,6 +414,7 @@ async fn handle_init_for_os(
             proxy_env_map,
         )],
         yes,
+        verbose,
     )
     .await?
     .into_iter()

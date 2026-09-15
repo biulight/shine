@@ -1,5 +1,8 @@
+import * as console from "node:console";
+
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 20_000;
+export const SUBSCRIPTION_USER_AGENT = "shine-subscription-generator/1";
 
 export interface ConversionStats {
   imported: number;
@@ -20,6 +23,16 @@ type ParsedProxy = {
   definition: string;
 };
 
+class GeneratorFailure extends Error {
+  constructor(readonly diagnostic: string) {
+    super(diagnostic);
+  }
+}
+
+function fail(diagnostic: string): never {
+  throw new GeneratorFailure(diagnostic);
+}
+
 function decodeBase64(input: string): string {
   const normalized = input
     .replace(/\s+/g, "")
@@ -37,10 +50,17 @@ function decodeBase64(input: string): string {
 
 function decodeOuterSubscription(input: string): string {
   const trimmed = input.trim();
-  if (/^(ss|vmess|vless):\/\//m.test(trimmed)) {
+  if (/^(ss|vmess|vless|trojan):\/\//m.test(trimmed)) {
     return trimmed;
   }
   return decodeBase64(trimmed);
+}
+
+export function isSurgeConfiguration(input: string): boolean {
+  return (
+    /^\s*\[General\]\s*$/m.test(input) &&
+    /^\s*\[Proxy\]\s*$/m.test(input)
+  );
 }
 
 function decodeName(value: string | undefined, fallback: string): string {
@@ -217,6 +237,66 @@ function parseVmess(uri: string): ParsedProxy {
   };
 }
 
+function parseTrojan(uri: string): ParsedProxy {
+  const body = uri.slice("trojan://".length);
+  const hashAt = body.indexOf("#");
+  const withoutHash = hashAt >= 0 ? body.slice(0, hashAt) : body;
+  const fragment = hashAt >= 0 ? body.slice(hashAt + 1) : undefined;
+  const queryAt = withoutHash.indexOf("?");
+  const authority = queryAt >= 0 ? withoutHash.slice(0, queryAt) : withoutHash;
+  const query = new URLSearchParams(
+    queryAt >= 0 ? withoutHash.slice(queryAt + 1) : "",
+  );
+
+  const at = authority.lastIndexOf("@");
+  if (at <= 0) throw new Error("missing Trojan password");
+  const password = decodeURIComponent(authority.slice(0, at));
+  if (!password) throw new Error("empty Trojan password");
+  const endpoint = parseHostPort(authority.slice(at + 1));
+
+  const security = (query.get("security") ?? "").trim().toLowerCase();
+  if (security && security !== "tls") {
+    throw new Error("unsupported Trojan security");
+  }
+  if (query.get("flow")) throw new Error("unsupported Trojan flow");
+
+  const transport = (query.get("type") ?? "tcp").trim().toLowerCase() || "tcp";
+  if (transport !== "tcp" && transport !== "ws") {
+    throw new Error("unsupported Trojan transport");
+  }
+
+  const params = [
+    "trojan",
+    positionalValue(endpoint.host),
+    String(endpoint.port),
+    `password=${value(password)}`,
+  ];
+  if (transport === "ws") {
+    params.push("ws=true");
+    const path = query.get("path");
+    if (path) {
+      if (!path.startsWith("/")) throw new Error("invalid WebSocket path");
+      params.push(`ws-path=${value(path)}`);
+    }
+    const wsHost = query.get("host");
+    if (wsHost) params.push(`ws-headers=${value(`Host:${wsHost}`)}`);
+  }
+
+  const sni = query.get("sni");
+  if (sni) params.push(`sni=${value(sni)}`);
+  if (/^(1|true)$/i.test(query.get("allowInsecure") ?? "")) {
+    params.push("skip-cert-verify=true");
+  }
+
+  const fallback = `Trojan ${endpoint.host}:${endpoint.port}`;
+  const name = sanitizeName(decodeName(fragment, fallback));
+  return {
+    name,
+    signature: params.join(", "),
+    definition: params.join(", "),
+  };
+}
+
 export function convertSubscription(input: string): ConversionResult {
   const stats: ConversionStats = {
     imported: 0,
@@ -244,6 +324,8 @@ export function convertSubscription(input: string): ConversionResult {
         parsed = parseShadowsocks(line);
       } else if (line.startsWith("vmess://")) {
         parsed = parseVmess(line);
+      } else if (line.startsWith("trojan://")) {
+        parsed = parseTrojan(line);
       } else {
         stats.unsupported += 1;
         continue;
@@ -295,7 +377,7 @@ async function readLimitedResponse(response: Response): Promise<Uint8Array> {
     total += chunk.byteLength;
     if (total > MAX_RESPONSE_BYTES) {
       await reader.cancel();
-      throw new Error("response too large");
+      fail("response-too-large");
     }
     chunks.push(chunk);
   }
@@ -311,24 +393,50 @@ async function readLimitedResponse(response: Response): Promise<Uint8Array> {
 async function main(): Promise<void> {
   try {
     const configured = process.env.SURGE_SUBSCRIPTION_URL;
-    if (!configured) throw new Error("missing URL");
-    const url = new URL(configured);
-    if (url.protocol !== "https:") throw new Error("HTTPS required");
+    if (!configured) fail("missing-input");
+    let url: URL;
+    try {
+      url = new URL(configured);
+    } catch {
+      fail("invalid-url");
+    }
+    if (url.protocol !== "https:") fail("https-required");
 
-    const response = await fetch(url, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      headers: { "user-agent": "shine-surge-generator/1" },
-    });
-    if (!response.ok) throw new Error("request failed");
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: { "user-agent": SUBSCRIPTION_USER_AGENT },
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.name === "TimeoutError" || error.name === "AbortError")
+      ) {
+        fail("request-timeout");
+      }
+      fail("request-failed");
+    }
+    if (!response.ok) fail(`http-status:${response.status}`);
     if (new URL(response.url).protocol !== "https:") {
-      throw new Error("HTTPS redirect required");
+      fail("https-redirect-required");
     }
     const declaredLength = Number(response.headers.get("content-length") ?? "0");
-    if (declaredLength > MAX_RESPONSE_BYTES) throw new Error("response too large");
+    if (declaredLength > MAX_RESPONSE_BYTES) fail("response-too-large");
     const bytes = await readLimitedResponse(response);
+    const body = new TextDecoder().decode(bytes);
+    if (isSurgeConfiguration(body)) fail("surge-configuration-response");
 
-    const result = convertSubscription(new TextDecoder().decode(bytes));
+    let result: ConversionResult;
+    try {
+      result = convertSubscription(body);
+    } catch (error) {
+      if (error instanceof Error && error.message === "no compatible proxy nodes") {
+        fail("no-compatible-nodes");
+      }
+      fail("invalid-subscription");
+    }
     process.stdout.write(result.output);
     const skipped =
       result.stats.vless +
@@ -336,8 +444,10 @@ async function main(): Promise<void> {
       result.stats.invalid +
       result.stats.duplicate;
     if (skipped > 0) process.stderr.write(`${summary(result.stats)}\n`);
-  } catch {
-    process.stderr.write("surge subscription: generation failed (details redacted)\n");
+  } catch (error) {
+    const diagnostic =
+      error instanceof GeneratorFailure ? error.diagnostic : "generation-failed";
+    process.stderr.write(`shine-generator-diagnostic-v1:${diagnostic}\n`);
     process.exitCode = 1;
   }
 }

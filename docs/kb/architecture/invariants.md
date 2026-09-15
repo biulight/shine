@@ -37,6 +37,11 @@ bugs. Check this list before changing the modules named in each entry.
   preview contract. Specialized operations use `sys-bootstrap`, `app-refresh`,
   `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
   lifecycle Plans or `LifecycleResultV1` operations.
+- **Bootstrap permission provenance is bound review data.** Target-local and shared permission
+  scopes are captured before merging; their union must equal the aggregate required set. Scopes
+  contain only safe capability identities/diagnostics and enter the Plan fingerprint. They do not
+  create per-item approval or execution authority. Incomplete attribution must fall back to the
+  full permission review rather than hide an unassigned capability (ADR 0086).
 - **A Preset authoring plan is hypothetical and never authorizes mutation.** `shine preset plan`
   validates and plans from one immutable external snapshot, but observes only deterministic
   `InMemoryHost` state for the selected platform. The direct command uses empty state; declarative

@@ -1084,11 +1084,10 @@ where
             let destination = self.app_destination(&category, &file)?;
             let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
                 if request.file.is_some() {
-                    bail!(
-                        "app '{}' generated file is not installed: {}",
-                        request.category,
-                        file.source_rel.display()
-                    );
+                    bail!(generated_file_not_installed_message(
+                        &request.category,
+                        &file.source_rel
+                    ));
                 }
                 continue;
             };
@@ -2707,11 +2706,11 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             .await
             .with_context(|| format!("running app '{}' generator", request.category))?;
         if output.exit_code != Some(0) {
-            bail!(
-                "app '{}' generator exited with {} (details redacted)",
-                request.category,
-                display_exit_code(output.exit_code)
-            );
+            bail!(generator_failure_message(
+                &request.category,
+                output.exit_code,
+                &output.stderr
+            ));
         }
         let content = String::from_utf8(output.stdout)
             .with_context(|| format!("app '{}' generator output is not UTF-8", request.category))?;
@@ -3343,6 +3342,57 @@ fn display_exit_code(code: Option<i32>) -> String {
     code.map_or_else(|| "signal".to_string(), |code| code.to_string())
 }
 
+pub(super) fn generated_file_not_installed_message(category: &str, source: &Path) -> String {
+    format!(
+        "app '{category}' generated file is not installed: {}; run `shine install app/{category}` to install it before refreshing",
+        source.display()
+    )
+}
+
+fn generator_failure_message(category: &str, exit_code: Option<i32>, stderr: &[u8]) -> String {
+    let detail = generator_failure_detail(stderr).unwrap_or_else(|| "details redacted".to_string());
+    format!(
+        "app '{category}' generator exited with {} ({detail})",
+        display_exit_code(exit_code)
+    )
+}
+
+fn generator_failure_detail(stderr: &[u8]) -> Option<String> {
+    const PREFIX: &str = "shine-generator-diagnostic-v1:";
+    let line = std::str::from_utf8(stderr).ok()?;
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    if line.contains(['\n', '\r']) {
+        return None;
+    }
+    let diagnostic = line.strip_prefix(PREFIX)?;
+    let detail = match diagnostic {
+        "missing-input" => "required generator input is missing",
+        "invalid-url" => "configured URL is invalid",
+        "https-required" => "configured URL must use HTTPS",
+        "request-timeout" => "remote request timed out",
+        "request-failed" => "remote request failed before receiving a response",
+        "https-redirect-required" => "remote redirect left HTTPS",
+        "response-too-large" => "remote response exceeded the size limit",
+        "surge-configuration-response" => {
+            "remote server returned a complete Surge configuration; use a URI/Base64 subscription URL"
+        }
+        "no-compatible-nodes" => "response contained no compatible proxy nodes",
+        "invalid-subscription" => "subscription response could not be decoded",
+        "generation-failed" => "generation failed; details redacted",
+        _ => {
+            let status = diagnostic
+                .strip_prefix("http-status:")?
+                .parse::<u16>()
+                .ok()?;
+            if !(100..=599).contains(&status) {
+                return None;
+            }
+            return Some(format!("remote server returned HTTP {status}"));
+        }
+    };
+    Some(detail.to_string())
+}
+
 fn process_detail(output: &crate::runtime::ProcessOutput) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -3400,6 +3450,58 @@ mod lifecycle_tests {
     use std::future::Future;
     use std::path::Path;
     use std::pin::Pin;
+
+    #[test]
+    fn generator_failure_diagnostics_allow_only_safe_fixed_details() {
+        assert_eq!(
+            generator_failure_detail(b"shine-generator-diagnostic-v1:http-status:403\n"),
+            Some("remote server returned HTTP 403".to_string())
+        );
+        assert_eq!(
+            generator_failure_detail(b"shine-generator-diagnostic-v1:request-timeout\n"),
+            Some("remote request timed out".to_string())
+        );
+        assert_eq!(
+            generator_failure_detail(b"shine-generator-diagnostic-v1:no-compatible-nodes\n"),
+            Some("response contained no compatible proxy nodes".to_string())
+        );
+        assert_eq!(
+            generator_failure_detail(
+                b"shine-generator-diagnostic-v1:surge-configuration-response\n"
+            ),
+            Some(
+                "remote server returned a complete Surge configuration; use a URI/Base64 subscription URL"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            generator_failure_message(
+                "surge",
+                Some(1),
+                b"shine-generator-diagnostic-v1:http-status:403\n"
+            ),
+            "app 'surge' generator exited with 1 (remote server returned HTTP 403)"
+        );
+    }
+
+    #[test]
+    fn generator_failure_diagnostics_reject_untrusted_stderr() {
+        assert_eq!(generator_failure_detail(b"provider token=secret\n"), None);
+        assert_eq!(
+            generator_failure_detail(
+                b"shine-generator-diagnostic-v1:http-status:403\ntoken=secret\n"
+            ),
+            None
+        );
+        assert_eq!(
+            generator_failure_detail(b"shine-generator-diagnostic-v1:http-status:999\n"),
+            None
+        );
+        assert_eq!(
+            generator_failure_detail(b"shine-generator-diagnostic-v1:token=secret\n"),
+            None
+        );
+    }
 
     fn runtime() -> CoreRuntime<InMemoryHost> {
         let home_dir = std::env::temp_dir().join("shine-core-app-lifecycle");

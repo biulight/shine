@@ -141,6 +141,25 @@ pub(crate) async fn review_plans(
     review_plans_with_render_mode(config, requests, yes, PlanRenderMode::Detailed).await
 }
 
+pub(crate) async fn review_bootstrap_plans(
+    config: &Config,
+    requests: impl IntoIterator<Item = LifecyclePlanRequest>,
+    yes: bool,
+    verbose: bool,
+) -> Result<Vec<ReviewedLifecyclePlan>> {
+    review_plans_with_render_mode(
+        config,
+        requests,
+        yes,
+        if verbose {
+            PlanRenderMode::Detailed
+        } else {
+            PlanRenderMode::Bootstrap
+        },
+    )
+    .await
+}
+
 pub(crate) async fn review_upgrade_plans(
     config: &Config,
     requests: impl IntoIterator<Item = LifecyclePlanRequest>,
@@ -162,6 +181,7 @@ pub(crate) async fn review_upgrade_plans(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PlanRenderMode {
+    Bootstrap,
     Compact,
     Detailed,
 }
@@ -211,9 +231,21 @@ async fn review_plans_with_render_mode(
 
     let rendered = match render_mode {
         PlanRenderMode::Compact => render_compact_plan_lines(&planned, &config_digest)?,
-        PlanRenderMode::Detailed => planned
+        PlanRenderMode::Detailed | PlanRenderMode::Bootstrap => planned
             .iter()
-            .map(|(_, plan)| render_plan_lines(plan, &config_digest))
+            .map(|(_, plan)| {
+                if plan.operation == shine_core::plan::PlanOperationV1::SysBootstrap
+                    && !plan.permission_scopes.is_empty()
+                {
+                    render_bootstrap_plan_lines(
+                        plan,
+                        &config_digest,
+                        render_mode == PlanRenderMode::Detailed,
+                    )
+                } else {
+                    render_plan_lines(plan, &config_digest)
+                }
+            })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
@@ -329,7 +361,7 @@ fn blocked_plan_error(
         .collect::<std::collections::BTreeSet<_>>();
     for target in external_app_targets {
         reasons.push(format!(
-            "{target}: external Preset code is not trusted; run `shine trust inspect {target}`"
+            "{target}: external Preset code is not trusted; run `shine trust inspect {target}` to review the current scope, then `shine trust grant {target}` if you accept it"
         ));
     }
     if !missing.is_empty() {
@@ -734,6 +766,248 @@ fn short_identity(value: &str) -> String {
     }
 }
 
+fn render_bootstrap_plan_lines(
+    plan: &PlanV1,
+    config_digest: &str,
+    verbose: bool,
+) -> Result<Vec<String>> {
+    let scoped_required = shine_core::plan::PermissionSetV1::new(
+        plan.permission_scopes
+            .iter()
+            .flat_map(|scope| scope.permissions.required.iter().cloned()),
+    );
+    let targets = plan
+        .permission_scopes
+        .iter()
+        .map(|scope| scope.target.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    if targets.len() != plan.permission_scopes.len()
+        || scoped_required != plan.permissions.required
+        || plan
+            .permission_scopes
+            .iter()
+            .filter_map(|scope| scope.target.as_ref())
+            .any(|target| !plan.steps.iter().any(|step| &step.target == target))
+    {
+        return render_plan_lines(plan, config_digest);
+    }
+    let items = plan
+        .steps
+        .iter()
+        .filter(|step| step.resource.as_deref() == Some("bootstrap"))
+        .count();
+    let profiles = plan
+        .steps
+        .iter()
+        .filter(|step| step.target == "sys/profile")
+        .count();
+    let mut lines = vec![
+        crate::colors::bold("Security Plan · sys-bootstrap"),
+        format!(
+            "  {items} bootstrap item{} · {profiles} profile configuration{}",
+            if items == 1 { "" } else { "s" },
+            if profiles == 1 { "" } else { "s" }
+        ),
+    ];
+    let mut attention = Vec::new();
+    if plan
+        .permissions
+        .required
+        .contains(&PermissionV1::Administrator)
+    {
+        attention.push("Administrator access required");
+    }
+    if plan.permissions.required.contains(&PermissionV1::Network {
+        scope: NetworkScopeV1::Any,
+    }) {
+        attention.push("Unrestricted network access required");
+    }
+    if !plan.is_ready() {
+        attention.push("Plan is blocked; review the diagnostics below");
+    }
+    if plan.steps.iter().any(|step| {
+        step.diagnostic_codes
+            .iter()
+            .any(|code| code == "sys_bootstrap_profile_recovery_unsupported")
+    }) {
+        attention.push("Recovery is unsupported for the profile step");
+    }
+    if !attention.is_empty() {
+        lines.push(format!("\n  {}", crate::colors::bold("Attention")));
+        for message in attention {
+            lines.push(format!("    {} {message}", crate::colors::yellow("!")));
+        }
+    }
+    lines.push(format!("\n  {}", crate::colors::bold("Bootstrap items")));
+    let mut item_index = 0;
+    for step in &plan.steps {
+        if step.target == "sys/profile" {
+            lines.push(format!(
+                "\n  {}",
+                crate::colors::bold("Profile configuration")
+            ));
+            lines.push(format!(
+                "\n    {}  {}",
+                styled_action_name(step.action),
+                step.resource.as_deref().unwrap_or("profile")
+            ));
+        } else {
+            item_index += 1;
+            lines.push(format!(
+                "\n    {item_index:02}  {}  {}",
+                step.target.strip_prefix("sys/").unwrap_or(&step.target),
+                styled_action_name(step.action)
+            ));
+        }
+        if let Some(scope) = plan
+            .permission_scopes
+            .iter()
+            .find(|scope| scope.target.as_deref() == Some(step.target.as_str()))
+        {
+            lines.extend(render_bootstrap_permissions(&scope.permissions, "        "));
+        } else {
+            // Older/incomplete contracts must never look like an empty permission set.
+            return render_plan_lines(plan, config_digest);
+        }
+        for code in &step.diagnostic_codes {
+            let message = match code.as_str() {
+                "sys_bootstrap_profile_recovery_unsupported" => {
+                    "Recovery is unsupported for this profile step"
+                }
+                "sys_bootstrap_required_env_missing" => "Required environment input is missing",
+                "sys_external_code_not_allowed" => "External preset code is not trusted",
+                _ => code,
+            };
+            let suffix = if verbose && message != code {
+                format!(" [{code}]")
+            } else {
+                String::new()
+            };
+            lines.push(format!(
+                "        {} {message}{suffix}",
+                crate::colors::yellow("!")
+            ));
+        }
+    }
+    for scope in plan
+        .permission_scopes
+        .iter()
+        .filter(|scope| scope.target.is_none())
+    {
+        lines.push(format!("\n  {}", crate::colors::bold("Shared changes")));
+        lines.extend(render_bootstrap_permissions(&scope.permissions, "    "));
+    }
+    // Keep aggregate blockers visible even if a future planner adds a non-scoped diagnostic.
+    for permission in plan.permissions.missing_declarations.iter() {
+        lines.push(format!(
+            "  ! Missing declaration: {}",
+            permission_name(permission)
+        ));
+    }
+    for code in &plan.permissions.uncomputable_codes {
+        if !plan
+            .permission_scopes
+            .iter()
+            .any(|scope| scope.permissions.uncomputable_codes.contains(code))
+        {
+            lines.push(format!("  ! Uncomputable permissions: {code}"));
+        }
+    }
+    lines.push(format!("\n  {}", crate::colors::bold("Plan identity")));
+    for (label, identity) in [
+        ("Preset", plan.inputs.preset.as_hex()),
+        ("Config", config_digest.to_string()),
+        ("State", plan.inputs.state.as_hex()),
+        ("Fingerprint", plan.fingerprint()?.as_hex()),
+    ] {
+        let value = if verbose {
+            identity
+        } else {
+            short_identity(&identity)
+        };
+        lines.push(crate::colors::dim(&format!("    {label:<12}{value}")));
+    }
+    if !verbose {
+        lines.push(crate::colors::dim(
+            "  Use --verbose for full identities and diagnostic codes.",
+        ));
+    }
+    Ok(lines)
+}
+
+fn render_bootstrap_permissions(
+    permissions: &shine_core::plan::PermissionResolutionV1,
+    indent: &str,
+) -> Vec<String> {
+    let mut groups = Vec::<(String, Vec<String>)>::new();
+    for permission in permissions.required.iter() {
+        let (label, value) = match permission {
+            PermissionV1::Filesystem { access, path } => (
+                match access {
+                    FilesystemAccessV1::Read => "Read",
+                    FilesystemAccessV1::Write => "Write",
+                    FilesystemAccessV1::Remove => "Remove",
+                    FilesystemAccessV1::Execute => "Execute",
+                }
+                .to_string(),
+                path.clone(),
+            ),
+            PermissionV1::Network { .. } => ("Network".to_string(), permission_group(permission).1),
+            PermissionV1::Command { program } => ("Commands".to_string(), program.clone()),
+            PermissionV1::Administrator => ("Privilege".to_string(), "administrator".to_string()),
+            PermissionV1::Environment { name, sensitivity } => (
+                "Environment".to_string(),
+                format!(
+                    "{} {name}",
+                    match sensitivity {
+                        EnvironmentSensitivityV1::Plain => "plain",
+                        EnvironmentSensitivityV1::Secret => "secret",
+                    }
+                ),
+            ),
+            PermissionV1::System {
+                capability,
+                resource,
+            } => (
+                "System".to_string(),
+                resource.as_ref().map_or_else(
+                    || capability.clone(),
+                    |resource| format!("{capability} {resource}"),
+                ),
+            ),
+        };
+        if let Some((_, values)) = groups.iter_mut().find(|(group, _)| *group == label) {
+            values.push(value);
+        } else {
+            groups.push((label, vec![value]));
+        }
+    }
+    let mut lines = Vec::new();
+    for (label, values) in groups {
+        if label == "Commands" {
+            lines.push(format!("{indent}{label:<12}{}", values.join(", ")));
+        } else {
+            for (index, value) in values.iter().enumerate() {
+                let label = if index == 0 { &label } else { "" };
+                lines.push(format!("{indent}{label:<12}{value}"));
+            }
+        }
+    }
+    if permissions.required.is_empty() && permissions.is_satisfied() {
+        lines.push(format!("{indent}{:<12}none required", "Permissions"));
+    }
+    for permission in permissions.missing_declarations.iter() {
+        lines.push(format!(
+            "{indent}! Missing declaration: {}",
+            permission_name(permission)
+        ));
+    }
+    for code in &permissions.uncomputable_codes {
+        lines.push(format!("{indent}! Uncomputable permissions: {code}"));
+    }
+    lines
+}
+
 fn render_plan_lines(plan: &PlanV1, config_digest: &str) -> Result<Vec<String>> {
     let mut lines = vec![crate::colors::bold(&format!(
         "Security Plan · {}",
@@ -884,6 +1158,256 @@ mod tests {
         let mut builder = SnapshotDigestV1::builder("test");
         builder.add_observation(label, b"value").unwrap();
         builder.finish()
+    }
+
+    fn bootstrap_display_plan() -> PlanV1 {
+        use shine_core::plan::{PermissionResolutionV1, PlanOperationV1, PlanPermissionScopeV1};
+        let scopes = vec![
+            (
+                Some("sys/rust"),
+                vec![
+                    PermissionV1::Command {
+                        program: "curl".into(),
+                    },
+                    PermissionV1::Network {
+                        scope: NetworkScopeV1::Any,
+                    },
+                ],
+            ),
+            (
+                Some("sys/fzf"),
+                vec![
+                    PermissionV1::Command {
+                        program: "apt-get".into(),
+                    },
+                    PermissionV1::Administrator,
+                ],
+            ),
+            (
+                Some("sys/profile"),
+                vec![PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: "home:.bashrc".into(),
+                }],
+            ),
+            (
+                None,
+                vec![PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: "shine:sys-manifest.toml".into(),
+                }],
+            ),
+        ]
+        .into_iter()
+        .map(|(target, required)| {
+            let required = PermissionSetV1::new(required);
+            PlanPermissionScopeV1 {
+                target: target.map(str::to_string),
+                permissions: PermissionResolutionV1::resolve(
+                    required.clone(),
+                    &required,
+                    Vec::<String>::new(),
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+        let required = PermissionSetV1::new(
+            scopes
+                .iter()
+                .flat_map(|scope| scope.permissions.required.iter().cloned()),
+        );
+        let mut plan = PlanV1::new(
+            PlanOperationV1::SysBootstrap,
+            PlanInputsV1 {
+                preset: digest("preset"),
+                state: digest("state"),
+            },
+            vec![
+                PlanStepV1::new("sys/rust", Some("bootstrap"), PlanActionV1::Execute),
+                PlanStepV1::new("sys/fzf", Some("bootstrap"), PlanActionV1::Update),
+                PlanStepV1::new("sys/profile", Some("bash"), PlanActionV1::Update)
+                    .with_diagnostic_code("sys_bootstrap_profile_recovery_unsupported"),
+            ],
+            required.clone(),
+            &required,
+            Vec::<String>::new(),
+        );
+        plan.permission_scopes = scopes;
+        plan
+    }
+
+    // Ubuntu's full selection contains absolute Unix detection paths. InMemoryHost
+    // isolates I/O, but PathBuf still uses the compiled host's path grammar.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bootstrap_renderer_uses_embedded_ubuntu_permission_provenance() {
+        assert_embedded_bootstrap_permission_provenance("ubuntu").await;
+    }
+
+    #[tokio::test]
+    async fn bootstrap_renderer_uses_embedded_windows_permission_provenance() {
+        assert_embedded_bootstrap_permission_provenance("windows").await;
+    }
+
+    async fn assert_embedded_bootstrap_permission_provenance(os_id: &str) {
+        use shine_core::runtime::{
+            InMemoryHost, RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot,
+        };
+        let (platform, shell, profile, package_command, administrator, runtime_writes) = match os_id
+        {
+            "ubuntu" => (
+                RuntimePlatform::Linux,
+                shine_core::runtime::ShellType::Bash,
+                ".bashrc",
+                "apt-get",
+                true,
+                1,
+            ),
+            "windows" => (
+                RuntimePlatform::Windows,
+                shine_core::runtime::ShellType::PowerShell,
+                "Documents/PowerShell/Microsoft.PowerShell_profile.ps1",
+                "winget",
+                false,
+                0,
+            ),
+            _ => unreachable!("unsupported test platform"),
+        };
+        let home = std::env::temp_dir().join(format!("shine-bootstrap-render-{os_id}"));
+        let mut context = RuntimeContext::isolated(
+            home.clone(),
+            home.join(".shine"),
+            home.join(".shine/presets"),
+            home.join(".shine/bin"),
+            platform,
+        );
+        context.shell = shell;
+        context.shell_config_paths = vec![home.join(profile)];
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            context,
+            capture_embedded_preset_snapshot(crate::core_runtime::embedded_preset_files()),
+        );
+        let loaded = runtime.load_sys_preset(os_id).await.unwrap();
+        let items = loaded
+            .manifest
+            .profiles
+            .get("recommended")
+            .unwrap()
+            .items
+            .clone();
+        let plan = runtime
+            .plan_sys_bootstrap(SysBootstrapPlanRequest {
+                os_id: os_id.into(),
+                item_ids: items.clone(),
+                sys_shell: <&str>::from(shell).to_string(),
+                force_profile: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(plan.is_ready());
+        let rendered = render_bootstrap_plan_lines(&plan, "missing", false)
+            .unwrap()
+            .join("\n");
+        assert!(rendered.contains("Shared changes"));
+        assert_eq!(
+            rendered
+                .matches(&format!("shine:runtime/sys/{os_id}"))
+                .count(),
+            runtime_writes
+        );
+        assert_eq!(rendered.matches("shine:sys-manifest.toml").count(), 1);
+        for item in &items {
+            assert!(
+                plan.permission_scopes
+                    .iter()
+                    .any(|scope| scope.target.as_deref() == Some(&format!("sys/{item}")))
+            );
+        }
+        for item in ["neovim", "fzf"] {
+            let scope = plan
+                .permission_scopes
+                .iter()
+                .find(|scope| scope.target.as_deref() == Some(&format!("sys/{item}")))
+                .unwrap();
+            assert!(scope.permissions.required.contains(&PermissionV1::Command {
+                program: package_command.into()
+            }));
+            assert_eq!(
+                scope
+                    .permissions
+                    .required
+                    .contains(&PermissionV1::Administrator),
+                administrator,
+            );
+        }
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .iter()
+                .all(|operation| matches!(operation, shine_core::runtime::HostOperation::Read(_)))
+        );
+        println!("{rendered}");
+    }
+
+    #[test]
+    fn bootstrap_renderer_groups_real_permissions_and_keeps_full_audit_option() {
+        let plan = bootstrap_display_plan();
+        let before = plan.fingerprint().unwrap();
+        let compact = render_bootstrap_plan_lines(&plan, "present:0123456789abcdef", false)
+            .unwrap()
+            .join("\n");
+        let rust = compact.find("01  rust").unwrap();
+        let fzf = compact.find("02  fzf").unwrap();
+        let profile = compact.find("Profile configuration").unwrap();
+        let shared = compact.find("Shared changes").unwrap();
+        assert!(compact[..rust].contains("Administrator access required"));
+        assert!(compact[rust..fzf].contains("curl"));
+        assert!(!compact[rust..fzf].contains("apt-get"));
+        assert!(compact[fzf..profile].contains("apt-get"));
+        assert!(compact[profile..shared].contains("home:.bashrc"));
+        assert_eq!(compact.matches("shine:sys-manifest.toml").count(), 1);
+        assert!(compact.contains("Recovery is unsupported for this profile step"));
+        assert!(!compact.contains("sys_bootstrap_profile_recovery_unsupported"));
+        assert!(!compact.contains(&before.as_hex()));
+        let verbose = render_bootstrap_plan_lines(&plan, "present:0123456789abcdef", true)
+            .unwrap()
+            .join("\n");
+        assert!(verbose.contains(&before.as_hex()));
+        assert!(verbose.contains("sys_bootstrap_profile_recovery_unsupported"));
+        assert_eq!(plan.fingerprint().unwrap(), before);
+    }
+
+    #[test]
+    fn bootstrap_renderer_keeps_blockers_and_falls_back_for_unattributed_permissions() {
+        let mut plan = bootstrap_display_plan();
+        plan.steps[0].action = PlanActionV1::Blocked;
+        plan.steps[0]
+            .diagnostic_codes
+            .push("sys_external_code_not_allowed".into());
+        plan.permission_scopes[0]
+            .permissions
+            .uncomputable_codes
+            .insert("sys_bootstrap_permission_declaration_missing".into());
+        plan.permissions
+            .uncomputable_codes
+            .insert("sys_bootstrap_permission_declaration_missing".into());
+        let output = render_bootstrap_plan_lines(&plan, "missing", false)
+            .unwrap()
+            .join("\n");
+        assert!(output.contains("Plan is blocked"));
+        assert!(output.contains("External preset code is not trusted"));
+        assert!(output.contains("sys_bootstrap_permission_declaration_missing"));
+        plan.permissions.required.insert(PermissionV1::Command {
+            program: "unattributed".into(),
+        });
+        let fallback = render_bootstrap_plan_lines(&plan, "missing", false)
+            .unwrap()
+            .join("\n");
+        assert!(fallback.contains("command unattributed"));
+        assert!(fallback.contains(&plan.fingerprint().unwrap().as_hex()));
     }
 
     #[test]
@@ -1079,6 +1603,42 @@ mod tests {
         assert!(error.contains("retain overlay payload files such as `merge.yaml` and `rules/`"));
         assert!(error.contains("`shine state migrate` does not modify Preset overlays"));
         assert!(error.contains("no changes were made"));
+    }
+
+    #[test]
+    fn blocked_app_error_explains_inspection_and_trust_enrollment() {
+        let plan = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("preset"),
+                state: digest("state"),
+            },
+            vec![
+                PlanStepV1::new("app/surge", Some("hook:0"), PlanActionV1::Blocked)
+                    .with_diagnostic_code("app_external_code_not_allowed"),
+            ],
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let planned = vec![(
+            LifecyclePlanRequest::App(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("surge".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            }),
+            plan,
+        )];
+        let diagnostics =
+            std::collections::BTreeSet::from(["app_external_code_not_allowed".to_string()]);
+
+        let error = blocked_plan_error(&planned, &diagnostics);
+
+        assert!(error.contains("`shine trust inspect app/surge` to review the current scope"));
+        assert!(error.contains("then `shine trust grant app/surge` if you accept it"));
     }
 
     #[test]

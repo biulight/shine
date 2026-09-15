@@ -2,7 +2,8 @@ use crate::{config::Config, core_runtime};
 use anyhow::{Context, Result, bail};
 use shine_core::persist::atomic_write_private;
 use shine_core::trust::{
-    TRUST_STORE_SCHEMA_VERSION, TrustGrantV1, TrustRequirementV1, TrustStoreV1, evaluate_trust,
+    TRUST_STORE_SCHEMA_VERSION, TrustDecisionV1, TrustGrantV1, TrustRequirementV1, TrustStoreV1,
+    evaluate_trust,
 };
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -37,13 +38,53 @@ pub async fn handle_inspect(config: &Config, target: &str) -> Result<()> {
         println!("{target} has no external executable-code requirements.");
         return Ok(());
     }
-    for requirement in &report.requirements {
-        render_requirement(
-            requirement,
-            evaluate_trust(&runtime.context().trust_grants, requirement),
+    let decisions = report
+        .requirements
+        .iter()
+        .map(|requirement| evaluate_trust(&runtime.context().trust_grants, requirement))
+        .collect::<Vec<_>>();
+    println!(
+        "{}",
+        render_requirements(target, &report.requirements, &decisions)
+    );
+    println!();
+    println!(
+        "{}",
+        render_inspect_guidance(target, &report.requirements, &decisions)
+    );
+    Ok(())
+}
+
+fn render_inspect_guidance(
+    target: &str,
+    requirements: &[TrustRequirementV1],
+    decisions: &[TrustDecisionV1],
+) -> String {
+    if requirements
+        .iter()
+        .any(|requirement| !requirement.permissions_declared)
+    {
+        return format!(
+            "{}\n  Add a valid permission declaration to the {target} Preset before granting trust.",
+            crate::colors::yellow("Next")
         );
     }
-    Ok(())
+    if decisions
+        .iter()
+        .any(|decision| *decision != TrustDecisionV1::Trusted)
+    {
+        return format!(
+            "{}\n  Review the current code and permissions, then run:\n    shine trust grant {target}",
+            crate::colors::cyan("Next")
+        );
+    }
+    format!(
+        "{} {}",
+        crate::colors::symbol("✓"),
+        crate::colors::green(&format!(
+            "All current external code for {target} is trusted."
+        ))
+    )
 }
 
 pub async fn handle_grant(config: &Config, target: &str, yes: bool) -> Result<()> {
@@ -53,12 +94,15 @@ pub async fn handle_grant(config: &Config, target: &str, yes: bool) -> Result<()
         bail!("{target} has no external executable code to trust");
     }
     validate_grant_requirements(target, &report.requirements)?;
-    for requirement in &report.requirements {
-        render_requirement(
-            requirement,
-            evaluate_trust(&runtime.context().trust_grants, requirement),
-        );
-    }
+    let decisions = report
+        .requirements
+        .iter()
+        .map(|requirement| evaluate_trust(&runtime.context().trust_grants, requirement))
+        .collect::<Vec<_>>();
+    println!(
+        "{}",
+        render_requirements(target, &report.requirements, &decisions)
+    );
     if !yes {
         if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
             bail!("trust enrollment requires an interactive terminal or explicit --yes");
@@ -174,23 +218,109 @@ fn validate_target(target: &str) -> Result<()> {
     Ok(())
 }
 
-fn render_requirement(
-    requirement: &TrustRequirementV1,
-    decision: shine_core::trust::TrustDecisionV1,
-) {
-    println!("External code trust:");
-    println!("  Target:      {}", requirement.target);
-    println!("  Capability:  {}", requirement.capability.as_str());
-    println!("  Code digest: {}", requirement.code_digest.as_hex());
-    println!("  Permissions:");
-    if requirement.permissions.is_empty() {
-        println!("    none");
-    } else {
-        for permission in requirement.permissions.iter() {
-            println!("    {permission:?}");
+fn render_requirements(
+    target: &str,
+    requirements: &[TrustRequirementV1],
+    decisions: &[TrustDecisionV1],
+) -> String {
+    debug_assert_eq!(requirements.len(), decisions.len());
+    let mut scopes = Vec::<Vec<usize>>::new();
+    for (index, requirement) in requirements.iter().enumerate() {
+        if let Some(scope) = scopes.iter_mut().find(|scope| {
+            let existing = &requirements[scope[0]];
+            existing.code_digest == requirement.code_digest
+                && existing.permissions_declared == requirement.permissions_declared
+                && existing.permissions == requirement.permissions
+        }) {
+            scope.push(index);
+        } else {
+            scopes.push(vec![index]);
         }
     }
-    println!("  Status:      {}", decision.code());
+
+    let mut lines = vec![crate::colors::bold(&format!(
+        "External Code Trust · {target}"
+    ))];
+    for (scope_index, scope) in scopes.iter().enumerate() {
+        let requirement = &requirements[scope[0]];
+        lines.push(String::new());
+        if scopes.len() > 1 {
+            lines.push(format!(
+                "  {}",
+                crate::colors::bold(&format!("Scope {}", scope_index + 1))
+            ));
+        }
+        lines.push(format!(
+            "  {}  {}",
+            crate::colors::dim("Code digest"),
+            requirement.code_digest.as_hex()
+        ));
+        lines.push(String::new());
+        lines.push(format!("  {}", crate::colors::bold("Capabilities")));
+        let width = scope
+            .iter()
+            .map(|index| requirements[*index].capability.as_str().len())
+            .max()
+            .unwrap_or_default();
+        for index in scope {
+            let requirement = &requirements[*index];
+            let decision = decisions[*index];
+            let (symbol, status) = trust_status(decision);
+            lines.push(format!(
+                "    {} {:width$}  {} {}",
+                crate::colors::symbol(symbol),
+                requirement.capability.as_str(),
+                styled_trust_status(decision, status),
+                crate::colors::dim(&format!("[{}]", decision.code())),
+            ));
+        }
+        lines.push(String::new());
+        lines.push(format!("  {}", crate::colors::bold("Permissions")));
+        if !requirement.permissions_declared {
+            lines.push(format!(
+                "    {} {}",
+                crate::colors::symbol("!"),
+                crate::colors::yellow("valid declaration missing")
+            ));
+        } else if requirement.permissions.is_empty() {
+            lines.push(format!("    {}", crate::colors::dim("- none")));
+        } else {
+            let mut grouped = std::collections::BTreeMap::<String, Vec<String>>::new();
+            for permission in requirement.permissions.iter() {
+                let (group, value) = crate::lifecycle_plan::permission_group(permission);
+                grouped.entry(group).or_default().push(value);
+            }
+            for (group, values) in grouped {
+                lines.push(format!("    {group}"));
+                for value in values {
+                    lines.push(format!("      - {value}"));
+                }
+            }
+        }
+    }
+    lines.join("\n")
+}
+
+fn trust_status(decision: TrustDecisionV1) -> (&'static str, &'static str) {
+    match decision {
+        TrustDecisionV1::Trusted => ("✓", "trusted"),
+        TrustDecisionV1::Missing => ("✗", "not trusted"),
+        TrustDecisionV1::CodeChanged => ("!", "code changed"),
+        TrustDecisionV1::PermissionsChanged => ("!", "permissions changed"),
+        TrustDecisionV1::UnsupportedGrantSchema => ("!", "unsupported grant schema"),
+    }
+}
+
+fn styled_trust_status(decision: TrustDecisionV1, status: &str) -> String {
+    match decision {
+        TrustDecisionV1::Trusted => crate::colors::green(status),
+        TrustDecisionV1::Missing | TrustDecisionV1::UnsupportedGrantSchema => {
+            crate::colors::red(status)
+        }
+        TrustDecisionV1::CodeChanged | TrustDecisionV1::PermissionsChanged => {
+            crate::colors::yellow(status)
+        }
+    }
 }
 
 fn short_digest(digest: &str) -> &str {
@@ -216,7 +346,7 @@ pub(crate) async fn grant_current_for_test(config: &Config, target: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shine_core::plan::{PermissionSetV1, SnapshotDigestV1};
+    use shine_core::plan::{PermissionSetV1, PermissionV1, SnapshotDigestV1};
     use shine_core::trust::TrustCapabilityV1;
 
     fn requirement(permissions_declared: bool) -> TrustRequirementV1 {
@@ -251,6 +381,104 @@ mod tests {
                 .to_string()
                 .contains("no valid permission declaration")
         );
+    }
+
+    #[test]
+    fn inspect_guidance_points_untrusted_targets_to_grant() {
+        assert_eq!(
+            render_inspect_guidance(
+                "sys/package-only",
+                &[requirement(true)],
+                &[TrustDecisionV1::Missing]
+            ),
+            "Next\n  Review the current code and permissions, then run:\n    shine trust grant sys/package-only"
+        );
+    }
+
+    #[test]
+    fn inspect_guidance_does_not_suggest_an_ungrantable_action() {
+        assert_eq!(
+            render_inspect_guidance(
+                "sys/package-only",
+                &[requirement(false)],
+                &[TrustDecisionV1::Missing]
+            ),
+            "Next\n  Add a valid permission declaration to the sys/package-only Preset before granting trust."
+        );
+    }
+
+    #[test]
+    fn inspect_guidance_confirms_when_every_requirement_is_trusted() {
+        assert_eq!(
+            render_inspect_guidance(
+                "sys/package-only",
+                &[requirement(true)],
+                &[TrustDecisionV1::Trusted]
+            ),
+            "✓ All current external code for sys/package-only is trusted."
+        );
+    }
+
+    #[test]
+    fn requirement_renderer_groups_shared_scope_and_uses_human_readable_permissions() {
+        let permissions = PermissionSetV1::new([
+            PermissionV1::Command {
+                program: "bun".to_string(),
+            },
+            PermissionV1::Network {
+                scope: shine_core::plan::NetworkScopeV1::Any,
+            },
+        ]);
+        let requirements = [
+            TrustRequirementV1 {
+                target: "app/surge".to_string(),
+                capability: TrustCapabilityV1::AppHook,
+                code_digest: SnapshotDigestV1::builder("surge-code").finish(),
+                permissions_declared: true,
+                permissions: permissions.clone(),
+            },
+            TrustRequirementV1 {
+                target: "app/surge".to_string(),
+                capability: TrustCapabilityV1::AppGenerator,
+                code_digest: SnapshotDigestV1::builder("surge-code").finish(),
+                permissions_declared: true,
+                permissions,
+            },
+        ];
+
+        let output = render_requirements(
+            "app/surge",
+            &requirements,
+            &[TrustDecisionV1::Missing, TrustDecisionV1::Trusted],
+        );
+
+        assert!(output.starts_with("External Code Trust · app/surge"));
+        assert_eq!(output.matches("Code digest").count(), 1);
+        assert_eq!(output.matches("Permissions").count(), 1);
+        assert!(output.contains("✗ app-hook       not trusted [external_code_trust_missing]"));
+        assert!(output.contains("✓ app-generator  trusted [trusted]"));
+        assert!(output.contains("    command\n      - bun"));
+        assert!(output.contains("    network\n      - any"));
+        assert!(!output.contains("PermissionV1"));
+        assert!(!output.contains("Command {"));
+    }
+
+    #[test]
+    fn requirement_renderer_keeps_different_security_scopes_separate() {
+        let mut changed = requirement(true);
+        changed.code_digest = SnapshotDigestV1::builder("changed-code").finish();
+        let requirements = [requirement(true), changed];
+
+        let output = render_requirements(
+            "sys/package-only",
+            &requirements,
+            &[TrustDecisionV1::Trusted, TrustDecisionV1::CodeChanged],
+        );
+
+        assert!(output.contains("Scope 1"));
+        assert!(output.contains("Scope 2"));
+        assert_eq!(output.matches("Code digest").count(), 2);
+        assert_eq!(output.matches("Permissions").count(), 2);
     }
 
     #[cfg(unix)]

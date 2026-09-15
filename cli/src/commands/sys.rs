@@ -48,6 +48,9 @@ pub enum SysCommands {
     Status,
     /// Bootstrap software and shell integration for the current OS
     Bootstrap {
+        /// Show the full security Plan, including complete snapshot identities
+        #[arg(long)]
+        verbose: bool,
         /// Bootstrap only these system items, in the given order
         #[arg(value_name = "ITEM", conflicts_with_all = ["preset", "exact_items"])]
         items: Vec<String>,

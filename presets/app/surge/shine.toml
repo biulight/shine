@@ -35,6 +35,7 @@ commands = ["/Applications/Surge.app/Contents/Applications/surge-cli", "bun"]
 environment = [
   { name = "SURGE_PROFILE", sensitivity = "plain" },
   { name = "SURGE_SUBSCRIPTION_URL", sensitivity = "secret" },
+  { name = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL", sensitivity = "secret" },
 ]
 
 [[files]]
@@ -70,5 +71,11 @@ description = "Local proxy groups merged into [Proxy Group] after provider group
 [[files]]
 source = "subscription-proxies.conf"
 target = "subscription-proxies.conf"
-description = "SS/VMess policies generated from SURGE_SUBSCRIPTION_URL."
+description = "SS/VMess/Trojan policies generated from SURGE_SUBSCRIPTION_URL."
 generator = { script = "generate-subscription.ts", runtime = "bun", env = ["SURGE_SUBSCRIPTION_URL"], when_env = "SURGE_SUBSCRIPTION_URL", auto = false }
+
+[[files]]
+source = "sub/wget-cloud-proxies.conf"
+target = "wget-cloud-proxies.conf"
+description = "SS/VMess/Trojan policies generated from W_GET_CLOUD_SURGE_SUBSCRIPTION_URL."
+generator = { script = "generate-subscription.ts", runtime = "bun", env = ["W_GET_CLOUD_SURGE_SUBSCRIPTION_URL=SURGE_SUBSCRIPTION_URL"], when_env = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL", auto = false }

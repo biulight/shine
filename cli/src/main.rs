@@ -681,6 +681,7 @@ async fn run(cli: Cli) -> Result<()> {
                 force_profile,
                 proxy,
                 yes,
+                verbose,
             } => {
                 let requested = if exact_items.is_empty() {
                     items
@@ -689,12 +690,15 @@ async fn run(cli: Cli) -> Result<()> {
                 };
                 Box::pin(sys::handle_init(
                     &config,
-                    &requested,
-                    preset.as_deref(),
-                    dry_run,
-                    force_profile,
-                    proxy,
-                    yes,
+                    sys::BootstrapCliOptions {
+                        requested: &requested,
+                        preset: preset.as_deref(),
+                        dry_run,
+                        force_profile,
+                        proxy,
+                        yes,
+                        verbose,
+                    },
                 ))
                 .await
             }
@@ -2491,6 +2495,13 @@ mod tests {
 
     #[test]
     fn cli_accepts_sys_bootstrap_options() {
+        let verbose = Cli::try_parse_from(["shine", "sys", "bootstrap", "--verbose"]).unwrap();
+        assert!(matches!(
+            verbose.command,
+            Commands::Sys {
+                command: SysCommands::Bootstrap { verbose: true, .. }
+            }
+        ));
         let cli = Cli::try_parse_from(["shine", "sys", "bootstrap"]).unwrap();
         assert!(matches!(
             cli.command,
