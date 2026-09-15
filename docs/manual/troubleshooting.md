@@ -94,10 +94,15 @@ shine env list
 shine app refresh surge subscription-proxies.conf
 ```
 
-The built-in Surge generator requires an HTTPS `SURGE_SUBSCRIPTION_URL` and Bun at runtime. A failed
-refresh does not remove the last successfully generated file. If the destination is user-modified,
-inspect the difference and use `--force` only when you intend to replace it. Routine `shine update`
-and `shine upgrade` runs never access this manual subscription generator.
+The built-in Surge generator requires Bun and an HTTPS URL in the selected file's input:
+`SURGE_SUBSCRIPTION_URL` or `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`. A failed refresh reports a safe
+failure category such as an HTTP status, timeout, oversized response, or no
+compatible proxy nodes; URLs, response bodies, and node content remain redacted. It does not remove
+the last successfully generated file. If the destination is user-modified, inspect the difference
+and use `--force` only when you intend to replace it. Routine `shine update` and `shine upgrade` runs
+never access this manual subscription generator. If the provider returns a complete Surge managed
+configuration, use its generic URI/Base64 subscription URL instead; the generator deliberately does
+not extract one section from a configuration whose sections may reference each other.
 
 ## `shine preset pull` refuses to update a source
 

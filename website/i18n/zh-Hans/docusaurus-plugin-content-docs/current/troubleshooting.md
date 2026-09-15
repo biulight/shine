@@ -80,7 +80,7 @@ shine env list
 shine app refresh surge subscription-proxies.conf
 ```
 
-内置 Surge generator 要求 `SURGE_SUBSCRIPTION_URL` 使用 HTTPS，运行时还需要 Bun。失败不会删除上次成功生成的文件。若提示目标被用户修改，先检查差异；只有确定要以新生成内容覆盖时才使用 `--force`。日常 `shine update` 和 `shine upgrade` 不会访问这个手动订阅 generator。
+内置 Surge generator 运行时需要 Bun，并要求所选文件对应的 `SURGE_SUBSCRIPTION_URL` 或 `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` 使用 HTTPS。刷新失败时会报告 HTTP 状态、超时、响应过大或无兼容代理节点等安全分类；URL、响应正文和节点内容仍会隐去。失败不会删除上次成功生成的文件。若提示目标被用户修改，先检查差异；只有确定要以新生成内容覆盖时才使用 `--force`。日常 `shine update` 和 `shine upgrade` 不会访问这个手动订阅 generator。若服务商返回完整的 Surge 托管配置，应改用其通用 URI/Base64 订阅地址；配置各区段可能互相引用，generator 不会自动截取其中一段。
 
 ## `shine preset pull` 拒绝更新来源
 

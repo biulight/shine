@@ -147,7 +147,7 @@ URL token、环境变量值、命令参数或密文。
 
 ### Surge URI 订阅
 
-内置 `surge` 预设可把 HTTPS Base64 URI 订阅转换为受管的 `subscription-proxies.conf`。此功能需要 Bun，支持兼容的 `ss://` 和 `vmess://` 记录；VLESS、不支持的 transport、插件、坏记录与重复项会被跳过，并只输出不含凭据的摘要。用户维护的 `local-proxies.conf` 不会被改写。
+内置 `surge` 预设可把 HTTPS Base64 URI 订阅转换为受管的代理文件。`subscription-proxies.conf` 读取 `SURGE_SUBSCRIPTION_URL`；`wget-cloud-proxies.conf` 读取 `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`，Shine 会把后者映射为 generator 内部的 `SURGE_SUBSCRIPTION_URL` 输入。此功能需要 Bun，支持兼容的 `ss://`、`vmess://` 和 `trojan://` 记录，其中 Trojan 支持 TCP 和 WebSocket transport；VLESS、不支持的 transport 或 security mode、插件、坏记录与重复项会被跳过，并只输出不含凭据的摘要。用户维护的 `local-proxies.conf` 不会被改写。
 
 要定制 Surge 的本地代理、策略组或规则文件，先将完整内置预设复制到自己的局部 overlay：
 
@@ -164,6 +164,7 @@ shine preset overlay link .
 
 ```bash
 shine env set SURGE_SUBSCRIPTION_URL 'https://provider.example/subscription?...'
+shine env set W_GET_CLOUD_SURGE_SUBSCRIPTION_URL 'https://provider.example/wget-cloud?...'
 shine app install surge
 ```
 
@@ -171,6 +172,7 @@ shine app install surge
 
 ```bash
 shine app refresh surge subscription-proxies.conf
+shine app refresh surge sub/wget-cloud-proxies.conf
 ```
 
 刷新成功且内容变化后会通过现有 `post_upgrade` 钩子 reload Surge；失败时保留上次成功文件。`local-proxy-groups.conf` 中的 `Subscription` 组通过 `policy-path=subscription-proxies.conf` 读取节点，其它策略组可用 `include-other-group=Subscription` 纳入这些节点。

@@ -630,16 +630,20 @@ inspection never runs it; explicit evaluation may:
    generator fails; a first-time enabled generator failure is fatal.
 5. Only `generator.env` values are injected. External preset or overlay generator code requires a
    matching `app/<category>` scoped trust grant. Execution is deadline- and
-   output-size-limited.
+   output-size-limited. Failed generators may emit one exact allowlisted diagnostic token; Core
+   maps recognized tokens and validated HTTP status numbers to fixed safe descriptions and discards
+   all other stderr, so URLs, response bodies, credentials, and arbitrary process output cannot
+   enter the error report.
 6. A Bun generator is resolved against the physical category that supplied its effective script.
    Embedded temporary scripts use `--no-install`; an external/overlay script uses
    `--install=fallback` only with a valid `package.json` + `bun.lock` pair in that category.
 7. External evaluation still requires snapshot-scoped trust. Per-file evaluation failures continue
    through the remaining selection and cause a nonzero command result after all statuses render.
 
-The Surge generator downloads the Base64 URI list in
-`SURGE_SUBSCRIPTION_URL`, converts supported SS/VMess nodes, and writes bare
-policy declarations to `subscription-proxies.conf`. It declares `auto = false`
+The Surge generator downloads the Base64 URI list selected by each file: `SURGE_SUBSCRIPTION_URL`
+for `subscription-proxies.conf`, or `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` mapped into the script as
+`SURGE_SUBSCRIPTION_URL` for `wget-cloud-proxies.conf`. It converts supported SS/VMess/Trojan nodes
+and writes bare policy declarations. Both files declare `auto = false`
 so it runs on install (including `--replace-managed`) or explicit refresh, not ordinary
 status/upgrade passes. Its `Subscription` group
 loads that file through `policy-path`; other groups reuse the nodes through

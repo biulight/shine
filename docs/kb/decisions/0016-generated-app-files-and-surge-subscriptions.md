@@ -13,7 +13,7 @@
 
 The Surge preset originally treated every installed file as static preset
 content and left subscription refresh entirely to Surge. A provider now exposes
-a Base64 list of `ss://`, `vmess://`, and `vless://` records rather than a Surge
+a Base64 list of `ss://`, `vmess://`, `trojan://`, and `vless://` records rather than a Surge
 profile. Surge cannot consume that wire format directly, and lifecycle hooks
 cannot solve the problem: hooks run only after another file changes, while
 `shine update` must detect remote changes without writing.
@@ -40,8 +40,8 @@ transform, desired-hash, install, and manifest pipeline.
   raw records.
 
 The built-in Surge generator uses Bun to download an HTTPS Base64 URI list. It
-converts compatible Shadowsocks and VMess records to bare Surge policy lines.
-VLESS, unsupported VMess transports, plugins, malformed records, and exact
+converts compatible Shadowsocks, VMess, and Trojan records to bare Surge policy lines.
+VLESS, unsupported VMess/Trojan transports or security modes, plugins, malformed records, and exact
 duplicates are counted and skipped. Zero compatible nodes is a failure.
 
 The generated file is not included in `[Proxy]`. A `Subscription` group loads
@@ -53,7 +53,9 @@ fallback. Other groups may use `include-other-group=Subscription`.
 - `shine install`, `shine update --run-generators`, and `shine upgrade` refresh remote desired state
   while update preserves its no-write contract.
 - User-owned local proxy definitions remain independent from generated nodes.
-- The generator requires Bun only when `SURGE_SUBSCRIPTION_URL` enables it.
+- The generator requires Bun only when a file's declared subscription URL enables it. The default
+  file reads `SURGE_SUBSCRIPTION_URL`; the WGet Cloud file maps
+  `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL` into that script variable.
   Separately, ADR 0017's explicit Surge build/unbuild artifacts also use Bun.
 - Removing the URL restores static fallback behavior; uninstall continues to be
   driven solely by the app manifest.

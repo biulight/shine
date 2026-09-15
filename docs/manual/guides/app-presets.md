@@ -169,10 +169,13 @@ environment value, command arguments, or ciphertext in the declaration.
 
 ### Surge URI subscriptions
 
-The built-in `surge` preset can convert an HTTPS Base64 URI subscription into a managed
-`subscription-proxies.conf`. It requires Bun and supports compatible `ss://` and `vmess://` records.
-VLESS, unsupported transports, plugins, malformed records, and duplicates are skipped; diagnostics
-contain no credentials. User-maintained `local-proxies.conf` is not rewritten.
+The built-in `surge` preset can convert HTTPS Base64 URI subscriptions into managed proxy files.
+`subscription-proxies.conf` reads `SURGE_SUBSCRIPTION_URL`; `wget-cloud-proxies.conf` reads
+`W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`, which Shine maps to the generator's internal
+`SURGE_SUBSCRIPTION_URL` input. The generator requires Bun and supports compatible `ss://`,
+`vmess://`, and `trojan://` records. Trojan TCP and WebSocket transports are supported. VLESS,
+unsupported transports or security modes, plugins, malformed records, and duplicates are skipped;
+diagnostics contain no credentials. User-maintained `local-proxies.conf` is not rewritten.
 
 To customize local proxies, policy groups, or rules, first copy the complete preset into a local
 overlay:
@@ -192,6 +195,7 @@ Configure the URL and install:
 
 ```bash
 shine env set SURGE_SUBSCRIPTION_URL 'https://provider.example/subscription?...'
+shine env set W_GET_CLOUD_SURGE_SUBSCRIPTION_URL 'https://provider.example/wget-cloud?...'
 shine app install surge
 ```
 
@@ -200,6 +204,7 @@ Open the provider's access window and refresh explicitly:
 
 ```bash
 shine app refresh surge subscription-proxies.conf
+shine app refresh surge sub/wget-cloud-proxies.conf
 ```
 
 When refreshed content changes, the existing `post_upgrade` hook reloads Surge. Failure preserves the

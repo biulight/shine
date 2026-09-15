@@ -13,6 +13,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   make `trust inspect` group shared security scopes, render human-readable permissions, and report
   the appropriate next step for missing trust, invalid permission declarations, or fully trusted
   targets.
+- Report safe Surge generator failure categories such as HTTP status, timeout, oversized response,
+  and incompatible subscription content while continuing to redact URLs, response bodies, nodes,
+  and arbitrary process stderr. Use a neutral subscription User-Agent so content-negotiating
+  providers return URI data, and identify complete Surge configurations with actionable guidance.
 - Point targeted refreshes of newly added generated App files to the required initial install.
 
 ## [2.1.1] — 2026-09-13
