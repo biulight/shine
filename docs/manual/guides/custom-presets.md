@@ -190,14 +190,32 @@ External executable code additionally requires a target-scoped `shine trust gran
 review. The grant binds the current code identity and exact declared permission set; it does not
 replace administrator authorization or the per-mutation security Plan.
 
+When actively developing a local Preset, opt into source-scoped development trust after reviewing
+the displayed source and permissions:
+
+```bash
+shine trust inspect <TARGET>
+shine trust grant <TARGET> --development
+```
+
+Development trust allows later code edits from the same enrolled local source without another
+grant. A target, capability, permission, source directory, or source-layer change still requires
+review. `opaque_code = "unrestricted"` does not enable development trust by itself. `trust list`,
+`trust inspect`, and the security Plan label active development trust; the private local trust store
+owns the grant, so a Preset cannot distribute or enable it.
+The default `trust list` view groups capabilities with the same security scope into one row and
+shows whether each stored grant is current. Use `trust list --verbose` for capability names, local
+development-source labels, and stale-grant review guidance.
+
 An unrestricted external Shell command uses the canonical
 `shell/<CATEGORY>/<COMMAND>` trust target. Use `preset` to inspect or trust every executable target
-in the current active Preset snapshot; Shine still stores separate, snapshot-bound grants for the
-individual targets. Revoking `preset` clears every stored Preset trust grant:
+in the current active Preset snapshot; Shine still stores a separate target-local grant in the
+selected mode for each target. Revoking `preset` clears every stored Preset trust grant:
 
 ```bash
 shine trust inspect preset
 shine trust grant preset
+shine trust grant preset --development
 shine trust revoke preset
 ```
 
@@ -556,8 +574,9 @@ content or disable integrations outside the selection.
 
 External sys install scripts and executable profile content (`eval`, `source`, fragments, and base
 files) require the user to review the active snapshot and run `shine trust grant sys/<ITEM>`; the
-project config and Preset cannot authorize themselves. The grant is invalidated by changed code,
-source layer, or permissions. If trust is missing during bootstrap preflight, no installer has run
+project config and Preset cannot authorize themselves. A snapshot grant is invalidated by changed
+code, source layer, or permissions; an explicit development grant accepts code edits only from its
+enrolled source. If trust is missing during bootstrap preflight, no installer has run
 yet. Static detection, package metadata, PATH, env, and aliases remain available without a grant.
 Validate with
 `shine sys list`, `shine sys info <ITEM>`, and `shine sys bootstrap <ITEM> --dry-run`.

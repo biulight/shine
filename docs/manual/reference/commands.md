@@ -101,8 +101,8 @@ shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-g
 shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
 shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
-shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--yes]
-shine trust list
+shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
+shine trust list [--verbose]
 shine trust revoke <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
 shine completions install
 shine completions <bash|zsh|powershell>
@@ -111,6 +111,10 @@ shine completions <bash|zsh|powershell>
 `update` is read-only. `upgrade` displays the planned changes and asks for approval; use `--yes`
 only after reviewing the same scope. `--pull` first updates eligible Git-managed Preset sources.
 `--prune-stale` permits removal of unchanged managed entries no longer present in the Preset.
+`trust grant --development` keeps code edits from the displayed local source trusted while the
+target, capability, permissions, source directory, and source layer remain unchanged.
+`trust list` groups grants that share one security scope into a compact row and checks them against
+the active Preset; `--verbose` expands capabilities, development-source labels, and review guidance.
 
 Missing Presets, user-modified files, foreign command entries, missing permissions, and untrusted
 external code are reported as attention items rather than silently overwritten. Restore the source

@@ -289,9 +289,11 @@ environment = [
 ```bash
 shine trust inspect app/<CATEGORY>
 shine trust grant app/<CATEGORY>
+shine trust grant app/<CATEGORY> --development
 ```
 
-`trust inspect` 只读，不会授予信任。它会合并展示共享同一代码和权限范围的 capability，然后给出合适的下一步。
+`trust inspect` 只读，不会授予信任。它会合并展示共享同一代码、来源和权限范围的 capability，然后给出合适的下一步。
+只有准备信任所显示本地来源中的后续代码修改时才使用 `--development`。
 授予信任前，先处理 Plan 显示的所有缺失权限声明。若启用的 overlay
 中 `app/<CATEGORY>/shine.toml` 是覆盖内置 metadata 的旧版完整副本，应先删除或迁移该 metadata 文件；
 `merge.yaml`、`rules/` 等 overlay payload 文件仍可保留。

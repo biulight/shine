@@ -74,14 +74,17 @@ shine trust list
 shine trust revoke app/example
 shine trust inspect shell/tools/my-command
 shine trust grant preset
+shine trust grant app/example --development
 ```
 
-Grant 只适用于已经审阅的 target 与权限；代码、来源或权限变化后必须重新审阅。当类型化 Preset
+快照 Grant 只适用于已经审阅的 target、代码、来源与权限。显式使用 `--development` 建立的开发
+信任允许所显示本地来源中的代码继续修改，但 target、capability、来源目录/层与权限集合必须保持
+不变。当类型化 Preset
 元数据已经能够推导操作所需的全部权限时，经过验证的显式空权限声明也可以授予信任；完全缺失声明
 仍会阻止操作。Grant 不能替代每次操作前显示的 Plan。旧的 `allow_app_hooks` 和
 `allow_sys_code` 已被忽略，并会在下次保存配置时移除。
 `preset` target 可以批量审阅或授予当前激活快照，但保存时仍是各 target 独立的 grant；新增 target、
-代码变化或权限变化后仍须重新审阅。
+新增 target 或权限变化后仍须重新审阅；开发信任还会在来源变化后失效。
 
 ## Env 条目格式与说明
 

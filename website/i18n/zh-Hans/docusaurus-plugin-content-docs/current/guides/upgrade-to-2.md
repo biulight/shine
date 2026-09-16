@@ -61,7 +61,9 @@ shine trust grant <TARGET>
 shine trust list
 ```
 
-外部代码或所请求权限发生变化后，旧 grant 会失效，必须重新审阅。
+外部代码或所请求权限发生变化后，旧的快照 grant 会失效，必须重新审阅。Preset 作者可以显式运行
+`shine trust grant <TARGET> --development`，让同一本地来源中的后续代码修改继续受信任；来源或权限
+变化后仍须重新审阅。
 
 ## Generator 与环境变化
 

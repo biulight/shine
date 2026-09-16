@@ -229,7 +229,8 @@ async fn review_plans_with_render_mode(
         planned.push((request, plan));
     }
 
-    let rendered = match render_mode {
+    let development_trust_targets = active_development_trust_targets(&runtime, &planned).await;
+    let mut rendered = match render_mode {
         PlanRenderMode::Compact => render_compact_plan_lines(&planned, &config_digest)?,
         PlanRenderMode::Detailed | PlanRenderMode::Bootstrap => planned
             .iter()
@@ -251,6 +252,16 @@ async fn review_plans_with_render_mode(
             .flatten()
             .collect(),
     };
+    if !development_trust_targets.is_empty() {
+        rendered.push(String::new());
+        rendered.push(format!("  {}", crate::colors::bold("Development trust")));
+        for target in development_trust_targets {
+            rendered.push(format!(
+                "    {} {target} · code changes allowed from the enrolled local source",
+                crate::colors::symbol("✓")
+            ));
+        }
+    }
     for line in rendered {
         println!("{line}");
     }
@@ -295,6 +306,45 @@ async fn review_plans_with_render_mode(
             })
         })
         .collect()
+}
+
+async fn active_development_trust_targets<H>(
+    runtime: &shine_core::runtime::CoreRuntime<H>,
+    planned: &[(LifecyclePlanRequest, PlanV1)],
+) -> Vec<String> {
+    let involved = planned
+        .iter()
+        .flat_map(|(_, plan)| {
+            plan.steps.iter().map(|step| step.target.as_str()).chain(
+                plan.permission_scopes
+                    .iter()
+                    .filter_map(|scope| scope.target.as_deref()),
+            )
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let candidates = runtime
+        .context()
+        .trust_grants
+        .iter()
+        .filter(|grant| grant.mode == shine_core::trust::TrustModeV1::Development)
+        .map(|grant| grant.target.clone())
+        .filter(|target| involved.contains(target.as_str()))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut active = Vec::new();
+    for target in candidates {
+        let Ok(report) = runtime.external_code_requirements(&target).await else {
+            continue;
+        };
+        if !report.requirements.is_empty()
+            && report.requirements.iter().all(|requirement| {
+                shine_core::trust::evaluate_trust(&runtime.context().trust_grants, requirement)
+                    == shine_core::trust::TrustDecisionV1::DevelopmentTrusted
+            })
+        {
+            active.push(target);
+        }
+    }
+    active
 }
 
 fn blocked_plan_error(

@@ -13,6 +13,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   opaque-code declaration, category defaults for Shell and Sys, Preset-wide trust batching,
   target-local external Shell trust, scaffolding support, lint diagnostics, and bundle risk
   metadata.
+- Add explicit source-scoped development trust so Preset authors can keep editing enrolled local
+  code without granting every snapshot again; source, target, capability, and permission changes
+  continue to fail closed. Group matching grants in `trust list`, report their current status, and
+  provide `--verbose` details for capabilities and development sources.
 
 ### Bug Fixes
 

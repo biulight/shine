@@ -169,14 +169,29 @@ package provider 已由各自 metadata 覆盖，只需声明预设额外需要�
 `shine trust grant <TARGET>`。Grant 会绑定当前代码身份与准确的权限声明，不能替代管理员授权或每次
 mutation 的安全 Plan。
 
+持续开发本地 Preset 时，可以在审阅显示的来源与权限后，显式建立绑定来源的开发信任：
+
+```bash
+shine trust inspect <TARGET>
+shine trust grant <TARGET> --development
+```
+
+开发信任允许同一本地来源中的后续代码修改继续使用，无需重复 grant；target、capability、权限、
+来源目录或来源层发生变化时仍须重新审阅。`opaque_code = "unrestricted"` 本身不会启用开发信任。
+`trust list`、`trust inspect` 与安全 Plan 都会标注当前有效的开发信任。Grant 只保存在本机私有 trust
+store 中，Preset 不能随自身分发或启用它。
+默认的 `trust list` 会把安全范围相同的 capability 合并为一行，并显示每条已存 grant 当前是否有效；
+使用 `trust list --verbose` 可查看 capability 名称、本地开发来源标签与过期 grant 的复查提示。
+
 使用 unrestricted 的外部 Shell command 采用规范 target
 `shell/<CATEGORY>/<COMMAND>`。使用 `preset` 可以一次审阅或信任当前激活 Preset 快照中的全部可执行
-target；Shine 底层仍会为各 target 保存独立且绑定快照的 grant。撤销 `preset` 会清除所有已保存的
+target；Shine 底层仍会按所选模式为各 target 保存独立的 target-local grant。撤销 `preset` 会清除所有已保存的
 Preset trust grant：
 
 ```bash
 shine trust inspect preset
 shine trust grant preset
+shine trust grant preset --development
 shine trust revoke preset
 ```
 
@@ -479,7 +494,8 @@ Shell integration 必须且只能声明 `path`、`env`、`eval`、`source`、`al
 
 外部 sys 安装脚本和可执行 profile 内容（`eval`、`source`、fragment 与 base 文件）要求用户审阅
 当前 snapshot 后运行 `shine trust grant sys/<ITEM>`；项目配置和 Preset 不能自行授权。代码、来源层或
-权限变化后 grant 会失效。bootstrap 预检因缺少信任而停止时尚未运行任何安装器。静态 detection、
+权限变化后快照 grant 会失效；显式开发信任只接受其已登记来源中的代码修改。bootstrap 预检因缺少
+信任而停止时尚未运行任何安装器。静态 detection、
 package metadata、PATH、env 和 aliases 无需 grant。使用
 `shine sys list`、`shine sys info <ITEM>` 和
 `shine sys bootstrap <ITEM> --dry-run` 完成验证。

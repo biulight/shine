@@ -4,7 +4,9 @@ use super::{
 };
 use crate::permission::PermissionDeclarationV1;
 use crate::plan::{FilesystemAccessV1, OpaqueCodeScopeV1, PermissionSetV1, PermissionV1};
-use crate::trust::{TrustCapabilityV1, TrustDecisionV1, TrustRequirementV1, evaluate_trust};
+use crate::trust::{
+    TrustCapabilityV1, TrustDecisionV1, TrustRequirementV1, TrustSourceV1, evaluate_trust,
+};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 
@@ -281,7 +283,7 @@ impl<H> CoreRuntime<H> {
         Ok(requirements
             .iter()
             .filter(|requirement| requirement.capability == capability)
-            .all(|requirement| self.trust_decision(requirement) == TrustDecisionV1::Trusted))
+            .all(|requirement| self.trust_decision(requirement).is_trusted()))
     }
 
     pub(crate) fn sys_capability_trusted(
@@ -294,7 +296,7 @@ impl<H> CoreRuntime<H> {
         Ok(requirements
             .iter()
             .filter(|requirement| requirement.capability == capability)
-            .all(|requirement| self.trust_decision(requirement) == TrustDecisionV1::Trusted))
+            .all(|requirement| self.trust_decision(requirement).is_trusted()))
     }
 
     pub(crate) fn shell_command_trusted(
@@ -305,7 +307,7 @@ impl<H> CoreRuntime<H> {
         Ok(self
             .shell_external_code_requirements(category, file)?
             .iter()
-            .all(|requirement| self.trust_decision(requirement) == TrustDecisionV1::Trusted))
+            .all(|requirement| self.trust_decision(requirement).is_trusted()))
     }
 
     fn requirement<'a>(
@@ -320,11 +322,71 @@ impl<H> CoreRuntime<H> {
         Ok(TrustRequirementV1 {
             target: target.to_string(),
             capability,
-            code_digest: self.presets().code_digest_v1(paths)?,
+            code_digest: self.presets().code_digest_v1(paths.iter().copied())?,
             permissions_declared,
             permissions,
+            development_source: development_source(self, paths.iter().copied())?,
         })
     }
+}
+
+fn development_source<'a, H>(
+    runtime: &CoreRuntime<H>,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> Result<Option<TrustSourceV1>> {
+    let mut sources = BTreeSet::new();
+    for path in paths {
+        let Some(origin) = runtime.presets().origin(path) else {
+            continue;
+        };
+        if origin.source_kind == PresetSourceKind::Embedded {
+            continue;
+        }
+        let Some(root) = origin.category_root.as_ref() else {
+            return Ok(None);
+        };
+        sources.insert((origin.source_kind, root.clone()));
+    }
+    if sources.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = crate::plan::SnapshotDigestV1::builder("development-source");
+    let mut labels = Vec::with_capacity(sources.len());
+    for (index, (kind, root)) in sources.into_iter().enumerate() {
+        let kind = match kind {
+            PresetSourceKind::Embedded => "embedded",
+            PresetSourceKind::External => "external",
+            PresetSourceKind::Overlay => "overlay",
+        };
+        builder.add_observation(format!("source:{index}:kind"), kind)?;
+        builder.add_observation(format!("source:{index}:path"), source_path_bytes(&root))?;
+        let label = root.to_string_lossy().replace('\\', "/");
+        labels.push(format!("{kind}:{label}"));
+    }
+    Ok(Some(TrustSourceV1 {
+        identity: builder.finish(),
+        labels,
+    }))
+}
+
+#[cfg(unix)]
+fn source_path_bytes(path: &std::path::Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(windows)]
+fn source_path_bytes(path: &std::path::Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn source_path_bytes(path: &std::path::Path) -> Vec<u8> {
+    path.to_string_lossy().as_bytes().to_vec()
 }
 
 fn declared_permissions(declaration: Option<&PermissionDeclarationV1>) -> Result<PermissionSetV1> {
@@ -423,6 +485,7 @@ mod tests {
         );
         context.is_external_presets = true;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/presets")
             .file("sys/ubuntu/shine.toml", manifest.as_bytes().to_vec())
             .file(
                 "sys/ubuntu/profile/base.pre.sh",
@@ -444,6 +507,7 @@ mod tests {
         );
         context.is_external_presets = true;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/presets")
             .file(
                 "shell/tools/shine.toml",
                 b"[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'tool.sh'\ntarget = 'tool'\nplatforms = ['unix']\n"
@@ -466,6 +530,7 @@ mod tests {
         );
         context.is_external_presets = true;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/presets")
             .file(
                 "app/demo/shine.toml",
                 b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_install = { script = 'hooks/install' }\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.toml'\n"
@@ -492,6 +557,37 @@ mod tests {
         assert_ne!(
             before.requirements[0].code_digest,
             after.requirements[0].code_digest
+        );
+    }
+
+    #[tokio::test]
+    async fn development_source_binds_the_external_category_root() {
+        let report = external_app_runtime(b"#!/bin/sh\necho ok\n")
+            .external_code_requirements("app/demo")
+            .await
+            .unwrap();
+
+        let source = report.requirements[0].development_source.as_ref().unwrap();
+        assert_eq!(source.labels, ["external:/presets/app/demo"]);
+    }
+
+    #[tokio::test]
+    async fn development_grant_survives_code_edits_from_the_same_category_root() {
+        let before = external_app_runtime(b"#!/bin/sh\necho before\n")
+            .external_code_requirements("app/demo")
+            .await
+            .unwrap();
+        let grant =
+            crate::trust::TrustGrantV1::for_development_requirement(&before.requirements[0])
+                .unwrap();
+        let mut after = external_app_runtime(b"#!/bin/sh\necho after\n");
+        after.context_mut_for_cli().trust_grants = vec![grant];
+        let category = after.app_categories(Some("demo")).unwrap().remove(0);
+
+        assert!(
+            after
+                .app_capability_trusted(&category, TrustCapabilityV1::AppHook)
+                .unwrap()
         );
     }
 

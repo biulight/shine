@@ -165,8 +165,10 @@ A permission declaration describes what a preset needs to do; a trust grant reco
 and permission to execute its code. A package-only item may use an explicit empty declaration
 because the provider's operation permissions are derived from typed metadata; this remains
 grantable if shared external profile code creates a trust requirement. A completely missing
-declaration remains blocked. Changed code or permissions require a new review. Run the installation
-preview again after granting trust.
+declaration remains blocked. Snapshot trust requires a new review after code or permission changes.
+Run the installation preview again after granting trust. During ongoing local authoring,
+`--development` may accept code
+edits from the same enrolled source; permissions and source changes still require review.
 
 Migration preparation is complete when local validation has no errors, Shine reads the correct
 source, and the installation preview matches your intent. When ready to install, run

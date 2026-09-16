@@ -210,11 +210,13 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::State { .. } => unreachable!(),
         Commands::Theme { .. } => unreachable!(),
         Commands::Trust { command } => match command {
-            TrustCommands::List => cli::trust::handle_list(&config).await,
+            TrustCommands::List { verbose } => cli::trust::handle_list(&config, verbose).await,
             TrustCommands::Inspect { target } => cli::trust::handle_inspect(&config, &target).await,
-            TrustCommands::Grant { target, yes } => {
-                cli::trust::handle_grant(&config, &target, yes).await
-            }
+            TrustCommands::Grant {
+                target,
+                yes,
+                development,
+            } => cli::trust::handle_grant(&config, &target, yes, development).await,
             TrustCommands::Revoke { target } => cli::trust::handle_revoke(&config, &target).await,
         },
         Commands::Install {

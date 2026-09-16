@@ -34,7 +34,8 @@ This manual applies to **Shine 2.2.0**. Use the version selector for the frozen
 - **See what will happen before it starts.** Before an install, upgrade, or removal, Shine shows the
   actions it plans to take and the access it needs. Nothing changes until you approve.
 - **Trust external code one Preset at a time.** If a personal Preset needs to run code, Shine asks
-  you to review that specific tool. If the code or requested access changes, Shine asks again.
+  you to review that specific tool. Snapshot trust asks again after code changes; Preset authors can
+  explicitly trust continuing edits from one local development source.
 - **Pick up safely after an interruption.** If an operation stops halfway, Shine pauses later
   changes and guides you through recovery instead of continuing blindly.
 

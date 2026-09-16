@@ -102,7 +102,9 @@ bugs. Check this list before changing the modules named in each entry.
   Declaration presence is distinct from the normalized permission set: a validated explicit empty
   declaration is legitimate when typed metadata derives every required capability, while an absent
   declaration remains a fail-closed error. Trust enrollment must preserve that distinction rather
-  than treating both cases as an empty set.
+  than treating both cases as an empty set. Snapshot grants bind exact code. An explicitly requested
+  development grant may accept code changes only while target, capability, permissions, physical
+  source-root identity, and source layer still match; Preset content cannot create that grant.
   Untargeted upgrade includes declarations only from installed App categories, installed Shell
   commands, and enabled managed Sys items; merely available embedded, external, or overlay Presets
   cannot contribute required permissions or missing-declaration blockers. A fully current Shell

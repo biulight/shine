@@ -375,10 +375,12 @@ Hooks and generators in external presets require target-scoped trust:
 ```bash
 shine trust inspect app/<CATEGORY>
 shine trust grant app/<CATEGORY>
+shine trust grant app/<CATEGORY> --development
 ```
 
-`trust inspect` is read-only. It groups capabilities that share the same code and permission scope,
-then prints the appropriate next step. Before granting trust, resolve every missing permission
+`trust inspect` is read-only. It groups capabilities that share the same code, source, and
+permission scope, then prints the appropriate next step. Use `--development` only when you intend
+to trust later code edits from the displayed local source. Before granting trust, resolve every missing permission
 declaration shown by the Plan. If an active overlay's `app/<CATEGORY>/shine.toml` is an old full copy that
 overrides built-in metadata, remove or migrate that metadata file first; overlay payload files such
 as `merge.yaml` and `rules/` remain usable.

@@ -63,7 +63,8 @@ shine trust list
 ```
 
 Changing the external code or its requested permissions invalidates the old grant and requires a
-new review.
+new review. Preset authors may explicitly use `shine trust grant <TARGET> --development` to trust
+later code edits from the same local source; source or permission changes still require review.
 
 ## Generator and environment changes
 

@@ -96,8 +96,8 @@ shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-g
 shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
 shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
-shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--yes]
-shine trust list
+shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
+shine trust list [--verbose]
 shine trust revoke <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
 shine completions install
 shine completions <bash|zsh|powershell>
@@ -105,6 +105,10 @@ shine completions <bash|zsh|powershell>
 
 `update` 只读检查；`upgrade` 会显示计划并等待确认。只有审阅过同一范围后才应使用 `--yes`。
 `--pull` 会先更新符合条件的 Git 预设来源；`--prune-stale` 允许删除预设中已经不存在且未被修改的受管项。
+`trust grant --development` 会让所显示本地来源中的代码修改继续受信任，但 target、capability、权限、
+来源目录与来源层必须保持不变。
+`trust list` 会将共享同一安全范围的 grant 合并为紧凑行，并对照当前 Preset 检查状态；`--verbose`
+会展开 capability、开发来源标签与复查提示。
 
 来源缺失、用户修改、外部命令冲突、权限声明缺失或外部代码尚未信任时，Shine 会提示需要处理，
 不会静默覆盖。请恢复来源或按终端给出的命令处理。

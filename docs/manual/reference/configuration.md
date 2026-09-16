@@ -81,15 +81,19 @@ shine trust list
 shine trust revoke app/example
 shine trust inspect shell/tools/my-command
 shine trust grant preset
+shine trust grant app/example --development
 ```
 
-A grant applies only to the reviewed target and permissions. Code, source, or permission changes
-require another review. A validated explicit empty permission declaration can be granted when typed
+A snapshot grant applies only to the reviewed target, code, source, and permissions. An explicitly
+requested `--development` grant keeps trusting code edits from the displayed local source while
+the target, capability, source directory/layer, and permission set remain unchanged. A validated
+explicit empty permission declaration can be granted when typed
 Preset metadata derives all required operation permissions; a missing declaration remains blocked.
 A grant does not replace the Plan shown for each operation. Retired `allow_app_hooks` and
 `allow_sys_code` fields are ignored and removed on the next configuration save.
 The `preset` target batches the current active snapshot for review or enrollment but persists
-separate grants for each target. New targets and changed code or permissions require review.
+separate grants for each target. New targets and changed permissions require review; development
+grants additionally fail closed when their local source changes.
 
 ## Environment entry formats and descriptions
 

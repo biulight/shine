@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::plan::{SnapshotDigestError, SnapshotDigestV1};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PresetSourceKind {
     Embedded,
     External,

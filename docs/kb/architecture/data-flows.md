@@ -71,8 +71,10 @@ Permission resolution treats it as coverage for opaque command, filesystem, netw
 requirements while retaining explicit environment identities and administrator authorization.
 Shell/Sys category defaults resolve to each selected target before Plan scopes and fingerprints are
 built. App contributes the identity only when an executable surface is triggered. The `preset`
-trust target enumerates current requirements and persists exact per-target grants; it does not add a
-repository-wide grant or mutable-source trust mode.
+trust target enumerates current requirements and persists separate per-target grants. The default
+mode binds exact code. An explicit `--development` grant instead binds each target and capability to
+the exact permission set and current local source-root identity, allowing code digest changes from
+that source while continuing to reject source, layer, or permission changes.
 
 ## Shell availability and ownership inspection
 

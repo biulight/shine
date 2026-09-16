@@ -88,6 +88,8 @@ A personal command whose effects are impractical to enumerate can use permission
 `shine trust grant shell/<CATEGORY>/<COMMAND>` before installation. The declaration and grant do
 not expose ambient environment variables or bypass administrator and ownership checks. See
 [custom Preset permissions](./custom-presets.md#declare-permissions).
+During local authoring, add `--development` to the grant only when later code edits from that
+displayed source should remain trusted.
 When a lifecycle Plan is blocked by missing trust, Shine reports the exact command-scoped
 `shine trust inspect shell/<CATEGORY>/<COMMAND>` and `shine trust grant` follow-up commands.
 

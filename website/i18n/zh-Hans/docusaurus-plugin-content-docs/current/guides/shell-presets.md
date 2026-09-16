@@ -76,6 +76,8 @@ shine shell uninstall proxy --purge
 `opaque_code = "unrestricted"`。外部 unrestricted command 在安装前还需要当前有效的
 `shine trust grant shell/<CATEGORY>/<COMMAND>`。该声明和 grant 不会暴露环境中的全部变量，也不会
 绕过管理员授权与所有权检查。详见[自定义 Preset 权限](./custom-presets.md#声明权限)。
+本地开发期间，只有准备让所显示来源中的后续代码修改继续受信任时，才为 grant 添加
+`--development`。
 当生命周期 Plan 因缺少信任而被阻塞时，Shine 会报告精确到 command 的
 `shine trust inspect shell/<CATEGORY>/<COMMAND>` 和 `shine trust grant` 后续命令。
 
