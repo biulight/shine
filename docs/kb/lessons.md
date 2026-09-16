@@ -1,5 +1,18 @@
 # Lessons Learned
 
+
+## 2026-09-16 — Stable documentation snapshots must replace older same-major versions
+
+- **Symptom**: the 2.2 release continued publishing 2.1 documentation after 2.0 had already
+  been retired during the 2.1 cycle.
+- **Root cause**: `9bc1e23` added 2.2 and moved 2.1 to a versioned route; the earlier cleanup
+  in `8a730bc` had no release-runbook rule or CI guard to prevent recurrence.
+- **Fix**: remove the 2.1 bilingual snapshots and metadata, record the retention policy in
+  [ADR 0089](decisions/0089-documentation-version-retention.md), and run `pnpm check:versions`
+  in documentation CI.
+- **Rule**: publish one stable documentation version per major plus `Next`; replace same-major
+  snapshots and remove their configuration, sidebars, and translation metadata together.
+
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 

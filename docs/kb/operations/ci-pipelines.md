@@ -10,7 +10,7 @@ All workflows live in `.github/workflows/`.
 | `release.yml` | push of a `v*` tag | test + MSRV → `package-assets.yml` builds per-platform tarballs and crates.io publish → GitHub Release with git-cliff-generated notes + `install.sh`/`install.ps1` → `open-main-pr` job opens (or reuses) the `release` → `main` sync PR; RC notes are tag-to-tag increments, while stable notes cover the previous stable release through the new stable tag |
 | `preview.yml` | daily cron (00:00 UTC) + manual dispatch | if there are new commits since the `preview` tag: test → build assets → force-move `preview` tag → delete and re-publish the `Preview` prerelease |
 | `package-assets.yml` | `workflow_call` | builds the release tarballs consumed by `release.yml`/`preview.yml` |
-| `docs.yml` | documentation changes pushed to `release`, matching PRs, or manual dispatch | type-checks, checks locale parity, and builds the documentation; non-PR runs deploy to GitHub Pages and, when enabled, the configured documentation server |
+| `docs.yml` | documentation changes pushed to `release`, matching PRs, or manual dispatch | type-checks, checks documentation version retention and resource consistency (including regression tests), checks locale parity, and builds the documentation; non-PR runs deploy to GitHub Pages and, when enabled, the configured documentation server |
 | `setup-labels.yml` | (repo maintenance) | syncs GitHub issue labels |
 
 Notes:
