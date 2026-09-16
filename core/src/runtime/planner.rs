@@ -5564,10 +5564,10 @@ fn sys_bootstrap_code_blocked<H>(
         return Ok(false);
     };
     let logical = format!("sys/{os_id}/{}", path.replace('\\', "/"));
-    if !runtime
+    if runtime
         .presets()
         .origin(&logical)
-        .is_some_and(|origin| origin.source_kind != super::PresetSourceKind::Embedded)
+        .is_none_or(|origin| origin.source_kind == super::PresetSourceKind::Embedded)
     {
         return Ok(false);
     }
@@ -6479,10 +6479,10 @@ fn app_code_blocked<H>(
     script: &Path,
 ) -> Result<bool> {
     let logical = format!("app/{}/{}", category.name, script.display());
-    if !runtime
+    if runtime
         .presets()
         .origin(&logical)
-        .is_some_and(|origin| origin.source_kind != super::PresetSourceKind::Embedded)
+        .is_none_or(|origin| origin.source_kind == super::PresetSourceKind::Embedded)
     {
         return Ok(false);
     }
