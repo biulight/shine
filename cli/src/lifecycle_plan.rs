@@ -343,13 +343,16 @@ fn blocked_plan_error(
             "{target}: legacy v1 App metadata contains a recursive artifact hook that is incompatible with Shine 2. Migrate `{target}/shine.toml` to metadata schema v2 and remove the recursive hook; `shine state migrate` does not modify Preset metadata"
         ));
     }
-    let external_app_targets = planned
+    let external_app_and_shell_targets = planned
         .iter()
         .flat_map(|(_, plan)| &plan.steps)
         .filter(|step| {
-            step.diagnostic_codes
-                .iter()
-                .any(|code| code == "app_external_code_not_allowed")
+            step.diagnostic_codes.iter().any(|code| {
+                matches!(
+                    code.as_str(),
+                    "app_external_code_not_allowed" | "shell_external_code_not_allowed"
+                )
+            })
         })
         .map(|step| step.target.as_str())
         .collect::<std::collections::BTreeSet<_>>();
@@ -359,7 +362,7 @@ fn blocked_plan_error(
         .flat_map(|(_, plan)| plan.permissions.missing_declarations.iter())
         .map(permission_name)
         .collect::<std::collections::BTreeSet<_>>();
-    for target in external_app_targets {
+    for target in external_app_and_shell_targets {
         reasons.push(format!(
             "{target}: external Preset code is not trusted; run `shine trust inspect {target}` to review the current scope, then `shine trust grant {target}` if you accept it"
         ));
@@ -1673,6 +1676,49 @@ mod tests {
 
         assert!(error.contains("`shine trust inspect app/surge` to review the current scope"));
         assert!(error.contains("then `shine trust grant app/surge` if you accept it"));
+    }
+
+    #[test]
+    fn blocked_shell_error_explains_command_scoped_inspection_and_trust_enrollment() {
+        let plan = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("preset"),
+                state: digest("state"),
+            },
+            vec![
+                PlanStepV1::new(
+                    "shell/proxy/setproxy",
+                    Some("external-code-trust"),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code("shell_external_code_not_allowed"),
+            ],
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let planned = vec![(
+            LifecyclePlanRequest::Shell(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("proxy".to_string()),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            }),
+            plan,
+        )];
+        let diagnostics =
+            std::collections::BTreeSet::from(["shell_external_code_not_allowed".to_string()]);
+
+        let error = blocked_plan_error(&planned, &diagnostics);
+
+        assert!(
+            error
+                .contains("`shine trust inspect shell/proxy/setproxy` to review the current scope")
+        );
+        assert!(error.contains("then `shine trust grant shell/proxy/setproxy` if you accept it"));
+        assert!(!error.contains("shine trust inspect shell/proxy`"));
     }
 
     #[test]

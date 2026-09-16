@@ -88,6 +88,8 @@ A personal command whose effects are impractical to enumerate can use permission
 `shine trust grant shell/<CATEGORY>/<COMMAND>` before installation. The declaration and grant do
 not expose ambient environment variables or bypass administrator and ownership checks. See
 [custom Preset permissions](./custom-presets.md#declare-permissions).
+When a lifecycle Plan is blocked by missing trust, Shine reports the exact command-scoped
+`shine trust inspect shell/<CATEGORY>/<COMMAND>` and `shine trust grant` follow-up commands.
 
 Command-scoped uninstall preserves other installed commands in the category. Shared preset or
 snapshot files may remain while a sibling command still needs them. `--purge` also removes empty

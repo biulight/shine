@@ -1,6 +1,19 @@
 # Lessons Learned
 
 
+## 2026-09-16 — New trust target kinds must join lifecycle remediation
+
+- **Symptom**: an external unrestricted Shell command blocked category upgrade with
+  `shell_external_code_not_allowed`, but the final error omitted the accepted command-scoped
+  `trust inspect` and `trust grant` remediation; retrying with the category target was rejected.
+- **Root cause**: `583873c` added Shell trust targets and the planner diagnostic after lifecycle
+  remediation had been written specifically for `app_external_code_not_allowed`.
+- **Fix**: collect both App and Shell external-code diagnostics, render each Plan step's canonical
+  target, and regression-test the Shell command scope.
+- **Rule**: when a new target kind joins an existing security workflow, extend the terminal
+  remediation and test its exact accepted target grammar together with the planner and callee.
+
+
 ## 2026-09-16 — Stable documentation snapshots must replace older same-major versions
 
 - **Symptom**: the 2.2 release continued publishing 2.1 documentation after 2.0 had already

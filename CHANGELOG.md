@@ -13,6 +13,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   opaque-code declaration, category defaults for Shell and Sys, Preset-wide trust batching,
   target-local external Shell trust, scaffolding support, lint diagnostics, and bundle risk
   metadata.
+
+### Bug Fixes
+
+- Point blocked external Shell commands to the exact command-scoped `trust inspect` and
+  `trust grant` remediation accepted by the trust CLI.
+
 ## [2.2.0] — 2026-09-15
 
 ### Features
