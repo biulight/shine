@@ -1712,6 +1712,7 @@ dependencies = [
  "directories",
  "flate2",
  "jsonc-parser",
+ "libc",
  "schemars",
  "serde",
  "serde_json",

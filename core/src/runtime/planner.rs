@@ -225,6 +225,33 @@ impl PermissionAccumulator {
         self.declaration_with_opaque_code(declaration, missing, false);
     }
 
+    fn opaque_code_declaration(
+        &mut self,
+        declaration: Option<&PermissionDeclarationV1>,
+        missing: &str,
+    ) {
+        match declaration {
+            Some(declaration) => match declaration.permission_set() {
+                Ok(permissions) => {
+                    for permission in permissions
+                        .iter()
+                        .filter(|permission| matches!(permission, PermissionV1::OpaqueCode { .. }))
+                        .cloned()
+                    {
+                        self.required.push(permission.clone());
+                        self.declared.push(permission);
+                    }
+                }
+                Err(_) => {
+                    self.uncomputable.insert(missing.to_string());
+                }
+            },
+            None => {
+                self.uncomputable.insert(missing.to_string());
+            }
+        }
+    }
+
     fn declaration_with_opaque_code(
         &mut self,
         declaration: Option<&PermissionDeclarationV1>,
@@ -2773,10 +2800,17 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         continue;
                     }
                     let mut file_permissions = PermissionAccumulator::default();
-                    file_permissions.declaration(
-                        file.permissions.as_ref(),
-                        "shell_permission_declaration_missing",
-                    );
+                    if request.operation == LifecycleOperation::Uninstall {
+                        file_permissions.declaration_without_opaque_code(
+                            file.permissions.as_ref(),
+                            "shell_permission_declaration_missing",
+                        );
+                    } else {
+                        file_permissions.declaration(
+                            file.permissions.as_ref(),
+                            "shell_permission_declaration_missing",
+                        );
+                    }
                     capture_shell_inputs(
                         self.context(),
                         &request.input_versions,
@@ -3631,10 +3665,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             .iter()
             .filter(|candidate| enabled.contains(candidate.id.as_str()))
         {
-            permissions.declaration(
+            permissions.declaration_without_opaque_code(
                 enabled_item.permissions.as_ref(),
                 "sys_profile_permission_declaration_missing",
             );
+            if sys_item_has_executable_profile_code(enabled_item)
+                || sys_profile_base_code_present(self, &request.os_id)
+            {
+                permissions.opaque_code_declaration(
+                    enabled_item.permissions.as_ref(),
+                    "sys_profile_permission_declaration_missing",
+                );
+            }
         }
         add_shine_write_permission(
             self.context(),
@@ -3810,7 +3852,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         let mut shared_permissions = PermissionAccumulator::default();
         for item in &selected {
             let mut item_permissions = PermissionAccumulator::default();
-            item_permissions.declaration(
+            item_permissions.declaration_without_opaque_code(
                 item.permissions.as_ref(),
                 "sys_bootstrap_permission_declaration_missing",
             );
@@ -3835,14 +3877,25 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .install
                 .as_ref()
                 .with_context(|| format!("sys item `{}` has no standard installer", item.id))?;
-            add_sys_bootstrap_install_permissions(
-                self,
-                &request.os_id,
-                item,
-                install,
-                &mut item_permissions,
-                &mut shared_permissions,
-            )?;
+            if (!present && matches!(install, SysInstall::Script { .. }))
+                || sys_item_has_executable_profile_code(item)
+                || sys_profile_base_code_present(self, &request.os_id)
+            {
+                item_permissions.opaque_code_declaration(
+                    item.permissions.as_ref(),
+                    "sys_bootstrap_permission_declaration_missing",
+                );
+            }
+            if !present {
+                add_sys_bootstrap_install_permissions(
+                    self,
+                    &request.os_id,
+                    item,
+                    install,
+                    &mut item_permissions,
+                    &mut shared_permissions,
+                )?;
+            }
 
             let missing_env = item.required_env.iter().any(|name| {
                 self.context()
@@ -5555,6 +5608,24 @@ fn sys_profile_code_blocked_for_enabled<H>(
         }
     }
     Ok(false)
+}
+
+fn sys_item_has_executable_profile_code(item: &SysItem) -> bool {
+    item.shell.iter().any(|integration| {
+        !integration.eval_argv.is_empty()
+            || integration.source.is_some()
+            || integration.fragment.is_some()
+    })
+}
+
+fn sys_profile_base_code_present<H>(runtime: &CoreRuntime<H>, os_id: &str) -> bool {
+    let ext = if os_id == "windows" { "ps1" } else { "sh" };
+    ["pre", "post"].into_iter().any(|phase| {
+        runtime
+            .presets()
+            .get(&format!("sys/{os_id}/profile/base.{phase}.{ext}"))
+            .is_some()
+    })
 }
 
 async fn capture_sys_profile_state<H: FileSystemObservationHost>(
@@ -7309,7 +7380,11 @@ permissions = { schema_version = 1 }
             .run_sys_bootstrap_approved(request, &approval, &mut interaction, &mut observer)
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("Plan changed"));
+        assert!(
+            error
+                .to_string()
+                .contains("Plan permission set changed after approval")
+        );
         assert!(
             !runtime
                 .host()
@@ -7421,20 +7496,38 @@ permissions = { schema_version = 1 }
             )
             .file("shell/demo/demo.sh", b"#!/bin/sh\n".to_vec())
             .build();
-        let plan = runtime(snapshot)
-            .plan_shells(ShellPlanRequest {
-                operation: LifecycleOperation::Install,
-                target: Some("demo/demo".to_string()),
-                force: false,
-                purge: false,
-                input_versions: PlanningInputVersions::default(),
-            })
-            .await
-            .unwrap();
+        let runtime = runtime(snapshot);
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo/demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
 
         assert!(plan.is_ready(), "{plan:?}");
         assert!(
             plan.permissions
+                .required
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                })
+        );
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        let uninstall = runtime
+            .plan_shells(shell_uninstall_request())
+            .await
+            .unwrap();
+        assert!(uninstall.is_ready(), "{uninstall:?}");
+        assert!(
+            !uninstall
+                .permissions
                 .required
                 .contains(&PermissionV1::OpaqueCode {
                     scope: OpaqueCodeScopeV1::Unrestricted,
@@ -7454,7 +7547,8 @@ permissions = { schema_version = 1 }
             )
             .file("sys/test/install.sh", b"#!/bin/sh\n".to_vec())
             .build();
-        let script_plan = runtime(script_snapshot)
+        let script_runtime = runtime(script_snapshot);
+        let script_plan = script_runtime
             .plan_sys_bootstrap(SysBootstrapPlanRequest {
                 os_id: "test".to_string(),
                 item_ids: vec!["scripted".to_string()],
@@ -7466,6 +7560,42 @@ permissions = { schema_version = 1 }
             .unwrap();
         assert!(script_plan.is_ready(), "{script_plan:?}");
         assert!(script_plan.permissions.required.contains(&opaque));
+
+        script_runtime.host().put_file(
+            script_runtime.context().home_dir.join(".scripted"),
+            b"present".to_vec(),
+        );
+        let current_script_plan = script_runtime
+            .plan_sys_bootstrap(SysBootstrapPlanRequest {
+                os_id: "test".to_string(),
+                item_ids: vec!["scripted".to_string()],
+                sys_shell: "zsh".to_string(),
+                force_profile: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(current_script_plan.is_ready(), "{current_script_plan:?}");
+        assert!(!current_script_plan.permissions.required.contains(&opaque));
+
+        let package_snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                b"version = 2\n[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[items]]\nid = 'package'\nlabel = 'Package'\ndetect = { kind = 'path', path = '$HOME/.package' }\ninstall = { kind = 'package', provider = 'homebrew', package = 'package' }\n".to_vec(),
+            )
+            .build();
+        let package_plan = runtime(package_snapshot)
+            .plan_sys_bootstrap(SysBootstrapPlanRequest {
+                os_id: "test".to_string(),
+                item_ids: vec!["package".to_string()],
+                sys_shell: "zsh".to_string(),
+                force_profile: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(package_plan.is_ready(), "{package_plan:?}");
+        assert!(!package_plan.permissions.required.contains(&opaque));
 
         let managed_snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(

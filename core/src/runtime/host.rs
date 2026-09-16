@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileKind {
@@ -555,6 +555,11 @@ impl ProcessHost for RealHost {
             if let Some(cwd) = &request.cwd {
                 command.current_dir(cwd);
             }
+            #[cfg(unix)]
+            if request.timeout.is_some() {
+                use std::os::unix::process::CommandExt;
+                command.as_std_mut().process_group(0);
+            }
             let mut child = command.spawn()?;
             if !request.stdin.is_empty()
                 && let Some(mut stdin) = child.stdin.take()
@@ -562,22 +567,63 @@ impl ProcessHost for RealHost {
                 stdin.write_all(&request.stdin).await?;
                 stdin.shutdown().await?;
             }
-            let output = if let Some(timeout) = request.timeout {
-                tokio::time::timeout(timeout, child.wait_with_output())
-                    .await
-                    .map_err(|_| anyhow::anyhow!("process timed out"))??
+            let mut stdout = child.stdout.take();
+            let mut stderr = child.stderr.take();
+            let mut stdout_bytes = Vec::new();
+            let mut stderr_bytes = Vec::new();
+            let mut completion = Box::pin(async {
+                let (status, (), ()) = tokio::try_join!(
+                    child.wait(),
+                    read_process_stream(&mut stdout, &mut stdout_bytes),
+                    read_process_stream(&mut stderr, &mut stderr_bytes),
+                )?;
+                Ok::<_, std::io::Error>(status)
+            });
+            let status = if let Some(timeout) = request.timeout {
+                match tokio::time::timeout(timeout, &mut completion).await {
+                    Ok(result) => result?,
+                    Err(_) => {
+                        drop(completion);
+                        terminate_timed_out_process(&mut child).await;
+                        return Err(anyhow::anyhow!("process timed out"));
+                    }
+                }
             } else {
-                child.wait_with_output().await?
+                (&mut completion).await?
             };
-            let stdout = enforce_output_limit(output.stdout, request.stdout_limit, "stdout")?;
-            let stderr = enforce_output_limit(output.stderr, request.stderr_limit, "stderr")?;
+            drop(completion);
+            let stdout = enforce_output_limit(stdout_bytes, request.stdout_limit, "stdout")?;
+            let stderr = enforce_output_limit(stderr_bytes, request.stderr_limit, "stderr")?;
             Ok(ProcessOutput {
-                exit_code: output.status.code(),
+                exit_code: status.code(),
                 stdout,
                 stderr,
             })
         })
     }
+}
+
+async fn read_process_stream<R: AsyncRead + Unpin>(
+    stream: &mut Option<R>,
+    output: &mut Vec<u8>,
+) -> std::io::Result<()> {
+    if let Some(stream) = stream {
+        stream.read_to_end(output).await?;
+    }
+    Ok(())
+}
+
+async fn terminate_timed_out_process(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    if let Some(id) = child.id() {
+        // Timed commands start in their own process group, so provider helpers
+        // cannot continue mutating after their parent is reported as timed out.
+        unsafe {
+            libc::kill(-(id as i32), libc::SIGKILL);
+        }
+    }
+    let _ = child.start_kill();
+    let _ = child.wait().await;
 }
 
 impl PrivilegedFileSystemHost for RealHost {
@@ -946,4 +992,31 @@ async fn restart_systemd_resolved() -> anyhow::Result<()> {
         anyhow::bail!("failed to restart systemd-resolved");
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn timed_process_terminates_its_process_group_before_returning() {
+        let marker = std::env::temp_dir().join(format!(
+            "shine-timeout-process-group-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let script = format!("(sleep 0.3; printf leaked > '{}') & wait", marker.display());
+        let error = RealHost
+            .run(ProcessRequest {
+                program: "sh".to_string(),
+                args: vec!["-c".to_string(), script],
+                timeout: Some(Duration::from_millis(50)),
+                ..ProcessRequest::default()
+            })
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("process timed out"));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(tokio::fs::metadata(&marker).await.is_err());
+    }
 }
