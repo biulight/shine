@@ -3,6 +3,8 @@
 - **Status**: Accepted
 - **Date**: 2026-09-01
 - **Evidence**: `core/src/action.rs`, `core/src/runtime/{planner,shell,shell_action_executor}.rs`
+- **Extended by**: ADR 0091 requires trust review for every installed command affected by a shared
+  category snapshot replacement.
 
 ## Context
 

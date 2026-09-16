@@ -1194,4 +1194,160 @@ package = "tool"
         );
         assert_eq!(safe[7].status, Some(FrontendEventStatusV1::Failed));
     }
+    fn code_review_request() -> ReviewRequest {
+        ReviewRequest::Shell(crate::runtime::ShellPlanRequest {
+            operation: crate::lifecycle::LifecycleOperation::Install,
+            target: Some("tools/tool".into()),
+            force: false,
+            purge: false,
+            input_versions: crate::runtime::PlanningInputVersions::default(),
+        })
+    }
+
+    #[tokio::test]
+    async fn human_code_review_is_operation_scoped_and_never_persists_trust() {
+        let mut trusted =
+            FrontendService::new(runtime(InMemoryHost::new(), snapshot())).into_trusted();
+        let ordinary = trusted.review(code_review_request()).await.unwrap();
+        assert!(!ordinary.report().plan.is_ready());
+        assert!(ordinary.approve_after_human_confirmation().is_err());
+        let review = trusted
+            .review_with_code_confirmation(code_review_request())
+            .await
+            .unwrap();
+        assert!(
+            review.report().plan.is_ready(),
+            "{:?}",
+            review.report().plan
+        );
+        assert!(
+            review
+                .report()
+                .plan
+                .code_boundaries
+                .iter()
+                .any(|boundary| boundary.trust
+                    == crate::plan::CodeTrustStateV2::OperationConfirmation)
+        );
+        assert!(review.approve_for_automation().is_err());
+        let review = trusted
+            .review_with_code_confirmation(code_review_request())
+            .await
+            .unwrap();
+        let approved = review.approve_after_human_confirmation().unwrap();
+        let runtime = trusted.into_runtime();
+        assert!(runtime.context().trust_grants.is_empty());
+        assert!(runtime.operation_code_grants.is_empty());
+        let fresh = FrontendService::new(runtime)
+            .into_trusted()
+            .with_approved_code(&approved);
+        fresh.validate_approved(&approved).await.unwrap();
+        assert!(fresh.into_runtime().operation_code_grants.is_empty());
+        struct NoInteraction;
+        impl crate::runtime::RuntimeInteraction for NoInteraction {
+            fn confirm(&mut self, _: &'static str, _: bool) -> anyhow::Result<bool> {
+                panic!("unexpected prompt")
+            }
+            fn authorize_admin<'a>(
+                &'a mut self,
+                _: usize,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + 'a>,
+            > {
+                panic!("unexpected elevation")
+            }
+            fn select_many(
+                &mut self,
+                _: &'static str,
+                _: &[String],
+                _: &[String],
+            ) -> anyhow::Result<Vec<String>> {
+                panic!("unexpected selection")
+            }
+        }
+        let fresh = FrontendService::new(super::tests::runtime(InMemoryHost::new(), snapshot()))
+            .into_trusted();
+        fresh
+            .apply(
+                approved,
+                ExecutionOptions::default(),
+                &mut crate::runtime::NullObserver,
+                &mut NoInteraction,
+                &mut Vec::new(),
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn human_code_approval_rejects_changed_source_and_live_delivery() {
+        let mut trusted =
+            FrontendService::new(runtime(InMemoryHost::new(), snapshot())).into_trusted();
+        let approved = trusted
+            .review_with_code_confirmation(code_review_request())
+            .await
+            .unwrap()
+            .approve_after_human_confirmation()
+            .unwrap();
+        let changed = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "shell/tools/shine.toml",
+                b"[[files]]\nsource = 'tool.sh'\ntarget = 'tool'\n".to_vec(),
+            )
+            .file("shell/tools/tool.sh", b"echo changed\n".to_vec())
+            .build();
+        let fresh = FrontendService::new(runtime(InMemoryHost::new(), changed))
+            .into_trusted()
+            .with_approved_code(&approved);
+        assert!(fresh.validate_approved(&approved).await.is_err());
+        let mut live = runtime(InMemoryHost::new(), snapshot());
+        live.context_mut_for_cli().external_shell_mode = crate::runtime::ExternalShellMode::Live;
+        let mut live = FrontendService::new(live).into_trusted();
+        let review = live
+            .review_with_code_confirmation(code_review_request())
+            .await
+            .unwrap();
+        assert!(!review.report().plan.is_ready());
+        assert!(review.approve_after_human_confirmation().is_err());
+    }
+    #[tokio::test]
+    async fn human_code_review_covers_app_hooks_and_sys_profile() {
+        let presets = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/presets")
+            .file("app/available/shine.toml", b"dest = '~/.config/available'\npost_install = { script = 'hook.sh' }\n[[files]]\nsource = 'config.toml'\n".to_vec())
+            .file("app/available/config.toml", b"value = true\n".to_vec())
+            .file("app/available/hook.sh", b"echo hook\n".to_vec())
+            .file("sys/ubuntu/shine.toml", b"version = 2\n[[items]]\nid = 'tool'\nlabel = 'Tool'\ndetect = { kind = 'path', path = '~/.tool-present' }\ninstall = { kind = 'package', provider = 'apt', package = 'tool' }\n[[items.shell]]\nshells = ['bash']\nphase = 'post'\nsource = 'profile/tool.sh'\n".to_vec())
+            .file("sys/ubuntu/profile/tool.sh", b"echo profile\n".to_vec()).build();
+        let host = InMemoryHost::new();
+        host.put_file("/home/test/.tool-present", Vec::new());
+        let mut trusted = FrontendService::new(runtime(host, presets)).into_trusted();
+        for request in [
+            ReviewRequest::App(app_plan_request()),
+            ReviewRequest::SysProfile(crate::runtime::SysProfilePlanRequest {
+                os_id: "ubuntu".into(),
+                item_id: "tool".into(),
+                enabled: true,
+            }),
+        ] {
+            let review = trusted
+                .review_with_code_confirmation(request)
+                .await
+                .unwrap();
+            assert!(
+                review.report().plan.is_ready(),
+                "{:?}",
+                review.report().plan
+            );
+            assert!(
+                review
+                    .report()
+                    .plan
+                    .code_boundaries
+                    .iter()
+                    .any(|boundary| boundary.trust
+                        == crate::plan::CodeTrustStateV2::OperationConfirmation)
+            );
+        }
+    }
 }

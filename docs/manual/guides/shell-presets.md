@@ -83,15 +83,29 @@ Non-dry-run install and uninstall, plus `shine upgrade`, show the planned change
 Confirmation defaults to No; automation must pass `--yes`, while the Plan and safety checks still
 run. `--dry-run` remains a separate preview and cannot be combined with `--yes`.
 
-A personal command whose effects are impractical to enumerate can use permission schema v2 with
-`opaque_code = "unrestricted"`. External unrestricted commands require a current
-`shine trust grant shell/<CATEGORY>/<COMMAND>` before installation. The declaration and grant do
-not expose ambient environment variables or bypass administrator and ownership checks. See
-[custom Preset permissions](./custom-presets.md#declare-permissions).
+Every installed or sourced Shell entry is delivered as unisolated code. External and overlay
+commands require human confirmation of the current Plan or a matching persistent grant,
+whether the permission table is missing, empty, enumerated, or uses the compatible
+`opaque_code = "unrestricted"` field. Author capability statements are review notes, not file,
+network, or command restrictions. See
+[custom Preset capabilities](./custom-presets.md#declare-permissions).
 During local authoring, add `--development` to the grant only when later code edits from that
 displayed source should remain trusted.
 When a lifecycle Plan is blocked by missing trust, Shine reports the exact command-scoped
 `shine trust inspect shell/<CATEGORY>/<COMMAND>` and `shine trust grant` follow-up commands.
+
+Snapshot trust works with the default snapshot deployment. It copies the reviewed category content
+into Shine's managed directory; later source edits do not enter the installed command until an
+explicit reviewed update. `external_shell_mode = "live"` requires development trust because later
+invocations or `source` operations read from a mutable trusted source. Snapshot trust with live
+deployment is blocked, including Bun launchers, Windows shims, and invocation-time transforms.
+
+One snapshot directory is shared by installed commands in the same category. If an update replaces
+that shared code, the security Plan lists both the selected command and every installed sibling it
+affects. Each affected external command needs one-time human consent or a matching grant for the new snapshot;
+uninstalled siblings do not need a grant and are not installed. Existing live launchers are kept
+after upgrading Shine, but `list`/`info` reports `development trust required` until they are reviewed.
+Uninstall and recovery remain available without granting trust to code being removed.
 
 Command-scoped uninstall preserves other installed commands in the category. Shared preset or
 snapshot files may remain while a sibling command still needs them. `--purge` also removes empty

@@ -112,11 +112,15 @@ shine completions <bash|zsh|powershell>
 only after reviewing the same scope. `--pull` first updates eligible Git-managed Preset sources.
 `--prune-stale` permits removal of unchanged managed entries no longer present in the Preset.
 `trust grant --development` keeps code edits from the displayed local source trusted while the
-target, capability, permissions, source directory, and source layer remain unchanged.
+target, capability, source directory, and source layer remain unchanged. This is long-term source
+authorization, not continuous code review.
 `trust list` groups grants that share one security scope into a compact row and checks them against
 the active Preset; `--verbose` expands capabilities, development-source labels, and review guidance.
 
-Missing Presets, user-modified files, foreign command entries, missing permissions, and untrusted
+Interactive lifecycle confirmation may authorize external code for that operation without saving
+a grant. Automation and `--yes` require existing trust; Shell live requires Development trust.
+
+Missing Presets, user-modified files, foreign command entries, missing env/admin contracts, and untrusted
 external code are reported as attention items rather than silently overwritten. Restore the source
 or follow the command shown by Shine.
 
@@ -166,6 +170,8 @@ Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These c
 authoring input without installing it. `migrate --dry-run` previews legacy metadata changes;
 applying a migration requires review and confirmation. A Git-managed overlay is a disposable mirror,
 so edit its upstream checkout rather than the mirror.
+New templates omit empty and speculative capability tables. `--unrestricted` remains compatible
+and adds the legacy statement, but all arbitrary code is unisolated with or without it.
 
 See [Customize presets](../guides/custom-presets.md) and
 [Migrate system presets to v2](../guides/sys-preset-v2-migration.md).

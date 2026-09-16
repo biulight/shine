@@ -50,10 +50,11 @@ detect = { kind = "command", command = "my-tool", version_args = ["--version"] }
 # Keep scripts inside this category. For Windows, use a .ps1 script instead.
 install = { kind = "script", path = "install/my-tool.sh" }
 
-[items.permissions]
-schema_version = 1
-filesystem = [{ access = ["execute"], base = "preset", path = "install/my-tool.sh" }]
-# Add reviewed command, network, administrator, environment, and system identities used by the script.
+# Optional author capability notes do not restrict the script. Declare environment inputs and
+# administrator requirements when Shine must inject or elevate them.
+# [items.permissions]
+# schema_version = 1
+# environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
 
 [profiles.recommended]
 items = ["my-tool"]
@@ -74,9 +75,8 @@ pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()>
 
 fn init_template(unrestricted: bool) -> String {
     if unrestricted {
-        SYS_TEMPLATE.replace(
-            "[items.permissions]\nschema_version = 1\nfilesystem = [{ access = [\"execute\"], base = \"preset\", path = \"install/my-tool.sh\" }]",
-            "[permission_defaults]\nschema_version = 2\nopaque_code = \"unrestricted\"",
+        format!(
+            "{SYS_TEMPLATE}\n[permission_defaults]\nschema_version = 2\nopaque_code = \"unrestricted\"\n"
         )
     } else {
         SYS_TEMPLATE.to_string()
@@ -88,17 +88,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn init_template_contains_valid_permission_declaration() {
+    fn init_template_does_not_require_a_permission_declaration() {
         let manifest = manifest::parse_and_validate_manifest(SYS_TEMPLATE).unwrap();
 
         assert_eq!(manifest.items.len(), 1);
-        assert_eq!(
-            manifest.items[0]
-                .permissions
-                .as_ref()
-                .map(|permissions| permissions.schema_version),
-            Some(1)
-        );
+        assert!(manifest.items[0].permissions.is_none());
     }
 
     #[test]

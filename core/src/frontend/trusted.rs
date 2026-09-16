@@ -18,7 +18,8 @@ pub struct TrustedFrontend<H> {
 }
 
 impl<H> TrustedFrontend<H> {
-    pub fn into_runtime(self) -> CoreRuntime<H> {
+    pub fn into_runtime(mut self) -> CoreRuntime<H> {
+        self.service.runtime.operation_code_grants.clear();
         self.service.into_runtime()
     }
 }
@@ -34,11 +35,23 @@ pub struct HumanReview {
     report: PlanReviewReportV1,
     request: ReviewRequest,
     configuration_revision: Option<String>,
+    operation_code_grants: Vec<crate::trust::TrustGrantV1>,
 }
 
 impl HumanReview {
     pub fn report(&self) -> &PlanReviewReportV1 {
         &self.report
+    }
+
+    /// Automatic confirmation may approve operations only with already-established code trust.
+    pub fn approve_for_automation(self) -> Result<ApprovedOperation, FrontendServiceError> {
+        if !self.operation_code_grants.is_empty() {
+            return Err(FrontendServiceError::new(
+                "frontend_human_code_consent_required",
+                anyhow::anyhow!("automatic confirmation cannot authorize external code"),
+            ));
+        }
+        self.approve_after_human_confirmation()
     }
 
     /// The trusted caller must obtain an affirmative human action before this call.
@@ -51,6 +64,7 @@ impl HumanReview {
             request: self.request,
             approval,
             configuration_revision: self.configuration_revision,
+            operation_code_grants: self.operation_code_grants,
         })
     }
 }
@@ -77,6 +91,7 @@ pub struct ApprovedOperation {
     request: ReviewRequest,
     approval: PlanApprovalV1,
     configuration_revision: Option<String>,
+    operation_code_grants: Vec<crate::trust::TrustGrantV1>,
 }
 
 impl ApprovedOperation {
@@ -152,7 +167,60 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> TrustedFrontend<H> 
             report: self.service.review(&request).await?,
             request,
             configuration_revision: self.service.configuration_revision.clone(),
+            operation_code_grants: self.service.runtime.operation_code_grants.clone(),
         })
+    }
+
+    /// Prepare a review that requires an explicit human confirmation of external code.
+    /// Read-only/AI adapters and automatic confirmation must never use this capability.
+    pub async fn review_with_code_confirmation(
+        &mut self,
+        request: ReviewRequest,
+    ) -> Result<HumanReview, FrontendServiceError> {
+        self.service.runtime.operation_code_grants.clear();
+        let initial = self.service.review(&request).await?;
+        let targets = initial
+            .plan
+            .code_boundaries
+            .iter()
+            .map(|boundary| boundary.target.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut operation_code_grants = Vec::new();
+        for target in targets {
+            if target.starts_with("shell/")
+                && self.service.runtime.context().external_shell_mode == ExternalShellMode::Live
+            {
+                continue;
+            }
+            let report = self
+                .service
+                .runtime
+                .external_code_requirements(&target)
+                .await
+                .map_err(|error| FrontendServiceError::new("frontend_code_review_failed", error))?;
+            for requirement in report.requirements {
+                if !crate::trust::evaluate_trust(
+                    &self.service.runtime.context().trust_grants,
+                    &requirement,
+                )
+                .is_trusted()
+                {
+                    operation_code_grants.push(
+                        crate::trust::TrustGrantV1::for_reviewed_requirement(&requirement),
+                    );
+                }
+            }
+        }
+        self.service.runtime.operation_code_grants = operation_code_grants;
+        let review = self.review(request).await;
+        self.service.runtime.operation_code_grants.clear();
+        review
+    }
+
+    /// Reinstall only the exact, process-local code identities carried by human approval.
+    pub fn with_approved_code(mut self, approved: &ApprovedOperation) -> Self {
+        self.service.runtime.operation_code_grants = approved.operation_code_grants.clone();
+        self
     }
 
     /// Used by batch frontends to validate every freshly captured Plan before any apply.
@@ -188,13 +256,14 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost + ProcessHost> 
     /// Call on a freshly bootstrapped service. Consumes the exact approved request and re-plans
     /// before dispatch; Core repeats its final fingerprint/permission checks before OS effects.
     pub async fn apply(
-        &self,
+        mut self,
         approved: ApprovedOperation,
         options: ExecutionOptions,
         local: &mut impl RuntimeObserver,
         interaction: &mut impl RuntimeInteraction,
         safe: &mut impl FrontendEventSink,
     ) -> Result<OperationExecution, FrontendServiceError> {
+        self.service.runtime.operation_code_grants = approved.operation_code_grants.clone();
         let current = self.validated_plan(&approved).await?;
         let ApprovedOperation {
             request, approval, ..

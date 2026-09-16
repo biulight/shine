@@ -96,30 +96,42 @@ bugs. Check this list before changing the modules named in each entry.
   manifests/receipts, live fingerprints, platform/mode, and outcome-affecting input identities are
   all bound. Plain environment values contribute only a hash, while secrets require opaque handles
   or versions and never contribute plaintext.
-- **A Preset permission declaration is not a grant.** App categories, Shell commands, and Sys items
-  may declare versioned capability identities, but those declarations do not create scoped
-  external-code trust or bypass administrator authorization, ownership checks, or Plan approval.
-  Declaration presence is distinct from the normalized permission set: a validated explicit empty
-  declaration is legitimate when typed metadata derives every required capability, while an absent
-  declaration remains a fail-closed error. Trust enrollment must preserve that distinction rather
-  than treating both cases as an empty set. Snapshot grants bind exact code. An explicitly requested
-  development grant may accept code changes only while target, capability, permissions, physical
-  source-root identity, and source layer still match; Preset content cannot create that grant.
+- **A Preset capability statement is not a grant or sandbox.** App categories, Shell commands, and
+  Sys items may declare versioned command, filesystem, network, and system identities for review.
+  They are optional, unverified author statements and never restrict arbitrary code. Missing or
+  empty statements do not block planning or trust enrollment. Explicit statements remain validated,
+  enter the Plan fingerprint, and are not trust identity. Environment declarations and Administrator
+  authorization retain executor semantics: required managed injection or elevation without the
+  corresponding declaration remains fail-closed. No declaration creates external-code trust or
+  bypasses ownership checks or Plan approval.
+  Snapshot grants bind the complete effective category snapshot, including sorted logical paths,
+  bytes, and source layers. An explicitly requested development grant may accept content changes
+  only while target, capability, physical source-root identity, and source
+  layer still match; Preset content cannot create that grant. Trust grant schemas older than v2 are
+  inspection/revocation state only and require a new review before execution.
   Untargeted upgrade includes declarations only from installed App categories, installed Shell
   commands, and enabled managed Sys items; merely available embedded, external, or overlay Presets
-  cannot contribute required permissions or missing-declaration blockers. A fully current Shell
+  cannot contribute required permissions or trust blockers. A fully current Shell
   command contributes no command-local mutation permissions; shared cache, snapshot, rendered, or
   profile actions contribute only their own exact transaction permissions.
   Filesystem declarations use logical bases and never embed a physical Preset
   checkout path; command entries contain no argv and environment entries contain names and
   sensitivity only. Pure planners merge explicit declarations with Core-bounded typed metadata and
-  receipt ownership. A missing declaration or uncomputable requirement blocks protected mutation;
-  it is never converted into a broad implicit grant.
-  Schema-v2 `opaque_code = "unrestricted"` is one explicit conservative review identity, not a
-  wildcard expansion or bypass. It may cover otherwise undeclared opaque command, filesystem,
-  network, and system effects, but never covers environment input identities or administrator
-  authorization. App adds it only for a triggered executable surface; managed Sys resources remain
-  bounded. Shell/Sys permission defaults resolve per target before planning.
+  receipt ownership. An uncomputable structured requirement still blocks protected mutation; it is
+  never converted into a broad implicit grant. Schema-v2 `opaque_code = "unrestricted"` remains a
+  compatible author statement and cannot enable, suppress, or narrow Core's code classification.
+  Shell/Sys permission defaults still resolve per target before planning.
+
+- **Unisolated code classification is Core-owned.** Triggered App hooks, generators and artifacts;
+  installed or sourced Shell commands; Sys scripts; and executable profile integrations are marked
+  unisolated from typed entry semantics regardless of permission-table presence. Plans separate
+  derived operation capabilities, author statements, and code-boundary/trust records. Built-in code
+  uses distribution provenance but carries the same unisolated warning. External Shell live
+  deployment requires development trust; snapshot trust permits only snapshot delivery. A shared
+  category snapshot replacement includes every installed dependent command as a selected or
+  shared-resource-affected code boundary, and each affected external target needs one-time human consent or matching trust before
+  mutation. Fully unchanged resources preserve no-op behavior, and uninstall/recovery do not require
+  trusting code merely to remove or restore owned resources (ADR 0091).
 
 - **Opaque Preset code is described conservatively, never sampled during planning.** A generator
   or lifecycle hook contributes known command/environment/administrator requirements plus an
@@ -504,8 +516,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **External app preset hooks and generators require scoped trust.** `post_upgrade`
   runs commands after upgrades, while an automatic file generator may run during an approved
   install/upgrade and supply effective source bytes. Embedded code may run implicitly, but external
-  preset or overlay code requires a grant matching canonical target, capability, code digest,
-  trust layer, and exact permission set. Read-oriented checks execute it only through the explicit
+  preset or overlay code requires one-operation human consent or a grant matching canonical target,
+  capability, code digest and trust layer. Read-oriented checks execute it only through the explicit
   `--run-generators` mode; ordinary inspection remains process-free.
 - **Script hooks belong to their parent lifecycle Plan.** A `post_install`/`post_upgrade` hook may
   resolve a native or Bun script from the immutable App snapshot and receive declared environment
@@ -522,7 +534,8 @@ bugs. Check this list before changing the modules named in each entry.
   download never bypasses scoped trust. See ADR 0031 and ADR 0046.
 - **External sys executable code requires target-local scoped trust.** Static detection/provider metadata and
   declarative PATH/env/aliases are safe to inspect, but external or overlay bootstrap/managed scripts,
-  guarded eval/source, fragments, and base profile code require a matching `sys/<item>` grant.
+  guarded eval/source, fragments, and base profile code require human lifecycle consent or a matching
+  `sys/<item>` grant.
   Read-only status paths must never execute sys code. Project config and Presets cannot authorize
   their own executable content.
 - **Manual generators never run from implicit status or upgrade paths.**
@@ -747,3 +760,14 @@ bugs. Check this list before changing the modules named in each entry.
   `cfg(test)` does not cross that boundary).
 - **Tests that touch real system paths** (e.g. docker-engine's `/etc/docker/daemon.json`) must
   additionally hold the cross-process admin lock for their full body (commit `fbd9c55`).
+
+## One-operation external code consent
+
+Trusted human-facing lifecycle review may obtain one-time consent for exact external Preset code
+alongside Plan confirmation. Temporary grants are private Core runtime state, cleared after review,
+and carried only in the non-serializable ApprovedOperation. Execution reinstalls those exact
+identities and re-plans against fresh input; changed source, state or configuration rejects approval.
+No persistent grant is written. Automatic `--yes` and read-only/AI review use the ordinary path and
+remain blocked without persistent trust. Shell live always needs Development trust. Explicit
+info/update generator evaluation retains its persistent-grant requirement. Author statements are
+review data, not trust identity; env/admin remain per-operation executor contracts. See ADR 0091.

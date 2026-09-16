@@ -13,6 +13,10 @@ authoritative list of available items.
 See [built-in presets](../reference/built-in-presets.md#system-presets) for each platform's profiles
 and for `split-dns` environment variables and safe preview steps.
 
+Interactive lifecycle Plan confirmation can authorize the listed external code for that operation only,
+without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
+Development trust; explicit `--run-generators` inspection also requires a grant.
+
 ## Inspect before applying
 
 ```bash
@@ -54,16 +58,17 @@ approval defaults to No. Automation must pass `--yes`; this skips only the promp
 still shown and validated. `--dry-run` is an earlier preview and cannot be combined with `--yes`.
 
 The security Plan starts with administrator/network warnings and profile recovery limitations,
-then lists permissions under each selected bootstrap item. Profile configuration and shared runtime
-or manifest writes have separate sections. Package-provider permissions are derived from metadata,
-so an empty permission declaration does not mean that installing a package needs no permissions.
+then lists derived permissions under each selected bootstrap item. Profile configuration and shared
+runtime or manifest writes have separate sections. Package-provider permissions are derived from
+metadata, so no author capability table is needed for a fixed provider.
 Shared capabilities may appear under multiple items when each needs them. `Permissions none required`
 means only that the planner derived no capabilities for that section; it is not a safety guarantee.
 
-Custom script items whose effects are impractical to enumerate can use permission schema v2 with
-`opaque_code = "unrestricted"`. A category-level `permission_defaults` table can supply that
-declaration to items without an item-specific override. Environment inputs and administrator
-requirements remain explicit.
+Custom script and executable profile items are automatically shown as unisolated code. Optional
+permission tables are unverified author statements; `opaque_code = "unrestricted"` and category
+`permission_defaults` remain compatible but do not change classification. Environment inputs and
+Administrator requirements remain explicit executor contracts. External/overlay code also needs
+target-scoped trust for its complete effective `sys/<os>/` snapshot.
 
 Snapshot identities are shortened in the default display. Add `--verbose`, for example
 `shine sys bootstrap --preset recommended --verbose`, to show full identities and diagnostic codes.

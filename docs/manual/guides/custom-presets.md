@@ -45,8 +45,8 @@ shine preset plan . --platform macos --format json
 shine preset test . --format json
 ```
 
-When a personal Preset contains opaque code and maintaining a complete capability list would be
-impractical, scaffold an explicit unrestricted declaration instead:
+The default scaffold does not add an empty permission table. The compatibility option below adds
+the legacy unrestricted author statement:
 
 ```bash
 shine preset new app --unrestricted
@@ -54,8 +54,8 @@ shine preset new shell --unrestricted
 shine preset new sys --unrestricted
 ```
 
-This describes the code as unrestricted; it does not skip trust, Plan review, administrator
-authorization, ownership checks, or explicit environment inputs.
+All arbitrary code is unisolated whether this option is present or absent. The option does not skip
+trust, Plan review, administrator authorization, ownership checks, or explicit environment inputs.
 
 Use `shell` or `sys` in `preset new` for the other kinds. To customize an embedded category, enter
 the repository or overlay root and run `shine preset copy <kind>/<name>`; the command creates the
@@ -75,8 +75,8 @@ Run `shine preset schema --format json` when authoring tools need the exact repo
 formats supported by the installed version. Continue to use `preset validate` as the acceptance
 check for App, Shell, and Sys metadata.
 
-Run `preset lint` after validation to find author-quality, portability, and overly broad permission
-issues. Warnings are advisory by default; CI can add `--deny-warnings` after reviewing them.
+Run `preset lint` after validation to find author-quality and portability issues. Warnings are
+advisory by default; CI can add `--deny-warnings` after reviewing them.
 
 Then run `preset plan` for each target platform. It previews a hypothetical first installation and
 shows actions, permissions, and blockers without changing the machine. A blocker commonly means the
@@ -112,22 +112,21 @@ The migrator shows unified metadata diffs and confirmation defaults to No. It ed
 `shine.toml`, validates the candidate, rechecks source hashes, and creates a complete private backup
 set before writing. Payloads, scripts, values, runtime manifests, and trust grants are untouched.
 Exact released 1.x built-in metadata may be rebased when its executable identity is unchanged;
-safe declarative Apps may receive the current metadata and empty permission schema. Opaque code and
-Sys v1 dispatchers remain manual blockers instead of receiving guessed or broad permissions.
+safe declarative Apps may receive current metadata. Opaque code and Sys v1 dispatchers remain
+manual blockers instead of receiving guessed or broad capability statements.
 
 `--yes` is appropriate only after review and still prints text diffs. JSON is a versioned report
 without contents or diffs; use `--format json --dry-run` for inspection or combine JSON apply with
 `--yes`. A managed Git overlay is diagnosed but never changed—run the explicit-path command in its
 upstream checkout, commit there, and pull the mirror again.
 
-## Declare permissions
+## Describe capabilities and required inputs {#declare-permissions}
 
-New Presets declare reviewable capability identities with permission schema v1 or v2. App permissions
-belong to the category root, each Shell `[[files]]` command has its own `[files.permissions]`, and
-each Sys `[[items]]` target has its own `[items.permissions]`. A protected install, upgrade, or
-uninstall fails closed when a required declaration is missing; static validation reports
-`missing_permission_declaration`. Unsupported versions, unknown fields, invalid identities, and
-duplicates are errors.
+Permission schema v1/v2 tables are optional author capability statements. App statements belong to
+the category root, each Shell `[[files]]` command can have `[files.permissions]`, and each Sys
+`[[items]]` target can have `[items.permissions]`. Shine validates any table you provide, but a
+missing or empty table does not hide or constrain arbitrary code. Unsupported versions, unknown
+fields, invalid identities, and duplicates are errors.
 
 ```toml
 [permissions]
@@ -143,8 +142,7 @@ environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
 system = [{ capability = "split-dns", resource = "private-domain" }]
 ```
 
-Permission schema v2 can explicitly describe opaque code whose effects are not completely
-enumerated:
+Permission schema v2 retains the legacy unrestricted statement:
 
 ```toml
 [permissions]
@@ -176,39 +174,55 @@ default for that entry.
 Filesystem bases are `home`, `shine`, `data-dir`, `preset`, or `absolute`; non-absolute paths are
 normalized relative paths, with `.` meaning the selected base root. Commands contain one program
 identity without arguments. Environment entries contain names and `plain`/`secret` sensitivity,
-never values or ciphertext. Ordinary destinations and fixed package providers are already covered
-by their metadata, so declare only the additional capabilities the Preset needs.
+never values or ciphertext. Do not repeat commands, script paths, ordinary destinations, or fixed
+package providers already present in typed metadata. Add optional statements only when they help a
+reviewer understand intended effects.
 
-`opaque_code = "unrestricted"` covers unenumerated command, network, filesystem, and system effects.
-It never forwards ambient environment variables or grants elevation. Environment allowlists and
-their `plain`/`secret` sensitivity, plus typed administrator requirements, remain explicit. Lint
-reports `unrestricted_opaque_code` as an advisory warning, and packed bundle metadata exposes the
-unrestricted-code risk.
+`opaque_code = "unrestricted"` is compatible review metadata. Core automatically marks App hooks,
+generators and artifacts, installed or sourced Shell commands, and Sys scripts/profile code as
+unisolated even when this field or the whole table is absent. It never forwards environment values
+or grants elevation. Environment allowlists and `plain`/`secret` sensitivity, plus Administrator
+requirements, remain explicit because Shine enforces those managed injection/elevation contracts.
 
-A declaration is not an authorization grant and does not prove opaque script behavior complete.
-External executable code additionally requires a target-scoped `shine trust grant <TARGET>` after
-review. The grant binds the current code identity and exact declared permission set; it does not
-replace administrator authorization or the per-mutation security Plan.
+The security Plan presents Shine's derived operations, unverified author statements, and code/trust
+boundaries separately. A statement is not an authorization grant or proof that script behavior is
+complete. Arbitrary code runs with the access already available to its process; Shine does not add a
+runtime sandbox or intercept every later Shell command invocation.
 
-When actively developing a local Preset, opt into source-scoped development trust after reviewing
-the displayed source and permissions:
+Interactive lifecycle operations can authorize the listed external code when you confirm the Plan.
+This authorization applies only to that operation and captured snapshot; it saves no persistent grant.
+The confirmation includes code delivered for later execution, such as installed Shell commands.
+Automation and `--yes` require an existing matching grant; `--yes` cannot supply human code consent.
+Explicit `info`/`update --run-generators` evaluation also requires a grant; use interactive
+`shine app refresh` when you want to approve a generator for one operation.
+
+For persistent authorization, inspect and grant the target:
 
 ```bash
 shine trust inspect <TARGET>
+shine trust grant <TARGET>
 shine trust grant <TARGET> --development
 ```
 
-Development trust allows later code edits from the same enrolled local source without another
-grant. A target, capability, permission, source directory, or source-layer change still requires
-review. `opaque_code = "unrestricted"` does not enable development trust by itself. `trust list`,
+Snapshot trust binds the target, capability, and complete effective category snapshot, including
+logical paths, exact bytes, and source layers. Any category file change requires renewed authorization.
+Author statements appear in review and affect the Plan, but are not separately compared as trust identity.
+Editing statements in `shine.toml` still changes the snapshot bytes.
+The snapshot excludes `node_modules`; trust does not constrain interpreters, PATH tools, dependencies,
+downloads, or runtime side effects.
+
+Development trust is long-term authorization of future code from the displayed local source for the
+specified target and capability. Source directory/layer changes and new targets or capabilities need
+new authorization. It does not mean continuing code review. Shell live deployment requires this mode.
+`opaque_code = "unrestricted"` does not enable development trust. `trust list`,
 `trust inspect`, and the security Plan label active development trust; the private local trust store
 owns the grant, so a Preset cannot distribute or enable it.
 The default `trust list` view groups capabilities with the same security scope into one row and
 shows whether each stored grant is current. Use `trust list --verbose` for capability names, local
 development-source labels, and stale-grant review guidance.
 
-An unrestricted external Shell command uses the canonical
-`shell/<CATEGORY>/<COMMAND>` trust target. Use `preset` to inspect or trust every executable target
+Every external Shell command uses the canonical `shell/<CATEGORY>/<COMMAND>` trust target. Use
+`preset` to inspect or trust every executable target
 in the current active Preset snapshot; Shine still stores a separate target-local grant in the
 selected mode for each target. Revoking `preset` clears every stored Preset trust grant:
 
@@ -218,6 +232,16 @@ shine trust grant preset
 shine trust grant preset --development
 shine trust revoke preset
 ```
+
+Trust-store schema v2 uses this complete-category boundary. Older v1 grants remain visible and
+revocable, but show that re-review is required and cannot authorize a new operation. A successful
+grant replaces the old record for the same target and capability.
+
+AI tools may generate and statically validate Presets, but cannot approve their own code. Review the
+actual generated changes through a trusted human interface. A changed snapshot invalidates the approval.
+Development trust for an AI-writable directory permits future AI edits for enrolled targets. An AI
+with unrestricted terminal access can grant trust or execute scripts directly; its tool host must enforce
+that authority boundary.
 
 ## From source folders to installed capabilities
 
@@ -573,9 +597,9 @@ stable composition. Named `[profiles.*]` tables select bootstrap items; they do 
 content or disable integrations outside the selection.
 
 External sys install scripts and executable profile content (`eval`, `source`, fragments, and base
-files) require the user to review the active snapshot and run `shine trust grant sys/<ITEM>`; the
+files) require either human confirmation of the current lifecycle Plan or an existing matching grant; the
 project config and Preset cannot authorize themselves. A snapshot grant is invalidated by changed
-code, source layer, or permissions; an explicit development grant accepts code edits only from its
+category content or source layer; an explicit development grant accepts code edits only from its
 enrolled source. If trust is missing during bootstrap preflight, no installer has run
 yet. Static detection, package metadata, PATH, env, and aliases remain available without a grant.
 Validate with
@@ -599,6 +623,6 @@ artifact and supports `SOURCE=TARGET` aliases; declare each source and sensitivi
 category's `[permissions].environment`. Listed sources are forwarded only when configured; missing
 optional values are omitted. Fixed application path variables are added separately. To
 run an artifact automatically after installation or upgrade actually changes files, declare
-`post_install` or `post_upgrade`; external presets require `shine trust grant app/<CATEGORY>` after
-review. A hook that invokes `shine app artifact apply` runs non-interactively and
-must include `--yes`; the nested command still renders and freshly validates its security Plan.
+`post_install` or `post_upgrade`; external presets require human confirmation of the lifecycle Plan
+or a matching grant. Hooks cannot recursively invoke artifact lifecycle commands; use the supported
+artifact configuration and explicit artifact operation instead.

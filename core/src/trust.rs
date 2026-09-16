@@ -1,9 +1,9 @@
 //! Versioned, target-local trust for opaque external Preset code.
 //!
-//! Permission declarations describe author intent and Plan approvals authorize
+//! Capability statements describe unverified author intent and Plan approvals authorize
 //! one exact mutation. A trust grant is deliberately separate: it records that
 //! a user reviewed either one exact external-code identity or one explicit
-//! local development source together with an exact permission set.
+//! local development source. Author statements are review context, not grant identity.
 
 use crate::plan::{PermissionSetV1, SnapshotDigestV1};
 use serde::{Deserialize, Serialize};
@@ -65,9 +65,8 @@ pub struct TrustRequirementV1 {
     pub target: String,
     pub capability: TrustCapabilityV1,
     pub code_digest: SnapshotDigestV1,
-    /// Whether the Preset explicitly supplied a validated permission declaration.
-    /// An explicit declaration may intentionally normalize to an empty set when all
-    /// required effects are derived from typed metadata.
+    /// Whether the Preset explicitly supplied validated author capability metadata.
+    /// Presence is reportable context and does not control code classification or grantability.
     pub permissions_declared: bool,
     pub permissions: PermissionSetV1,
     /// Machine-local source identity used only for an explicitly requested
@@ -82,6 +81,8 @@ pub struct TrustGrantV1 {
     pub target: String,
     pub capability: TrustCapabilityV1,
     pub code_digest: SnapshotDigestV1,
+    /// Historical review context; never used for authorization matching.
+    #[serde(default, skip_serializing)]
     pub permissions: PermissionSetV1,
     #[serde(default)]
     pub mode: TrustModeV1,
@@ -96,7 +97,7 @@ impl TrustGrantV1 {
             target: requirement.target.clone(),
             capability: requirement.capability,
             code_digest: requirement.code_digest,
-            permissions: requirement.permissions.clone(),
+            permissions: PermissionSetV1::default(),
             mode: TrustModeV1::Snapshot,
             development_source: None,
         }
@@ -108,7 +109,7 @@ impl TrustGrantV1 {
             target: requirement.target.clone(),
             capability: requirement.capability,
             code_digest: requirement.code_digest,
-            permissions: requirement.permissions.clone(),
+            permissions: PermissionSetV1::default(),
             mode: TrustModeV1::Development,
             development_source: Some(requirement.development_source.clone()?),
         })
@@ -118,7 +119,6 @@ impl TrustGrantV1 {
         grant_schema_supported(self)
             && self.target == requirement.target
             && self.capability == requirement.capability
-            && self.permissions == requirement.permissions
             && match self.mode {
                 TrustModeV1::Snapshot => self.code_digest == requirement.code_digest,
                 TrustModeV1::Development => {
@@ -131,8 +131,6 @@ impl TrustGrantV1 {
 
 fn grant_schema_supported(grant: &TrustGrantV1) -> bool {
     grant.schema_version == TRUST_GRANT_SCHEMA_VERSION
-        || (grant.schema_version == LEGACY_TRUST_SCHEMA_VERSION
-            && grant.mode == TrustModeV1::Snapshot)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -142,7 +140,6 @@ pub enum TrustDecisionV1 {
     Missing,
     CodeChanged,
     SourceChanged,
-    PermissionsChanged,
     UnsupportedGrantSchema,
 }
 
@@ -154,7 +151,6 @@ impl TrustDecisionV1 {
             Self::Missing => "external_code_trust_missing",
             Self::CodeChanged => "external_code_trust_code_changed",
             Self::SourceChanged => "external_code_trust_source_changed",
-            Self::PermissionsChanged => "external_code_trust_permissions_changed",
             Self::UnsupportedGrantSchema => "external_code_trust_schema_unsupported",
         }
     }
@@ -173,8 +169,6 @@ pub fn evaluate_trust(
     });
     let mut saw_supported_candidate = false;
     let mut saw_unsupported_candidate = false;
-    let mut saw_code = false;
-    let mut saw_source = false;
     for grant in candidates {
         if !grant_schema_supported(grant) {
             saw_unsupported_candidate = true;
@@ -184,27 +178,19 @@ pub fn evaluate_trust(
         match grant.mode {
             TrustModeV1::Snapshot => {
                 if grant.code_digest == requirement.code_digest {
-                    saw_code = true;
-                    if grant.permissions == requirement.permissions {
-                        return TrustDecisionV1::Trusted;
-                    }
+                    return TrustDecisionV1::Trusted;
                 }
             }
             TrustModeV1::Development => {
                 if grant.development_source == requirement.development_source
                     && grant.development_source.is_some()
                 {
-                    saw_source = true;
-                    if grant.permissions == requirement.permissions {
-                        return TrustDecisionV1::DevelopmentTrusted;
-                    }
+                    return TrustDecisionV1::DevelopmentTrusted;
                 }
             }
         }
     }
-    if saw_code || saw_source {
-        TrustDecisionV1::PermissionsChanged
-    } else if saw_supported_candidate
+    if saw_supported_candidate
         && grants.iter().any(|grant| {
             grant.target == requirement.target
                 && grant.capability == requirement.capability
@@ -287,12 +273,12 @@ mod tests {
         other.permissions = PermissionSetV1::default();
         assert_eq!(
             evaluate_trust(std::slice::from_ref(&grant), &other),
-            TrustDecisionV1::PermissionsChanged
+            TrustDecisionV1::Trusted
         );
     }
 
     #[test]
-    fn development_grant_accepts_code_changes_only_from_same_source_and_permissions() {
+    fn development_grant_accepts_code_and_statement_changes_only_from_same_source() {
         let requirement = requirement();
         let grant = TrustGrantV1::for_development_requirement(&requirement).unwrap();
 
@@ -307,7 +293,7 @@ mod tests {
         changed_permissions.permissions = PermissionSetV1::default();
         assert_eq!(
             evaluate_trust(std::slice::from_ref(&grant), &changed_permissions),
-            TrustDecisionV1::PermissionsChanged
+            TrustDecisionV1::DevelopmentTrusted
         );
 
         let mut changed_source = changed_code;
@@ -328,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_snapshot_grant_deserializes_with_snapshot_mode() {
+    fn legacy_snapshot_grant_deserializes_but_requires_review() {
         let requirement = requirement();
         let current = TrustGrantV1::for_reviewed_requirement(&requirement);
         let mut value = serde_json::to_value(&current).unwrap();
@@ -337,7 +323,11 @@ mod tests {
         value["schema_version"] = serde_json::json!(LEGACY_TRUST_SCHEMA_VERSION);
         let decoded: TrustGrantV1 = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.mode, TrustModeV1::Snapshot);
-        assert!(decoded.matches(&requirement));
+        assert!(!decoded.matches(&requirement));
+        assert_eq!(
+            evaluate_trust(std::slice::from_ref(&decoded), &requirement),
+            TrustDecisionV1::UnsupportedGrantSchema
+        );
     }
 
     #[test]

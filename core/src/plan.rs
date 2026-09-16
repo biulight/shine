@@ -12,11 +12,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-pub const PLAN_SCHEMA_VERSION: u32 = 1;
-pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 1;
+pub const PLAN_SCHEMA_VERSION: u32 = 2;
+pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 2;
 
 const SNAPSHOT_HASH_DOMAIN: &[u8] = b"shine.snapshot.v1";
-const PLAN_HASH_DOMAIN: &[u8] = b"shine.plan.v1";
+const PLAN_HASH_DOMAIN: &[u8] = b"shine.plan.v2";
 
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
@@ -114,19 +114,15 @@ impl PermissionSetV1 {
         self.0.iter()
     }
 
-    fn difference(&self, declared: &Self) -> Self {
-        let unrestricted_opaque_code = declared.contains(&PermissionV1::OpaqueCode {
-            scope: OpaqueCodeScopeV1::Unrestricted,
-        });
+    fn missing_execution_contracts(&self, declared: &Self) -> Self {
         Self(
             self.0
                 .difference(&declared.0)
                 .filter(|permission| {
-                    !unrestricted_opaque_code
-                        || matches!(
-                            permission,
-                            PermissionV1::Environment { .. } | PermissionV1::Administrator
-                        )
+                    matches!(
+                        permission,
+                        PermissionV1::Environment { .. } | PermissionV1::Administrator
+                    )
                 })
                 .cloned()
                 .collect(),
@@ -142,8 +138,9 @@ impl FromIterator<PermissionV1> for PermissionSetV1 {
 
 /// Permission derivation for one complete operation.
 ///
-/// Missing declarations and uncomputable requirements are blockers. Codes are
-/// stable identifiers, never arbitrary error prose.
+/// Only declarations with executor semantics (managed environment injection and
+/// administrator authorization) may be missing blockers. Other author-declared
+/// capabilities are review statements and never constrain arbitrary code.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PermissionResolutionV1 {
     pub required: PermissionSetV1,
@@ -157,7 +154,7 @@ impl PermissionResolutionV1 {
         declared: &PermissionSetV1,
         uncomputable_codes: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        let missing_declarations = required.difference(declared);
+        let missing_declarations = required.missing_execution_contracts(declared);
         Self {
             required,
             missing_declarations,
@@ -180,6 +177,65 @@ pub enum PlanActionV1 {
     Execute,
     Preserve,
     Blocked,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeEntryKindV2 {
+    AppHook,
+    AppGenerator,
+    AppArtifact,
+    ShellCommand,
+    SysBootstrapScript,
+    SysProfileCode,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeTimingV2 {
+    ExecuteNow,
+    DeliverForLater,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeSourceV2 {
+    ShineDistribution,
+    ExternalOrOverlay,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeTrustStateV2 {
+    Distribution,
+    SnapshotTrusted,
+    OperationConfirmation,
+    DevelopmentTrusted,
+    MissingOrStale,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeTargetRoleV2 {
+    Selected,
+    SharedResourceAffected,
+}
+
+/// Core-owned classification of an executable Preset entry. It describes the
+/// trust boundary; it is not a sandbox or a claim about the code's full effects.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct CodeBoundaryV2 {
+    pub target: String,
+    pub entry_kind: CodeEntryKindV2,
+    pub timing: CodeTimingV2,
+    pub source: CodeSourceV2,
+    pub trust: CodeTrustStateV2,
+    pub unisolated: bool,
+    pub target_role: CodeTargetRoleV2,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_resource: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -382,6 +438,12 @@ pub struct PlanV1 {
     pub inputs: PlanInputsV1,
     pub steps: Vec<PlanStepV1>,
     pub permissions: PermissionResolutionV1,
+    /// Optional author-provided capability statements. These are review data,
+    /// not a runtime allow-list and do not satisfy arbitrary-code effects.
+    #[serde(default, skip_serializing_if = "PermissionSetV1::is_empty")]
+    pub author_capabilities: PermissionSetV1,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_boundaries: Vec<CodeBoundaryV2>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_scopes: Vec<PlanPermissionScopeV1>,
 }
@@ -397,6 +459,8 @@ impl PlanV1 {
     ) -> Self {
         Self {
             permission_scopes: Vec::new(),
+            author_capabilities: declared_permissions.clone(),
+            code_boundaries: Vec::new(),
             schema_version: PLAN_SCHEMA_VERSION,
             operation: operation.into(),
             inputs,
@@ -652,7 +716,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_and_uncomputable_permissions_fail_closed() {
+    fn descriptive_capability_gaps_do_not_block_but_uncomputable_contracts_fail_closed() {
         let required = PermissionSetV1::new([filesystem_permission("~/.config/demo")]);
         let resolution = PermissionResolutionV1::resolve(
             required.clone(),
@@ -660,7 +724,7 @@ mod tests {
             ["permission_command_uncomputable"],
         );
 
-        assert_eq!(resolution.missing_declarations, required);
+        assert!(resolution.missing_declarations.is_empty());
         assert_eq!(
             resolution.uncomputable_codes,
             BTreeSet::from(["permission_command_uncomputable".to_string()])
@@ -669,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn unrestricted_opaque_code_covers_effects_but_not_inputs_or_elevation() {
+    fn only_environment_and_administrator_declarations_are_execution_contracts() {
         let opaque = PermissionV1::OpaqueCode {
             scope: OpaqueCodeScopeV1::Unrestricted,
         };
@@ -771,10 +835,10 @@ mod tests {
         let plan_json = serde_json::to_string(&plan).unwrap();
         let approval_toml = toml::to_string(&approval).unwrap();
 
-        assert!(plan_json.contains("\"schema_version\":1"));
+        assert!(plan_json.contains("\"schema_version\":2"));
         assert!(plan_json.contains("\"operation\":\"install\""));
         assert!(plan_json.contains("\"action\":\"create\""));
-        assert!(approval_toml.contains("schema_version = 1"));
+        assert!(approval_toml.contains("schema_version = 2"));
         assert!(approval_toml.contains("plan_fingerprint = \""));
         for private in [
             "preset-content",

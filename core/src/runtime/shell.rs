@@ -495,6 +495,9 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 };
                 let canonical = format!("shell/{}/{}", category.name, file.command_name);
                 let entry = manifest.find(&canonical);
+                let live_trust_review_required = self.context().is_external_presets
+                    && entry.is_some_and(|entry| entry.mode == ExternalShellMode::Live)
+                    && !self.shell_command_development_trusted(&category, file)?;
                 let launcher_probe = probe_shell_launcher(
                     self.host(),
                     self.context(),
@@ -621,6 +624,13 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 if self.context().is_external_presets && entry.is_none() && link_exists {
                     changes.push(InspectionChange::ManifestEntryMissing { target: canonical });
                 }
+                if live_trust_review_required {
+                    changes.push(InspectionChange::DeploymentChanged {
+                        field: "trust",
+                        from: "legacy or snapshot trust".to_string(),
+                        to: "development trust".to_string(),
+                    });
+                }
                 if !snapshot_current
                     && source_status != InspectionFileStatus::UpdateAvail
                     && self.context().external_shell_mode == ExternalShellMode::Snapshot
@@ -654,6 +664,11 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     )
                 } else if !installed {
                     (InspectionFileStatus::NotInstalled, "not installed")
+                } else if live_trust_review_required {
+                    (
+                        InspectionFileStatus::UpdateAvail,
+                        "development trust required",
+                    )
                 } else if (installed && !link_exists)
                     || (link_exists && (!link_current || !manifest_current || !snapshot_current))
                     || source_status == InspectionFileStatus::UpdateAvail

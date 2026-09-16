@@ -1,5 +1,39 @@
 # Lessons Learned
 
+## 2026-09-16 — Code consent must not be inferred from automatic confirmation
+
+- **Symptom**: snapshot trust duplicated human Plan approval, while missing optional statements still
+  appeared as trust blockers in CLI guidance.
+- **Fix**: separate one-operation human code consent from persistent trust; remove statements from
+  grant matching and keep env/admin checks in the Plan. Clear temporary review grants and replay
+  only exact identities from the non-serializable approved handoff.
+- **Rule**: `--yes`, AI review reports and model assertions cannot produce human code consent. Live
+  sources still need explicit long-term Development trust. Tool hosts must constrain agents that
+  otherwise have unrestricted shell or synthetic terminal access.
+
+## 2026-09-16 — Author capability statements cannot classify or constrain code
+
+- **Symptom**: missing or empty permission tables let some external Shell commands avoid trust,
+  while detailed tables suggested that unlisted script behavior was prevented.
+- **Root cause**: automatic operation capabilities, unverified author descriptions, and executable
+  code trust were represented by one permission-resolution path.
+- **Fix**: derive unisolated entry kinds in Core, retain author statements separately, preserve only
+  environment and Administrator declarations as executor contracts, and bind target trust to the
+  complete effective category snapshot.
+- **Rule**: typed entry semantics classify code; author metadata may add review context but cannot
+  turn code into data, establish a sandbox, or authorize execution.
+
+## 2026-09-16 — Shared code replacement expands the trust review set
+
+- **Symptom**: updating selected Shell command A could replace a category tree used by installed B
+  after checking only A's grant.
+- **Root cause**: the selector was treated as the affected-target set even though ADR 0064 makes the
+  deployed snapshot category-scoped.
+- **Fix**: derive installed dependents from the manifest, record selected and shared-affected targets
+  in the Plan, and require each affected external target to match the new snapshot before mutation.
+- **Rule**: authorization scope follows changed shared resources and their installed consumers, not
+  only the command-line selector.
+
 
 ## 2026-09-16 — New trust target kinds must join lifecycle remediation
 
@@ -41,7 +75,7 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Rule**: isolate filesystem I/O and choose host-compatible fixtures independently. Do not weaken
   runtime path validation or drop Windows rendering coverage to accommodate a foreign OS fixture.
 
-## 2026-09-13 — Empty permission sets do not imply missing declarations
+## 2026-09-13 — Empty permission sets did not imply missing declarations (superseded by ADR 0091)
 
 - **Symptom**: an exported Sys collection could not grant profile-code trust for package-only
   `neovim` or `fzf`, leaving `sys bootstrap` blocked even though both items had schema-v1

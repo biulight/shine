@@ -8,6 +8,10 @@ sidebar_position: 1
 Shine 2.0 is the current stable release. It introduces a stricter lifecycle security and recovery
 boundary, so review the compatibility changes below before upgrading an existing 1.x installation.
 
+Interactive lifecycle Plan confirmation can authorize the listed external code for that operation only,
+without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
+Development trust; explicit `--run-generators` inspection also requires a grant.
+
 ## Install stable 2.0
 
 On macOS or Linux, install the latest stable release:
@@ -54,7 +58,8 @@ shine upgrade app/<CATEGORY> --yes
 
 The broad 1.x `allow_app_hooks` and `allow_sys_code` settings are retired, ignored, and removed on
 the next configuration save. They are deliberately not converted into grants. External App, Shell,
-and Sys executable targets require separate target-scoped trust:
+and Sys executable targets need human confirmation in the lifecycle Plan, or persistent
+target-scoped trust for automation:
 
 ```bash
 shine trust inspect <TARGET>
@@ -62,9 +67,9 @@ shine trust grant <TARGET>
 shine trust list
 ```
 
-Changing the external code or its requested permissions invalidates the old grant and requires a
+Changing the effective category content invalidates a snapshot grant and requires a
 new review. Preset authors may explicitly use `shine trust grant <TARGET> --development` to trust
-later code edits from the same local source; source or permission changes still require review.
+later code edits from the same local source; source, target, or capability changes still require authorization.
 
 ## Generator and environment changes
 
@@ -135,10 +140,10 @@ overlay remains read-only, so its report points back to the upstream checkout in
 an edit to the mirrored path.
 
 Trust enrollment applies to external App hook/generator/artifact code, Sys bootstrap/profile code,
-and Shell commands that declare unrestricted opaque-code effects. After validation, use the
-reported canonical target—or `shine trust inspect preset` for the current batch—and grant only
-after accepting the rendered scope. Existing Shell commands with enumerated permissions retain
-their permission declaration and security Plan flow without a separate trust target.
+and every external Shell command, independent of capability-table contents. After validation, use
+the canonical target—or `shine trust inspect preset` for the current batch—and grant only after
+accepting the rendered scope. Trust schema v2 binds the complete effective category snapshot, so
+older grants require review again; live Shell deployment requires development trust.
 
 `shine update` prints a concise **Preset compatibility** summary and still completes the available
 configuration and Shine release checks before returning a blocker. Its final error provides the

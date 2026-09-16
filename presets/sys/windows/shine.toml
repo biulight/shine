@@ -6,7 +6,6 @@ default_profile = "recommended"
 id = "rust"
 label = "Rust"
 description = "Install Rustup and the Rust toolchain."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "rustup", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "Rustlang.Rustup" }
@@ -15,7 +14,6 @@ install = { kind = "package", provider = "winget", package = "Rustlang.Rustup" }
 id = "neovim"
 label = "Neovim"
 description = "Install Neovim with WinGet."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "nvim", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "Neovim.Neovim" }
@@ -24,7 +22,6 @@ install = { kind = "package", provider = "winget", package = "Neovim.Neovim" }
 id = "yazi"
 label = "Yazi"
 description = "Install the Yazi terminal file manager."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "yazi", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "sxyazi.yazi" }
@@ -39,7 +36,6 @@ fragment = "profile/yazi.ps1"
 id = "starship"
 label = "Starship"
 description = "Install the Starship shell prompt."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "starship", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "Starship.Starship" }
@@ -54,7 +50,6 @@ eval = ["starship", "init", "{shell}"]
 id = "zoxide"
 label = "zoxide"
 description = "Install smarter directory jumping."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "zoxide", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "ajeetdsouza.zoxide" }
@@ -69,7 +64,6 @@ eval = ["zoxide", "init", "{shell}"]
 id = "atuin"
 label = "Atuin"
 description = "Install the Atuin shell history sync client."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "atuin", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "Atuinsh.Atuin" }
@@ -84,7 +78,6 @@ eval = ["atuin", "init", "{shell}"]
 id = "fzf"
 label = "fzf"
 description = "Install the fzf command-line fuzzy finder."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "fzf", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "junegunn.fzf" }
@@ -93,7 +86,6 @@ install = { kind = "package", provider = "winget", package = "junegunn.fzf" }
 id = "bat"
 label = "bat"
 description = "Install the bat command-line file viewer."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "bat", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "sharkdp.bat" }
@@ -108,7 +100,6 @@ fragment = "profile/bat.ps1"
 id = "eza"
 label = "eza"
 description = "Install the eza modern ls replacement."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "eza", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "eza-community.eza" }
@@ -123,7 +114,6 @@ fragment = "profile/eza.ps1"
 id = "zerotier"
 label = "ZeroTier"
 description = "Install the ZeroTier One Windows client."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "zerotier-cli" }
 
@@ -152,7 +142,6 @@ servers_env = "PRIVATE_DNS_SERVERS"
 id = "bun"
 label = "Bun"
 description = "Install the Bun JavaScript runtime."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "bun", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "Oven-sh.Bun" }
@@ -161,7 +150,6 @@ install = { kind = "package", provider = "winget", package = "Oven-sh.Bun" }
 id = "pnpm"
 label = "pnpm"
 description = "Install the pnpm package manager."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "pnpm", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "pnpm.pnpm" }
@@ -170,7 +158,6 @@ install = { kind = "package", provider = "winget", package = "pnpm.pnpm" }
 id = "mise"
 label = "mise"
 description = "Install the mise development environment manager."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "mise", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "jdx.mise" }

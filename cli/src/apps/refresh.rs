@@ -497,6 +497,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
                 .is_err()
         );
         assert_eq!(fs::read(&first_dest).await.unwrap(), b"user edit\n");
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
         handle_refresh(&config, "sample", Some("first.txt"), true)
             .await
             .unwrap();

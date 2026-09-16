@@ -9,7 +9,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use toml_edit::{DocumentMut, Item, Table, Value, value};
+use toml_edit::{DocumentMut, Item, Value, value};
 
 pub const PRESET_MIGRATION_SCHEMA_VERSION: u32 = 1;
 
@@ -426,26 +426,6 @@ fn plan_app(
             ));
         }
     }
-    let candidate_text = document.to_string();
-    let candidate_value = toml::from_str::<toml::Value>(&candidate_text).unwrap_or(parsed);
-    if candidate_value.get("permissions").is_none() {
-        if app_has_opaque_code(&candidate_value) {
-            diagnostics.push(diagnostic(
-                PresetMigrationSeverityV1::Blocker,
-                "manual_permission_review_required",
-                target,
-                "executable App metadata is missing a reviewed `[permissions]` declaration",
-            ));
-        } else {
-            let mut permissions = Table::new();
-            permissions.insert("schema_version", value(1));
-            document
-                .as_table_mut()
-                .insert("permissions", Item::Table(permissions));
-            changed = true;
-            operations.push("add_empty_permission_schema_v1".to_string());
-        }
-    }
     if changed {
         push_edit(
             snapshot,
@@ -483,18 +463,6 @@ fn is_recursive_artifact_hook(hook: &toml::Value, category: &str) -> bool {
     command == Some("shine") && args == ["app", "artifact", "apply", category]
 }
 
-fn app_has_opaque_code(value: &toml::Value) -> bool {
-    ["post_install", "post_upgrade", "artifact"]
-        .iter()
-        .any(|key| value.get(*key).is_some())
-        || value
-            .get("files")
-            .and_then(toml::Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|file| file.get("generator").is_some())
-}
-
 fn plan_shell(target: &str, original: &[u8], diagnostics: &mut Vec<PresetMigrationDiagnosticV1>) {
     let Ok(value) = toml::from_slice::<toml::Value>(original) else {
         diagnostics.push(diagnostic(
@@ -505,26 +473,7 @@ fn plan_shell(target: &str, original: &[u8], diagnostics: &mut Vec<PresetMigrati
         ));
         return;
     };
-    for file in value
-        .get("files")
-        .and_then(toml::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if file.get("permissions").is_none() {
-            let name = file
-                .get("target")
-                .or_else(|| file.get("source"))
-                .and_then(toml::Value::as_str)
-                .unwrap_or("unknown");
-            diagnostics.push(diagnostic(
-                PresetMigrationSeverityV1::Blocker,
-                "manual_permission_review_required",
-                &format!("{target}/{name}"),
-                "Shell command is missing `[files.permissions]`; permissions cannot be inferred safely from its source",
-            ));
-        }
-    }
+    let _ = (target, value);
 }
 
 fn plan_sys(target: &str, original: &[u8], diagnostics: &mut Vec<PresetMigrationDiagnosticV1>) {
@@ -544,26 +493,6 @@ fn plan_sys(target: &str, original: &[u8], diagnostics: &mut Vec<PresetMigration
             target,
             "Sys v1 dispatchers must be split into v2 detect/install items; see the Sys Preset v2 migration guide",
         ));
-        return;
-    }
-    for item in value
-        .get("items")
-        .and_then(toml::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if item.get("permissions").is_none() {
-            let name = item
-                .get("id")
-                .and_then(toml::Value::as_str)
-                .unwrap_or("unknown");
-            diagnostics.push(diagnostic(
-                PresetMigrationSeverityV1::Blocker,
-                "manual_permission_review_required",
-                &format!("sys/{name}"),
-                "Sys item is missing `[items.permissions]`; permissions cannot be inferred safely from scripts or profile code",
-            ));
-        }
     }
 }
 
@@ -706,7 +635,7 @@ mod tests {
         let candidate = String::from_utf8(plan.edits[0].candidate.clone().unwrap()).unwrap();
         assert!(candidate.contains("# keep"));
         assert!(candidate.contains("metadata_schema_version = 2"));
-        assert!(candidate.contains("[permissions]"));
+        assert!(!candidate.contains("[permissions]"));
         assert_eq!(
             snapshot.get("app/demo/config.toml"),
             Some(b"secret payload\n".as_slice())
@@ -762,10 +691,7 @@ mod tests {
                 .iter()
                 .all(|diagnostic| !diagnostic.message.contains("shine "))
         );
-        assert!(plan.report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.target == "shell/demo/run"
-                && diagnostic.message.contains("[files.permissions]")
-        }));
+        assert!(plan.report.diagnostics.is_empty());
     }
 
     #[test]
@@ -785,7 +711,7 @@ script = 'build.ts'
         let candidate = String::from_utf8(plan.edits[0].candidate.clone().unwrap()).unwrap();
         assert!(!candidate.contains("'demo'"));
         assert!(candidate.contains("'other'"));
-        assert_eq!(plan.report.summary.blockers, 1);
+        assert_eq!(plan.report.summary.blockers, 0);
     }
 
     #[test]
@@ -809,8 +735,7 @@ source = 'config.toml'
             plan.report.files[0].operations,
             [
                 "set_app_metadata_schema_v2",
-                "remove_recursive_artifact_hook",
-                "add_empty_permission_schema_v1"
+                "remove_recursive_artifact_hook"
             ]
         );
     }

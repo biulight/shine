@@ -16,7 +16,7 @@ Follow the user's language for questions and results.
   Never link a source/overlay, activate a preset, grant trust, or run a real install, upgrade,
   bootstrap, artifact, hook, generator, or preset script in this workflow.
 - Validation is static. `shine preset plan` is a hypothetical report, never an approval or input
-  to apply. Permission declarations describe requirements; they do not grant trust or authority.
+  to apply. Author capability statements do not grant trust, authority, or runtime confinement.
 - Use a fresh temporary `SHINE_CONFIG_DIR` for **scaffolding as well as runtime dry-runs**:
   `preset new` and `preset copy` can initialize config. Set it per command; clean up only the
   exact temporary directory created for this task. Never supply real secrets to checks.
@@ -41,9 +41,10 @@ Follow the user's language for questions and results.
    from the workspace root; it creates the category path. Preserve referenced support files
    and unrelated edits; do not scaffold over an existing category.
 4. Keep explicit `shine.toml` metadata and referenced sources, scripts, fragments, and dependency
-   files inside the category. Retain schema-v1 permission declarations at the proper target
-   boundary; declare identities and environment sensitivity (`plain`/`secret`), never argv,
-   values, ciphertext, credentials, or physical checkout paths in permission tables.
+   files inside the category. Do not add empty permission tables or repeat commands/script paths
+   already expressed by typed metadata. Optional capability statements stay at the proper target
+   boundary. Environment inputs and Administrator requirements remain explicit executor contracts.
+   Never put argv, values, ciphertext, credentials, or physical checkout paths in these tables.
 
 ## Verify and deliver
 
@@ -52,7 +53,8 @@ Follow the user's language for questions and results.
   findings by stable code; explain accepted warnings. Validation errors block a ready deliverable.
   Rerun after fixes, not indefinitely when a missing tool or external input prevents progress.
 - Run `shine preset plan <category-path> --platform <macos|linux|windows> --format json` for
-  each requested target platform. Review steps, permissions, opaque effects, and blockers.
+  each requested target platform. Review steps, derived permissions, author statements,
+  unisolated-code boundaries, and blockers.
   Explain `ready: false` against its synthetic assumptions; never invent environment, trust,
   commands, or administrator state to make it ready.
 - Use [verification details](references/verification.md) for existing `shine.test.toml` fixtures,

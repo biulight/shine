@@ -1,6 +1,6 @@
 # 0088 — Presets may declare unrestricted opaque-code effects
 
-- **Status**: Accepted
+- **Status**: Superseded in part by ADR 0091
 - **Date**: 2026-09-16
 - **Evidence**: `core/src/{permission,plan}.rs`, `core/src/runtime/{planner,trust,lint,pack}.rs`,
   `cli/src/{trust,lifecycle_plan}.rs`

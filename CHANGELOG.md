@@ -9,14 +9,25 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
-- Add permission schema v2 for App, Shell, and Sys Presets with an explicit unrestricted
-  opaque-code declaration, category defaults for Shell and Sys, Preset-wide trust batching,
-  target-local external Shell trust, scaffolding support, lint diagnostics, and bundle risk
-  metadata.
-- Add explicit source-scoped development trust so Preset authors can keep editing enrolled local
-  code without granting every snapshot again; source, target, capability, and permission changes
-  continue to fail closed. Group matching grants in `trust list`, report their current status, and
-  provide `--verbose` details for capabilities and development sources.
+- Allow explicit human lifecycle Plan confirmation to authorize its external code for one operation
+  without saving a trust grant. Automation and `--yes` still require existing trust; Shell live
+  requires Development trust. Author capability statements no longer determine grant identity.
+  Fix trust inspection and listing so optional missing statements do not appear as blockers.
+
+- Separate Shine-derived operations, optional unverified author capability statements, and
+  automatically classified unisolated code in security Plans. Empty permission tables and repeated
+  command/script declarations are no longer required; managed environment inputs and Administrator
+  authorization remain explicit execution contracts.
+- Require target-local trust for every external App/Shell/Sys executable entry and bind snapshot
+  grants to the complete effective category. Trust schema v2 requires existing v1 grants to be
+  reviewed again; the unreleased earlier v2 shape is replaced in place. Source-scoped development
+  trust still permits edits from an enrolled source while target, capability, source root, and source layer remain unchanged.
+- Enforce compatible external Shell deployment: snapshot trust can deliver only snapshots, while
+  live deployment requires development trust. Shared category updates review every affected
+  installed command; existing live launchers remain installed and status reports required review.
+- Upgrade Plan/approval, frontend review, authoring, pack, and bundle reports for typed code-boundary
+  presentation. Default Preset templates no longer create empty or speculative permission tables;
+  the compatible `--unrestricted` option no longer changes risk classification.
 
 ### Bug Fixes
 

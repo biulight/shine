@@ -1,6 +1,6 @@
 # 0046 — External Preset code trust is snapshot-scoped and target-local
 
-- **Status**: Accepted
+- **Status**: Superseded in part by ADR 0091
 - **Date**: 2026-08-30
 - **Evidence**: `core/src/trust.rs`, `cli/src/trust.rs`, `core/src/runtime/planner.rs`
 

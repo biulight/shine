@@ -3,9 +3,6 @@ description = "Starship prompt configuration."
 dest = "~/.config"
 list_mode = "category"
 
-[permissions]
-schema_version = 1
-
 [[files]]
 source = "starship.toml"
 target = "starship.toml"

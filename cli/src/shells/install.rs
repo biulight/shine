@@ -31,9 +31,6 @@ needs_source = false
 # Optional: limit a file to specific platforms.
 # platforms = ["macos"]    # exact: macos/linux/windows; unix groups macOS + Linux
 
-[files.permissions]
-schema_version = 1
-
 # PowerShell scripts are also supported:
 # source = "my_tool.ps1"
 
@@ -46,9 +43,10 @@ schema_version = 1
 # description = "What mytool does."  # or a `// ...` header at the top of my_tool.ts
 # transforms = ["template"] # opt into @@VAR@@ env substitution (static, needs `shine upgrade`)
 # env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]  # inject shine values at launch; read via Bun.env
+# Optional author capability notes. Shine automatically classifies installed commands as
+# unisolated code; these notes do not restrict the script:
 # [files.permissions]
 # schema_version = 1
-# commands = ["bun"]
 # environment = [
 #   { name = "API_URL", sensitivity = "plain" },
 #   { name = "SERVICE_TOKEN", sensitivity = "secret" },
@@ -70,9 +68,8 @@ pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()>
 
 fn init_template(unrestricted: bool) -> String {
     if unrestricted {
-        SHELL_TEMPLATE.replace(
-            "[files.permissions]\nschema_version = 1",
-            "[permission_defaults]\nschema_version = 2\nopaque_code = \"unrestricted\"",
+        format!(
+            "{SHELL_TEMPLATE}\n[permission_defaults]\nschema_version = 2\nopaque_code = \"unrestricted\"\n"
         )
     } else {
         SHELL_TEMPLATE.to_string()
@@ -928,6 +925,7 @@ mod tests {
             .await
             .unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "shell/custom/one").await;
 
         handle_install(&config, Some("custom/one"), false)
             .await
@@ -988,6 +986,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "shell/custom/one").await;
 
         let install = handle_install_with_result(&config, Some("custom/one"), false)
             .await
@@ -1003,6 +1002,7 @@ mod tests {
         fs::write(category.join("one.sh"), b"#!/bin/sh\necho updated\n")
             .await
             .unwrap();
+        crate::trust::grant_current_for_test(&config, "shell/custom/one").await;
         let update = collect_update_lifecycle_result(&config).await.unwrap();
         let pending = update
             .outcomes
@@ -1459,6 +1459,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "shell/custom/my_tool").await;
 
         handle_install(&config, Some("custom"), false)
             .await
@@ -1507,6 +1508,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "shell/custom/setproxy").await;
 
         handle_install(&config, Some("custom"), false)
             .await
@@ -1546,6 +1548,8 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
+        crate::trust::grant_current_for_test(&config, "shell/proxy/usetproxy").await;
 
         handle_install(&config, Some("proxy"), false).await.unwrap();
 
@@ -1590,13 +1594,7 @@ mod tests {
         );
         assert_eq!(categories[0].files[0].command_name, "mytool");
         assert!(!categories[0].files[0].needs_source);
-        assert_eq!(
-            categories[0].files[0]
-                .permissions
-                .as_ref()
-                .map(|permissions| permissions.schema_version),
-            Some(1)
-        );
+        assert!(categories[0].files[0].permissions.is_none());
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1777,6 +1775,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
 
         handle_install(&config, Some("proxy"), false).await.unwrap();
         assert!(config.bin_dir().join("setproxy").exists());
@@ -1792,6 +1791,7 @@ mod tests {
         .await
         .unwrap();
         make_executable(&setproxy).await;
+        crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
 
         let mut sep = crate::output::SectionSeparator::new();
         let report = handle_upgrade_installed(&config, false, &mut sep)
@@ -1833,6 +1833,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "custom").await;
 
         handle_install(&config, Some("custom"), false)
             .await
@@ -1891,6 +1892,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "custom").await;
 
         handle_install(&config, Some("custom"), false)
             .await
@@ -1941,6 +1943,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "custom").await;
         handle_install(&config, Some("custom"), false)
             .await
             .unwrap();
@@ -1988,6 +1991,7 @@ mod tests {
             .env
             .insert("PROXY_HOST".into(), "proxy.example".into());
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "custom").await;
 
         handle_install(&config, Some("custom"), false)
             .await
@@ -2040,6 +2044,7 @@ mod tests {
             .env
             .insert("PROXY_HOST".into(), "first.example".into());
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_development_for_test(&config, "custom").await;
         handle_install(&config, Some("custom"), false)
             .await
             .unwrap();
@@ -2106,6 +2111,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "custom").await;
         handle_install(&config, Some("custom"), false)
             .await
             .unwrap();
@@ -2120,6 +2126,7 @@ mod tests {
         fs::write(&source, b"#!/bin/sh\necho second\n")
             .await
             .unwrap();
+        crate::trust::grant_current_for_test(&config, "custom").await;
         let mut separator = crate::output::SectionSeparator::new();
         let report = handle_upgrade_installed(&config, false, &mut separator)
             .await
@@ -2161,6 +2168,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "custom").await;
         fs::symlink(&source, config.bin_dir().join("mytool"))
             .await
             .unwrap();
@@ -2203,11 +2211,13 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "custom").await;
         handle_install(&config, Some("custom"), false)
             .await
             .unwrap();
 
         config.external_shell_mode = crate::config::ExternalShellMode::Live;
+        crate::trust::grant_development_for_test(&config, "custom").await;
         let mut separator = crate::output::SectionSeparator::new();
         handle_upgrade_installed(&config, false, &mut separator)
             .await

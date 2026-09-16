@@ -36,7 +36,6 @@ default_profile = "recommended"
 id = "neovim"
 label = "Neovim"
 description = "Install Neovim with Homebrew."
-permissions = { schema_version = 1 }
 
 [items.detect]
 kind = "command"
@@ -56,7 +55,7 @@ items = ["neovim"]
 
 - `detect` 告诉 Shine 如何检查软件是否已经存在；这里检查 `nvim` 命令。
 - `install` 告诉 Shine 如何安装缺失的软件；这里使用 Homebrew，实际安装前需确保 Homebrew 可用。
-- `permissions` 是每个安装项必需的权限声明。仅使用固定包管理器、没有自定义代码的这个示例可使用上述简短声明。
+- 固定 package provider 不需要空的 `permissions` 表；Shine 会从 typed metadata 推导操作身份。
 - `[profiles.recommended]` 选择该配置组包含的安装项。保留原有配置组时，检查其中的 ID 仍然有效。
 
 Ubuntu 和 Windows 应使用对应的 `apt` 或 `winget` provider，并核对该包管理器中的实际包名；不要直接照搬 Homebrew 的包名。
@@ -65,7 +64,9 @@ Ubuntu 和 Windows 应使用对应的 `apt` 或 `winget` provider，并核对该
 
 如果一个安装项无法用包管理器完成，把旧脚本中属于它的逻辑移到 `install/<item>.sh` 或 `install/<item>.ps1`，并将该项的 `install` 改为 `kind = "script"`、`path = "install/<item>.sh"`（Windows 使用 `.ps1`）。
 
-脚本只负责这一个安装项，用普通退出码报告成功或失败，并保留对应的 `detect`。根据脚本实际行为补充执行路径、命令、网络及其他所需权限，不能直接沿用上面只有 `schema_version` 的声明。具体字段见[声明权限](./custom-presets.md#声明权限)。
+脚本只负责这一个安装项，用普通退出码报告成功或失败，并保留对应的 `detect`。Core 会自动把它标为
+未隔离代码。只有在有助于审阅时才添加可选作者能力说明；环境输入和 Administrator 要求仍须显式配置。
+具体字段见[能力说明](./custom-presets.md#声明权限)。
 
 全部安装项迁移完成后，移除旧的统一入口及旧状态输出、更新检查逻辑。第三方软件的更新交给其包管理器或上游工具，`shine sys bootstrap` 只负责确保软件已安装。
 
@@ -84,7 +85,7 @@ shine preset validate ./my-presets/sys/macos
 shine preset plan ./my-presets/sys/macos --platform macos
 ```
 
-先修复 `validate` 报告的错误，例如缺失文件、权限声明或无效配置。然后查看 `plan` 中的安装目标、所需权限和 Shell 配置步骤，确认它们符合预期。
+先修复 `validate` 报告的错误，例如缺失文件、无效能力说明或无效配置。然后查看 `plan` 中的安装目标、所需权限和 Shell 配置步骤，确认它们符合预期。
 
 这两条命令不会安装软件或执行预设脚本。`preset plan` 使用模拟环境，不是本机安装预览；缺少模拟环境中的信任、命令或管理员条件也可能使它报告阻塞。按报告区分配置错误与环境要求，不要为了让报告通过而扩大权限。
 
@@ -123,10 +124,9 @@ shine trust inspect sys/neovim
 shine trust grant sys/neovim
 ```
 
-权限声明说明预设需要做什么，授予信任表示你已审阅并允许执行相关代码。纯包管理器安装项可以使用
-显式空声明，因为 provider 的操作权限由类型化元数据推导；如果公共外部 profile 代码为它产生了
-信任要求，该空声明仍可正常授权。完全缺失声明仍会阻止操作。快照信任会在代码或权限变化后要求重新审阅；授权后
-再运行一次安装预览。持续开发本地 Preset 时可使用 `--development` 接受同一已登记来源中的代码修改；
-权限或来源变化仍须审阅。
+能力说明是可选、未经验证的审阅信息；trust grant 表示你已审阅并允许执行 external code。
+纯 package-provider item 不需要空声明。Snapshot trust 会绑定完整有效 Sys OS 快照，任何文件、
+来源层或作者/env/admin 说明变化后都需重新审阅。授权后再运行一次安装预览。持续开发本地 Preset
+时可使用 `--development` 接受同一已登记来源中的代码修改；说明或来源变化仍须审阅。
 
 本地验证无错误、实际来源正确且安装预览符合预期后，迁移准备完成。需要实际安装时运行 `shine sys bootstrap neovim`，审阅计划后确认执行；后续操作见[初始化与管理系统](./system-init.md)。

@@ -392,6 +392,8 @@ mod tests {
                     PlanStepV1::new("shell/test/mytool", None::<String>, PlanActionV1::Create),
                 ],
                 permissions,
+                author_capabilities: PermissionSetV1::default(),
+                code_boundaries: Vec::new(),
             }],
         };
 

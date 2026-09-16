@@ -1,7 +1,7 @@
 use crate::{config::Config, core_runtime};
 use anyhow::{Context, Result, bail};
 use shine_core::persist::atomic_write_private;
-use shine_core::plan::{PermissionSetV1, SnapshotDigestV1};
+use shine_core::plan::SnapshotDigestV1;
 use shine_core::trust::{
     LEGACY_TRUST_SCHEMA_VERSION, TRUST_STORE_SCHEMA_VERSION, TrustCapabilityV1, TrustDecisionV1,
     TrustGrantV1, TrustModeV1, TrustRequirementV1, TrustSourceV1, TrustStoreV1, evaluate_trust,
@@ -58,8 +58,6 @@ enum GrantListStatus {
     Current,
     CodeChanged,
     SourceChanged,
-    PermissionsChanged,
-    DeclarationMissing,
     CapabilityMissing,
     Unavailable,
     UnsupportedSchema,
@@ -72,8 +70,6 @@ impl GrantListStatus {
             Self::Current => "current",
             Self::CodeChanged => "code changed",
             Self::SourceChanged => "source changed",
-            Self::PermissionsChanged => "permissions changed",
-            Self::DeclarationMissing => "declaration missing",
             Self::CapabilityMissing => "capability missing",
             Self::Unavailable => "unavailable",
             Self::UnsupportedSchema => "unsupported schema",
@@ -88,7 +84,6 @@ struct TrustListGroup {
     mode: TrustModeV1,
     code_digest: SnapshotDigestV1,
     development_source: Option<TrustSourceV1>,
-    permissions: PermissionSetV1,
     status: GrantListStatus,
     capabilities: Vec<TrustCapabilityV1>,
 }
@@ -104,7 +99,6 @@ fn build_list_groups(
         if let Some(group) = groups.iter_mut().find(|group| {
             group.target == grant.target
                 && group.mode == grant.mode
-                && group.permissions == grant.permissions
                 && group.status == status
                 && match grant.mode {
                     TrustModeV1::Snapshot => group.code_digest == grant.code_digest,
@@ -120,7 +114,6 @@ fn build_list_groups(
                 mode: grant.mode,
                 code_digest: grant.code_digest,
                 development_source: grant.development_source.clone(),
-                permissions: grant.permissions.clone(),
                 status,
                 capabilities: vec![grant.capability],
             });
@@ -153,14 +146,10 @@ fn grant_list_status(
     else {
         return GrantListStatus::CapabilityMissing;
     };
-    if !requirement.permissions_declared {
-        return GrantListStatus::DeclarationMissing;
-    }
     match evaluate_trust(std::slice::from_ref(grant), requirement) {
         TrustDecisionV1::Trusted | TrustDecisionV1::DevelopmentTrusted => GrantListStatus::Current,
         TrustDecisionV1::CodeChanged => GrantListStatus::CodeChanged,
         TrustDecisionV1::SourceChanged => GrantListStatus::SourceChanged,
-        TrustDecisionV1::PermissionsChanged => GrantListStatus::PermissionsChanged,
         TrustDecisionV1::UnsupportedGrantSchema => GrantListStatus::UnsupportedSchema,
         TrustDecisionV1::Missing => GrantListStatus::NotTrusted,
     }
@@ -360,26 +349,12 @@ pub async fn handle_inspect(config: &Config, target: &str) -> Result<()> {
 
 fn render_inspect_guidance(
     target: &str,
-    requirements: &[TrustRequirementV1],
+    _requirements: &[TrustRequirementV1],
     decisions: &[TrustDecisionV1],
 ) -> String {
-    if requirements
-        .iter()
-        .any(|requirement| !requirement.permissions_declared)
-    {
-        let guidance = if target == "preset" {
-            "Add a valid permission declaration to every listed target before granting trust."
-                .to_string()
-        } else {
-            format!(
-                "Add a valid permission declaration to the {target} Preset before granting trust."
-            )
-        };
-        return format!("{}\n  {guidance}", crate::colors::yellow("Next"));
-    }
     if decisions.iter().any(|decision| !decision.is_trusted()) {
         return format!(
-            "{}\n  Review the current code and permissions, then run:\n    shine trust grant {target}",
+            "{}\n  For persistent authorization, review the current code and source, then run:\n    shine trust grant {target}",
             crate::colors::cyan("Next")
         );
     }
@@ -403,7 +378,6 @@ pub async fn handle_grant(
     if report.requirements.is_empty() {
         bail!("{target} has no external executable code to trust");
     }
-    validate_grant_requirements(target, &report.requirements)?;
     if development
         && report
             .requirements
@@ -463,18 +437,6 @@ pub async fn handle_grant(
         println!("Established development trust for {target}.");
     } else {
         println!("Trusted current external code for {target}.");
-    }
-    Ok(())
-}
-
-fn validate_grant_requirements(target: &str, requirements: &[TrustRequirementV1]) -> Result<()> {
-    if requirements
-        .iter()
-        .any(|requirement| !requirement.permissions_declared)
-    {
-        bail!(
-            "{target} external code has no valid permission declaration; fix and validate the Preset before granting trust"
-        );
     }
     Ok(())
 }
@@ -614,7 +576,7 @@ fn render_requirements(
             .all(|index| decisions[*index] == TrustDecisionV1::DevelopmentTrusted)
         {
             lines.push(format!(
-                "  {}  development (code changes allowed from enrolled source)",
+                "  {}  development (long-term authorization of future code from enrolled source)",
                 crate::colors::dim("Trust mode")
             ));
         } else if scope
@@ -657,12 +619,15 @@ fn render_requirements(
             ));
         }
         lines.push(String::new());
-        lines.push(format!("  {}", crate::colors::bold("Permissions")));
+        lines.push(format!(
+            "  {}",
+            crate::colors::bold("Author capability statements (unverified; not authorization)")
+        ));
         if !requirement.permissions_declared {
             lines.push(format!(
                 "    {} {}",
                 crate::colors::symbol("!"),
-                crate::colors::yellow("valid declaration missing")
+                crate::colors::dim("not supplied (optional)")
             ));
         } else if requirement.permissions.is_empty() {
             lines.push(format!("    {}", crate::colors::dim("- none")));
@@ -680,6 +645,7 @@ fn render_requirements(
             }
         }
     }
+    lines.push("Trust binds Preset content or source identity; it does not constrain interpreters, PATH tools, dependencies, downloads, or runtime side effects.".to_string());
     lines.join("\n")
 }
 
@@ -690,8 +656,7 @@ fn trust_status(decision: TrustDecisionV1) -> (&'static str, &'static str) {
         TrustDecisionV1::Missing => ("✗", "not trusted"),
         TrustDecisionV1::CodeChanged => ("!", "code changed"),
         TrustDecisionV1::SourceChanged => ("!", "source changed"),
-        TrustDecisionV1::PermissionsChanged => ("!", "permissions changed"),
-        TrustDecisionV1::UnsupportedGrantSchema => ("!", "unsupported grant schema"),
+        TrustDecisionV1::UnsupportedGrantSchema => ("!", "old grant requires re-review"),
     }
 }
 
@@ -703,9 +668,9 @@ fn styled_trust_status(decision: TrustDecisionV1, status: &str) -> String {
         TrustDecisionV1::Missing | TrustDecisionV1::UnsupportedGrantSchema => {
             crate::colors::red(status)
         }
-        TrustDecisionV1::CodeChanged
-        | TrustDecisionV1::SourceChanged
-        | TrustDecisionV1::PermissionsChanged => crate::colors::yellow(status),
+        TrustDecisionV1::CodeChanged | TrustDecisionV1::SourceChanged => {
+            crate::colors::yellow(status)
+        }
     }
 }
 
@@ -716,7 +681,13 @@ fn short_digest(digest: &str) -> &str {
 #[cfg(test)]
 pub(crate) async fn grant_current_for_test(config: &Config, target: &str) {
     let runtime = core_runtime::from_config(config).await.unwrap();
-    let report = runtime.external_code_requirements(target).await.unwrap();
+    let report = match runtime.external_code_requirements(target).await {
+        Ok(report) => report,
+        Err(_) if !target.contains('/') => {
+            runtime.external_code_requirements("preset").await.unwrap()
+        }
+        Err(error) => panic!("failed to inspect test trust target {target}: {error}"),
+    };
     let mut store = load_store(config).await.unwrap();
     for requirement in report.requirements {
         store.grants.retain(|grant| {
@@ -725,6 +696,29 @@ pub(crate) async fn grant_current_for_test(config: &Config, target: &str) {
         store
             .grants
             .push(TrustGrantV1::for_reviewed_requirement(&requirement));
+    }
+    save_store(config, &store).await.unwrap();
+}
+
+#[cfg(test)]
+pub(crate) async fn grant_development_for_test(config: &Config, target: &str) {
+    let runtime = core_runtime::from_config(config).await.unwrap();
+    let report = match runtime.external_code_requirements(target).await {
+        Ok(report) => report,
+        Err(_) if !target.contains('/') => {
+            runtime.external_code_requirements("preset").await.unwrap()
+        }
+        Err(error) => panic!("failed to inspect test trust target {target}: {error}"),
+    };
+    let mut store = load_store(config).await.unwrap();
+    for requirement in report.requirements {
+        store.grants.retain(|grant| {
+            grant.target != requirement.target || grant.capability != requirement.capability
+        });
+        store.grants.push(
+            TrustGrantV1::for_development_requirement(&requirement)
+                .expect("test Preset has a development source"),
+        );
     }
     save_store(config, &store).await.unwrap();
 }
@@ -758,22 +752,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_empty_permission_declaration_is_grantable() {
-        assert!(validate_grant_requirements("sys/package-only", &[requirement(true)]).is_ok());
-    }
-
-    #[test]
-    fn missing_permission_declaration_remains_ungrantable() {
-        let error =
-            validate_grant_requirements("sys/package-only", &[requirement(false)]).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("no valid permission declaration")
-        );
-    }
-
-    #[test]
     fn inspect_guidance_points_untrusted_targets_to_grant() {
         assert_eq!(
             render_inspect_guidance(
@@ -781,19 +759,19 @@ mod tests {
                 &[requirement(true)],
                 &[TrustDecisionV1::Missing]
             ),
-            "Next\n  Review the current code and permissions, then run:\n    shine trust grant sys/package-only"
+            "Next\n  For persistent authorization, review the current code and source, then run:\n    shine trust grant sys/package-only"
         );
     }
 
     #[test]
-    fn inspect_guidance_does_not_suggest_an_ungrantable_action() {
+    fn inspect_guidance_allows_missing_optional_statements() {
         assert_eq!(
             render_inspect_guidance(
                 "sys/package-only",
                 &[requirement(false)],
                 &[TrustDecisionV1::Missing]
             ),
-            "Next\n  Add a valid permission declaration to the sys/package-only Preset before granting trust."
+            "Next\n  For persistent authorization, review the current code and source, then run:\n    shine trust grant sys/package-only"
         );
     }
 
@@ -823,7 +801,7 @@ mod tests {
         );
 
         assert!(output.contains("Trust mode  development"));
-        assert!(output.contains("code changes allowed from enrolled source"));
+        assert!(output.contains("long-term authorization of future code from enrolled source"));
         assert!(output.contains("Local source  external:/presets/sys/ubuntu"));
         assert!(output.contains("development trusted [development_trusted]"));
     }
@@ -902,14 +880,14 @@ mod tests {
     }
 
     #[test]
-    fn list_does_not_report_a_missing_permission_declaration_as_current() {
+    fn list_reports_matching_grant_without_optional_statements_as_current() {
         let requirement = requirement(false);
         let grant = TrustGrantV1::for_reviewed_requirement(&requirement);
         let current = BTreeMap::from([("sys/package-only".to_string(), Some(vec![requirement]))]);
 
         let groups = build_list_groups(std::slice::from_ref(&grant), &current);
 
-        assert_eq!(groups[0].status, GrantListStatus::DeclarationMissing);
+        assert_eq!(groups[0].status, GrantListStatus::Current);
     }
 
     #[test]
@@ -949,7 +927,7 @@ mod tests {
 
         assert!(output.starts_with("External Code Trust · app/surge"));
         assert_eq!(output.matches("Code digest").count(), 1);
-        assert_eq!(output.matches("Permissions").count(), 1);
+        assert_eq!(output.matches("Author capability statements").count(), 1);
         assert!(output.contains("✗ app-hook       not trusted [external_code_trust_missing]"));
         assert!(output.contains("✓ app-generator  trusted [trusted]"));
         assert!(output.contains("    command\n      - bun"));
@@ -973,7 +951,7 @@ mod tests {
         assert!(output.contains("Scope 1"));
         assert!(output.contains("Scope 2"));
         assert_eq!(output.matches("Code digest").count(), 2);
-        assert_eq!(output.matches("Permissions").count(), 2);
+        assert_eq!(output.matches("Author capability statements").count(), 2);
     }
 
     #[test]

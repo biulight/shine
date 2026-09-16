@@ -43,11 +43,12 @@ use crate::install::{AppEntry, AppManifest};
 use crate::lifecycle::LifecycleOperation;
 use crate::permission::{PermissionDeclarationV1, PermissionPathBaseV1};
 use crate::plan::{
-    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, PermissionSetV1, PermissionV1,
-    PlanActionV1, PlanApprovalV1, PlanInputsV1, PlanOperationV1, PlanStepV1, PlanV1,
-    SnapshotDigestBuilderV1, SnapshotDigestV1,
+    CodeBoundaryV2, CodeEntryKindV2, CodeSourceV2, CodeTargetRoleV2, CodeTimingV2,
+    CodeTrustStateV2, EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1,
+    PermissionSetV1, PermissionV1, PlanActionV1, PlanApprovalV1, PlanInputsV1, PlanOperationV1,
+    PlanStepV1, PlanV1, SnapshotDigestBuilderV1, SnapshotDigestV1,
 };
-use crate::trust::TrustCapabilityV1;
+use crate::trust::{TRUST_GRANT_SCHEMA_VERSION, TrustCapabilityV1, TrustDecisionV1, TrustModeV1};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -200,6 +201,7 @@ impl StateCapture {
 struct PermissionAccumulator {
     required: Vec<PermissionV1>,
     declared: Vec<PermissionV1>,
+    author: Vec<PermissionV1>,
     uncomputable: BTreeSet<String>,
 }
 
@@ -215,6 +217,7 @@ impl PermissionAccumulator {
 
     fn declaration(&mut self, declaration: Option<&PermissionDeclarationV1>, missing: &str) {
         self.declaration_with_opaque_code(declaration, missing, true);
+        self.opaque_code_declaration(declaration, missing);
     }
 
     fn declaration_without_opaque_code(
@@ -228,27 +231,15 @@ impl PermissionAccumulator {
     fn opaque_code_declaration(
         &mut self,
         declaration: Option<&PermissionDeclarationV1>,
-        missing: &str,
+        _missing: &str,
     ) {
-        match declaration {
-            Some(declaration) => match declaration.permission_set() {
-                Ok(permissions) => {
-                    for permission in permissions
-                        .iter()
-                        .filter(|permission| matches!(permission, PermissionV1::OpaqueCode { .. }))
-                        .cloned()
-                    {
-                        self.required.push(permission.clone());
-                        self.declared.push(permission);
-                    }
-                }
-                Err(_) => {
-                    self.uncomputable.insert(missing.to_string());
-                }
-            },
-            None => {
-                self.uncomputable.insert(missing.to_string());
-            }
+        let opaque = PermissionV1::OpaqueCode {
+            scope: crate::plan::OpaqueCodeScopeV1::Unrestricted,
+        };
+        self.required.push(opaque.clone());
+        self.declared.push(opaque.clone());
+        if declaration.is_some_and(|declaration| declaration.opaque_code.is_some()) {
+            self.author.push(opaque);
         }
     }
 
@@ -258,22 +249,17 @@ impl PermissionAccumulator {
         missing: &str,
         include_opaque_code: bool,
     ) {
-        match declaration {
-            Some(declaration) => {
-                match declaration.permission_set_with_opaque_code(include_opaque_code) {
-                    Ok(permissions) => {
-                        for permission in permissions.iter().cloned() {
-                            self.required.push(permission.clone());
-                            self.declared.push(permission);
-                        }
-                    }
-                    Err(_) => {
-                        self.uncomputable.insert(missing.to_string());
+        if let Some(declaration) = declaration {
+            match declaration.permission_set_with_opaque_code(include_opaque_code) {
+                Ok(permissions) => {
+                    for permission in permissions.iter().cloned() {
+                        self.author.push(permission.clone());
+                        self.declared.push(permission);
                     }
                 }
-            }
-            None => {
-                self.uncomputable.insert(missing.to_string());
+                Err(_) => {
+                    self.uncomputable.insert(missing.to_string());
+                }
             }
         }
     }
@@ -292,13 +278,22 @@ impl PermissionAccumulator {
     fn merge(&mut self, other: Self) {
         self.required.extend(other.required);
         self.declared.extend(other.declared);
+        self.author.extend(other.author);
         self.uncomputable.extend(other.uncomputable);
     }
 
-    fn finish(self) -> (PermissionSetV1, PermissionSetV1, BTreeSet<String>) {
+    fn finish(
+        self,
+    ) -> (
+        PermissionSetV1,
+        PermissionSetV1,
+        PermissionSetV1,
+        BTreeSet<String>,
+    ) {
         (
             PermissionSetV1::new(self.required),
             PermissionSetV1::new(self.declared),
+            PermissionSetV1::new(self.author),
             self.uncomputable,
         )
     }
@@ -2700,6 +2695,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 ))
                                 .is_none_or(|bytes| !has_template_annotation(bytes))
                     });
+                let mut shared_snapshot_changes = false;
                 if untransformed_snapshot {
                     let prefix = format!("shell/{}/", category.name);
                     let expected = self
@@ -2718,6 +2714,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         .join("installed/shell")
                         .join(&category.name);
                     if !shell_snapshot_tree_current(self.host(), &destination, &expected).await? {
+                        shared_snapshot_changes = true;
                         if missing_entries
                             .iter()
                             .any(|entry| entry.category == category.name)
@@ -2787,6 +2784,51 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         );
                     }
                 }
+                if shared_snapshot_changes {
+                    let full_category = self
+                        .shell_categories(Some(&category.name))?
+                        .into_iter()
+                        .find(|candidate| candidate.name == category.name)
+                        .with_context(|| {
+                            format!("shell preset category not found: {}", category.name)
+                        })?;
+                    let selected_commands = category
+                        .files
+                        .iter()
+                        .map(|file| file.command_name.as_str())
+                        .collect::<BTreeSet<_>>();
+                    for installed in manifest.entries.iter().filter(|entry| {
+                        entry.category == category.name
+                            && !selected_commands.contains(entry.command.as_str())
+                    }) {
+                        let Some(file) = full_category
+                            .files
+                            .iter()
+                            .find(|file| file.command_name == installed.command)
+                        else {
+                            continue;
+                        };
+                        if !self.shell_command_trusted(&full_category, file)? {
+                            steps.push(
+                                PlanStepV1::new(
+                                    format!("shell/{}/{}", category.name, installed.command),
+                                    Some("shared-category-code"),
+                                    PlanActionV1::Blocked,
+                                )
+                                .with_diagnostic_code("shell_shared_code_target_trust_required"),
+                            );
+                        } else {
+                            steps.push(
+                                PlanStepV1::new(
+                                    format!("shell/{}/{}", category.name, installed.command),
+                                    Some("shared-category-code"),
+                                    PlanActionV1::Preserve,
+                                )
+                                .with_diagnostic_code("shell_shared_code_target_affected"),
+                            );
+                        }
+                    }
+                }
                 for file in &category.files {
                     let canonical = format!("shell/{}/{}", category.name, file.command_name);
                     let entry = manifest.find(&canonical);
@@ -2818,20 +2860,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         &mut state,
                         &mut file_permissions,
                     )?;
-                    if request.operation != LifecycleOperation::Uninstall
-                        && !self.shell_command_trusted(&category, file)?
-                    {
-                        steps.push(
-                            PlanStepV1::new(
-                                &canonical,
-                                Some("external-code-trust"),
-                                PlanActionV1::Blocked,
-                            )
-                            .with_diagnostic_code("shell_external_code_not_allowed"),
-                        );
-                        permissions.merge(file_permissions);
-                        continue;
-                    }
                     let managed = self
                         .shell_launcher_is_managed(&category.name, &file.command_name, entry)
                         .await?;
@@ -3073,6 +3101,27 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     };
                     if action == PlanActionV1::Create && !all_launcher_resources_absent {
                         action = PlanActionV1::Blocked;
+                    }
+                    if request.operation != LifecycleOperation::Uninstall
+                        && action != PlanActionV1::None
+                        && !self.shell_command_trusted(&category, file)?
+                    {
+                        steps.push(
+                            PlanStepV1::new(
+                                &canonical,
+                                Some("external-code-trust"),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code(
+                                if self.context().external_shell_mode == ExternalShellMode::Live {
+                                    "shell_live_requires_development_trust"
+                                } else {
+                                    "shell_external_code_not_allowed"
+                                },
+                            ),
+                        );
+                        permissions.merge(file_permissions);
+                        continue;
                     }
                     let first_time_creation = request.operation == LifecycleOperation::Install
                         && action == PlanActionV1::Create
@@ -3771,13 +3820,23 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .with_diagnostic_code("sys_profile_block_transaction")
                 .with_diagnostic_code("sys_profile_merge_recovery_unsupported");
         }
-        finish_specialized_plan(
+        let mut plan = finish_specialized_plan(
             self,
             operation,
             state,
             permissions,
             vec![state_step, profile_step],
-        )
+        )?;
+        let mut affected = enabled;
+        affected.insert(request.item_id.clone());
+        attach_sys_profile_boundaries(
+            self,
+            &mut plan,
+            &request.os_id,
+            &loaded.manifest,
+            &affected,
+        )?;
+        Ok(plan)
     }
 
     pub async fn plan_sys_bootstrap(&self, request: SysBootstrapPlanRequest) -> Result<PlanV1> {
@@ -3964,7 +4023,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         }
         permissions.merge(shared_permissions);
 
-        let (required, declared, uncomputable) = permissions.finish();
+        let (required, declared, author, uncomputable) = permissions.finish();
         let mut plan = PlanV1::new(
             PlanOperationV1::SysBootstrap,
             PlanInputsV1 {
@@ -3976,7 +4035,25 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             &declared,
             uncomputable,
         );
+        plan.author_capabilities = author;
+        attach_code_boundaries(self, &mut plan)?;
         plan.permission_scopes = permission_scopes;
+        let affected = run_manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.os_id == request.os_id && !entry.managed && entry.profile_enabled)
+            .map(|entry| entry.item_id.clone())
+            .chain(selected.iter().map(|item| item.id.clone()))
+            .collect();
+        if !selected.is_empty() {
+            attach_sys_profile_boundaries(
+                self,
+                &mut plan,
+                &request.os_id,
+                &loaded.manifest,
+                &affected,
+            )?;
+        }
         Ok(plan)
     }
 }
@@ -5293,8 +5370,8 @@ fn finish_plan<H>(
     permissions: PermissionAccumulator,
     steps: Vec<PlanStepV1>,
 ) -> Result<PlanV1> {
-    let (required, declared, uncomputable) = permissions.finish();
-    Ok(PlanV1::new(
+    let (required, declared, author, uncomputable) = permissions.finish();
+    let mut plan = PlanV1::new(
         operation,
         PlanInputsV1 {
             preset: runtime.presets().digest_v1()?,
@@ -5304,7 +5381,10 @@ fn finish_plan<H>(
         required,
         &declared,
         uncomputable,
-    ))
+    );
+    plan.author_capabilities = author;
+    attach_code_boundaries(runtime, &mut plan)?;
+    Ok(plan)
 }
 
 fn finish_specialized_plan<H>(
@@ -5314,8 +5394,8 @@ fn finish_specialized_plan<H>(
     permissions: PermissionAccumulator,
     steps: Vec<PlanStepV1>,
 ) -> Result<PlanV1> {
-    let (required, declared, uncomputable) = permissions.finish();
-    Ok(PlanV1::new(
+    let (required, declared, author, uncomputable) = permissions.finish();
+    let mut plan = PlanV1::new(
         operation,
         PlanInputsV1 {
             preset: runtime.presets().digest_v1()?,
@@ -5325,7 +5405,253 @@ fn finish_specialized_plan<H>(
         required,
         &declared,
         uncomputable,
-    ))
+    );
+    plan.author_capabilities = author;
+    attach_code_boundaries(runtime, &mut plan)?;
+    Ok(plan)
+}
+
+fn attach_code_boundaries<H>(runtime: &CoreRuntime<H>, plan: &mut PlanV1) -> Result<()> {
+    let mut boundaries = BTreeMap::<(String, CodeEntryKindV2), CodeBoundaryV2>::new();
+    for step in &plan.steps {
+        if step.action == PlanActionV1::None {
+            continue;
+        }
+        let resource = step.resource.as_deref().unwrap_or_default();
+        let classified = if step.target.starts_with("app/") {
+            if resource.starts_with("generator:") {
+                Some((
+                    CodeEntryKindV2::AppGenerator,
+                    TrustCapabilityV1::AppGenerator,
+                ))
+            } else if resource.starts_with("hook:") {
+                Some((CodeEntryKindV2::AppHook, TrustCapabilityV1::AppHook))
+            } else if resource.starts_with("artifact:") && resource != "artifact:preset-cache" {
+                Some((CodeEntryKindV2::AppArtifact, TrustCapabilityV1::AppArtifact))
+            } else {
+                None
+            }
+        } else if step.target.starts_with("shell/")
+            && step.target.split('/').count() == 3
+            && plan.operation != PlanOperationV1::Uninstall
+        {
+            Some((
+                CodeEntryKindV2::ShellCommand,
+                TrustCapabilityV1::ShellCommand,
+            ))
+        } else if step.target.starts_with("sys/") && resource == "bootstrap" {
+            Some((
+                CodeEntryKindV2::SysBootstrapScript,
+                TrustCapabilityV1::SysBootstrapScript,
+            ))
+        } else if step.target == "sys/profile" || resource == "profile-state" {
+            Some((
+                CodeEntryKindV2::SysProfileCode,
+                TrustCapabilityV1::SysProfileCode,
+            ))
+        } else {
+            None
+        };
+        let Some((entry_kind, capability)) = classified else {
+            continue;
+        };
+        let timing = if entry_kind == CodeEntryKindV2::ShellCommand
+            || entry_kind == CodeEntryKindV2::SysProfileCode
+        {
+            CodeTimingV2::DeliverForLater
+        } else {
+            CodeTimingV2::ExecuteNow
+        };
+        let (source, trust) = code_boundary_trust(runtime, &step.target, capability)?;
+        let target_role = if step.diagnostic_codes.iter().any(|code| {
+            code == "shell_shared_code_target_trust_required"
+                || code == "shell_shared_code_target_affected"
+        }) {
+            CodeTargetRoleV2::SharedResourceAffected
+        } else {
+            CodeTargetRoleV2::Selected
+        };
+        boundaries.insert(
+            (step.target.clone(), entry_kind),
+            CodeBoundaryV2 {
+                target: step.target.clone(),
+                entry_kind,
+                timing,
+                source,
+                trust,
+                unisolated: true,
+                target_role,
+                shared_resource: (entry_kind == CodeEntryKindV2::ShellCommand).then(|| {
+                    format!(
+                        "shell/{}/shared-category",
+                        step.target.split('/').nth(1).unwrap_or_default()
+                    )
+                }),
+            },
+        );
+    }
+    plan.code_boundaries = boundaries.into_values().collect();
+    Ok(())
+}
+
+fn attach_sys_profile_boundaries<H>(
+    runtime: &CoreRuntime<H>,
+    plan: &mut PlanV1,
+    os_id: &str,
+    manifest: &SysManifest,
+    affected: &BTreeSet<String>,
+) -> Result<()> {
+    plan.code_boundaries
+        .retain(|boundary| boundary.entry_kind != CodeEntryKindV2::SysProfileCode);
+    for item in manifest
+        .items
+        .iter()
+        .filter(|item| affected.contains(&item.id))
+    {
+        for requirement in runtime.sys_external_code_requirements(os_id, item)? {
+            let trust = if runtime
+                .operation_code_grants
+                .iter()
+                .any(|grant| grant.matches(&requirement))
+            {
+                CodeTrustStateV2::OperationConfirmation
+            } else {
+                match runtime.trust_decision(&requirement) {
+                    TrustDecisionV1::Trusted => CodeTrustStateV2::SnapshotTrusted,
+                    TrustDecisionV1::DevelopmentTrusted => CodeTrustStateV2::DevelopmentTrusted,
+                    _ => CodeTrustStateV2::MissingOrStale,
+                }
+            };
+            if requirement.capability == TrustCapabilityV1::SysProfileCode {
+                plan.code_boundaries.push(CodeBoundaryV2 {
+                    target: requirement.target,
+                    entry_kind: CodeEntryKindV2::SysProfileCode,
+                    timing: CodeTimingV2::DeliverForLater,
+                    source: CodeSourceV2::ExternalOrOverlay,
+                    trust,
+                    unisolated: true,
+                    target_role: CodeTargetRoleV2::Selected,
+                    shared_resource: Some(format!("sys/{os_id}/profile")),
+                });
+            } else {
+                for boundary in plan
+                    .code_boundaries
+                    .iter_mut()
+                    .filter(|boundary| boundary.target == requirement.target)
+                {
+                    boundary.source = CodeSourceV2::ExternalOrOverlay;
+                    boundary.trust = trust;
+                }
+            }
+        }
+        if (sys_item_has_executable_profile_code(item)
+            || sys_profile_base_code_present(runtime, os_id))
+            && !plan.code_boundaries.iter().any(|b| {
+                b.target == format!("sys/{}", item.id)
+                    && b.entry_kind == CodeEntryKindV2::SysProfileCode
+            })
+        {
+            plan.code_boundaries.push(CodeBoundaryV2 {
+                target: format!("sys/{}", item.id),
+                entry_kind: CodeEntryKindV2::SysProfileCode,
+                timing: CodeTimingV2::DeliverForLater,
+                source: CodeSourceV2::ShineDistribution,
+                trust: CodeTrustStateV2::Distribution,
+                unisolated: true,
+                target_role: CodeTargetRoleV2::Selected,
+                shared_resource: Some(format!("sys/{os_id}/profile")),
+            });
+        }
+    }
+    plan.code_boundaries
+        .sort_by(|a, b| (&a.target, a.entry_kind).cmp(&(&b.target, b.entry_kind)));
+    Ok(())
+}
+
+fn code_boundary_trust<H>(
+    runtime: &CoreRuntime<H>,
+    target: &str,
+    capability: TrustCapabilityV1,
+) -> Result<(CodeSourceV2, CodeTrustStateV2)> {
+    let requirement = if let Some(name) = target.strip_prefix("app/") {
+        runtime
+            .app_categories(Some(name))?
+            .into_iter()
+            .next()
+            .map(|category| runtime.app_external_code_requirements(&category))
+            .transpose()?
+            .unwrap_or_default()
+            .into_iter()
+            .find(|requirement| requirement.capability == capability)
+    } else if let Some(value) = target.strip_prefix("shell/") {
+        value
+            .split_once('/')
+            .and_then(|(category_name, command_name)| {
+                let category = runtime
+                    .shell_categories(Some(category_name))
+                    .ok()?
+                    .into_iter()
+                    .next()?;
+                let file = category
+                    .files
+                    .iter()
+                    .find(|file| file.command_name == command_name)?;
+                runtime
+                    .shell_external_code_requirements(&category, file)
+                    .ok()?
+                    .into_iter()
+                    .find(|requirement| requirement.capability == capability)
+            })
+    } else {
+        None
+    };
+    if let Some(requirement) = requirement {
+        let trust = if runtime
+            .operation_code_grants
+            .iter()
+            .any(|grant| grant.matches(&requirement))
+        {
+            CodeTrustStateV2::OperationConfirmation
+        } else {
+            match runtime.trust_decision(&requirement) {
+                TrustDecisionV1::Trusted => CodeTrustStateV2::SnapshotTrusted,
+                TrustDecisionV1::DevelopmentTrusted => CodeTrustStateV2::DevelopmentTrusted,
+                _ => CodeTrustStateV2::MissingOrStale,
+            }
+        };
+        return Ok((CodeSourceV2::ExternalOrOverlay, trust));
+    }
+    if runtime
+        .operation_code_grants
+        .iter()
+        .any(|grant| grant.target == target && grant.capability == capability)
+    {
+        return Ok((
+            CodeSourceV2::ExternalOrOverlay,
+            CodeTrustStateV2::OperationConfirmation,
+        ));
+    }
+    if runtime.context().is_external_presets {
+        let trust = runtime
+            .context()
+            .trust_grants
+            .iter()
+            .find(|grant| {
+                grant.schema_version == TRUST_GRANT_SCHEMA_VERSION
+                    && grant.target == target
+                    && grant.capability == capability
+            })
+            .map_or(CodeTrustStateV2::MissingOrStale, |grant| match grant.mode {
+                TrustModeV1::Snapshot => CodeTrustStateV2::SnapshotTrusted,
+                TrustModeV1::Development => CodeTrustStateV2::DevelopmentTrusted,
+            });
+        Ok((CodeSourceV2::ExternalOrOverlay, trust))
+    } else {
+        Ok((
+            CodeSourceV2::ShineDistribution,
+            CodeTrustStateV2::Distribution,
+        ))
+    }
 }
 
 fn validate_sys_bootstrap_request(request: &SysBootstrapPlanRequest) -> Result<()> {
@@ -7270,7 +7596,7 @@ permissions = { schema_version = 1 }
         );
         let script = &plan.permission_scopes[0].permissions.required;
         let package = &plan.permission_scopes[1].permissions.required;
-        assert!(script.contains(&PermissionV1::Command {
+        assert!(plan.author_capabilities.contains(&PermissionV1::Command {
             program: "curl".to_string()
         }));
         assert!(!package.contains(&PermissionV1::Command {
@@ -7350,18 +7676,14 @@ permissions = { schema_version = 1 }
     }
 
     #[tokio::test]
-    async fn sys_bootstrap_missing_permission_declaration_fails_closed() {
+    async fn sys_bootstrap_package_adapter_does_not_require_an_empty_declaration() {
         let runtime = runtime(bootstrap_snapshot(PresetSourceKind::External, false));
         let plan = runtime
             .plan_sys_bootstrap(bootstrap_request())
             .await
             .unwrap();
-        assert!(!plan.is_ready());
-        assert!(
-            plan.permissions
-                .uncomputable_codes
-                .contains("sys_bootstrap_permission_declaration_missing")
-        );
+        assert!(plan.is_ready());
+        assert!(plan.permissions.uncomputable_codes.is_empty());
     }
 
     #[tokio::test]
@@ -7659,8 +7981,7 @@ permissions = { schema_version = 1 }
                 })
         );
         assert!(
-            plan.permissions
-                .required
+            plan.author_capabilities
                 .iter()
                 .any(|permission| matches!(permission, PermissionV1::Network { .. }))
         );
@@ -10966,6 +11287,165 @@ target = '$HOME/.config/disabled.txt'
 
         trust_current_external_shell(&mut runtime);
         assert!(runtime.plan_shells(request).await.unwrap().is_ready());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_external_shell_requires_development_trust() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/external")
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n".to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        let mut runtime = external_shell_runtime(snapshot);
+        runtime.context_mut_for_cli().external_shell_mode = ExternalShellMode::Live;
+        let request = shell_install_request();
+
+        let blocked = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(!blocked.is_ready());
+        assert!(blocked.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_live_requires_development_trust".to_string())
+        }));
+
+        let requirements = runtime
+            .external_code_requirements("shell/demo/demo")
+            .await
+            .unwrap()
+            .requirements;
+        runtime.context_mut_for_cli().trust_grants = requirements
+            .iter()
+            .map(|requirement| {
+                crate::trust::TrustGrantV1::for_development_requirement(requirement).unwrap()
+            })
+            .collect();
+        assert!(runtime.plan_shells(request).await.unwrap().is_ready());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shared_snapshot_change_requires_trust_for_installed_siblings() {
+        fn snapshot(helper: &[u8]) -> PresetSnapshot {
+            PresetSnapshot::builder(PresetSourceKind::External)
+                .file(
+                    "shell/demo/shine.toml",
+                    b"[[files]]\nsource = 'a.sh'\ntarget = 'a'\n\n[[files]]\nsource = 'b.sh'\ntarget = 'b'\n"
+                        .to_vec(),
+                )
+                .file("shell/demo/a.sh", b"#!/bin/sh\necho a\n".to_vec())
+                .file("shell/demo/b.sh", b"#!/bin/sh\necho b\n".to_vec())
+                .file("shell/demo/helper.data", helper.to_vec())
+                .build()
+        }
+
+        let previous = external_shell_runtime(snapshot(b"before"));
+        let host = previous.host().clone();
+        let context = previous.context().clone();
+        let deployed = context.shine_dir.join("installed/shell/demo");
+        for (name, bytes) in [
+            (
+                "shine.toml",
+                previous.presets().get("shell/demo/shine.toml").unwrap(),
+            ),
+            ("a.sh", previous.presets().get("shell/demo/a.sh").unwrap()),
+            ("b.sh", previous.presets().get("shell/demo/b.sh").unwrap()),
+            (
+                "helper.data",
+                previous.presets().get("shell/demo/helper.data").unwrap(),
+            ),
+        ] {
+            host.put_file(deployed.join(name), bytes.to_vec());
+        }
+        let entries = ["a", "b"]
+            .into_iter()
+            .map(|command| ShellManifestEntry {
+                category: "demo".to_string(),
+                command: command.to_string(),
+                mode: ExternalShellMode::Snapshot,
+                source_path: deployed.join(format!("{command}.sh")),
+                rendered_path: context
+                    .shine_dir
+                    .join(format!("rendered/shell/demo/{command}.sh")),
+                runtime: "native".to_string(),
+                bun_dependencies: None,
+                dependency_hash: None,
+                transforms: Vec::new(),
+                env: Vec::new(),
+                needs_source: false,
+                content_hash: 1,
+            })
+            .collect();
+        host.put_file(
+            context.shine_dir.join("shell-manifest.toml"),
+            toml::to_string(&ShellManifest {
+                schema_version: super::super::SHELL_MANIFEST_SCHEMA_VERSION,
+                entries,
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+
+        let mut changed = CoreRuntime::new(host, context, snapshot(b"after"));
+        let a_requirement = changed
+            .external_code_requirements("shell/demo/a")
+            .await
+            .unwrap()
+            .requirements
+            .remove(0);
+        changed
+            .context_mut_for_cli()
+            .trust_grants
+            .retain(|grant| grant.target != "shell/demo/a");
+        changed.context_mut_for_cli().trust_grants.push(
+            crate::trust::TrustGrantV1::for_reviewed_requirement(&a_requirement),
+        );
+
+        let plan = changed
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo/a".to_string()),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.target == "shell/demo/b"
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_shared_code_target_trust_required".to_string())
+        }));
+
+        let b_requirement = changed
+            .external_code_requirements("shell/demo/b")
+            .await
+            .unwrap()
+            .requirements
+            .remove(0);
+        changed.context_mut_for_cli().trust_grants.push(
+            crate::trust::TrustGrantV1::for_reviewed_requirement(&b_requirement),
+        );
+        let ready = changed
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo/a".to_string()),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(ready.is_ready());
+        assert!(ready.code_boundaries.iter().any(|boundary| {
+            boundary.target == "shell/demo/b"
+                && boundary.target_role == CodeTargetRoleV2::SharedResourceAffected
+                && boundary.shared_resource.as_deref() == Some("shell/demo/shared-category")
+        }));
     }
 
     #[tokio::test]

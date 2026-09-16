@@ -8,8 +8,8 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
 
 1. Prefer `shine.toml` metadata over legacy source annotations for new presets.
 2. Keep commands, identifiers, and platform constraints explicit in metadata.
-3. Treat external preset and overlay code as untrusted unless the corresponding config permission
-   has a matching target-scoped trust grant.
+3. Treat every external or overlay executable entry as untrusted until it has a matching
+   target-scoped trust grant; permission-table presence does not change this classification.
 4. Keep generated output deterministic. Never print credentials, source URLs containing secrets, or
    raw subscription records in diagnostics.
 5. `cli/build.rs` must retain `cargo:rerun-if-changed=presets`; a normal Cargo rebuild then
@@ -29,13 +29,14 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
     bounded synthetic observations but never executable setup/teardown, actual credentials, or private machine paths.
 12. When a bundle is requested, build it with `shine preset pack`, outside the category. Fix every policy
     diagnostic; `--force` controls output replacement only.
-13. Keep versioned permission declarations at the execution target boundary: one App category
-   table, one table per Shell file/platform variant, and one table per Sys item. Schema-v2
-   `opaque_code = "unrestricted"` is allowed only when effects cannot be enumerated honestly;
-   environment inputs/sensitivity and administrator requirements stay explicit. Shell and Sys may
-   use category `permission_defaults`, with entry declarations replacing the default. Expect the
-   `unrestricted_opaque_code` lint warning and verify the bundle risk marker. Never place argv,
-   values, ciphertext, credentials, or physical checkout paths in declarations.
+13. Capability declarations are optional, target-local author statements. Do not repeat commands,
+   script paths, or managed destinations already expressed by typed metadata, and do not add empty
+   tables. Keep environment inputs/sensitivity and Administrator requirements explicit whenever
+   Shine injects or elevates them. Shell and Sys may use category `permission_defaults`, with entry
+   declarations replacing the default. Schema-v2 `opaque_code = "unrestricted"` remains accepted
+   for compatibility, but all arbitrary code is classified as unisolated independently. Bundle v3
+   reports that classification and the author-statement source. Never place argv, values,
+   ciphertext, credentials, or physical checkout paths in declarations.
 14. After changing a built-in App destination or App/Shell file selector, run
    `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`
    and commit both regenerated public-manual blocks.

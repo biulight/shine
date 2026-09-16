@@ -17,11 +17,12 @@ directory. Use the installed template through the skill's isolated scaffolding w
 Command names must be plain filenames and unique within every platform branch.
 Keep all sources inside the category; do not use absolute paths or `..`.
 
-Every `[[files]]` command has its own `[files.permissions]` table with
-`schema_version = 1`. Platform variants of the same command declare separately.
-Record program identities without argv and environment names without values;
-classify every environment entry as `plain` or `secret`. Standard launcher,
-snapshot, receipt, and profile ownership remains derived from Shell metadata.
+Each `[[files]]` command may have its own `[files.permissions]` table. Do not add
+an empty table or repeat its runtime or source path. Optional capability entries
+are unverified review context. Environment names used by `env` remain explicit,
+without values, and each is classified `plain` or `secret`. Standard launcher,
+snapshot, receipt, profile ownership, and unisolated-code classification are derived
+from Shell metadata. Every external/overlay command requires target-scoped trust.
 
 ## Bun and transforms
 

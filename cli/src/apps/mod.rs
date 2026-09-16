@@ -51,10 +51,10 @@ description = "My app configuration."
 dest = "~/.config/my-app"
 # Optional category platform destination. Exact OS keys override the Unix fallback:
 # dest = { macos = "~/Library/Application Support/My App", linux = "~/.config/my-app", windows = "~/AppData/Roaming/My App", unix = "~/.config/my-app" }
-
-[permissions]
-schema_version = 1
-# Additional capabilities not already bounded by typed destination metadata:
+# Optional author capability notes. Shine derives managed file operations from typed metadata;
+# these notes do not restrict arbitrary code:
+# [permissions]
+# schema_version = 1
 # commands = ["bun"]
 # network = [{ scope = "host", host = "api.example.com" }]
 # environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
@@ -89,9 +89,8 @@ pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()>
 
 fn init_template(unrestricted: bool) -> String {
     if unrestricted {
-        APP_TEMPLATE.replace(
-            "[permissions]\nschema_version = 1",
-            "[permissions]\nschema_version = 2\nopaque_code = \"unrestricted\"",
+        format!(
+            "{APP_TEMPLATE}\n[permissions]\nschema_version = 2\nopaque_code = \"unrestricted\"\n"
         )
     } else {
         APP_TEMPLATE.to_string()
@@ -489,13 +488,7 @@ mod tests {
             categories[0].destination_root.as_deref(),
             Some("~/.config/my-app")
         );
-        assert_eq!(
-            categories[0]
-                .permissions
-                .as_ref()
-                .map(|permissions| permissions.schema_version),
-            Some(1)
-        );
+        assert!(categories[0].permissions.is_none());
         assert_eq!(
             categories[0].files[0].source_rel,
             PathBuf::from("config.toml")

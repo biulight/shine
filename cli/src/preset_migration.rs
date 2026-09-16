@@ -1184,7 +1184,7 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_summary_defers_the_single_next_command_to_the_failure() {
+    fn missing_optional_capability_statements_need_no_migration() {
         let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::External)
             .base_root("/presets")
             .file(
@@ -1196,22 +1196,15 @@ mod tests {
         let plan = plan_preset_migration(&snapshot, "active", None, None);
 
         let summary = compatibility_text(&plan);
-        let failure = compatibility_failure_message(&plan);
         let detailed = migration_text(&plan, &snapshot, None, true);
 
-        assert!(summary.contains("shell/chrome/open-chrome (external)"));
-        assert!(summary.contains("code: manual_permission_review_required"));
-        assert!(!summary.contains("[manual_permission_review_required]"));
-        assert!(!summary.contains("preset migrate --dry-run"));
-        assert_eq!(failure.matches("preset migrate --dry-run").count(), 1);
-        assert!(failure.contains("1 blocker"));
-        assert!(failure.contains("\n\nNext:\n  shine preset migrate --dry-run"));
-        assert!(detailed.contains("1 blocker · 0 automatic changes · 0 advisories"));
-        assert!(!detailed.contains("1 blockers"));
+        assert!(summary.is_empty());
+        assert!(!compatibility_required(&plan));
+        assert!(detailed.contains("0 blockers · 0 automatic changes · 0 advisories"));
     }
 
     #[test]
-    fn detailed_shell_remediation_groups_commands_and_never_suggests_trust() {
+    fn shell_without_capability_tables_needs_no_remediation() {
         let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::External)
             .base_root("/preset root")
             .file(
@@ -1225,25 +1218,13 @@ mod tests {
 
         let output = migration_text(&plan, &snapshot, None, true);
 
-        assert_eq!(output.matches("  shell/chrome (external)").count(), 1);
-        assert_eq!(output.matches("shine preset validate").count(), 1);
-        assert_eq!(output.matches("shine preset plan").count(), 1);
-        let manifest = snapshot
-            .origin("shell/chrome/shine.toml")
-            .and_then(|origin| origin.physical_path.as_deref())
-            .expect("external snapshot manifest has a physical path");
-        let quoted = quote_command_arg(manifest, RuntimePlatform::current());
-        assert!(output.contains(&format!("shine preset validate {quoted}")));
-        assert!(output.contains(&format!(
-            "shine preset plan {quoted} --platform {}",
-            RuntimePlatform::current().as_str()
-        )));
-        assert!(output.contains("2 blockers · 0 automatic changes · 0 advisories"));
+        assert!(output.contains("0 blockers · 0 automatic changes · 0 advisories"));
+        assert!(!output.contains("shine preset validate"));
         assert!(!output.contains("shine trust"));
     }
 
     #[test]
-    fn detailed_app_and_sys_remediation_suggests_trust_only_for_executable_code() {
+    fn executable_code_without_capability_tables_needs_no_metadata_migration() {
         let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::External)
             .base_root("/presets")
             .file(
@@ -1261,16 +1242,12 @@ mod tests {
 
         let output = migration_text(&plan, &snapshot, None, true);
 
-        assert!(output.contains("shine trust inspect app/demo"));
-        assert!(output.contains("shine trust grant app/demo"));
-        assert!(output.contains("shine trust inspect sys/scripted"));
-        assert!(output.contains("shine trust grant sys/scripted"));
-        assert!(!output.contains("shine trust inspect sys/package-only"));
-        assert!(!output.contains("shine trust grant sys/package-only"));
+        assert!(output.contains("0 blockers · 1 automatic change · 0 advisories"));
+        assert!(!output.contains("shine trust"));
     }
 
     #[test]
-    fn managed_overlay_remediation_never_suggests_editing_the_mirror() {
+    fn managed_overlay_missing_capability_tables_needs_no_remediation() {
         let root = Path::new("/managed overlay");
         let snapshot = PresetSnapshot::builder(shine_core::runtime::PresetSourceKind::Embedded)
             .overlay_root(root)
@@ -1289,14 +1266,9 @@ mod tests {
 
         let output = migration_text(&plan, &snapshot, Some(root), true);
 
-        assert!(output.contains("upstream checkout"));
-        assert_eq!(output.matches("shine preset pull").count(), 1);
-        assert!(output.contains("    ✗ shell/chrome/open-chrome\n      Shell command"));
-        assert!(output.contains("      code: manual_permission_review_required"));
-        assert_eq!(output.matches("    Fix:\n").count(), 2);
-        assert!(output.contains("  Next:\n    Commit the upstream changes, then run:"));
-        assert!(!output.contains("Edit: /managed overlay"));
-        assert!(!output.contains("shine preset validate"));
+        assert!(output.contains("0 blockers · 0 automatic changes · 0 advisories"));
+        assert!(!output.contains("upstream checkout"));
+        assert!(!output.contains("shine preset pull"));
     }
 
     #[test]
@@ -1365,7 +1337,7 @@ mod tests {
         assert!(applied);
         let migrated = tokio::fs::read_to_string(&metadata).await.unwrap();
         assert!(migrated.contains("metadata_schema_version = 2"));
-        assert!(migrated.contains("[permissions]"));
+        assert!(!migrated.contains("[permissions]"));
         let backups = state.join("preset-migration-backups");
         assert!(backups.is_dir());
         let mut sets = tokio::fs::read_dir(&backups).await.unwrap();

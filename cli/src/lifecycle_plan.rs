@@ -3,6 +3,7 @@ use crate::env::EnvConfig;
 use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 use shine_core::plan::{
+    CodeEntryKindV2, CodeSourceV2, CodeTargetRoleV2, CodeTimingV2, CodeTrustStateV2,
     EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, OpaqueCodeScopeV1, PermissionV1,
     PlanActionV1, PlanV1,
 };
@@ -192,6 +193,8 @@ async fn review_plans_with_render_mode(
     yes: bool,
     render_mode: PlanRenderMode,
 ) -> Result<Vec<ReviewedLifecyclePlan>> {
+    let code_confirmation =
+        !yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let config_digest = active_config_digest(config).await?;
     let mut runtime = runtime_with_env(config).await?;
     let mut planned = Vec::new();
@@ -201,13 +204,17 @@ async fn review_plans_with_render_mode(
     let mut blocked_diagnostics = std::collections::BTreeSet::new();
     for request in requests {
         request.configure_runtime(&mut runtime);
-        let trusted = shine_core::frontend::FrontendService::new(runtime)
+        let mut trusted = shine_core::frontend::FrontendService::new(runtime)
             .with_configuration_revision(Some(config_digest.clone()))
             .into_trusted();
-        let human_review = trusted
-            .review(request.service_request())
-            .await
-            .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+        let human_review = if code_confirmation {
+            trusted
+                .review_with_code_confirmation(request.service_request())
+                .await
+        } else {
+            trusted.review(request.service_request()).await
+        }
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
         let plan = human_review.report().plan.clone();
         human_reviews.push(human_review);
         runtime = trusted.into_runtime();
@@ -217,6 +224,9 @@ async fn review_plans_with_render_mode(
                 .iter()
                 .flat_map(|step| step.diagnostic_codes.iter().cloned()),
         );
+        needs_confirmation |= plan.code_boundaries.iter().any(|boundary| {
+            boundary.trust == shine_core::plan::CodeTrustStateV2::OperationConfirmation
+        });
         needs_confirmation |= plan.steps.iter().any(|step| {
             matches!(
                 step.action,
@@ -287,7 +297,7 @@ async fn review_plans_with_render_mode(
             bail!("security Plan approval requires an interactive terminal or explicit --yes");
         }
         let confirmed = dialoguer::Confirm::new()
-            .with_prompt("Apply this security Plan?")
+            .with_prompt("Apply this Plan, including use of its listed external code? No persistent trust will be saved.")
             .default(false)
             .interact()?;
         if !confirmed {
@@ -300,9 +310,12 @@ async fn review_plans_with_render_mode(
         .map(|((request, _), human_review)| {
             Ok(ReviewedLifecyclePlan {
                 request,
-                approved: human_review
-                    .approve_after_human_confirmation()
-                    .map_err(shine_core::frontend::FrontendServiceError::into_source)?,
+                approved: if yes {
+                    human_review.approve_for_automation()
+                } else {
+                    human_review.approve_after_human_confirmation()
+                }
+                .map_err(shine_core::frontend::FrontendServiceError::into_source)?,
             })
         })
         .collect()
@@ -400,7 +413,10 @@ fn blocked_plan_error(
             step.diagnostic_codes.iter().any(|code| {
                 matches!(
                     code.as_str(),
-                    "app_external_code_not_allowed" | "shell_external_code_not_allowed"
+                    "app_external_code_not_allowed"
+                        | "shell_external_code_not_allowed"
+                        | "shell_live_requires_development_trust"
+                        | "shell_shared_code_target_trust_required"
                 )
             })
         })
@@ -493,6 +509,7 @@ pub(crate) async fn prepare_runtime(
     let trusted = shine_core::frontend::FrontendService::new(runtime)
         .with_configuration_revision(Some(revision))
         .into_trusted();
+    let trusted = trusted.with_approved_code(&reviewed.approved);
     trusted
         .validate_approved(&reviewed.approved)
         .await
@@ -587,6 +604,7 @@ fn render_compact_plan_lines(
             crate::colors::bold_cyan(request.section_label())
         ));
         lines.extend(render_compact_steps(plan));
+        lines.extend(render_code_boundaries(plan, "    "));
         lines.extend(render_compact_permissions(plan));
         lines.push(crate::colors::dim(&format!(
             "    Identity  preset {} · config {} · state {} · plan {}",
@@ -731,6 +749,15 @@ fn render_compact_permissions(plan: &PlanV1) -> Vec<String> {
             for value in values {
                 lines.push(format!("        - {value}"));
             }
+        }
+    }
+    if !plan.author_capabilities.is_empty() {
+        lines.push(format!(
+            "    {}",
+            crate::colors::bold("Author capability statement (unverified)")
+        ));
+        for permission in plan.author_capabilities.iter() {
+            lines.push(format!("      - {}", permission_name(permission)));
         }
     }
     if !plan.permissions.missing_declarations.is_empty() {
@@ -897,6 +924,7 @@ fn render_bootstrap_plan_lines(
             lines.push(format!("    {} {message}", crate::colors::yellow("!")));
         }
     }
+    lines.extend(render_code_boundaries(plan, "  "));
     lines.push(format!("\n  {}", crate::colors::bold("Bootstrap items")));
     let mut item_index = 0;
     for step in &plan.steps {
@@ -1107,12 +1135,22 @@ fn render_plan_lines(plan: &PlanV1, config_digest: &str) -> Result<Vec<String>> 
             diagnostics
         ));
     }
+    lines.extend(render_code_boundaries(plan, "  "));
     lines.push(format!("  {}", crate::colors::bold("Required permissions")));
     if plan.permissions.required.is_empty() {
         lines.push(format!("    {}", crate::colors::dim("- none")));
     }
     for permission in plan.permissions.required.iter() {
         lines.push(format!("    - {}", permission_name(permission)));
+    }
+    if !plan.author_capabilities.is_empty() {
+        lines.push(format!(
+            "  {}",
+            crate::colors::bold("Author capability statement (unverified)")
+        ));
+        for permission in plan.author_capabilities.iter() {
+            lines.push(format!("    - {}", permission_name(permission)));
+        }
     }
     for permission in plan.permissions.missing_declarations.iter() {
         lines.push(format!(
@@ -1132,6 +1170,66 @@ fn render_plan_lines(plan: &PlanV1, config_digest: &str) -> Result<Vec<String>> 
         plan.fingerprint()?.as_hex()
     ));
     Ok(lines)
+}
+
+fn render_code_boundaries(plan: &PlanV1, indent: &str) -> Vec<String> {
+    if plan.code_boundaries.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!(
+        "{indent}{}",
+        crate::colors::bold("Code execution and trust")
+    )];
+    for boundary in &plan.code_boundaries {
+        let kind = match boundary.entry_kind {
+            CodeEntryKindV2::AppHook => "app hook",
+            CodeEntryKindV2::AppGenerator => "app generator",
+            CodeEntryKindV2::AppArtifact => "app artifact",
+            CodeEntryKindV2::ShellCommand => "shell command",
+            CodeEntryKindV2::SysBootstrapScript => "system bootstrap script",
+            CodeEntryKindV2::SysProfileCode => "system profile code",
+        };
+        let timing = match boundary.timing {
+            CodeTimingV2::ExecuteNow => "executes during this operation",
+            CodeTimingV2::DeliverForLater => "delivered for later execution/source",
+        };
+        let source = match boundary.source {
+            CodeSourceV2::ShineDistribution => "Shine distribution",
+            CodeSourceV2::ExternalOrOverlay => "external/overlay Preset",
+        };
+        let trust = match boundary.trust {
+            CodeTrustStateV2::Distribution => "distribution trust",
+            CodeTrustStateV2::SnapshotTrusted => "snapshot trusted",
+            CodeTrustStateV2::OperationConfirmation => {
+                "requires your confirmation for this operation only"
+            }
+            CodeTrustStateV2::DevelopmentTrusted => "development trusted; source may change",
+            CodeTrustStateV2::MissingOrStale => "trust missing or stale",
+        };
+        let role = match boundary.target_role {
+            CodeTargetRoleV2::Selected => "selected target",
+            CodeTargetRoleV2::SharedResourceAffected => "affected by shared code",
+        };
+        lines.push(format!(
+            "{indent}  - {} · {role} · {kind} · {timing} · {source} · {trust}",
+            boundary.target
+        ));
+    }
+    lines.push(format!(
+        "{indent}  {}",
+        crate::colors::yellow("! This operation contains unisolated code. It can use the process's existing system access; author capability statements are not file, network, or command restrictions, and Shine does not verify that they describe all behavior.")
+    ));
+    if plan
+        .code_boundaries
+        .iter()
+        .any(|boundary| boundary.entry_kind == CodeEntryKindV2::ShellCommand)
+    {
+        lines.push(format!(
+            "{indent}  {}",
+            crate::colors::yellow("! This review covers installing or updating the code. Shine does not intercept each action when the command is later run or sourced.")
+        ));
+    }
+    lines
 }
 
 pub(crate) fn action_name(action: PlanActionV1) -> &'static str {

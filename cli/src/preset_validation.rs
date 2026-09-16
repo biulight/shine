@@ -582,7 +582,7 @@ platforms = ["macos"]
     }
 
     #[tokio::test]
-    async fn missing_permission_declarations_warn_without_blocking_compatibility() {
+    async fn missing_optional_capability_statements_are_clean() {
         let root = fixture_root("preset-validation-permission-warning").await;
         let category = root.join("app/editor");
         write(
@@ -593,11 +593,8 @@ platforms = ["macos"]
 
         let report = validate_path(&category).await;
         assert!(report.valid, "{report:#?}");
-        assert_eq!(report.summary.warnings, 1);
-        assert_eq!(
-            report.categories[0].diagnostics[0].code,
-            "missing_permission_declaration"
-        );
+        assert_eq!(report.summary.warnings, 0);
+        assert!(report.categories[0].diagnostics.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 

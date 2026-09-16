@@ -17,17 +17,12 @@ target = "usetproxy"
 needs_source = true
 platforms = ["unix"]
 
-[files.permissions]
-schema_version = 1
-
 [[files]]
 source = "set_proxy.ps1"
 target = "setproxy"
 needs_source = true
 platforms = ["windows"]
 
-[files.permissions]
-schema_version = 1
 network = [{ scope = "any" }]
 commands = ["Get-NetTCPConnection", "Test-NetConnection"]
 

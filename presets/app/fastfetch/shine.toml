@@ -1,6 +1,3 @@
 metadata_schema_version = 2
 description = "Fastfetch system information tool configuration."
 dest = "~/.config/fastfetch"
-
-[permissions]
-schema_version = 1

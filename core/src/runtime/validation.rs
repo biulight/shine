@@ -259,13 +259,10 @@ fn validate_app_permissions(
             path,
         ));
     }
-    match table.get("permissions") {
-        Some(value) => {
-            if let Some(diagnostic) = validate_permission_value(value, &target, path) {
-                diagnostics.push(diagnostic);
-            }
-        }
-        None => diagnostics.push(missing_permission_diagnostic(&target, path)),
+    if let Some(value) = table.get("permissions")
+        && let Some(diagnostic) = validate_permission_value(value, &target, path)
+    {
+        diagnostics.push(diagnostic);
     }
     if table
         .get("files")
@@ -341,29 +338,17 @@ fn validate_shell_permissions(
     let Some(files) = table.get("files").and_then(toml::Value::as_array) else {
         return diagnostics;
     };
-    for (index, file) in files.iter().enumerate() {
+    for file in files {
         let identity = file
             .get("target")
             .or_else(|| file.get("source"))
             .and_then(toml::Value::as_str)
             .unwrap_or("unknown");
         let target = format!("shell/{}/{identity}", category.name);
-        match file.get("permissions") {
-            Some(value) => {
-                if let Some(diagnostic) = validate_permission_value(value, &target, path) {
-                    diagnostics.push(diagnostic);
-                }
-            }
-            None if defaults.is_none() => diagnostics.push(PresetDiagnostic {
-                severity: PresetDiagnosticSeverity::Warning,
-                code: "missing_permission_declaration".to_string(),
-                message: format!(
-                    "{target} (`[[files]]` entry {}) has no versioned permission declaration; compatibility execution is unchanged",
-                    index + 1
-                ),
-                path: Some(path.to_path_buf()),
-            }),
-            None => {}
+        if let Some(value) = file.get("permissions")
+            && let Some(diagnostic) = validate_permission_value(value, &target, path)
+        {
+            diagnostics.push(diagnostic);
         }
     }
     diagnostics
@@ -398,28 +383,16 @@ fn validate_sys_permissions(
     let Some(items) = table.get("items").and_then(toml::Value::as_array) else {
         return diagnostics;
     };
-    for (index, item) in items.iter().enumerate() {
+    for item in items {
         let identity = item
             .get("id")
             .and_then(toml::Value::as_str)
             .unwrap_or("unknown");
         let target = format!("sys/{identity}");
-        match item.get("permissions") {
-            Some(value) => {
-                if let Some(diagnostic) = validate_permission_value(value, &target, path) {
-                    diagnostics.push(diagnostic);
-                }
-            }
-            None if defaults.is_none() => diagnostics.push(PresetDiagnostic {
-                severity: PresetDiagnosticSeverity::Warning,
-                code: "missing_permission_declaration".to_string(),
-                message: format!(
-                    "{target} (`[[items]]` entry {}) has no versioned permission declaration; compatibility execution is unchanged",
-                    index + 1
-                ),
-                path: Some(path.to_path_buf()),
-            }),
-            None => {}
+        if let Some(value) = item.get("permissions")
+            && let Some(diagnostic) = validate_permission_value(value, &target, path)
+        {
+            diagnostics.push(diagnostic);
         }
     }
     diagnostics
@@ -445,17 +418,6 @@ fn validate_permission_value(
     declaration.validate().err().map(|error| {
         permission_error_diagnostic(error.diagnostic_code(), format!("{target}: {error}"), path)
     })
-}
-
-fn missing_permission_diagnostic(target: &str, path: &Path) -> PresetDiagnostic {
-    PresetDiagnostic {
-        severity: PresetDiagnosticSeverity::Warning,
-        code: "missing_permission_declaration".to_string(),
-        message: format!(
-            "{target} has no versioned permission declaration; compatibility execution is unchanged"
-        ),
-        path: Some(path.to_path_buf()),
-    }
 }
 
 fn permission_error_diagnostic(code: &str, message: String, path: &Path) -> PresetDiagnostic {
@@ -1006,8 +968,7 @@ mod tests {
             .build();
 
         let diagnostics = permission_declaration_diagnostics(&snapshot, &category);
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].code, "missing_permission_declaration");
+        assert!(diagnostics.is_empty());
 
         let invalid = PresetSnapshot::builder(PresetSourceKind::External)
             .file(

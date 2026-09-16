@@ -10,8 +10,9 @@ records the cross-module sequences and their gotchas.
 `runtime::planner` consumes one immutable `PresetSnapshot`, a validated App/Shell/managed Sys,
 exact Sys bootstrap, App refresh/artifact, or Sys profile request, captured runtime inputs,
 manifests, receipts, and live resource observations. It emits
-ordered semantic steps plus a required permission set; missing declarations, uncomputable
-permissions, or a blocked step make the Plan non-ready. Planning cannot invoke host mutation or
+ordered semantic steps plus derived permissions, optional author capability statements, and typed
+code boundaries. Missing environment/elevation contracts, uncomputable structured requirements, or
+a blocked step make the Plan non-ready. Planning cannot invoke host mutation or
 Preset code, and its output carries no content, env values, secret plaintext, raw errors, or raw
 command arguments.
 
@@ -26,13 +27,15 @@ values contribute hashes; secrets contribute only caller-supplied opaque handles
 validated target + immutable Preset snapshot
     → observation-only manifest/receipt/live-state capture
     → ownership and lifecycle assessment
-    → merge typed effects + explicit target permissions
+    → derive typed effects + retain optional author statements
+    → classify triggered unisolated code and evaluate target trust
     → ordered payload-free PlanV1 + state/Preset digests
 ```
 
-Generator, hook, artifact, bootstrap, and profile-code triggers are modeled as conservative
-`execute` plus potential resource steps; the code is never run during planning and missing or stale
-target-scoped trust remains a blocker. A supported receipt can drive uninstall after source
+Generator, hook, artifact, Shell delivery, bootstrap, and profile-code triggers are modeled as
+unisolated code boundaries plus conservative semantic steps. Classification never depends on an
+author's `opaque_code` field. Code is never run during planning and missing or stale target-scoped
+trust remains a blocker for external code delivery/execution. A supported receipt can drive uninstall after source
 disappearance, but cannot recreate missing teardown code.
 CLI review creates approval for one exact ready Plan. Apply deliberately follows:
 
@@ -58,23 +61,20 @@ bootstrap review; `--verbose` expands identities and diagnostic codes (ADR 0086)
 materialization, profile write, or receipt mutation. Its existing domain report remains separate
 from `LifecycleResultV1`.
 
-Permission declarations are parsed from the same immutable snapshot: one App category
-table, one table per Shell command/platform variant, and one table per Sys item. Static validation
-checks version, placement, structured paths, payload-free identities, and duplicates without
-executing Preset code. Typed metadata continues to describe Core-bounded effects; explicit tables
-record additional capabilities. Pure planners combine both sources into the required/declared
-resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
-protected execution fails closed.
+Capability statements are parsed from the same immutable snapshot: one App category table, one
+table per Shell command/platform variant, and one table per Sys item. Static validation checks
+version, placement, structured paths, payload-free identities, and duplicates without executing
+Preset code. Typed metadata describes Core-bounded effects; explicit command, filesystem, network,
+and system entries remain unverified author statements. Their absence does not block planning.
+Environment input identities and Administrator authorization keep executor semantics, so a missing
+required contract remains non-ready. Shell/Sys defaults resolve per target before fingerprinting.
 
-Schema v2 additionally represents unenumerated opaque-code effects as one unrestricted identity.
-Permission resolution treats it as coverage for opaque command, filesystem, network, and system
-requirements while retaining explicit environment identities and administrator authorization.
-Shell/Sys category defaults resolve to each selected target before Plan scopes and fingerprints are
-built. App contributes the identity only when an executable surface is triggered. The `preset`
-trust target enumerates current requirements and persists separate per-target grants. The default
-mode binds exact code. An explicit `--development` grant instead binds each target and capability to
-the exact permission set and current local source-root identity, allowing code digest changes from
-that source while continuing to reject source, layer, or permission changes.
+Core classifies triggered App, Shell and Sys executable entries independently of permission fields.
+The compatible v2 unrestricted identity is an author statement and cannot alter classification.
+The `preset` trust target enumerates current requirements and persists separate per-target grants.
+Snapshot grants bind the complete effective category files, bytes and source layers. An explicit
+`--development` grant binds the target/capability and current local source-root/layer
+identity while allowing content changes. Schema v1 grants require review again.
 
 ## Shell availability and ownership inspection
 
@@ -271,12 +271,13 @@ category → immutable validation → physical policy scan
 ## Scoped external-code trust
 
 `core::runtime::trust` derives requirements only from the immutable logical Preset snapshot. Each
-requirement binds a canonical App/Sys target, capability kind, digest of the relevant code inputs
-and effective trust layers, and the exact target permission set. `core::trust::evaluate_trust`
+requirement binds a canonical App/Shell/Sys target, capability kind, digest of the complete effective
+category snapshot and source layers, and the target/capability identity.
+`core::trust::evaluate_trust`
 matches that requirement against versioned grants without consulting project configuration.
 
 ```text
-immutable code inputs + trust layers + declared permissions
+complete effective category snapshot + trust layers + target/capability
     → TrustRequirementV1
     → exact match against global owner-only trust.toml
     → trusted or stable missing/stale decision
@@ -285,8 +286,9 @@ immutable code inputs + trust layers + declared permissions
 
 The CLI loads `~/.shine/trust.toml` before constructing `RuntimeContext`. `shine trust grant`
 derives and renders the current requirement, confirms with default No, then atomically stores only
-the reviewed identities. Code, layer, or permission changes do not match. Legacy coarse booleans
-are diagnostic-only and never create grants.
+the reviewed identities. Category content or layer changes do not match snapshot grants; source
+root/layer changes do not match development grants. Old v1 grants remain listable
+and revocable but are unsupported for execution. Legacy coarse booleans are diagnostic-only.
 
 ## Shell install and uninstall
 
@@ -731,6 +733,12 @@ active source and upgrade refreshes it. Explicit `live` mode points raw commands
 category. Materialization skips every `node_modules/` directory but preserves `package.json` and
 `bun.lock`.
 
+Snapshot deployment accepts snapshot or development trust; live deployment accepts development
+trust only. Existing live launchers are preserved after upgrade, while inspection reports targets
+that need development-trust review. A category snapshot replacement expands the Plan to all
+installed commands that consume the shared tree and checks every affected target grant before the
+first mutation. Uninstalled siblings remain available only and do not gain launchers or grants.
+
 Every Bun launcher includes an explicit package policy. Embedded commands and unlocked external
 commands use `--no-install`. When the physical category owning an effective external/overlay script
 contains both lock files, the launcher uses `--install=fallback`; the Shell manifest records this
@@ -1000,3 +1008,14 @@ and workspace recipients inside the encrypted cache. Cache writes use only the s
 cache decryption cancellation never retries from sources. See [ADR 0085](../decisions/0085-local-hybrid-preferences-and-cache.md)
 for local trust and cache boundaries, and [ADR 0084](../decisions/0084-hybrid-secret-envelope.md)
 for the unchanged envelope and sealing concurrency contract.
+
+## One-operation external code consent
+
+Trusted human-facing lifecycle review may obtain one-time consent for exact external Preset code
+alongside Plan confirmation. Temporary grants are private Core runtime state, cleared after review,
+and carried only in the non-serializable ApprovedOperation. Execution reinstalls those exact
+identities and re-plans against fresh input; changed source, state or configuration rejects approval.
+No persistent grant is written. Automatic `--yes` and read-only/AI review use the ordinary path and
+remain blocked without persistent trust. Shell live always needs Development trust. Explicit
+info/update generator evaluation retains its persistent-grant requirement. Author statements are
+review data, not trust identity; env/admin remain per-operation executor contracts. See ADR 0091.

@@ -11,16 +11,19 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub const PRESET_BUNDLE_SCHEMA_VERSION: u32 = 2;
+pub const PRESET_BUNDLE_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct PresetPackReportV2 {
+pub struct PresetPackReportV3 {
     pub schema_version: u32,
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     pub files: usize,
     pub unrestricted_opaque_code: bool,
+    pub unisolated_code: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_capability_source: Option<String>,
     pub archive_bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_sha256: Option<String>,
@@ -28,16 +31,19 @@ pub struct PresetPackReportV2 {
     pub diagnostics: Vec<String>,
 }
 
-pub struct PresetPackArtifactV2 {
-    pub report: PresetPackReportV2,
+pub struct PresetPackArtifactV3 {
+    pub report: PresetPackReportV3,
     pub bytes: Vec<u8>,
 }
 
 #[derive(JsonSchema, Serialize)]
-pub(crate) struct BundleManifestV2 {
+pub(crate) struct BundleManifestV3 {
     schema_version: u32,
     target: String,
     unrestricted_opaque_code: bool,
+    unisolated_code: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author_capability_source: Option<String>,
     files: Vec<BundleFileV1>,
 }
 
@@ -52,7 +58,7 @@ pub async fn pack_preset_path(
     source_host: &impl FileSystemObservationHost,
     cwd: &Path,
     path: &Path,
-) -> PresetPackArtifactV2 {
+) -> PresetPackArtifactV3 {
     let scope = match load_preset_source_scope(source_host, cwd, path).await {
         Ok(scope) => scope,
         Err(_) => return invalid(None, "invalid_input"),
@@ -104,13 +110,15 @@ pub async fn pack_preset_path(
         files.push((relative.to_string(), bytes.clone(), mode));
     }
     if !diagnostics.is_empty() {
-        return PresetPackArtifactV2 {
-            report: PresetPackReportV2 {
+        return PresetPackArtifactV3 {
+            report: PresetPackReportV3 {
                 schema_version: PRESET_BUNDLE_SCHEMA_VERSION,
                 valid: false,
                 target: Some(target),
                 files: 0,
                 unrestricted_opaque_code: false,
+                unisolated_code: false,
+                author_capability_source: None,
                 archive_bytes: 0,
                 bundle_sha256: None,
                 diagnostics: diagnostics.into_iter().collect(),
@@ -120,10 +128,15 @@ pub async fn pack_preset_path(
     }
     files.sort_by(|left, right| left.0.cmp(&right.0));
     let unrestricted_opaque_code = declares_unrestricted_opaque_code(category.kind, manifest_bytes);
-    let manifest = BundleManifestV2 {
+    let unisolated_code = has_unisolated_code(category.kind, manifest_bytes);
+    let author_capability_source = has_author_capabilities(category.kind, manifest_bytes)
+        .then(|| "preset-metadata".to_string());
+    let manifest = BundleManifestV3 {
         schema_version: PRESET_BUNDLE_SCHEMA_VERSION,
         target: target.clone(),
         unrestricted_opaque_code,
+        unisolated_code,
+        author_capability_source: author_capability_source.clone(),
         files: files
             .iter()
             .map(|(path, bytes, mode)| BundleFileV1 {
@@ -138,13 +151,15 @@ pub async fn pack_preset_path(
         Ok(bytes) => bytes,
         Err(_) => return invalid(Some(target), "bundle_encoding_failed"),
     };
-    PresetPackArtifactV2 {
-        report: PresetPackReportV2 {
+    PresetPackArtifactV3 {
+        report: PresetPackReportV3 {
             schema_version: PRESET_BUNDLE_SCHEMA_VERSION,
             valid: true,
             target: Some(target),
             files: files.len(),
             unrestricted_opaque_code,
+            unisolated_code,
+            author_capability_source,
             archive_bytes: bytes.len(),
             bundle_sha256: Some(sha256(&bytes)),
             diagnostics: Vec::new(),
@@ -349,6 +364,56 @@ fn declares_unrestricted_opaque_code(kind: &str, bytes: &[u8]) -> bool {
     }
 }
 
+fn has_unisolated_code(kind: &str, bytes: &[u8]) -> bool {
+    match kind {
+        "app" => toml::from_slice::<PackAppManifest>(bytes)
+            .ok()
+            .is_some_and(|manifest| {
+                manifest.artifact.is_some()
+                    || manifest.post_install.is_some()
+                    || manifest.post_upgrade.is_some()
+                    || manifest.files.iter().any(|file| file.generator.is_some())
+            }),
+        "shell" => toml::from_slice::<PackShellManifest>(bytes)
+            .ok()
+            .is_some_and(|manifest| !manifest.files.is_empty()),
+        "sys" => toml::from_slice::<SysManifest>(bytes)
+            .ok()
+            .is_some_and(|manifest| {
+                manifest.items.iter().any(|item| {
+                    matches!(item.install, Some(SysInstall::Script { .. }))
+                        || item.shell.iter().any(|integration| {
+                            !integration.eval_argv.is_empty()
+                                || integration.source.is_some()
+                                || integration.fragment.is_some()
+                        })
+                })
+            }),
+        _ => false,
+    }
+}
+
+fn has_author_capabilities(kind: &str, bytes: &[u8]) -> bool {
+    match kind {
+        "app" => toml::from_slice::<PackAppManifest>(bytes)
+            .ok()
+            .is_some_and(|manifest| manifest.permissions.is_some()),
+        "shell" => toml::from_slice::<PackShellManifest>(bytes)
+            .ok()
+            .is_some_and(|manifest| {
+                manifest.permission_defaults.is_some()
+                    || manifest.files.iter().any(|file| file.permissions.is_some())
+            }),
+        "sys" => toml::from_slice::<SysManifest>(bytes)
+            .ok()
+            .is_some_and(|manifest| {
+                manifest.permission_defaults.is_some()
+                    || manifest.items.iter().any(|item| item.permissions.is_some())
+            }),
+        _ => false,
+    }
+}
+
 fn collect_permission_executables(
     paths: &mut BTreeSet<String>,
     permissions: Option<&PermissionDeclarationV1>,
@@ -445,14 +510,16 @@ fn logical_path(path: &Path) -> String {
         .join("/")
 }
 
-fn invalid(target: Option<String>, code: &str) -> PresetPackArtifactV2 {
-    PresetPackArtifactV2 {
-        report: PresetPackReportV2 {
+fn invalid(target: Option<String>, code: &str) -> PresetPackArtifactV3 {
+    PresetPackArtifactV3 {
+        report: PresetPackReportV3 {
             schema_version: PRESET_BUNDLE_SCHEMA_VERSION,
             valid: false,
             target,
             files: 0,
             unrestricted_opaque_code: false,
+            unisolated_code: false,
+            author_capability_source: None,
             archive_bytes: 0,
             bundle_sha256: None,
             diagnostics: vec![code.to_string()],
@@ -462,8 +529,10 @@ fn invalid(target: Option<String>, code: &str) -> PresetPackArtifactV2 {
 }
 
 // Compatibility aliases for internal callers compiled against the earlier report names.
-pub type PresetPackReportV1 = PresetPackReportV2;
-pub type PresetPackArtifactV1 = PresetPackArtifactV2;
+pub type PresetPackReportV2 = PresetPackReportV3;
+pub type PresetPackArtifactV2 = PresetPackArtifactV3;
+pub type PresetPackReportV1 = PresetPackReportV3;
+pub type PresetPackArtifactV1 = PresetPackArtifactV3;
 
 #[cfg(test)]
 mod tests {
@@ -519,6 +588,11 @@ mod tests {
         let artifact = pack_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
         assert!(artifact.report.valid);
         assert!(artifact.report.unrestricted_opaque_code);
+        assert!(artifact.report.unisolated_code);
+        assert_eq!(
+            artifact.report.author_capability_source.as_deref(),
+            Some("preset-metadata")
+        );
 
         let decoder = flate2::read::GzDecoder::new(artifact.bytes.as_slice());
         let mut archive = tar::Archive::new(decoder);
@@ -526,8 +600,9 @@ mod tests {
         assert_eq!(first.path().unwrap(), Path::new("shine.bundle.json"));
         let mut manifest = String::new();
         first.read_to_string(&mut manifest).unwrap();
-        assert!(manifest.contains("\"schema_version\": 2"));
+        assert!(manifest.contains("\"schema_version\": 3"));
         assert!(manifest.contains("\"unrestricted_opaque_code\": true"));
+        assert!(manifest.contains("\"unisolated_code\": true"));
     }
 
     #[tokio::test]

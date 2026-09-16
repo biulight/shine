@@ -1041,6 +1041,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "preset").await;
 
         crate::shells::handle_install(&config, Some("proxy"), false)
             .await
@@ -1077,6 +1078,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "preset").await;
         crate::shells::handle_install(&config, Some("custom"), false)
             .await
             .unwrap();
@@ -1135,6 +1137,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "preset").await;
 
         crate::shells::handle_install(&config, Some("proxy"), false)
             .await
@@ -1180,6 +1183,7 @@ mod tests {
         config.is_external_presets = true;
         config.external_shell_mode = crate::config::ExternalShellMode::Live;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_development_for_test(&config, "preset").await;
         crate::shells::handle_install(&config, Some("custom"), false)
             .await
             .unwrap();
@@ -1194,6 +1198,22 @@ mod tests {
             .unwrap();
         assert_eq!(row.status_sym, "✓");
         assert_eq!(row.status_text, "live source");
+
+        crate::trust::grant_current_for_test(&config, "preset").await;
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "custom/mytool")
+            .unwrap();
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "development trust required");
+        assert!(row.changes.iter().any(|change| matches!(
+            change,
+            UpdateChange::DeploymentChanged { field: "trust", .. }
+        )));
+        crate::shells::handle_install(&config, Some("custom"), false)
+            .await
+            .expect("a fully no-op live install remains removable/reviewable without new mutation");
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1220,6 +1240,7 @@ mod tests {
         old_config.is_external_presets = true;
         old_config.external_shell_mode = crate::config::ExternalShellMode::Live;
         fs::create_dir_all(old_config.bin_dir()).await.unwrap();
+        crate::trust::grant_development_for_test(&old_config, "preset").await;
         crate::shells::handle_install(&old_config, Some("custom"), false)
             .await
             .unwrap();
@@ -1235,13 +1256,20 @@ mod tests {
             .iter()
             .find(|row| row.label == "custom/mytool")
             .unwrap();
-        assert_eq!(row.status_text, "update available");
+        assert_eq!(row.status_text, "development trust required");
         assert_eq!(
             row.changes,
-            vec![UpdateChange::SourceRelocated {
-                from: old_overlay.join("shell/custom/tool.sh"),
-                to: new_overlay.join("shell/custom/tool.sh"),
-            }]
+            vec![
+                UpdateChange::SourceRelocated {
+                    from: old_overlay.join("shell/custom/tool.sh"),
+                    to: new_overlay.join("shell/custom/tool.sh"),
+                },
+                UpdateChange::DeploymentChanged {
+                    field: "trust",
+                    from: "legacy or snapshot trust".to_string(),
+                    to: "development trust".to_string(),
+                },
+            ]
         );
 
         fs::write(
@@ -1263,6 +1291,11 @@ mod tests {
                     to: new_overlay.join("shell/custom/tool.sh"),
                 },
                 UpdateChange::ContentChanged,
+                UpdateChange::DeploymentChanged {
+                    field: "trust",
+                    from: "legacy or snapshot trust".to_string(),
+                    to: "development trust".to_string(),
+                },
             ]
         );
 
@@ -1291,6 +1324,7 @@ mod tests {
             Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(old_overlay.clone()));
         old_config.is_external_presets = true;
         fs::create_dir_all(old_config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&old_config, "preset").await;
         crate::shells::handle_install(&old_config, Some("custom"), false)
             .await
             .unwrap();
@@ -1424,6 +1458,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "preset").await;
         crate::shells::handle_install(&config, Some("custom"), false)
             .await
             .unwrap();
@@ -1500,6 +1535,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "preset").await;
         crate::shells::handle_install(&config, Some("agent"), false)
             .await
             .unwrap();
@@ -1538,6 +1574,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "preset").await;
         crate::shells::handle_install(&config, Some("agent"), false)
             .await
             .unwrap();
@@ -1586,6 +1623,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "preset").await;
 
         crate::shells::handle_install(&config, Some("proxy"), false)
             .await

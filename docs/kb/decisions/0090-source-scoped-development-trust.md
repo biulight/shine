@@ -1,6 +1,6 @@
 # 0090 — Development trust is source-scoped
 
-- **Status**: Accepted
+- **Status**: Superseded in part by ADR 0091
 - **Date**: 2026-09-16
 - **Evidence**: `core/src/trust.rs`, `core/src/runtime/trust.rs`, `cli/src/trust.rs`
 

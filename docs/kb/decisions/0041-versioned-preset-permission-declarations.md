@@ -1,6 +1,6 @@
 # 0041 — Preset permissions use versioned target-local declarations
 
-- **Status**: Accepted
+- **Status**: Superseded in part by ADR 0091
 - **Date**: 2026-08-29
 - **Evidence**: `core/src/permission.rs`, `core/src/runtime/validation.rs`, `presets/`
 

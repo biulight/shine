@@ -105,12 +105,15 @@ shine completions <bash|zsh|powershell>
 
 `update` 只读检查；`upgrade` 会显示计划并等待确认。只有审阅过同一范围后才应使用 `--yes`。
 `--pull` 会先更新符合条件的 Git 预设来源；`--prune-stale` 允许删除预设中已经不存在且未被修改的受管项。
-`trust grant --development` 会让所显示本地来源中的代码修改继续受信任，但 target、capability、权限、
-来源目录与来源层必须保持不变。
+`trust grant --development` 会让所显示本地来源中的代码修改继续受信任，但 target、capability、
+来源目录与来源层必须保持不变。这是来源级长期授权，不代表持续代码审阅。
 `trust list` 会将共享同一安全范围的 grant 合并为紧凑行，并对照当前 Preset 检查状态；`--verbose`
 会展开 capability、开发来源标签与复查提示。
 
-来源缺失、用户修改、外部命令冲突、权限声明缺失或外部代码尚未信任时，Shine 会提示需要处理，
+交互式生命周期确认可仅授权本次外部代码，不保存 grant；自动化与 `--yes` 必须已有 trust，
+Shell live 必须使用 Development trust。
+
+来源缺失、用户修改、外部命令冲突、env/admin 契约缺失或外部代码尚未信任时，Shine 会提示需要处理，
 不会静默覆盖。请恢复来源或按终端给出的命令处理。
 
 ## 系统预设
@@ -157,6 +160,8 @@ shine preset pull
 发布预设前使用 `validate`、`lint`、`plan` 和 `test`。这些命令只检查创作输入，不会安装预设。
 `migrate --dry-run` 用于预览旧 metadata 迁移，实际应用前需要审阅并确认。Git 管理的 overlay 是
 可丢弃镜像，应在上游 checkout 中编辑，而不是修改镜像。
+新模板不会生成空表或推测性能力清单。`--unrestricted` 保持兼容并添加旧版说明，但无论是否使用，
+所有任意代码都未隔离。
 
 参见 [自定义预设](../guides/custom-presets.md)与
 [将系统预设迁移到 v2](../guides/sys-preset-v2-migration.md)。

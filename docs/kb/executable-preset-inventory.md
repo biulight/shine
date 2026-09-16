@@ -1,6 +1,6 @@
 # Built-in Executable Preset Inventory
 
-Last classified: 2026-09-04
+Last classified: 2026-09-16
 
 This inventory tracks the Roadmap Phase 4 requirement that every built-in executable Preset is
 either migrated to typed declarative actions or explicitly classified. It is not a public feature
@@ -14,6 +14,11 @@ Classification vocabulary:
 - **provenance** — built-ins are embedded; the same logical path may become external or overlay at
   runtime and then requires the scoped trust contract;
 - **rollback** — describes lifecycle recovery, not reversal of user data processed by a command.
+
+Core derives the unisolated-code boundary from these typed executable entries. Author capability
+statements are review notes and cannot remove that classification. External/overlay entries require
+target-local trust bound to the complete effective category snapshot; built-ins rely on Shine
+distribution provenance. This inventory does not imply a runtime sandbox.
 
 ## App lifecycle code
 
@@ -55,6 +60,11 @@ pending journal without creating its own persistent transaction. Cache and snaps
 typed removal actions with receipt transitions and positive commit evidence. Shell profile
 reconciliation is sentinel-owned: recovery restores only Shine blocks in the current file and
 preserves unrelated edits.
+
+When a shared external category snapshot changes, planning also enumerates every installed sibling
+that consumes the tree. All affected targets must match the new snapshot trust before replacement;
+uninstalled commands remain outside the operation. External live launchers require explicit
+development trust, while snapshot trust is compatible only with snapshot deployment.
 
 | Category | Targets | Runtime/class | Privilege | Built-in provenance | Rollback classification |
 |---|---|---|---|---|---|
