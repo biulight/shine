@@ -609,7 +609,7 @@ platforms = ["macos"]
             category.join("shine.toml"),
             r#"dest = "~/.config/editor"
 [permissions]
-schema_version = 2
+schema_version = 3
 [[files]]
 source = "config.toml"
 "#,

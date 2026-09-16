@@ -127,10 +127,10 @@ opaque App/Shell/Sys 代码的权限与 Sys v1 dispatcher 必须人工改写。�
 和当前平台 `preset plan` 命令。Git 管理的 overlay 仍是只读镜像，因此报告会指向上游 checkout，
 不会建议直接编辑镜像路径。
 
-trust enrollment 只适用于外部 App hook/generator/artifact 代码和 Sys bootstrap/profile 代码。
-验证通过后，运行报告给出的 `shine trust inspect app/<CATEGORY>` 或
-`shine trust inspect sys/<ITEM>`；只有接受所显示的权限范围后才执行 grant。Shell 命令通过
-`[files.permissions]` 声明和 security Plan 审阅，不是合法的 `trust inspect/grant` target。
+trust enrollment 适用于外部 App hook/generator/artifact 代码、Sys bootstrap/profile 代码，以及
+声明 unrestricted opaque-code 效果的 Shell command。验证通过后，使用报告给出的规范 target，或用
+`shine trust inspect preset` 批量查看当前要求；只有接受所显示的权限范围后才执行 grant。已有的
+枚举权限 Shell command 仍只经过权限声明与 security Plan，不会额外获得 trust target。
 
 `shine update` 会显示简洁的 **Preset compatibility** 摘要，并继续完成可执行的配置检查和 Shine
 release 检查，最后再因 blocker 返回非零。最终错误只给出一次
@@ -138,8 +138,8 @@ release 检查，最后再因 blocker 返回非零。最终错误只给出一次
 `shine upgrade` 会在任何生命周期 Plan 或 mutation 前执行同一 preflight；使用 `--pull` 时则在
 拉取并重新加载后检查，不兼容时不会产生部分升级。
 
-外部 Preset 必须为每个可执行 target 声明 permission schema v1。缺失或无效声明属于
-blocker，不会被解释为隐式宽泛授权。作者应在分发前运行静态和 fixture 检查：
+外部 Preset 必须为每个可执行 target 声明受支持的 permission schema v1 或 v2。缺失或无效声明
+属于 blocker，不会被解释为隐式宽泛授权。作者应在分发前运行静态和 fixture 检查：
 
 ```bash
 shine preset schema

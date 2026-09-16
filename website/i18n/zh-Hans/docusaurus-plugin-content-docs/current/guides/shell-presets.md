@@ -72,6 +72,11 @@ shine shell uninstall proxy --purge
 自动化必须传入 `--yes`，但 Plan 与安全检查仍会执行。`--dry-run` 是独立预览，不能与 `--yes`
 组合。
 
+个人 command 的效果难以完整枚举时，可使用权限 schema v2 的
+`opaque_code = "unrestricted"`。外部 unrestricted command 在安装前还需要当前有效的
+`shine trust grant shell/<CATEGORY>/<COMMAND>`。该声明和 grant 不会暴露环境中的全部变量，也不会
+绕过管理员授权与所有权检查。详见[自定义 Preset 权限](./custom-presets.md#声明权限)。
+
 按命令卸载会保留同类别下其他已安装命令；只要兄弟命令仍需要，共享 preset 或 snapshot 文件
 就可能继续保留。`--purge` 会额外删除空的受管预设目录；未指定 target 时会处理整棵 shell
 预设目录。它不会删除 `~/.shine/config.toml`。

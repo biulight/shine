@@ -4,12 +4,12 @@ use clap::Subcommand;
 pub enum TrustCommands {
     /// List current external-code trust grants
     List,
-    /// Inspect the current external-code requirements for one canonical target
+    /// Inspect one canonical target or every current target with `preset`
     Inspect {
         #[arg(value_name = "TARGET")]
         target: String,
     },
-    /// Trust the current external code and declared permissions for one target
+    /// Trust one canonical target or every current target with `preset`
     Grant {
         #[arg(value_name = "TARGET")]
         target: String,
@@ -17,7 +17,7 @@ pub enum TrustCommands {
         #[arg(long)]
         yes: bool,
     },
-    /// Revoke every external-code grant for one target
+    /// Revoke one target, or every Preset grant with `preset`
     Revoke {
         #[arg(value_name = "TARGET")]
         target: String,

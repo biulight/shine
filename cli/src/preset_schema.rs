@@ -12,15 +12,15 @@ struct PresetCommandHelpV1 {
 }
 
 #[derive(Serialize)]
-struct PresetSchemaDocumentV1 {
+struct PresetSchemaDocumentV2 {
     schema_version: u32,
     commands: Vec<PresetCommandHelpV1>,
     schemas: BTreeMap<String, Value>,
 }
 
 pub fn handle_schema(format: PresetReportFormat) -> Result<()> {
-    let core = shine_core::runtime::preset_schema_reference_v1();
-    let document = PresetSchemaDocumentV1 {
+    let core = shine_core::runtime::preset_schema_reference_v2();
+    let document = PresetSchemaDocumentV2 {
         schema_version: core.schema_version,
         commands: generated_command_help()?,
         schemas: core.schemas,

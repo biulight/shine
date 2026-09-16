@@ -110,6 +110,9 @@ pub enum PresetCommands {
     New {
         #[arg(value_enum)]
         kind: PresetTemplateKind,
+        /// Declare opaque Preset code as having unrestricted effects
+        #[arg(long)]
+        unrestricted: bool,
         /// Overwrite shine.toml if it already exists
         #[arg(long, short = 'f')]
         force: bool,

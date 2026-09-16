@@ -74,16 +74,45 @@ transforms = []
 # generator = { script = "generate.ts", runtime = "bun", env = ["SOURCE_URL"], when_env = "SOURCE_URL", auto = false }
 "#;
 
-pub async fn handle_init_template(force: bool) -> Result<()> {
+pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
+    let template = init_template(unrestricted);
     let (path, overwritten) =
-        shine_core::init_template::write_shine_toml_template(&dir, force, APP_TEMPLATE)?;
+        shine_core::init_template::write_shine_toml_template(&dir, force, &template)?;
     if overwritten {
         println!("Updated app preset template: {}", path.display());
     } else {
         println!("Created app preset template: {}", path.display());
     }
     Ok(())
+}
+
+fn init_template(unrestricted: bool) -> String {
+    if unrestricted {
+        APP_TEMPLATE.replace(
+            "[permissions]\nschema_version = 1",
+            "[permissions]\nschema_version = 2\nopaque_code = \"unrestricted\"",
+        )
+    } else {
+        APP_TEMPLATE.to_string()
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn unrestricted_init_template_is_valid_schema_v2() {
+    let manifest: toml::Value = toml::from_str(&init_template(true)).unwrap();
+    let permissions = manifest.get("permissions").unwrap();
+    assert_eq!(
+        permissions
+            .get("schema_version")
+            .and_then(toml::Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        permissions.get("opaque_code").and_then(toml::Value::as_str),
+        Some("unrestricted")
+    );
 }
 
 /// Hash the effective install content for `file` — applies transforms if declared.

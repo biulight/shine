@@ -55,16 +55,45 @@ schema_version = 1
 # ]
 "#;
 
-pub async fn handle_init_template(force: bool) -> Result<()> {
+pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
+    let template = init_template(unrestricted);
     let (path, overwritten) =
-        shine_core::init_template::write_shine_toml_template(&dir, force, SHELL_TEMPLATE)?;
+        shine_core::init_template::write_shine_toml_template(&dir, force, &template)?;
     if overwritten {
         println!("Updated shell preset template: {}", path.display());
     } else {
         println!("Created shell preset template: {}", path.display());
     }
     Ok(())
+}
+
+fn init_template(unrestricted: bool) -> String {
+    if unrestricted {
+        SHELL_TEMPLATE.replace(
+            "[files.permissions]\nschema_version = 1",
+            "[permission_defaults]\nschema_version = 2\nopaque_code = \"unrestricted\"",
+        )
+    } else {
+        SHELL_TEMPLATE.to_string()
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn unrestricted_init_template_uses_valid_category_defaults() {
+    let parsed: toml::Value = toml::from_str(&init_template(true)).unwrap();
+    let defaults = parsed.get("permission_defaults").unwrap();
+    assert_eq!(
+        defaults
+            .get("schema_version")
+            .and_then(toml::Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        defaults.get("opaque_code").and_then(toml::Value::as_str),
+        Some("unrestricted")
+    );
 }
 
 pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) -> Result<()> {

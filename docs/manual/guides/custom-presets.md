@@ -45,6 +45,18 @@ shine preset plan . --platform macos --format json
 shine preset test . --format json
 ```
 
+When a personal Preset contains opaque code and maintaining a complete capability list would be
+impractical, scaffold an explicit unrestricted declaration instead:
+
+```bash
+shine preset new app --unrestricted
+shine preset new shell --unrestricted
+shine preset new sys --unrestricted
+```
+
+This describes the code as unrestricted; it does not skip trust, Plan review, administrator
+authorization, ownership checks, or explicit environment inputs.
+
 Use `shell` or `sys` in `preset new` for the other kinds. To customize an embedded category, enter
 the repository or overlay root and run `shine preset copy <kind>/<name>`; the command creates the
 kind/category path.
@@ -110,7 +122,7 @@ upstream checkout, commit there, and pull the mirror again.
 
 ## Declare permissions
 
-New Presets declare reviewable capability identities with permission schema v1. App permissions
+New Presets declare reviewable capability identities with permission schema v1 or v2. App permissions
 belong to the category root, each Shell `[[files]]` command has its own `[files.permissions]`, and
 each Sys `[[items]]` target has its own `[items.permissions]`. A protected install, upgrade, or
 uninstall fails closed when a required declaration is missing; static validation reports
@@ -131,16 +143,63 @@ environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
 system = [{ capability = "split-dns", resource = "private-domain" }]
 ```
 
+Permission schema v2 can explicitly describe opaque code whose effects are not completely
+enumerated:
+
+```toml
+[permissions]
+schema_version = 2
+opaque_code = "unrestricted"
+```
+
+For Shell and Sys categories, use `permission_defaults` to apply one declaration to entries that
+do not provide their own target-local override:
+
+```toml
+[permission_defaults]
+schema_version = 2
+opaque_code = "unrestricted"
+
+[[files]]
+source = "foo.sh"
+target = "foo"
+
+[[files]]
+source = "bar.sh"
+target = "bar"
+```
+
+Defaults are resolved separately for each command or Sys item; a targeted operation does not
+inherit capabilities from unrelated entries. An entry-level permission table replaces the
+default for that entry.
+
 Filesystem bases are `home`, `shine`, `data-dir`, `preset`, or `absolute`; non-absolute paths are
 normalized relative paths, with `.` meaning the selected base root. Commands contain one program
 identity without arguments. Environment entries contain names and `plain`/`secret` sensitivity,
 never values or ciphertext. Ordinary destinations and fixed package providers are already covered
 by their metadata, so declare only the additional capabilities the Preset needs.
 
+`opaque_code = "unrestricted"` covers unenumerated command, network, filesystem, and system effects.
+It never forwards ambient environment variables or grants elevation. Environment allowlists and
+their `plain`/`secret` sensitivity, plus typed administrator requirements, remain explicit. Lint
+reports `unrestricted_opaque_code` as an advisory warning, and packed bundle metadata exposes the
+unrestricted-code risk.
+
 A declaration is not an authorization grant and does not prove opaque script behavior complete.
 External executable code additionally requires a target-scoped `shine trust grant <TARGET>` after
 review. The grant binds the current code identity and exact declared permission set; it does not
 replace administrator authorization or the per-mutation security Plan.
+
+An unrestricted external Shell command uses the canonical
+`shell/<CATEGORY>/<COMMAND>` trust target. Use `preset` to inspect or trust every executable target
+in the current active Preset snapshot; Shine still stores separate, snapshot-bound grants for the
+individual targets. Revoking `preset` clears every stored Preset trust grant:
+
+```bash
+shine trust inspect preset
+shine trust grant preset
+shine trust revoke preset
+```
 
 ## From source folders to installed capabilities
 

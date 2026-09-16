@@ -58,13 +58,21 @@ bootstrap review; `--verbose` expands identities and diagnostic codes (ADR 0086)
 materialization, profile write, or receipt mutation. Its existing domain report remains separate
 from `LifecycleResultV1`.
 
-Permission declaration schema v1 is parsed from the same immutable snapshot: one App category
+Permission declarations are parsed from the same immutable snapshot: one App category
 table, one table per Shell command/platform variant, and one table per Sys item. Static validation
 checks version, placement, structured paths, payload-free identities, and duplicates without
 executing Preset code. Typed metadata continues to describe Core-bounded effects; explicit tables
 record additional capabilities. Pure planners combine both sources into the required/declared
 resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
 protected execution fails closed.
+
+Schema v2 additionally represents unenumerated opaque-code effects as one unrestricted identity.
+Permission resolution treats it as coverage for opaque command, filesystem, network, and system
+requirements while retaining explicit environment identities and administrator authorization.
+Shell/Sys category defaults resolve to each selected target before Plan scopes and fingerprints are
+built. App contributes the identity only when an executable surface is triggered. The `preset`
+trust target enumerates current requirements and persists exact per-target grants; it does not add a
+repository-wide grant or mutable-source trust mode.
 
 ## Shell availability and ownership inspection
 

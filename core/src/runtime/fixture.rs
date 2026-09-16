@@ -4,7 +4,8 @@ use super::authoring::{PresetAuthoringSyntheticState, plan_preset_source_scope_w
 use super::validation::load_preset_source_scope;
 use super::{FileSystemObservationHost, InMemoryHost, RuntimePlatform};
 use crate::plan::{
-    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, PermissionV1, PlanActionV1,
+    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, OpaqueCodeScopeV1, PermissionV1,
+    PlanActionV1,
 };
 use crate::trust::TrustCapabilityV1;
 use schemars::JsonSchema;
@@ -580,6 +581,9 @@ fn action_name(action: PlanActionV1) -> &'static str {
 
 fn permission_name(permission: &PermissionV1) -> String {
     match permission {
+        PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        } => "opaque-code:unrestricted".to_string(),
         PermissionV1::Filesystem { access, path } => format!(
             "filesystem:{}:{path}",
             match access {

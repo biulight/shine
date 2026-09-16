@@ -83,6 +83,12 @@ Non-dry-run install and uninstall, plus `shine upgrade`, show the planned change
 Confirmation defaults to No; automation must pass `--yes`, while the Plan and safety checks still
 run. `--dry-run` remains a separate preview and cannot be combined with `--yes`.
 
+A personal command whose effects are impractical to enumerate can use permission schema v2 with
+`opaque_code = "unrestricted"`. External unrestricted commands require a current
+`shine trust grant shell/<CATEGORY>/<COMMAND>` before installation. The declaration and grant do
+not expose ambient environment variables or bypass administrator and ownership checks. See
+[custom Preset permissions](./custom-presets.md#declare-permissions).
+
 Command-scoped uninstall preserves other installed commands in the category. Shared preset or
 snapshot files may remain while a sibling command still needs them. `--purge` also removes empty
 managed preset directories; without a target, uninstall processes the whole shell preset tree. It

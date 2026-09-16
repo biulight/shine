@@ -64,10 +64,15 @@ fn render_inspect_guidance(
         .iter()
         .any(|requirement| !requirement.permissions_declared)
     {
-        return format!(
-            "{}\n  Add a valid permission declaration to the {target} Preset before granting trust.",
-            crate::colors::yellow("Next")
-        );
+        let guidance = if target == "preset" {
+            "Add a valid permission declaration to every listed target before granting trust."
+                .to_string()
+        } else {
+            format!(
+                "Add a valid permission declaration to the {target} Preset before granting trust."
+            )
+        };
+        return format!("{}\n  {guidance}", crate::colors::yellow("Next"));
     }
     if decisions
         .iter()
@@ -107,8 +112,13 @@ pub async fn handle_grant(config: &Config, target: &str, yes: bool) -> Result<()
         if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
             bail!("trust enrollment requires an interactive terminal or explicit --yes");
         }
+        let prompt = if target == "preset" {
+            "Trust every listed target's current external code?"
+        } else {
+            "Trust this target's current external code?"
+        };
         if !dialoguer::Confirm::new()
-            .with_prompt("Trust this target's current external code?")
+            .with_prompt(prompt)
             .default(false)
             .interact()?
         {
@@ -148,7 +158,11 @@ pub async fn handle_revoke(config: &Config, target: &str) -> Result<()> {
     validate_target(target)?;
     let mut store = load_store(config).await?;
     let before = store.grants.len();
-    store.grants.retain(|grant| grant.target != target);
+    if target == "preset" {
+        store.grants.clear();
+    } else {
+        store.grants.retain(|grant| grant.target != target);
+    }
     if store.grants.len() == before {
         println!("No external-code trust grants matched {target}.");
         return Ok(());
@@ -202,20 +216,27 @@ fn trust_store_path(config: &Config) -> PathBuf {
 }
 
 fn validate_target(target: &str) -> Result<()> {
-    let valid_prefix = target.starts_with("app/") || target.starts_with("sys/");
-    let suffix = target
-        .split_once('/')
-        .map(|(_, suffix)| suffix)
-        .unwrap_or_default();
-    if !valid_prefix
-        || suffix.is_empty()
-        || suffix.contains(['/', '\\'])
-        || suffix == "."
-        || suffix == ".."
-    {
-        bail!("trust target must be canonical app/<category> or sys/<item>: {target}");
+    if target == "preset" {
+        return Ok(());
+    }
+    let parts = target.split('/').collect::<Vec<_>>();
+    let valid = match parts.as_slice() {
+        ["app" | "sys", name] => valid_target_segment(name),
+        ["shell", category, command] => {
+            valid_target_segment(category) && valid_target_segment(command)
+        }
+        _ => false,
+    };
+    if !valid {
+        bail!(
+            "trust target must be preset, app/<category>, shell/<category>/<command>, or sys/<item>: {target}"
+        );
     }
     Ok(())
+}
+
+fn valid_target_segment(value: &str) -> bool {
+    !value.is_empty() && !value.contains('\\') && !matches!(value, "." | "..")
 }
 
 fn render_requirements(
@@ -228,7 +249,8 @@ fn render_requirements(
     for (index, requirement) in requirements.iter().enumerate() {
         if let Some(scope) = scopes.iter_mut().find(|scope| {
             let existing = &requirements[scope[0]];
-            existing.code_digest == requirement.code_digest
+            existing.target == requirement.target
+                && existing.code_digest == requirement.code_digest
                 && existing.permissions_declared == requirement.permissions_declared
                 && existing.permissions == requirement.permissions
         }) {
@@ -248,6 +270,13 @@ fn render_requirements(
             lines.push(format!(
                 "  {}",
                 crate::colors::bold(&format!("Scope {}", scope_index + 1))
+            ));
+        }
+        if requirement.target != target {
+            lines.push(format!(
+                "  {}  {}",
+                crate::colors::dim("Target"),
+                requirement.target
             ));
         }
         lines.push(format!(
@@ -361,10 +390,13 @@ mod tests {
 
     #[test]
     fn trust_targets_must_be_canonical_and_target_local() {
+        assert!(validate_target("preset").is_ok());
         assert!(validate_target("app/demo").is_ok());
+        assert!(validate_target("shell/demo/tool").is_ok());
         assert!(validate_target("sys/mise").is_ok());
         assert!(validate_target("demo").is_err());
         assert!(validate_target("app/demo/other").is_err());
+        assert!(validate_target("shell/demo").is_err());
     }
 
     #[test]
@@ -479,6 +511,34 @@ mod tests {
         assert!(output.contains("Scope 2"));
         assert_eq!(output.matches("Code digest").count(), 2);
         assert_eq!(output.matches("Permissions").count(), 2);
+    }
+
+    #[test]
+    fn preset_requirement_renderer_keeps_targets_separate_and_visible() {
+        let app = TrustRequirementV1 {
+            target: "app/demo".to_string(),
+            capability: TrustCapabilityV1::AppHook,
+            code_digest: SnapshotDigestV1::builder("shared-code").finish(),
+            permissions_declared: true,
+            permissions: PermissionSetV1::default(),
+        };
+        let shell = TrustRequirementV1 {
+            target: "shell/demo/tool".to_string(),
+            capability: TrustCapabilityV1::ShellCommand,
+            ..app.clone()
+        };
+
+        let output = render_requirements(
+            "preset",
+            &[app, shell],
+            &[TrustDecisionV1::Missing, TrustDecisionV1::Missing],
+        );
+
+        assert_eq!(output.matches("Code digest").count(), 2);
+        assert!(output.contains("Target  app/demo"));
+        assert!(output.contains("Target  shell/demo/tool"));
+        assert!(output.contains("app-hook"));
+        assert!(output.contains("shell-command"));
     }
 
     #[cfg(unix)]

@@ -60,6 +60,11 @@ so an empty permission declaration does not mean that installing a package needs
 Shared capabilities may appear under multiple items when each needs them. `Permissions none required`
 means only that the planner derived no capabilities for that section; it is not a safety guarantee.
 
+Custom script items whose effects are impractical to enumerate can use permission schema v2 with
+`opaque_code = "unrestricted"`. A category-level `permission_defaults` table can supply that
+declaration to items without an item-specific override. Environment inputs and administrator
+requirements remain explicit.
+
 Snapshot identities are shortened in the default display. Add `--verbose`, for example
 `shine sys bootstrap --preset recommended --verbose`, to show full identities and diagnostic codes.
 Both views review the same complete Plan and use a single confirmation for the selected operation.

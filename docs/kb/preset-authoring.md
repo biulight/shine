@@ -29,9 +29,13 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
     bounded synthetic observations but never executable setup/teardown, actual credentials, or private machine paths.
 12. When a bundle is requested, build it with `shine preset pack`, outside the category. Fix every policy
     diagnostic; `--force` controls output replacement only.
-13. Keep schema-v1 permission declarations at the execution target boundary: one App category
-   table, one table per Shell file/platform variant, and one table per Sys item. Declare identities
-   only; never place argv, values, ciphertext, credentials, or physical checkout paths in them.
+13. Keep versioned permission declarations at the execution target boundary: one App category
+   table, one table per Shell file/platform variant, and one table per Sys item. Schema-v2
+   `opaque_code = "unrestricted"` is allowed only when effects cannot be enumerated honestly;
+   environment inputs/sensitivity and administrator requirements stay explicit. Shell and Sys may
+   use category `permission_defaults`, with entry declarations replacing the default. Expect the
+   `unrestricted_opaque_code` lint warning and verify the bundle risk marker. Never place argv,
+   values, ciphertext, credentials, or physical checkout paths in declarations.
 14. After changing a built-in App destination or App/Shell file selector, run
    `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`
    and commit both regenerated public-manual blocks.

@@ -291,6 +291,14 @@ fn lint_permissions(
     let Some(declaration) = declaration else {
         return;
     };
+    if declaration.opaque_code.is_some() {
+        diagnostics.push(warning(
+            "unrestricted_opaque_code",
+            target,
+            resource.clone(),
+            "opaque Preset code has unrestricted effects; enumerate capabilities when practical",
+        ));
+    }
     if declaration
         .network
         .iter()
@@ -411,5 +419,22 @@ mod tests {
         assert!(codes.contains(&"missing_category_description"));
         assert!(codes.contains(&"missing_resource_description"));
         assert!(codes.contains(&"private_absolute_path"));
+    }
+
+    #[tokio::test]
+    async fn unrestricted_opaque_code_is_a_stable_advisory_warning() {
+        let host = InMemoryHost::new();
+        host.put_file(
+            "/repo/app/demo/shine.toml",
+            b"description = 'Demo'\ndest = '~/.config/demo'\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.toml'\ndescription = 'Demo config'\n"
+                .to_vec(),
+        );
+        host.put_file("/repo/app/demo/config.toml", b"value = true\n".to_vec());
+
+        let report = lint_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+
+        assert!(report.valid, "{:?}", report.diagnostics);
+        assert_eq!(report.summary.warnings, 1);
+        assert_eq!(report.diagnostics[0].code, "unrestricted_opaque_code");
     }
 }

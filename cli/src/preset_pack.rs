@@ -2,7 +2,7 @@
 
 use crate::commands::PresetReportFormat;
 use anyhow::Result;
-use shine_core::runtime::PresetPackReportV1;
+use shine_core::runtime::PresetPackReportV2;
 use std::path::{Path, PathBuf};
 
 pub async fn handle_pack(
@@ -50,7 +50,7 @@ fn absolute(cwd: &Path, path: &Path) -> PathBuf {
     }
 }
 
-fn invalidate(report: &mut PresetPackReportV1, code: &str) {
+fn invalidate(report: &mut PresetPackReportV2, code: &str) {
     report.valid = false;
     report.files = 0;
     report.archive_bytes = 0;
@@ -58,7 +58,7 @@ fn invalidate(report: &mut PresetPackReportV1, code: &str) {
     report.diagnostics.push(code.to_string());
 }
 
-fn print_text_report(report: &PresetPackReportV1) {
+fn print_text_report(report: &PresetPackReportV2) {
     println!(
         "Preset pack: {}",
         if report.valid { "created" } else { "blocked" }
@@ -71,6 +71,9 @@ fn print_text_report(report: &PresetPackReportV1) {
     }
     if report.valid {
         println!("  Files: {}", report.files);
+        if report.unrestricted_opaque_code {
+            println!("  Opaque code: unrestricted effects");
+        }
         println!("  Archive bytes: {}", report.archive_bytes);
         println!(
             "  SHA-256: {}",

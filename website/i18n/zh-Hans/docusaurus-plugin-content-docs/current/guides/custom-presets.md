@@ -40,6 +40,17 @@ shine preset plan . --platform macos --format json
 shine preset test . --format json
 ```
 
+个人 Preset 含有 opaque code、难以维护完整 capability 清单时，可以直接生成显式的 unrestricted
+声明：
+
+```bash
+shine preset new app --unrestricted
+shine preset new shell --unrestricted
+shine preset new sys --unrestricted
+```
+
+这只表示代码能力范围不受限；它不会跳过 trust、安全 Plan、管理员授权、所有权检查或显式环境输入。
+
 其它类型把 `preset new` 的参数换成 `shell` 或 `sys`。定制内置类别时，进入仓库或 overlay 根目录
 并运行 `shine preset copy <kind>/<name>`；命令会创建类型与类别路径。
 
@@ -97,7 +108,7 @@ blocker，不会获得猜测或宽泛权限。
 
 ## 声明权限
 
-新预设使用权限 schema v1 声明可审查的 capability identity。App 在类别根部使用
+新预设使用权限 schema v1 或 v2 声明可审查的 capability identity。App 在类别根部使用
 `[permissions]`；Shell 的每个 `[[files]]` 命令分别使用 `[files.permissions]`；Sys 的每个
 `[[items]]` target 分别使用 `[items.permissions]`。受保护的 install、upgrade 或 uninstall
 在缺少必要声明时会 fail closed；静态校验会报告 `missing_permission_declaration`。不支持的
@@ -117,14 +128,57 @@ environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
 system = [{ capability = "split-dns", resource = "private-domain" }]
 ```
 
+权限 schema v2 可以显式表示无法完整枚举效果的 opaque code：
+
+```toml
+[permissions]
+schema_version = 2
+opaque_code = "unrestricted"
+```
+
+Shell 和 Sys 类别可以用 `permission_defaults` 为没有目标级覆盖的条目提供同一声明：
+
+```toml
+[permission_defaults]
+schema_version = 2
+opaque_code = "unrestricted"
+
+[[files]]
+source = "foo.sh"
+target = "foo"
+
+[[files]]
+source = "bar.sh"
+target = "bar"
+```
+
+默认值会分别解析到每个 command 或 Sys item；定向操作不会继承无关条目的 capability。条目自己的
+权限表会替换该条目的默认值。
+
 Filesystem base 只接受 `home`、`shine`、`data-dir`、`preset` 或 `absolute`；非绝对路径必须是
 规范化相对路径，`.` 表示所选 base 的根。Command 只能填写一个不带参数的 program identity。
 Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。普通 destination 与固定
 package provider 已由各自 metadata 覆盖，只需声明预设额外需要的能力。
 
+`opaque_code = "unrestricted"` 覆盖未枚举的 command、network、filesystem 与 system 效果，
+但不会转发环境中的全部变量，也不会授予提权。环境 allowlist 及其 `plain`/`secret` 敏感度、类型化
+管理员要求仍须显式配置。Lint 会给出 `unrestricted_opaque_code` 提示，打包后的 bundle metadata
+也会标记 unrestricted code 风险。
+
 权限声明不是授权，也不能证明 opaque script 已完整披露行为。外部可执行代码还要求用户审阅后运行
 `shine trust grant <TARGET>`。Grant 会绑定当前代码身份与准确的权限声明，不能替代管理员授权或每次
 mutation 的安全 Plan。
+
+使用 unrestricted 的外部 Shell command 采用规范 target
+`shell/<CATEGORY>/<COMMAND>`。使用 `preset` 可以一次审阅或信任当前激活 Preset 快照中的全部可执行
+target；Shine 底层仍会为各 target 保存独立且绑定快照的 grant。撤销 `preset` 会清除所有已保存的
+Preset trust grant：
+
+```bash
+shine trust inspect preset
+shine trust grant preset
+shine trust revoke preset
+```
 
 ## 从来源文件夹到已安装能力
 

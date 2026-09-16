@@ -250,6 +250,15 @@ fn validate_app_permissions(
 ) -> Vec<PresetDiagnostic> {
     let target = format!("app/{}", category.name);
     let mut diagnostics = Vec::new();
+    if table.contains_key("permission_defaults") {
+        diagnostics.push(permission_error_diagnostic(
+            "invalid_permission_declaration",
+            format!(
+                "{target} has one category-wide target and must use `[permissions]`, not `[permission_defaults]`"
+            ),
+            path,
+        ));
+    }
     match table.get("permissions") {
         Some(value) => {
             if let Some(diagnostic) = validate_permission_value(value, &target, path) {
@@ -319,6 +328,16 @@ fn validate_shell_permissions(
             path,
         ));
     }
+    let defaults = table.get("permission_defaults");
+    if let Some(value) = defaults
+        && let Some(diagnostic) = validate_permission_value(
+            value,
+            &format!("shell/{} permission defaults", category.name),
+            path,
+        )
+    {
+        diagnostics.push(diagnostic);
+    }
     let Some(files) = table.get("files").and_then(toml::Value::as_array) else {
         return diagnostics;
     };
@@ -335,7 +354,7 @@ fn validate_shell_permissions(
                     diagnostics.push(diagnostic);
                 }
             }
-            None => diagnostics.push(PresetDiagnostic {
+            None if defaults.is_none() => diagnostics.push(PresetDiagnostic {
                 severity: PresetDiagnosticSeverity::Warning,
                 code: "missing_permission_declaration".to_string(),
                 message: format!(
@@ -344,6 +363,7 @@ fn validate_shell_permissions(
                 ),
                 path: Some(path.to_path_buf()),
             }),
+            None => {}
         }
     }
     diagnostics
@@ -365,6 +385,16 @@ fn validate_sys_permissions(
             path,
         ));
     }
+    let defaults = table.get("permission_defaults");
+    if let Some(value) = defaults
+        && let Some(diagnostic) = validate_permission_value(
+            value,
+            &format!("sys/{} permission defaults", category.name),
+            path,
+        )
+    {
+        diagnostics.push(diagnostic);
+    }
     let Some(items) = table.get("items").and_then(toml::Value::as_array) else {
         return diagnostics;
     };
@@ -380,7 +410,7 @@ fn validate_sys_permissions(
                     diagnostics.push(diagnostic);
                 }
             }
-            None => diagnostics.push(PresetDiagnostic {
+            None if defaults.is_none() => diagnostics.push(PresetDiagnostic {
                 severity: PresetDiagnosticSeverity::Warning,
                 code: "missing_permission_declaration".to_string(),
                 message: format!(
@@ -389,6 +419,7 @@ fn validate_sys_permissions(
                 ),
                 path: Some(path.to_path_buf()),
             }),
+            None => {}
         }
     }
     diagnostics
@@ -985,7 +1016,7 @@ mod tests {
             )
             .overlay_file(
                 "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 2\n".to_vec(),
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 3\n".to_vec(),
             )
             .build();
         let diagnostics = permission_declaration_diagnostics(&invalid, &category);
@@ -1022,6 +1053,56 @@ mod tests {
                 "{kind} declaration should be accepted at its target-local placement"
             );
         }
+    }
+
+    #[test]
+    fn shell_and_sys_permission_defaults_satisfy_target_declarations() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "shell/demo/shine.toml",
+                b"[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'tool.sh'\n"
+                    .to_vec(),
+            )
+            .file(
+                "sys/demo/shine.toml",
+                b"version = 2\n[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[items]]\nid = 'tool'\nlabel = 'Tool'\n"
+                    .to_vec(),
+            )
+            .build();
+
+        for (kind, name) in [("shell", "demo"), ("sys", "demo")] {
+            let category = CategoryPath {
+                kind,
+                name: name.to_string(),
+                root: PathBuf::from(format!("{kind}/{name}")),
+            };
+            assert!(
+                permission_declaration_diagnostics(&snapshot, &category).is_empty(),
+                "{kind} defaults should satisfy item-local declaration validation"
+            );
+        }
+    }
+
+    #[test]
+    fn app_rejects_shell_and_sys_permission_defaults_placement() {
+        let category = CategoryPath {
+            kind: "app",
+            name: "demo".to_string(),
+            root: PathBuf::from("app/demo"),
+        };
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n[permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .build();
+
+        let diagnostics = permission_declaration_diagnostics(&snapshot, &category);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "invalid_permission_declaration"
+                && diagnostic.message.contains("must use `[permissions]`")
+        }));
     }
 
     #[test]

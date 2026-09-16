@@ -68,7 +68,8 @@ pub use lint::{
 };
 pub use memory::InMemoryHost;
 pub use pack::{
-    PRESET_BUNDLE_SCHEMA_VERSION, PresetPackArtifactV1, PresetPackReportV1, pack_preset_path,
+    PRESET_BUNDLE_SCHEMA_VERSION, PresetPackArtifactV1, PresetPackArtifactV2, PresetPackReportV1,
+    PresetPackReportV2, pack_preset_path,
 };
 pub use planner::{
     AppApprovedUpgradeOptions, AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest,
@@ -92,7 +93,8 @@ pub use profile::{
     shell_source_command, supports_completion_registration,
 };
 pub use schema::{
-    PRESET_SCHEMA_REFERENCE_VERSION, PresetSchemaReferenceV1, preset_schema_reference_v1,
+    PRESET_SCHEMA_REFERENCE_VERSION, PresetSchemaReferenceV1, PresetSchemaReferenceV2,
+    preset_schema_reference_v1, preset_schema_reference_v2,
 };
 pub use shell::{
     BunDependencyMode, BunRuntimeSpec, ExternalShellMode, LinkRuntime, SHELL_MANIFEST_FILE,

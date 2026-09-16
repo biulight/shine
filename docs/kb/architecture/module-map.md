@@ -29,8 +29,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/action_executor.rs` | Phase 4 App static Copy and key-owned JSON create/update/relocate/ordinary-or-forced-remove journal, manifest-receipt-gated commit, lock-spanning privileged/unprivileged path dispatch, persistent backup restoration, same-directory rollback material, explicit recovery Plan, and fingerprint/key-guarded remove/restore |
 | `core/src/runtime/shell_action_executor.rs` | Phase 4 Shell launcher, embedded cache, external snapshot, rendered file, and profile-sentinel create/update/remove actions; per-resource rollback journal, receipt/positive-marker-gated commit, and explicit fingerprint/owned-subset recovery |
 | `core/src/runtime/sys_action_executor.rs` | Phase 4 managed Sys file, split-DNS, and explicit profile-sentinel actions; Sys receipt transition journal, exact rollback cleanup, and explicit recovery Plan/apply |
-| `core/src/runtime/trust.rs` | Derivation of App/Sys external-code requirements from immutable logical code inputs and declared permissions |
-| `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence and `shine trust` workflows |
+| `core/src/runtime/trust.rs` | Derivation of App/Shell/Sys external-code requirements from immutable logical code inputs, resolved defaults, and declared permissions |
+| `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence plus target-local and current-Preset batch `shine trust` workflows |
 | `core/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
 | `core/src/runtime/shell.rs` | Complete Shell assessment/install/upgrade/uninstall/live render, launcher, cache, profile, and manifest orchestration |
 | `core/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS transactional orchestration, and run-manifest persistence |

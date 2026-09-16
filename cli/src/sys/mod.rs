@@ -59,16 +59,28 @@ filesystem = [{ access = ["execute"], base = "preset", path = "install/my-tool.s
 items = ["my-tool"]
 "#;
 
-pub async fn handle_init_template(force: bool) -> Result<()> {
+pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
+    let template = init_template(unrestricted);
     let (path, overwritten) =
-        shine_core::init_template::write_shine_toml_template(&dir, force, SYS_TEMPLATE)?;
+        shine_core::init_template::write_shine_toml_template(&dir, force, &template)?;
     if overwritten {
         println!("Updated sys preset template: {}", path.display());
     } else {
         println!("Created sys preset template: {}", path.display());
     }
     Ok(())
+}
+
+fn init_template(unrestricted: bool) -> String {
+    if unrestricted {
+        SYS_TEMPLATE.replace(
+            "[items.permissions]\nschema_version = 1\nfilesystem = [{ access = [\"execute\"], base = \"preset\", path = \"install/my-tool.sh\" }]",
+            "[permission_defaults]\nschema_version = 2\nopaque_code = \"unrestricted\"",
+        )
+    } else {
+        SYS_TEMPLATE.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -87,5 +99,13 @@ mod tests {
                 .map(|permissions| permissions.schema_version),
             Some(1)
         );
+    }
+
+    #[test]
+    fn unrestricted_init_template_contains_valid_permission_defaults() {
+        let manifest = manifest::parse_and_validate_manifest(&init_template(true)).unwrap();
+        let permissions = manifest.items[0].permissions.as_ref().unwrap();
+        assert_eq!(permissions.schema_version, 2);
+        assert!(permissions.opaque_code.is_some());
     }
 }

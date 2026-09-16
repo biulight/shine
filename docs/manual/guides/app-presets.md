@@ -166,6 +166,9 @@ The category's `[permissions]` table separately declares review identities for g
 and artifact commands, network scopes, and environment-name sensitivity. It is statically
 validated but does not enable or trust external code; never put a URL token,
 environment value, command arguments, or ciphertext in the declaration.
+Permission schema v2 may instead mark unenumerated opaque-code effects with
+`opaque_code = "unrestricted"`; environment allowlists and sensitivity remain explicit, and lint
+reports the broader risk.
 
 ### Surge URI subscriptions
 

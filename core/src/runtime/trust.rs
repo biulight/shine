@@ -1,6 +1,9 @@
-use super::{AppCategory, CoreRuntime, PresetSourceKind, SysInstall, SysItem};
+use super::{
+    AppCategory, AppHookAction, CoreRuntime, PresetSourceKind, ShellCategory, ShellFile,
+    SysInstall, SysItem,
+};
 use crate::permission::PermissionDeclarationV1;
-use crate::plan::{FilesystemAccessV1, PermissionSetV1, PermissionV1};
+use crate::plan::{FilesystemAccessV1, OpaqueCodeScopeV1, PermissionSetV1, PermissionV1};
 use crate::trust::{TrustCapabilityV1, TrustDecisionV1, TrustRequirementV1, evaluate_trust};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
@@ -15,6 +18,31 @@ impl<H> CoreRuntime<H> {
         &self,
         target: &str,
     ) -> Result<ExternalCodeRequirementReport> {
+        if target == "preset" {
+            let mut requirements = Vec::new();
+            for category in self.app_categories(None)? {
+                requirements.extend(self.app_external_code_requirements(&category)?);
+            }
+            for category in self.shell_categories(None)? {
+                for file in &category.files {
+                    requirements.extend(self.shell_external_code_requirements(&category, file)?);
+                }
+            }
+            let os_id = match self.context().platform {
+                super::RuntimePlatform::Macos => "macos",
+                super::RuntimePlatform::Linux => "ubuntu",
+                super::RuntimePlatform::Windows => "windows",
+            };
+            if let Ok(loaded) = self.load_sys_preset(os_id).await {
+                for item in &loaded.manifest.items {
+                    requirements.extend(self.sys_external_code_requirements(os_id, item)?);
+                }
+            }
+            requirements.sort_by(|left, right| {
+                (&left.target, left.capability).cmp(&(&right.target, right.capability))
+            });
+            return Ok(ExternalCodeRequirementReport { requirements });
+        }
         if let Some(category_name) = target.strip_prefix("app/") {
             let category = self
                 .app_categories(Some(category_name))?
@@ -23,6 +51,25 @@ impl<H> CoreRuntime<H> {
                 .with_context(|| format!("app preset category not found: {category_name}"))?;
             return Ok(ExternalCodeRequirementReport {
                 requirements: self.app_external_code_requirements(&category)?,
+            });
+        }
+        if let Some(shell_target) = target.strip_prefix("shell/") {
+            let (category_name, command_name) =
+                shell_target.split_once('/').with_context(|| {
+                    format!("trust Shell target must be shell/<category>/<command>: {target}")
+                })?;
+            let category = self
+                .shell_categories(Some(category_name))?
+                .into_iter()
+                .find(|category| category.name == category_name)
+                .with_context(|| format!("shell preset category not found: {category_name}"))?;
+            let file = category
+                .files
+                .iter()
+                .find(|file| file.command_name == command_name)
+                .with_context(|| format!("shell command not found: {target}"))?;
+            return Ok(ExternalCodeRequirementReport {
+                requirements: self.shell_external_code_requirements(&category, file)?,
             });
         }
         if let Some(item_id) = target.strip_prefix("sys/") {
@@ -42,7 +89,9 @@ impl<H> CoreRuntime<H> {
                 requirements: self.sys_external_code_requirements(os_id, item)?,
             });
         }
-        bail!("trust target must be canonical app/<category> or sys/<item>: {target}")
+        bail!(
+            "trust target must be preset, app/<category>, shell/<category>/<command>, or sys/<item>: {target}"
+        )
     }
 
     pub(crate) fn app_external_code_requirements(
@@ -66,6 +115,19 @@ impl<H> CoreRuntime<H> {
             })
             .collect::<Vec<_>>();
         let mut explicit_paths = generator_paths.clone();
+        for hook in category
+            .post_install
+            .iter()
+            .chain(category.post_upgrade.iter())
+        {
+            if let AppHookAction::Script { script, .. } = &hook.action {
+                explicit_paths.push(format!(
+                    "app/{}/{}",
+                    category.name,
+                    script.to_string_lossy().replace('\\', "/")
+                ));
+            }
+        }
         if let Some(artifact) = &category.artifact {
             explicit_paths.push(format!(
                 "app/{}/{}",
@@ -175,6 +237,37 @@ impl<H> CoreRuntime<H> {
         Ok(output)
     }
 
+    pub(crate) fn shell_external_code_requirements(
+        &self,
+        category: &ShellCategory,
+        file: &ShellFile,
+    ) -> Result<Vec<TrustRequirementV1>> {
+        let target = format!("shell/{}/{}", category.name, file.command_name);
+        let prefix = format!("shell/{}/", category.name);
+        let permissions_declared = file.permissions.is_some();
+        let permissions = declared_permissions(file.permissions.as_ref())?;
+        if !permissions.contains(&PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        }) {
+            return Ok(Vec::new());
+        }
+        let source = format!(
+            "{prefix}{}",
+            file.source_rel.to_string_lossy().replace('\\', "/")
+        );
+        let category_paths = code_paths(self, &prefix, &permissions, [source]);
+        if !any_external(self, category_paths.iter().copied()) {
+            return Ok(Vec::new());
+        }
+        Ok(vec![self.requirement(
+            &target,
+            TrustCapabilityV1::ShellCommand,
+            category_paths,
+            permissions_declared,
+            permissions,
+        )?])
+    }
+
     pub(crate) fn trust_decision(&self, requirement: &TrustRequirementV1) -> TrustDecisionV1 {
         evaluate_trust(&self.context().trust_grants, requirement)
     }
@@ -201,6 +294,17 @@ impl<H> CoreRuntime<H> {
         Ok(requirements
             .iter()
             .filter(|requirement| requirement.capability == capability)
+            .all(|requirement| self.trust_decision(requirement) == TrustDecisionV1::Trusted))
+    }
+
+    pub(crate) fn shell_command_trusted(
+        &self,
+        category: &ShellCategory,
+        file: &ShellFile,
+    ) -> Result<bool> {
+        Ok(self
+            .shell_external_code_requirements(category, file)?
+            .iter()
             .all(|requirement| self.trust_decision(requirement) == TrustDecisionV1::Trusted))
     }
 
@@ -303,6 +407,7 @@ fn is_code_support_file(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plan::{OpaqueCodeScopeV1, PermissionV1};
     use crate::runtime::{InMemoryHost, PresetSnapshot, RuntimeContext, RuntimePlatform};
     use std::path::PathBuf;
 
@@ -325,6 +430,89 @@ mod tests {
             )
             .build();
         CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    }
+
+    fn external_shell_runtime() -> CoreRuntime<InMemoryHost> {
+        let home = PathBuf::from("/home/test");
+        let shine = home.join(".shine");
+        let mut context = RuntimeContext::isolated(
+            home,
+            shine.clone(),
+            shine.join("presets"),
+            shine.join("bin"),
+            RuntimePlatform::Linux,
+        );
+        context.is_external_presets = true;
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "shell/tools/shine.toml",
+                b"[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'tool.sh'\ntarget = 'tool'\nplatforms = ['unix']\n"
+                    .to_vec(),
+            )
+            .file("shell/tools/tool.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    }
+
+    fn external_app_runtime(hook: &[u8]) -> CoreRuntime<InMemoryHost> {
+        let home = PathBuf::from("/home/test");
+        let shine = home.join(".shine");
+        let mut context = RuntimeContext::isolated(
+            home,
+            shine.clone(),
+            shine.join("presets"),
+            shine.join("bin"),
+            RuntimePlatform::Linux,
+        );
+        context.is_external_presets = true;
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_install = { script = 'hooks/install' }\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.toml'\n"
+                    .to_vec(),
+            )
+            .file("app/demo/config.toml", b"value = true\n".to_vec())
+            .file("app/demo/hooks/install", hook.to_vec())
+            .build();
+        CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    }
+
+    #[tokio::test]
+    async fn extensionless_app_hook_is_bound_into_the_trust_digest() {
+        let before = external_app_runtime(b"#!/bin/sh\necho before\n")
+            .external_code_requirements("app/demo")
+            .await
+            .unwrap();
+        let after = external_app_runtime(b"#!/bin/sh\necho after\n")
+            .external_code_requirements("app/demo")
+            .await
+            .unwrap();
+
+        assert_eq!(before.requirements.len(), 1);
+        assert_ne!(
+            before.requirements[0].code_digest,
+            after.requirements[0].code_digest
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_and_batch_requirements_are_target_local_and_snapshot_bound() {
+        let runtime = external_shell_runtime();
+        let direct = runtime
+            .external_code_requirements("shell/tools/tool")
+            .await
+            .unwrap();
+        let batch = runtime.external_code_requirements("preset").await.unwrap();
+
+        assert_eq!(direct.requirements, batch.requirements);
+        assert_eq!(direct.requirements.len(), 1);
+        let requirement = &direct.requirements[0];
+        assert_eq!(requirement.target, "shell/tools/tool");
+        assert_eq!(requirement.capability, TrustCapabilityV1::ShellCommand);
+        assert!(requirement.permissions_declared);
+        assert!(requirement.permissions.contains(&PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        }));
     }
 
     #[tokio::test]

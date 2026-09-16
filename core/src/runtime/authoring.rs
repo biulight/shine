@@ -613,7 +613,7 @@ mod tests {
         let source = app_source();
         source.put_file(
             "/repo/app/demo/shine.toml",
-            b"dest = '~/.config/demo'\n[permissions]\nschema_version = 2\n[[files]]\nsource = 'config.toml'\n"
+            b"dest = '~/.config/demo'\n[permissions]\nschema_version = 3\n[[files]]\nsource = 'config.toml'\n"
                 .to_vec(),
         );
 

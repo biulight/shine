@@ -97,7 +97,7 @@ bugs. Check this list before changing the modules named in each entry.
   all bound. Plain environment values contribute only a hash, while secrets require opaque handles
   or versions and never contribute plaintext.
 - **A Preset permission declaration is not a grant.** App categories, Shell commands, and Sys items
-  may declare schema-v1 capability identities, but those declarations do not create scoped
+  may declare versioned capability identities, but those declarations do not create scoped
   external-code trust or bypass administrator authorization, ownership checks, or Plan approval.
   Declaration presence is distinct from the normalized permission set: a validated explicit empty
   declaration is legitimate when typed metadata derives every required capability, while an absent
@@ -113,6 +113,11 @@ bugs. Check this list before changing the modules named in each entry.
   sensitivity only. Pure planners merge explicit declarations with Core-bounded typed metadata and
   receipt ownership. A missing declaration or uncomputable requirement blocks protected mutation;
   it is never converted into a broad implicit grant.
+  Schema-v2 `opaque_code = "unrestricted"` is one explicit conservative review identity, not a
+  wildcard expansion or bypass. It may cover otherwise undeclared opaque command, filesystem,
+  network, and system effects, but never covers environment input identities or administrator
+  authorization. App adds it only for a triggered executable surface; managed Sys resources remain
+  bounded. Shell/Sys permission defaults resolve per target before planning.
 
 - **Opaque Preset code is described conservatively, never sampled during planning.** A generator
   or lifecycle hook contributes known command/environment/administrator requirements plus an

@@ -11,15 +11,16 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub const PRESET_BUNDLE_SCHEMA_VERSION: u32 = 1;
+pub const PRESET_BUNDLE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct PresetPackReportV1 {
+pub struct PresetPackReportV2 {
     pub schema_version: u32,
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     pub files: usize,
+    pub unrestricted_opaque_code: bool,
     pub archive_bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_sha256: Option<String>,
@@ -27,15 +28,16 @@ pub struct PresetPackReportV1 {
     pub diagnostics: Vec<String>,
 }
 
-pub struct PresetPackArtifactV1 {
-    pub report: PresetPackReportV1,
+pub struct PresetPackArtifactV2 {
+    pub report: PresetPackReportV2,
     pub bytes: Vec<u8>,
 }
 
 #[derive(JsonSchema, Serialize)]
-pub(crate) struct BundleManifestV1 {
+pub(crate) struct BundleManifestV2 {
     schema_version: u32,
     target: String,
+    unrestricted_opaque_code: bool,
     files: Vec<BundleFileV1>,
 }
 
@@ -50,7 +52,7 @@ pub async fn pack_preset_path(
     source_host: &impl FileSystemObservationHost,
     cwd: &Path,
     path: &Path,
-) -> PresetPackArtifactV1 {
+) -> PresetPackArtifactV2 {
     let scope = match load_preset_source_scope(source_host, cwd, path).await {
         Ok(scope) => scope,
         Err(_) => return invalid(None, "invalid_input"),
@@ -102,12 +104,13 @@ pub async fn pack_preset_path(
         files.push((relative.to_string(), bytes.clone(), mode));
     }
     if !diagnostics.is_empty() {
-        return PresetPackArtifactV1 {
-            report: PresetPackReportV1 {
+        return PresetPackArtifactV2 {
+            report: PresetPackReportV2 {
                 schema_version: PRESET_BUNDLE_SCHEMA_VERSION,
                 valid: false,
                 target: Some(target),
                 files: 0,
+                unrestricted_opaque_code: false,
                 archive_bytes: 0,
                 bundle_sha256: None,
                 diagnostics: diagnostics.into_iter().collect(),
@@ -116,9 +119,11 @@ pub async fn pack_preset_path(
         };
     }
     files.sort_by(|left, right| left.0.cmp(&right.0));
-    let manifest = BundleManifestV1 {
+    let unrestricted_opaque_code = declares_unrestricted_opaque_code(category.kind, manifest_bytes);
+    let manifest = BundleManifestV2 {
         schema_version: PRESET_BUNDLE_SCHEMA_VERSION,
         target: target.clone(),
+        unrestricted_opaque_code,
         files: files
             .iter()
             .map(|(path, bytes, mode)| BundleFileV1 {
@@ -133,12 +138,13 @@ pub async fn pack_preset_path(
         Ok(bytes) => bytes,
         Err(_) => return invalid(Some(target), "bundle_encoding_failed"),
     };
-    PresetPackArtifactV1 {
-        report: PresetPackReportV1 {
+    PresetPackArtifactV2 {
+        report: PresetPackReportV2 {
             schema_version: PRESET_BUNDLE_SCHEMA_VERSION,
             valid: true,
             target: Some(target),
             files: files.len(),
+            unrestricted_opaque_code,
             archive_bytes: bytes.len(),
             bundle_sha256: Some(sha256(&bytes)),
             diagnostics: Vec::new(),
@@ -184,9 +190,23 @@ async fn scan_tree(
 #[derive(Deserialize)]
 struct PackAppManifest {
     artifact: Option<PackArtifact>,
+    post_install: Option<PackHookSpec>,
+    post_upgrade: Option<PackHookSpec>,
     #[serde(default)]
     files: Vec<PackAppFile>,
     permissions: Option<PermissionDeclarationV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PackHookSpec {
+    Single(PackHook),
+    Multiple(Vec<PackHook>),
+}
+
+#[derive(Deserialize)]
+struct PackHook {
+    script: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -208,6 +228,7 @@ struct PackGenerator {
 
 #[derive(Deserialize)]
 struct PackShellManifest {
+    permission_defaults: Option<PermissionDeclarationV1>,
     #[serde(default)]
     files: Vec<PackShellFile>,
 }
@@ -231,6 +252,8 @@ fn declared_executable_paths(kind: &str, bytes: &[u8]) -> BTreeSet<String> {
                     insert_path(&mut paths, teardown);
                 }
             }
+            collect_hook_paths(&mut paths, manifest.post_install);
+            collect_hook_paths(&mut paths, manifest.post_upgrade);
             for file in manifest.files {
                 insert_path(&mut paths, file.source);
                 if let Some(generator) = file.generator {
@@ -243,6 +266,7 @@ fn declared_executable_paths(kind: &str, bytes: &[u8]) -> BTreeSet<String> {
             let Ok(manifest) = toml::from_slice::<PackShellManifest>(bytes) else {
                 return paths;
             };
+            collect_permission_executables(&mut paths, manifest.permission_defaults.as_ref());
             for file in manifest.files {
                 insert_path(&mut paths, file.source);
                 collect_permission_executables(&mut paths, file.permissions.as_ref());
@@ -252,6 +276,7 @@ fn declared_executable_paths(kind: &str, bytes: &[u8]) -> BTreeSet<String> {
             let Ok(manifest) = toml::from_slice::<SysManifest>(bytes) else {
                 return paths;
             };
+            collect_permission_executables(&mut paths, manifest.permission_defaults.as_ref());
             for item in manifest.items {
                 if let Some(SysInstall::Script { path, .. }) = item.install {
                     insert_path(&mut paths, path);
@@ -263,6 +288,9 @@ fn declared_executable_paths(kind: &str, bytes: &[u8]) -> BTreeSet<String> {
                     if let Some(source) = integration.source {
                         insert_path(&mut paths, source);
                     }
+                    if let Some(fragment) = integration.fragment {
+                        insert_path(&mut paths, fragment);
+                    }
                 }
                 collect_permission_executables(&mut paths, item.permissions.as_ref());
             }
@@ -270,6 +298,55 @@ fn declared_executable_paths(kind: &str, bytes: &[u8]) -> BTreeSet<String> {
         _ => {}
     }
     paths
+}
+
+fn collect_hook_paths(paths: &mut BTreeSet<String>, hooks: Option<PackHookSpec>) {
+    let hooks = match hooks {
+        Some(PackHookSpec::Single(hook)) => vec![hook],
+        Some(PackHookSpec::Multiple(hooks)) => hooks,
+        None => Vec::new(),
+    };
+    for hook in hooks {
+        if let Some(script) = hook.script {
+            insert_path(paths, script);
+        }
+    }
+}
+
+fn declares_unrestricted_opaque_code(kind: &str, bytes: &[u8]) -> bool {
+    match kind {
+        "app" => toml::from_slice::<PackAppManifest>(bytes)
+            .ok()
+            .and_then(|manifest| manifest.permissions)
+            .is_some_and(|permissions| permissions.opaque_code.is_some()),
+        "shell" => toml::from_slice::<PackShellManifest>(bytes)
+            .ok()
+            .is_some_and(|manifest| {
+                manifest
+                    .permission_defaults
+                    .as_ref()
+                    .is_some_and(|permissions| permissions.opaque_code.is_some())
+                    || manifest.files.iter().any(|file| {
+                        file.permissions
+                            .as_ref()
+                            .is_some_and(|permissions| permissions.opaque_code.is_some())
+                    })
+            }),
+        "sys" => toml::from_slice::<SysManifest>(bytes)
+            .ok()
+            .is_some_and(|manifest| {
+                manifest
+                    .permission_defaults
+                    .as_ref()
+                    .is_some_and(|permissions| permissions.opaque_code.is_some())
+                    || manifest.items.iter().any(|item| {
+                        item.permissions
+                            .as_ref()
+                            .is_some_and(|permissions| permissions.opaque_code.is_some())
+                    })
+            }),
+        _ => false,
+    }
 }
 
 fn collect_permission_executables(
@@ -368,13 +445,14 @@ fn logical_path(path: &Path) -> String {
         .join("/")
 }
 
-fn invalid(target: Option<String>, code: &str) -> PresetPackArtifactV1 {
-    PresetPackArtifactV1 {
-        report: PresetPackReportV1 {
+fn invalid(target: Option<String>, code: &str) -> PresetPackArtifactV2 {
+    PresetPackArtifactV2 {
+        report: PresetPackReportV2 {
             schema_version: PRESET_BUNDLE_SCHEMA_VERSION,
             valid: false,
             target,
             files: 0,
+            unrestricted_opaque_code: false,
             archive_bytes: 0,
             bundle_sha256: None,
             diagnostics: vec![code.to_string()],
@@ -383,10 +461,15 @@ fn invalid(target: Option<String>, code: &str) -> PresetPackArtifactV1 {
     }
 }
 
+// Compatibility aliases for internal callers compiled against the earlier report names.
+pub type PresetPackReportV1 = PresetPackReportV2;
+pub type PresetPackArtifactV1 = PresetPackArtifactV2;
+
 #[cfg(test)]
 mod tests {
     use super::super::InMemoryHost;
     use super::*;
+    use std::io::Read;
 
     fn source(root: &str) -> InMemoryHost {
         let host = InMemoryHost::new();
@@ -422,6 +505,29 @@ mod tests {
             .map(|entry| entry.unwrap().path().unwrap().to_string_lossy().to_string())
             .collect::<Vec<_>>();
         assert!(!paths.iter().any(|path| path.ends_with("shine.test.toml")));
+    }
+
+    #[tokio::test]
+    async fn bundle_manifest_exposes_unrestricted_opaque_code() {
+        let host = source("/repo");
+        host.put_file(
+            "/repo/app/demo/shine.toml",
+            b"description = 'Demo'\ndest = '~/.config/demo'\npost_install = { script = 'hook.sh' }\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.toml'\ndescription = 'Config'\n"
+                .to_vec(),
+        );
+        host.put_file("/repo/app/demo/hook.sh", b"#!/bin/sh\n".to_vec());
+        let artifact = pack_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+        assert!(artifact.report.valid);
+        assert!(artifact.report.unrestricted_opaque_code);
+
+        let decoder = flate2::read::GzDecoder::new(artifact.bytes.as_slice());
+        let mut archive = tar::Archive::new(decoder);
+        let mut first = archive.entries().unwrap().next().unwrap().unwrap();
+        assert_eq!(first.path().unwrap(), Path::new("shine.bundle.json"));
+        let mut manifest = String::new();
+        first.read_to_string(&mut manifest).unwrap();
+        assert!(manifest.contains("\"schema_version\": 2"));
+        assert!(manifest.contains("\"unrestricted_opaque_code\": true"));
     }
 
     #[tokio::test]

@@ -344,10 +344,16 @@ async fn run(cli: Cli) -> Result<()> {
             }
         }
         Commands::Preset { command } => match command {
-            PresetCommands::New { kind, force } => match kind {
-                PresetTemplateKind::App => apps::handle_init_template(force).await,
-                PresetTemplateKind::Shell => shells::handle_init_template(force).await,
-                PresetTemplateKind::Sys => sys::handle_init_template(force).await,
+            PresetCommands::New {
+                kind,
+                unrestricted,
+                force,
+            } => match kind {
+                PresetTemplateKind::App => apps::handle_init_template(force, unrestricted).await,
+                PresetTemplateKind::Shell => {
+                    shells::handle_init_template(force, unrestricted).await
+                }
+                PresetTemplateKind::Sys => sys::handle_init_template(force, unrestricted).await,
             },
             PresetCommands::Schema { .. } => unreachable!(),
             PresetCommands::Validate { .. } => unreachable!(),
@@ -2329,6 +2335,7 @@ mod tests {
             Commands::Preset {
                 command: PresetCommands::New {
                     kind: PresetTemplateKind::App,
+                    unrestricted: false,
                     force: false,
                 }
             }
@@ -2340,6 +2347,19 @@ mod tests {
             Commands::Preset {
                 command: PresetCommands::New {
                     kind: PresetTemplateKind::Sys,
+                    unrestricted: false,
+                    force: false,
+                }
+            }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["shine", "preset", "new", "shell", "--unrestricted"])
+                .unwrap()
+                .command,
+            Commands::Preset {
+                command: PresetCommands::New {
+                    kind: PresetTemplateKind::Shell,
+                    unrestricted: true,
                     force: false,
                 }
             }
@@ -2683,8 +2703,9 @@ mod tests {
     }
 
     #[test]
-    fn cli_rejects_removed_sys_update_command() {
+    fn cli_rejects_removed_sys_package_maintenance_commands() {
         assert!(Cli::try_parse_from(["shine", "sys", "update"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "sys", "upgrade"]).is_err());
     }
 
     #[test]

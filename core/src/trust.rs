@@ -16,6 +16,7 @@ pub enum TrustCapabilityV1 {
     AppHook,
     AppGenerator,
     AppArtifact,
+    ShellCommand,
     SysBootstrapScript,
     SysProfileCode,
 }
@@ -26,6 +27,7 @@ impl TrustCapabilityV1 {
             Self::AppHook => "app-hook",
             Self::AppGenerator => "app-generator",
             Self::AppArtifact => "app-artifact",
+            Self::ShellCommand => "shell-command",
             Self::SysBootstrapScript => "sys-bootstrap-script",
             Self::SysProfileCode => "sys-profile-code",
         }

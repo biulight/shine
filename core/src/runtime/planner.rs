@@ -214,18 +214,37 @@ impl PermissionAccumulator {
     }
 
     fn declaration(&mut self, declaration: Option<&PermissionDeclarationV1>, missing: &str) {
+        self.declaration_with_opaque_code(declaration, missing, true);
+    }
+
+    fn declaration_without_opaque_code(
+        &mut self,
+        declaration: Option<&PermissionDeclarationV1>,
+        missing: &str,
+    ) {
+        self.declaration_with_opaque_code(declaration, missing, false);
+    }
+
+    fn declaration_with_opaque_code(
+        &mut self,
+        declaration: Option<&PermissionDeclarationV1>,
+        missing: &str,
+        include_opaque_code: bool,
+    ) {
         match declaration {
-            Some(declaration) => match declaration.permission_set() {
-                Ok(permissions) => {
-                    for permission in permissions.iter().cloned() {
-                        self.required.push(permission.clone());
-                        self.declared.push(permission);
+            Some(declaration) => {
+                match declaration.permission_set_with_opaque_code(include_opaque_code) {
+                    Ok(permissions) => {
+                        for permission in permissions.iter().cloned() {
+                            self.required.push(permission.clone());
+                            self.declared.push(permission);
+                        }
+                    }
+                    Err(_) => {
+                        self.uncomputable.insert(missing.to_string());
                     }
                 }
-                Err(_) => {
-                    self.uncomputable.insert(missing.to_string());
-                }
-            },
+            }
             None => {
                 self.uncomputable.insert(missing.to_string());
             }
@@ -381,7 +400,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             if request.operation != LifecycleOperation::Install && !installed_category {
                 continue;
             }
-            permissions.declaration(
+            permissions.declaration_without_opaque_code(
                 category.permissions.as_ref(),
                 "app_permission_declaration_missing",
             );
@@ -551,6 +570,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         );
                         continue;
                     }
+                    permissions.declaration(
+                        category.permissions.as_ref(),
+                        "app_permission_declaration_missing",
+                    );
                     capture_generator_inputs(
                         self.context(),
                         &request.input_versions,
@@ -955,6 +978,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         );
                         continue;
                     }
+                    permissions.declaration(
+                        category.permissions.as_ref(),
+                        "app_permission_declaration_missing",
+                    );
                     capture_app_hook_inputs(
                         self.context(),
                         &request.input_versions,
@@ -2757,6 +2784,20 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         &mut state,
                         &mut file_permissions,
                     )?;
+                    if request.operation != LifecycleOperation::Uninstall
+                        && !self.shell_command_trusted(&category, file)?
+                    {
+                        steps.push(
+                            PlanStepV1::new(
+                                &canonical,
+                                Some("external-code-trust"),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code("shell_external_code_not_allowed"),
+                        );
+                        permissions.merge(file_permissions);
+                        continue;
+                    }
                     let managed = self
                         .shell_launcher_is_managed(&category.name, &file.command_name, entry)
                         .await?;
@@ -3309,7 +3350,7 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
                 .unwrap_or("unknown");
             let target = format!("sys/{item_id}");
             if let Some(item) = &item {
-                permissions.declaration(
+                permissions.declaration_without_opaque_code(
                     item.permissions.as_ref(),
                     "sys_permission_declaration_missing",
                 );
@@ -6698,6 +6739,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plan::OpaqueCodeScopeV1;
     use crate::runtime::{
         FileMetadata, HostError, HostOperation, InMemoryHost, PresetSnapshot, PresetSourceKind,
         RuntimeContext, RuntimePlatform, SplitDnsState,
@@ -7324,6 +7366,125 @@ permissions = { schema_version = 1 }
                 | super::super::HostOperation::Run { .. }
                 | super::super::HostOperation::ApplySplitDns { .. }
         )));
+    }
+
+    #[tokio::test]
+    async fn unrestricted_opaque_code_is_added_only_when_app_code_is_triggered() {
+        let opaque = PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        };
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let static_snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .build();
+        let static_plan = runtime(static_snapshot)
+            .plan_apps(request.clone())
+            .await
+            .unwrap();
+        assert!(static_plan.is_ready());
+        assert!(!static_plan.permissions.required.contains(&opaque));
+
+        let executable_snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_install = { script = 'setup.sh' }\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .file("app/demo/setup.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        let executable_plan = runtime(executable_snapshot)
+            .plan_apps(request)
+            .await
+            .unwrap();
+        assert!(executable_plan.is_ready(), "{executable_plan:?}");
+        assert!(executable_plan.permissions.required.contains(&opaque));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_permission_defaults_expose_unrestricted_command_effects() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\nplatforms = ['unix']\n".to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        let plan = runtime(snapshot)
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: Some("demo/demo".to_string()),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(plan.is_ready(), "{plan:?}");
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn sys_unrestricted_code_is_triggered_for_scripts_not_managed_resources() {
+        let opaque = PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        };
+        let script_snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                b"version = 2\n[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[items]]\nid = 'scripted'\nlabel = 'Scripted'\ndetect = { kind = 'path', path = '$HOME/.scripted' }\ninstall = { kind = 'script', path = 'install.sh' }\n".to_vec(),
+            )
+            .file("sys/test/install.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        let script_plan = runtime(script_snapshot)
+            .plan_sys_bootstrap(SysBootstrapPlanRequest {
+                os_id: "test".to_string(),
+                item_ids: vec!["scripted".to_string()],
+                sys_shell: "zsh".to_string(),
+                force_profile: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(script_plan.is_ready(), "{script_plan:?}");
+        assert!(script_plan.permissions.required.contains(&opaque));
+
+        let managed_snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                b"version = 2\n[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[items]]\nid = 'managed'\nlabel = 'Managed'\nmode = 'managed'\ndriver = 'managed-file'\n[items.config]\nsource = 'managed.txt'\ntarget = '$HOME/.config/managed.txt'\n".to_vec(),
+            )
+            .file("sys/test/managed.txt", b"managed".to_vec())
+            .build();
+        let managed_plan = runtime(managed_snapshot)
+            .plan_managed_sys(SysManagedPlanRequest {
+                operation: LifecycleOperation::Install,
+                os_id: "test".to_string(),
+                target: Some("managed".to_string()),
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(managed_plan.is_ready(), "{managed_plan:?}");
+        assert!(!managed_plan.permissions.required.contains(&opaque));
     }
 
     #[tokio::test]
@@ -10621,7 +10782,60 @@ target = '$HOME/.config/disabled.txt'
         );
         context.is_external_presets = true;
         context.external_shell_mode = ExternalShellMode::Snapshot;
-        CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+        let mut runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
+        trust_current_external_shell(&mut runtime);
+        runtime
+    }
+
+    fn trust_current_external_shell(runtime: &mut CoreRuntime<InMemoryHost>) {
+        let requirements = runtime
+            .shell_categories(None)
+            .unwrap()
+            .into_iter()
+            .flat_map(|category| {
+                category
+                    .files
+                    .iter()
+                    .flat_map(|file| {
+                        runtime
+                            .shell_external_code_requirements(&category, file)
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        runtime.context_mut_for_cli().trust_grants = requirements
+            .iter()
+            .map(crate::trust::TrustGrantV1::for_reviewed_requirement)
+            .collect();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_shell_requires_current_target_local_trust() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        let mut runtime = external_shell_runtime(snapshot);
+        runtime.context_mut_for_cli().trust_grants.clear();
+        let request = shell_install_request();
+
+        let blocked = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(!blocked.is_ready());
+        assert!(blocked.steps.iter().any(|step| {
+            step.target == "shell/demo/demo"
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_external_code_not_allowed".to_string())
+        }));
+
+        trust_current_external_shell(&mut runtime);
+        assert!(runtime.plan_shells(request).await.unwrap().is_ready());
     }
 
     #[tokio::test]
@@ -11692,11 +11906,12 @@ target = '$HOME/.config/disabled.txt'
             .file("shell/demo/shine.toml", metadata.to_vec())
             .file("shell/demo/demo.sh", desired_script.to_vec())
             .build();
-        let runtime = CoreRuntime::new(
+        let mut runtime = CoreRuntime::new(
             original.host().clone(),
             original.context().clone(),
             desired_snapshot,
         );
+        trust_current_external_shell(&mut runtime);
         runtime.host().put_file(
             runtime.context().presets_dir.join("shell/demo/demo.sh"),
             desired_script.to_vec(),
@@ -12979,11 +13194,12 @@ target = '$HOME/.config/disabled.txt'
             )
             .file("shell/demo/two.sh", b"#!/bin/sh\necho changed\n".to_vec())
             .build();
-        let runtime = CoreRuntime::new(
+        let mut runtime = CoreRuntime::new(
             original.host().clone(),
             original.context().clone(),
             snapshot,
         );
+        trust_current_external_shell(&mut runtime);
         for (logical, bytes) in runtime.presets().files() {
             runtime
                 .host()

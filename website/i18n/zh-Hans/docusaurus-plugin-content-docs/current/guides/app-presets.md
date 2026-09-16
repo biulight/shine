@@ -144,6 +144,8 @@ refresh 会显示并重新校验安全 Plan；自动化调用必须添加 `--yes
 类别根部的 `[permissions]` 会另外声明 generator、hook、artifact 的 command、network scope 和
 环境变量敏感度，供静态校验与后续安全 Plan 使用。该声明不会启用或信任外部代码；其中不得写入
 URL token、环境变量值、命令参数或密文。
+权限 schema v2 也可以用 `opaque_code = "unrestricted"` 标记未枚举的 opaque-code 效果；环境
+allowlist 与敏感度仍须显式配置，lint 会提示这一宽泛风险。
 
 ### Surge URI 订阅
 

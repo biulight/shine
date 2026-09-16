@@ -3,8 +3,8 @@ use crate::env::EnvConfig;
 use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 use shine_core::plan::{
-    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, PermissionV1, PlanActionV1,
-    PlanV1,
+    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, OpaqueCodeScopeV1, PermissionV1,
+    PlanActionV1, PlanV1,
 };
 use shine_core::runtime::{
     AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest, CoreRuntime,
@@ -707,6 +707,12 @@ fn render_compact_permissions(plan: &PlanV1) -> Vec<String> {
 
 pub(crate) fn permission_group(permission: &PermissionV1) -> (String, String) {
     match permission {
+        PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        } => (
+            "opaque Preset code".to_string(),
+            "unrestricted effects".to_string(),
+        ),
         PermissionV1::Filesystem { access, path } => (
             format!(
                 "filesystem {}",
@@ -942,6 +948,12 @@ fn render_bootstrap_permissions(
     let mut groups = Vec::<(String, Vec<String>)>::new();
     for permission in permissions.required.iter() {
         let (label, value) = match permission {
+            PermissionV1::OpaqueCode {
+                scope: OpaqueCodeScopeV1::Unrestricted,
+            } => (
+                "Opaque code".to_string(),
+                "unrestricted effects".to_string(),
+            ),
             PermissionV1::Filesystem { access, path } => (
                 match access {
                     FilesystemAccessV1::Read => "Read",
@@ -1116,6 +1128,9 @@ pub(crate) fn styled_action_name(action: PlanActionV1) -> String {
 
 pub(crate) fn permission_name(permission: &PermissionV1) -> String {
     match permission {
+        PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        } => "opaque Preset code with unrestricted effects".to_string(),
         PermissionV1::Filesystem { access, path } => format!(
             "filesystem {} {path}",
             match access {
@@ -1158,6 +1173,25 @@ mod tests {
         let mut builder = SnapshotDigestV1::builder("test");
         builder.add_observation(label, b"value").unwrap();
         builder.finish()
+    }
+
+    #[test]
+    fn unrestricted_opaque_code_permission_has_human_readable_output() {
+        let permission = PermissionV1::OpaqueCode {
+            scope: shine_core::plan::OpaqueCodeScopeV1::Unrestricted,
+        };
+
+        assert_eq!(
+            permission_group(&permission),
+            (
+                "opaque Preset code".to_string(),
+                "unrestricted effects".to_string()
+            )
+        );
+        assert_eq!(
+            permission_name(&permission),
+            "opaque Preset code with unrestricted effects"
+        );
     }
 
     fn bootstrap_display_plan() -> PlanV1 {

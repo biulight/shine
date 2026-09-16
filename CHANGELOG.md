@@ -7,6 +7,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Features
+
+- Add permission schema v2 for App, Shell, and Sys Presets with an explicit unrestricted
+  opaque-code declaration, category defaults for Shell and Sys, Preset-wide trust batching,
+  target-local external Shell trust, scaffolding support, lint diagnostics, and bundle risk
+  metadata.
 ## [2.2.0] — 2026-09-15
 
 ### Features

@@ -63,20 +63,25 @@ phone recipient 不由 `state migrate` 自动转换。升级并验证插件和�
 
 ## 外部代码信任
 
-外部 App hook、generator、artifact、Sys 安装脚本及可执行 profile 内容使用 target-scoped grant，
-并保存在仅所有者可读写的 `~/.shine/trust.toml`。不要手改该文件，也不能从项目配置授予信任。
+外部 App hook、generator、artifact、Sys 安装脚本、可执行 profile 内容，以及声明了 unrestricted
+opaque-code 效果的 Shell command 使用 target-scoped grant，并保存在仅所有者可读写的
+`~/.shine/trust.toml`。不要手改该文件，也不能从项目配置授予信任。
 
 ```bash
 shine trust inspect app/example
 shine trust grant app/example
 shine trust list
 shine trust revoke app/example
+shine trust inspect shell/tools/my-command
+shine trust grant preset
 ```
 
 Grant 只适用于已经审阅的 target 与权限；代码、来源或权限变化后必须重新审阅。当类型化 Preset
 元数据已经能够推导操作所需的全部权限时，经过验证的显式空权限声明也可以授予信任；完全缺失声明
 仍会阻止操作。Grant 不能替代每次操作前显示的 Plan。旧的 `allow_app_hooks` 和
 `allow_sys_code` 已被忽略，并会在下次保存配置时移除。
+`preset` target 可以批量审阅或授予当前激活快照，但保存时仍是各 target 独立的 grant；新增 target、
+代码变化或权限变化后仍须重新审阅。
 
 ## Env 条目格式与说明
 

@@ -95,10 +95,10 @@ shine info <TARGET> [--diff] [--verbose] [--run-generators]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
 shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
-shine trust inspect <app/CATEGORY|sys/ITEM>
-shine trust grant <app/CATEGORY|sys/ITEM> [--yes]
+shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
+shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--yes]
 shine trust list
-shine trust revoke <app/CATEGORY|sys/ITEM>
+shine trust revoke <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
 shine completions install
 shine completions <bash|zsh|powershell>
 ```
@@ -132,7 +132,7 @@ dry run。
 ## 预设创作与来源
 
 ```text
-shine preset new <app|shell|sys> [--force]
+shine preset new <app|shell|sys> [--unrestricted] [--force]
 shine preset schema [--format <text|json>]
 shine preset validate [PATH] [--format <text|json>]
 shine preset lint [PATH] [--format <text|json>] [--deny-warnings]

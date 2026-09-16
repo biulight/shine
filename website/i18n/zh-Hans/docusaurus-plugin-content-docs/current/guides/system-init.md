@@ -51,6 +51,10 @@ Profile 配置与公共运行时目录、清单写入分别列在独立区块。
 不表示安装软件包无需权限。多个安装项都需要同一权限时，会在各项下分别展示。
 `Permissions none required` 仅表示规划器未为该区块推导出所需权限，不是安全保证。
 
+自定义脚本 item 的效果难以完整枚举时，可使用权限 schema v2 的
+`opaque_code = "unrestricted"`。类别级 `permission_defaults` 可为没有 item-specific 覆盖的条目
+提供该声明；环境输入与管理员要求仍须显式配置。
+
 默认输出缩短快照标识。添加 `--verbose`（例如 `shine sys bootstrap --preset recommended --verbose`）
 可查看完整标识与诊断码。两种视图审阅的是同一个完整 Plan，对选中的操作仍只进行一次确认。
 `--verbose` 不改变更早阶段的 `--dry-run` 预览。

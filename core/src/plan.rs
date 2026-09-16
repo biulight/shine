@@ -52,6 +52,12 @@ pub enum EnvironmentSensitivityV1 {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum PermissionV1 {
+    /// Opaque Preset code whose effects cannot be completely enumerated.
+    /// This remains a review identity; it does not expose ambient inputs or
+    /// replace administrator authorization.
+    OpaqueCode {
+        scope: OpaqueCodeScopeV1,
+    },
     Filesystem {
         access: FilesystemAccessV1,
         path: String,
@@ -72,6 +78,14 @@ pub enum PermissionV1 {
         #[serde(skip_serializing_if = "Option::is_none")]
         resource: Option<String>,
     },
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum OpaqueCodeScopeV1 {
+    Unrestricted,
 }
 
 /// A stable, sorted, duplicate-free permission set.
@@ -101,7 +115,22 @@ impl PermissionSetV1 {
     }
 
     fn difference(&self, declared: &Self) -> Self {
-        Self(self.0.difference(&declared.0).cloned().collect())
+        let unrestricted_opaque_code = declared.contains(&PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        });
+        Self(
+            self.0
+                .difference(&declared.0)
+                .filter(|permission| {
+                    !unrestricted_opaque_code
+                        || matches!(
+                            permission,
+                            PermissionV1::Environment { .. } | PermissionV1::Administrator
+                        )
+                })
+                .cloned()
+                .collect(),
+        )
     }
 }
 
@@ -637,6 +666,45 @@ mod tests {
             BTreeSet::from(["permission_command_uncomputable".to_string()])
         );
         assert!(!resolution.is_satisfied());
+    }
+
+    #[test]
+    fn unrestricted_opaque_code_covers_effects_but_not_inputs_or_elevation() {
+        let opaque = PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        };
+        let required = PermissionSetV1::new([
+            opaque.clone(),
+            PermissionV1::Command {
+                program: "arbitrary-tool".to_string(),
+            },
+            filesystem_permission("~/.outside"),
+            PermissionV1::Environment {
+                name: "TOKEN".to_string(),
+                sensitivity: EnvironmentSensitivityV1::Secret,
+            },
+            PermissionV1::Administrator,
+        ]);
+        let resolution = PermissionResolutionV1::resolve(
+            required,
+            &PermissionSetV1::new([opaque]),
+            std::iter::empty::<String>(),
+        );
+
+        assert_eq!(resolution.missing_declarations.iter().count(), 2);
+        assert!(
+            resolution
+                .missing_declarations
+                .contains(&PermissionV1::Environment {
+                    name: "TOKEN".to_string(),
+                    sensitivity: EnvironmentSensitivityV1::Secret,
+                })
+        );
+        assert!(
+            resolution
+                .missing_declarations
+                .contains(&PermissionV1::Administrator)
+        );
     }
 
     #[test]

@@ -5,18 +5,20 @@
 //! snapshot-bound [`crate::plan::PlanV1`] wire contract.
 
 use crate::plan::{
-    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, PermissionSetV1, PermissionV1,
+    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, OpaqueCodeScopeV1,
+    PermissionSetV1, PermissionV1,
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::fmt;
 
-pub const PERMISSION_DECLARATION_SCHEMA_VERSION: u32 = 1;
+pub const PERMISSION_DECLARATION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionDeclarationV1 {
     pub schema_version: u32,
+    pub opaque_code: Option<OpaqueCodeDeclarationV2>,
     #[serde(default)]
     pub administrator: bool,
     #[serde(default)]
@@ -33,9 +35,17 @@ pub struct PermissionDeclarationV1 {
 
 impl PermissionDeclarationV1 {
     pub fn validate(&self) -> Result<(), PermissionDeclarationError> {
-        if self.schema_version != PERMISSION_DECLARATION_SCHEMA_VERSION {
+        if !matches!(
+            self.schema_version,
+            1 | PERMISSION_DECLARATION_SCHEMA_VERSION
+        ) {
             return Err(PermissionDeclarationError::UnsupportedSchema(
                 self.schema_version,
+            ));
+        }
+        if self.schema_version == 1 && self.opaque_code.is_some() {
+            return Err(PermissionDeclarationError::Invalid(
+                "`opaque_code` requires permission schema version 2".to_string(),
             ));
         }
 
@@ -116,8 +126,20 @@ impl PermissionDeclarationV1 {
     /// permission vocabulary used by a security Plan. Filesystem paths retain
     /// their logical base and never contain a physical Preset checkout root.
     pub fn permission_set(&self) -> Result<PermissionSetV1, PermissionDeclarationError> {
+        self.permission_set_with_opaque_code(true)
+    }
+
+    pub fn permission_set_with_opaque_code(
+        &self,
+        include_opaque_code: bool,
+    ) -> Result<PermissionSetV1, PermissionDeclarationError> {
         self.validate()?;
         let mut permissions = Vec::new();
+        if include_opaque_code && self.opaque_code == Some(OpaqueCodeDeclarationV2::Unrestricted) {
+            permissions.push(PermissionV1::OpaqueCode {
+                scope: OpaqueCodeScopeV1::Unrestricted,
+            });
+        }
         if self.administrator {
             permissions.push(PermissionV1::Administrator);
         }
@@ -166,6 +188,12 @@ impl PermissionDeclarationV1 {
         }));
         Ok(PermissionSetV1::new(permissions))
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OpaqueCodeDeclarationV2 {
+    Unrestricted,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -490,12 +518,50 @@ system = [{ capability = "split-dns", resource = "private-domain" }]
 
     #[test]
     fn schema_and_unknown_fields_fail_closed() {
-        let declaration = parse("schema_version = 2\n").unwrap();
+        let declaration = parse("schema_version = 3\n").unwrap();
         assert_eq!(
             declaration.validate().unwrap_err().diagnostic_code(),
             "unsupported_permission_schema"
         );
         assert!(parse("schema_version = 1\nsecret_value = 'nope'\n").is_err());
+    }
+
+    #[test]
+    fn schema_v2_declares_unrestricted_opaque_code_without_expanding_wildcards() {
+        let declaration = parse(
+            r#"
+schema_version = 2
+opaque_code = "unrestricted"
+environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
+"#,
+        )
+        .unwrap();
+
+        let permissions = declaration.permission_set().unwrap();
+        assert!(permissions.contains(&PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        }));
+        assert!(permissions.contains(&PermissionV1::Environment {
+            name: "API_TOKEN".to_string(),
+            sensitivity: EnvironmentSensitivityV1::Secret,
+        }));
+        assert_eq!(permissions.iter().count(), 2);
+    }
+
+    #[test]
+    fn schema_v1_rejects_the_v2_opaque_code_field() {
+        let declaration = parse(
+            r#"
+schema_version = 1
+opaque_code = "unrestricted"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            declaration.validate().unwrap_err().diagnostic_code(),
+            "invalid_permission_declaration"
+        );
     }
 
     #[test]

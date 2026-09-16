@@ -133,11 +133,11 @@ prints copy-paste-safe `preset validate` and current-platform `preset plan` comm
 overlay remains read-only, so its report points back to the upstream checkout instead of suggesting
 an edit to the mirrored path.
 
-Trust enrollment applies only to external App hook/generator/artifact code and Sys bootstrap/profile
-code. After validation, use the reported `shine trust inspect app/<CATEGORY>` or
-`shine trust inspect sys/<ITEM>` command and grant only after accepting the rendered scope. Shell
-commands are reviewed through their `[files.permissions]` declaration and security Plan; they are
-not valid `trust inspect/grant` targets.
+Trust enrollment applies to external App hook/generator/artifact code, Sys bootstrap/profile code,
+and Shell commands that declare unrestricted opaque-code effects. After validation, use the
+reported canonical target—or `shine trust inspect preset` for the current batch—and grant only
+after accepting the rendered scope. Existing Shell commands with enumerated permissions retain
+their permission declaration and security Plan flow without a separate trust target.
 
 `shine update` prints a concise **Preset compatibility** summary and still completes the available
 configuration and Shine release checks before returning a blocker. Its final error provides the
@@ -145,9 +145,9 @@ single `shine preset migrate --dry-run` entry point; that command groups detaile
 manifest. `shine upgrade` performs the same preflight—including after `--pull`—and stops before any
 lifecycle Plan or mutation when the source is incompatible.
 
-External Presets must declare permission schema v1 for each executable target. A missing or invalid
-declaration is a blocker, not an implicit broad grant. Authors should run the static and fixture
-gates before distribution:
+External Presets must declare supported permission schema v1 or v2 for each executable target. A
+missing or invalid declaration is a blocker, not an implicit broad grant. Authors should run the
+static and fixture gates before distribution:
 
 ```bash
 shine preset schema

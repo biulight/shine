@@ -35,6 +35,7 @@ use std::str::FromStr;
 #[derive(Debug, Deserialize)]
 struct ShellCategoryToml {
     description: Option<String>,
+    permission_defaults: Option<PermissionDeclarationV1>,
     files: Option<Vec<ShellFileToml>>,
 }
 
@@ -2963,6 +2964,14 @@ impl<H> CoreRuntime<H> {
                     .with_context(|| format!("failed to parse {metadata_path}"))
             })
             .transpose()?;
+        if let Some(defaults) = parsed
+            .as_ref()
+            .and_then(|parsed| parsed.permission_defaults.as_ref())
+        {
+            defaults
+                .validate()
+                .with_context(|| format!("invalid permission_defaults in {metadata_path}"))?;
+        }
         let mut files = Vec::new();
         if let Some(entries) = parsed.as_ref().and_then(|parsed| parsed.files.as_ref()) {
             for entry in entries {
@@ -2998,7 +3007,12 @@ impl<H> CoreRuntime<H> {
                 if runtime != LinkRuntime::Bun && !env.is_empty() {
                     bail!("{metadata_path}: `env` is only valid when `runtime = \"bun\"`");
                 }
-                if let Some(permissions) = &entry.permissions {
+                let permissions = entry.permissions.as_ref().or_else(|| {
+                    parsed
+                        .as_ref()
+                        .and_then(|parsed| parsed.permission_defaults.as_ref())
+                });
+                if let Some(permissions) = permissions {
                     permissions
                         .validate()
                         .with_context(|| format!("invalid permissions in {metadata_path}"))?;
@@ -3022,7 +3036,7 @@ impl<H> CoreRuntime<H> {
                     runtime,
                     transforms,
                     env,
-                    permissions: entry.permissions.clone(),
+                    permissions: permissions.cloned(),
                 });
             }
         } else {
@@ -3045,7 +3059,9 @@ impl<H> CoreRuntime<H> {
                     runtime: LinkRuntime::Native,
                     transforms: Vec::new(),
                     env: Vec::new(),
-                    permissions: None,
+                    permissions: parsed
+                        .as_ref()
+                        .and_then(|parsed| parsed.permission_defaults.clone()),
                     source_rel,
                 });
             }
@@ -3855,10 +3871,109 @@ fn canonical_target(entry: &ShellManifestEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plan::{OpaqueCodeScopeV1, PermissionV1};
     use crate::runtime::{
         FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost,
         RuntimeContext, RuntimePlatform,
     };
+
+    #[test]
+    fn shell_permission_defaults_apply_and_entries_can_override_them() {
+        let parsed: ShellCategoryToml = toml::from_str(
+            r#"
+[permission_defaults]
+schema_version = 2
+opaque_code = "unrestricted"
+
+[[files]]
+source = "one.sh"
+
+[[files]]
+source = "two.sh"
+[files.permissions]
+schema_version = 1
+commands = ["git"]
+"#,
+        )
+        .unwrap();
+        let files = parsed.files.as_ref().unwrap();
+        let inherited = files[0]
+            .permissions
+            .as_ref()
+            .or(parsed.permission_defaults.as_ref())
+            .unwrap();
+        let overridden = files[1]
+            .permissions
+            .as_ref()
+            .or(parsed.permission_defaults.as_ref())
+            .unwrap();
+
+        assert!(
+            inherited
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                })
+        );
+        assert!(
+            !overridden
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                })
+        );
+        assert!(
+            overridden
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::Command {
+                    program: "git".to_string(),
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_permission_defaults_apply_to_compatible_auto_discovery() {
+        let home = PathBuf::from("/home/test");
+        let shine = home.join(".shine");
+        let context = RuntimeContext::isolated(
+            home,
+            shine.clone(),
+            shine.join("presets"),
+            shine.join("bin"),
+            RuntimePlatform::Linux,
+        );
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "shell/tools/shine.toml",
+                b"[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n"
+                    .to_vec(),
+            )
+            .file("shell/tools/tool.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
+
+        let category = runtime
+            .shell_categories(Some("tools"))
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        assert!(
+            category.files[0]
+                .permissions
+                .as_ref()
+                .unwrap()
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                })
+        );
+    }
 
     #[tokio::test]
     async fn in_memory_shell_lifecycle_covers_cache_launcher_profile_and_receipt() {
