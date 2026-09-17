@@ -7,6 +7,10 @@ platform = "linux"
 [cases.host]
 environment = ["DEMO_GREETING"]
 
+[[cases.host.trust]]
+target = "shell/demo/shine-demo-hello"
+capability = "shell-command"
+
 [cases.expect]
 valid = true
 ready = true
@@ -20,6 +24,10 @@ permission_diagnostic_codes = []
 [[cases]]
 name = "macos-without-environment"
 platform = "macos"
+
+[[cases.host.trust]]
+target = "shell/demo/shine-demo-hello"
+capability = "shell-command"
 
 [cases.expect]
 valid = true

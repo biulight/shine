@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-09-17 — Fixture trust grammar must follow every code target kind
+
+- **Symptom**: the Shell authoring example started failing with
+  `shell_external_code_not_allowed` after Shell commands became derived code boundaries, while App
+  and Sys fixtures could still seed exact trust.
+- **Root cause**: the versioned fixture capability enum and its canonical-target validator were not
+  extended with `shell-command` and `shell/<category>/<command>` when the runtime trust grammar was.
+- **Fix**: expose the runtime capability in fixture schema, accept its exact target shape, seed the
+  example cases with derived snapshot trust, and cover the path with a Core regression test.
+- **Rule**: when adding a trust target or capability, update runtime parsing, fixture schema and
+  target validation, generated schema coverage, and at least one representative authoring example.
+
 ## 2026-09-16 — Code consent must not be inferred from automatic confirmation
 
 - **Symptom**: snapshot trust duplicated human Plan approval, while missing optional statements still
