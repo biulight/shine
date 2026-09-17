@@ -33,8 +33,8 @@ semantics: Shine injects only declared inputs and requires explicit elevation ap
 
 App hooks, generators and artifacts; installed or sourced Shell commands; and Sys scripts or
 executable profile integrations are classified from typed entry semantics. This classification does
-not depend on `opaque_code`. The v2 unrestricted field and `preset new --unrestricted` remain
-compatible authoring inputs, but cannot enable or disable the risk classification.
+not depend on `opaque_code`. The v2 unrestricted field and `preset new --unrestricted` are
+supported optional authoring inputs, but cannot enable or disable the risk classification.
 
 External code trust schema v2 binds each target and capability to its complete effective category
 snapshot: `app/<category>/`, `shell/<category>/`, or `sys/<os>/`. The digest includes sorted logical

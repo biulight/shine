@@ -118,8 +118,8 @@ bugs. Check this list before changing the modules named in each entry.
   checkout path; command entries contain no argv and environment entries contain names and
   sensitivity only. Pure planners merge explicit declarations with Core-bounded typed metadata and
   receipt ownership. An uncomputable structured requirement still blocks protected mutation; it is
-  never converted into a broad implicit grant. Schema-v2 `opaque_code = "unrestricted"` remains a
-  compatible author statement and cannot enable, suppress, or narrow Core's code classification.
+  never converted into a broad implicit grant. Schema-v2 `opaque_code = "unrestricted"` is an
+  optional author statement and cannot enable, suppress, or narrow Core's code classification.
   Shell/Sys permission defaults still resolve per target before planning.
 
 - **Unisolated code classification is Core-owned.** Triggered App hooks, generators and artifacts;

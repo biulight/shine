@@ -170,8 +170,8 @@ Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These c
 authoring input without installing it. `migrate --dry-run` previews legacy metadata changes;
 applying a migration requires review and confirmation. A Git-managed overlay is a disposable mirror,
 so edit its upstream checkout rather than the mirror.
-New templates omit empty and speculative capability tables. `--unrestricted` remains compatible
-and adds the legacy statement, but all arbitrary code is unisolated with or without it.
+New templates omit empty and speculative capability tables. `--unrestricted` adds the optional
+unrestricted author statement, but all arbitrary code is unisolated with or without it.
 
 See [Customize presets](../guides/custom-presets.md) and
 [Migrate system presets to v2](../guides/sys-preset-v2-migration.md).

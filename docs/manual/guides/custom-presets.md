@@ -45,8 +45,8 @@ shine preset plan . --platform macos --format json
 shine preset test . --format json
 ```
 
-The default scaffold does not add an empty permission table. The compatibility option below adds
-the legacy unrestricted author statement:
+The default scaffold does not add an empty permission table. Use the option below to add the
+unrestricted author statement:
 
 ```bash
 shine preset new app --unrestricted
@@ -142,7 +142,7 @@ environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
 system = [{ capability = "split-dns", resource = "private-domain" }]
 ```
 
-Permission schema v2 retains the legacy unrestricted statement:
+Permission schema v2 supports the unrestricted author statement:
 
 ```toml
 [permissions]
@@ -178,7 +178,7 @@ never values or ciphertext. Do not repeat commands, script paths, ordinary desti
 package providers already present in typed metadata. Add optional statements only when they help a
 reviewer understand intended effects.
 
-`opaque_code = "unrestricted"` is compatible review metadata. Core automatically marks App hooks,
+`opaque_code = "unrestricted"` is optional review metadata. Core automatically marks App hooks,
 generators and artifacts, installed or sourced Shell commands, and Sys scripts/profile code as
 unisolated even when this field or the whole table is absent. It never forwards environment values
 or grants elevation. Environment allowlists and `plain`/`secret` sensitivity, plus Administrator

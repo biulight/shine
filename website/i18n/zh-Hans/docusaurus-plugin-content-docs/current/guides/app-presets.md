@@ -143,7 +143,7 @@ refresh 会显示并重新校验安全 Plan；自动化调用必须添加 `--yes
 
 类别根部可选的 `[permissions]` 表包含未经验证的作者能力说明及受执行器约束的 env/admin 契约。
 Shine 已从 typed metadata 推导 hook command 和脚本路径，无需重复声明。其中不得写入 URL token、
-环境变量值、命令参数或密文。权限 schema v2 继续接受 `opaque_code = "unrestricted"`，但 Core 会
+环境变量值、命令参数或密文。权限 schema v2 支持 `opaque_code = "unrestricted"`，但 Core 会
 独立地把每个实际触发的 hook、generator 和 artifact 标记为未隔离。这是审阅和信任 metadata，
 不是运行时沙箱。
 

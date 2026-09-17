@@ -40,7 +40,7 @@ shine preset plan . --platform macos --format json
 shine preset test . --format json
 ```
 
-默认脚手架不会添加空权限表。以下兼容选项会添加旧版 unrestricted 作者说明：
+默认脚手架不会添加空权限表。以下选项会添加 unrestricted 作者说明：
 
 ```bash
 shine preset new app --unrestricted
@@ -127,7 +127,7 @@ environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
 system = [{ capability = "split-dns", resource = "private-domain" }]
 ```
 
-权限 schema v2 继续接受旧版 unrestricted 说明：
+权限 schema v2 支持 unrestricted 作者说明：
 
 ```toml
 [permissions]
@@ -160,7 +160,7 @@ Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值�
 已表达的命令、脚本路径、普通 destination 或固定 package provider；只有在有助于审阅时才添加
 可选说明。
 
-`opaque_code = "unrestricted"` 是兼容的审阅 metadata。即使省略该字段或整张表，Core 仍会把
+`opaque_code = "unrestricted"` 是可选的审阅 metadata。即使省略该字段或整张表，Core 仍会把
 App hook、generator、artifact、安装或 source 的 Shell 命令，以及 Sys script/profile code 自动
 标记为未隔离代码。它不会转发环境值或授予提权。环境 allowlist 及 `plain`/`secret` 敏感度和
 Administrator 要求仍须显式配置，因为 Shine 会执行这些受管注入/提权契约。

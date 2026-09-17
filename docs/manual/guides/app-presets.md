@@ -166,7 +166,7 @@ and trust.
 The category's optional `[permissions]` table contains unverified author capability statements and
 the enforced environment/admin contracts. Shine already derives hook commands and script paths from
 typed metadata; do not repeat them. Never put a URL token, environment value, command arguments, or
-ciphertext in the declaration. Permission schema v2 still accepts
+ciphertext in the declaration. Permission schema v2 supports
 `opaque_code = "unrestricted"`, but Core marks every triggered hook, generator, and artifact as
 unisolated independently. This is review and trust metadata, not a runtime sandbox.
 
