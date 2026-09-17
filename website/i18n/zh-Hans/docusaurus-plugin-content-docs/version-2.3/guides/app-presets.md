@@ -137,13 +137,15 @@ shine app refresh <CATEGORY> <SOURCE_FILE>
 `--replace-managed` 的修复安装会运行已由 `when_env` 启用的生成器，不受 `auto` 设置影响。
 refresh 会显示并重新校验安全 Plan；自动化调用必须添加 `--yes`。
 
-外部预设或 overlay 提供的 generator 属于可执行代码，需要审阅后运行
-`shine trust grant app/<CATEGORY>`。Shine 只向它传入预设显式声明的 env 值及固定的
+外部预设或 overlay 的 generator 可由交互式生命周期 Plan 获得本次授权；自动化与
+`--run-generators` 检查则须先运行 `shine trust grant app/<CATEGORY>` 建立持久授权。Shine 只向它传入预设显式声明的 env 值及固定的
 `SHINE_APP_*` 路径变量，并限制执行时间和输出大小；仍应只运行自己审阅和信任的预设。
 
-类别根部的 `[permissions]` 会另外声明 generator、hook、artifact 的 command、network scope 和
-环境变量敏感度，供静态校验与后续安全 Plan 使用。该声明不会启用或信任外部代码；其中不得写入
-URL token、环境变量值、命令参数或密文。
+类别根部可选的 `[permissions]` 表包含未经验证的作者能力说明及受执行器约束的 env/admin 契约。
+Shine 已从 typed metadata 推导 hook command 和脚本路径，无需重复声明。其中不得写入 URL token、
+环境变量值、命令参数或密文。权限 schema v2 支持 `opaque_code = "unrestricted"`，但 Core 会
+独立地把每个实际触发的 hook、generator 和 artifact 标记为未隔离。这是审阅和信任 metadata，
+不是运行时沙箱。
 
 ### Surge URI 订阅
 
@@ -235,7 +237,7 @@ Shine 只读取 `profiles.yaml` 定位这些绑定文件，不会修改订阅、
 
 示例沿用上述三类流量，并为 rule-provider 提供三套互斥布局：mihomo `HomeDir` 内的 `type: file`、同设备的 loopback HTTP 服务，或远程 HTTPS 服务。Shine 会通过普通受管 app 文件把三份默认不生效的参考规则安装到 `HomeDir/ruleset/shine-source/`；只有选择 file provider 时才需要在 overlay 中覆盖这些文件。loopback 和远程 HTTP 布局不会引用它们，因此 URL、interval 与 provider 缓存路径保持不变。`shine upgrade` 实际更新该类别后，会自动运行已审批的 post-upgrade 脚本。若订阅绑定内容已经生效，本地参考规则更新会立即刷新全部 provider 并关闭旧连接；若渲染结果改变了绑定文件，脚本只写入文件，不请求 mihomo 尚未加载的 provider。此时请重新选择订阅，再运行 `shine app artifact apply clash-verge`。选择一整套 provider 后，还需同步启用对应策略组与 `prepend-rules`。loopback 或私有服务的 `proxy: DIRECT` 只控制 provider 下载，如服务器只能经代理访问，应删除或调整它。私有域名依赖系统 split DNS 时，还需配置 mihomo 自己的 `dns.nameserver-policy`。
 
-artifact 和 post-upgrade 脚本都使用 Bun，运行机器必须已安装 Bun。自动钩子仅在 `shine upgrade` 确实改动 `clash-verge` 受管文件时运行；首次设置、重选变化后的绑定或刷新失败重试仍使用显式命令。外部脚本型钩子需要当前 target-scoped trust grant。即时刷新还可使用 `[env]` 中的 `CLASH_CONTROLLER_URL` 和 `CLASH_CONTROLLER_TOKEN`；未配置 URL 时只跳过立即刷新，provider 仍按自身 interval 更新。artifact 会刷新最终生效的 `merge.yaml` 中 `rule-providers` 映射声明的全部名称，自定义 provider 名称无需同步修改脚本。该映射缺失、为 null 或为空时跳过刷新；存在但不是映射时报告配置错误。所有已声明 provider 都刷新成功后，artifact 还会关闭当前全部 mihomo 连接，使浏览器和其它应用自动重连并立即按新规则匹配，无需重启应用；正在进行的下载或其它长连接可能会短暂中断。控制器令牌不要写入 overlay 或文档。
+artifact 和 post-upgrade 脚本都使用 Bun，运行机器必须已安装 Bun。自动钩子仅在 `shine upgrade` 确实改动 `clash-verge` 受管文件时运行；首次设置、重选变化后的绑定或刷新失败重试仍使用显式命令。外部脚本型钩子需要人工确认生命周期 Plan 或已有匹配 grant。即时刷新还可使用 `[env]` 中的 `CLASH_CONTROLLER_URL` 和 `CLASH_CONTROLLER_TOKEN`；未配置 URL 时只跳过立即刷新，provider 仍按自身 interval 更新。artifact 会刷新最终生效的 `merge.yaml` 中 `rule-providers` 映射声明的全部名称，自定义 provider 名称无需同步修改脚本。该映射缺失、为 null 或为空时跳过刷新；存在但不是映射时报告配置错误。所有已声明 provider 都刷新成功后，artifact 还会关闭当前全部 mihomo 连接，使浏览器和其它应用自动重连并立即按新规则匹配，无需重启应用；正在进行的下载或其它长连接可能会短暂中断。控制器令牌不要写入 overlay 或文档。
 
 `shine app artifact remove clash-verge` 不会清除 Clash Verge Rev 自己保存的订阅绑定；完全移除时还需在应用中手动清空上述四个编辑器。
 
@@ -244,7 +246,7 @@ artifact 和 post-upgrade 脚本都使用 Bun，运行机器必须已安装 Bun�
 预设作者可以声明 `post_install` 和 `post_upgrade` 钩子：前者在安装实际写入文件后运行，后者只在 `shine upgrade` 实际更新该类别至少一个文件后运行；未变化的类别不会触发。
 
 钩子读取的每个环境输入都必须列入钩子的 `env`，并在类别权限声明中声明同名变量；Plan 不会显示
-变量值。command hook 缺少必需输入时不能批准；脚本型 hook 的可选输入缺失时不会注入子进程。
+变量值。缺少必需环境输入时不能批准；脚本型 hook 的可选输入缺失时不会注入子进程。
 
 每个钩子必须且只能声明一种动作。`command` 运行声明的命令和参数；`script` 运行 native 或 Bun 脚本，
 并只接收自身 `env` 声明的值与固定 `SHINE_APP_*` 变量。`runtime` 只能与 `script` 同用；Bun 脚本沿用
@@ -261,7 +263,6 @@ environment = [
   { name = "API_URL", sensitivity = "plain" },
   { name = "API_TOKEN", sensitivity = "secret" },
 ]
-commands = ["my-reloader"]
 ```
 
 ```toml
@@ -273,24 +274,25 @@ post_upgrade = [{
 
 [permissions]
 schema_version = 1
-filesystem = [{ access = ["execute"], base = "preset", path = "refresh.ts" }]
 network = [{ scope = "any" }]
-commands = ["bun"]
 environment = [
   { name = "API_URL", sensitivity = "plain" },
   { name = "API_TOKEN", sensitivity = "secret" },
 ]
 ```
 
-外部预设中的钩子和 generator 需要 target-scoped trust：
+外部钩子和 generator 可通过交互式生命周期确认获得本次授权。需要持久授权时使用 target-scoped trust：
 
 ```bash
 shine trust inspect app/<CATEGORY>
 shine trust grant app/<CATEGORY>
+shine trust grant app/<CATEGORY> --development
 ```
 
-`trust inspect` 只读，不会授予信任。它会合并展示共享同一代码和权限范围的 capability，然后给出合适的下一步。
-授予信任前，先处理 Plan 显示的所有缺失权限声明。若启用的 overlay
+`trust inspect` 只读，不会授予信任。它会合并展示共享同一代码、来源和作者说明范围的 capability，
+然后给出合适的下一步。Snapshot trust 会绑定完整有效 App 类别，包括辅助文件和数据文件。
+只有准备信任所显示本地来源中的后续代码修改时才使用 `--development`。
+授予信任前，先处理 Plan 显示的缺失环境输入或 Administrator 要求。若启用的 overlay
 中 `app/<CATEGORY>/shine.toml` 是覆盖内置 metadata 的旧版完整副本，应先删除或迁移该 metadata 文件；
 `merge.yaml`、`rules/` 等 overlay payload 文件仍可保留。
 

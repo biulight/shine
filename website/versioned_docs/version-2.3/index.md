@@ -24,8 +24,7 @@ of deleting it.
 
 **Make every step of personal automation visible—and leave a safe way back.**
 
-This manual applies to **Shine 2.2.0**. Use the version selector for the frozen
-2.1 and 1.8.x manuals.
+This manual applies to **Shine 2.3.0**. Use the version selector for the frozen 1.8.x manual.
 
 [![The three core values of Shine 2.0: repeatable deployment, one entry point for personal developer resources, and changes you can see before they happen and recover if interrupted.](/img/shine-core-values-v2-en.webp)](/img/shine-core-values-v2-en.webp)
 
@@ -34,7 +33,8 @@ This manual applies to **Shine 2.2.0**. Use the version selector for the frozen
 - **See what will happen before it starts.** Before an install, upgrade, or removal, Shine shows the
   actions it plans to take and the access it needs. Nothing changes until you approve.
 - **Trust external code one Preset at a time.** If a personal Preset needs to run code, Shine asks
-  you to review that specific tool. If the code or requested access changes, Shine asks again.
+  you to review that specific tool. Snapshot trust asks again after code changes; Preset authors can
+  explicitly trust continuing edits from one local development source.
 - **Pick up safely after an interruption.** If an operation stops halfway, Shine pauses later
   changes and guides you through recovery instead of continuing blindly.
 

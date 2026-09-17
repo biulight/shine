@@ -8,6 +8,9 @@ sidebar_position: 1
 Shine 2.0 已是当前稳定版。它引入了更严格的生命周期安全与恢复边界；从既有 1.x 安装升级前，
 请先阅读下列兼容性变化。
 
+交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
+必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
+
 ## 安装稳定版 2.0
 
 在 macOS 或 Linux 上安装最新稳定版：
@@ -52,8 +55,8 @@ shine upgrade app/<CATEGORY> --yes
 ## 重新建立外部代码信任
 
 1.x 中宽泛的 `allow_app_hooks` 和 `allow_sys_code` 已停用：它们会被忽略，并在下次保存配置
-时移除。Shine 不会将其自动转换成 grant。外部 App、Shell 和 Sys 可执行 target 需要按
-target 单独授权：
+时移除。Shine 不会将其自动转换成 grant。外部 App、Shell 和 Sys 可执行 target 可在交互式生命周期 Plan 中获得本次授权；自动化需按
+target 建立持久授权：
 
 ```bash
 shine trust inspect <TARGET>
@@ -61,7 +64,9 @@ shine trust grant <TARGET>
 shine trust list
 ```
 
-外部代码或所请求权限发生变化后，旧 grant 会失效，必须重新审阅。
+有效类别内容发生变化后，旧的快照 grant 会失效，必须重新审阅。Preset 作者可以显式运行
+`shine trust grant <TARGET> --development`，让同一本地来源中的后续代码修改继续受信任；来源、target 或 capability
+变化后仍须重新授权。
 
 ## Generator 与环境变化
 
@@ -127,10 +132,10 @@ opaque App/Shell/Sys 代码的权限与 Sys v1 dispatcher 必须人工改写。�
 和当前平台 `preset plan` 命令。Git 管理的 overlay 仍是只读镜像，因此报告会指向上游 checkout，
 不会建议直接编辑镜像路径。
 
-trust enrollment 只适用于外部 App hook/generator/artifact 代码和 Sys bootstrap/profile 代码。
-验证通过后，运行报告给出的 `shine trust inspect app/<CATEGORY>` 或
-`shine trust inspect sys/<ITEM>`；只有接受所显示的权限范围后才执行 grant。Shell 命令通过
-`[files.permissions]` 声明和 security Plan 审阅，不是合法的 `trust inspect/grant` target。
+trust enrollment 适用于外部 App hook/generator/artifact 代码、Sys bootstrap/profile 代码，以及
+每个外部 Shell command，与能力表内容无关。验证后使用规范 target，或用 `shine trust inspect preset`
+批量查看当前要求；只有接受所显示范围后才执行 grant。Trust schema v2 绑定完整有效类别快照，因此
+旧 grant 需要重新审阅；live Shell 部署必须使用 development trust。
 
 `shine update` 会显示简洁的 **Preset compatibility** 摘要，并继续完成可执行的配置检查和 Shine
 release 检查，最后再因 blocker 返回非零。最终错误只给出一次
@@ -138,8 +143,8 @@ release 检查，最后再因 blocker 返回非零。最终错误只给出一次
 `shine upgrade` 会在任何生命周期 Plan 或 mutation 前执行同一 preflight；使用 `--pull` 时则在
 拉取并重新加载后检查，不兼容时不会产生部分升级。
 
-外部 Preset 必须为每个可执行 target 声明 permission schema v1。缺失或无效声明属于
-blocker，不会被解释为隐式宽泛授权。作者应在分发前运行静态和 fixture 检查：
+外部 Preset 必须为每个可执行 target 声明受支持的 permission schema v1 或 v2。缺失或无效声明
+属于 blocker，不会被解释为隐式宽泛授权。作者应在分发前运行静态和 fixture 检查：
 
 ```bash
 shine preset schema

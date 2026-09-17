@@ -7,6 +7,9 @@ sidebar_position: 2
 
 Shine 将全局运行时状态保存在 `~/.shine/`。首次需要配置时会创建 `~/.shine/config.toml`。
 
+交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
+必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
+
 ## 常用全局字段
 
 ```toml
@@ -63,20 +66,28 @@ phone recipient 不由 `state migrate` 自动转换。升级并验证插件和�
 
 ## 外部代码信任
 
-外部 App hook、generator、artifact、Sys 安装脚本及可执行 profile 内容使用 target-scoped grant，
-并保存在仅所有者可读写的 `~/.shine/trust.toml`。不要手改该文件，也不能从项目配置授予信任。
+外部 App hook、generator、artifact、Sys 安装脚本、可执行 profile 内容，以及每个外部 Shell
+command 都使用 target-scoped grant，并保存在仅所有者可读写的
+`~/.shine/trust.toml`。不要手改该文件，也不能从项目配置授予信任。
 
 ```bash
 shine trust inspect app/example
 shine trust grant app/example
 shine trust list
 shine trust revoke app/example
+shine trust inspect shell/tools/my-command
+shine trust grant preset
+shine trust grant app/example --development
 ```
 
-Grant 只适用于已经审阅的 target 与权限；代码、来源或权限变化后必须重新审阅。当类型化 Preset
-元数据已经能够推导操作所需的全部权限时，经过验证的显式空权限声明也可以授予信任；完全缺失声明
-仍会阻止操作。Grant 不能替代每次操作前显示的 Plan。旧的 `allow_app_hooks` 和
+快照 Grant 只适用于已经审阅的 target、capability、来源层与完整有效类别快照。显式使用
+`--development` 建立的开发信任允许所显示本地来源中的代码继续修改，但 target、capability、
+来源目录/层必须保持不变。这是对未来来源内容的长期授权，不代表持续代码审阅。权限表是否存在不控制代码分类或 grant 资格。
+Grant 不能替代每次操作前显示的 Plan。旧的 `allow_app_hooks` 和
 `allow_sys_code` 已被忽略，并会在下次保存配置时移除。
+`preset` target 可以批量审阅或授予当前激活快照，但保存时仍是各 target 独立的 grant；新增 target
+或 capability 变化后仍须重新授权；开发信任还会在来源变化后失效。旧 schema v1 trust
+grant 仍可查看和撤销，但必须重新审阅。
 
 ## Env 条目格式与说明
 
@@ -131,7 +142,9 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 `~/.shine/installed/shell/` 后再运行。修改来源文件后，先用 `shine update` 检查，再用
 `shine upgrade` 应用，便于审阅变化且与 app 配置的更新流程一致。仅在编写和调试预设时，才把
 `external_shell_mode` 设为 `live`：源文件内容会在下次调用时生效；但 `target`、`runtime`、
-`transforms` 和 `env` 等部署元数据变更仍须运行 `shine upgrade` 重新生成受管入口。
+`transforms` 和 `env` 等部署元数据变更仍须运行 `shine upgrade` 重新生成受管入口。Live 模式要求
+显式 development trust；snapshot trust 不能授权读取可变来源的 launcher。已有 live launcher 会
+保留，状态会把缺少 development trust 的目标标为需要审阅。
 
 Overlay 在选定的基础预设来源上按相同相对路径覆盖文件，不替代整棵目录。手动关联的
 `presets_overlay_dir` 与 `presets_overlay_git` 互斥；使用 `shine preset overlay link` 可避免同时配置。

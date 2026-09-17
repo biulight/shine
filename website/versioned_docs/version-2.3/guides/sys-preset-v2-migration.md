@@ -44,7 +44,6 @@ default_profile = "recommended"
 id = "neovim"
 label = "Neovim"
 description = "Install Neovim with Homebrew."
-permissions = { schema_version = 1 }
 
 [items.detect]
 kind = "command"
@@ -66,8 +65,8 @@ items and their IDs and convert them individually; do not replace the whole conf
 - `detect` tells Shine how to check whether software is present; here it checks the `nvim` command.
 - `install` tells Shine how to install missing software. This example uses Homebrew, which must be
   available before the actual installation.
-- `permissions` is required for every item. This example uses only a fixed package provider and no
-  custom code, so the short declaration above is sufficient.
+- A fixed package provider needs no empty `permissions` table. Shine derives its operation identity
+  from typed metadata.
 - `[profiles.recommended]` selects the items in that group. Check that IDs in existing groups still
   refer to valid items.
 
@@ -81,10 +80,9 @@ into `install/<item>.sh` or `install/<item>.ps1`. Change that item's `install` t
 `kind = "script"`, `path = "install/<item>.sh"` (use `.ps1` for Windows).
 
 The script handles only that item, reports success or failure with a normal exit code, and still
-needs a corresponding `detect`. Declare its executable path, commands, network access, and other
-required permissions based on what the script actually does. Do not reuse the example's
-`schema_version`-only declaration. See [Declare permissions](./custom-presets.md#declare-permissions)
-for the fields.
+needs a corresponding `detect`. Core automatically marks it as unisolated. Add optional author
+capability statements only when they help review; keep environment inputs and Administrator
+requirements explicit. See [capability statements](./custom-presets.md#declare-permissions).
 
 After converting every item, remove the old shared entry point and its old status-output and
 update-check logic. Third-party software updates belong to its package manager or upstream tool;
@@ -109,7 +107,7 @@ shine preset validate ./my-presets/sys/macos
 shine preset plan ./my-presets/sys/macos --platform macos
 ```
 
-First fix errors reported by `validate`, such as missing files, permission declarations, or invalid
+First fix errors reported by `validate`, such as missing files, invalid capability statements, or invalid
 configuration. Then review the installation targets, required permissions, and shell configuration steps in
 `plan` and check that they match your intent.
 
@@ -161,12 +159,13 @@ shine trust inspect sys/neovim
 shine trust grant sys/neovim
 ```
 
-A permission declaration describes what a preset needs to do; a trust grant records your review
-and permission to execute its code. A package-only item may use an explicit empty declaration
-because the provider's operation permissions are derived from typed metadata; this remains
-grantable if shared external profile code creates a trust requirement. A completely missing
-declaration remains blocked. Changed code or permissions require a new review. Run the installation
-preview again after granting trust.
+A capability statement is optional, unverified review context; a trust grant records your review
+and permission to execute external code. Package-only items need no empty declaration. Snapshot
+trust binds the complete effective Sys OS snapshot and requires review after any file, source-layer,
+or author/env/admin statement change.
+Run the installation preview again after granting trust. During ongoing local authoring,
+`--development` may accept code
+edits from the same enrolled source; statement and source changes still require review.
 
 Migration preparation is complete when local validation has no errors, Shine reads the correct
 source, and the installation preview matches your intent. When ready to install, run

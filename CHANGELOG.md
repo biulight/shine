@@ -7,6 +7,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-09-17
+
 ### Features
 
 - Allow explicit human lifecycle Plan confirmation to authorize its external code for one operation
@@ -33,6 +35,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Point blocked external Shell commands to the exact command-scoped `trust inspect` and
   `trust grant` remediation accepted by the trust CLI.
+
+### Docs
+
+- Publish the bilingual 2.3 manual with separate capability and code-authorization guidance,
+  source-scoped Development trust, and one stable documentation snapshot per major.
 
 ## [2.2.0] — 2026-09-15
 

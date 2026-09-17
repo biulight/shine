@@ -40,6 +40,17 @@ shine preset plan . --platform macos --format json
 shine preset test . --format json
 ```
 
+默认脚手架不会添加空权限表。以下选项会添加 unrestricted 作者说明：
+
+```bash
+shine preset new app --unrestricted
+shine preset new shell --unrestricted
+shine preset new sys --unrestricted
+```
+
+无论是否使用该选项，所有任意代码都未隔离。该选项不会跳过 trust、安全 Plan、管理员授权、
+所有权检查或显式环境输入。
+
 其它类型把 `preset new` 的参数换成 `shell` 或 `sys`。定制内置类别时，进入仓库或 overlay 根目录
 并运行 `shine preset copy <kind>/<name>`；命令会创建类型与类别路径。
 
@@ -55,7 +66,7 @@ shine preset test . --format json
 `shine preset schema --format json`。App、Shell 和 Sys metadata 是否可用仍以
 `preset validate` 的结果为准。
 
-校验后运行 `preset lint`，检查作者质量、可移植性和过宽权限。warning 默认只是建议；CI 可在审阅后
+校验后运行 `preset lint`，检查作者质量和可移植性。warning 默认只是建议；CI 可在审阅后
 添加 `--deny-warnings`。
 
 然后对每个目标平台运行 `preset plan`。它会预览一次假设的首次安装，显示操作、权限和 blocker，
@@ -88,20 +99,19 @@ shine preset migrate ./my-presets
 迁移器显示 unified metadata diff，确认默认是 No。它只修改 `shine.toml`，校验候选内容、复查来源
 hash，并在写入前创建完整的私有备份集；payload、脚本、值、runtime manifest 与 trust grant 都不会
 改变。若 executable identity 未变化，精确匹配已发布 1.x 内置 metadata 的文件可 rebase；安全的纯
-声明式 App 可以补齐当前 metadata 与空权限 schema。opaque code 和 Sys v1 dispatcher 会保留为人工
-blocker，不会获得猜测或宽泛权限。
+声明式 App 可以补齐当前 metadata。opaque code 和 Sys v1 dispatcher 会保留为人工 blocker，
+不会获得猜测或宽泛能力说明。
 
 `--yes` 仅适合审阅后使用，且仍显示 text diff。JSON 是不含内容和 diff 的版本化报告：检查时使用
 `--format json --dry-run`，JSON 写入则必须同时指定 `--yes`。Git 管理的 overlay 只诊断、不修改；
 请在其上游 checkout 对显式路径运行迁移，提交后再 pull 镜像。
 
-## 声明权限
+## 说明能力和必需输入 {#声明权限}
 
-新预设使用权限 schema v1 声明可审查的 capability identity。App 在类别根部使用
-`[permissions]`；Shell 的每个 `[[files]]` 命令分别使用 `[files.permissions]`；Sys 的每个
-`[[items]]` target 分别使用 `[items.permissions]`。受保护的 install、upgrade 或 uninstall
-在缺少必要声明时会 fail closed；静态校验会报告 `missing_permission_declaration`。不支持的
-版本、未知字段、非法 identity 和重复项均为错误。
+权限 schema v1/v2 表是可选的作者能力说明。App 在类别根部使用 `[permissions]`；Shell 的每个
+`[[files]]` 命令可使用 `[files.permissions]`；Sys 的每个 `[[items]]` target 可使用
+`[items.permissions]`。Shine 会校验任何显式提供的表，但缺表或空表不会隐藏或约束任意代码。
+不支持的版本、未知字段、非法 identity 和重复项均为错误。
 
 ```toml
 [permissions]
@@ -117,14 +127,92 @@ environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
 system = [{ capability = "split-dns", resource = "private-domain" }]
 ```
 
+权限 schema v2 支持 unrestricted 作者说明：
+
+```toml
+[permissions]
+schema_version = 2
+opaque_code = "unrestricted"
+```
+
+Shell 和 Sys 类别可以用 `permission_defaults` 为没有目标级覆盖的条目提供同一声明：
+
+```toml
+[permission_defaults]
+schema_version = 2
+opaque_code = "unrestricted"
+
+[[files]]
+source = "foo.sh"
+target = "foo"
+
+[[files]]
+source = "bar.sh"
+target = "bar"
+```
+
+默认值会分别解析到每个 command 或 Sys item；定向操作不会继承无关条目的 capability。条目自己的
+权限表会替换该条目的默认值。
+
 Filesystem base 只接受 `home`、`shine`、`data-dir`、`preset` 或 `absolute`；非绝对路径必须是
 规范化相对路径，`.` 表示所选 base 的根。Command 只能填写一个不带参数的 program identity。
-Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。普通 destination 与固定
-package provider 已由各自 metadata 覆盖，只需声明预设额外需要的能力。
+Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。不要重复 typed metadata
+已表达的命令、脚本路径、普通 destination 或固定 package provider；只有在有助于审阅时才添加
+可选说明。
 
-权限声明不是授权，也不能证明 opaque script 已完整披露行为。外部可执行代码还要求用户审阅后运行
-`shine trust grant <TARGET>`。Grant 会绑定当前代码身份与准确的权限声明，不能替代管理员授权或每次
-mutation 的安全 Plan。
+`opaque_code = "unrestricted"` 是可选的审阅 metadata。即使省略该字段或整张表，Core 仍会把
+App hook、generator、artifact、安装或 source 的 Shell 命令，以及 Sys script/profile code 自动
+标记为未隔离代码。它不会转发环境值或授予提权。环境 allowlist 及 `plain`/`secret` 敏感度和
+Administrator 要求仍须显式配置，因为 Shine 会执行这些受管注入/提权契约。
+
+安全 Plan 会分别展示 Shine 推导的操作、未经验证的作者说明，以及代码/信任边界。说明不是授权，
+也不能证明脚本已完整披露行为。任意代码可使用其进程已有的系统访问能力；Shine 不新增运行时沙箱，
+也不会在以后每次调用 Shell 命令时逐项拦截。
+
+交互式生命周期操作可在用户确认 Plan 时，一并授权其中列出的外部代码。本次授权仅适用于当前
+操作和捕获快照，不保存持久 grant；确认也包含安装 Shell 命令等“交付后运行”的代码。
+自动化和 `--yes` 必须已有匹配 grant；`--yes` 不能代替人工代码确认。
+显式 `info`/`update --run-generators` 检查同样要求 grant；若只想授权一次 generator 操作，
+使用交互式 `shine app refresh`。
+
+需要持久授权时，先检查再登记目标：
+
+```bash
+shine trust inspect <TARGET>
+shine trust grant <TARGET>
+shine trust grant <TARGET> --development
+```
+
+Snapshot trust 绑定 target、capability 和完整有效类别快照，包括逻辑路径、精确字节和来源层。
+类别文件发生变化后需要重新授权。作者说明仍进入审阅与 Plan，但不再单独作为 trust 身份比较；
+修改 `shine.toml` 中的说明仍会改变快照字节。
+快照排除 `node_modules`；trust 不约束解释器、PATH 工具、依赖、下载内容或运行副作用。
+
+Development trust 是对所显示本地来源中、指定 target/capability 的未来代码的长期授权，
+不代表持续代码审阅。来源目录/层变化、新 target 或新 capability 需要重新授权。
+Shell live 部署必须使用此模式。`opaque_code = "unrestricted"` 不会启用开发信任。`trust list`、
+`trust inspect` 与安全 Plan 都会标注当前有效的开发信任。Grant 只保存在本机私有 trust
+store 中，Preset 不能随自身分发或启用它。
+默认的 `trust list` 会把安全范围相同的 capability 合并为一行，并显示每条已存 grant 当前是否有效；
+使用 `trust list --verbose` 可查看 capability 名称、本地开发来源标签与过期 grant 的复查提示。
+
+每个外部 Shell command 都采用规范 target `shell/<CATEGORY>/<COMMAND>`。使用 `preset` 可以一次审阅或信任当前激活 Preset 快照中的全部可执行
+target；Shine 底层仍会按所选模式为各 target 保存独立的 target-local grant。撤销 `preset` 会清除所有已保存的
+Preset trust grant：
+
+```bash
+shine trust inspect preset
+shine trust grant preset
+shine trust grant preset --development
+shine trust revoke preset
+```
+
+Trust store schema v2 使用完整类别边界。旧 v1 grant 仍可查看和撤销，但会显示需要重新审阅，
+不能授权新的操作。成功 grant 会替换同一 target/capability 的旧记录。
+
+AI 工具可生成和静态验证 Preset，但不能批准自己生成的代码。用户须通过可信界面审阅实际变更；
+快照修改会使原审批失效。对 AI 可写目录授予 Development trust，意味着允许已登记目标采用以后
+的 AI 修改。拥有不受限终端权限的 AI 可以自行 grant 或直接运行脚本，其授权边界必须由工具宿主执行。
 
 ## 从来源文件夹到已安装能力
 
@@ -424,8 +512,9 @@ Shell integration 必须且只能声明 `path`、`env`、`eval`、`source`、`al
 命名 `[profiles.*]` 表只选择 bootstrap items，不定义 shell 内容，也不会禁用选择之外的集成。
 
 外部 sys 安装脚本和可执行 profile 内容（`eval`、`source`、fragment 与 base 文件）要求用户审阅
-当前 snapshot 后运行 `shine trust grant sys/<ITEM>`；项目配置和 Preset 不能自行授权。代码、来源层或
-权限变化后 grant 会失效。bootstrap 预检因缺少信任而停止时尚未运行任何安装器。静态 detection、
+当前生命周期 Plan，或使用已有匹配 grant；项目配置和 Preset 不能自行授权。类别内容或来源层
+变化后快照 grant 会失效；显式开发信任只接受其已登记来源中的代码修改。bootstrap 预检因缺少
+信任而停止时尚未运行任何安装器。静态 detection、
 package metadata、PATH、env 和 aliases 无需 grant。使用
 `shine sys list`、`shine sys info <ITEM>` 和
 `shine sys bootstrap <ITEM> --dry-run` 完成验证。
@@ -447,6 +536,5 @@ env = ["PROFILE_PATH", "API_TOKEN"]
 `SOURCE=TARGET` alias；每个 source 及其敏感度还必须在类别
 `[permissions].environment` 中声明。allowlist 中未配置的可选值会被省略；固定 app 路径变量会
 另外加入。若希望安装或升级实际改动
-文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设需用户审阅后运行
-`shine trust grant app/<CATEGORY>`。hook 中调用 `shine app artifact apply` 时属于非交互子进程，必须带
-`--yes`；嵌套命令仍会显示并重新校验自己的安全 Plan。
+文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设须人工确认生命周期 Plan
+或已有匹配 grant。钩子不能递归调用 artifact 生命周期命令；应使用受支持的 artifact 配置和显式操作。

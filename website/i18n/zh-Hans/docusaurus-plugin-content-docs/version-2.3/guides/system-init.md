@@ -10,6 +10,9 @@ sidebar_position: 3
 
 各平台 profile 的项目清单，以及 `split-dns` 所需的环境变量和安全预览步骤见[内置预设](../reference/built-in-presets.md#系统预设)。
 
+交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
+必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
+
 ## 先查看，再执行
 
 ```bash
@@ -46,10 +49,15 @@ shine sys bootstrap --proxy --dry-run
 该参数只跳过提示，Plan 仍会展示并在执行前校验。`--dry-run` 是更早阶段的预览，不能与 `--yes`
 同时使用。
 
-安全 Plan 会先提示管理员权限、网络访问范围与 profile 恢复限制，再按选中的安装项展示所需权限。
-Profile 配置与公共运行时目录、清单写入分别列在独立区块。包管理器权限由元数据推导，因此空的权限声明
-不表示安装软件包无需权限。多个安装项都需要同一权限时，会在各项下分别展示。
+安全 Plan 会先提示管理员权限、网络访问范围与 profile 恢复限制，再按选中的安装项展示推导权限。
+Profile 配置与公共运行时目录、清单写入分别列在独立区块。包管理器权限由元数据推导，因此固定
+provider 不需要空的作者能力表。多个安装项都需要同一权限时，会在各项下分别展示。
 `Permissions none required` 仅表示规划器未为该区块推导出所需权限，不是安全保证。
+
+自定义脚本和可执行 profile item 会自动显示为未隔离代码。可选权限表属于未经验证的作者说明；
+`opaque_code = "unrestricted"` 与类别级 `permission_defaults` 仍兼容，但不会改变分类。环境输入与
+Administrator 要求仍是显式执行契约。External/overlay 代码还需对完整有效 `sys/<os>/` 快照建立
+target-scoped trust。
 
 默认输出缩短快照标识。添加 `--verbose`（例如 `shine sys bootstrap --preset recommended --verbose`）
 可查看完整标识与诊断码。两种视图审阅的是同一个完整 Plan，对选中的操作仍只进行一次确认。

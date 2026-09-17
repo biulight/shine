@@ -72,6 +72,25 @@ shine shell uninstall proxy --purge
 自动化必须传入 `--yes`，但 Plan 与安全检查仍会执行。`--dry-run` 是独立预览，不能与 `--yes`
 组合。
 
+每个安装或 source 的 Shell 入口都会作为未隔离代码交付。External 和 overlay command 在安装前都
+需要人工确认当前 Plan 或已有匹配的持久 grant，无论权限表缺失、为空、包含枚举项，
+还是使用兼容字段 `opaque_code = "unrestricted"`。作者能力说明仅供审阅，不是文件、网络或命令限制。
+详见[自定义 Preset 能力说明](./custom-presets.md#声明权限)。
+本地开发期间，只有准备让所显示来源中的后续代码修改继续受信任时，才为 grant 添加
+`--development`。
+当生命周期 Plan 因缺少信任而被阻塞时，Shine 会报告精确到 command 的
+`shine trust inspect shell/<CATEGORY>/<COMMAND>` 和 `shine trust grant` 后续命令。
+
+Snapshot trust 与默认 snapshot 部署配合使用：Shine 把已审阅类别内容复制到受管目录，之后的来源
+修改只有经过显式审阅更新才进入已安装命令。`external_shell_mode = "live"` 必须使用 development
+trust，因为以后调用或 source 会读取可变的受信任来源。Snapshot trust 与 live 部署的组合会被阻塞，
+该规则同样覆盖 Bun launcher、Windows shim 和调用时 transform。
+
+同一类别的已安装命令共享一个 snapshot 目录。更新替换共享代码时，安全 Plan 会列出选中的命令和
+所有受影响的已安装兄弟命令；每个受影响 external command 都必须由本次人工确认或匹配 grant 授权。
+未安装兄弟不需要 grant，也不会被安装。升级 Shine 后会保留已有 live launcher，但 `list`/`info`
+会显示 `development trust required`，直到重新审阅。卸载和恢复无需先信任即将移除的代码。
+
 按命令卸载会保留同类别下其他已安装命令；只要兄弟命令仍需要，共享 preset 或 snapshot 文件
 就可能继续保留。`--purge` 会额外删除空的受管预设目录；未指定 target 时会处理整棵 shell
 预设目录。它不会删除 `~/.shine/config.toml`。

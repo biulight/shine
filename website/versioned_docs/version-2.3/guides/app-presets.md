@@ -136,7 +136,8 @@ shine update --run-generators
 
 The global form evaluates generators for every installed App category; the targeted forms evaluate
 only the selected App. Both automatic and `auto = false` manual generators participate because the
-flag is explicit. External or overlay generators still require matching scoped trust. Generator
+flag is explicit. External or overlay generator evaluation with `--run-generators` still requires matching scoped trust;
+interactive lifecycle operations can obtain one-time code consent. Generator
 failures do not stop evaluation of the remaining selection, but the command returns nonzero after
 reporting incomplete results.
 
@@ -162,10 +163,12 @@ Generators supplied by external presets or overlays are executable code and requ
 `SHINE_APP_*` path variables and limits runtime and output size. Run only presets you have reviewed
 and trust.
 
-The category's `[permissions]` table separately declares review identities for generator, hook,
-and artifact commands, network scopes, and environment-name sensitivity. It is statically
-validated but does not enable or trust external code; never put a URL token,
-environment value, command arguments, or ciphertext in the declaration.
+The category's optional `[permissions]` table contains unverified author capability statements and
+the enforced environment/admin contracts. Shine already derives hook commands and script paths from
+typed metadata; do not repeat them. Never put a URL token, environment value, command arguments, or
+ciphertext in the declaration. Permission schema v2 supports
+`opaque_code = "unrestricted"`, but Core marks every triggered hook, generator, and artifact as
+unisolated independently. This is review and trust metadata, not a runtime sandbox.
 
 ### Surge URI subscriptions
 
@@ -306,7 +309,7 @@ also require mihomo `dns.nameserver-policy` configuration.
 The artifact and post-upgrade script use Bun, which must be installed on the machine. The automatic
 hook runs only when `shine upgrade` actually changes a managed `clash-verge` file; use the explicit
 command for first-time setup, after reselecting changed bindings, or to retry a failed refresh.
-External script hooks require a current target-scoped trust grant. Optional
+External script hooks require human confirmation of the lifecycle Plan or a matching grant. Optional
 `CLASH_CONTROLLER_URL` and `CLASH_CONTROLLER_TOKEN` values can request an immediate refresh. Without
 the URL, only that immediate refresh is skipped; providers still update on their own intervals. The
 artifact refreshes every name declared by the effective `merge.yaml` `rule-providers` mapping, so
@@ -327,8 +330,8 @@ actually writes files. The latter runs only when `shine upgrade` updates at leas
 category. Unchanged categories do not trigger hooks.
 
 Bind every environment input a hook consumes with its `env` list and declare the same names under
-the category permission declaration. Values are not displayed in the Plan. Missing required command
-inputs block approval; optional script inputs are omitted from the child environment.
+the category permission declaration. Values are not displayed in the Plan. Missing required
+environment inputs block approval; optional script inputs are omitted from the child environment.
 
 Each hook declares exactly one action. `command` runs the declared command and arguments. `script`
 runs a native or Bun script with its declared `env` values plus the fixed `SHINE_APP_*` variables.
@@ -346,7 +349,6 @@ environment = [
   { name = "API_URL", sensitivity = "plain" },
   { name = "API_TOKEN", sensitivity = "secret" },
 ]
-commands = ["my-reloader"]
 ```
 
 ```toml
@@ -358,25 +360,27 @@ post_upgrade = [{
 
 [permissions]
 schema_version = 1
-filesystem = [{ access = ["execute"], base = "preset", path = "refresh.ts" }]
 network = [{ scope = "any" }]
-commands = ["bun"]
 environment = [
   { name = "API_URL", sensitivity = "plain" },
   { name = "API_TOKEN", sensitivity = "secret" },
 ]
 ```
 
-Hooks and generators in external presets require target-scoped trust:
+For persistent authorization of external hooks and generators, use target-scoped trust.
+Interactive lifecycle confirmation can instead authorize only the current operation:
 
 ```bash
 shine trust inspect app/<CATEGORY>
 shine trust grant app/<CATEGORY>
+shine trust grant app/<CATEGORY> --development
 ```
 
-`trust inspect` is read-only. It groups capabilities that share the same code and permission scope,
-then prints the appropriate next step. Before granting trust, resolve every missing permission
-declaration shown by the Plan. If an active overlay's `app/<CATEGORY>/shine.toml` is an old full copy that
+`trust inspect` is read-only. It groups capabilities that share the same code, source, and
+author-statement scope, then prints the appropriate next step. Snapshot trust binds the complete
+effective App category, including helper and data files. Use `--development` only when you intend
+to trust later code edits from the displayed local source. Before granting trust, resolve missing
+environment inputs or Administrator requirements shown by the Plan. If an active overlay's `app/<CATEGORY>/shine.toml` is an old full copy that
 overrides built-in metadata, remove or migrate that metadata file first; overlay payload files such
 as `merge.yaml` and `rules/` remain usable.
 

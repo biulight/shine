@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 2.2.0. Run `shine <COMMAND> --help` for every option supported by the
+This page reflects Shine 2.3.0. Run `shine <COMMAND> --help` for every option supported by the
 installed version. The task guides explain complete workflows; this page is a compact command index.
 
 ## Targets
@@ -100,10 +100,10 @@ shine info <TARGET> [--diff] [--verbose] [--run-generators]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
 shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
-shine trust inspect <app/CATEGORY|sys/ITEM>
-shine trust grant <app/CATEGORY|sys/ITEM> [--yes]
-shine trust list
-shine trust revoke <app/CATEGORY|sys/ITEM>
+shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
+shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
+shine trust list [--verbose]
+shine trust revoke <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
 shine completions install
 shine completions <bash|zsh|powershell>
 ```
@@ -111,8 +111,16 @@ shine completions <bash|zsh|powershell>
 `update` is read-only. `upgrade` displays the planned changes and asks for approval; use `--yes`
 only after reviewing the same scope. `--pull` first updates eligible Git-managed Preset sources.
 `--prune-stale` permits removal of unchanged managed entries no longer present in the Preset.
+`trust grant --development` keeps code edits from the displayed local source trusted while the
+target, capability, source directory, and source layer remain unchanged. This is long-term source
+authorization, not continuous code review.
+`trust list` groups grants that share one security scope into a compact row and checks them against
+the active Preset; `--verbose` expands capabilities, development-source labels, and review guidance.
 
-Missing Presets, user-modified files, foreign command entries, missing permissions, and untrusted
+Interactive lifecycle confirmation may authorize external code for that operation without saving
+a grant. Automation and `--yes` require existing trust; Shell live requires Development trust.
+
+Missing Presets, user-modified files, foreign command entries, missing env/admin contracts, and untrusted
 external code are reported as attention items rather than silently overwritten. Restore the source
 or follow the command shown by Shine.
 
@@ -140,7 +148,7 @@ See [Initialize and manage a system](../guides/system-init.md).
 ## Preset authoring and sources
 
 ```text
-shine preset new <app|shell|sys> [--force]
+shine preset new <app|shell|sys> [--unrestricted] [--force]
 shine preset schema [--format <text|json>]
 shine preset validate [PATH] [--format <text|json>]
 shine preset lint [PATH] [--format <text|json>] [--deny-warnings]
@@ -162,6 +170,8 @@ Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These c
 authoring input without installing it. `migrate --dry-run` previews legacy metadata changes;
 applying a migration requires review and confirmation. A Git-managed overlay is a disposable mirror,
 so edit its upstream checkout rather than the mirror.
+New templates omit empty and speculative capability tables. `--unrestricted` adds the optional
+unrestricted author statement, but all arbitrary code is unisolated with or without it.
 
 See [Customize presets](../guides/custom-presets.md) and
 [Migrate system presets to v2](../guides/sys-preset-v2-migration.md).
