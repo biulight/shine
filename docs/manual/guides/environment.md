@@ -459,7 +459,9 @@ values. For an occasional yank, prefer the one-time `env run` form above.
 
 Proxy only an explicitly approved bare command name containing ASCII letters, numbers, `-`, `_`, or
 `.`. Make sure `~/.shine/bin/` is early in `PATH` and the target is not another Shine wrapper. Shine
-refuses to overwrite a same-name entry it does not own.
+refuses to overwrite a same-name entry it does not own. On Windows, it checks the entire launcher
+set, including `.cmd` and `.ps1`, before writing any file. A conflicting file or symbolic link is
+preserved. Proxy rule changes also retain owner-only configuration permissions on Unix.
 
 Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
 `--project` to scope the rule; a project rule for the same command overrides the global one:

@@ -1,5 +1,26 @@
 # Lessons Learned
 
+## 2026-09-27 — Generated relocation needs explicit old-path review
+
+- **Symptom**: changing a generated file's backup after approval did not invalidate the Plan,
+  and migration restored the changed bytes without showing the old-path effects.
+- **Root cause**: the opaque-generator planning branch returned before relocation state and
+  permissions were collected; elevation counted only the new file and static actions.
+- **Fix**: bind the canonical regular backup, enumerate old-path removal/restoration and rollback
+  permissions, reject incomplete backup state, and authorize the old receipt's administrator scope.
+- **Rule**: opaque output does not make known Core filesystem effects opaque or confer journal recovery.
+
+## 2026-09-27 — EOF and multi-file ownership require complete boundary checks
+
+- **Symptoms**: a Core child waiting for stdin EOF timed out; proxy rule edits widened `0600`
+  configuration permissions; Windows proxy installation overwrote foreign `.cmd`/`.ps1` files.
+- **Root causes**: Unix pipe shutdown was a no-op, a secondary config writer used ordinary atomic
+  replacement, and ownership preflight covered only the extensionless launcher.
+- **Fixes**: drop stdin after concurrent writing, use the private config writer for proxy edits,
+  and preflight the complete platform launcher set before writing any member.
+- **Rule**: verify successful EOF delivery, every writer of sensitive files, and conflicts in the
+  last member of a multi-file operation, not just the first.
+
 ## 2026-09-26 — Private replacement, streaming pipes, and executable helpers need regression coverage
 
 - **Symptoms**: editing a `0600` env override produced `0644`; real age encryption hung on a 1 MiB

@@ -566,7 +566,7 @@ impl ProcessHost for RealHost {
             command.kill_on_drop(true);
             let mut child = command.spawn()?;
             let process_group = bounded.then(|| child.id()).flatten();
-            let mut stdin = child.stdin.take();
+            let stdin = child.stdin.take();
             let mut stdout = child.stdout.take();
             let mut stderr = child.stderr.take();
             let mut stdout_bytes = Vec::new();
@@ -575,9 +575,11 @@ impl ProcessHost for RealHost {
                 let (status, (), (), ()) = tokio::try_join!(
                     child.wait(),
                     async {
-                        if let Some(stdin) = &mut stdin {
+                        if let Some(mut stdin) = stdin {
                             stdin.write_all(&request.stdin).await?;
-                            stdin.shutdown().await?;
+                            // ChildStdin::shutdown is a no-op on Unix. Drop the
+                            // pipe here so EOF reaches the child before wait().
+                            drop(stdin);
                         }
                         Ok::<_, std::io::Error>(())
                     },
@@ -1114,5 +1116,22 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("process timed out"));
+    }
+
+    #[tokio::test]
+    async fn process_receives_stdin_eof_while_output_is_drained() {
+        let input = vec![b'x'; 1024 * 1024];
+        let output = RealHost
+            .run(ProcessRequest {
+                program: "cat".into(),
+                stdin: input.clone(),
+                timeout: Some(Duration::from_secs(5)),
+                stdout_limit: Some(input.len()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout, input);
     }
 }

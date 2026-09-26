@@ -248,17 +248,42 @@ fn absolute_path(path: PathBuf) -> Result<PathBuf> {
 }
 
 async fn install_shim(bin_dir: &Path, command: &str, target: &Path) -> Result<()> {
-    tokio::fs::create_dir_all(bin_dir).await?;
+    install_shims_for_platform(bin_dir, command, target, cfg!(windows)).await
+}
+
+async fn install_shims_for_platform(
+    bin_dir: &Path,
+    command: &str,
+    target: &Path,
+    windows: bool,
+) -> Result<()> {
     let path = bin_dir.join(command);
-    if path.exists() {
-        let body = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-        if !body.contains(MARKER) {
+    let mut paths = vec![path.clone()];
+    if windows {
+        paths.push(bin_dir.join(format!("{command}.cmd")));
+        paths.push(bin_dir.join(format!("{command}.ps1")));
+    }
+    // Check the entire launcher set before writing any member. Inspect links
+    // themselves, including dangling links, rather than following their target.
+    for candidate in &paths {
+        let metadata = match tokio::fs::symlink_metadata(candidate).await {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).context("inspecting env proxy destination"),
+        };
+        if !metadata.is_file()
+            || !tokio::fs::read_to_string(candidate)
+                .await
+                .with_context(|| format!("reading {}", candidate.display()))?
+                .contains(MARKER)
+        {
             bail!(
                 "{} already exists and is not a shine env proxy",
-                path.display()
+                candidate.display()
             );
         }
     }
+    tokio::fs::create_dir_all(bin_dir).await?;
     let target_string = target.to_string_lossy().into_owned();
     let target = shell_quote::single_quote(&target_string);
     let command_q = shell_quote::single_quote(command);
@@ -268,14 +293,12 @@ async fn install_shim(bin_dir: &Path, command: &str, target: &Path) -> Result<()
         use std::os::unix::fs::PermissionsExt;
         tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).await?;
     }
-    #[cfg(windows)]
-    {
+    if windows {
         install_windows_shims(bin_dir, command, &target_string).await?;
     }
     Ok(())
 }
 
-#[cfg(windows)]
 async fn install_windows_shims(bin_dir: &Path, command: &str, target: &str) -> Result<()> {
     atomic_write(&bin_dir.join(format!("{command}.cmd")), format!("@echo off\r\nREM {MARKER}\r\nshine env proxy exec --target \"{target}\" {command} %*\r\n").as_bytes()).await?;
     let target_ps = target.replace('\'', "''");
@@ -301,7 +324,11 @@ async fn mutate_rules(
     path: &Path,
     change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
 ) -> Result<()> {
-    let text = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    let text = match tokio::fs::read_to_string(path).await {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
     let mut table: toml::Table =
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     let mut rules: Vec<EnvProxyRule> = table
@@ -319,7 +346,7 @@ async fn mutate_rules(
         .parse()
         .with_context(|| format!("parsing {}", path.display()))?;
     shine_core::migration::sync_table(doc.as_table_mut(), &table);
-    atomic_write(path, doc.to_string().as_bytes()).await
+    crate::persist::atomic_write_private(path, doc.to_string().as_bytes()).await
 }
 
 fn manifest_path(shine_dir: &Path) -> PathBuf {
@@ -399,5 +426,124 @@ mod tests {
         let rule: EnvProxyRule =
             toml::from_str("command = \"gh\"\nwith = [\"GH_TOKEN\"]\n").unwrap();
         assert!(rule.enabled);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn proxy_rule_mutations_keep_config_private_and_preserve_env() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::test_support::make_temp_dir("shine-proxy-private").await;
+        for name in ["config.toml", "shine.config.toml"] {
+            let path = dir.join(name);
+            crate::persist::atomic_write_private(
+                &path,
+                b"# retained\n[env]\nTOKEN = 'synthetic-value'\n",
+            )
+            .await
+            .unwrap();
+            for action in 0..3 {
+                match action {
+                    0 => upsert_rule(
+                        &path,
+                        EnvProxyRule {
+                            command: "demo".into(),
+                            with: vec!["TOKEN".into()],
+                            enabled: true,
+                        },
+                    )
+                    .await
+                    .unwrap(),
+                    1 => mutate_rules(&path, |rules| {
+                        rules[0].enabled = false;
+                        Ok(())
+                    })
+                    .await
+                    .unwrap(),
+                    _ => remove_rule(&path, "demo").await.unwrap(),
+                }
+                assert_eq!(
+                    tokio::fs::metadata(&path)
+                        .await
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600,
+                );
+                let contents = tokio::fs::read_to_string(&path).await.unwrap();
+                assert!(contents.contains("# retained"));
+                let table: toml::Table = toml::from_str(&contents).unwrap();
+                assert_eq!(table["env"]["TOKEN"].as_str(), Some("synthetic-value"));
+            }
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn windows_proxy_preflights_all_launchers_before_writing() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-conflict").await;
+        for occupied in ["demo", "demo.cmd", "demo.ps1"] {
+            let bin = dir.join(occupied);
+            tokio::fs::create_dir_all(&bin).await.unwrap();
+            let foreign = bin.join(occupied);
+            tokio::fs::write(&foreign, b"user launcher").await.unwrap();
+            assert!(
+                install_shims_for_platform(&bin, "demo", &dir.join("real-demo"), true)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(tokio::fs::read(&foreign).await.unwrap(), b"user launcher");
+            for candidate in ["demo", "demo.cmd", "demo.ps1"] {
+                assert_eq!(bin.join(candidate).exists(), candidate == occupied);
+            }
+        }
+        let bin = dir.join("owned");
+        install_shims_for_platform(&bin, "demo", &dir.join("first"), true)
+            .await
+            .unwrap();
+        let before = tokio::fs::read(bin.join("demo")).await.unwrap();
+        tokio::fs::write(bin.join("demo.ps1"), b"user replacement")
+            .await
+            .unwrap();
+        assert!(
+            install_shims_for_platform(&bin, "demo", &dir.join("second"), true)
+                .await
+                .is_err()
+        );
+        assert_eq!(tokio::fs::read(bin.join("demo")).await.unwrap(), before);
+        tokio::fs::remove_file(bin.join("demo.ps1")).await.unwrap();
+        install_shims_for_platform(&bin, "demo", &dir.join("second"), true)
+            .await
+            .unwrap();
+        for name in ["demo", "demo.cmd", "demo.ps1"] {
+            assert!(
+                tokio::fs::read_to_string(bin.join(name))
+                    .await
+                    .unwrap()
+                    .contains("second")
+            );
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn proxy_refuses_dangling_launcher_links() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-link").await;
+        let missing = dir.join("missing");
+        tokio::fs::symlink(&missing, dir.join("demo.cmd"))
+            .await
+            .unwrap();
+        assert!(
+            install_shims_for_platform(&dir, "demo", &dir.join("real"), true)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            tokio::fs::read_link(dir.join("demo.cmd")).await.unwrap(),
+            missing
+        );
+        assert!(!dir.join("demo").exists());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 }

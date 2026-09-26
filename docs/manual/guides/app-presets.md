@@ -78,6 +78,13 @@ restores the original backup when one was created. A destination move also requi
 file to be unchanged and the new path to be free. If either location has changed, Shine leaves both
 untouched for review.
 
+When an automatic generator's destination moves during upgrade, the Plan also includes removal
+of the old managed file and restoration of its backup, including any administrator permission
+needed for the old location. Changes to the backup after review invalidate approval. If a recorded
+backup is missing or is not a regular file at the expected backup path, or the old managed file is
+missing while a backup is recorded, resolve that state before retrying. Generated-file moves
+remain outside the journaled static-file recovery workflow.
+
 `app uninstall --force` explicitly permits deletion of user-modified managed content. Preview it
 with `--dry-run`. `--purge` also removes the category's installed Preset files. During upgrade,
 obsolete managed entries are removed only when `--prune-stale` is part of the approved command;

@@ -10,7 +10,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 ### Bug Fixes
 
 - Save configuration and environment override files with owner-only Unix permissions, including
-  private temporary files during replacement.
+  private temporary files during replacement and env proxy rule changes.
+- Preserve foreign Windows `.cmd` and `.ps1` launchers when installing an environment proxy;
+  check all launcher destinations before writing any file.
+- Bind generated App relocation approval to old-file removal, backup restoration, and old-path
+  administrator requirements; reject changed or incomplete backup state before execution.
+- Close Core subprocess stdin after writing so children waiting for EOF can finish.
 - Drain encryption output while writing plaintext so large GPG/age payloads cannot deadlock on
   full pipes; terminate and reap failed encryption processes.
 - Retain external App helper executable flags in captured source and overlay copies, and bind

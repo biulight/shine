@@ -592,6 +592,30 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         );
                         continue;
                     }
+                    let relocation = entry.filter(|entry| {
+                        request.operation == LifecycleOperation::Upgrade
+                            && entry.destination != destination
+                    });
+                    if let Some(previous) = relocation
+                        && let Some(code) = generated_relocation_blocker(
+                            self.host(),
+                            state,
+                            &source,
+                            previous,
+                            current.is_some(),
+                        )
+                        .await?
+                    {
+                        steps.push(
+                            PlanStepV1::new(
+                                &target,
+                                Some(file.source_rel.display().to_string()),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code(code),
+                        );
+                        continue;
+                    }
                     permissions.declaration(
                         category.permissions.as_ref(),
                         "app_permission_declaration_missing",
@@ -634,7 +658,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     if blocked {
                         continue;
                     }
-                    let action = if entry.is_some() {
+                    let action = if entry.is_some() && relocation.is_none() {
                         PlanActionV1::Update
                     } else {
                         PlanActionV1::Create
@@ -654,6 +678,51 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             &destination,
                             backup,
                         );
+                    }
+                    if let Some(previous) = relocation.filter(|_| current.is_some()) {
+                        // Opaque output does not hide Core's known old-path effects.
+                        // This remains the non-journaled generated-file path.
+                        add_app_entry_permissions(
+                            self.context(),
+                            permissions,
+                            previous,
+                            LifecycleOperation::Uninstall,
+                        );
+                        if matches!(
+                            previous.install_strategy,
+                            crate::install::AppInstallStrategy::JsonMerge { .. }
+                        ) {
+                            permissions.implicit(PermissionV1::Filesystem {
+                                access: FilesystemAccessV1::Write,
+                                path: review_path(self.context(), &previous.destination),
+                            });
+                        }
+                        // A failed old-path removal rolls back the new file.
+                        permissions.implicit(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Remove,
+                            path: review_path(self.context(), &destination),
+                        });
+                        steps.push(
+                            PlanStepV1::new(
+                                &target,
+                                Some(format!("relocation-source:{}", file.source_rel.display())),
+                                PlanActionV1::Remove,
+                            )
+                            .with_diagnostic_code("app_generated_relocation_source_removed"),
+                        );
+                        if previous.backup.is_some() {
+                            steps.push(
+                                PlanStepV1::new(
+                                    &target,
+                                    Some(format!(
+                                        "relocation-backup:{}",
+                                        file.source_rel.display()
+                                    )),
+                                    PlanActionV1::Update,
+                                )
+                                .with_diagnostic_code("app_generated_relocation_backup_restored"),
+                            );
+                        }
                     }
                     category_changes = true;
                     continue;
@@ -6460,6 +6529,42 @@ fn add_app_update_permissions(
     }
 }
 
+async fn generated_relocation_blocker(
+    host: &impl FileSystemObservationHost,
+    state: &mut StateCapture,
+    source: &str,
+    previous: &AppEntry,
+    previous_present: bool,
+) -> Result<Option<&'static str>> {
+    if !previous_present && previous.backup.is_some() {
+        return Ok(Some("app_relocation_backup_source_missing"));
+    }
+    if previous_present
+        && host
+            .metadata(&previous.destination)
+            .await
+            .map_err(|error| error.into_anyhow("observing generated App relocation source"))?
+            .kind
+            != FileKind::File
+    {
+        return Ok(Some("app_relocation_source_not_regular"));
+    }
+    if let Some(backup) = &previous.backup {
+        capture_path_state(host, state, format!("relocation-backup:{source}"), backup).await?;
+        let regular = match host.metadata(backup).await {
+            Ok(metadata) => metadata.kind == FileKind::File,
+            Err(error) if error.is_not_found() => false,
+            Err(error) => {
+                return Err(error.into_anyhow("observing generated App relocation backup"));
+            }
+        };
+        if *backup != crate::install::backup_path(&previous.destination) || !regular {
+            return Ok(Some("app_relocation_backup_unsupported"));
+        }
+    }
+    Ok(None)
+}
+
 fn add_app_relocation_permissions(
     context: &super::RuntimeContext,
     permissions: &mut PermissionAccumulator,
@@ -9560,6 +9665,242 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
                     to: rollback,
                 })
         );
+    }
+
+    async fn generated_relocation_fixture(
+        requires_admin: bool,
+    ) -> (
+        CoreRuntime<InMemoryHost>,
+        AppPlanRequest,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+    ) {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                br#"
+dest = '~/.config/demo-next'
+[permissions]
+schema_version = 1
+environment = [{ name = 'ENABLE', sensitivity = 'plain' }]
+[[files]]
+source = 'config.toml'
+generator = { script = 'gen.sh', env = ['ENABLE'], when_env = 'ENABLE', auto = true }
+"#
+                .to_vec(),
+            )
+            .file("app/demo/config.toml", b"fallback".to_vec())
+            .file("app/demo/gen.sh", b"#!/bin/sh\nprintf generated".to_vec())
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("ENABLE".into(), "1".into());
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        let backup = crate::install::backup_path(&previous);
+        runtime.host().put_file(&previous, b"managed".to_vec());
+        runtime.host().put_file(&backup, b"user-original".to_vec());
+        AppManifest {
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".into(),
+                destination: previous.clone(),
+                backup: Some(backup.clone()),
+                content_hash: crate::install::hash_content(b"managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin,
+            }],
+            ..Default::default()
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".into()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        (runtime, request, previous, desired, backup)
+    }
+
+    #[tokio::test]
+    async fn generated_relocation_binds_backup_changes_before_any_execution() {
+        for change_mode_only in [false, true] {
+            let (runtime, request, previous, desired, backup) =
+                generated_relocation_fixture(false).await;
+            let plan = runtime.plan_apps(request.clone()).await.unwrap();
+            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+            for (access, path) in [
+                (FilesystemAccessV1::Write, &desired),
+                (FilesystemAccessV1::Remove, &desired),
+                (FilesystemAccessV1::Remove, &previous),
+                (FilesystemAccessV1::Write, &previous),
+                (FilesystemAccessV1::Remove, &backup),
+            ] {
+                assert!(
+                    plan.permissions
+                        .required
+                        .contains(&PermissionV1::Filesystem {
+                            access,
+                            path: review_path(runtime.context(), path),
+                        })
+                );
+            }
+            assert!(
+                plan.steps
+                    .iter()
+                    .any(|step| step.action == PlanActionV1::Remove
+                        && step.resource.as_deref() == Some("relocation-source:config.toml"))
+            );
+            assert!(plan.steps.iter().any(|step| {
+                step.diagnostic_codes
+                    .iter()
+                    .any(|code| code == "app_generated_relocation_backup_restored")
+            }));
+            let operations = runtime.host().operations().len();
+            if change_mode_only {
+                runtime
+                    .host()
+                    .put_file_with_mode(&backup, b"user-original".to_vec(), 0o600);
+            } else {
+                runtime.host().put_file(&backup, b"changed-backup".to_vec());
+            }
+            let changed = runtime.plan_apps(request.clone()).await.unwrap();
+            assert_ne!(plan.fingerprint().unwrap(), changed.fingerprint().unwrap());
+            assert!(
+                runtime
+                    .upgrade_apps_approved(
+                        request,
+                        &approval,
+                        AppApprovedUpgradeOptions::default(),
+                        &mut super::super::NullObserver,
+                        &mut Interaction
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(
+                runtime.host().operations()[operations..]
+                    .iter()
+                    .all(|operation| matches!(operation, HostOperation::Read(_)))
+            );
+            assert_eq!(runtime.host().read(&previous).await.unwrap(), b"managed");
+            assert!(runtime.host().read(&desired).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn generated_relocation_restores_backup_and_checks_old_admin_identity() {
+        struct AdminReview(bool);
+        impl RuntimeInteraction for AdminReview {
+            fn confirm(&mut self, _: &'static str, default: bool) -> Result<bool> {
+                Ok(default)
+            }
+            fn authorize_admin<'a>(
+                &'a mut self,
+                count: usize,
+            ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+                assert_eq!(count, 1);
+                self.0 = true;
+                Box::pin(async { Ok(true) })
+            }
+            fn select_many(
+                &mut self,
+                _: &'static str,
+                _: &[String],
+                defaults: &[String],
+            ) -> Result<Vec<String>> {
+                Ok(defaults.to_vec())
+            }
+        }
+        for requires_admin in [false, true] {
+            let (runtime, request, previous, desired, backup) =
+                generated_relocation_fixture(requires_admin).await;
+            let plan = runtime.plan_apps(request.clone()).await.unwrap();
+            assert_eq!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Administrator),
+                requires_admin
+            );
+            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+            runtime
+                .host()
+                .queue_process_output(Ok(super::super::ProcessOutput {
+                    exit_code: Some(0),
+                    stdout: b"generated".to_vec(),
+                    stderr: Vec::new(),
+                }));
+            let mut interaction = AdminReview(false);
+            let report = runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut super::super::NullObserver,
+                    &mut interaction,
+                )
+                .await
+                .unwrap();
+            assert_eq!(interaction.0, requires_admin);
+            assert_eq!(report.failed, 0);
+            assert_eq!(runtime.host().read(&desired).await.unwrap(), b"generated");
+            assert_eq!(
+                runtime.host().read(&previous).await.unwrap(),
+                b"user-original"
+            );
+            assert!(runtime.host().read(&backup).await.is_err());
+            let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap();
+            let entry = manifest.find_by_source("app/demo/config.toml").unwrap();
+            assert_eq!(entry.destination, desired);
+            assert!(entry.backup.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn generated_relocation_preserves_incomplete_backup_state() {
+        for missing_source in [false, true] {
+            let (runtime, request, previous, _, backup) = generated_relocation_fixture(false).await;
+            runtime
+                .host()
+                .remove_file(if missing_source { &previous } else { &backup })
+                .await
+                .unwrap();
+            let plan = runtime.plan_apps(request).await.unwrap();
+            assert!(!plan.is_ready());
+            let expected = if missing_source {
+                "app_relocation_backup_source_missing"
+            } else {
+                "app_relocation_backup_unsupported"
+            };
+            assert!(
+                plan.steps
+                    .iter()
+                    .any(|step| step.action == PlanActionV1::Blocked
+                        && step.diagnostic_codes.iter().any(|code| code == expected))
+            );
+            assert!(
+                !runtime
+                    .host()
+                    .operations()
+                    .iter()
+                    .any(|op| matches!(op, HostOperation::Run { .. }))
+            );
+        }
     }
 
     #[tokio::test]

@@ -1368,11 +1368,36 @@ where
                 })
             })
             .count();
+        let generated_relocation_admin_count = selected_entries
+            .iter()
+            .filter(|entry| {
+                entry.requires_admin
+                    && assessments.get(&entry.source).is_some_and(|assessment| {
+                        assessment.file.generator.is_some()
+                            && !assessment.file.requires_admin
+                            && approved.plan.steps.iter().any(|step| {
+                                step.target == format!("app/{}", assessment.category.name)
+                                    && step.resource.as_deref()
+                                        == Some(
+                                            format!(
+                                                "relocation-source:{}",
+                                                assessment.file.source_rel.display()
+                                            )
+                                            .as_str(),
+                                        )
+                                    && step.diagnostic_codes.iter().any(|code| {
+                                        code == "app_generated_relocation_source_removed"
+                                    })
+                            })
+                    })
+            })
+            .count();
         let admin_count = assessments
             .values()
             .filter(|assessment| assessment.file.requires_admin)
             .count()
-            + additional_admin_count;
+            + additional_admin_count
+            + generated_relocation_admin_count;
         if admin_count > 0
             && !self.context.running_as_admin
             && !interaction.authorize_admin(admin_count).await?

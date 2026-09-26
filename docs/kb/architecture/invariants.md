@@ -158,7 +158,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **Process limits apply while draining pipes.** Bounded reads retain at most the configured stdout
   and stderr limits, concurrently with stdin writes and child wait. Overflow, timeout, or I/O failure
   kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
-  terminated too. A post-capture length check is never a memory bound.
+  terminated too. A post-capture length check is never a memory bound. Drop piped stdin immediately
+  after writing to deliver EOF; Tokio's Unix `ChildStdin::shutdown` alone does not close the pipe.
 - **Root links and tree links have different policies.** A selected external/overlay root symlink
   resolves before capture and records its resolved source identity; broken root links fail closed.
   Ordinary directory origins keep their existing spelling for receipt/trust compatibility. Links
@@ -357,6 +358,12 @@ bugs. Check this list before changing the modules named in each entry.
   and removes only exact rollback material. The new receipt never inherits the old backup path. A
   missing old destination is eligible only without a persistent backup; JSON relocation does not
   inherit this whole-file proof.
+- **Generated App relocation still binds Core's known effects.** An upgrade Plan captures the old
+  destination and exact canonical regular-file backup, declares removal/restoration and both
+  privilege identities, and includes new-file rollback removal. Missing or unsupported backup
+  state blocks. Opaque output does not waive those checks or grant static relocation's journal
+  recovery proof. Execution obtains administrator authorization for a protected old location even
+  when the new destination is unprivileged.
 - **Privileged App static Copy changes the mutation port, not the rollback proof.** Create,
   backup-aware create, update, and the three removal actions persist `requires_admin`, derive
   Administrator permission, and require matching old/new receipts to carry the same flag. Planning
@@ -531,6 +538,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **Configuration and env overrides are saved privately.** Global/project configuration and
   `shine.env.toml` writes use `atomic_write_private`: Unix temporary files start as `0600` before
   any content is written, and replacement cannot widen an existing private file's permissions.
+  Env proxy rule install, toggle, and removal use the same private writer.
+- **Env proxy installation checks every launcher before writing any.** Windows extensionless,
+  `.cmd`, and `.ps1` destinations all require absence or a regular Shine-owned proxy file.
+  Foreign files, directories, and symlinks (including dangling links) remain untouched.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and
   [`data-flows.md`](data-flows.md#config-discovery) must agree.
