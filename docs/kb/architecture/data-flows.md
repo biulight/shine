@@ -16,8 +16,8 @@ a blocked step make the Plan non-ready. Planning cannot invoke host mutation or
 Preset code, and its output carries no content, env values, secret plaintext, raw errors, or raw
 command arguments.
 
-The effective Preset snapshot hashes sorted logical paths, bytes, and trust layers without hashing
-its physical checkout root. Target selection from immutable request/Preset input occurs before
+The effective Preset snapshot hashes sorted logical paths, bytes, captured executable flags, and
+trust layers without hashing its physical checkout root. Target selection from immutable request/Preset input occurs before
 host-state reads. Filesystem and split-DNS observation traits expose manifests, receipts, live
 resources, launchers, and system state without exposing write/process/privileged/apply methods.
 Planners hash every outcome-affecting observation using the same framed SHA-256 builder. Plain env
@@ -72,7 +72,7 @@ required contract remains non-ready. Shell/Sys defaults resolve per target befor
 Core classifies triggered App, Shell and Sys executable entries independently of permission fields.
 The compatible v2 unrestricted identity is an author statement and cannot alter classification.
 The `preset` trust target enumerates current requirements and persists separate per-target grants.
-Snapshot grants bind the complete effective category files, bytes and source layers. An explicit
+Snapshot grants bind the complete effective category files, bytes, executable flags and source layers. An explicit
 `--development` grant binds the target/capability and current local source-root/layer
 identity while allowing content changes. Schema v1 grants require review again.
 

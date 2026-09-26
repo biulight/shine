@@ -7368,6 +7368,37 @@ mod tests {
             .build()
     }
 
+    #[tokio::test]
+    async fn app_approval_rejects_only_executable_intent_changing() {
+        let snapshot = |executable| {
+            PresetSnapshot::builder(PresetSourceKind::External)
+                .file(
+                    "app/demo/shine.toml",
+                    b"dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+                )
+                .file("app/demo/config.toml", b"managed".to_vec())
+                .file_with_executable("app/demo/helper", b"helper".to_vec(), executable)
+                .build()
+        };
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let reviewed = runtime(snapshot(false))
+            .plan_apps(request.clone())
+            .await
+            .unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&reviewed).unwrap();
+        let changed = runtime(snapshot(true)).plan_apps(request).await.unwrap();
+        assert_eq!(reviewed.permissions, changed.permissions);
+        assert_ne!(reviewed.inputs.preset, changed.inputs.preset);
+        assert!(approval.validate(&changed).is_err());
+    }
+
     fn privileged_static_copy_app_snapshot() -> PresetSnapshot {
         PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(

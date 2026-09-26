@@ -48,6 +48,10 @@ MY_API_TOKEN = { value = "<token>", description = "Token for the internal API" }
 Running `shine env set MY_API_TOKEN <new-value>` on a detailed entry updates `value` and preserves the
 description.
 
+On Unix, Shine saves `config.toml`, `shine.config.toml`, and `shine.env.toml` with owner-only
+permissions (`0600`), including when replacing an existing file. Temporary files are private before
+any values are written. This protects local file access; plaintext values are still plaintext.
+
 When a global, overlay, or project `shine.env.toml` already overrides a key, `set`, `delete`, and
 `env secret encrypt --set` refuse to write a lower-priority value that would have no effect. Add
 `--force` only when you intend to modify that override file:

@@ -205,7 +205,9 @@ shine trust grant <TARGET> --development
 ```
 
 Snapshot trust binds the target, capability, and complete effective category snapshot, including
-logical paths, exact bytes, and source layers. Any category file change requires renewed authorization.
+logical paths, exact bytes, source layers, and captured Unix executable flags. Changing category
+content or whether a file is executable requires renewed snapshot authorization. Existing snapshot
+grants for categories containing executable files may require review again after upgrading.
 Author statements appear in review and affect the Plan, but are not separately compared as trust identity.
 Editing statements in `shine.toml` still changes the snapshot bytes.
 The snapshot excludes `node_modules`; trust does not constrain interpreters, PATH tools, dependencies,

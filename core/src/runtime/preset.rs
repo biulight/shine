@@ -21,6 +21,8 @@ pub struct PresetFileOrigin {
 pub struct PresetFile {
     pub bytes: Vec<u8>,
     pub origin: PresetFileOrigin,
+    /// Captured executable intent only; never retain setuid/setgid or source ownership.
+    pub executable: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -102,6 +104,9 @@ impl PresetSnapshot {
             let mut framed = Vec::with_capacity(bytes.len() + 16);
             append_digest_frame(&mut framed, source_kind_name(origin));
             append_digest_frame(&mut framed, bytes);
+            if self.file(path).is_some_and(|file| file.executable) {
+                append_digest_frame(&mut framed, b"executable");
+            }
             builder.add_observation(format!("file:{path}"), framed)?;
         }
         Ok(builder.finish())
@@ -125,6 +130,9 @@ impl PresetSnapshot {
             let mut framed = Vec::with_capacity(bytes.len() + 16);
             append_digest_frame(&mut framed, source_kind_name(origin));
             append_digest_frame(&mut framed, bytes);
+            if self.file(path).is_some_and(|file| file.executable) {
+                append_digest_frame(&mut framed, b"executable");
+            }
             builder.add_observation(format!("file:{path}"), framed)?;
         }
         Ok(builder.finish())
@@ -174,7 +182,16 @@ pub struct PresetSnapshotBuilder {
 }
 
 impl PresetSnapshotBuilder {
-    pub fn file(mut self, path: impl Into<String>, bytes: Vec<u8>) -> Self {
+    pub fn file(self, path: impl Into<String>, bytes: Vec<u8>) -> Self {
+        self.file_with_executable(path, bytes, false)
+    }
+
+    pub fn file_with_executable(
+        mut self,
+        path: impl Into<String>,
+        bytes: Vec<u8>,
+        executable: bool,
+    ) -> Self {
         let path = normalize_logical_path(path.into());
         let physical_path = self.base_root.as_ref().map(|root| root.join(&path));
         let category_root = self
@@ -185,6 +202,7 @@ impl PresetSnapshotBuilder {
             path,
             PresetFile {
                 bytes,
+                executable,
                 origin: PresetFileOrigin {
                     source_kind: self.source_kind,
                     physical_path,
@@ -205,7 +223,16 @@ impl PresetSnapshotBuilder {
         self
     }
 
-    pub fn overlay_file(mut self, path: impl Into<String>, bytes: Vec<u8>) -> Self {
+    pub fn overlay_file(self, path: impl Into<String>, bytes: Vec<u8>) -> Self {
+        self.overlay_file_with_executable(path, bytes, false)
+    }
+
+    pub fn overlay_file_with_executable(
+        mut self,
+        path: impl Into<String>,
+        bytes: Vec<u8>,
+        executable: bool,
+    ) -> Self {
         let path = normalize_logical_path(path.into());
         let physical_path = self.overlay_root.as_ref().map(|root| root.join(&path));
         let category_root = self
@@ -216,6 +243,7 @@ impl PresetSnapshotBuilder {
             path,
             PresetFile {
                 bytes,
+                executable,
                 origin: PresetFileOrigin {
                     source_kind: PresetSourceKind::Overlay,
                     physical_path,
@@ -273,6 +301,37 @@ fn category_root(root: &Path, logical_path: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn digests_bind_effective_executable_intent() {
+        let path = "app/demo/helper";
+        let snapshot = |executable| {
+            PresetSnapshot::builder(PresetSourceKind::External)
+                .file_with_executable(path, b"helper".to_vec(), executable)
+                .build()
+        };
+        let plain = snapshot(false);
+        let executable = snapshot(true);
+        assert_ne!(plain.digest_v1().unwrap(), executable.digest_v1().unwrap());
+        assert_ne!(
+            plain.code_digest_v1([path]).unwrap(),
+            executable.code_digest_v1([path]).unwrap()
+        );
+        let overlay = |base_executable| {
+            PresetSnapshot::builder(PresetSourceKind::External)
+                .file_with_executable(path, b"shadowed".to_vec(), base_executable)
+                .overlay_file_with_executable(path, b"helper".to_vec(), true)
+                .build()
+        };
+        assert_eq!(
+            overlay(false).digest_v1().unwrap(),
+            overlay(true).digest_v1().unwrap()
+        );
+        assert_eq!(
+            overlay(false).code_digest_v1([path]).unwrap(),
+            overlay(true).code_digest_v1([path]).unwrap()
+        );
+    }
 
     #[test]
     fn immutable_snapshot_rejects_paths_outside_known_kinds() {

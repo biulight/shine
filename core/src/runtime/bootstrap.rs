@@ -43,8 +43,8 @@ pub async fn capture_preset_snapshot(
             let root = resolve_preset_root(host, &root).await?;
             let mut builder =
                 PresetSnapshot::builder(PresetSourceKind::External).base_root(root.clone());
-            for (logical, bytes) in capture_preset_tree(host, &root).await? {
-                builder = builder.file(logical, bytes);
+            for (logical, bytes, executable) in capture_preset_tree(host, &root).await? {
+                builder = builder.file_with_executable(logical, bytes, executable);
             }
             builder
         }
@@ -52,8 +52,8 @@ pub async fn capture_preset_snapshot(
     if let Some(root) = request.overlay_root {
         let root = resolve_preset_root(host, &root).await?;
         builder = builder.overlay_root(root.clone());
-        for (logical, bytes) in capture_preset_tree(host, &root).await? {
-            builder = builder.overlay_file(logical, bytes);
+        for (logical, bytes, executable) in capture_preset_tree(host, &root).await? {
+            builder = builder.overlay_file_with_executable(logical, bytes, executable);
         }
     }
     Ok(builder.build())
@@ -88,7 +88,7 @@ async fn resolve_preset_root(host: &impl FileSystemHost, root: &Path) -> Result<
 async fn capture_preset_tree(
     host: &impl FileSystemHost,
     root: &Path,
-) -> Result<Vec<(String, Vec<u8>)>> {
+) -> Result<Vec<(String, Vec<u8>, bool)>> {
     match host.metadata(root).await {
         Ok(metadata) if metadata.kind == FileKind::Directory => {}
         Ok(_) => return Ok(Vec::new()),
@@ -126,7 +126,11 @@ async fn capture_preset_tree(
                         .await
                         .map_err(|error| error.into_anyhow("reading preset file"))
                         .with_context(|| format!("reading preset file {}", path.display()))?;
-                    files.push((logical_path(relative), bytes));
+                    files.push((
+                        logical_path(relative),
+                        bytes,
+                        metadata.unix_mode.unwrap_or(0) & 0o111 != 0,
+                    ));
                 }
                 FileKind::Symlink => {}
             }

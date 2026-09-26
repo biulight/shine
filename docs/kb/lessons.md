@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-09-26 — Private replacement, streaming pipes, and executable helpers need regression coverage
+
+- **Symptoms**: editing a `0600` env override produced `0644`; real age encryption hung on a 1 MiB
+  payload; a working external helper exited 126 inside an App snapshot.
+- **Root causes**: replacement inherited the temporary file's default mode; stdin was filled before
+  stdout was drained; snapshot materialization copied bytes without executable intent.
+- **Fixes**: use private atomic config/env writes, concurrently feed and drain encryption pipes with
+  failure cleanup, and capture/hash/restore executable flags for external and overlay App helpers.
+- **Rule**: verify both sides of a boundary: private temp creation plus final mode, input plus output
+  backpressure, and reviewed source bytes plus execution metadata. See ADR 0093.
+
 ## 2026-09-26 — Snapshot review must bind the code actually launched
 
 - **Symptom**: an external App script edited after capture executed its new bytes under the old grant.

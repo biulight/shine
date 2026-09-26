@@ -66,15 +66,35 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 .filter(|(path, _)| path.starts_with(&prefix))
             {
                 let relative = &logical[prefix.len()..];
+                let executable = self
+                    .presets()
+                    .file(logical)
+                    .is_some_and(|file| file.executable);
                 self.host()
                     .write_atomic(&app_dir.join(relative), bytes)
                     .await
                     .map_err(|error| error.into_anyhow("materializing App execution snapshot"))?;
+                if executable {
+                    self.host()
+                        .set_executable(&app_dir.join(relative))
+                        .await
+                        .map_err(|error| {
+                            error.into_anyhow("making App snapshot helper executable")
+                        })?;
+                }
                 if self.presets().is_overlay(logical) {
                     self.host()
                         .write_atomic(&invocation.join("overlay").join(relative), bytes)
                         .await
                         .map_err(|error| error.into_anyhow("materializing App overlay snapshot"))?;
+                    if executable {
+                        self.host()
+                            .set_executable(&invocation.join("overlay").join(relative))
+                            .await
+                            .map_err(|error| {
+                                error.into_anyhow("making App overlay helper executable")
+                            })?;
+                    }
                 }
             }
             let script = app_dir.join(relative_script);
@@ -172,6 +192,7 @@ mod tests {
     async fn app_entrypoints_and_helpers_execute_captured_bytes_after_source_changes() {
         use crate::trust::TrustGrantV1;
         use std::collections::BTreeSet;
+        use std::os::unix::fs::PermissionsExt;
         let root =
             std::env::temp_dir().join(format!("shine-app-snapshot-{}", uuid::Uuid::new_v4()));
         let presets = root.join("presets");
@@ -208,7 +229,7 @@ generator = { script = "scripts/generate.sh", env = ["ENABLE", "ENABLE=SHINE_APP
         ] {
             std::fs::write(
                 category.join(script),
-                format!("#!/bin/sh\n[ \"$SHINE_APP_ID\" = demo ] || exit 2\n. \"$SHINE_APP_SOURCE_DIR/helper.sh\"\n. \"$SHINE_APP_OVERLAY_DIR/helper.sh\"\n{suffix}\n"),
+                format!("#!/bin/sh\nset -e\n[ \"$SHINE_APP_ID\" = demo ] || exit 2\n[ ! -x fallback.txt ]\n[ \"$(./native-helper)\" = captured-base ]\n[ \"$(./overlay-helper)\" = captured-overlay ]\n[ \"$(\"$SHINE_APP_OVERLAY_DIR/overlay-helper\")\" = captured-overlay ]\n. \"$SHINE_APP_SOURCE_DIR/helper.sh\"\n. \"$SHINE_APP_OVERLAY_DIR/helper.sh\"\n{suffix}\n"),
             )
             .unwrap();
         }
@@ -220,6 +241,14 @@ generator = { script = "scripts/generate.sh", env = ["ENABLE", "ENABLE=SHINE_APP
         )
         .unwrap();
         std::fs::write(category.join("helper.sh"), "emit() { printf shadowed; }\n").unwrap();
+        for (path, text) in [
+            (category.join("native-helper"), "captured-base"),
+            (overlay.join("app/demo/overlay-helper"), "captured-overlay"),
+        ] {
+            std::fs::write(&path, format!("#!/bin/sh\nprintf {text}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(category.join("overlay-helper"), "shadowed non-executable").unwrap();
         let snapshot = capture_preset_snapshot(
             &RealHost,
             PresetSnapshotRequest {
@@ -229,6 +258,13 @@ generator = { script = "scripts/generate.sh", env = ["ENABLE", "ENABLE=SHINE_APP
         )
         .await
         .unwrap();
+        // Changing source permissions after capture must not change execution either.
+        for path in [
+            category.join("native-helper"),
+            overlay.join("app/demo/overlay-helper"),
+        ] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
         let mut context = RuntimeContext::isolated(
             root.join("home"),
             root.join("state"),

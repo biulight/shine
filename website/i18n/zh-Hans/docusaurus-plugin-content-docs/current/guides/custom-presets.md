@@ -183,8 +183,9 @@ shine trust grant <TARGET>
 shine trust grant <TARGET> --development
 ```
 
-Snapshot trust 绑定 target、capability 和完整有效类别快照，包括逻辑路径、精确字节和来源层。
-类别文件发生变化后需要重新授权。作者说明仍进入审阅与 Plan，但不再单独作为 trust 身份比较；
+Snapshot trust 绑定 target、capability 和完整有效类别快照，包括逻辑路径、精确字节、来源层及
+捕获的 Unix 可执行标记。改变类别文件内容或是否可执行都需要重新进行快照授权；升级后，包含可执行
+文件的类别所持有的旧 snapshot grant 可能需要重新审阅。作者说明仍进入审阅与 Plan，但不再单独作为 trust 身份比较；
 修改 `shine.toml` 中的说明仍会改变快照字节。
 快照排除 `node_modules`；trust 不约束解释器、PATH 工具、依赖、下载内容或运行副作用。
 

@@ -9,6 +9,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Save configuration and environment override files with owner-only Unix permissions, including
+  private temporary files during replacement.
+- Drain encryption output while writing plaintext so large GPG/age payloads cannot deadlock on
+  full pipes; terminate and reap failed encryption processes.
+- Retain external App helper executable flags in captured source and overlay copies, and bind
+  those flags into Plan and snapshot-trust digests. Existing grants for executable categories
+  may require renewed review.
 - Execute App generators, script hooks, and artifacts from independent captured category copies,
   including helper and overlay files, so edits after review cannot replace the executed source.
   App source path variables now refer to temporary snapshots; persistent output belongs in the

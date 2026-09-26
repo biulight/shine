@@ -821,7 +821,11 @@ async fn snapshot_tree(
                         &entry,
                     )
                 })?;
-                builder = builder.file(logical_path(&relative), bytes);
+                builder = builder.file_with_executable(
+                    logical_path(&relative),
+                    bytes,
+                    kind.unix_mode.unwrap_or(0) & 0o111 != 0,
+                );
             }
         }
     }

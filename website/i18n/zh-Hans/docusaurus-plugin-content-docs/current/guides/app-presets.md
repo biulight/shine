@@ -199,6 +199,11 @@ Shine 不会隐式运行 artifact 命令。每次手动 apply/remove 都会显�
 `SHINE_CACHE_DIR`、`SHINE_STATE_DIR` 等固定路径变量，适合生成放在
 `~/.shine/http/app/<APP_ID>/` 下的本地资源。完整变量说明见[任务与本地服务](./tasks-and-serve.md)。
 
+Generator、脚本钩子、artifact 和 teardown 脚本均从临时捕获的类别副本运行。在 Unix 上，外部
+预设及 overlay 中的可执行辅助文件在副本中仍可执行，包括没有扩展名的文件。捕获后修改原始
+文件内容或权限不会影响本次调用。持久输出应写入 state、cache 或 HTTP 路径；捕获的 source
+和 overlay 副本会在执行后删除。
+
 内置 `surge` app 预设会把 `local-proxies.conf`、`local-proxy-groups.conf`、`local-rules.conf` 和可选的订阅生成文件安装到 Surge Profiles 目录。设置 `[env]` 中的 `SURGE_PROFILE` 后，`shine app artifact apply surge` 使用内置 Bun artifact 幂等修补活动配置文件的 `[Proxy]`、`[Proxy Group]` 与 `[Rule]` `#!include` 行。Overlay 只需覆盖自己的策略文件，无需提供构建脚本。
 
 预设还安装默认注释、不立即生效的 `LAN Network`、`LAN PROXY` 和 `Other Direct` 规则示例。每类规则在 `local-rules.conf` 中提供三种互斥来源：随 Profile 安装的相对 `rules/*.list`、同设备 loopback HTTP 地址，或自行替换域名的远程 HTTPS 地址。每类只启用一种；相对文件通常最简单。`localhost` 始终指运行 Surge 的设备，在 iOS 上不会指向另一台局域网主机。

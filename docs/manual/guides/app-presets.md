@@ -240,6 +240,12 @@ the category's `[permissions].environment`, plus path variables such as `SHINE_A
 `~/.shine/http/app/<APP_ID>/`. See [Tasks and the local service](./tasks-and-serve.md) for the complete
 variable list.
 
+Generators, script hooks, artifacts, and teardown scripts run from temporary captured category
+copies. On Unix, executable helpers from external presets and overlays remain executable in those
+copies, including helpers without a filename extension. Source edits or permission changes after
+capture do not affect that invocation. Keep persistent output in the state, cache, or HTTP paths;
+the captured source and overlay copies are removed after execution.
+
 The built-in `surge` preset installs `local-proxies.conf`, `local-proxy-groups.conf`,
 `local-rules.conf`, and the optional subscription file in the Surge Profiles directory. After setting
 `SURGE_PROFILE` in `[env]`, `shine app artifact apply surge` uses a built-in Bun artifact to

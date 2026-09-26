@@ -28,19 +28,43 @@ pub(crate) async fn write_stdin_and_wait(
     mut child: tokio::process::Child,
     input: &[u8],
 ) -> Result<std::process::Output> {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+
+    async fn read_output(stream: Option<impl AsyncRead + Unpin>) -> std::io::Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        if let Some(mut stream) = stream {
+            stream.read_to_end(&mut bytes).await?;
+        }
+        Ok(bytes)
+    }
 
     let mut stdin = child.stdin.take().context("opening child stdin")?;
-    stdin
-        .write_all(input)
-        .await
-        .context("writing child stdin")?;
-    drop(stdin);
-
-    child
-        .wait_with_output()
-        .await
-        .context("waiting for child process")
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    // Encryption can produce output before consuming the complete plaintext.
+    // Drain both output pipes while writing, including waiting for stdin EOF.
+    let result = tokio::try_join!(
+        async move {
+            stdin.write_all(input).await?;
+            drop(stdin);
+            Ok::<_, std::io::Error>(())
+        },
+        read_output(stdout),
+        read_output(stderr),
+        child.wait(),
+    );
+    match result {
+        Ok(((), stdout, stderr, status)) => Ok(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        }),
+        Err(error) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            Err(error).context("communicating with encryption process")
+        }
+    }
 }
 
 /// Bounded, zeroizing output for data-key unwraps; never echo backend stderr.
@@ -121,6 +145,57 @@ impl Drop for TempFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn encryption_drains_both_pipes_while_writing_large_input() {
+        let child = tokio::process::Command::new("sh")
+            .args(["-c", "dd if=/dev/zero bs=16384 count=64 >&2; cat"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let input = vec![b'x'; 1024 * 1024];
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            write_stdin_and_wait(child, &input),
+        )
+        .await
+        .expect("pipe deadlock")
+        .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, input);
+        assert!(output.stderr.starts_with(&vec![0; 1024 * 1024]));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn encryption_input_failure_kills_and_reaps_child() {
+        let child = tokio::process::Command::new("sh")
+            .args(["-c", "exec 0<&-; exec sleep 30"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            write_stdin_and_wait(child, &vec![b'x'; 1024 * 1024]),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_err());
+        // Signal zero only probes existence; successful cleanup must reap the child.
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
 
     #[tokio::test]
     async fn base64_standard_vectors_round_trip() {

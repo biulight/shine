@@ -31,7 +31,7 @@ impl Config {
             new_toml
         };
 
-        crate::persist::atomic_write(&config_path, toml_str.as_bytes())
+        crate::persist::atomic_write_private(&config_path, toml_str.as_bytes())
             .await
             .with_context(|| format!("Failed to write config to {config_path:?}"))?;
 
@@ -112,6 +112,32 @@ mod tests {
     use super::*;
     use crate::config::CURRENT_RUNTIME_SCHEMA_VERSION;
     use std::path::Path;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn save_keeps_config_private_on_creation_and_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+        for previous_mode in [None, Some(0o600), Some(0o644)] {
+            if let Some(mode) = previous_mode {
+                fs::set_permissions(&config.config_path, std::fs::Permissions::from_mode(mode))
+                    .await
+                    .unwrap();
+            }
+            config.save().await.unwrap();
+            assert_eq!(
+                fs::metadata(&config.config_path)
+                    .await
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        fs::remove_dir_all(dir).await.unwrap();
+    }
 
     #[tokio::test]
     async fn save_writes_config_file_for_new_config() {

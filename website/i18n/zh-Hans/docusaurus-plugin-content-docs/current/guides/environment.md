@@ -45,6 +45,10 @@ MY_API_TOKEN = { value = "<令牌>", description = "内部 API 的访问令牌" 
 对已有详细条目执行 `shine env set MY_API_TOKEN <新值>` 时，Shine 会更新 `value` 并保留
 说明。
 
+在 Unix 上，Shine 保存 `config.toml`、`shine.config.toml` 和 `shine.env.toml` 时使用仅所有者
+可读写的权限（`0600`），替换已有文件时也一样。临时文件在写入任何值之前就已限制权限。
+这只保护本地文件访问，明文值仍然是明文。
+
 若同名键已由全局、overlay 或项目 `shine.env.toml` 覆盖，直接 `set`、`delete` 或 `env secret encrypt --set` 会被拒绝，防止写入一个不会生效的低优先级值。确认应修改该覆盖文件时，添加 `--force`：
 
 ```bash

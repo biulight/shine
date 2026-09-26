@@ -230,7 +230,7 @@ pub async fn write_env_override_entry(path: &Path, key: &str, value: Option<&str
             .await
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    crate::persist::atomic_write(path, new_content.as_bytes())
+    crate::persist::atomic_write_private(path, new_content.as_bytes())
         .await
         .with_context(|| format!("writing {}", path.display()))
 }
@@ -794,6 +794,27 @@ mod tests {
             table.get("TOKEN").and_then(toml::Value::as_str),
             Some("secret")
         );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for previous_mode in [0o600, 0o644] {
+                assert_eq!(
+                    fs::metadata(&path).await.unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+                fs::set_permissions(&path, std::fs::Permissions::from_mode(previous_mode))
+                    .await
+                    .unwrap();
+                write_env_override_entry(&path, "OTHER", Some("value"))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    fs::metadata(&path).await.unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+        }
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

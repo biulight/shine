@@ -89,8 +89,8 @@ bugs. Check this list before changing the modules named in each entry.
   content or paths. Descriptions, labels, arguments, and other incidental strings never declare an
   executable payload.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
-  digest binds sorted effective logical paths, exact bytes, and each file's embedded, external, or
-  overlay origin. It must not include physical source roots: relocating unchanged source is not a
+  digest binds sorted effective logical paths, exact bytes, captured executable intent, and each
+  file's embedded, external, or overlay origin. It must not include physical source roots: relocating unchanged source is not a
   semantic change, while changing an effective layer is. State observations use the same framed
   SHA-256 contract. Labels use canonical targets and logical resources; request flags, relevant
   manifests/receipts, live fingerprints, platform/mode, and outcome-affecting input identities are
@@ -105,7 +105,7 @@ bugs. Check this list before changing the modules named in each entry.
   corresponding declaration remains fail-closed. No declaration creates external-code trust or
   bypasses ownership checks or Plan approval.
   Snapshot grants bind the complete effective category snapshot, including sorted logical paths,
-  bytes, and source layers. An explicitly requested development grant may accept content changes
+  bytes, executable intent, and source layers. An explicitly requested development grant may accept content changes
   only while target, capability, physical source-root identity, and source
   layer still match; Preset content cannot create that grant. Trust grant schemas older than v2 are
   inspection/revocation state only and require a new review before execution.
@@ -152,6 +152,9 @@ bugs. Check this list before changing the modules named in each entry.
   that invocation's tree, including on spawn failure; persistent output uses the state/cache/HTTP
   contract. Planners declare snapshot creation and removal. Unisolated code can still deliberately
   access other host paths; this is source consistency, not a sandbox (ADR 0092).
+  External and overlay helper executable flags are captured with the bytes and restored in both
+  execution copies. Never re-read source modes at execution time or copy ownership/setuid/setgid
+  bits; executable intent also enters approval and snapshot-trust digests (ADR 0093).
 - **Process limits apply while draining pipes.** Bounded reads retain at most the configured stdout
   and stderr limits, concurrently with stdin writes and child wait. Overflow, timeout, or I/O failure
   kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
@@ -525,6 +528,9 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **All `config.toml` writes go through `shine_core::sync_table`**, which preserves user comments.
   Never serialize the whole file from a struct — that destroys comments.
+- **Configuration and env overrides are saved privately.** Global/project configuration and
+  `shine.env.toml` writes use `atomic_write_private`: Unix temporary files start as `0600` before
+  any content is written, and replacement cannot widen an existing private file's permissions.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and
   [`data-flows.md`](data-flows.md#config-discovery) must agree.
@@ -646,6 +652,9 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Encryption drains output while feeding plaintext.** GPG/age can write before reading all
+  input, so stdin writing, stdout/stderr draining, and child waiting must proceed concurrently.
+  I/O errors terminate and reap the child; encryption callers enable kill-on-drop for cancellation.
 - **Age sealing never drops unavailable recipients.** Age 1.3 native `age1tag` recipients remove
   the Secure Enclave and phone plugin dependencies from encryption, but explicit `age1phone` and legacy plugin
   recipients still require their named recipient plugins. Missing plugins fail before old-payload
