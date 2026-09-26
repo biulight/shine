@@ -60,11 +60,11 @@ Use the versions pinned in `mise.toml` (`mise exec -- <command>` or activate mis
 
 ```bash
 cargo build --target-dir target
-cargo nextest run --target-dir target --all-features
-cargo test --target-dir target                         # fallback or targeted test filter
-cargo nextest run --target-dir target -E 'test(install_then_uninstall)'
+cargo nextest run --workspace --target-dir target --all-features
+cargo test --workspace --target-dir target                         # fallback or targeted test filter
+cargo nextest run --workspace --target-dir target -E 'test(install_then_uninstall)'
 cargo fmt --check
-cargo clippy --target-dir target --all-targets --all-features --tests --benches -- -D warnings
+cargo clippy --workspace --target-dir target --all-targets --all-features --tests --benches -- -D warnings
 cargo deny check bans licenses sources
 typos
 bun run check:ts                                      # typecheck + preset tests

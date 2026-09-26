@@ -138,6 +138,10 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 3. 全局 `config.toml` 中的 `presets_dir`
 4. 默认 `~/.shine/presets/`
 
+外部预设或 overlay 的根目录可以是符号链接。Shine 会先解析该链接，并把解析后的来源
+用于 development trust；重新指向另一个目录需要重新审阅。失效的根目录链接会报错，
+预设树内部的符号链接仍不参与快照。
+
 使用外部 `presets_dir` 时，Shell 类别默认以 `snapshot` 模式复制到
 `~/.shine/installed/shell/` 后再运行。修改来源文件后，先用 `shine update` 检查，再用
 `shine upgrade` 应用，便于审阅变化且与 app 配置的更新流程一致。仅在编写和调试预设时，才把

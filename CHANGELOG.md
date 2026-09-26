@@ -7,6 +7,16 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- Execute App generators, script hooks, and artifacts from independent captured category copies,
+  including helper and overlay files, so edits after review cannot replace the executed source.
+  App source path variables now refer to temporary snapshots; persistent output belongs in the
+  supplied state, cache, or HTTP directories.
+- Enforce subprocess stdout/stderr limits while reading and terminate the child on overflow.
+- Discover external Preset and overlay roots through symbolic links, and report broken root links.
+- Run Core tests and lint checks alongside CLI checks in CI and local verification hooks.
+
 ## [2.3.0] — 2026-09-17
 
 ### Features

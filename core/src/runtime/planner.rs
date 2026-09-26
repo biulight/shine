@@ -604,7 +604,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         state,
                         permissions,
                     )?;
-                    add_generator_permissions(
+                    let snapshot_cleanup = add_generator_permissions(
                         self,
                         permissions,
                         &category,
@@ -630,6 +630,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             "app_opaque_generator_output"
                         }),
                     );
+                    steps.push(snapshot_cleanup);
                     if blocked {
                         continue;
                     }
@@ -1012,7 +1013,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         state,
                         permissions,
                     )?;
-                    add_app_hook_permissions(
+                    let snapshot_cleanup = add_app_hook_permissions(
                         self,
                         &category,
                         hook,
@@ -1040,6 +1041,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             "app_hook_execution"
                         }),
                     );
+                    steps.extend(snapshot_cleanup);
                 }
             }
         }
@@ -1350,7 +1352,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         state,
                         permissions,
                     )?;
-                    add_app_artifact_permissions(
+                    let snapshot_cleanup = add_app_artifact_permissions(
                         self,
                         &category,
                         teardown,
@@ -1368,6 +1370,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         )
                         .with_diagnostic_code("app_artifact_execution"),
                     );
+                    steps.push(snapshot_cleanup);
                 }
             }
         }
@@ -1700,7 +1703,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 &mut state,
                 &mut permissions,
             )?;
-            add_generator_permissions(
+            let snapshot_cleanup = add_generator_permissions(
                 self,
                 &mut permissions,
                 &category,
@@ -1736,6 +1739,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 execution = execution.with_diagnostic_code("app_opaque_generator_output");
             }
             steps.push(execution);
+            steps.push(snapshot_cleanup);
             if blocked {
                 continue;
             }
@@ -1847,7 +1851,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             &mut state,
             &mut permissions,
         )?;
-        add_app_artifact_permissions(
+        let snapshot_cleanup = add_app_artifact_permissions(
             self,
             &category,
             script,
@@ -1873,6 +1877,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             "app_artifact_execution"
         });
         steps.push(step);
+        steps.push(snapshot_cleanup);
         finish_specialized_plan(self, operation, state, permissions, steps)
     }
 
@@ -5178,7 +5183,9 @@ async fn plan_app_hooks<H: FileSystemObservationHost>(
             state,
             permissions,
         )?;
-        add_app_hook_permissions(runtime, category, hook, index, state, permissions, steps).await?;
+        let snapshot_cleanup =
+            add_app_hook_permissions(runtime, category, hook, index, state, permissions, steps)
+                .await?;
         let blocked = !runtime.app_capability_trusted(category, TrustCapabilityV1::AppHook)?;
         steps.push(
             PlanStepV1::new(
@@ -5196,6 +5203,7 @@ async fn plan_app_hooks<H: FileSystemObservationHost>(
                 "app_hook_execution"
             }),
         );
+        steps.extend(snapshot_cleanup);
     }
     Ok(())
 }
@@ -5217,7 +5225,7 @@ async fn add_app_hook_permissions<H: FileSystemObservationHost>(
     state: &mut StateCapture,
     permissions: &mut PermissionAccumulator,
     steps: &mut Vec<PlanStepV1>,
-) -> Result<()> {
+) -> Result<Option<PlanStepV1>> {
     let super::AppHookAction::Script {
         script,
         runtime: runtime_kind,
@@ -5228,7 +5236,7 @@ async fn add_app_hook_permissions<H: FileSystemObservationHost>(
                 program: command.clone(),
             });
         }
-        return Ok(());
+        return Ok(None);
     };
 
     permissions.require(PermissionV1::Filesystem {
@@ -5241,31 +5249,20 @@ async fn add_app_hook_permissions<H: FileSystemObservationHost>(
         });
     }
     let logical = format!("app/{}/{}", category.name, script.display());
-    let script_file = runtime
+    runtime
         .presets()
         .file(&logical)
         .with_context(|| format!("app hook script is missing: {logical}"))?;
-    if script_file.origin.physical_path.is_none() {
-        let cache_root = runtime
-            .context()
-            .presets_dir
-            .join("app")
-            .join(&category.name);
-        capture_tree_state(
-            runtime.host(),
-            state,
-            format!("hook:{index}:preset-cache"),
-            &cache_root,
-        )
-        .await?;
-        add_shine_write_permission(runtime.context(), permissions, &cache_root);
-        steps.push(PlanStepV1::new(
-            format!("app/{}", category.name),
-            Some(format!("hook:{index}:preset-cache")),
-            PlanActionV1::Update,
-        ));
-    }
-    Ok(())
+    let cleanup = add_app_snapshot_permissions(
+        runtime,
+        category,
+        &format!("hook:{index}:snapshot"),
+        state,
+        permissions,
+        steps,
+    )
+    .await?;
+    Ok(Some(cleanup))
 }
 
 async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
@@ -5276,7 +5273,7 @@ async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
     state: &mut StateCapture,
     permissions: &mut PermissionAccumulator,
     steps: &mut Vec<PlanStepV1>,
-) -> Result<()> {
+) -> Result<PlanStepV1> {
     permissions.require(PermissionV1::Filesystem {
         access: FilesystemAccessV1::Execute,
         path: format!("preset:{}", script.replace('\\', "/")),
@@ -5287,30 +5284,19 @@ async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
         });
     }
     let logical = format!("app/{}/{script}", category.name);
-    let script_file = runtime
+    runtime
         .presets()
         .file(&logical)
         .with_context(|| format!("app script is missing: {logical}"))?;
-    if script_file.origin.physical_path.is_none() {
-        let cache_root = runtime
-            .context()
-            .presets_dir
-            .join("app")
-            .join(&category.name);
-        capture_tree_state(
-            runtime.host(),
-            state,
-            "artifact:preset-cache".to_string(),
-            &cache_root,
-        )
-        .await?;
-        add_shine_write_permission(runtime.context(), permissions, &cache_root);
-        steps.push(PlanStepV1::new(
-            format!("app/{}", category.name),
-            Some("artifact:preset-cache"),
-            PlanActionV1::Update,
-        ));
-    }
+    let cleanup = add_app_snapshot_permissions(
+        runtime,
+        category,
+        "artifact:snapshot",
+        state,
+        permissions,
+        steps,
+    )
+    .await?;
     for (label, directory) in [
         (
             "http-dir",
@@ -5360,7 +5346,7 @@ async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
             ));
         }
     }
-    Ok(())
+    Ok(cleanup)
 }
 
 fn finish_plan<H>(
@@ -6748,7 +6734,7 @@ async fn add_generator_permissions<H: FileSystemObservationHost>(
     generator: &super::AppGenerator,
     state: &mut StateCapture,
     steps: &mut Vec<PlanStepV1>,
-) -> Result<()> {
+) -> Result<PlanStepV1> {
     permissions.require(PermissionV1::Filesystem {
         access: FilesystemAccessV1::Execute,
         path: format!("preset:{}", generator.script.display()),
@@ -6759,44 +6745,63 @@ async fn add_generator_permissions<H: FileSystemObservationHost>(
         });
     }
     let logical = format!("app/{}/{}", category.name, generator.script.display());
-    let script = runtime
+    runtime
         .presets()
         .file(&logical)
         .with_context(|| format!("app generator script is missing: {logical}"))?;
-    if script.origin.physical_path.is_none() {
-        let file_name = generator
-            .script
-            .file_name()
-            .context("app generator script has no file name")?;
-        let path = runtime
-            .context()
-            .shine_dir
-            .join("runtime/app")
-            .join(&category.name)
-            .join(file_name);
-        let exists = path_exists(runtime.host(), &path).await?;
-        capture_path_state(
-            runtime.host(),
-            state,
-            format!("generator-runtime:{logical}"),
-            &path,
-        )
-        .await?;
-        add_shine_write_permission(runtime.context(), permissions, &path);
-        steps.push(
-            PlanStepV1::new(
-                format!("app/{}", category.name),
-                Some(format!("generator-runtime:{}", generator.script.display())),
-                if exists {
-                    PlanActionV1::Update
-                } else {
-                    PlanActionV1::Create
-                },
-            )
-            .with_diagnostic_code("app_generator_runtime_materialization"),
-        );
+    add_app_snapshot_permissions(
+        runtime,
+        category,
+        &format!("generator-runtime:{}", generator.script.display()),
+        state,
+        permissions,
+        steps,
+    )
+    .await
+}
+
+async fn add_app_snapshot_permissions<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    category: &AppCategory,
+    resource: &str,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+    steps: &mut Vec<PlanStepV1>,
+) -> Result<PlanStepV1> {
+    // Execution creates a fresh UUID child and removes only that child. No
+    // existing category tree is replaced or removed, and no random ID is review data.
+    let root = runtime
+        .context()
+        .shine_dir
+        .join("runtime/app")
+        .join(&category.name);
+    capture_path_state(
+        runtime.host(),
+        state,
+        format!("app/{}:{resource}:root", category.name),
+        &root,
+    )
+    .await?;
+    for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+        permissions.implicit(PermissionV1::Filesystem {
+            access,
+            path: review_path(runtime.context(), &root),
+        });
     }
-    Ok(())
+    steps.push(
+        PlanStepV1::new(
+            format!("app/{}", category.name),
+            Some(resource),
+            PlanActionV1::Create,
+        )
+        .with_diagnostic_code("app_execution_snapshot_materialization"),
+    );
+    Ok(PlanStepV1::new(
+        format!("app/{}", category.name),
+        Some(format!("{resource}:cleanup")),
+        PlanActionV1::Remove,
+    )
+    .with_diagnostic_code("app_execution_snapshot_cleanup"))
 }
 
 fn app_code_blocked<H>(
@@ -10519,6 +10524,84 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
     }
 
     #[tokio::test]
+    async fn app_snapshot_plans_keep_category_observations_separate() {
+        let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
+        for category in ["first", "second"] {
+            builder = builder
+                .file(
+                    format!("app/{category}/shine.toml"),
+                    format!(
+                        r#"dest = '~/.config/{category}'
+[permissions]
+schema_version = 1
+filesystem = [{{ access = ['execute'], base = 'preset', path = 'gen.ts' }}]
+commands = ['bun']
+environment = [{{ name = 'SOURCE', sensitivity = 'plain' }}]
+[[files]]
+source = 'generated.txt'
+generator = {{ script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE' }}
+"#
+                    )
+                    .into_bytes(),
+                )
+                .file(
+                    format!("app/{category}/generated.txt"),
+                    b"fallback".to_vec(),
+                )
+                .file(
+                    format!("app/{category}/gen.ts"),
+                    b"process.stdout.write('generated')".to_vec(),
+                );
+        }
+        let mut runtime = runtime(builder.build());
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("SOURCE".into(), "value".into());
+        // Only one category has been invoked before; these observations differ.
+        runtime
+            .host()
+            .create_dir_all(&runtime.context().shine_dir.join("runtime/app/first"))
+            .await
+            .unwrap();
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: None,
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(plan.is_ready());
+        for category in ["first", "second"] {
+            let target = format!("app/{category}");
+            let steps: Vec<_> = plan
+                .steps
+                .iter()
+                .filter(|step| step.target == target)
+                .collect();
+            let create = steps
+                .iter()
+                .position(|step| step.resource.as_deref() == Some("generator-runtime:gen.ts"))
+                .unwrap();
+            let execute = steps
+                .iter()
+                .position(|step| step.action == PlanActionV1::Execute)
+                .unwrap();
+            let cleanup = steps
+                .iter()
+                .position(|step| {
+                    step.resource.as_deref() == Some("generator-runtime:gen.ts:cleanup")
+                })
+                .unwrap();
+            assert!(create < execute && execute < cleanup);
+        }
+    }
+
+    #[tokio::test]
     async fn app_refresh_plan_is_payload_free_and_rejects_changed_destination() {
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
@@ -10575,22 +10658,28 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
         let plan = runtime.plan_app_refresh(request.clone()).await.unwrap();
         assert_eq!(plan.operation, PlanOperationV1::AppRefresh);
         assert!(plan.is_ready());
-        assert!(plan.steps.iter().any(|step| {
-            step.action == PlanActionV1::Execute
-                && step.resource.as_deref() == Some("generator:generated.txt")
-        }));
-        assert!(plan.steps.iter().any(|step| {
-            step.action == PlanActionV1::Create
-                && step.resource.as_deref() == Some("generator-runtime:gen.ts")
-        }));
-        assert!(
-            plan.permissions
-                .required
-                .contains(&PermissionV1::Filesystem {
-                    access: FilesystemAccessV1::Write,
-                    path: "shine:runtime/app/demo/gen.ts".to_string(),
+        let step_index = |action, resource| {
+            plan.steps
+                .iter()
+                .position(|step| {
+                    step.action == action && step.resource.as_deref() == Some(resource)
                 })
-        );
+                .unwrap()
+        };
+        let materialize = step_index(PlanActionV1::Create, "generator-runtime:gen.ts");
+        let execute = step_index(PlanActionV1::Execute, "generator:generated.txt");
+        let cleanup = step_index(PlanActionV1::Remove, "generator-runtime:gen.ts:cleanup");
+        assert!(materialize < execute && execute < cleanup);
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: "shine:runtime/app/demo".to_string(),
+                    })
+            );
+        }
         assert!(
             !serde_json::to_string(&plan)
                 .unwrap()

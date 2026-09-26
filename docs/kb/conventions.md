@@ -24,7 +24,7 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   or `fix(docs):`, plus `chore(release)` preparation commits. Feature and bug-fix commits remain
   included even when they update public docs in the same change.
 - Pre-commit runs `cargo fmt --check`, `clippy -D warnings`, `cargo deny check`, `typos`, and
-  `cargo nextest run`; it validates `mise.toml`, and changes to Bun tooling or TypeScript sources
+  `cargo nextest run --workspace`; it validates `mise.toml`, and changes to Bun tooling or TypeScript sources
   additionally run `mise exec -- bun run check:ts` (strict type-check + Bun tests). All must pass
   locally before a commit lands.
 - **Never `git push` without explicit user approval** (`AGENTS.md` § Hard repository rules).
@@ -49,7 +49,7 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 
 ## Testing
 
-- Runner: `cargo nextest run --all-features` (each test is its own OS process — in-process
+- Runner: `cargo nextest run --workspace --all-features` (each test is its own OS process — in-process
   locks do not serialize across tests).
 - Any test that mutates environment variables must hold `crate::test_support::env_lock()`.
 - Any test that performs privileged (sudo) file operations on real paths must hold the

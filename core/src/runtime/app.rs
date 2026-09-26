@@ -2671,14 +2671,6 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             request.category,
             request.generator.script.display()
         );
-        let prepared = self
-            .prepare_app_script(
-                &request.category,
-                &logical,
-                request.generator.runtime,
-                false,
-            )
-            .await?;
         let mut env = BTreeMap::new();
         for spec in &request.generator.env {
             let value = self.context.env.get(&spec.source).ok_or_else(|| {
@@ -2690,19 +2682,19 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             })?;
             env.insert(spec.target.clone(), value.clone());
         }
-        env.extend(self.fixed_app_contract_env(&request.category, &prepared.category_root));
         let output = self
-            .host
-            .run(ProcessRequest {
-                program: prepared.program,
-                args: prepared.args,
-                cwd: Some(prepared.category_root),
-                env,
-                timeout: Some(GENERATOR_TIMEOUT),
-                stdout_limit: Some(GENERATOR_STDOUT_LIMIT),
-                stderr_limit: Some(GENERATOR_STDERR_LIMIT),
-                ..ProcessRequest::default()
-            })
+            .run_app_script(
+                &request.category,
+                &logical,
+                request.generator.runtime,
+                ProcessRequest {
+                    env,
+                    timeout: Some(GENERATOR_TIMEOUT),
+                    stdout_limit: Some(GENERATOR_STDOUT_LIMIT),
+                    stderr_limit: Some(GENERATOR_STDERR_LIMIT),
+                    ..ProcessRequest::default()
+                },
+            )
             .await
             .with_context(|| format!("running app '{}' generator", request.category))?;
         if output.exit_code != Some(0) {
@@ -2782,52 +2774,34 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                             .map(|value| (spec.target.clone(), value.clone()))
                     })
                     .collect();
-                let (program, mut args, cwd) = match &hook.action {
-                    AppHookAction::Command(command) => (command.clone(), Vec::new(), None),
-                    AppHookAction::Script { script, runtime } => {
-                        let logical = format!("app/{}/{}", category_name, script.display());
-                        match self
-                            .prepare_app_script(&category_name, &logical, *runtime, true)
-                            .await
-                        {
-                            Ok(prepared) => {
-                                env.extend(self.fixed_app_contract_env(
-                                    &category_name,
-                                    &prepared.category_root,
-                                ));
-                                (
-                                    prepared.program,
-                                    prepared.args,
-                                    Some(prepared.category_root),
-                                )
-                            }
-                            Err(error) => {
-                                observer.emit(RuntimeEvent::Warning {
-                                    code: "app_hook_failed",
-                                    target: Some(format!("app/{category_name}")),
-                                    detail: format!("{}: {error}", script.display()),
-                                });
-                                completed = false;
-                                break;
-                            }
-                        }
-                    }
-                };
-                args.extend(hook.args.clone());
                 let label = match &hook.action {
                     AppHookAction::Command(command) => command.clone(),
                     AppHookAction::Script { script, .. } => script.display().to_string(),
                 };
-                let output = self
-                    .host
-                    .run(ProcessRequest {
-                        program,
-                        args,
-                        cwd,
-                        env,
-                        ..ProcessRequest::default()
-                    })
-                    .await;
+                let process = ProcessRequest {
+                    args: hook.args.clone(),
+                    env: std::mem::take(&mut env),
+                    ..ProcessRequest::default()
+                };
+                let output = match &hook.action {
+                    AppHookAction::Command(command) => {
+                        self.host
+                            .run(ProcessRequest {
+                                program: command.clone(),
+                                ..process
+                            })
+                            .await
+                    }
+                    AppHookAction::Script { script, runtime } => {
+                        self.run_app_script(
+                            &category_name,
+                            &format!("app/{}/{}", category_name, script.display()),
+                            *runtime,
+                            process,
+                        )
+                        .await
+                    }
+                };
                 match output {
                     Ok(output) if output.exit_code == Some(0) => {
                         if request.show_success && hook.show_output {
@@ -2942,9 +2916,6 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             self.ensure_app_code_allowed(&request.category, resource)?;
         }
         let logical = format!("app/{}/{script}", request.category);
-        let prepared = self
-            .prepare_app_script(&request.category, &logical, request.artifact.runtime, true)
-            .await?;
         for directory in [
             self.context
                 .shine_dir
@@ -2968,23 +2939,30 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 .map_err(|error| error.into_anyhow("creating App artifact directory"))?;
         }
         let output = self
-            .host
-            .run(ProcessRequest {
-                program: prepared.program,
-                args: prepared.args,
-                cwd: Some(prepared.category_root.clone()),
-                env: self.app_artifact_env(
-                    &request.category,
-                    &prepared.category_root,
-                    &request.artifact.env,
-                ),
-                io: if request.implicit {
-                    ProcessIo::Captured
-                } else {
-                    ProcessIo::Inherit
+            .run_app_script(
+                &request.category,
+                &logical,
+                request.artifact.runtime,
+                ProcessRequest {
+                    env: request
+                        .artifact
+                        .env
+                        .iter()
+                        .filter_map(|spec| {
+                            self.context
+                                .env
+                                .get(&spec.source)
+                                .map(|value| (spec.target.clone(), value.clone()))
+                        })
+                        .collect(),
+                    io: if request.implicit {
+                        ProcessIo::Captured
+                    } else {
+                        ProcessIo::Inherit
+                    },
+                    ..ProcessRequest::default()
                 },
-                ..ProcessRequest::default()
-            })
+            )
             .await;
         match output {
             Ok(output) if output.exit_code == Some(0) => Ok(LifecycleOutcomeV1::new(
@@ -3056,70 +3034,6 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         Ok(())
     }
 
-    async fn prepare_app_script(
-        &self,
-        category: &str,
-        logical: &str,
-        runtime: ArtifactRuntime,
-        materialize_category: bool,
-    ) -> Result<PreparedScript> {
-        let file = self
-            .presets
-            .file(logical)
-            .with_context(|| format!("app script is missing: {logical}"))?;
-        let script_path = if let Some(path) = &file.origin.physical_path {
-            path.clone()
-        } else if materialize_category {
-            let prefix = format!("app/{category}/");
-            for (path, bytes) in self
-                .presets
-                .files()
-                .iter()
-                .filter(|(path, _)| path.starts_with(&prefix))
-            {
-                self.host
-                    .write_atomic(&self.context.presets_dir.join(path), bytes)
-                    .await
-                    .map_err(|error| error.into_anyhow("materializing App artifact category"))?;
-            }
-            self.context.presets_dir.join(logical)
-        } else {
-            let file_name = Path::new(logical)
-                .file_name()
-                .context("app script has no file name")?;
-            let path = self
-                .context
-                .shine_dir
-                .join("runtime")
-                .join("app")
-                .join(category)
-                .join(file_name);
-            self.host
-                .write_atomic(&path, &file.bytes)
-                .await
-                .map_err(|error| error.into_anyhow("materializing app script"))?;
-            path
-        };
-        let category_root = (materialize_category && file.origin.physical_path.is_none())
-            .then(|| self.context.presets_dir.join("app").join(category))
-            .or_else(|| file.origin.category_root.clone())
-            .or_else(|| script_path.parent().map(Path::to_path_buf))
-            .context("app script has no category root")?;
-        let (program, args) = match runtime {
-            ArtifactRuntime::Native => (script_path.display().to_string(), Vec::new()),
-            ArtifactRuntime::Bun => {
-                let mut args = vec![self.bun_dependency_arg(logical)?];
-                args.push(script_path.display().to_string());
-                ("bun".to_string(), args)
-            }
-        };
-        Ok(PreparedScript {
-            program,
-            args,
-            category_root,
-        })
-    }
-
     pub(crate) fn bun_dependency_arg(&self, logical: &str) -> Result<String> {
         let script = self
             .presets
@@ -3157,25 +3071,13 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         }
     }
 
-    fn app_artifact_env(
+    pub(super) fn fixed_app_contract_env(
         &self,
         category: &str,
         app_dir: &Path,
-        specs: &[EnvVarSpec],
     ) -> BTreeMap<String, String> {
         let mut env = BTreeMap::new();
-        for spec in specs {
-            if let Some(value) = self.context.env.get(&spec.source) {
-                env.insert(spec.target.clone(), value.clone());
-            }
-        }
-        env.extend(self.fixed_app_contract_env(category, app_dir));
-        env
-    }
-
-    fn fixed_app_contract_env(&self, category: &str, app_dir: &Path) -> BTreeMap<String, String> {
-        let mut env = BTreeMap::new();
-        let source_dir = self.context.presets_dir.join("app").join(category);
+        let source_dir = app_dir.to_path_buf();
         let cache_dir = self
             .context
             .cache_dir
@@ -3208,10 +3110,15 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         ] {
             env.insert(key.to_string(), value);
         }
-        if let Some(overlay) = &self.context.overlay_dir {
+        if self.context.overlay_dir.is_some() {
             env.insert(
                 "SHINE_APP_OVERLAY_DIR".to_string(),
-                overlay.join("app").join(category).display().to_string(),
+                app_dir
+                    .parent()
+                    .expect("staged App directory has a parent")
+                    .join("overlay")
+                    .display()
+                    .to_string(),
             );
         }
         env
@@ -3330,12 +3237,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             effects,
         ))
     }
-}
-
-struct PreparedScript {
-    program: String,
-    args: Vec<String>,
-    category_root: PathBuf,
 }
 
 fn display_exit_code(code: Option<i32>) -> String {
@@ -3543,24 +3444,6 @@ mod lifecycle_tests {
         ) -> Result<Vec<String>> {
             Ok(defaults.to_vec())
         }
-    }
-
-    #[test]
-    fn artifact_env_allowlist_cannot_override_fixed_contract_values() {
-        let mut runtime = runtime();
-        runtime
-            .context_mut_for_cli()
-            .env
-            .insert("USER_VALUE".to_string(), "override".to_string());
-        let env = runtime.app_artifact_env(
-            "demo",
-            Path::new("/preset/app/demo"),
-            &[EnvVarSpec {
-                source: "USER_VALUE".to_string(),
-                target: "SHINE_APP_ID".to_string(),
-            }],
-        );
-        assert_eq!(env.get("SHINE_APP_ID").map(String::as_str), Some("demo"));
     }
 
     #[tokio::test]

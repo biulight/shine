@@ -41,7 +41,7 @@ jobs:
           cargo run -- preset pack examples/presets/shell/demo --output target/demo-shell.shine-preset.tar.gz --format json
           cargo run -- preset pack examples/presets/sys/ubuntu --output target/demo-sys.shine-preset.tar.gz --format json
       - name: Lint rust sources
-        run: cargo clippy --all-targets --all-features --tests --benches -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --tests --benches -- -D warnings
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
       - name: Security audit
@@ -75,4 +75,4 @@ jobs:
         uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
       - name: Execute rust tests
-        run: cargo nextest run --all-features --target ${{ matrix.target }}
+        run: cargo nextest run --workspace --all-features --target ${{ matrix.target }}

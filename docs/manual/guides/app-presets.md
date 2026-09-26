@@ -121,6 +121,10 @@ managed content. Generated results still pass through normal transforms, hashing
 user-modification protection, and uninstall. A script must not bypass Shine and write the destination
 directly.
 
+Generator stdout is limited to 8 MiB and stderr to 64 KiB. Shine enforces these limits while
+reading output and terminates and reaps the child on overflow, including its process group on Unix.
+Output that exceeds a limit is never installed as managed content.
+
 Generators can be automatic or manual. Neither kind runs during ordinary `list`, `info`, or
 `update`. When Shine cannot determine dynamic desired content without execution, info/update shows
 a prominent `generator not evaluated` warning and does not claim that the installed file is

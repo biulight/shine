@@ -105,6 +105,9 @@ shine app recover --yes
 
 App 预设可以为 `[[files]]` 声明 generator，把命令的 UTF-8 stdout 作为该受管文件的预期内容。生成结果仍经过正常的变换、hash、manifest、用户修改保护和卸载流程，不应由脚本绕过 Shine 直接改写目标文件。
 
+Generator 的 stdout 上限为 8 MiB，stderr 上限为 64 KiB。Shine 在读取输出时检查限制，
+超限即终止并回收子进程；在 Unix 上也会终止它的进程组。超限输出不会安装为受管内容。
+
 生成器可分为自动和手动两类。普通 `list`、`info` 和 `update` 都不会运行它们；无法在不执行代码的
 情况下计算动态预期内容时，info/update 会醒目显示 `generator not evaluated`，不会声称已安装文件
 是最新状态。使用 `--run-generators` 可以显式执行所选 generator、在内存中应用 transform，并检查

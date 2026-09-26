@@ -1,5 +1,24 @@
 # Lessons Learned
 
+## 2026-09-26 — Snapshot review must bind the code actually launched
+
+- **Symptom**: an external App script edited after capture executed its new bytes under the old grant.
+- **Root cause**: trust used captured bytes but process argv used the mutable physical source path.
+- **Fix**: execute each App entrypoint and its helpers from an independent captured category copy;
+  point source/overlay environment paths at captured bytes and declare temporary writes/removal.
+- **Rule**: validating a digest is insufficient if execution reopens the original checkout. See ADR 0092.
+
+## 2026-09-26 — Runtime ports and workspace checks must retain safety coverage
+
+- **Symptom**: process limits were post-capture again; linked Preset roots disappeared; CI missed
+  453 Core tests on the review host.
+- **Root cause**: unbounded `read_to_end`, root `symlink_metadata` treated as an empty directory,
+  and CLI-only workspace default members despite moving behavior into Core.
+- **Fix**: bound concurrent pipe reads and terminate on errors; resolve selected root links while
+  preserving ordinary source spelling; explicitly include the workspace in CI and local checks.
+- **Rule**: preserve behavioral guarantees across host adapters, and enumerate tests when moving
+  ownership between workspace packages. Unix `/var` versus `/private/var` must not invent relocation.
+
 ## 2026-09-17 — Fixture trust grammar must follow every code target kind
 
 - **Symptom**: the Shell authoring example started failing with

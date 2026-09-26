@@ -136,8 +136,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **Opaque Preset code is described conservatively, never sampled during planning.** A generator
   or lifecycle hook contributes known command/environment/administrator requirements plus an
   `execute` step and potential mutation step when its lifecycle trigger applies. Existing external-
-  code gates may still block it. Embedded generator execution also declares and binds its runtime
-  script materialization under the Shine directory. If the original Preset disappeared, supported
+  code gates may still block it. Every App script execution declares and binds its temporary category
+  snapshot creation and removal under the Shine directory. If the original Preset disappeared, supported
   manifests/receipts may drive owned-resource removal, but missing teardown code is never
   reconstructed or executed.
   A generated App file still participates in first-install destination and fixed-backup observation;
@@ -145,6 +145,21 @@ bugs. Check this list before changing the modules named in each entry.
   must fail closed rather than replace an occupied `.shine.bak` path.
   User modification, occupied destinations, foreign launchers, and managed Sys ownership conflicts
   remain `preserve`/`blocked`; force must produce a distinct step or diagnostic and fingerprint.
+
+- **App execution consumes captured bytes, never mutable source paths.** Generator, script hook,
+  artifact and teardown entrypoints use a fresh private category copy per invocation. Relative helpers
+  and the source/overlay path variables refer only to effective captured bytes. Cleanup removes only
+  that invocation's tree, including on spawn failure; persistent output uses the state/cache/HTTP
+  contract. Planners declare snapshot creation and removal. Unisolated code can still deliberately
+  access other host paths; this is source consistency, not a sandbox (ADR 0092).
+- **Process limits apply while draining pipes.** Bounded reads retain at most the configured stdout
+  and stderr limits, concurrently with stdin writes and child wait. Overflow, timeout, or I/O failure
+  kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
+  terminated too. A post-capture length check is never a memory bound.
+- **Root links and tree links have different policies.** A selected external/overlay root symlink
+  resolves before capture and records its resolved source identity; broken root links fail closed.
+  Ordinary directory origins keep their existing spelling for receipt/trust compatibility. Links
+  inside a preset tree remain excluded.
 
 - **App executable environment is explicit.** Generators receive only fixed `SHINE_APP_*` contract
   variables plus their `generator.env` mappings. Artifacts receive only the fixed contract plus
@@ -522,7 +537,7 @@ bugs. Check this list before changing the modules named in each entry.
 - **Script hooks belong to their parent lifecycle Plan.** A `post_install`/`post_upgrade` hook may
   resolve a native or Bun script from the immutable App snapshot and receive declared environment
   inputs plus the fixed `SHINE_APP_*` contract. Planning must bind its executable source, runtime,
-  environment identities, materialized embedded cache, and declared capabilities before App files
+  environment identities, temporary execution snapshot, and declared capabilities before App files
   mutate. It must execute only after that category changes. A hook must never recursively launch an
   artifact or another mutation with an independently approved Plan.
 - **Bun package installation is source-scoped and explicit.** Embedded scripts and external scripts

@@ -555,49 +555,71 @@ impl ProcessHost for RealHost {
             if let Some(cwd) = &request.cwd {
                 command.current_dir(cwd);
             }
+            let bounded = request.timeout.is_some()
+                || request.stdout_limit.is_some()
+                || request.stderr_limit.is_some();
             #[cfg(unix)]
-            if request.timeout.is_some() {
+            if bounded {
                 use std::os::unix::process::CommandExt;
                 command.as_std_mut().process_group(0);
             }
+            command.kill_on_drop(true);
             let mut child = command.spawn()?;
-            if !request.stdin.is_empty()
-                && let Some(mut stdin) = child.stdin.take()
-            {
-                stdin.write_all(&request.stdin).await?;
-                stdin.shutdown().await?;
-            }
+            let process_group = bounded.then(|| child.id()).flatten();
+            let mut stdin = child.stdin.take();
             let mut stdout = child.stdout.take();
             let mut stderr = child.stderr.take();
             let mut stdout_bytes = Vec::new();
             let mut stderr_bytes = Vec::new();
             let mut completion = Box::pin(async {
-                let (status, (), ()) = tokio::try_join!(
+                let (status, (), (), ()) = tokio::try_join!(
                     child.wait(),
-                    read_process_stream(&mut stdout, &mut stdout_bytes),
-                    read_process_stream(&mut stderr, &mut stderr_bytes),
+                    async {
+                        if let Some(stdin) = &mut stdin {
+                            stdin.write_all(&request.stdin).await?;
+                            stdin.shutdown().await?;
+                        }
+                        Ok::<_, std::io::Error>(())
+                    },
+                    read_process_stream(
+                        &mut stdout,
+                        &mut stdout_bytes,
+                        request.stdout_limit,
+                        "stdout"
+                    ),
+                    read_process_stream(
+                        &mut stderr,
+                        &mut stderr_bytes,
+                        request.stderr_limit,
+                        "stderr"
+                    ),
                 )?;
                 Ok::<_, std::io::Error>(status)
             });
-            let status = if let Some(timeout) = request.timeout {
+            let result = if let Some(timeout) = request.timeout {
                 match tokio::time::timeout(timeout, &mut completion).await {
-                    Ok(result) => result?,
-                    Err(_) => {
-                        drop(completion);
-                        terminate_timed_out_process(&mut child).await;
-                        return Err(anyhow::anyhow!("process timed out"));
-                    }
+                    Ok(result) => result,
+                    Err(_) => Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "process timed out",
+                    )),
                 }
             } else {
-                (&mut completion).await?
+                (&mut completion).await
             };
             drop(completion);
-            let stdout = enforce_output_limit(stdout_bytes, request.stdout_limit, "stdout")?;
-            let stderr = enforce_output_limit(stderr_bytes, request.stderr_limit, "stderr")?;
+            let status = match result {
+                Ok(status) => status,
+                Err(error) => {
+                    terminate_process(&mut child, process_group).await;
+                    return Err(error.into());
+                }
+            };
+
             Ok(ProcessOutput {
                 exit_code: status.code(),
-                stdout,
-                stderr,
+                stdout: stdout_bytes,
+                stderr: stderr_bytes,
             })
         })
     }
@@ -606,22 +628,38 @@ impl ProcessHost for RealHost {
 async fn read_process_stream<R: AsyncRead + Unpin>(
     stream: &mut Option<R>,
     output: &mut Vec<u8>,
+    limit: Option<usize>,
+    name: &'static str,
 ) -> std::io::Result<()> {
     if let Some(stream) = stream {
-        stream.read_to_end(output).await?;
+        let mut buffer = [0u8; 8192];
+        loop {
+            let count = stream.read(&mut buffer).await?;
+            if count == 0 {
+                break;
+            }
+            if limit.is_some_and(|limit| count > limit.saturating_sub(output.len())) {
+                return Err(std::io::Error::other(format!(
+                    "process {name} exceeded configured limit"
+                )));
+            }
+            output.extend_from_slice(&buffer[..count]);
+        }
     }
     Ok(())
 }
 
-async fn terminate_timed_out_process(child: &mut tokio::process::Child) {
+async fn terminate_process(child: &mut tokio::process::Child, process_group: Option<u32>) {
     #[cfg(unix)]
-    if let Some(id) = child.id() {
-        // Timed commands start in their own process group, so provider helpers
-        // cannot continue mutating after their parent is reported as timed out.
+    if let Some(id) = process_group {
+        // Keep the original group ID even if wait() already reaped the parent:
+        // descendants may still hold a pipe open after the parent exits.
         unsafe {
             libc::kill(-(id as i32), libc::SIGKILL);
         }
     }
+    #[cfg(not(unix))]
+    let _ = process_group;
     let _ = child.start_kill();
     let _ = child.wait().await;
 }
@@ -676,17 +714,6 @@ impl PrivilegedFileSystemHost for RealHost {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(privileged_remove(path))
     }
-}
-
-fn enforce_output_limit(
-    output: Vec<u8>,
-    limit: Option<usize>,
-    stream: &'static str,
-) -> anyhow::Result<Vec<u8>> {
-    if limit.is_some_and(|limit| output.len() > limit) {
-        anyhow::bail!("process {stream} exceeded configured limit");
-    }
-    Ok(output)
 }
 
 impl SplitDnsObservationHost for RealHost {
@@ -1018,5 +1045,74 @@ mod tests {
         assert!(error.to_string().contains("process timed out"));
         tokio::time::sleep(Duration::from_millis(400)).await;
         assert!(tokio::fs::metadata(&marker).await.is_err());
+    }
+    #[tokio::test]
+    async fn output_limits_kill_children_before_later_side_effects() {
+        for stream in ["stdout", "stderr"] {
+            let marker =
+                std::env::temp_dir().join(format!("shine-output-limit-{}", uuid::Uuid::new_v4()));
+            let redirection = if stream == "stderr" { " >&2" } else { "" };
+            let script = format!(
+                "(sleep 0.3; printf leaked > \"$1\") & printf 123456789{redirection}; wait"
+            );
+            let error = RealHost
+                .run(ProcessRequest {
+                    program: "sh".into(),
+                    args: vec![
+                        "-c".into(),
+                        script,
+                        "probe".into(),
+                        marker.display().to_string(),
+                    ],
+                    stdout_limit: (stream == "stdout").then_some(4),
+                    stderr_limit: (stream == "stderr").then_some(4),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("process {stream} exceeded configured limit"))
+            );
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            assert!(
+                !marker.exists(),
+                "child continued after {stream} exceeded its limit"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_accepts_exact_limit_without_retaining_overflow() {
+        let mut exact = Some(&b"1234"[..]);
+        let mut output = Vec::new();
+        read_process_stream(&mut exact, &mut output, Some(4), "stdout")
+            .await
+            .unwrap();
+        assert_eq!(output, b"1234");
+        let mut overflow = Some(&b"123456789"[..]);
+        output.clear();
+        assert!(
+            read_process_stream(&mut overflow, &mut output, Some(4), "stdout")
+                .await
+                .is_err()
+        );
+        assert!(output.len() <= 4);
+    }
+
+    #[tokio::test]
+    async fn timeout_also_bounds_a_child_that_never_reads_stdin() {
+        let error = RealHost
+            .run(ProcessRequest {
+                program: "sh".into(),
+                args: vec!["-c".into(), "sleep 5".into()],
+                stdin: vec![b'x'; 1024 * 1024],
+                timeout: Some(Duration::from_millis(50)),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("process timed out"));
     }
 }

@@ -157,6 +157,10 @@ Without `SHINE_CONFIG_DIR`, the base preset directory is selected in this order:
 3. global `config.toml` `presets_dir`;
 4. default `~/.shine/presets/`.
 
+An external preset or overlay root may be a symbolic link. Shine resolves that root before capture
+and uses the resolved source for development trust; retargeting it requires review again. A broken
+root link is an error. Symbolic links inside the preset tree remain excluded from the snapshot.
+
 External shell categories default to `snapshot`: Shine copies them to
 `~/.shine/installed/shell/`. After source edits, inspect with `shine update` and apply with
 `shine upgrade`. Set `external_shell_mode = "live"` only for development; source content takes effect

@@ -6,6 +6,7 @@
 mod action_executor;
 mod app;
 mod app_metadata;
+mod app_script;
 mod authoring;
 mod bootstrap;
 mod command_detection;

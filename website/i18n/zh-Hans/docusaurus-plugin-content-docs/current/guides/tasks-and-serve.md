@@ -56,9 +56,9 @@ shine app artifact apply surge
 | 变量 | 作用 |
 | --- | --- |
 | `SHINE_APP_ID` | 当前 app 预设 ID |
-| `SHINE_APP_DIR` | 实际运行脚本的 app 目录，overlay 中有脚本时指向 overlay |
-| `SHINE_APP_SOURCE_DIR` | 基础 app 预设目录 |
-| `SHINE_APP_OVERLAY_DIR` | 当前 app 的 overlay 目录；没有 overlay 时不设置 |
+| `SHINE_APP_DIR` | 本次执行的临时 app 快照目录，包含生效的基础文件和 overlay 文件 |
+| `SHINE_APP_SOURCE_DIR` | 与 `SHINE_APP_DIR` 相同的生效源文件快照目录 |
+| `SHINE_APP_OVERLAY_DIR` | 本次快照中生效的 overlay 文件副本；没有 overlay 时不设置 |
 | `SHINE_APP_HTTP_DIR` | 该 app 可发布资源目录，位于 `~/.shine/http/app/<APP_ID>/` |
 | `SHINE_CONFIG_DIR` | 当前 Shine 运行时目录 |
 | `SHINE_CACHE_DIR` | 当前 app 的缓存目录 |
@@ -67,6 +67,11 @@ shine app artifact apply surge
 每个环境 source 还必须出现在 `[permissions].environment`；未配置的可选 source 会被省略。值按
 存储内容传入；secret 分类输入通过 opaque version 绑定到 Plan，但不会自动解密，也不会触发
 GPG、age 或 Touch ID 提示。
+
+App generator、script hook 和 artifact（含 teardown）都从本次捕获的类别快照执行，
+相对路径引用的辅助文件也来自该快照。捕获后的来源修改不会改变本次执行的代码。
+这些目录在执行结束后清理；需要保留的输出应写入 `SHINE_STATE_DIR`、`SHINE_CACHE_DIR`
+或 `SHINE_APP_HTTP_DIR`，不要修改执行快照。脚本仍以当前进程权限运行，并未被沙箱隔离。
 
 ## 启动本地 HTTP 服务
 

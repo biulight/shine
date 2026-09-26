@@ -76,6 +76,17 @@ Snapshot grants bind the complete effective category files, bytes and source lay
 `--development` grant binds the target/capability and current local source-root/layer
 identity while allowing content changes. Schema v1 grants require review again.
 
+## App script execution snapshots
+
+After trust and Plan approval, App generators, script hooks and artifacts materialize the complete
+captured effective category into a fresh owner-only invocation directory below
+`shine_dir/runtime/app/<category>/`. Entry paths and cwd use that copy. `SHINE_APP_DIR` and
+`SHINE_APP_SOURCE_DIR` identify the effective copy; `SHINE_APP_OVERLAY_DIR` identifies the captured
+effective overlay subset. Relative imports therefore cannot reopen changed checkout helpers.
+Bun dependency mode still comes from the captured script's source layer. Execution and spawn errors
+both clean only the invocation tree; persistent artifact output uses the existing state/cache/HTTP
+paths. Plans declare the create/remove effects before execution (ADR 0092).
+
 ## Shell availability and ownership inspection
 
 Shell inspection joins the effective platform-selected Preset commands with manifest-only targets.
