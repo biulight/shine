@@ -461,10 +461,14 @@ Proxy only an explicitly approved bare command name containing ASCII letters, nu
 `.`. Make sure `~/.shine/bin/` is early in `PATH` and the target is not another Shine wrapper. Shine
 refuses to overwrite a same-name entry it does not own. On Windows, it checks the entire launcher
 set, including `.cmd` and `.ps1`, before writing any file. A conflicting file or symbolic link is
-preserved. Proxy rule changes also retain owner-only configuration permissions on Unix.
+preserved. PATH entries that resolve to the Shine bin directory, including symbolic-link aliases,
+are skipped when locating the real command. Proxy rule changes also retain owner-only configuration
+permissions on Unix.
 
 Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
-`--project` to scope the rule; a project rule for the same command overrides the global one:
+`--project` to scope the rule; a project rule for the same command overrides the global one.
+Outside that project, the shim uses the global rule if present; otherwise it forwards to the real
+command without injecting values:
 
 ```bash
 shine env proxy install gh --with GH_TOKEN --project

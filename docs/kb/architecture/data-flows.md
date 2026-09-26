@@ -856,8 +856,9 @@ verbosely.
 A **shine-managed Git overlay** (`presets_overlay_git`) is handled separately, *before* the
 fast-forward loop, by `git_pull::sync_managed_overlay` against `<shine_dir>/overlay`. On first use
 it clones `--depth 1` via a temp sibling dir + atomic rename (a failed clone never leaves a
-half-populated overlay). On subsequent runs it **force-mirrors**: `git fetch --depth 1 origin
-<branch>` then `git reset --hard FETCH_HEAD`, so the checkout always equals the remote tip even
+half-populated overlay). On subsequent runs it **force-mirrors**: fetch depth 1 from the configured
+URL and branch (remote `HEAD` when omitted), update `origin` only after fetch succeeds, then
+`git reset --hard FETCH_HEAD`, so the checkout always equals the remote tip even
 across rebases/force-pushes, discarding local edits (the managed overlay is read-only by design).
 The fetch runs before the reset, so an unreachable remote leaves the previous checkout intact and
 usable. `shine preset overlay link --git <url>` writes the config and clones immediately;
@@ -901,7 +902,10 @@ values (`KEY_SECRET` decrypted first, then `KEY`) into the child process.
 Project rules replace the global rule for the same command. The shim never
 exports values to the parent shell and never scans all `_SECRET` values.
 Each rule defaults to `enabled = true`; `shine env proxy disable <command>`
-retains the shim but bypasses config lookup and secret decryption entirely.
+retains the shim but bypasses environment-value lookup and secret decryption entirely. Missing
+applicable rules also pass through without injection, so project-only proxies work outside that
+project. Target discovery compares canonical directory identities to exclude aliases of Shine bin,
+but retains the executable filename for rustup-style dispatch.
 
 ## SSH environment forwarding
 

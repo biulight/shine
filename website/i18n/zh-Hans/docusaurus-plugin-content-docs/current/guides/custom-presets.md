@@ -304,6 +304,8 @@ shine preset overlay info
 
 首次 `shine preset pull` 会在 `~/.shine/overlay/` 浅克隆仓库；以后会把该目录镜像到远端分支的最新状态。此目录是缓存，任何本地修改都会在下次拉取时丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
 
+使用不同的 Git URL 重新链接时，现有镜像会切换到该仓库。未指定 `--branch` 时，每次同步都跟随所配置远端的默认分支。拉取失败会保留之前的 checkout。
+
 如果只想定制一个内置类别，可在 overlay 根目录复制该预设，无需导出整套内容。例如，Surge 的本地代理、策略组和规则文件应从内置预设复制后再修改：
 
 ```bash

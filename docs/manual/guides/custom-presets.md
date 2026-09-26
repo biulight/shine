@@ -343,6 +343,9 @@ The first `shine preset pull` shallow-clones the repository under `~/.shine/over
 mirror that directory to the latest state of the remote branch. It is a disposable cache: the next
 pull discards local edits. Make changes and push them in an upstream checkout, then synchronize each
 device with `shine preset pull`, `shine update --pull`, or `shine upgrade --pull`.
+Relinking with a different Git URL switches the existing mirror to that repository. Without
+`--branch`, each sync follows the configured remote's default branch. A failed fetch preserves
+the previous checkout.
 
 To customize one built-in category, copy it at the overlay root instead of exporting everything. For
 example, copy Surge before editing its local proxy, group, and rule files:

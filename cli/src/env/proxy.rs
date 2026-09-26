@@ -148,22 +148,18 @@ pub async fn uninstall(config: &Config, command: &str) -> Result<()> {
 }
 
 pub async fn exec(config: &Config, target: &Path, command: &str, args: &[OsString]) -> Result<()> {
-    let rule = config
-        .env_proxy
-        .iter()
-        .find(|rule| rule.command == command)
-        .with_context(|| {
-            format!("{command} is not configured as a transparent env proxy in the active config")
-        })?;
+    let rule = config.env_proxy.iter().find(|rule| rule.command == command);
     if !target.is_file() {
         bail!(
             "proxy target {} no longer exists; rerun `shine env proxy install {command} --with ...`",
             target.display()
         );
     }
-    if !rule.enabled {
+    // Project-local rules share a global launcher. Outside the project there
+    // may be no applicable rule; the original command must still work.
+    let Some(rule) = rule.filter(|rule| rule.enabled) else {
         return run_target(target, args, BTreeMap::new()).await;
-    }
+    };
     let env = EnvConfig::load_or_init(config).await?;
     let mut injected = BTreeMap::new();
     for spec in parse_env_specs(&rule.with)? {
@@ -210,8 +206,21 @@ fn validate_command(command: &str) -> Result<()> {
 
 fn find_target(command: &str, shine_bin: &Path) -> Result<PathBuf> {
     let paths = std::env::var_os("PATH").context("PATH is not set")?;
-    for dir in std::env::split_paths(&paths) {
-        if dir == shine_bin {
+    find_target_in_paths(command, shine_bin, std::env::split_paths(&paths))
+}
+
+fn find_target_in_paths(
+    command: &str,
+    shine_bin: &Path,
+    paths: impl IntoIterator<Item = PathBuf>,
+) -> Result<PathBuf> {
+    let canonical_bin = std::fs::canonicalize(shine_bin).ok();
+    for dir in paths {
+        if dir == shine_bin
+            || canonical_bin
+                .as_ref()
+                .is_some_and(|bin| std::fs::canonicalize(&dir).is_ok_and(|path| &path == bin))
+        {
             continue;
         }
         let candidate = dir.join(command);
@@ -387,6 +396,59 @@ mod tests {
         let resolved = absolute_path(relative).unwrap();
         assert!(resolved.ends_with("bin/cargo"));
         assert!(!resolved.ends_with("rustup"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn target_discovery_skips_bin_alias_without_resolving_executable_name() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-paths").await;
+        let bin = dir.join("bin");
+        let real = dir.join("real");
+        tokio::fs::create_dir_all(&bin).await.unwrap();
+        tokio::fs::create_dir_all(&real).await.unwrap();
+        tokio::fs::write(bin.join("cargo"), MARKER).await.unwrap();
+        tokio::fs::write(real.join("rustup"), b"real executable")
+            .await
+            .unwrap();
+        tokio::fs::symlink(real.join("rustup"), real.join("cargo"))
+            .await
+            .unwrap();
+        let alias = dir.join("bin-alias");
+        tokio::fs::symlink(&bin, &alias).await.unwrap();
+        assert!(find_target_in_paths("cargo", &bin, [alias.clone()]).is_err());
+        assert_eq!(
+            find_target_in_paths("cargo", &bin, [alias, real.clone()]).unwrap(),
+            real.join("cargo")
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn proxy_without_active_rule_runs_original_command() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-no-rule").await;
+        let config = Config::new_for_test(&dir);
+        let output = dir.join("executed");
+        exec(
+            &config,
+            Path::new("/bin/sh"),
+            "project-command",
+            &[
+                "-c".into(),
+                "printf reached > \"$1\"".into(),
+                "sh".into(),
+                output.clone().into_os_string(),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(tokio::fs::read(&output).await.unwrap(), b"reached");
+        assert!(
+            exec(&config, &dir.join("missing"), "project-command", &[])
+                .await
+                .is_err()
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]

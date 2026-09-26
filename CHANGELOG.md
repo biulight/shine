@@ -9,6 +9,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Preserve existing Windows configuration and manifest files when replacement fails.
+- Switch managed Git overlays to the configured repository when relinking, and follow the remote
+  default branch when no branch is selected.
+- Forward project-only environment proxies outside their project without injecting values, and
+  exclude PATH aliases of Shine bin when locating the real command.
+
 - Save configuration and environment override files with owner-only Unix permissions, including
   private temporary files during replacement and env proxy rule changes.
 - Preserve foreign Windows `.cmd` and `.ps1` launchers when installing an environment proxy;

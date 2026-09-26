@@ -535,6 +535,9 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **All `config.toml` writes go through `shine_core::sync_table`**, which preserves user comments.
   Never serialize the whole file from a struct — that destroys comments.
+- **Atomic file replacement never pre-deletes its destination.** Rename replaces existing files on
+  Windows as well as Unix. Failure cleanup removes only the staged file; the previous configuration
+  or receipt must survive a failed rename.
 - **Configuration and env overrides are saved privately.** Global/project configuration and
   `shine.env.toml` writes use `atomic_write_private`: Unix temporary files start as `0600` before
   any content is written, and replacement cannot widen an existing private file's permissions.
@@ -542,6 +545,12 @@ bugs. Check this list before changing the modules named in each entry.
 - **Env proxy installation checks every launcher before writing any.** Windows extensionless,
   `.cmd`, and `.ps1` destinations all require absence or a regular Shine-owned proxy file.
   Foreign files, directories, and symlinks (including dangling links) remain untouched.
+- **Project-only proxies remain transparent outside the project.** Missing active rules forward
+  directly without environment injection. PATH discovery excludes the actual Shine bin directory,
+  including directory aliases, while preserving executable names such as `cargo` for dispatch.
+- **Managed overlay synchronization uses the configured source.** Fetch from the current URL and
+  explicit branch or remote HEAD before updating origin/resetting; failed fetches preserve the last
+  checkout and origin even during relink.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and
   [`data-flows.md`](data-flows.md#config-discovery) must agree.

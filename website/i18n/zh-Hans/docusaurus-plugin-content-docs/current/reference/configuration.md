@@ -6,6 +6,7 @@ sidebar_position: 2
 # 配置参考
 
 Shine 将全局运行时状态保存在 `~/.shine/`。首次需要配置时会创建 `~/.shine/config.toml`。
+配置与清单文件的替换（包括 Windows）不会在重命名暂存文件前删除旧文件；重命名失败时保留原文件。
 
 交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
 必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。

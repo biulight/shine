@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-09-27 — Replacement and routing must preserve the effective target
+
+- **Symptom**: Windows replacement could lose the previous file; overlay relink kept the old
+  remote; project-only proxies failed outside the project and bin aliases could select the proxy itself.
+- **Root cause**: pre-deleting destinations, fetching stale origin, requiring an active rule for
+  every invocation, and comparing PATH directories only lexically.
+- **Rule**: rename without pre-delete; fetch the configured URL/ref before switching origin;
+  pass through absent rules; compare directory identities without resolving executable dispatch names.
+- **Coverage**: failed replacement retains existing bytes, two-repository relink with different
+  default branches and failed-fetch preservation, absent-rule execution, and bin-alias/rustup discovery.
+
 ## 2026-09-27 — Generated relocation needs explicit old-path review
 
 - **Symptom**: changing a generated file's backup after approval did not invalidate the Plan,

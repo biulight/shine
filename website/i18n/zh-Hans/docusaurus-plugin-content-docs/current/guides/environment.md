@@ -417,11 +417,12 @@ shine env proxy disable cargo
 只代理你明确允许的裸命令名；命令名只能包含 ASCII 字母、数字、`-`、`_` 或 `.`。安装前请确认
 `~/.shine/bin/` 已在 `PATH` 的靠前位置，且目标命令不是另一个 Shine 代理。若同名入口已存在
 但并非 Shine 创建，安装会拒绝覆盖它。在 Windows 上，Shine 会在写入任何文件前检查整组启动器，
-包括 `.cmd` 和 `.ps1`；冲突文件或符号链接都会保留。在 Unix 上，修改代理规则也会保持配置文件
+包括 `.cmd` 和 `.ps1`；冲突文件或符号链接都会保留。查找真实命令时，会跳过实际指向 Shine bin 目录的 PATH 项，包括符号链接别名。在 Unix 上，修改代理规则也会保持配置文件
 仅所有者可读写的权限。
 
 默认规则保存在全局 `~/.shine/config.toml`。在含有 `shine.config.toml` 的项目内加入
-`--project`，可将该命令的规则限定到项目；同一命令的项目规则会覆盖全局规则：
+`--project`，可将该命令的规则限定到项目；同一命令的项目规则会覆盖全局规则。
+离开项目后，shim 会使用已有的全局规则；若没有适用规则，则直接执行原命令，不注入变量：
 
 ```bash
 shine env proxy install gh --with GH_TOKEN --project

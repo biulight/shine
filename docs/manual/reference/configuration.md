@@ -6,7 +6,8 @@ sidebar_position: 2
 # Configuration reference
 
 Shine stores global runtime state under `~/.shine/` and creates `~/.shine/config.toml` when global
-configuration is first needed.
+configuration is first needed. Configuration and manifest replacement does not delete the old file
+before renaming the staged file, including on Windows; a failed rename preserves the existing file.
 
 Interactive lifecycle Plan confirmation can authorize the listed external code for that operation only,
 without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
