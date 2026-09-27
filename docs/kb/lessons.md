@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-09-27 — Shared frontend fixtures need native absolute homes
+
+- **Symptom**: Windows CI rejected four frontend conformance tests during App inspection or
+  review because `/home/test` is not an absolute Windows path.
+- **Root cause**: the shared frontend fixture used Unix-rooted context paths; the simulated Linux
+  platform and `InMemoryHost` do not change native `Path` semantics.
+- **Fix**: derive the fixture home from the native temporary directory, use it for seeded state
+  and manifests, and resolve the foreign Shell launcher with the production naming helper.
+  Redaction assertions check the unique home component so JSON-escaped Windows paths are covered.
+- **Rule**: update all consumers of a shared fixture path together, including state-change tests
+  and privacy assertions; keep runtime absolute-path validation intact.
+
 ## 2026-09-27 — Replacement and routing must preserve the effective target
 
 - **Symptom**: Windows replacement could lose the previous file; overlay relink kept the old

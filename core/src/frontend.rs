@@ -467,6 +467,11 @@ mod tests {
     };
     use std::path::PathBuf;
 
+    // InMemoryHost still uses the compiling host's native Path semantics.
+    pub(super) fn home_dir() -> PathBuf {
+        std::env::temp_dir().join("shine-frontend-test-home")
+    }
+
     pub(super) fn runtime(
         host: InMemoryHost,
         presets: PresetSnapshot,
@@ -474,10 +479,10 @@ mod tests {
         CoreRuntime::new(
             host,
             RuntimeContext::isolated(
-                PathBuf::from("/home/test"),
-                PathBuf::from("/home/test/.shine"),
-                PathBuf::from("/presets"),
-                PathBuf::from("/home/test/.shine/bin"),
+                home_dir(),
+                home_dir().join(".shine"),
+                home_dir().join("presets"),
+                home_dir().join(".shine/bin"),
                 RuntimePlatform::Linux,
             ),
             presets,
@@ -524,9 +529,7 @@ mod tests {
             }],
             ..AppManifest::default()
         };
-        app.save(host, &PathBuf::from("/home/test/.shine"))
-            .await
-            .unwrap();
+        app.save(host, &home_dir().join(".shine")).await.unwrap();
         let shell = ShellManifest {
             entries: vec![ShellManifestEntry {
                 category: "tools".to_string(),
@@ -544,10 +547,7 @@ mod tests {
             }],
             ..ShellManifest::default()
         };
-        shell
-            .save(host, &PathBuf::from("/home/test/.shine"))
-            .await
-            .unwrap();
+        shell.save(host, &home_dir().join(".shine")).await.unwrap();
         let mut sys = SysRunManifest::default();
         sys.entries.push(SysRunEntry {
             os_id: "ubuntu".to_string(),
@@ -560,9 +560,7 @@ mod tests {
             profile_enabled: true,
             receipt: None,
         });
-        sys.save(host, &PathBuf::from("/home/test/.shine"))
-            .await
-            .unwrap();
+        sys.save(host, &home_dir().join(".shine")).await.unwrap();
     }
 
     #[tokio::test]
@@ -698,7 +696,7 @@ mod tests {
         );
         let encoded = serde_json::to_string(&report).unwrap();
         for private in [
-            "/home/test",
+            "shine-frontend-test-home",
             "/private/orphan-config",
             "rendered-tool.sh",
             "SECRET=value",
@@ -777,7 +775,7 @@ mod tests {
         for report in [&app.report, &shell.report, &sys.report] {
             let encoded = serde_json::to_string(report).unwrap();
             for private in [
-                "/home/test",
+                "shine-frontend-test-home",
                 "/private",
                 "value = true",
                 "echo tool",
@@ -796,7 +794,7 @@ mod tests {
     #[tokio::test]
     async fn frontend_inspection_preserves_user_modified_and_missing_states() {
         let host = InMemoryHost::new();
-        let destination = PathBuf::from("/home/test/.config/available/config.toml");
+        let destination = home_dir().join(".config/available/config.toml");
         let content = b"value = true\n";
         AppManifest {
             entries: vec![AppEntry {
@@ -810,7 +808,7 @@ mod tests {
             }],
             ..AppManifest::default()
         }
-        .save(&host, &PathBuf::from("/home/test/.shine"))
+        .save(&host, &home_dir().join(".shine"))
         .await
         .unwrap();
         host.put_file(&destination, content.to_vec());
@@ -845,7 +843,10 @@ mod tests {
     #[tokio::test]
     async fn frontend_inspection_foreign_shell_launcher_is_not_upgradeable() {
         let host = InMemoryHost::new();
-        host.put_file("/home/test/.shine/bin/tool", b"user program".to_vec());
+        host.put_file(
+            crate::runtime::command_path_for_name(&home_dir().join(".shine/bin"), "tool".as_ref()),
+            b"user program".to_vec(),
+        );
         let service = FrontendService::new(runtime(host, snapshot()));
         let shell = service.inspect_shells().await.unwrap();
         assert_eq!(shell.report.items[0].state, InspectionStateV1::Conflict);
@@ -865,7 +866,7 @@ mod tests {
         );
         let encoded = serde_json::to_string(&report).unwrap();
         assert!(!encoded.contains("approved_permissions"));
-        assert!(!encoded.contains("/home/test"));
+        assert!(!encoded.contains("shine-frontend-test-home"));
         assert!(!encoded.contains("value = true"));
         assert_observation_only(service.runtime().host(), 0);
         for request in [
@@ -900,7 +901,7 @@ auto = false
             .file("app/generated/generate.sh", b"echo new".to_vec())
             .build();
         let host = InMemoryHost::new();
-        let destination = PathBuf::from("/home/test/.config/generated/config.txt");
+        let destination = home_dir().join(".config/generated/config.txt");
         host.put_file(&destination, b"old".to_vec());
         AppManifest {
             entries: vec![AppEntry {
@@ -914,7 +915,7 @@ auto = false
             }],
             ..AppManifest::default()
         }
-        .save(&host, &PathBuf::from("/home/test/.shine"))
+        .save(&host, &home_dir().join(".shine"))
         .await
         .unwrap();
         let since = host.operations().len();
@@ -979,7 +980,7 @@ auto = false
             receipt: None,
         });
         manifest
-            .save(&host, &PathBuf::from("/home/test/.shine"))
+            .save(&host, &home_dir().join(".shine"))
             .await
             .unwrap();
         let presets = PresetSnapshot::builder(PresetSourceKind::External)
@@ -1320,7 +1321,7 @@ package = "tool"
             .file("sys/ubuntu/shine.toml", b"version = 2\n[[items]]\nid = 'tool'\nlabel = 'Tool'\ndetect = { kind = 'path', path = '~/.tool-present' }\ninstall = { kind = 'package', provider = 'apt', package = 'tool' }\n[[items.shell]]\nshells = ['bash']\nphase = 'post'\nsource = 'profile/tool.sh'\n".to_vec())
             .file("sys/ubuntu/profile/tool.sh", b"echo profile\n".to_vec()).build();
         let host = InMemoryHost::new();
-        host.put_file("/home/test/.tool-present", Vec::new());
+        host.put_file(home_dir().join(".tool-present"), Vec::new());
         let mut trusted = FrontendService::new(runtime(host, presets)).into_trusted();
         for request in [
             ReviewRequest::App(app_plan_request()),

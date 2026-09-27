@@ -1,4 +1,4 @@
-use super::tests::{app_plan_request, assert_observation_only, runtime};
+use super::tests::{app_plan_request, assert_observation_only, home_dir, runtime};
 use super::*;
 use crate::lifecycle::LifecycleOperation;
 use crate::runtime::*;
@@ -120,7 +120,11 @@ source = 'config.toml'
             ));
             assert_eq!(execution.report.operation, readonly.plan.operation);
             let encoded = serde_json::to_string(&(&execution.report, &events)).unwrap();
-            for private in ["private-plaintext", "vault-revision-9", "/home/test"] {
+            for private in [
+                "private-plaintext",
+                "vault-revision-9",
+                "shine-frontend-test-home",
+            ] {
                 assert!(!encoded.contains(private));
             }
             outputs.push(execution.report);
@@ -171,7 +175,7 @@ path = '$HOME/.tool/bin'
     let mut runs = Vec::new();
     for _ in 0..2 {
         let host = InMemoryHost::new();
-        host.put_file("/home/test/.tool-present", b"present".to_vec());
+        host.put_file(home_dir().join(".tool-present"), b"present".to_vec());
         let mut reports = Vec::new();
         for request in &requests {
             let mut runtime = runtime(host.clone(), presets.clone());
@@ -199,7 +203,7 @@ path = '$HOME/.tool/bin'
             assert!(
                 !serde_json::to_string(&(&execution.report, &events))
                     .unwrap()
-                    .contains("/home/test")
+                    .contains("shine-frontend-test-home")
             );
             reports.push(execution.report);
         }
@@ -285,7 +289,11 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
             panic!("refresh details")
         };
         assert_eq!(local.lifecycle.summary().changed, 1);
-        for private in ["private-source", "source-version", "/home/test"] {
+        for private in [
+            "private-source",
+            "source-version",
+            "shine-frontend-test-home",
+        ] {
             assert!(
                 !serde_json::to_string(&(&execution.report, &events))
                     .unwrap()
@@ -536,7 +544,7 @@ async fn normal_lifecycle_cli_ui_and_core_results_agree() {
                     Some(FrontendEventStatusV1::Completed)
                 );
                 let encoded = serde_json::to_string(&execution.report).unwrap();
-                assert!(!encoded.contains("/home/test"));
+                assert!(!encoded.contains("shine-frontend-test-home"));
                 let decoded: ExecutionReportV1 = serde_json::from_str(&encoded).unwrap();
                 same_json(&decoded, &execution.report);
                 results.push(execution.report);
@@ -560,7 +568,7 @@ async fn configuration_and_live_state_changes_reject_before_effects() {
             service(host.clone()).with_configuration_revision(Some("config:two".into()))
         } else {
             host.put_file(
-                "/home/test/.config/available/config.toml",
+                home_dir().join(".config/available/config.toml"),
                 b"user change".to_vec(),
             );
             service(host.clone())
