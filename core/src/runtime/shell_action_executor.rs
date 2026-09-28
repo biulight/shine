@@ -3726,6 +3726,9 @@ fn shell_unix_modes_match(actual: Option<u32>, expected: Option<u32>) -> bool {
     match (actual, expected) {
         (Some(actual), Some(expected)) => actual & 0o7777 == expected & 0o7777,
         (None, None) => true,
+        // Windows has no Unix mode contract. InMemoryHost still records a synthetic mode
+        // for files written there, while a real Windows host reports None.
+        (Some(_), None) if cfg!(windows) => true,
         _ => false,
     }
 }
@@ -4760,6 +4763,27 @@ fn logical_path(path: &Path) -> String {
 mod tests {
     use super::*;
     use crate::runtime::InMemoryHost;
+
+    #[test]
+    fn shell_file_identity_uses_native_mode_contract() {
+        let observation = ShellFileObservation::Regular(ShellFileIdentityV1 {
+            content_hash: hash_content(b"cache"),
+            unix_mode: Some(0o100644),
+        });
+        let without_mode = ShellFileIdentityV1 {
+            content_hash: hash_content(b"cache"),
+            unix_mode: None,
+        };
+        assert_eq!(observation.matches(&without_mode), cfg!(windows));
+        assert!(!observation.matches(&ShellFileIdentityV1 {
+            content_hash: hash_content(b"changed"),
+            ..without_mode
+        }));
+        assert!(observation.matches(&ShellFileIdentityV1 {
+            content_hash: hash_content(b"cache"),
+            unix_mode: Some(0o644),
+        }));
+    }
 
     #[tokio::test]
     async fn snapshot_recovery_blocks_changed_rollback_tree() {

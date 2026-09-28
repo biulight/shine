@@ -14,6 +14,18 @@
   and privacy assertions; select simulated shell behavior explicitly and keep runtime absolute-path
   validation intact.
 
+## 2026-09-28 — Windows Shell cache observations ignore synthetic Unix modes
+
+- **Symptom**: Windows frontend conformance still failed after selecting Bash because Shell cache
+  receipt commit rejected files that had just been written.
+- **Root cause**: Windows cache identities have no Unix mode, but `InMemoryHost` records a synthetic
+  mode for every written file; the commit check treated that extra observation as a mismatch.
+- **Fix**: when the expected mode is absent on Windows, compare the regular-file kind and content
+  without requiring the synthetic mode to be absent. Keep exact mode comparisons when a mode is
+  expected and on Unix hosts.
+- **Rule**: in-memory metadata may be richer than native Windows metadata; optional Unix mode
+  observations must not become a Windows receipt requirement.
+
 ## 2026-09-27 — Replacement and routing must preserve the effective target
 
 - **Symptom**: Windows replacement could lose the previous file; overlay relink kept the old
