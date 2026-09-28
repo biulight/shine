@@ -7450,17 +7450,15 @@ mod tests {
     fn runtime(snapshot: PresetSnapshot) -> CoreRuntime<InMemoryHost> {
         let home = std::env::temp_dir().join("shine-planner-home");
         let shine = home.join(".shine");
-        CoreRuntime::new(
-            InMemoryHost::new(),
-            RuntimeContext::isolated(
-                home.clone(),
-                shine.clone(),
-                shine.join("presets"),
-                shine.join("bin"),
-                RuntimePlatform::current(),
-            ),
-            snapshot,
-        )
+        let mut context = RuntimeContext::isolated(
+            home.clone(),
+            shine.clone(),
+            shine.join("presets"),
+            shine.join("bin"),
+            RuntimePlatform::Linux,
+        );
+        context.shell = super::super::ShellType::Bash;
+        CoreRuntime::new(InMemoryHost::new(), context, snapshot)
     }
 
     fn static_copy_app_snapshot() -> PresetSnapshot {

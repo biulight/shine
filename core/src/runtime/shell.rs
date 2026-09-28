@@ -3951,15 +3951,16 @@ commands = ["git"]
 
     #[tokio::test]
     async fn shell_permission_defaults_apply_to_compatible_auto_discovery() {
-        let home = PathBuf::from("/home/test");
+        let home = std::env::temp_dir().join("shine-shell-permission-defaults");
         let shine = home.join(".shine");
-        let context = RuntimeContext::isolated(
+        let mut context = RuntimeContext::isolated(
             home,
             shine.clone(),
             shine.join("presets"),
             shine.join("bin"),
             RuntimePlatform::Linux,
         );
+        context.shell = ShellType::Bash;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
             .file(
                 "shell/tools/shine.toml",
@@ -3996,13 +3997,14 @@ commands = ["git"]
         let home_dir = std::env::temp_dir().join("shine-core-shell-lifecycle");
         let shine_dir = home_dir.join(".shine");
         let bin_dir = shine_dir.join("bin");
-        let context = RuntimeContext::isolated(
+        let mut context = RuntimeContext::isolated(
             home_dir,
             shine_dir.clone(),
             shine_dir.join("presets"),
             bin_dir.clone(),
             RuntimePlatform::Linux,
         );
+        context.shell = ShellType::Bash;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "shell/tools/shine.toml",

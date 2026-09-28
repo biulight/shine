@@ -126,7 +126,12 @@ pub(super) async fn load_preset_source_scope(
 pub(super) async fn validate_preset_source_scope(
     scope: &PresetSourceScope,
 ) -> PresetValidationReportV1 {
-    let validation_home = scope.repository_root.join(".shine-validation-home");
+    // Validation is hypothetical and its home must be absolute under the compiling host's
+    // Path semantics, even when a synthetic source scope uses a foreign-style root.
+    #[cfg(windows)]
+    let validation_home = PathBuf::from(r"C:\shine-validation-home");
+    #[cfg(not(windows))]
+    let validation_home = PathBuf::from("/shine-validation-home");
     let mut reports = Vec::new();
     for category in scope.categories.iter().cloned() {
         let mut diagnostics = permission_declaration_diagnostics(&scope.snapshot, &category);

@@ -428,7 +428,7 @@ mod tests {
     }
 
     fn external_shell_runtime() -> CoreRuntime<InMemoryHost> {
-        let home = PathBuf::from("/home/test");
+        let home = std::env::temp_dir().join("shine-external-shell-trust");
         let shine = home.join(".shine");
         let mut context = RuntimeContext::isolated(
             home,
@@ -438,6 +438,7 @@ mod tests {
             RuntimePlatform::Linux,
         );
         context.is_external_presets = true;
+        context.shell = crate::runtime::ShellType::Bash;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
             .base_root("/presets")
             .file(

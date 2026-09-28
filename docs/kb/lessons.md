@@ -28,11 +28,14 @@
 
 ## 2026-09-28 — Authoring simulations need a native absolute context root
 
-- **Symptom**: Windows rejected two otherwise valid App authoring reports after static validation.
-- **Root cause**: hypothetical Core planning used `/shine-author/home`, which Windows treats as a
-  rooted path without a drive rather than an absolute path.
-- **Fix**: use a deterministic Windows drive root for synthetic planning on Windows, and keep the
-  Unix root elsewhere. Redaction checks cover the root's platform-independent name.
+- **Symptom**: Windows rejected valid authoring, fixture, lint, and pack reports; planner and
+  Shell tests then failed to discover `.sh` commands.
+- **Root cause**: hypothetical Core planning used `/shine-author/home`, and static validation
+  derived a home from synthetic `/repo`; Windows treats both as rooted paths without a drive.
+  Shared Linux Shell test contexts also inherited the compiling host's PowerShell default.
+- **Fix**: use deterministic host-native roots for both authoring and static validation, and
+  explicitly select Linux/Bash in fixtures that exercise Unix Shell sources. Redaction checks
+  cover the root's platform-independent name.
 - **Rule**: simulated target platforms do not override the compiling host's `Path` semantics.
 
 ## 2026-09-27 — Replacement and routing must preserve the effective target
