@@ -75,4 +75,4 @@ jobs:
         uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
       - name: Execute rust tests
-        run: cargo nextest run --workspace --all-features --target ${{ matrix.target }}
+        run: cargo nextest run --workspace --all-features --target ${{ matrix.target }} --no-fail-fast

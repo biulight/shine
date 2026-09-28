@@ -26,6 +26,15 @@
 - **Rule**: in-memory metadata may be richer than native Windows metadata; optional Unix mode
   observations must not become a Windows receipt requirement.
 
+## 2026-09-28 — Authoring simulations need a native absolute context root
+
+- **Symptom**: Windows rejected two otherwise valid App authoring reports after static validation.
+- **Root cause**: hypothetical Core planning used `/shine-author/home`, which Windows treats as a
+  rooted path without a drive rather than an absolute path.
+- **Fix**: use a deterministic Windows drive root for synthetic planning on Windows, and keep the
+  Unix root elsewhere. Redaction checks cover the root's platform-independent name.
+- **Rule**: simulated target platforms do not override the compiling host's `Path` semantics.
+
 ## 2026-09-27 — Replacement and routing must preserve the effective target
 
 - **Symptom**: Windows replacement could lose the previous file; overlay relink kept the old

@@ -248,12 +248,17 @@ pub(super) async fn plan_preset_source_scope_with_state(
             }),
     );
 
-    let home = PathBuf::from("/shine-author/home");
+    // Synthetic planning still uses the compiling host's native Path semantics.
+    #[cfg(windows)]
+    let root = PathBuf::from(r"C:\shine-author");
+    #[cfg(not(windows))]
+    let root = PathBuf::from("/shine-author");
+    let home = root.join("home");
     let shine = home.join(".shine");
     let mut context = RuntimeContext::isolated(
         home,
         shine.clone(),
-        PathBuf::from("/shine-author/presets"),
+        root.join("presets"),
         shine.join("bin"),
         platform,
     );
@@ -546,7 +551,7 @@ mod tests {
                 let json = serde_json::to_string(report).unwrap();
                 for forbidden in [
                     "/repo",
-                    "/shine-author",
+                    "shine-author",
                     "private-template-value",
                     "HTTP_PROXY_PORT",
                     "undefined template",
@@ -599,6 +604,7 @@ mod tests {
         assert_eq!(first, second);
         let json = serde_json::to_string(&first).unwrap();
         assert!(!json.contains("/repo"));
+        assert!(!json.contains("shine-author"));
         assert!(!json.contains("PlanApproval"));
     }
 
