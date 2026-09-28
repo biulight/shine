@@ -34,8 +34,10 @@
   derived a home from synthetic `/repo`; Windows treats both as rooted paths without a drive.
   Shared Linux Shell test contexts also inherited the compiling host's PowerShell default.
 - **Fix**: use deterministic host-native roots for both authoring and static validation, and
-  explicitly select Linux/Bash in fixtures that exercise Unix Shell sources. Redaction checks
-  cover the root's platform-independent name.
+  explicitly select Linux/Bash in fixtures that exercise Unix Shell sources, including external
+  snapshot fixtures. Check inactive cache permissions by their canonical cache path, since a
+  Windows launcher may legitimately share the `.ps1` basename. Redaction checks cover the root's
+  platform-independent name.
 - **Rule**: simulated target platforms do not override the compiling host's `Path` semantics.
 
 ## 2026-09-27 — Replacement and routing must preserve the effective target

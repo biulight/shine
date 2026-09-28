@@ -11553,12 +11553,14 @@ target = '$HOME/.config/disabled.txt'
         let plan = runtime.plan_shells(request.clone()).await.unwrap();
 
         assert!(plan.is_ready());
-        assert!(
-            plan.permissions
-                .required
-                .iter()
-                .all(|permission| { !format!("{permission:?}").contains("demo.ps1") })
+        let inactive_cache = review_path(
+            runtime.context(),
+            &runtime.context().presets_dir.join("shell/demo/demo.ps1"),
         );
+        assert!(!plan.permissions.required.iter().any(|permission| matches!(
+            permission,
+            PermissionV1::Filesystem { path, .. } if path == &inactive_cache
+        )));
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         runtime
             .install_shells_approved(request, &approval)
@@ -11688,8 +11690,9 @@ target = '$HOME/.config/disabled.txt'
             shine.clone(),
             home.join("external-presets"),
             shine.join("bin"),
-            RuntimePlatform::current(),
+            RuntimePlatform::Linux,
         );
+        context.shell = super::super::ShellType::Bash;
         context.is_external_presets = true;
         context.external_shell_mode = ExternalShellMode::Snapshot;
         let mut runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);

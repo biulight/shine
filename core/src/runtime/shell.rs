@@ -4046,7 +4046,10 @@ commands = ["git"]
             })
             .await
             .unwrap();
-        assert_eq!(removed.links.removed.len(), 1);
+        assert_eq!(
+            removed.links.removed.len(),
+            if cfg!(windows) { 2 } else { 1 }
+        );
         assert!(host.metadata(&launcher_path).await.is_err());
     }
 
