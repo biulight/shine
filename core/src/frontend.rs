@@ -476,17 +476,15 @@ mod tests {
         host: InMemoryHost,
         presets: PresetSnapshot,
     ) -> CoreRuntime<InMemoryHost> {
-        CoreRuntime::new(
-            host,
-            RuntimeContext::isolated(
-                home_dir(),
-                home_dir().join(".shine"),
-                home_dir().join("presets"),
-                home_dir().join(".shine/bin"),
-                RuntimePlatform::Linux,
-            ),
-            presets,
-        )
+        let mut context = RuntimeContext::isolated(
+            home_dir(),
+            home_dir().join(".shine"),
+            home_dir().join("presets"),
+            home_dir().join(".shine/bin"),
+            RuntimePlatform::Linux,
+        );
+        context.shell = crate::runtime::ShellType::Bash;
+        CoreRuntime::new(host, context, presets)
     }
 
     pub(super) fn snapshot() -> PresetSnapshot {
