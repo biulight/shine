@@ -34,8 +34,8 @@ shine upgrade app/starship
 | `shine init [--yes]` | Create `shine.config.toml` for the current project |
 | `shine list [--available [KIND]]` | List installed resources or browse the `app`, `shell`, and `sys` catalogs |
 | `shine info <TARGET> [--diff] [--verbose]` | Inspect an available or installed target |
-| `shine install <TARGET>` | Install or repair an app or shell target |
-| `shine uninstall <TARGET>` | Uninstall an app or shell target |
+| `shine install <TARGET> [--verbose]` | Install or repair an app or shell target |
+| `shine uninstall <TARGET> [--verbose]` | Uninstall an app or shell target |
 | `shine update [TARGET]` | Check managed content and Shine releases without applying changes |
 | `shine upgrade [TARGET]` | Apply all or selected managed updates |
 | `shine shell ...` / `shine app ...` / `shine sys ...` | Use resource-specific operations |
@@ -52,14 +52,34 @@ shine upgrade app/starship
 
 Every command accepts the global `--config-dir <PATH>` option.
 
+Security Plans show user file paths explicitly and summarize installed files, Shine maintenance,
+and associated backup/recovery files by purpose, with access types and path counts. Installation,
+upgrade, uninstall, recovery, App refresh/artifact, and Sys bootstrap/profile/apply reviews accept
+`--verbose` to show all file paths, steps, snapshot identities, and diagnostics.
+
+Shell command installations are grouped by command count, with Shell integration shown separately.
+Internal state and recovery files share one path count, while backup associations with user files
+remain explicit. Use `--verbose` for individual entries.
+
+For App files and managed Sys items confirmed unchanged, required permissions omit their operation
+effects; author capability statements remain visible. State observations still bind approval, so a
+change after review requires a new Plan. Active generators, hooks and shared transactions retain
+their own permissions. Normal transaction codes and lifecycle snapshot identities appear only
+with `--verbose`; preservation, blocking and other diagnostic notices remain explicit.
+
+Recovery operations, blocked Plans, and permissions without reliable classification still show
+concrete paths. Code trust, administrator access, and other capability notices remain visible.
+Summaries only change the display: they grant no blanket access to `~/.shine` and are not a script
+sandbox. The earlier `--dry-run` preview is unchanged.
+
 ## Shell presets
 
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed] [--yes]
-shine shell recover [--yes]
-shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed] [--yes] [--verbose]
+shine shell recover [--yes] [--verbose]
+shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes] [--verbose]
 ```
 
 - Preview installation or uninstall with `--dry-run`.
@@ -75,12 +95,12 @@ See [Manage shell presets](../guides/shell-presets.md).
 ```text
 shine app list
 shine app info <CATEGORY> [--run-generators] [--diff]
-shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
-shine app refresh <CATEGORY> [FILE] [--force] [--yes]
-shine app recover [--yes]
-shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
-shine app artifact apply <APP_ID> [--yes]
-shine app artifact remove <APP_ID> [--yes]
+shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes] [--verbose]
+shine app refresh <CATEGORY> [FILE] [--force] [--yes] [--verbose]
+shine app recover [--yes] [--verbose]
+shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes] [--verbose]
+shine app artifact apply <APP_ID> [--yes] [--verbose]
+shine app artifact remove <APP_ID> [--yes] [--verbose]
 ```
 
 - `app info` and `update` do not run generators unless `--run-generators` is present.
@@ -130,12 +150,12 @@ or follow the command shown by Shine.
 shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
-shine sys recover [--yes]
+shine sys recover [--yes] [--verbose]
 shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes] [--verbose]
-shine sys profile enable <ITEM> [--dry-run] [--yes]
-shine sys profile disable <ITEM> [--dry-run] [--yes]
-shine sys apply [ITEM] [--dry-run] [--yes]
-shine sys uninstall <ITEM> [--dry-run] [--yes]
+shine sys profile enable <ITEM> [--dry-run] [--yes] [--verbose]
+shine sys profile disable <ITEM> [--dry-run] [--yes] [--verbose]
+shine sys apply [ITEM] [--dry-run] [--yes] [--verbose]
+shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 ```
 
 Use `bootstrap` to ensure selected software and shell integration are present. Use `apply` and

@@ -71,7 +71,7 @@ Administrator requirements remain explicit executor contracts. External/overlay 
 target-scoped trust for its complete effective `sys/<os>/` snapshot.
 
 Snapshot identities are shortened in the default display. Add `--verbose`, for example
-`shine sys bootstrap --preset recommended --verbose`, to show full identities and diagnostic codes.
+`shine sys bootstrap --preset recommended --verbose`, to show all file paths, full identities, and diagnostic codes.
 Both views review the same complete Plan and use a single confirmation for the selected operation.
 `--verbose` does not change the earlier `--dry-run` preview.
 

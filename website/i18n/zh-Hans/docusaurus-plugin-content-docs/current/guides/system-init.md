@@ -60,7 +60,7 @@ Administrator 要求仍是显式执行契约。External/overlay 代码还需对�
 target-scoped trust。
 
 默认输出缩短快照标识。添加 `--verbose`（例如 `shine sys bootstrap --preset recommended --verbose`）
-可查看完整标识与诊断码。两种视图审阅的是同一个完整 Plan，对选中的操作仍只进行一次确认。
+可查看完整文件路径、标识与诊断码。两种视图审阅的是同一个完整 Plan，对选中的操作仍只进行一次确认。
 `--verbose` 不改变更早阶段的 `--dry-run` 预览。
 
 Ubuntu 还提供 `minimal` profile，适合生产服务器：仅安装 Neovim、fzf、bat、eza 和 zoxide，不包含 shell 历史同步、提示符、Node.js 工具链或 Homebrew。运行前仍应先执行 `shine sys bootstrap --preset minimal --dry-run` 复核当前版本的实际步骤。

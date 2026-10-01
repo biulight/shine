@@ -431,6 +431,24 @@ pub struct PlanPermissionScopeV1 {
     pub permissions: PermissionResolutionV1,
 }
 
+/// Core-derived presentation provenance, never an authorization shortcut.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FilesystemPurposeV1 {
+    UserTarget,
+    Installation,
+    Maintenance,
+    Recovery,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FilesystemReviewGroupV1 {
+    pub purpose: FilesystemPurposeV1,
+    /// Canonical target or logical destination whose transaction owns these effects.
+    pub target: String,
+    pub permissions: PermissionSetV1,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PlanV1 {
     pub schema_version: u32,
@@ -446,6 +464,8 @@ pub struct PlanV1 {
     pub code_boundaries: Vec<CodeBoundaryV2>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_scopes: Vec<PlanPermissionScopeV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filesystem_review: Vec<FilesystemReviewGroupV1>,
 }
 
 impl PlanV1 {
@@ -459,6 +479,7 @@ impl PlanV1 {
     ) -> Self {
         Self {
             permission_scopes: Vec::new(),
+            filesystem_review: Vec::new(),
             author_capabilities: declared_permissions.clone(),
             code_boundaries: Vec::new(),
             schema_version: PLAN_SCHEMA_VERSION,
@@ -788,6 +809,38 @@ mod tests {
         assert_eq!(
             PlanApprovalV1::for_reviewed_plan(&unresolved),
             Err(PlanApprovalError::PlanNotReady)
+        );
+    }
+
+    #[test]
+    fn approval_binds_filesystem_review_purpose_and_target() {
+        let mut plan = ready_plan();
+        plan.filesystem_review.push(FilesystemReviewGroupV1 {
+            purpose: FilesystemPurposeV1::UserTarget,
+            target: "app/demo".into(),
+            permissions: PermissionSetV1::new([filesystem_permission(
+                "~/.config/demo/config.toml",
+            )]),
+        });
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let required = plan.permissions.required.clone();
+        let mut changed = plan.clone();
+        changed.filesystem_review[0].purpose = FilesystemPurposeV1::Maintenance;
+        assert_eq!(
+            approval.validate(&changed),
+            Err(PlanApprovalError::PlanChanged)
+        );
+        changed = plan.clone();
+        changed.filesystem_review[0].target = "app/other".into();
+        assert_eq!(
+            approval.validate(&changed),
+            Err(PlanApprovalError::PlanChanged)
+        );
+        assert_eq!(changed.permissions.required, required);
+        changed.filesystem_review.clear();
+        assert_eq!(
+            approval.validate(&changed),
+            Err(PlanApprovalError::PlanChanged)
         );
     }
 

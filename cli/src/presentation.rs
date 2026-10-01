@@ -244,3 +244,42 @@ mod tests {
         assert!(interaction.authorize_admin(2).await.unwrap());
     }
 }
+
+// A review display preference belongs to one command future. It never changes
+// Core requests or approval, and concurrent CLI embedding cannot leak the setting.
+tokio::task_local! {
+    static VERBOSE_SECURITY_PLAN: bool;
+}
+
+pub async fn with_security_plan_verbosity<T>(
+    verbose: bool,
+    command: impl std::future::Future<Output = T>,
+) -> T {
+    VERBOSE_SECURITY_PLAN.scope(verbose, command).await
+}
+
+pub(crate) fn security_plan_verbose() -> bool {
+    VERBOSE_SECURITY_PLAN
+        .try_with(|verbose| *verbose)
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod security_review_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn review_verbosity_is_scoped_and_restored() {
+        assert!(!security_plan_verbose());
+        with_security_plan_verbosity(true, async {
+            assert!(security_plan_verbose());
+            with_security_plan_verbosity(false, async {
+                assert!(!security_plan_verbose());
+            })
+            .await;
+            assert!(security_plan_verbose());
+        })
+        .await;
+        assert!(!security_plan_verbose());
+    }
+}

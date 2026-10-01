@@ -33,8 +33,8 @@ shine upgrade app/starship
 | `shine init [--yes]` | 为当前项目创建 `shine.config.toml` |
 | `shine list [--available [KIND]]` | 查看已安装资源或浏览 `app`、`shell`、`sys` 目录 |
 | `shine info <TARGET> [--diff] [--verbose]` | 查看可用或已安装目标的详情 |
-| `shine install <TARGET>` | 安装或修复 App/Shell 目标 |
-| `shine uninstall <TARGET>` | 卸载 App/Shell 目标 |
+| `shine install <TARGET> [--verbose]` | 安装或修复 App/Shell 目标 |
+| `shine uninstall <TARGET> [--verbose]` | 卸载 App/Shell 目标 |
 | `shine update [TARGET]` | 检查受管内容与 Shine 版本，不应用改动 |
 | `shine upgrade [TARGET]` | 应用全部或指定的受管更新 |
 | `shine shell ...` / `shine app ...` / `shine sys ...` | 使用资源类型专属操作 |
@@ -51,14 +51,22 @@ shine upgrade app/starship
 
 所有命令都接受全局选项 `--config-dir <PATH>`。
 
+Security Plan 默认显示用户文件的具体路径，并按用途汇总安装产物、Shine 内部维护及关联的备份/回滚文件，注明访问类型和路径数量。安装、升级、卸载、恢复、App refresh/artifact 和 Sys bootstrap/profile/apply 的审批都支持 `--verbose`，可展开完整文件路径、步骤、快照标识和诊断。
+
+Shell 命令安装按命令数合并，Shell 集成单独显示；内部状态与恢复文件合并统计路径数量，用户文件的备份关联仍会明确提示。`--verbose` 保留逐项明细。
+
+已确认无变化的 App 文件及受管 Sys 项目不会贡献本次操作权限，作者能力声明仍会显示。状态观察仍参与审批绑定，审阅后发生变化必须重新规划。实际触发的生成器、hook 和共享事务保留各自权限。正常事务码及生命周期快照标识仅在 `--verbose` 中显示；保留、阻塞及其它诊断提示仍明确展示。
+
+恢复操作、阻塞的计划以及无法可靠归类的权限仍显示具体路径。代码信任、管理员权限和其它能力提示不会被省略。摘要只改变展示方式，不会授予整个 `~/.shine` 目录的访问权限，也不是脚本沙箱；`--dry-run` 的预览行为保持不变。
+
 ## Shell 预设
 
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed] [--yes]
-shine shell recover [--yes]
-shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed] [--yes] [--verbose]
+shine shell recover [--yes] [--verbose]
+shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes] [--verbose]
 ```
 
 - 使用 `--dry-run` 预览安装或卸载。
@@ -72,12 +80,12 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [-
 ```text
 shine app list
 shine app info <CATEGORY> [--run-generators] [--diff]
-shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
-shine app refresh <CATEGORY> [FILE] [--force] [--yes]
-shine app recover [--yes]
-shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
-shine app artifact apply <APP_ID> [--yes]
-shine app artifact remove <APP_ID> [--yes]
+shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes] [--verbose]
+shine app refresh <CATEGORY> [FILE] [--force] [--yes] [--verbose]
+shine app recover [--yes] [--verbose]
+shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes] [--verbose]
+shine app artifact apply <APP_ID> [--yes] [--verbose]
+shine app artifact remove <APP_ID> [--yes] [--verbose]
 ```
 
 - `app info` 和 `update` 只有在传入 `--run-generators` 时才会运行生成器。
@@ -122,12 +130,12 @@ Shell live 必须使用 Development trust。
 shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
-shine sys recover [--yes]
+shine sys recover [--yes] [--verbose]
 shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes] [--verbose]
-shine sys profile enable <ITEM> [--dry-run] [--yes]
-shine sys profile disable <ITEM> [--dry-run] [--yes]
-shine sys apply [ITEM] [--dry-run] [--yes]
-shine sys uninstall <ITEM> [--dry-run] [--yes]
+shine sys profile enable <ITEM> [--dry-run] [--yes] [--verbose]
+shine sys profile disable <ITEM> [--dry-run] [--yes] [--verbose]
+shine sys apply [ITEM] [--dry-run] [--yes] [--verbose]
+shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 ```
 
 使用 `bootstrap` 确保选中的软件和 Shell 集成存在；使用 `apply` 与 `uninstall` 管理可撤销的系统配置。

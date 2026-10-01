@@ -1045,7 +1045,10 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     })
                     .map(|category| category.name.as_str())
                     .unwrap_or_default();
-                let roots = self.shell_managed_roots(category, None);
+                let target = format!("shell/{category}/{command}");
+                // The planner includes the receipt's old paths when sources move.
+                // Reuse that ownership boundary instead of dropping valid launchers.
+                let roots = self.shell_managed_roots(category, manifest_before.find(&target));
                 let probe = unlink_managed_command_with_host(
                     self.host(),
                     &self.context().bin_dir,

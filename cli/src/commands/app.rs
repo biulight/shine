@@ -18,6 +18,9 @@ pub enum AppCommands {
     },
     /// Install app preset files for all or a specific category
     Install {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Category to install (e.g. JetBrains, starship). Installs all if omitted.
         #[arg(value_name = "CATEGORY")]
         category: Option<String>,
@@ -33,6 +36,9 @@ pub enum AppCommands {
     },
     /// Explicitly refresh installed generated files for an app preset
     Refresh {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// App preset category to refresh
         #[arg(value_name = "CATEGORY")]
         category: String,
@@ -48,12 +54,18 @@ pub enum AppCommands {
     },
     /// Review and recover an interrupted app lifecycle operation
     Recover {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Approve the displayed recovery Plan without prompting
         #[arg(long)]
         yes: bool,
     },
     /// Uninstall installed app preset files and optionally restore backups
     Uninstall {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Category to uninstall (e.g. vim, starship). Uninstalls all if omitted.
         #[arg(value_name = "CATEGORY")]
         category: Option<String>,
@@ -81,6 +93,9 @@ pub enum AppCommands {
 pub enum AppArtifactCommands {
     /// Apply the artifact integration declared by an app preset
     Apply {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         #[arg(value_name = "APP_ID")]
         app_id: String,
         /// Approve the displayed security Plan without prompting
@@ -89,6 +104,9 @@ pub enum AppArtifactCommands {
     },
     /// Remove the artifact integration declared by an app preset
     Remove {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         #[arg(value_name = "APP_ID")]
         app_id: String,
         /// Approve the displayed security Plan without prompting

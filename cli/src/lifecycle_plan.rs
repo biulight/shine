@@ -139,7 +139,17 @@ pub(crate) async fn review_plans(
     requests: impl IntoIterator<Item = LifecyclePlanRequest>,
     yes: bool,
 ) -> Result<Vec<ReviewedLifecyclePlan>> {
-    review_plans_with_render_mode(config, requests, yes, PlanRenderMode::Detailed).await
+    review_plans_with_render_mode(
+        config,
+        requests,
+        yes,
+        if crate::presentation::security_plan_verbose() {
+            PlanRenderMode::Detailed
+        } else {
+            PlanRenderMode::Compact
+        },
+    )
+    .await
 }
 
 pub(crate) async fn review_bootstrap_plans(
@@ -241,8 +251,14 @@ async fn review_plans_with_render_mode(
 
     let development_trust_targets = active_development_trust_targets(&runtime, &planned).await;
     let mut rendered = match render_mode {
-        PlanRenderMode::Compact => render_compact_plan_lines(&planned, &config_digest)?,
-        PlanRenderMode::Detailed | PlanRenderMode::Bootstrap => planned
+        PlanRenderMode::Compact
+            if planned.iter().all(|(_, plan)| {
+                plan.operation != shine_core::plan::PlanOperationV1::SysBootstrap
+            }) =>
+        {
+            render_compact_plan_lines(&planned, &config_digest)?
+        }
+        PlanRenderMode::Detailed | PlanRenderMode::Bootstrap | PlanRenderMode::Compact => planned
             .iter()
             .map(|(_, plan)| {
                 if plan.operation == shine_core::plan::PlanOperationV1::SysBootstrap
@@ -586,7 +602,7 @@ fn hex_digest(bytes: &[u8]) -> String {
 
 fn render_compact_plan_lines(
     planned: &[(LifecyclePlanRequest, PlanV1)],
-    config_digest: &str,
+    _config_digest: &str,
 ) -> Result<Vec<String>> {
     let Some((_, first)) = planned.first() else {
         return Ok(Vec::new());
@@ -606,14 +622,10 @@ fn render_compact_plan_lines(
         lines.extend(render_compact_steps(plan));
         lines.extend(render_code_boundaries(plan, "    "));
         lines.extend(render_compact_permissions(plan));
-        lines.push(crate::colors::dim(&format!(
-            "    Identity  preset {} · config {} · state {} · plan {}",
-            short_identity(&plan.inputs.preset.as_hex()),
-            short_identity(config_digest),
-            short_identity(&plan.inputs.state.as_hex()),
-            short_identity(&plan.fingerprint()?.as_hex()),
-        )));
     }
+    lines.push(crate::colors::dim(
+        "  Use --verbose for all paths, steps, identities and diagnostic codes.",
+    ));
     Ok(lines)
 }
 
@@ -631,14 +643,16 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
     let mut index = 0usize;
     while index < plan.steps.len() {
         let step = &plan.steps[index];
-        if step
-            .resource
-            .as_deref()
-            .is_some_and(|resource| resource.starts_with("preset-cache:"))
+        if step.diagnostic_codes.is_empty()
+            && step
+                .resource
+                .as_deref()
+                .is_some_and(|resource| resource.starts_with("preset-cache:"))
         {
             let start = index;
             while index < plan.steps.len()
                 && plan.steps[index].target == step.target
+                && plan.steps[index].diagnostic_codes.is_empty()
                 && plan.steps[index]
                     .resource
                     .as_deref()
@@ -662,7 +676,7 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
         }
 
         index += 1;
-        if step.action == PlanActionV1::None {
+        if step.action == PlanActionV1::None && step.diagnostic_codes.is_empty() {
             unchanged += 1;
             continue;
         }
@@ -671,10 +685,27 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
             .as_deref()
             .map(|value| format!(" · {value}"))
             .unwrap_or_default();
-        let diagnostics = if step.diagnostic_codes.is_empty() {
+        // Only known routine transaction codes are presentation details. Unknown,
+        // preservation and blocking diagnostics always remain visible.
+        let diagnostics = step
+            .diagnostic_codes
+            .iter()
+            .filter(|code| {
+                matches!(step.action, PlanActionV1::Blocked | PlanActionV1::Preserve)
+                    || !matches!(
+                        code.as_str(),
+                        "shell_snapshot_replace_transaction"
+                            | "shell_managed_launcher_update_transaction"
+                            | "shell_profile_reconcile_transaction"
+                            | "app_hook_execution"
+                    )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let diagnostics = if diagnostics.is_empty() {
             String::new()
         } else {
-            format!(" [{}]", step.diagnostic_codes.join(", "))
+            format!(" [{}]", diagnostics.join(", "))
         };
         lines.push(format!(
             "      {} {}{}{}",
@@ -739,17 +770,11 @@ fn render_compact_permissions(plan: &PlanV1) -> Vec<String> {
     if plan.permissions.required.is_empty() {
         lines.push(format!("      {}", crate::colors::dim("- none")));
     } else {
-        let mut grouped = std::collections::BTreeMap::<String, Vec<String>>::new();
-        for permission in plan.permissions.required.iter() {
-            let (group, value) = permission_group(permission);
-            grouped.entry(group).or_default().push(value);
-        }
-        for (group, values) in grouped {
-            lines.push(format!("      {group}"));
-            for value in values {
-                lines.push(format!("        - {value}"));
-            }
-        }
+        lines.extend(render_permission_summary(
+            plan,
+            &plan.permissions.required,
+            "      ",
+        ));
     }
     if !plan.author_capabilities.is_empty() {
         lines.push(format!(
@@ -781,6 +806,151 @@ fn render_compact_permissions(plan: &PlanV1) -> Vec<String> {
         for code in &plan.permissions.uncomputable_codes {
             lines.push(format!("      {} {code}", crate::colors::red("!")));
         }
+    }
+    lines
+}
+
+fn render_scope_summary(
+    plan: &PlanV1,
+    permissions: &shine_core::plan::PermissionResolutionV1,
+    indent: &str,
+) -> Vec<String> {
+    let mut lines = render_permission_summary(plan, &permissions.required, indent);
+    // Keep scoped blockers even when the aggregate diagnostics have the same code.
+    if !permissions.is_satisfied() || permissions.required.is_empty() {
+        let mut diagnostics = permissions.clone();
+        diagnostics.required = shine_core::plan::PermissionSetV1::default();
+        lines.extend(render_bootstrap_permissions(&diagnostics, indent));
+    }
+    lines
+}
+
+fn render_permission_summary(
+    plan: &PlanV1,
+    required: &shine_core::plan::PermissionSetV1,
+    indent: &str,
+) -> Vec<String> {
+    use shine_core::plan::FilesystemPurposeV1;
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut explicit = BTreeMap::<String, Vec<String>>::new();
+    #[derive(Default)]
+    struct Summary {
+        accesses: BTreeSet<String>,
+        paths: BTreeSet<String>,
+        targets: BTreeSet<String>,
+    }
+    let mut summaries = BTreeMap::<String, Summary>::new();
+    let mut recovery_targets = BTreeSet::new();
+    for permission in required.iter() {
+        let (group, value) = permission_group(permission);
+        let associations = plan
+            .filesystem_review
+            .iter()
+            .filter(|entry| entry.permissions.contains(permission))
+            .collect::<Vec<_>>();
+        // Missing, conflicting, user-facing and executable effects always remain explicit.
+        // Recovery operations retain every concrete path, including transaction material.
+        let association = if associations.len() == 1
+            && plan.is_ready()
+            && !matches!(
+                plan.operation,
+                shine_core::plan::PlanOperationV1::AppRecovery
+                    | shine_core::plan::PlanOperationV1::ShellRecovery
+                    | shine_core::plan::PlanOperationV1::SysRecovery
+            ) {
+            associations.first().copied()
+        } else {
+            None
+        };
+        if let (PermissionV1::Filesystem { access, path }, Some(entry)) = (permission, association)
+            && entry.purpose != FilesystemPurposeV1::UserTarget
+            && *access != FilesystemAccessV1::Execute
+            && !entry.target.is_empty()
+            && entry
+                .permissions
+                .iter()
+                .all(|permission| plan.permissions.required.contains(permission))
+        {
+            let label = match entry.purpose {
+                FilesystemPurposeV1::Installation
+                    if plan.code_boundaries.iter().any(|boundary| {
+                        boundary.entry_kind == CodeEntryKindV2::ShellCommand
+                            && boundary.target == entry.target
+                    }) =>
+                {
+                    "Installed commands".to_string()
+                }
+                FilesystemPurposeV1::Installation
+                    if matches!(entry.target.as_str(), "shell/profile" | "sys/profile") =>
+                {
+                    "Shell integration".to_string()
+                }
+                FilesystemPurposeV1::Installation => format!("Installed files · {}", entry.target),
+                FilesystemPurposeV1::Maintenance | FilesystemPurposeV1::Recovery => {
+                    "Installation state and recovery files".to_string()
+                }
+                FilesystemPurposeV1::UserTarget => unreachable!(),
+            };
+            let summary = summaries.entry(label).or_default();
+            summary
+                .accesses
+                .insert(group.trim_start_matches("filesystem ").to_string());
+            summary.paths.insert(path.clone());
+            summary.targets.insert(entry.target.clone());
+            if entry.purpose == FilesystemPurposeV1::Recovery {
+                recovery_targets.insert(entry.target.clone());
+            }
+        } else {
+            explicit.entry(group).or_default().push(value);
+        }
+    }
+    // Keep the association for user-facing destinations while merging internal
+    // transactions across commands. Only explicit file paths qualify, not names.
+    let backup_targets = explicit
+        .iter()
+        .filter(|(group, _)| group.starts_with("filesystem "))
+        .flat_map(|(_, paths)| paths.iter())
+        .filter(|path| recovery_targets.contains(*path))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut lines = Vec::new();
+    for (group, values) in explicit {
+        lines.push(format!("{indent}{group}"));
+        lines.extend(
+            values
+                .into_iter()
+                .map(|value| format!("{indent}  - {value}")),
+        );
+    }
+    for (label, summary) in summaries {
+        let count = if label == "Installed commands" {
+            format!(" ({})", summary.targets.len())
+        } else {
+            String::new()
+        };
+        let backups =
+            if label == "Installation state and recovery files" && !backup_targets.is_empty() {
+                format!(
+                    "; backups for {}",
+                    backup_targets
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            } else {
+                String::new()
+            };
+        lines.push(format!(
+            "{indent}{label}{count} · {} ({} {}{backups})",
+            summary.accesses.into_iter().collect::<Vec<_>>().join("/"),
+            summary.paths.len(),
+            if summary.paths.len() == 1 {
+                "path"
+            } else {
+                "paths"
+            }
+        ));
     }
     lines
 }
@@ -831,24 +1001,6 @@ pub(crate) fn permission_group(permission: &PermissionV1) -> (String, String) {
             format!("system {capability}"),
             resource.clone().unwrap_or_else(|| "required".to_string()),
         ),
-    }
-}
-
-fn short_identity(value: &str) -> String {
-    const DISPLAY_LEN: usize = 12;
-    let (prefix, digest) = value
-        .split_once(':')
-        .map_or(("", value), |(prefix, digest)| (prefix, digest));
-    let short = digest.chars().take(DISPLAY_LEN).collect::<String>();
-    let suffix = if digest.chars().count() > DISPLAY_LEN {
-        "…"
-    } else {
-        ""
-    };
-    if prefix.is_empty() {
-        format!("{short}{suffix}")
-    } else {
-        format!("{prefix}:{short}{suffix}")
     }
 }
 
@@ -925,6 +1077,15 @@ fn render_bootstrap_plan_lines(
         }
     }
     lines.extend(render_code_boundaries(plan, "  "));
+    if !plan.author_capabilities.is_empty() {
+        lines.push(format!(
+            "  {}",
+            crate::colors::bold("Author capability statement (unverified)")
+        ));
+        for permission in plan.author_capabilities.iter() {
+            lines.push(format!("    - {}", permission_name(permission)));
+        }
+    }
     lines.push(format!("\n  {}", crate::colors::bold("Bootstrap items")));
     let mut item_index = 0;
     for step in &plan.steps {
@@ -951,7 +1112,11 @@ fn render_bootstrap_plan_lines(
             .iter()
             .find(|scope| scope.target.as_deref() == Some(step.target.as_str()))
         {
-            lines.extend(render_bootstrap_permissions(&scope.permissions, "        "));
+            lines.extend(if verbose {
+                render_bootstrap_permissions(&scope.permissions, "        ")
+            } else {
+                render_scope_summary(plan, &scope.permissions, "        ")
+            });
         } else {
             // Older/incomplete contracts must never look like an empty permission set.
             return render_plan_lines(plan, config_digest);
@@ -982,7 +1147,11 @@ fn render_bootstrap_plan_lines(
         .filter(|scope| scope.target.is_none())
     {
         lines.push(format!("\n  {}", crate::colors::bold("Shared changes")));
-        lines.extend(render_bootstrap_permissions(&scope.permissions, "    "));
+        lines.extend(if verbose {
+            render_bootstrap_permissions(&scope.permissions, "    ")
+        } else {
+            render_scope_summary(plan, &scope.permissions, "    ")
+        });
     }
     // Keep aggregate blockers visible even if a future planner adds a non-scoped diagnostic.
     for permission in plan.permissions.missing_declarations.iter() {
@@ -1000,23 +1169,20 @@ fn render_bootstrap_plan_lines(
             lines.push(format!("  ! Uncomputable permissions: {code}"));
         }
     }
-    lines.push(format!("\n  {}", crate::colors::bold("Plan identity")));
-    for (label, identity) in [
-        ("Preset", plan.inputs.preset.as_hex()),
-        ("Config", config_digest.to_string()),
-        ("State", plan.inputs.state.as_hex()),
-        ("Fingerprint", plan.fingerprint()?.as_hex()),
-    ] {
-        let value = if verbose {
-            identity
-        } else {
-            short_identity(&identity)
-        };
-        lines.push(crate::colors::dim(&format!("    {label:<12}{value}")));
+    if verbose {
+        lines.push(format!("\n  {}", crate::colors::bold("Plan identity")));
+        for (label, identity) in [
+            ("Preset", plan.inputs.preset.as_hex()),
+            ("Config", config_digest.to_string()),
+            ("State", plan.inputs.state.as_hex()),
+            ("Fingerprint", plan.fingerprint()?.as_hex()),
+        ] {
+            lines.push(crate::colors::dim(&format!("    {label:<12}{identity}")));
+        }
     }
     if !verbose {
         lines.push(crate::colors::dim(
-            "  Use --verbose for full identities and diagnostic codes.",
+            "  Use --verbose for all paths, identities and diagnostic codes.",
         ));
     }
     Ok(lines)
@@ -1418,6 +1584,7 @@ mod tests {
             Vec::<String>::new(),
         );
         plan.permission_scopes = scopes;
+        plan.author_capabilities = PermissionSetV1::default();
         plan
     }
 
@@ -1496,13 +1663,18 @@ mod tests {
             .unwrap()
             .join("\n");
         assert!(rendered.contains("Shared changes"));
+        assert!(rendered.contains("Installation state and recovery files"));
+        assert!(!rendered.contains("shine:sys-manifest.toml"));
+        let detailed = render_bootstrap_plan_lines(&plan, "missing", true)
+            .unwrap()
+            .join("\n");
         assert_eq!(
-            rendered
+            detailed
                 .matches(&format!("shine:runtime/sys/{os_id}"))
                 .count(),
             runtime_writes
         );
-        assert_eq!(rendered.matches("shine:sys-manifest.toml").count(), 1);
+        assert_eq!(detailed.matches("shine:sys-manifest.toml").count(), 1);
         for item in &items {
             assert!(
                 plan.permission_scopes
@@ -1557,6 +1729,7 @@ mod tests {
         assert!(compact.contains("Recovery is unsupported for this profile step"));
         assert!(!compact.contains("sys_bootstrap_profile_recovery_unsupported"));
         assert!(!compact.contains(&before.as_hex()));
+        assert!(!compact.contains("Plan identity"));
         let verbose = render_bootstrap_plan_lines(&plan, "present:0123456789abcdef", true)
             .unwrap()
             .join("\n");
@@ -1629,6 +1802,265 @@ mod tests {
         assert!(rendered.contains(&format!("State snapshot   {state_digest}")));
         assert!(rendered.contains(&format!("Fingerprint      {fingerprint}")));
         assert!(!rendered.contains('\u{1b}'));
+    }
+
+    fn filesystem_summary_fixture() -> PlanV1 {
+        use shine_core::plan::{FilesystemPurposeV1, FilesystemReviewGroupV1};
+        let mut plan = PlanV1::new(
+            LifecycleOperation::Install,
+            PlanInputsV1 {
+                preset: digest("preset"),
+                state: digest("state"),
+            },
+            vec![PlanStepV1::new(
+                "shell/test/mytool",
+                None::<String>,
+                PlanActionV1::Create,
+            )],
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        for (purpose, target, paths) in [
+            (
+                FilesystemPurposeV1::UserTarget,
+                "home:.zshrc",
+                vec!["home:.zshrc"],
+            ),
+            (
+                FilesystemPurposeV1::Installation,
+                "shell/test/mytool",
+                vec!["shine:bin/mytool"],
+            ),
+            (
+                FilesystemPurposeV1::Recovery,
+                "home:.zshrc",
+                vec!["home:.zshrc.shine.rollback"],
+            ),
+            (
+                FilesystemPurposeV1::Maintenance,
+                "shell/test",
+                vec![
+                    "shine:installed/shell/.test.shine.stage",
+                    "shine:installed/shell/.test.shine.rollback",
+                    "shine:installed/shell/test",
+                    "shine:shell-operation-journal.toml",
+                    "shine:shell-manifest.toml",
+                ],
+            ),
+        ] {
+            let permissions = PermissionSetV1::new(paths.into_iter().flat_map(|path| {
+                [FilesystemAccessV1::Write, FilesystemAccessV1::Remove].map(|access| {
+                    PermissionV1::Filesystem {
+                        access,
+                        path: path.into(),
+                    }
+                })
+            }));
+            for permission in permissions.iter() {
+                plan.permissions.required.insert(permission.clone());
+            }
+            plan.filesystem_review.push(FilesystemReviewGroupV1 {
+                purpose,
+                target: target.into(),
+                permissions,
+            });
+        }
+        plan
+    }
+
+    #[test]
+    fn filesystem_summary_preserves_exact_permissions_and_verbose_details() {
+        let plan = filesystem_summary_fixture();
+        let fingerprint = plan.fingerprint().unwrap();
+        let compact = render_compact_permissions(&plan).join("\n");
+        assert!(compact.contains("- home:.zshrc"));
+        assert!(compact.contains("Installed files · shell/test/mytool"));
+        assert!(compact.contains("backups for home:.zshrc"));
+        assert!(compact.contains("Installation state and recovery files · remove/write (6 paths; backups for home:.zshrc)"));
+        assert!(!compact.contains(".shine.stage"));
+        assert!(!compact.contains("shell-manifest.toml"));
+        let full = render_plan_lines(&plan, "missing").unwrap().join("\n");
+        for permission in plan.permissions.required.iter() {
+            assert!(full.contains(&permission_name(permission)));
+        }
+        assert_eq!(plan.fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
+    fn compact_steps_hide_routine_codes_but_keep_unknown_diagnostics() {
+        let mut plan = filesystem_summary_fixture();
+        plan.steps = vec![
+            PlanStepV1::new("shell/demo/tool", None::<String>, PlanActionV1::Update)
+                .with_diagnostic_code("shell_managed_launcher_update_transaction"),
+            PlanStepV1::new("shell/demo/other", None::<String>, PlanActionV1::Blocked)
+                .with_diagnostic_code("future_ownership_conflict"),
+        ];
+        let compact = render_compact_steps(&plan).join("\n");
+        assert!(!compact.contains("shell_managed_launcher_update_transaction"));
+        assert!(compact.contains("future_ownership_conflict"));
+        let verbose = render_plan_lines(&plan, "missing").unwrap().join("\n");
+        assert!(verbose.contains("shell_managed_launcher_update_transaction"));
+        assert!(verbose.contains(&plan.fingerprint().unwrap().as_hex()));
+    }
+
+    #[test]
+    fn filesystem_summary_merges_commands_and_internal_transactions() {
+        use shine_core::plan::{CodeBoundaryV2, FilesystemPurposeV1, FilesystemReviewGroupV1};
+        let mut plan = filesystem_summary_fixture();
+        for command in ["mytool", "convert", "resize"] {
+            let target = format!("shell/test/{command}");
+            plan.code_boundaries.push(CodeBoundaryV2 {
+                target: target.clone(),
+                entry_kind: CodeEntryKindV2::ShellCommand,
+                timing: CodeTimingV2::DeliverForLater,
+                source: CodeSourceV2::ExternalOrOverlay,
+                trust: CodeTrustStateV2::OperationConfirmation,
+                unisolated: true,
+                target_role: CodeTargetRoleV2::Selected,
+                shared_resource: None,
+            });
+            if command != "mytool" {
+                let permissions = PermissionSetV1::new([PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: format!("shine:bin/{command}"),
+                }]);
+                for permission in permissions.iter() {
+                    plan.permissions.required.insert(permission.clone());
+                }
+                plan.filesystem_review.push(FilesystemReviewGroupV1 {
+                    purpose: FilesystemPurposeV1::Installation,
+                    target: target.clone(),
+                    permissions,
+                });
+            }
+            for (purpose, path) in [
+                (
+                    FilesystemPurposeV1::Maintenance,
+                    format!("shine:installed/shell/test/{command}.ts"),
+                ),
+                (
+                    FilesystemPurposeV1::Recovery,
+                    format!("shine:bin/{command}.shine.rollback"),
+                ),
+            ] {
+                let permissions = PermissionSetV1::new([PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path,
+                }]);
+                for permission in permissions.iter() {
+                    plan.permissions.required.insert(permission.clone());
+                }
+                plan.filesystem_review.push(FilesystemReviewGroupV1 {
+                    purpose,
+                    target: target.clone(),
+                    permissions,
+                });
+            }
+        }
+        let profile = PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Write,
+            path: "shine:shell/profile.sh".into(),
+        };
+        plan.permissions.required.insert(profile.clone());
+        plan.filesystem_review.push(FilesystemReviewGroupV1 {
+            purpose: FilesystemPurposeV1::Installation,
+            target: "shell/profile".into(),
+            permissions: PermissionSetV1::new([profile]),
+        });
+        let summary = render_compact_permissions(&plan).join("\n");
+        assert!(summary.contains("Installed commands (3) · remove/write (3 paths)"));
+        assert!(summary.contains("Shell integration · write (1 path)"));
+        assert_eq!(
+            summary
+                .matches("Installation state and recovery files")
+                .count(),
+            1
+        );
+        assert!(summary.contains("12 paths; backups for home:.zshrc"));
+        assert!(!summary.contains("shell/test/convert"));
+        let full = render_plan_lines(&plan, "missing").unwrap().join("\n");
+        for permission in plan.permissions.required.iter() {
+            assert!(full.contains(&permission_name(permission)));
+        }
+    }
+
+    #[test]
+    fn filesystem_summary_never_infers_hidden_paths_and_falls_back_on_conflicts() {
+        use shine_core::plan::FilesystemPurposeV1;
+        let mut plan = filesystem_summary_fixture();
+        let maintenance = plan.filesystem_review.last().unwrap().clone();
+        plan.filesystem_review.clear();
+        let legacy = render_compact_permissions(&plan).join("\n");
+        assert!(legacy.contains("shine:installed/shell/.test.shine.stage"));
+        assert!(legacy.contains("home:.zshrc.shine.rollback"));
+        plan.filesystem_review.push(maintenance.clone());
+        let mut conflict = maintenance.clone();
+        conflict.purpose = FilesystemPurposeV1::UserTarget;
+        plan.filesystem_review.push(conflict);
+        assert!(
+            render_compact_permissions(&plan)
+                .join("\n")
+                .contains("shine:shell-manifest.toml")
+        );
+        plan.filesystem_review.pop();
+        plan.filesystem_review[0]
+            .permissions
+            .insert(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: "shine:unplanned".into(),
+            });
+        assert!(
+            render_compact_permissions(&plan)
+                .join("\n")
+                .contains("shine:shell-manifest.toml")
+        );
+    }
+
+    #[test]
+    fn filesystem_summary_keeps_recovery_and_blocked_plans_explicit() {
+        for operation in [
+            shine_core::plan::PlanOperationV1::AppRecovery,
+            shine_core::plan::PlanOperationV1::ShellRecovery,
+            shine_core::plan::PlanOperationV1::SysRecovery,
+        ] {
+            let mut plan = filesystem_summary_fixture();
+            plan.operation = operation;
+            let rendered = render_compact_permissions(&plan).join("\n");
+            for permission in plan.permissions.required.iter() {
+                assert!(rendered.contains(&permission_group(permission).1));
+            }
+        }
+        let mut plan = filesystem_summary_fixture();
+        plan.steps[0].action = PlanActionV1::Blocked;
+        plan.steps[0]
+            .diagnostic_codes
+            .push("transaction_occupied".into());
+        assert!(
+            render_compact_permissions(&plan)
+                .join("\n")
+                .contains("shine:shell-manifest.toml")
+        );
+        assert!(
+            render_compact_steps(&plan)
+                .join("\n")
+                .contains("transaction_occupied")
+        );
+    }
+
+    #[test]
+    fn filesystem_summary_provenance_is_bound_and_legacy_field_is_optional() {
+        let mut plan = filesystem_summary_fixture();
+        let before = plan.permissions.required.clone();
+        let fingerprint = plan.fingerprint().unwrap();
+        plan.filesystem_review[0].target.push_str("-changed");
+        assert_ne!(plan.fingerprint().unwrap(), fingerprint);
+        assert_eq!(plan.permissions.required, before);
+        let mut encoded = serde_json::to_value(&plan).unwrap();
+        encoded.as_object_mut().unwrap().remove("filesystem_review");
+        let legacy: PlanV1 = serde_json::from_value(encoded).unwrap();
+        assert!(legacy.filesystem_review.is_empty());
+        assert_eq!(legacy.permissions.required, before);
     }
 
     #[test]
@@ -1746,7 +2178,8 @@ mod tests {
             rendered.contains("x blocked app/starship · hook:0 [app_external_code_not_allowed]")
         );
         assert!(rendered.contains("filesystem write"));
-        assert!(rendered.contains("config present:0123456789ab…"));
+        assert!(!rendered.contains("Identity"));
+        assert!(!rendered.contains("present:0123456789"));
         assert!(!rendered.contains("preset-cache:shine.toml"));
         assert!(!rendered.contains('\u{1b}'));
     }

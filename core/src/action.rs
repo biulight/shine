@@ -1283,6 +1283,11 @@ impl DeclarativeActionV1 {
             {
                 Ok(())
             }
+            (ActionKindV1::ReplaceShellSnapshot { receipts, .. }, _) if receipts.is_empty() => {
+                Err(ActionIrError::Invalid(
+                    "Shell snapshot replacement has no command receipt transitions; resolve launcher ownership before replacing the snapshot".to_string(),
+                ))
+            }
             (ActionKindV1::ReplaceShellSnapshot { .. }, _) => Err(ActionIrError::Invalid(
                 "Shell snapshot replacement requires canonical stage/rollback paths, valid tree identities and receipt transitions, and restore-previous-shell-snapshot-if-unchanged rollback"
                     .to_string(),
@@ -2588,6 +2593,29 @@ mod tests {
                 path: format!("absolute:{}", path.display()),
             }));
         }
+    }
+
+    #[test]
+    fn shell_snapshot_without_receipts_reports_missing_ownership_transition() {
+        let action = DeclarativeActionV1::replace_shell_snapshot(
+            "replace",
+            "shell/demo",
+            "shared-snapshot",
+            ShellSnapshotReplacementSpecV1 {
+                destination: std::env::temp_dir().join("shine-snapshot-contract-test"),
+                previous_present: false,
+                previous_files: Vec::new(),
+                desired_files: vec![ShellTreeFileV1 {
+                    relative_path: "demo.ts".into(),
+                    content_hash: hash_content(b"fixture"),
+                }],
+                receipts: Vec::new(),
+            },
+        );
+        let error = ActionIrV1::new("test", vec![action])
+            .validate()
+            .unwrap_err();
+        assert!(error.to_string().contains("no command receipt transitions"));
     }
 
     #[test]

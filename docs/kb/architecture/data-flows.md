@@ -37,6 +37,13 @@ unisolated code boundaries plus conservative semantic steps. Classification neve
 author's `opaque_code` field. Code is never run during planning and missing or stale target-scoped
 trust remains a blocker for external code delivery/execution. A supported receipt can drive uninstall after source
 disappearance, but cannot recreate missing teardown code.
+Typed filesystem operations also record exact presentation-purpose groups. The CLI summarizes
+uniquely attributed installation, maintenance and recovery material in ordinary ready Plans;
+user destinations, ambiguous entries, blocked Plans and recovery reviews stay explicit. All
+Security Plan commands accept `--verbose`; the display preference is scoped to the command future
+and never changes the execution request. Full permissions and purpose groups remain fingerprint-bound
+(ADR 0094).
+
 CLI review creates approval for one exact ready Plan. Apply deliberately follows:
 
 ```text

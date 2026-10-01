@@ -45,6 +45,8 @@ shine install shell/proxy --replace-managed
 
 `--replace-managed` 会覆盖 Shine 管理的对应内容。先用 `shine info shell/proxy --diff` 检查状态，避免把有意的本地修改当作损坏处理。
 
+切换预设来源后，可运行 `shine upgrade shell/<CATEGORY>` 更新已安装命令。Shine 会根据安装记录识别旧路径上的受管命令，再迁移到当前部署位置；不会因此接管无关命令文件。外部代码仍需按当前计划审阅和确认。
+
 ## 安装、升级或卸载中断后怎么办 {#恢复中断的-shell-事务}
 
 如果 Shell 预设操作意外中断，Shine 可能会暂停后续修改操作，并提示先执行恢复：

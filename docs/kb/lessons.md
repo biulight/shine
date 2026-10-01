@@ -1,5 +1,27 @@
 # Lessons Learned
 
+## 2026-09-30 — Derive operation permissions after no-op assessment
+
+Bulk upgrade listed unchanged App destinations and administrator/system access for current Sys
+items because capabilities were accumulated before desired-state comparison. Scope destination
+permissions to actual App effects and accumulate managed Sys requirements per item, keeping
+observations and author statements for no-ops. Do not hide excess permissions in CLI rendering:
+changed resources, opaque execution and shared transactions still need their full requirements.
+Regression coverage binds unchanged resources into approval and rejects changes after review.
+
+
+## 2026-09-30 — Shell upgrade must retain receipt-owned paths after source relocation
+
+- **Symptom**: upgrading Bun commands after changing from embedded presets to an external source
+  passed Plan review but failed snapshot action validation with an empty receipt-transition set.
+- **Root cause**: planning recognized the old receipt paths, while execution's preliminary launcher
+  filter checked only the current source roots and excluded all three valid installed commands.
+- **Fix**: include the selected command's existing receipt in the execution ownership check, retain
+  strict snapshot validation, and identify empty snapshot receipt transitions explicitly. Regression
+  tests cover three Bun launchers moving to external snapshot delivery and foreign launcher refusal.
+- **Rule**: changing source configuration must not erase receipt ownership between planning and
+  execution; neither source relocation nor display summaries authorize adopting foreign launchers.
+
 ## 2026-09-27 — Shared frontend fixtures need native absolute homes
 
 - **Symptom**: Windows CI rejected four frontend conformance tests during App inspection or

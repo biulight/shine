@@ -4,6 +4,9 @@ use clap::Subcommand;
 pub enum SysProfileCommands {
     /// Enable one item's Shine-managed shell integration without installing software
     Enable {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         #[arg(value_name = "ITEM")]
         item: String,
         #[arg(long)]
@@ -14,6 +17,9 @@ pub enum SysProfileCommands {
     },
     /// Disable one item's Shine-managed shell integration without uninstalling software
     Disable {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         #[arg(value_name = "ITEM")]
         item: String,
         #[arg(long)]
@@ -28,6 +34,9 @@ pub enum SysProfileCommands {
 pub enum SysCommands {
     /// Review and recover an interrupted managed system operation
     Recover {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Approve the displayed recovery Plan without prompting
         #[arg(long)]
         yes: bool,
@@ -80,6 +89,9 @@ pub enum SysCommands {
     },
     /// Reapply enabled managed system configuration items
     Apply {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Managed item to apply; applies all enabled items when omitted
         #[arg(value_name = "ITEM")]
         item: Option<String>,
@@ -92,6 +104,9 @@ pub enum SysCommands {
     },
     /// Remove a managed system configuration item safely
     Uninstall {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Managed item to remove
         #[arg(value_name = "ITEM")]
         item: String,

@@ -44,9 +44,10 @@ use crate::lifecycle::LifecycleOperation;
 use crate::permission::{PermissionDeclarationV1, PermissionPathBaseV1};
 use crate::plan::{
     CodeBoundaryV2, CodeEntryKindV2, CodeSourceV2, CodeTargetRoleV2, CodeTimingV2,
-    CodeTrustStateV2, EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1,
-    PermissionSetV1, PermissionV1, PlanActionV1, PlanApprovalV1, PlanInputsV1, PlanOperationV1,
-    PlanStepV1, PlanV1, SnapshotDigestBuilderV1, SnapshotDigestV1,
+    CodeTrustStateV2, EnvironmentSensitivityV1, FilesystemAccessV1, FilesystemPurposeV1,
+    FilesystemReviewGroupV1, NetworkScopeV1, PermissionSetV1, PermissionV1, PlanActionV1,
+    PlanApprovalV1, PlanInputsV1, PlanOperationV1, PlanStepV1, PlanV1, SnapshotDigestBuilderV1,
+    SnapshotDigestV1,
 };
 use crate::trust::{TRUST_GRANT_SCHEMA_VERSION, TrustCapabilityV1, TrustDecisionV1, TrustModeV1};
 use anyhow::{Context, Result, bail};
@@ -200,6 +201,7 @@ impl StateCapture {
 #[derive(Default)]
 struct PermissionAccumulator {
     required: Vec<PermissionV1>,
+    filesystem_review: BTreeMap<(FilesystemPurposeV1, String), PermissionSetV1>,
     declared: Vec<PermissionV1>,
     author: Vec<PermissionV1>,
     uncomputable: BTreeSet<String>,
@@ -207,11 +209,47 @@ struct PermissionAccumulator {
 
 impl PermissionAccumulator {
     fn implicit(&mut self, permission: PermissionV1) {
+        let target = match &permission {
+            PermissionV1::Filesystem { path, .. } => path.clone(),
+            _ => String::new(),
+        };
+        self.implicit_for(permission, FilesystemPurposeV1::UserTarget, target);
+    }
+
+    fn implicit_for(
+        &mut self,
+        permission: PermissionV1,
+        purpose: FilesystemPurposeV1,
+        target: impl Into<String>,
+    ) {
+        if matches!(permission, PermissionV1::Filesystem { .. }) {
+            self.filesystem_review
+                .entry((purpose, target.into()))
+                .or_default()
+                .insert(permission.clone());
+        }
         self.required.push(permission.clone());
         self.declared.push(permission);
     }
 
+    fn review_groups(&self) -> Vec<FilesystemReviewGroupV1> {
+        self.filesystem_review
+            .iter()
+            .map(|((purpose, target), permissions)| FilesystemReviewGroupV1 {
+                purpose: *purpose,
+                target: target.clone(),
+                permissions: permissions.clone(),
+            })
+            .collect()
+    }
+
     fn require(&mut self, permission: PermissionV1) {
+        if let PermissionV1::Filesystem { path, .. } = &permission {
+            self.filesystem_review
+                .entry((FilesystemPurposeV1::UserTarget, path.clone()))
+                .or_default()
+                .insert(permission.clone());
+        }
         self.required.push(permission);
     }
 
@@ -276,6 +314,14 @@ impl PermissionAccumulator {
     }
 
     fn merge(&mut self, other: Self) {
+        for (key, permissions) in other.filesystem_review {
+            for permission in permissions.iter() {
+                self.filesystem_review
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(permission.clone());
+            }
+        }
         self.required.extend(other.required);
         self.declared.extend(other.declared);
         self.author.extend(other.author);
@@ -458,13 +504,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     )
                     .await?;
                 }
-                add_app_typed_permissions(
-                    self.context(),
-                    permissions,
-                    file,
-                    &destination,
-                    request.operation,
-                );
 
                 let destination_exists = path_exists(self.host(), &destination).await?;
                 let backup_action_candidate = request.operation == LifecycleOperation::Install
@@ -592,6 +631,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         );
                         continue;
                     }
+                    add_app_typed_permissions(
+                        self.context(),
+                        permissions,
+                        file,
+                        &destination,
+                        request.operation,
+                    );
                     let relocation = entry.filter(|entry| {
                         request.operation == LifecycleOperation::Upgrade
                             && entry.destination != destination
@@ -757,6 +803,15 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     }
                     Some(_) => PlanActionV1::Update,
                 };
+                if action != PlanActionV1::None {
+                    add_app_typed_permissions(
+                        self.context(),
+                        permissions,
+                        file,
+                        &destination,
+                        request.operation,
+                    );
+                }
                 let static_relocation_entry = entry.filter(|entry| {
                     request.operation == LifecycleOperation::Upgrade
                         && action == PlanActionV1::Update
@@ -1341,10 +1396,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 Some(_) => PlanActionV1::None,
             };
             if matches!(action, PlanActionV1::Create | PlanActionV1::Update) {
-                permissions.implicit(PermissionV1::Filesystem {
-                    access: FilesystemAccessV1::Write,
-                    path: review_path(self.context(), &destination),
-                });
+                permissions.implicit_for(
+                    PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Write,
+                        path: review_path(self.context(), &destination),
+                    },
+                    FilesystemPurposeV1::Maintenance,
+                    format!("app/{}", category.name),
+                );
             }
             steps.push(PlanStepV1::new(
                 format!("app/{}", category.name),
@@ -2229,10 +2288,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 (FilesystemAccessV1::Write, rollback.as_path()),
                                 (FilesystemAccessV1::Remove, rollback.as_path()),
                             ] {
-                                permissions.implicit(PermissionV1::Filesystem {
-                                    access,
-                                    path: review_path(self.context(), path),
-                                });
+                                permissions.implicit_for(
+                                    PermissionV1::Filesystem {
+                                        access,
+                                        path: review_path(self.context(), path),
+                                    },
+                                    if path == rollback.as_path() {
+                                        FilesystemPurposeV1::Recovery
+                                    } else {
+                                        FilesystemPurposeV1::Installation
+                                    },
+                                    &target,
+                                );
                             }
                         }
                         PlanActionV1::Remove
@@ -2324,10 +2391,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             (FilesystemAccessV1::Write, &rollback),
                             (FilesystemAccessV1::Remove, &rollback),
                         ] {
-                            permissions.implicit(PermissionV1::Filesystem {
-                                access,
-                                path: review_path(self.context(), path),
-                            });
+                            permissions.implicit_for(
+                                PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), path),
+                                },
+                                if path == rollback.as_path() {
+                                    FilesystemPurposeV1::Recovery
+                                } else {
+                                    FilesystemPurposeV1::Installation
+                                },
+                                &target,
+                            );
                         }
                         (
                             PlanActionV1::Remove,
@@ -2386,10 +2461,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 managed_file_rollback_path(resource.destination()),
                             ),
                         ] {
-                            permissions.implicit(PermissionV1::Filesystem {
-                                access,
-                                path: review_path(self.context(), &path),
-                            });
+                            permissions.implicit_for(
+                                PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), &path),
+                                },
+                                if path == resource.destination() {
+                                    FilesystemPurposeV1::Installation
+                                } else {
+                                    FilesystemPurposeV1::Recovery
+                                },
+                                &target,
+                            );
                         }
                     }
                 }
@@ -2434,10 +2517,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     )
                     .await?;
                     if path_exists(self.host(), path).await? {
-                        permissions.implicit(PermissionV1::Filesystem {
-                            access: FilesystemAccessV1::Remove,
-                            path: review_path(self.context(), path),
-                        });
+                        permissions.implicit_for(
+                            PermissionV1::Filesystem {
+                                access: FilesystemAccessV1::Remove,
+                                path: review_path(self.context(), path),
+                            },
+                            FilesystemPurposeV1::Maintenance,
+                            "shell cache and snapshots",
+                        );
                     }
                 }
             }
@@ -2481,10 +2568,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 (FilesystemAccessV1::Write, &rollback),
                                 (FilesystemAccessV1::Remove, &rollback),
                             ] {
-                                permissions.implicit(PermissionV1::Filesystem {
-                                    access,
-                                    path: review_path(self.context(), path),
-                                });
+                                permissions.implicit_for(
+                                    PermissionV1::Filesystem {
+                                        access,
+                                        path: review_path(self.context(), path),
+                                    },
+                                    FilesystemPurposeV1::Maintenance,
+                                    "shell cache and snapshots",
+                                );
                             }
                         }
                     }
@@ -2557,10 +2648,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             (FilesystemAccessV1::Write, &rollback),
                             (FilesystemAccessV1::Remove, &rollback),
                         ] {
-                            permissions.implicit(PermissionV1::Filesystem {
-                                access,
-                                path: review_path(self.context(), path),
-                            });
+                            permissions.implicit_for(
+                                PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), path),
+                                },
+                                FilesystemPurposeV1::Maintenance,
+                                "shell cache and snapshots",
+                            );
                         }
                     }
                     if file_count > 0 && !blocked {
@@ -2615,10 +2710,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         (FilesystemAccessV1::Write, &rollback),
                         (FilesystemAccessV1::Remove, &rollback),
                     ] {
-                        permissions.implicit(PermissionV1::Filesystem {
-                            access,
-                            path: review_path(self.context(), path),
-                        });
+                        permissions.implicit_for(
+                            PermissionV1::Filesystem {
+                                access,
+                                path: review_path(self.context(), path),
+                            },
+                            FilesystemPurposeV1::Maintenance,
+                            "shell cache and snapshots",
+                        );
                     }
                 }
                 steps.push(
@@ -2725,10 +2824,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                     (FilesystemAccessV1::Write, rollback),
                                     (FilesystemAccessV1::Remove, rollback),
                                 ] {
-                                    permissions.implicit(PermissionV1::Filesystem {
-                                        access,
-                                        path: review_path(self.context(), path),
-                                    });
+                                    permissions.implicit_for(
+                                        PermissionV1::Filesystem {
+                                            access,
+                                            path: review_path(self.context(), path),
+                                        },
+                                        FilesystemPurposeV1::Maintenance,
+                                        format!("shell/{}", category.name),
+                                    );
                                 }
                             }
                         }
@@ -2830,10 +2933,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 (FilesystemAccessV1::Write, &rollback),
                                 (FilesystemAccessV1::Remove, &rollback),
                             ] {
-                                permissions.implicit(PermissionV1::Filesystem {
-                                    access,
-                                    path: review_path(self.context(), path),
-                                });
+                                permissions.implicit_for(
+                                    PermissionV1::Filesystem {
+                                        access,
+                                        path: review_path(self.context(), path),
+                                    },
+                                    FilesystemPurposeV1::Maintenance,
+                                    format!("shell/{}", category.name),
+                                );
                             }
                         }
                         steps.push(
@@ -3050,10 +3157,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                     (FilesystemAccessV1::Write, &rollback),
                                     (FilesystemAccessV1::Remove, &rollback),
                                 ] {
-                                    file_permissions.implicit(PermissionV1::Filesystem {
-                                        access,
-                                        path: review_path(self.context(), path),
-                                    });
+                                    file_permissions.implicit_for(
+                                        PermissionV1::Filesystem {
+                                            access,
+                                            path: review_path(self.context(), path),
+                                        },
+                                        if path == rollback.as_path() {
+                                            FilesystemPurposeV1::Recovery
+                                        } else {
+                                            FilesystemPurposeV1::Installation
+                                        },
+                                        &canonical,
+                                    );
                                 }
                             }
                             steps.push(
@@ -3249,7 +3364,12 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                     (FilesystemAccessV1::Write, rollback.clone()),
                                     (FilesystemAccessV1::Remove, rollback),
                                 ] {
-                                    managed_update_permissions.push((access, path));
+                                    let purpose = if path == previous.destination() {
+                                        FilesystemPurposeV1::Installation
+                                    } else {
+                                        FilesystemPurposeV1::Recovery
+                                    };
+                                    managed_update_permissions.push((access, path, purpose));
                                 }
                             }
                             managed_update = previous_exact && changed_resource;
@@ -3259,11 +3379,15 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         action = PlanActionV1::Blocked;
                     }
                     if managed_update && !rollback_occupied {
-                        for (access, path) in managed_update_permissions {
-                            file_permissions.implicit(PermissionV1::Filesystem {
-                                access,
-                                path: review_path(self.context(), &path),
-                            });
+                        for (access, path, purpose) in managed_update_permissions {
+                            file_permissions.implicit_for(
+                                PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), &path),
+                                },
+                                purpose,
+                                &canonical,
+                            );
                         }
                     }
                     typed_launcher_transaction |=
@@ -3275,6 +3399,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 &mut file_permissions,
                                 resource.destination(),
                                 request.operation,
+                                FilesystemPurposeV1::Installation,
+                                &canonical,
                             );
                         }
                         if !(self.context().is_external_presets
@@ -3285,6 +3411,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 &mut file_permissions,
                                 &source,
                                 request.operation,
+                                FilesystemPurposeV1::Maintenance,
+                                &canonical,
                             );
                         }
                         if !effective_transforms.is_empty() {
@@ -3293,6 +3421,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 &mut file_permissions,
                                 &rendered,
                                 request.operation,
+                                FilesystemPurposeV1::Installation,
+                                &canonical,
                             );
                         }
                     }
@@ -3506,8 +3636,9 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
                 .or_else(|| entry.as_ref().map(|entry| entry.item_id.as_str()))
                 .unwrap_or("unknown");
             let target = format!("sys/{item_id}");
+            let mut item_permissions = PermissionAccumulator::default();
             if let Some(item) = &item {
-                permissions.declaration_without_opaque_code(
+                item_permissions.declaration_without_opaque_code(
                     item.permissions.as_ref(),
                     "sys_permission_declaration_missing",
                 );
@@ -3516,17 +3647,17 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
                     &request.input_versions,
                     item,
                     &mut state,
-                    &mut permissions,
+                    &mut item_permissions,
                 )?;
                 if item.requires_admin {
-                    permissions.implicit(PermissionV1::Administrator);
+                    item_permissions.implicit(PermissionV1::Administrator);
                 }
             }
             let previous = entry.as_ref().and_then(|entry| entry.receipt.as_ref());
             if let Some(receipt) = previous {
                 add_sys_receipt_permissions(
                     self.context(),
-                    &mut permissions,
+                    &mut item_permissions,
                     receipt,
                     request.operation,
                 );
@@ -3570,10 +3701,18 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
                     (FilesystemAccessV1::Write, backup.as_path()),
                     (FilesystemAccessV1::Remove, backup.as_path()),
                 ] {
-                    permissions.implicit(PermissionV1::Filesystem {
-                        access,
-                        path: review_path(self.context(), transaction_path),
-                    });
+                    item_permissions.implicit_for(
+                        PermissionV1::Filesystem {
+                            access,
+                            path: review_path(self.context(), transaction_path),
+                        },
+                        if transaction_path == path.as_path() {
+                            FilesystemPurposeV1::UserTarget
+                        } else {
+                            FilesystemPurposeV1::Recovery
+                        },
+                        review_path(self.context(), path),
+                    );
                 }
             }
             let action = if request.operation == LifecycleOperation::Uninstall {
@@ -3596,7 +3735,7 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
                     .as_ref()
                     .is_some_and(|item| item.driver == SysDriverKind::Script)
                 {
-                    permissions
+                    item_permissions
                         .uncomputable
                         .insert("sys_managed_driver_uncomputable".to_string());
                     PlanActionV1::Blocked
@@ -3628,7 +3767,7 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
                         previous,
                         &mut state,
                         &target,
-                        &mut permissions,
+                        &mut item_permissions,
                     )
                     .await?;
                     if desired_current {
@@ -3655,6 +3794,13 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
                     },
                 );
             }
+            if action == PlanActionV1::None {
+                // Keep author statements and observations, but no operation capabilities
+                // for an item whose desired state already matches its owned receipt.
+                item_permissions.required.clear();
+                item_permissions.filesystem_review.clear();
+            }
+            permissions.merge(item_permissions);
             steps.push(step);
         }
         if steps.iter().any(|step| {
@@ -3670,16 +3816,20 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
                 request.operation,
             );
             for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
-                permissions.implicit(PermissionV1::Filesystem {
-                    access,
-                    path: review_path(
-                        self.context(),
-                        &self
-                            .context()
-                            .shine_dir
-                            .join(super::SYS_OPERATION_JOURNAL_FILE),
-                    ),
-                });
+                permissions.implicit_for(
+                    PermissionV1::Filesystem {
+                        access,
+                        path: review_path(
+                            self.context(),
+                            &self
+                                .context()
+                                .shine_dir
+                                .join(super::SYS_OPERATION_JOURNAL_FILE),
+                        ),
+                    },
+                    FilesystemPurposeV1::Maintenance,
+                    "installation state",
+                );
             }
         }
         finish_plan(self, request.operation, state, permissions, steps)
@@ -3805,6 +3955,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             self.context(),
             &mut permissions,
             &self.context().shine_dir.join("sys-manifest.toml"),
+            FilesystemPurposeV1::Maintenance,
+            "installation state",
         );
         let sys_shell: &'static str = self.context().shell.into();
         capture_sys_profile_state(
@@ -3838,23 +3990,35 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 (FilesystemAccessV1::Write, rollback.as_path()),
                 (FilesystemAccessV1::Remove, rollback.as_path()),
             ] {
-                permissions.implicit(PermissionV1::Filesystem {
-                    access,
-                    path: review_path(self.context(), transaction_path),
-                });
+                permissions.implicit_for(
+                    PermissionV1::Filesystem {
+                        access,
+                        path: review_path(self.context(), transaction_path),
+                    },
+                    if transaction_path == path.as_path() {
+                        FilesystemPurposeV1::UserTarget
+                    } else {
+                        FilesystemPurposeV1::Recovery
+                    },
+                    review_path(self.context(), path),
+                );
             }
         }
         for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
-            permissions.implicit(PermissionV1::Filesystem {
-                access,
-                path: review_path(
-                    self.context(),
-                    &self
-                        .context()
-                        .shine_dir
-                        .join(super::SYS_OPERATION_JOURNAL_FILE),
-                ),
-            });
+            permissions.implicit_for(
+                PermissionV1::Filesystem {
+                    access,
+                    path: review_path(
+                        self.context(),
+                        &self
+                            .context()
+                            .shine_dir
+                            .join(super::SYS_OPERATION_JOURNAL_FILE),
+                    ),
+                },
+                FilesystemPurposeV1::Maintenance,
+                "installation state",
+            );
         }
         let external_code_blocked =
             sys_profile_code_blocked_for_enabled(self, &request.os_id, &loaded.manifest, &enabled)?
@@ -4062,6 +4226,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 self.context(),
                 &mut shared_permissions,
                 &self.context().shine_dir.join("sys-manifest.toml"),
+                FilesystemPurposeV1::Maintenance,
+                "installation state",
             );
             capture_sys_profile_state(
                 self,
@@ -4097,6 +4263,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         }
         permissions.merge(shared_permissions);
 
+        let filesystem_review = permissions.review_groups();
         let (required, declared, author, uncomputable) = permissions.finish();
         let mut plan = PlanV1::new(
             PlanOperationV1::SysBootstrap,
@@ -4109,6 +4276,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             &declared,
             uncomputable,
         );
+        plan.filesystem_review = filesystem_review;
         plan.author_capabilities = author;
         attach_code_boundaries(self, &mut plan)?;
         plan.permission_scopes = permission_scopes;
@@ -5403,10 +5571,14 @@ async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
             &directory,
         )
         .await?;
-        permissions.implicit(PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Write,
-            path: review_path(runtime.context(), &directory),
-        });
+        permissions.implicit_for(
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: review_path(runtime.context(), &directory),
+            },
+            FilesystemPurposeV1::Installation,
+            format!("app/{}", category.name),
+        );
         if !exists {
             steps.push(PlanStepV1::new(
                 format!("app/{}", category.name),
@@ -5425,6 +5597,7 @@ fn finish_plan<H>(
     permissions: PermissionAccumulator,
     steps: Vec<PlanStepV1>,
 ) -> Result<PlanV1> {
+    let filesystem_review = permissions.review_groups();
     let (required, declared, author, uncomputable) = permissions.finish();
     let mut plan = PlanV1::new(
         operation,
@@ -5437,6 +5610,7 @@ fn finish_plan<H>(
         &declared,
         uncomputable,
     );
+    plan.filesystem_review = filesystem_review;
     plan.author_capabilities = author;
     attach_code_boundaries(runtime, &mut plan)?;
     Ok(plan)
@@ -5449,6 +5623,7 @@ fn finish_specialized_plan<H>(
     permissions: PermissionAccumulator,
     steps: Vec<PlanStepV1>,
 ) -> Result<PlanV1> {
+    let filesystem_review = permissions.review_groups();
     let (required, declared, author, uncomputable) = permissions.finish();
     let mut plan = PlanV1::new(
         operation,
@@ -5461,6 +5636,7 @@ fn finish_specialized_plan<H>(
         &declared,
         uncomputable,
     );
+    plan.filesystem_review = filesystem_review;
     plan.author_capabilities = author;
     attach_code_boundaries(runtime, &mut plan)?;
     Ok(plan)
@@ -5921,6 +6097,8 @@ fn add_sys_bootstrap_install_permissions<H>(
                 runtime.context(),
                 shared_permissions,
                 &runtime.context().shine_dir.join("runtime/sys").join(os_id),
+                FilesystemPurposeV1::Maintenance,
+                "sys/bootstrap",
             );
         }
     }
@@ -6024,7 +6202,13 @@ async fn capture_sys_profile_state<H: FileSystemObservationHost>(
             .join(".shine/profile")
             .join(format!("{os_id}.{phase}.{ext}"));
         capture_path_state(runtime.host(), state, format!("profile:{phase}"), &path).await?;
-        add_shine_write_permission(runtime.context(), permissions, &path);
+        add_shine_write_permission(
+            runtime.context(),
+            permissions,
+            &path,
+            FilesystemPurposeV1::Installation,
+            "sys/profile",
+        );
     }
     for (index, path) in runtime.context().shell_config_paths.iter().enumerate() {
         capture_path_state(
@@ -6034,7 +6218,13 @@ async fn capture_sys_profile_state<H: FileSystemObservationHost>(
             path,
         )
         .await?;
-        add_shine_write_permission(runtime.context(), permissions, path);
+        add_shine_write_permission(
+            runtime.context(),
+            permissions,
+            path,
+            FilesystemPurposeV1::UserTarget,
+            &review_path(runtime.context(), path),
+        );
     }
     permissions.implicit(PermissionV1::Command {
         program: "git".to_string(),
@@ -6065,11 +6255,17 @@ fn add_shine_write_permission(
     context: &super::RuntimeContext,
     permissions: &mut PermissionAccumulator,
     path: &Path,
+    purpose: FilesystemPurposeV1,
+    target: &str,
 ) {
-    permissions.implicit(PermissionV1::Filesystem {
-        access: FilesystemAccessV1::Write,
-        path: review_path(context, path),
-    });
+    permissions.implicit_for(
+        PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Write,
+            path: review_path(context, path),
+        },
+        purpose,
+        target,
+    );
 }
 
 fn validate_app_request(request: &AppPlanRequest) -> Result<()> {
@@ -6396,10 +6592,14 @@ fn add_app_entry_permissions(
             access: FilesystemAccessV1::Write,
             path: review_path(context, &entry.destination),
         });
-        permissions.implicit(PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Remove,
-            path: review_path(context, backup),
-        });
+        permissions.implicit_for(
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Remove,
+                path: review_path(context, backup),
+            },
+            FilesystemPurposeV1::Recovery,
+            review_path(context, &entry.destination),
+        );
     }
     if entry.requires_admin {
         permissions.implicit(PermissionV1::Administrator);
@@ -6411,15 +6611,21 @@ fn add_shell_typed_permissions(
     permissions: &mut PermissionAccumulator,
     path: &Path,
     operation: LifecycleOperation,
+    purpose: FilesystemPurposeV1,
+    target: &str,
 ) {
-    permissions.implicit(PermissionV1::Filesystem {
-        access: if operation == LifecycleOperation::Uninstall {
-            FilesystemAccessV1::Remove
-        } else {
-            FilesystemAccessV1::Write
+    permissions.implicit_for(
+        PermissionV1::Filesystem {
+            access: if operation == LifecycleOperation::Uninstall {
+                FilesystemAccessV1::Remove
+            } else {
+                FilesystemAccessV1::Write
+            },
+            path: review_path(context, path),
         },
-        path: review_path(context, path),
-    });
+        purpose,
+        target,
+    );
 }
 
 fn add_shell_profile_permissions(
@@ -6435,10 +6641,24 @@ fn add_shell_profile_permissions(
             (FilesystemAccessV1::Write, &rollback),
             (FilesystemAccessV1::Remove, &rollback),
         ] {
-            permissions.implicit(PermissionV1::Filesystem {
-                access,
-                path: review_path(context, effect),
-            });
+            permissions.implicit_for(
+                PermissionV1::Filesystem {
+                    access,
+                    path: review_path(context, effect),
+                },
+                if effect == &rollback {
+                    FilesystemPurposeV1::Recovery
+                } else if path == &managed_profile {
+                    FilesystemPurposeV1::Installation
+                } else {
+                    FilesystemPurposeV1::UserTarget
+                },
+                if path == &managed_profile {
+                    "shell/profile".to_string()
+                } else {
+                    review_path(context, path)
+                },
+            );
         }
     }
 }
@@ -6449,14 +6669,18 @@ fn add_shine_receipt_permission(
     file: &str,
     operation: LifecycleOperation,
 ) {
-    permissions.implicit(PermissionV1::Filesystem {
-        access: if operation == LifecycleOperation::Uninstall {
-            FilesystemAccessV1::Remove
-        } else {
-            FilesystemAccessV1::Write
+    permissions.implicit_for(
+        PermissionV1::Filesystem {
+            access: if operation == LifecycleOperation::Uninstall {
+                FilesystemAccessV1::Remove
+            } else {
+                FilesystemAccessV1::Write
+            },
+            path: review_path(context, &context.shine_dir.join(file)),
         },
-        path: review_path(context, &context.shine_dir.join(file)),
-    });
+        FilesystemPurposeV1::Maintenance,
+        "installation state",
+    );
 }
 
 fn add_app_journal_permissions(
@@ -6467,14 +6691,22 @@ fn add_app_journal_permissions(
         context,
         &context.shine_dir.join(super::APP_OPERATION_JOURNAL_FILE),
     );
-    permissions.implicit(PermissionV1::Filesystem {
-        access: FilesystemAccessV1::Write,
-        path: path.clone(),
-    });
-    permissions.implicit(PermissionV1::Filesystem {
-        access: FilesystemAccessV1::Remove,
-        path,
-    });
+    permissions.implicit_for(
+        PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Write,
+            path: path.clone(),
+        },
+        FilesystemPurposeV1::Maintenance,
+        "installation state",
+    );
+    permissions.implicit_for(
+        PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Remove,
+            path,
+        },
+        FilesystemPurposeV1::Maintenance,
+        "installation state",
+    );
 }
 
 fn add_shell_journal_permissions(
@@ -6485,14 +6717,22 @@ fn add_shell_journal_permissions(
         context,
         &context.shine_dir.join(super::SHELL_OPERATION_JOURNAL_FILE),
     );
-    permissions.implicit(PermissionV1::Filesystem {
-        access: FilesystemAccessV1::Write,
-        path: path.clone(),
-    });
-    permissions.implicit(PermissionV1::Filesystem {
-        access: FilesystemAccessV1::Remove,
-        path,
-    });
+    permissions.implicit_for(
+        PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Write,
+            path: path.clone(),
+        },
+        FilesystemPurposeV1::Maintenance,
+        "installation state",
+    );
+    permissions.implicit_for(
+        PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Remove,
+            path,
+        },
+        FilesystemPurposeV1::Maintenance,
+        "installation state",
+    );
 }
 
 fn add_app_backup_creation_permissions(
@@ -6505,10 +6745,14 @@ fn add_app_backup_creation_permissions(
         access: FilesystemAccessV1::Remove,
         path: review_path(context, destination),
     });
-    permissions.implicit(PermissionV1::Filesystem {
-        access: FilesystemAccessV1::Write,
-        path: review_path(context, backup),
-    });
+    permissions.implicit_for(
+        PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Write,
+            path: review_path(context, backup),
+        },
+        FilesystemPurposeV1::Recovery,
+        review_path(context, destination),
+    );
 }
 
 fn add_app_update_permissions(
@@ -6522,10 +6766,18 @@ fn add_app_update_permissions(
         (FilesystemAccessV1::Write, rollback),
         (FilesystemAccessV1::Remove, rollback),
     ] {
-        permissions.implicit(PermissionV1::Filesystem {
-            access,
-            path: review_path(context, path),
-        });
+        permissions.implicit_for(
+            PermissionV1::Filesystem {
+                access,
+                path: review_path(context, path),
+            },
+            if path == rollback {
+                FilesystemPurposeV1::Recovery
+            } else {
+                FilesystemPurposeV1::UserTarget
+            },
+            review_path(context, destination),
+        );
     }
 }
 
@@ -6603,10 +6855,14 @@ fn add_app_relocation_permissions(
                 access: FilesystemAccessV1::Write,
                 path: review_path(context, &previous.destination),
             });
-            permissions.implicit(PermissionV1::Filesystem {
-                access: FilesystemAccessV1::Remove,
-                path: review_path(context, backup),
-            });
+            permissions.implicit_for(
+                PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Remove,
+                    path: review_path(context, backup),
+                },
+                FilesystemPurposeV1::Recovery,
+                review_path(context, &previous.destination),
+            );
         }
     }
     if (previous_present && previous.requires_admin) || desired_requires_admin {
@@ -6888,10 +7144,14 @@ async fn add_app_snapshot_permissions<H: FileSystemObservationHost>(
     )
     .await?;
     for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
-        permissions.implicit(PermissionV1::Filesystem {
-            access,
-            path: review_path(runtime.context(), &root),
-        });
+        permissions.implicit_for(
+            PermissionV1::Filesystem {
+                access,
+                path: review_path(runtime.context(), &root),
+            },
+            FilesystemPurposeV1::Maintenance,
+            format!("app/{}", category.name),
+        );
     }
     steps.push(
         PlanStepV1::new(
@@ -9287,6 +9547,117 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
     }
 
     #[tokio::test]
+    async fn app_upgrade_permissions_exclude_current_files_and_bind_their_state() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("app/demo/shine.toml", b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\nenvironment = [{ name = 'SOURCE', sensitivity = 'plain' }]\n[[files]]\nsource = 'changed'\n[[files]]\nsource = 'current'\n[[files]]\nsource = 'manual'\ngenerator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }\n".to_vec())
+            .file("app/demo/changed", b"next".to_vec())
+            .file("app/demo/current", b"current".to_vec())
+            .file("app/demo/manual", b"fallback".to_vec())
+            .file("app/demo/gen.ts", b"process.stdout.write('generated')".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let root = runtime.context().home_dir.join(".config/demo");
+        let entries = [
+            ("changed", b"previous".as_slice()),
+            ("current", b"current".as_slice()),
+            ("manual", b"generated".as_slice()),
+        ]
+        .into_iter()
+        .map(|(name, bytes)| {
+            let destination = root.join(name);
+            runtime.host().put_file(&destination, bytes.to_vec());
+            AppEntry {
+                source: format!("app/demo/{name}"),
+                destination,
+                backup: None,
+                content_hash: crate::install::hash_content(bytes),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }
+        })
+        .collect();
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&AppManifest {
+                schema_version: APP_MANIFEST_SCHEMA_VERSION,
+                entries,
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: None,
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let current = review_path(runtime.context(), &root.join("current"));
+        assert!(
+            !plan
+                .permissions
+                .required
+                .iter()
+                .any(|p| matches!(p, PermissionV1::Filesystem { path, .. } if path == &current))
+        );
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: review_path(runtime.context(), &root.join("changed"))
+                })
+        );
+        let manual = review_path(runtime.context(), &root.join("manual"));
+        assert!(!plan.permissions.required.iter().any(|p| matches!(p,
+            PermissionV1::Filesystem { path, .. } if path == &manual)));
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .iter()
+                .any(|code| code == "app_manual_refresh_required")
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .put_file(root.join("current"), b"user edit".to_vec());
+        let changed_state = runtime.plan_apps(request.clone()).await.unwrap();
+        assert_ne!(
+            plan.fingerprint().unwrap(),
+            changed_state.fingerprint().unwrap()
+        );
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request.clone(),
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut super::super::NullObserver,
+                    &mut Interaction
+                )
+                .await
+                .is_err()
+        );
+        runtime
+            .host()
+            .put_file(root.join("current"), b"current".to_vec());
+        runtime
+            .upgrade_apps_approved(
+                request.clone(),
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut super::super::NullObserver,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        let current_plan = runtime.plan_apps(request).await.unwrap();
+        assert!(current_plan.permissions.required.is_empty());
+    }
+
+    #[tokio::test]
     async fn approved_app_upgrade_journals_static_in_place_managed_update() {
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
@@ -11450,6 +11821,99 @@ target = '$HOME/.config/disabled.txt'
         );
     }
 
+    #[tokio::test]
+    async fn filesystem_review_tracks_typed_shell_transactions_without_widening_permissions() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n".to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"echo demo\n".to_vec())
+            .build();
+        let mut runtime = external_shell_runtime(snapshot);
+        let profile = runtime.context().home_dir.join(".zshrc");
+        runtime.context_mut_for_cli().shell_config_paths = vec![profile];
+        let plan = runtime.plan_shells(shell_install_request()).await.unwrap();
+        assert!(plan.is_ready());
+        let purpose = |path: &str| {
+            plan.filesystem_review.iter().filter(|group| group.permissions.iter().any(|permission| matches!(permission, PermissionV1::Filesystem { path: actual, .. } if actual == path))).map(|group| group.purpose).collect::<BTreeSet<_>>()
+        };
+        assert_eq!(
+            purpose("home:.zshrc"),
+            BTreeSet::from([FilesystemPurposeV1::UserTarget])
+        );
+        assert_eq!(
+            purpose("home:.zshrc.shine.rollback"),
+            BTreeSet::from([FilesystemPurposeV1::Recovery])
+        );
+        assert_eq!(
+            purpose("shine:bin/demo"),
+            BTreeSet::from([FilesystemPurposeV1::Installation])
+        );
+        for path in [
+            "shine:shell-manifest.toml",
+            "shine:shell-operation-journal.toml",
+            "shine:installed/shell/demo",
+            "shine:installed/shell/.demo.shine.stage",
+            "shine:installed/shell/.demo.shine.rollback",
+            "shine:installed/shell/demo/demo.sh",
+        ] {
+            assert_eq!(
+                purpose(path),
+                BTreeSet::from([FilesystemPurposeV1::Maintenance]),
+                "{path}"
+            );
+        }
+        for group in &plan.filesystem_review {
+            assert!(
+                group
+                    .permissions
+                    .iter()
+                    .all(|permission| plan.permissions.required.contains(permission))
+            );
+        }
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .iter()
+                .all(|operation| matches!(operation, HostOperation::Read(_)))
+        );
+    }
+
+    #[test]
+    fn filesystem_review_user_destination_wins_even_inside_shine_or_with_rollback_suffix() {
+        let runtime = runtime(static_copy_app_snapshot());
+        let context = runtime.context();
+        let destination = context.shine_dir.join("shell-manifest.toml");
+        let rollback_named_destination = context.home_dir.join("my.shine.rollback");
+        let mut permissions = PermissionAccumulator::default();
+        add_shine_receipt_permission(
+            context,
+            &mut permissions,
+            "shell-manifest.toml",
+            LifecycleOperation::Install,
+        );
+        for path in [&destination, &rollback_named_destination] {
+            permissions.implicit(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: review_path(context, path),
+            });
+        }
+        let groups = permissions.review_groups();
+        for path in [&destination, &rollback_named_destination] {
+            assert!(
+                groups
+                    .iter()
+                    .any(|group| group.purpose == FilesystemPurposeV1::UserTarget
+                        && group.permissions.contains(&PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Write,
+                            path: review_path(context, path)
+                        }))
+            );
+        }
+    }
+
     fn shell_launcher_snapshot() -> PresetSnapshot {
         PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
@@ -12693,6 +13157,121 @@ target = '$HOME/.config/disabled.txt'
             .await
             .unwrap_err();
         assert!(error.to_string().contains("requires explicit recovery"));
+    }
+
+    async fn relocated_bun_shell_runtime() -> (CoreRuntime<InMemoryHost>, ShellPlanRequest) {
+        let metadata = ["compress", "convert", "resize"].map(|name| format!(
+            "[[files]]\nsource = '{name}.ts'\ntarget = 'img-{name}'\nruntime = 'bun'\nenv = ['IMAGE_QUALITY']\n[files.permissions]\nschema_version = 1\nenvironment = [{{ name = 'IMAGE_QUALITY', sensitivity = 'plain' }}]\n"
+        )).join("\n");
+        let snapshot = |source| {
+            let mut builder = PresetSnapshot::builder(source)
+                .file("shell/demo/shine.toml", metadata.as_bytes().to_vec());
+            for name in ["compress", "convert", "resize"] {
+                builder = builder.file(
+                    format!("shell/demo/{name}.ts"),
+                    b"console.log('fixture');\n".to_vec(),
+                );
+            }
+            builder.build()
+        };
+        let mut original = runtime(snapshot(PresetSourceKind::Embedded));
+        original
+            .context_mut_for_cli()
+            .env
+            .insert("IMAGE_QUALITY".into(), "80".into());
+        let mut request = shell_install_request();
+        request.target = Some("demo".into());
+        let plan = original.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        original
+            .install_shells_approved(request.clone(), &approval)
+            .await
+            .unwrap();
+        let mut context = original.context().clone();
+        context.presets_dir = context.home_dir.join("moved-external-presets");
+        context.is_external_presets = true;
+        context.external_shell_mode = ExternalShellMode::Snapshot;
+        let mut moved = CoreRuntime::new(
+            original.host().clone(),
+            context,
+            snapshot(PresetSourceKind::External),
+        );
+        trust_current_external_shell(&mut moved);
+        for (logical, bytes) in moved.presets().files() {
+            moved
+                .host()
+                .put_file(moved.context().presets_dir.join(logical), bytes.clone());
+        }
+        request.operation = LifecycleOperation::Upgrade;
+        (moved, request)
+    }
+
+    #[tokio::test]
+    async fn shell_upgrade_after_source_relocation_retains_receipt_owned_bun_launchers() {
+        let (runtime, request) = relocated_bun_shell_runtime().await;
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_snapshot_replace_transaction".into())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .upgrade_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        for name in ["compress", "convert", "resize"] {
+            let target = format!("shell/demo/img-{name}");
+            let receipt = manifest.find(&target).unwrap();
+            let expected = runtime
+                .context()
+                .shine_dir
+                .join(format!("installed/shell/demo/{name}.ts"));
+            assert_eq!(receipt.source_path, expected);
+            let spec = shell_link_spec_from_manifest_entry(receipt).unwrap();
+            for resource in prepare_launcher_resources(&runtime.context().bin_dir, &spec) {
+                assert!(
+                    prepared_launcher_resource_is_exact(runtime.host(), &resource)
+                        .await
+                        .unwrap()
+                );
+            }
+            assert_eq!(
+                runtime.host().read(&expected).await.unwrap(),
+                b"console.log('fixture');\n"
+            );
+        }
+        let snapshot = runtime.context().shine_dir.join("installed/shell/demo");
+        for path in [
+            shell_snapshot_stage_path(&snapshot),
+            shell_snapshot_rollback_path(&snapshot),
+            runtime
+                .context()
+                .shine_dir
+                .join("shell-operation-journal.toml"),
+        ] {
+            assert!(runtime.host().metadata(&path).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_upgrade_after_source_relocation_still_blocks_foreign_launchers() {
+        let (runtime, request) = relocated_bun_shell_runtime().await;
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "img-compress".as_ref());
+        let foreign = b"#!/bin/sh\necho foreign\n";
+        runtime.host().put_file(&launcher, foreign.to_vec());
+        let plan = runtime.plan_shells(request).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| step.target == "shell/demo/img-compress"
+                    && step.action == PlanActionV1::Blocked)
+        );
+        assert_eq!(runtime.host().read(&launcher).await.unwrap(), foreign);
     }
 
     #[tokio::test]
@@ -14807,6 +15386,42 @@ servers_env = 'PRIVATE_DNS_SERVERS'
                 .iter()
                 .any(|step| step.action == PlanActionV1::None)
         );
+
+        assert!(current.permissions.required.is_empty());
+        assert!(!current.author_capabilities.is_empty());
+
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("PRIVATE_DNS_SERVERS".into(), "10.0.0.54".into());
+        let update = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        assert!(
+            update
+                .steps
+                .iter()
+                .any(|step| step.action == PlanActionV1::Update)
+        );
+        assert!(
+            update
+                .permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        assert!(
+            update
+                .permissions
+                .required
+                .iter()
+                .any(|p| matches!(p, PermissionV1::System { .. }))
+        );
+        assert_ne!(
+            current.fingerprint().unwrap(),
+            update.fingerprint().unwrap()
+        );
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("PRIVATE_DNS_SERVERS".into(), "10.0.0.53".into());
 
         runtime.host().put_file(&resource, b"foreign".to_vec());
         let conflicted = runtime.plan_managed_sys(request).await.unwrap();

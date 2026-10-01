@@ -61,6 +61,10 @@ fn main() -> Result<()> {
 }
 
 async fn run(cli: Cli) -> Result<()> {
+    cli::with_security_plan_verbosity(cli.command.security_plan_verbose(), run_command(cli)).await
+}
+
+async fn run_command(cli: Cli) -> Result<()> {
     if let Commands::Init(cmd) = &cli.command {
         return cli::init::handle_init(cmd.yes).await;
     }
@@ -223,6 +227,7 @@ async fn run(cli: Cli) -> Result<()> {
             target,
             replace_managed,
             yes,
+            ..
         } => handle_install_shim_approved(&config, &target, replace_managed, yes).await,
         Commands::Uninstall {
             target,
@@ -230,6 +235,7 @@ async fn run(cli: Cli) -> Result<()> {
             purge,
             dry_run,
             yes,
+            ..
         } => handle_uninstall_shim_approved(&config, &target, force, purge, dry_run, yes).await,
         Commands::App { command } => match command {
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
@@ -243,6 +249,7 @@ async fn run(cli: Cli) -> Result<()> {
                 dry_run,
                 replace_managed,
                 yes,
+                ..
             } => {
                 Box::pin(apps::handle_install_approved(
                     &config,
@@ -258,6 +265,7 @@ async fn run(cli: Cli) -> Result<()> {
                 file,
                 force,
                 yes,
+                ..
             } => {
                 Box::pin(apps::handle_refresh_approved(
                     &config,
@@ -268,7 +276,7 @@ async fn run(cli: Cli) -> Result<()> {
                 ))
                 .await
             }
-            AppCommands::Recover { yes } => {
+            AppCommands::Recover { yes, .. } => {
                 Box::pin(apps::handle_recover_approved(&config, yes)).await
             }
             AppCommands::Uninstall {
@@ -277,6 +285,7 @@ async fn run(cli: Cli) -> Result<()> {
                 purge,
                 dry_run,
                 yes,
+                ..
             } => {
                 Box::pin(apps::handle_uninstall_approved(
                     &config,
@@ -289,10 +298,10 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
             }
             AppCommands::Artifact { command } => match command {
-                AppArtifactCommands::Apply { app_id, yes } => {
+                AppArtifactCommands::Apply { app_id, yes, .. } => {
                     Box::pin(apps::handle_build_approved(&config, &app_id, yes)).await
                 }
-                AppArtifactCommands::Remove { app_id, yes } => {
+                AppArtifactCommands::Remove { app_id, yes, .. } => {
                     Box::pin(apps::handle_unbuild_approved(&config, &app_id, yes)).await
                 }
             },
@@ -422,7 +431,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
             ShellCommands::Info { target } => Box::pin(shells::handle_info(&config, &target)).await,
-            ShellCommands::Recover { yes } => {
+            ShellCommands::Recover { yes, .. } => {
                 Box::pin(shells::handle_recover_approved(&config, yes)).await
             }
             ShellCommands::Install {
@@ -430,12 +439,14 @@ async fn run(cli: Cli) -> Result<()> {
                 dry_run: true,
                 replace_managed: _,
                 yes: _,
+                ..
             } => Box::pin(shells::handle_install_dry_run(&config, target.as_deref())).await,
             ShellCommands::Install {
                 target,
                 dry_run: false,
                 replace_managed,
                 yes,
+                ..
             } => {
                 Box::pin(shells::handle_install_approved(
                     &config,
@@ -450,6 +461,7 @@ async fn run(cli: Cli) -> Result<()> {
                 purge,
                 dry_run,
                 yes,
+                ..
             } => {
                 Box::pin(shells::handle_uninstall_approved(
                     &config,
@@ -675,7 +687,7 @@ async fn run(cli: Cli) -> Result<()> {
             },
         },
         Commands::Sys { command } => match command {
-            SysCommands::Recover { yes } => {
+            SysCommands::Recover { yes, .. } => {
                 Box::pin(sys::handle_recover_approved(&config, yes)).await
             }
             SysCommands::List { all } => Box::pin(sys::handle_list(&config, all)).await,
@@ -711,20 +723,26 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
             }
             SysCommands::Profile { command } => match command {
-                SysProfileCommands::Enable { item, dry_run, yes } => {
+                SysProfileCommands::Enable {
+                    item, dry_run, yes, ..
+                } => {
                     Box::pin(sys::handle_profile_enable_approved(
                         &config, &item, dry_run, yes,
                     ))
                     .await
                 }
-                SysProfileCommands::Disable { item, dry_run, yes } => {
+                SysProfileCommands::Disable {
+                    item, dry_run, yes, ..
+                } => {
                     Box::pin(sys::handle_profile_disable_approved(
                         &config, &item, dry_run, yes,
                     ))
                     .await
                 }
             },
-            SysCommands::Apply { item, dry_run, yes } => {
+            SysCommands::Apply {
+                item, dry_run, yes, ..
+            } => {
                 Box::pin(sys::handle_apply_approved(
                     &config,
                     item.as_deref(),
@@ -733,9 +751,9 @@ async fn run(cli: Cli) -> Result<()> {
                 ))
                 .await
             }
-            SysCommands::Uninstall { item, dry_run, yes } => {
-                Box::pin(sys::handle_uninstall_approved(&config, &item, dry_run, yes)).await
-            }
+            SysCommands::Uninstall {
+                item, dry_run, yes, ..
+            } => Box::pin(sys::handle_uninstall_approved(&config, &item, dry_run, yes)).await,
         },
         Commands::Ssh {
             remote_shell,
@@ -2187,14 +2205,14 @@ mod tests {
         let cli = Cli::try_parse_from(["shine", "install", "proxy"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Install { target, replace_managed: false, yes: false } if target == "proxy"
+            Commands::Install { target, replace_managed: false, yes: false, .. } if target == "proxy"
         ));
 
         let cli =
             Cli::try_parse_from(["shine", "install", "app/starship", "--replace-managed"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Install { target, replace_managed: true, yes: false } if target == "app/starship"
+            Commands::Install { target, replace_managed: true, yes: false, .. } if target == "app/starship"
         ));
 
         let cli = Cli::try_parse_from(["shine", "uninstall", "starship"]).unwrap();
@@ -2205,8 +2223,7 @@ mod tests {
                 force: false,
                 purge: false,
                 dry_run: false,
-                yes: false,
-            } if target == "starship"
+                yes: false, .. } if target == "starship"
         ));
     }
 
@@ -2429,7 +2446,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::App {
-                command: AppCommands::Recover { yes: false }
+                command: AppCommands::Recover { yes: false, .. }
             }
         ));
 
@@ -2437,7 +2454,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::App {
-                command: AppCommands::Recover { yes: true }
+                command: AppCommands::Recover { yes: true, .. }
             }
         ));
     }
@@ -2448,7 +2465,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Shell {
-                command: ShellCommands::Recover { yes: false }
+                command: ShellCommands::Recover { yes: false, .. }
             }
         ));
 
@@ -2456,7 +2473,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Shell {
-                command: ShellCommands::Recover { yes: true }
+                command: ShellCommands::Recover { yes: true, .. }
             }
         ));
     }
@@ -2467,7 +2484,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Sys {
-                command: SysCommands::Recover { yes: false }
+                command: SysCommands::Recover { yes: false, .. }
             }
         ));
 
@@ -2475,7 +2492,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Sys {
-                command: SysCommands::Recover { yes: true }
+                command: SysCommands::Recover { yes: true, .. }
             }
         ));
     }
@@ -2738,8 +2755,7 @@ mod tests {
                 command: SysCommands::Apply {
                     item: Some(ref item),
                     dry_run: true,
-                    yes: false
-                }
+                    yes: false, .. }
             } if item == "split-dns"
         ));
 
@@ -2750,8 +2766,7 @@ mod tests {
                 command: SysCommands::Uninstall {
                     ref item,
                     dry_run: false,
-                    yes: false
-                }
+                    yes: false, .. }
             } if item == "split-dns"
         ));
     }

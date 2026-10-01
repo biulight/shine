@@ -37,6 +37,15 @@ bugs. Check this list before changing the modules named in each entry.
   preview contract. Specialized operations use `sys-bootstrap`, `app-refresh`,
   `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
   lifecycle Plans or `LifecycleResultV1` operations.
+- **Filesystem summaries are Core-attributed review data.** Optional `filesystem_review` groups
+  bind exact permissions and their typed purpose/target into the Plan fingerprint. CLI summaries
+  never infer ownership from path prefixes or suffixes, never remove required permissions, and
+  leave user resources, ambiguous/unclassified effects, blockers and recovery paths explicit.
+  `--verbose` restores the complete review; no display mode creates directory-wide access (ADR 0094).
+- **No-op capabilities are decided by Core, never hidden by the renderer.** Current App files
+  and current managed Sys items do not contribute operation permissions. Their observations and
+  author statements remain bound; generators, hooks, shared transactions, and blocked Sys items
+  retain independent requirements. Changes after review still invalidate approval.
 - **Bootstrap permission provenance is bound review data.** Target-local and shared permission
   scopes are captured before merging; their union must equal the aggregate required set. Scopes
   contain only safe capability identities/diagnostics and enter the Plan fingerprint. They do not
@@ -428,6 +437,10 @@ bugs. Check this list before changing the modules named in each entry.
   restoring exact resources. Any conflicting receipt, changed destination or rollback identity, or
   occupied rollback path blocks and preserves state. Foreign and modified launchers do not inherit
   this proof; shared snapshot/render state and profile sentinel blocks use separate actions.
+- **Shell upgrade retains receipt ownership across source relocation.** Planning and execution's
+  launcher filter both include the selected command's recorded source/rendered paths, even when
+  current preset roots change. Empty snapshot receipt-transition sets remain invalid; unrelated
+  launchers are never adopted merely because the operation is an upgrade.
 - **An external Shell snapshot is category-owned, and receipt presence is not its commit marker.**
   `ReplaceShellSnapshot` applies only to approved snapshot-mode selections whose selected commands
   require no rendering. It binds the whole sorted category tree, deterministic sibling stage and
