@@ -11846,9 +11846,29 @@ target = '$HOME/.config/disabled.txt'
             purpose("home:.zshrc.shine.rollback"),
             BTreeSet::from([FilesystemPurposeV1::Recovery])
         );
+        // Launcher resources follow the compiling host, even though this fixture
+        // selects Linux/Bash to discover the .sh source. Windows installs both shims.
+        #[cfg(unix)]
+        let installation_paths_expected = ["shine:bin/demo", "shine:shell/profile.sh"];
+        #[cfg(not(unix))]
+        let installation_paths_expected = [
+            "shine:bin/demo.ps1",
+            "shine:bin/demo.cmd",
+            "shine:shell/profile.sh",
+        ];
+        let installation_paths = plan
+            .filesystem_review
+            .iter()
+            .filter(|group| group.purpose == FilesystemPurposeV1::Installation)
+            .flat_map(|group| group.permissions.iter())
+            .filter_map(|permission| match permission {
+                PermissionV1::Filesystem { path, .. } => Some(path.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
         assert_eq!(
-            purpose("shine:bin/demo"),
-            BTreeSet::from([FilesystemPurposeV1::Installation])
+            installation_paths,
+            BTreeSet::from(installation_paths_expected)
         );
         for path in [
             "shine:shell-manifest.toml",

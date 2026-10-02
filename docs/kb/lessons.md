@@ -1,5 +1,28 @@
 # Lessons Learned
 
+## 2026-10-02 — Filesystem review tests must cover native launcher resources
+
+- **Symptom**: Windows CI found no installation-purpose permission for `shine:bin/demo`.
+- **Cause**: the Shell review test assumed a Unix launcher name. Its Linux/Bash fixture
+  selects `.sh` sources, but launcher construction still follows compile-time host rules:
+  one extensionless resource on Unix, both `.ps1` and `.cmd` shims on Windows.
+- **Fix**: assert the exact host-specific set of installation paths, covering both Windows
+  shims while retaining the maintenance, recovery, permission-subset and read-only assertions.
+- **Rule**: a simulated runtime platform does not override native launcher construction.
+
+## 2026-10-01 — OSC deadline tests must not depend on CI scheduling
+
+- **Symptom**: macOS CI returned only three bytes in the 50 ms fragmented-reply test
+  with a 200 ms total deadline.
+- **Cause**: the test used a writer thread, real sleeps, and a wall-clock deadline;
+  scheduler delays could exhaust the budget even between readable bytes. Its no-reply
+  fixture also closed the socket immediately, testing EOF instead of timeout.
+- **Fix**: exercise the production deadline loop with a virtual clock and scheduled bytes,
+  asserting the remaining total budget on every read. Keep separate real socket and PTY
+  checks with generous integration budgets, and explicitly cover socket EOF.
+- **Rule**: test precise timeout policy with controlled time; test OS I/O separately.
+  Do not increase production timeouts to accommodate test-runner contention.
+
 ## 2026-09-30 — Derive operation permissions after no-op assessment
 
 Bulk upgrade listed unchanged App destinations and administrator/system access for current Sys
@@ -1322,7 +1345,7 @@ the second was the real blocker.
   that *checked revents* showed `revents=POLLNVAL, POLLIN=False`. The mistake that cost a round:
   an earlier `poll` probe read the fd whenever poll returned *any* event and so "passed",
   masking the missing `POLLIN`. Always inspect `revents`, don't just test "poll returned".
-- **Why the tests missed both**: the `matrix_*` tests drive the loop over a `UnixStream` socket
+- **Why the tests missed both**: the original `matrix_*` tests drove the loop over a `UnixStream` socket
   pair — no line discipline (so canonical mode never applied) and no tty (so the macOS
   `poll`/`POLLNVAL` behavior never applied). The `openpty` regression test
   (`read_loop_reads_newline_free_response_through_pty`) exercises canonical mode on a real pty, but

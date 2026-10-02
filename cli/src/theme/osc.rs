@@ -142,26 +142,33 @@ fn wait_readable(fd: RawFd, timeout: Duration) -> std::io::Result<bool> {
 /// [`MAX_RESPONSE_LEN`] or on any read error; the caller treats a
 /// non-terminated response as invalid (PRD §6.2: "半包...均静默失败").
 pub(super) fn read_until_terminator_or_deadline(fd: RawFd, deadline: Instant) -> Vec<u8> {
-    let mut response = Vec::with_capacity(32);
-    loop {
-        if response.len() >= MAX_RESPONSE_LEN {
-            break;
-        }
-        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-            break;
-        };
-        match wait_readable(fd, remaining) {
-            Ok(true) => {}
-            Ok(false) | Err(_) => break,
+    read_response_until_deadline(deadline, Instant::now, |remaining| {
+        if !wait_readable(fd, remaining).ok()? {
+            return None;
         }
         let mut byte = [0u8; 1];
         // SAFETY: `fd` is open for the duration of this call (caller
         // contract); `byte` is a valid one-byte buffer for `read` to fill.
         let n = unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) };
-        if n <= 0 {
-            break; // EOF or error: stop, do not retry.
-        }
-        response.push(byte[0]);
+        (n > 0).then_some(byte[0]) // EOF or error: stop, do not retry.
+    })
+}
+
+/// Shares the production deadline policy with deterministic timing tests.
+fn read_response_until_deadline(
+    deadline: Instant,
+    mut now: impl FnMut() -> Instant,
+    mut read_byte: impl FnMut(Duration) -> Option<u8>,
+) -> Vec<u8> {
+    let mut response = Vec::with_capacity(32);
+    while response.len() < MAX_RESPONSE_LEN {
+        let Some(remaining) = deadline.checked_duration_since(now()) else {
+            break;
+        };
+        let Some(byte) = read_byte(remaining) else {
+            break;
+        };
+        response.push(byte);
         if response.ends_with(TERMINATOR) {
             break;
         }
@@ -217,8 +224,8 @@ pub fn query_terminal_theme(budget: Duration) -> Option<Theme> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::os::unix::net::UnixStream;
-    use std::thread;
 
     #[test]
     fn parse_osc_response_extracts_theme_from_well_formed_reply() {
@@ -233,32 +240,38 @@ mod tests {
         assert_eq!(parse_osc_response(b""), None);
     }
 
-    /// Reproduces the exact PRD §2.1 matrix — a duplex byte stream (not a
-    /// real pty) driving the same `poll`+`read` deadline logic that runs
-    /// against `/dev/tty` in production. This is faithful for what actually
-    /// matters here (the total-deadline read policy, which doesn't care
-    /// whether the fd is a socket or a tty) while staying deterministic and
-    /// CI-safe. tty-specific echo control is covered separately by
-    /// `EchoGuard`; real end-to-end tty behavior was verified manually
-    /// against a live terminal during the PRD's own root-cause investigation.
+    /// Drive the production deadline policy with scheduled bytes and a virtual
+    /// clock. Real sleeps can overshoot under CI load, even between ready bytes.
+    /// Socket and PTY tests below cover the actual select/read adapter separately.
     fn run_matrix_case(
         chunks: Vec<(&'static [u8], Duration)>,
         deadline_budget: Duration,
     ) -> Vec<u8> {
-        let (rx, tx) = UnixStream::pair().expect("unix socket pair");
-        let writer = thread::spawn(move || {
-            let mut tx = tx;
-            for (chunk, gap) in chunks {
-                thread::sleep(gap);
-                let _ = tx.write_all(chunk);
-            }
+        let start = Instant::now();
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut arrival = Duration::ZERO;
+        let mut bytes = chunks.into_iter().flat_map(|(chunk, gap)| {
+            arrival += gap;
+            chunk.iter().map(move |&byte| (arrival, byte))
         });
-
-        let fd = rx.as_raw_fd();
-        let deadline = Instant::now() + deadline_budget;
-        let result = read_until_terminator_or_deadline(fd, deadline);
-        writer.join().unwrap();
-        result
+        read_response_until_deadline(
+            start + deadline_budget,
+            || start + elapsed.get(),
+            |remaining| {
+                assert_eq!(remaining, deadline_budget - elapsed.get());
+                match bytes.next() {
+                    Some((at, byte)) if at <= elapsed.get() + remaining => {
+                        elapsed.set(at);
+                        Some(byte)
+                    }
+                    _ => {
+                        // No reply means waiting until timeout, not socket EOF.
+                        elapsed.set(elapsed.get() + remaining);
+                        None
+                    }
+                }
+            },
+        )
     }
 
     const FULL_REPLY: &[u8] = b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\";
@@ -305,13 +318,8 @@ mod tests {
 
     #[test]
     fn matrix_no_reply_returns_empty_at_deadline() {
-        let start = Instant::now();
         let result = run_matrix_case(vec![], Duration::from_millis(80));
         assert!(result.is_empty());
-        assert!(
-            start.elapsed() < Duration::from_millis(500),
-            "no-reply path must not hang past its deadline"
-        );
     }
 
     #[test]
@@ -328,6 +336,41 @@ mod tests {
             Duration::from_millis(50),
         );
         assert_eq!(result, &FULL_REPLY[..2]);
+    }
+
+    #[test]
+    fn read_loop_reads_buffered_response_through_socket() {
+        let (rx, mut tx) = UnixStream::pair().expect("unix socket pair");
+        tx.write_all(FULL_REPLY).unwrap();
+        // Generous budget for syscall integration; exact timing is tested above.
+        let result = read_until_terminator_or_deadline(
+            rx.as_raw_fd(),
+            Instant::now() + Duration::from_secs(5),
+        );
+        assert_eq!(result, FULL_REPLY);
+    }
+
+    #[test]
+    fn read_loop_stops_at_socket_eof() {
+        let (rx, mut tx) = UnixStream::pair().expect("unix socket pair");
+        tx.write_all(&FULL_REPLY[..2]).unwrap();
+        drop(tx);
+        let result = read_until_terminator_or_deadline(
+            rx.as_raw_fd(),
+            Instant::now() + Duration::from_secs(5),
+        );
+        assert_eq!(result, &FULL_REPLY[..2]);
+    }
+
+    #[test]
+    fn read_loop_does_not_read_after_deadline() {
+        let now = Instant::now();
+        let result = read_response_until_deadline(
+            now,
+            || now + Duration::from_millis(1),
+            |_| panic!("must not read after the total deadline"),
+        );
+        assert!(result.is_empty());
     }
 
     #[test]
@@ -385,7 +428,7 @@ mod tests {
             let n = unsafe { libc::write(master, reply.as_ptr().cast(), reply.len()) };
             assert_eq!(n, reply.len() as isize, "short write to pty master");
 
-            let deadline = Instant::now() + Duration::from_millis(500);
+            let deadline = Instant::now() + Duration::from_secs(5);
             read_until_terminator_or_deadline(slave, deadline)
         };
 
