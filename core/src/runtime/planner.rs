@@ -1737,7 +1737,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         let mut selected = Vec::new();
         for file in candidates {
             let destination = self.app_destination(&category, &file)?;
-            let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
+            let Some(entry) = manifest
+                .find_by_dest(&destination)
+                .filter(|entry| {
+                    entry.source
+                        == format!("app/{}/{}", request.category, file.source_rel.display())
+                })
+                .cloned()
+            else {
                 if request.file.is_some() {
                     bail!(generated_file_not_installed_message(
                         &request.category,
@@ -2874,17 +2881,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     });
                 let mut shared_snapshot_changes = false;
                 if untransformed_snapshot {
-                    let prefix = format!("shell/{}/", category.name);
-                    let expected = self
-                        .presets()
-                        .files()
-                        .iter()
-                        .filter_map(|(logical, bytes)| {
-                            logical.strip_prefix(&prefix).map(|relative| {
-                                (PathBuf::from(relative), crate::install::hash_content(bytes))
-                            })
-                        })
-                        .collect::<BTreeMap<_, _>>();
+                    let expected = self.shell_snapshot_identities(&category.name);
                     let destination = self
                         .context()
                         .shine_dir
@@ -6432,10 +6429,10 @@ async fn path_exists(host: &impl FileSystemObservationHost, path: &Path) -> Resu
     }
 }
 
-async fn shell_snapshot_tree_current(
+pub(super) async fn shell_snapshot_tree_current(
     host: &impl FileSystemObservationHost,
     root: &Path,
-    expected: &BTreeMap<PathBuf, u64>,
+    expected: &BTreeMap<PathBuf, (u64, bool)>,
 ) -> Result<bool> {
     let metadata = match host.metadata(root).await {
         Ok(metadata) => metadata,
@@ -6468,7 +6465,10 @@ async fn shell_snapshot_tree_current(
                         path.strip_prefix(root)
                             .context("planned Shell snapshot escaped its root")?
                             .to_path_buf(),
-                        crate::install::hash_content(&bytes),
+                        (
+                            crate::install::hash_content(&bytes),
+                            cfg!(unix) && metadata.unix_mode.is_some_and(|mode| mode & 0o111 != 0),
+                        ),
                     );
                 }
                 FileKind::Symlink => return Ok(false),

@@ -26,7 +26,8 @@ Action IR v1 adds `ReplaceShellSnapshot` for approved install or upgrade of an e
 selection whose selected commands require no transforms. The action target is the category, not an
 individual command. It binds:
 
-- the exact sorted previous and desired regular-file tree identities without file payloads;
+- the exact sorted previous and desired regular-file tree identities without file payloads,
+  including captured executable intent on Unix;
 - deterministic sibling `.shine.stage` and `.shine.rollback` directories;
 - every selected command's optional previous and required desired receipt;
 - an explicit per-action `receipt-committed` journal marker.

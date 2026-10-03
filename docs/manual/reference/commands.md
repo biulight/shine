@@ -105,7 +105,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 
 - `app info` and `update` do not run generators unless `--run-generators` is present.
 - `app refresh` runs a generated-file refresh explicitly. `--force` permits replacing a
-  user-modified managed destination.
+  user-modified managed destination. The installed receipt must belong to that exact category and
+  source file; `--force` cannot refresh a destination owned by another source.
 - `app uninstall --force` may delete user-modified managed content. Always preview it with
   `--dry-run`.
 - Use `shine app recover` when an interrupted App operation blocks later changes.

@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-03 — Snapshot modes, refresh ownership, and pack aliases need boundary tests
+
+- **Symptoms**: an external Shell install succeeded but its command failed with permission denied;
+  App refresh overwrote another source's destination; packing through a directory symlink wrote
+  the archive back into its source category.
+- **Causes**: Shell delivery retained bytes alone, refresh matched receipts by destination alone,
+  and pack compared lexical rather than resolved output directories.
+- **Fix**: restore and compare captured executable flags, bind them in new recovery identities,
+  require exact refresh source ownership, and resolve output parents before containment checks.
+- **Rule**: test the delivered command, receipt identity, and resolved filesystem location—not
+  only successful installation, matching bytes, or path spelling.
+
 ## 2026-10-02 — Filesystem review tests must cover native launcher resources
 
 - **Symptom**: Windows CI found no installation-purpose permission for `shine:bin/demo`.

@@ -1799,6 +1799,9 @@ pub enum RollbackSupportV1 {
 pub struct ShellTreeFileV1 {
     pub relative_path: PathBuf,
     pub content_hash: u64,
+    /// Absent in legacy journals and on hosts without Unix executable modes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2608,6 +2611,7 @@ mod tests {
                 desired_files: vec![ShellTreeFileV1 {
                     relative_path: "demo.ts".into(),
                     content_hash: hash_content(b"fixture"),
+                    executable: None,
                 }],
                 receipts: Vec::new(),
             },

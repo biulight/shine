@@ -96,7 +96,8 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 
 The returned hash identifies the bundle. `shine.test.toml` remains author-only and is not included.
 A pack-policy failure must be fixed in the source; `--force` only replaces the output file and never
-bypasses validation or policy.
+bypasses validation or policy. The output directory is checked after resolving symbolic links and
+parent components (`..`); it must remain outside the category, even with `--force`.
 
 ## Migrate a 1.x source
 

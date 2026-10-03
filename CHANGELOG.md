@@ -9,6 +9,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Preserve external Shell snapshot executable flags and repair permission-only drift on upgrade.
+- Require exact source ownership for App generator refresh, including when `--force` is used.
+- Reject Preset bundle outputs inside their source category through symbolic links or `..` paths.
+
 - Preserve existing Windows configuration and manifest files when replacement fails.
 - Switch managed Git overlays to the configured repository when relinking, and follow the remote
   default branch when no branch is selected.

@@ -59,10 +59,17 @@ pub(crate) struct ShellLegacyLauncherRemoval {
     pub resources: Vec<PreparedLauncherResource>,
 }
 
+#[derive(Clone)]
+pub(crate) struct ShellSnapshotFile {
+    pub relative_path: PathBuf,
+    pub bytes: Vec<u8>,
+    pub executable: bool,
+}
+
 pub(crate) struct ShellSnapshotReplacement {
     pub target: String,
     pub destination: PathBuf,
-    pub files: Vec<(PathBuf, Vec<u8>)>,
+    pub files: Vec<ShellSnapshotFile>,
     pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
 }
 
@@ -142,7 +149,7 @@ enum PreparedShellAction {
         stage: PathBuf,
         rollback: PathBuf,
         previous_present: bool,
-        files: Vec<(PathBuf, Vec<u8>)>,
+        files: Vec<ShellSnapshotFile>,
     },
     RenderedFile {
         destination: PathBuf,
@@ -2068,11 +2075,19 @@ where
                     previous_present,
                     files,
                 } => {
-                    for (relative, bytes) in files {
+                    for file in files {
                         self.host()
-                            .write_atomic(&stage.join(relative), bytes)
+                            .write_atomic(&stage.join(&file.relative_path), &file.bytes)
                             .await
                             .map_err(|error| error.into_anyhow("staging Shell snapshot"))?;
+                        if file.executable {
+                            self.host()
+                                .set_executable(&stage.join(&file.relative_path))
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow("setting Shell snapshot executable mode")
+                                })?;
+                        }
                     }
                     if *previous_present {
                         self.host()
@@ -3606,12 +3621,13 @@ fn receipt_contract(entry: &ShellManifestEntry) -> ShellLauncherReceiptV1 {
     }
 }
 
-fn shell_tree_contract(files: &[(PathBuf, Vec<u8>)]) -> Vec<ShellTreeFileV1> {
+fn shell_tree_contract(files: &[ShellSnapshotFile]) -> Vec<ShellTreeFileV1> {
     let mut contracts = files
         .iter()
-        .map(|(relative_path, bytes)| ShellTreeFileV1 {
-            relative_path: relative_path.clone(),
-            content_hash: hash_content(bytes),
+        .map(|file| ShellTreeFileV1 {
+            relative_path: file.relative_path.clone(),
+            content_hash: hash_content(&file.bytes),
+            executable: cfg!(unix).then_some(file.executable),
         })
         .collect::<Vec<_>>();
     contracts.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -3655,6 +3671,11 @@ async fn collect_shell_tree(
                             .context("Shell snapshot entry escaped its root")?
                             .to_path_buf(),
                         content_hash: hash_content(&bytes),
+                        executable: if cfg!(unix) {
+                            metadata.unix_mode.map(|mode| mode & 0o111 != 0)
+                        } else {
+                            None
+                        },
                     });
                 }
                 FileKind::Symlink => {
@@ -4320,18 +4341,27 @@ async fn observe_shell_tree(
     let Some(actual) = collect_shell_tree(host, root).await? else {
         return Ok(ShellTreeObservation::Missing);
     };
-    if actual == expected {
+    // Old journals omit executable intent; retain their content-only recovery contract.
+    let matches = |actual: &ShellTreeFileV1, expected: &ShellTreeFileV1| {
+        actual.relative_path == expected.relative_path
+            && actual.content_hash == expected.content_hash
+            && expected
+                .executable
+                .is_none_or(|value| actual.executable == Some(value))
+    };
+    if actual.len() == expected.len() && actual.iter().zip(expected).all(|(a, e)| matches(a, e)) {
         return Ok(ShellTreeObservation::Exact);
     }
     if allow_safe_partial {
         let expected = expected
             .iter()
-            .map(|file| (&file.relative_path, file.content_hash))
+            .map(|file| (&file.relative_path, file))
             .collect::<BTreeMap<_, _>>();
-        if actual
-            .iter()
-            .all(|file| expected.get(&file.relative_path).copied() == Some(file.content_hash))
-        {
+        if actual.iter().all(|file| {
+            expected
+                .get(&file.relative_path)
+                .is_some_and(|expected| matches(file, expected))
+        }) {
             return Ok(ShellTreeObservation::SafePartial);
         }
     }
@@ -4785,6 +4815,43 @@ mod tests {
         }));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn snapshot_recovery_binds_executable_intent_but_reads_legacy_journals() {
+        let host = InMemoryHost::new();
+        let root = std::env::temp_dir().join("shine-shell-mode-recovery");
+        host.put_file_with_mode(root.join("helper"), b"helper".to_vec(), 0o100755);
+        let expected = vec![ShellTreeFileV1 {
+            relative_path: "helper".into(),
+            content_hash: hash_content(b"helper"),
+            executable: Some(true),
+        }];
+        assert_eq!(
+            observe_shell_tree(&host, &root, &expected, false)
+                .await
+                .unwrap(),
+            ShellTreeObservation::Exact
+        );
+        host.set_mode(&root.join("helper"), 0o644).await.unwrap();
+        for partial in [false, true] {
+            assert_eq!(
+                observe_shell_tree(&host, &root, &expected, partial)
+                    .await
+                    .unwrap(),
+                ShellTreeObservation::Changed
+            );
+        }
+        let legacy_json = serde_json::json!({ "relative_path": "helper", "content_hash": hash_content(b"helper") });
+        let legacy: ShellTreeFileV1 = serde_json::from_value(legacy_json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&legacy).unwrap(), legacy_json);
+        assert_eq!(
+            observe_shell_tree(&host, &root, &[legacy], false)
+                .await
+                .unwrap(),
+            ShellTreeObservation::Exact
+        );
+    }
+
     #[tokio::test]
     async fn snapshot_recovery_blocks_changed_rollback_tree() {
         let host = InMemoryHost::new();
@@ -4796,10 +4863,12 @@ mod tests {
         let previous_files = vec![ShellTreeFileV1 {
             relative_path: PathBuf::from("demo.sh"),
             content_hash: hash_content(b"previous"),
+            executable: None,
         }];
         let desired_files = vec![ShellTreeFileV1 {
             relative_path: PathBuf::from("demo.sh"),
             content_hash: hash_content(b"desired"),
+            executable: None,
         }];
 
         assert_eq!(

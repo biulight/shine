@@ -174,6 +174,10 @@ bugs. Check this list before changing the modules named in each entry.
   Ordinary directory origins keep their existing spelling for receipt/trust compatibility. Links
   inside a preset tree remain excluded.
 
+- **App refresh requires exact receipt ownership.** Destination equality alone cannot select a
+  generated file: the receipt source must match the requested category and logical source file.
+  Both planning and execution enforce this even with force; a foreign receipt never authorizes
+  generator execution or reassignment of its destination.
 - **App executable environment is explicit.** Generators receive only fixed `SHINE_APP_*` contract
   variables plus their `generator.env` mappings. Artifacts receive only the fixed contract plus
   their `[artifact].env` mappings, whose sources must be declared by the category's
@@ -659,6 +663,11 @@ bugs. Check this list before changing the modules named in each entry.
 - **External source selection and installed state are separate.** Snapshot mode materializes
   effective shell categories below `<shine_dir>/installed/shell/`; launchers must never point at
   the user-owned external tree unless `external_shell_mode = "live"` is explicit.
+- **Shell snapshot delivery retains captured executable intent.** Both transactional raw trees and
+  transformed snapshots restore executable flags from immutable Preset inputs, never by reopening
+  source modes. Inspection and planning share content-plus-executable comparison so mode-only
+  changes and older broken snapshots require upgrade. New recovery tree identities bind the flag;
+  old journals that omit it retain their original content-only comparison.
 - **Live transforms are manifest-constrained.** Generated launchers may request only a canonical
   target recorded in `shell-manifest.toml`; the renderer writes only below `rendered_dir`, stores
   no env values in the manifest, uses atomic replacement, and fails rather than executing stale

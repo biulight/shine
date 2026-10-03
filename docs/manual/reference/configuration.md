@@ -163,7 +163,10 @@ and uses the resolved source for development trust; retargeting it requires revi
 root link is an error. Symbolic links inside the preset tree remain excluded from the snapshot.
 
 External shell categories default to `snapshot`: Shine copies them to
-`~/.shine/installed/shell/`. After source edits, inspect with `shine update` and apply with
+`~/.shine/installed/shell/`. On Unix, snapshots retain captured executable flags for scripts and
+helpers without copying ownership or privileged mode bits. Permission-only changes, including
+missing executable flags in an older installed snapshot, appear in `shine update` and are repaired
+by `shine upgrade`. After source edits, inspect with `shine update` and apply with
 `shine upgrade`. Set `external_shell_mode = "live"` only for development; source content takes effect
 on the next invocation, but changes to `target`, `runtime`, `transforms`, or `env` still require
 `shine upgrade` to rebuild managed entries. Live mode requires an explicit development trust grant;

@@ -84,7 +84,8 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 ```
 
 返回的 hash 用于标识 bundle。`shine.test.toml` 只供作者使用，不会进入 bundle。Pack policy 失败
-必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。
+必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。输出目录会在解析
+符号链接和父目录组件（`..`）后检查；即使使用 `--force`，也必须位于类别目录外。
 
 ## 迁移 1.x 来源
 

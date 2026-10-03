@@ -1082,7 +1082,14 @@ where
         let mut selected = Vec::new();
         for file in candidates {
             let destination = self.app_destination(&category, &file)?;
-            let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
+            let Some(entry) = manifest
+                .find_by_dest(&destination)
+                .filter(|entry| {
+                    entry.source
+                        == format!("app/{}/{}", request.category, file.source_rel.display())
+                })
+                .cloned()
+            else {
                 if request.file.is_some() {
                     bail!(generated_file_not_installed_message(
                         &request.category,

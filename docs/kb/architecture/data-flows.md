@@ -278,7 +278,10 @@ live Clap preset subcommands → generated long help
 Packing validates one immutable category snapshot, then separately walks the physical category with
 an observation-only host so ignored trees and symlinks cannot evade policy. After policy checks,
 Core sorts logical files, excludes the author-only fixture, builds the versioned hash/mode manifest,
-and encodes fixed-metadata tar.gz bytes. The CLI performs only the requested atomic output write.
+and encodes fixed-metadata tar.gz bytes. The CLI resolves the category and output parent through
+symlinks and parent components, rejects output inside the category, and performs the requested
+atomic output write at the resolved parent. Missing output directories are created only after this
+check; a final output symlink is replaced as a directory entry and requires `--force`.
 
 ```text
 category → immutable validation → physical policy scan

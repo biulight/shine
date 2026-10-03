@@ -6,7 +6,7 @@ use super::shell_action_executor::{
     ShellCacheRemoval, ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation,
     ShellLauncherRemoval, ShellLauncherUpdate, ShellLegacyLauncherRemoval,
     ShellProfilePreparedFile, ShellProfileReconciliation, ShellRenderedFileRemoval,
-    ShellRenderedFileReplacement, ShellSharedReplacements, ShellSnapshotRemoval,
+    ShellRenderedFileReplacement, ShellSharedReplacements, ShellSnapshotFile, ShellSnapshotRemoval,
     ShellSnapshotReplacement,
 };
 use super::{
@@ -1220,17 +1220,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             if !transactional_snapshot_categories.contains(&category.name) {
                 continue;
             }
-            let prefix = format!("shell/{}/", category.name);
-            let files = self
-                .presets()
-                .files()
-                .iter()
-                .filter_map(|(logical, bytes)| {
-                    logical
-                        .strip_prefix(&prefix)
-                        .map(|relative| (PathBuf::from(relative), bytes.clone()))
-                })
-                .collect::<Vec<_>>();
+            let files = self.shell_snapshot_files(&category.name);
             let mut receipt_transitions = Vec::new();
             for file in &category.files {
                 let target = format!("shell/{}/{}", category.name, file.command_name);
@@ -2291,6 +2281,52 @@ pub(super) fn planned_shell_managed_roots(
 }
 
 impl<H> CoreRuntime<H> {
+    pub(super) fn shell_snapshot_identities(
+        &self,
+        category: &str,
+    ) -> BTreeMap<PathBuf, (u64, bool)> {
+        let prefix = format!("shell/{category}/");
+        self.presets()
+            .files()
+            .iter()
+            .filter_map(|(logical, bytes)| {
+                logical.strip_prefix(&prefix).map(|relative| {
+                    (
+                        PathBuf::from(relative),
+                        (
+                            crate::install::hash_content(bytes),
+                            cfg!(unix)
+                                && self
+                                    .presets()
+                                    .file(logical)
+                                    .is_some_and(|file| file.executable),
+                        ),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn shell_snapshot_files(&self, category: &str) -> Vec<ShellSnapshotFile> {
+        let prefix = format!("shell/{category}/");
+        self.presets()
+            .files()
+            .iter()
+            .filter_map(|(logical, bytes)| {
+                logical
+                    .strip_prefix(&prefix)
+                    .map(|relative| ShellSnapshotFile {
+                        relative_path: PathBuf::from(relative),
+                        bytes: bytes.clone(),
+                        executable: self
+                            .presets()
+                            .file(logical)
+                            .is_some_and(|file| file.executable),
+                    })
+            })
+            .collect()
+    }
+
     pub fn desired_shell_source_path(&self, category: &str, source_rel: &Path) -> PathBuf {
         let logical = format!("shell/{category}/{}", shell_logical_path(source_rel));
         self.presets()
@@ -2511,7 +2547,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         }
         let mut changed = 0;
         for category in categories {
-            let prefix = format!("shell/{}/", category.name);
             let destination = self
                 .context()
                 .shine_dir
@@ -2525,17 +2560,17 @@ impl<H: FileSystemHost> CoreRuntime<H> {
                 .shine_dir
                 .join("installed/shell")
                 .join(format!(".{}-{}", category.name, uuid::Uuid::new_v4()));
-            for (logical, bytes) in self
-                .presets()
-                .files()
-                .iter()
-                .filter(|(path, _)| path.starts_with(&prefix))
-            {
-                let relative = logical.strip_prefix(&prefix).unwrap_or_default();
+            for file in self.shell_snapshot_files(&category.name) {
+                let path = stage.join(&file.relative_path);
                 self.host()
-                    .write_atomic(&stage.join(relative), bytes)
+                    .write_atomic(&path, &file.bytes)
                     .await
                     .map_err(|error| error.into_anyhow("staging Shell snapshot"))?;
+                if file.executable {
+                    self.host().set_executable(&path).await.map_err(|error| {
+                        error.into_anyhow("setting Shell snapshot executable mode")
+                    })?;
+                }
             }
             let backup = self
                 .context()
@@ -2580,36 +2615,13 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         {
             return Ok(true);
         }
-        let prefix = format!("shell/{category}/");
-        let expected = self
-            .presets()
-            .files()
-            .iter()
-            .filter_map(|(path, bytes)| {
-                path.strip_prefix(&prefix)
-                    .map(|relative| (PathBuf::from(relative), bytes))
-            })
-            .collect::<BTreeMap<_, _>>();
+        let expected = self.shell_snapshot_identities(category);
         let root = self
             .context()
             .shine_dir
             .join("installed/shell")
             .join(category);
-        let actual = collect_host_files(self.host(), &root).await?;
-        if expected.keys().cloned().collect::<BTreeSet<_>>() != actual {
-            return Ok(false);
-        }
-        for (relative, bytes) in expected {
-            if self
-                .host()
-                .read(&root.join(relative))
-                .await
-                .map_or(true, |current| current != *bytes)
-            {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        super::planner::shell_snapshot_tree_current(self.host(), &root, &expected).await
     }
 
     pub async fn update_shell_manifest(
@@ -3611,36 +3623,6 @@ async fn save_shell_manifest_with_host(
     host.write_atomic(&shine_dir.join(SHELL_MANIFEST_FILE), bytes.as_bytes())
         .await
         .map_err(|error| error.into_anyhow("failed to write shell manifest"))
-}
-
-async fn collect_host_files(host: &impl FileSystemHost, root: &Path) -> Result<BTreeSet<PathBuf>> {
-    let mut result = BTreeSet::new();
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(directory) = pending.pop() {
-        let entries = match host.read_dir(&directory).await {
-            Ok(entries) => entries,
-            Err(error) if error.is_not_found() => return Ok(result),
-            Err(error) => return Err(error.into_anyhow("reading Shell snapshot")),
-        };
-        for path in entries {
-            match host.metadata(&path).await {
-                Ok(metadata) if metadata.kind == super::FileKind::Directory => pending.push(path),
-                Ok(metadata) if metadata.kind == super::FileKind::File => {
-                    result.insert(
-                        path.strip_prefix(root)
-                            .context("Shell snapshot escaped root")?
-                            .to_path_buf(),
-                    );
-                }
-                Ok(_) => bail!(
-                    "Shell snapshot contains unsupported symlink: {}",
-                    path.display()
-                ),
-                Err(error) => return Err(error.into_anyhow("inspecting Shell snapshot")),
-            }
-        }
-    }
-    Ok(result)
 }
 
 fn shell_platform_matches(

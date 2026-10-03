@@ -144,7 +144,9 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 预设树内部的符号链接仍不参与快照。
 
 使用外部 `presets_dir` 时，Shell 类别默认以 `snapshot` 模式复制到
-`~/.shine/installed/shell/` 后再运行。修改来源文件后，先用 `shine update` 检查，再用
+`~/.shine/installed/shell/` 后再运行。在 Unix 上，快照保留捕获时脚本和辅助文件的可执行标记，
+不复制所有者或特权权限位。仅执行权限变化（包括旧安装快照缺少可执行标记）也会出现在
+`shine update` 中，并由 `shine upgrade` 修复。修改来源文件后，先用 `shine update` 检查，再用
 `shine upgrade` 应用，便于审阅变化且与 app 配置的更新流程一致。仅在编写和调试预设时，才把
 `external_shell_mode` 设为 `live`：源文件内容会在下次调用时生效；但 `target`、`runtime`、
 `transforms` 和 `env` 等部署元数据变更仍须运行 `shine upgrade` 重新生成受管入口。Live 模式要求

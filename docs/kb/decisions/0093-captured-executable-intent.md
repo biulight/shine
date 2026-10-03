@@ -21,7 +21,11 @@ adds a framed marker to that file's digest input. Non-executable files keep thei
 Checkout paths, ownership, other permission bits, and setuid/setgid flags remain excluded.
 
 App execution sets executable bits on captured helpers in both the effective source copy and the
-overlay subset. Native entrypoints retain their existing explicit executable treatment. Embedded
+overlay subset. External Shell delivery also restores captured executable intent in raw and
+transformed snapshot paths. Inspection and planning compare executable flags as well as content,
+so upgrade repairs older snapshots that lost those flags. New Shell tree journal identities bind
+executable intent; legacy journals without that optional field retain their content-only recovery
+contract. Native App entrypoints retain their existing explicit executable treatment. Embedded
 distribution inputs remain byte-only unless their builder supplies executable intent explicitly.
 
 ## Consequences

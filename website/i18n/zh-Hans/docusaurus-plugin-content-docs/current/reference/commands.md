@@ -89,7 +89,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 ```
 
 - `app info` 和 `update` 只有在传入 `--run-generators` 时才会运行生成器。
-- `app refresh` 显式刷新生成文件；`--force` 允许替换用户修改过的受管目标。
+- `app refresh` 显式刷新生成文件；`--force` 允许替换用户修改过的受管目标。安装收据必须属于
+  该类别下的同一个源文件；`--force` 不能刷新由其他来源管理的目标。
 - `app uninstall --force` 可能删除用户修改过的受管内容，务必先使用 `--dry-run` 预览。
 - App 操作中断并阻塞后续变更时，使用 `shine app recover`。
 
