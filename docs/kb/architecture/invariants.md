@@ -44,7 +44,10 @@ bugs. Check this list before changing the modules named in each entry.
   `--verbose` restores exact permissions in displayed scopes; upgrade review omits entirely
   unchanged scopes by default, and `--verbose --full-plan` restores the complete review. Routine
   App/Shell cache writes share one internal maintenance summary in compact upgrade review;
-  verbose review retains their details, and conflicts/unknown diagnostics stay explicit. The
+  verbose review retains their details, and conflicts/unknown diagnostics stay explicit. Cache-only
+  App permissions may move to maintenance only with unique Core maintenance provenance; known
+  stale-source preservation notices then appear under Warnings. Ambiguous effects retain their
+  original scope. The
   complete Plan always binds approval (ADRs 0094, 0097, 0099). No display mode creates directory-wide
   access.
 - **No-op capabilities are decided by Core, never hidden by the renderer.** Current App files

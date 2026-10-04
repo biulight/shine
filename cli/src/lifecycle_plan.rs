@@ -306,14 +306,16 @@ async fn review_plans_with_render_mode(
     for line in rendered {
         println!("{line}");
     }
-    if planned.iter().any(|(_, plan)| {
-        plan.steps.iter().any(|step| {
-            step.resource
-                .as_deref()
-                .is_some_and(|resource| resource.starts_with("preset-cache:"))
-                && matches!(step.action, PlanActionV1::Create | PlanActionV1::Update)
+    if !(render_mode == PlanRenderMode::Compact && filtered_upgrade)
+        && planned.iter().any(|(_, plan)| {
+            plan.steps.iter().any(|step| {
+                step.resource
+                    .as_deref()
+                    .is_some_and(|resource| resource.starts_with("preset-cache:"))
+                    && matches!(step.action, PlanActionV1::Create | PlanActionV1::Update)
+            })
         })
-    }) {
+    {
         println!(
             "Preset cache steps maintain internal source copies; their counts are not application configuration updates."
         );
@@ -666,10 +668,24 @@ fn render_compact_plan_lines(
             },
         ));
     }
-    for (index, (request, plan)) in visible.into_iter().enumerate() {
-        if index > 0 {
+    for (_, plan) in &visible {
+        if compact_app_maintenance_only(plan) && !plan.permissions.required.is_empty() {
+            lines.extend(render_compact_permissions(plan));
+        }
+    }
+    let mut warnings = Vec::new();
+    let mut rendered_scopes = 0;
+    for (request, plan) in visible {
+        if compact_app_maintenance_only(plan) {
+            let mut warning_plan = plan.clone();
+            warning_plan.steps.retain(is_stale_app_preservation);
+            warnings.extend(render_compact_steps(&warning_plan).into_iter().skip(1));
+            continue;
+        }
+        if rendered_scopes > 0 {
             lines.push(String::new());
         }
+        rendered_scopes += 1;
         lines.push(format!(
             "  {}",
             crate::colors::bold_cyan(request.section_label())
@@ -677,6 +693,11 @@ fn render_compact_plan_lines(
         lines.extend(render_compact_steps(plan));
         lines.extend(render_code_boundaries(plan, "    "));
         lines.extend(render_compact_permissions(plan));
+    }
+    if !warnings.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("  {}", crate::colors::bold("Warnings")));
+        lines.extend(warnings);
     }
     lines.push(crate::colors::dim(
         "  Use --verbose for exact paths, relevant steps, identities and diagnostic codes.",
@@ -726,6 +747,61 @@ fn is_routine_cache_maintenance(step: &shine_core::plan::PlanStepV1) -> bool {
             }
             _ => false,
         }
+}
+
+fn is_stale_app_preservation(step: &shine_core::plan::PlanStepV1) -> bool {
+    step.target.starts_with("app/")
+        && step.action == PlanActionV1::Preserve
+        && step.diagnostic_codes.len() == 1
+        && step.diagnostic_codes[0] == "app_stale_source_preserved"
+}
+
+// Move a whole App scope only when Core's exact provenance proves that all its
+// permissions maintain caches. Ambiguous effects retain the original review.
+fn compact_app_maintenance_only(plan: &PlanV1) -> bool {
+    use shine_core::plan::{FilesystemPurposeV1, PlanOperationV1};
+    if plan.operation != PlanOperationV1::Upgrade
+        || !plan.is_ready()
+        || !plan.code_boundaries.is_empty()
+        || !plan.author_capabilities.is_empty()
+        || plan.steps.iter().any(|step| {
+            !step.target.starts_with("app/")
+                || (upgrade_step_has_review_content(step)
+                    && !is_routine_cache_maintenance(step)
+                    && !is_stale_app_preservation(step))
+        })
+    {
+        return false;
+    }
+    let cache_targets = plan
+        .steps
+        .iter()
+        .filter(|step| is_routine_cache_maintenance(step))
+        .map(|step| step.target.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    plan.permissions.required.iter().all(|permission| {
+        if !matches!(
+            permission,
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                ..
+            }
+        ) {
+            return false;
+        }
+        let mut associations = plan
+            .filesystem_review
+            .iter()
+            .filter(|group| group.permissions.contains(permission));
+        associations.next().is_some_and(|group| {
+            group.purpose == FilesystemPurposeV1::Maintenance
+                && cache_targets.contains(group.target.as_str())
+                && group
+                    .permissions
+                    .iter()
+                    .all(|permission| plan.permissions.required.contains(permission))
+        }) && associations.next().is_none()
+    })
 }
 
 fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
@@ -2468,6 +2544,106 @@ mod tests {
         assert!(!compact.contains("Internal preset cache maintenance"));
         assert!(compact.contains("shell/proxy · preset-cache"));
         assert!(compact.contains("app/git · preset cache"));
+    }
+
+    #[test]
+    fn compact_upgrade_moves_cache_only_app_permissions_and_stale_warning_out_of_configs() {
+        use shine_core::plan::{FilesystemPurposeV1, FilesystemReviewGroupV1};
+        let required = PermissionSetV1::new([PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Write,
+            path: "shine:presets/app/git/gitconfig".into(),
+        }]);
+        let mut app = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("preset"),
+                state: digest("state"),
+            },
+            vec![
+                PlanStepV1::new(
+                    "app/git",
+                    Some("preset-cache:gitconfig"),
+                    PlanActionV1::Create,
+                ),
+                PlanStepV1::new("app/docker", Some("daemon.jsonc"), PlanActionV1::Preserve)
+                    .with_diagnostic_code("app_stale_source_preserved"),
+            ],
+            required.clone(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        app.filesystem_review.push(FilesystemReviewGroupV1 {
+            purpose: FilesystemPurposeV1::Maintenance,
+            target: "app/git".into(),
+            permissions: required,
+        });
+        let request = LifecyclePlanRequest::App(AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: None,
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        });
+        let fingerprint = app.fingerprint().unwrap();
+        let planned = vec![(request, app)];
+        let render = |planned: &[(LifecyclePlanRequest, PlanV1)]| {
+            render_compact_plan_lines(planned, "config")
+                .unwrap()
+                .join("\n")
+        };
+        let compact = render(&planned);
+        assert!(!compact.contains("App Configs"));
+        assert!(!compact.contains("Steps"));
+        assert!(compact.contains("Internal preset cache maintenance · 1 category"));
+        assert!(compact.contains("Installation state and recovery files · write (1 path)"));
+        assert!(compact.contains("Warnings"));
+        assert!(compact.contains("app/docker · daemon.jsonc [app_stale_source_preserved]"));
+        assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
+        let verbose = render_upgrade_detailed_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert!(verbose.contains("shine:presets/app/git/gitconfig"));
+        assert!(verbose.contains("app/git · preset-cache:gitconfig"));
+
+        let mut changed = planned.clone();
+        changed[0].1.steps.push(PlanStepV1::new(
+            "app/git",
+            Some("gitconfig"),
+            PlanActionV1::Update,
+        ));
+        assert!(render(&changed).contains("App Configs"));
+        let mut ambiguous = planned.clone();
+        ambiguous[0].1.filesystem_review.clear();
+        let compact = render(&ambiguous);
+        assert!(compact.contains("App Configs"));
+        assert!(compact.contains("shine:presets/app/git/gitconfig"));
+        let mut conflict = planned.clone();
+        let duplicate = conflict[0].1.filesystem_review[0].clone();
+        conflict[0].1.filesystem_review.push(duplicate);
+        assert!(render(&conflict).contains("App Configs"));
+        let mut user_effect = planned.clone();
+        user_effect[0].1.filesystem_review[0].purpose = FilesystemPurposeV1::UserTarget;
+        assert!(render(&user_effect).contains("App Configs"));
+        let mut author = planned.clone();
+        author[0].1.author_capabilities = PermissionSetV1::new([PermissionV1::Network {
+            scope: NetworkScopeV1::Any,
+        }]);
+        assert!(render(&author).contains("Author capability statement (unverified)"));
+        let mut unknown = planned.clone();
+        unknown[0].1.steps[1]
+            .diagnostic_codes
+            .push("unknown_warning".into());
+        assert!(render(&unknown).contains("App Configs"));
+        let mut warning_only = planned.clone();
+        warning_only[0].1.steps.remove(0);
+        warning_only[0].1.permissions.required = PermissionSetV1::default();
+        warning_only[0].1.filesystem_review.clear();
+        let compact = render(&warning_only);
+        assert!(compact.contains("Warnings"));
+        assert!(!compact.contains("App Configs"));
+        assert!(!compact.contains("Required permissions"));
+        assert!(!compact.contains("Internal preset cache maintenance"));
     }
 
     #[test]

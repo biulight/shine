@@ -58,7 +58,9 @@ and prevalidates all three before protected mutation starts. `upgrade --verbose`
 scopes, while `upgrade --verbose --full-plan` displays every planned scope and step. Compact
 review combines known routine App/Shell cache writes into one internal maintenance summary;
 verbose review retains their category/file steps. Permissions, code boundaries, preservation,
-blockers, and unknown diagnostics remain visible (ADR 0099).
+blockers, and unknown diagnostics remain visible (ADR 0099). Ready cache-only App scopes move
+uniquely Core-attributed cache write permissions under maintenance and stale-source notices
+under Warnings; ambiguous effects retain their original App review.
 `upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate preview/inspection paths.
 Scoped external-code trust, ownership, and administrator authorization remain additional gates.
 After approval, the CLI upgrade report applies the same relevance rule to unchanged App and Sys

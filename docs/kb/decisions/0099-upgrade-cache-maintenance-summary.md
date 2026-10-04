@@ -22,3 +22,11 @@ Only known routine writes qualify: App cache steps without diagnostics and Shell
 steps with only the expected transaction diagnostic. Removal, preservation, blockers, and unknown
 diagnostics remain explicit. Scope permissions and code boundaries remain visible. The complete
 Plan, fingerprint, approval, and execution are unchanged; cache-only work still requires approval.
+
+For ready App scopes containing only routine cache writes, ordinary no-ops, and known stale-source
+preservation notices, move cache permissions under the internal maintenance summary and render
+preservation notices under Warnings. Move only filesystem-write permissions uniquely attributed
+by Core to maintenance for the cache targets, with complete required permission membership.
+Code boundaries, author statements, actual App changes, blockers, unexpected diagnostics, and
+ambiguous/missing provenance retain the original App section. Warning-only scopes need no
+permission section. Verbose/full reviews keep their original scope structure.

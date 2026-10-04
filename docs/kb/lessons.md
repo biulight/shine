@@ -8,6 +8,9 @@
   caches; missing cache copies and changed metadata are real maintenance effects.
 - **Fix**: summarize routine App/Shell cache writes once in compact review, retaining detailed
   steps in verbose review and all permissions, code boundaries, conflicts and warnings.
+- **Follow-up**: hiding cache steps alone left an App Configs heading for cache permissions and
+  stale-source notices. Move a proven cache-only App scope’s permissions to maintenance and its
+  preservation notices to Warnings; retain original review for ambiguous effects.
 - **Rule**: classify only known routine cache writes; unknown diagnostics and preservation or
   blocking steps must remain visible. Presentation never changes the approval-bound Plan.
 

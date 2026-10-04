@@ -11,7 +11,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Combine routine App and Shell preset cache writes into one internal maintenance summary in
   default upgrade reviews. Keep cache details in `--verbose`, with conflicts, preservation
-  warnings, code boundaries, and required permissions still explicit.
+  warnings, code boundaries, and required permissions still explicit. Place cache-only App
+  permissions under maintenance and missing-source preservation notices under Warnings instead
+  of presenting an App configuration update.
 
 ## [2.3.0] — 2026-10-04
 
