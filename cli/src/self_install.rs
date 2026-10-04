@@ -308,7 +308,7 @@ pub async fn handle_config_upgrade(
     let user_modified = env_report.user_modified + preserved_app_resources(&app_lifecycle);
 
     let summary = config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts);
-    if verbose || sep.has_printed() {
+    if updated > 0 || user_modified > 0 || shell_report.link_conflicts > 0 || sep.has_printed() {
         output::footer("Done", &summary);
     } else {
         println!("{}", colors::dim("Nothing to upgrade."));
@@ -435,7 +435,7 @@ async fn handle_config_target_upgrade(
         };
 
     let summary = config_upgrade_summary_parts(updated, user_modified, link_conflicts);
-    if verbose || sep.has_printed() {
+    if updated > 0 || user_modified > 0 || link_conflicts > 0 || sep.has_printed() {
         output::footer("Done", &summary);
     } else {
         println!("{}", colors::dim("Nothing to upgrade."));

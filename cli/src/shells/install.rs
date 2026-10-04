@@ -441,15 +441,20 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
             profile.profile_updated || matches!(profile.config_status, PathUpdateStatus::Updated(_))
         })
     });
+    let show_unchanged = verbose && crate::presentation::full_upgrade_plan();
     let has_visible_result = should_print_upgrade_section(
-        verbose,
-        !core.updated_categories.is_empty(),
+        show_unchanged,
+        !core.updated_categories.is_empty()
+            || snapshots_updated > 0
+            || templates_updated > 0
+            || links_created > 0
+            || links_updated > 0,
         link_conflicts > 0,
         path_changed,
     );
     if has_visible_result {
         reporter.emit(PresentationEvent::SectionStart);
-        if verbose {
+        if show_unchanged {
             let installed_categories = core
                 .runs
                 .iter()
@@ -471,20 +476,25 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
                 style_symbol("✓")
             )));
         }
-        if verbose && snapshots_updated > 0 {
+        if snapshots_updated > 0 && (verbose || core.updated_categories.is_empty()) {
+            let noun = if snapshots_updated == 1 {
+                "snapshot"
+            } else {
+                "snapshots"
+            };
             reporter.emit(PresentationEvent::stdout(format!(
                 "  {} {}",
                 style_symbol("✓"),
-                style_green(&format!("{snapshots_updated} snapshot(s) updated"))
+                style_green(&format!("{snapshots_updated} {noun} updated"))
             )));
         }
-        if verbose && templates_updated > 0 {
+        if templates_updated > 0 && (verbose || core.updated_categories.is_empty()) {
             reporter.emit(PresentationEvent::stdout(output::summary_line_text(
                 "Templates",
                 &[style_green(&format!("{templates_updated} rendered"))],
             )));
         }
-        if should_print_link_summary(verbose, link_conflicts) {
+        if should_print_link_summary(verbose, links_created + links_updated, link_conflicts) {
             let parts = vec![
                 (links_created > 0).then(|| style_green(&format!("{links_created} created"))),
                 (links_updated > 0).then(|| style_green(&format!("{links_updated} updated"))),
@@ -545,8 +555,8 @@ fn should_print_upgrade_section(
     verbose || targets_updated || has_link_conflict || path_changed
 }
 
-fn should_print_link_summary(verbose: bool, conflict_count: usize) -> bool {
-    verbose || conflict_count > 0
+fn should_print_link_summary(verbose: bool, changed_count: usize, conflict_count: usize) -> bool {
+    verbose || changed_count > 0 || conflict_count > 0
 }
 
 pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<LifecycleResultV1> {
@@ -689,7 +699,7 @@ mod tests {
     use tokio::fs;
 
     #[test]
-    fn upgrade_section_hides_no_op_by_default_and_shows_verbose_or_changes() {
+    fn upgrade_section_hides_no_op_without_full_output_and_shows_changes() {
         assert!(!should_print_upgrade_section(false, false, false, false));
         assert!(should_print_upgrade_section(true, false, false, false));
         assert!(should_print_upgrade_section(false, true, false, false));
@@ -698,10 +708,11 @@ mod tests {
     }
 
     #[test]
-    fn bin_link_summary_is_verbose_only_unless_there_is_a_conflict() {
-        assert!(!should_print_link_summary(false, 0));
-        assert!(should_print_link_summary(true, 0));
-        assert!(should_print_link_summary(false, 1));
+    fn bin_link_summary_shows_changed_or_conflicting_links() {
+        assert!(!should_print_link_summary(false, 0, 0));
+        assert!(should_print_link_summary(true, 0, 0));
+        assert!(should_print_link_summary(false, 1, 0));
+        assert!(should_print_link_summary(false, 0, 1));
     }
 
     async fn make_temp_dir() -> PathBuf {

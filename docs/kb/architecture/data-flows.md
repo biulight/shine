@@ -58,6 +58,9 @@ and prevalidates all three before protected mutation starts. `upgrade --verbose`
 scopes, while `upgrade --verbose --full-plan` displays every planned scope and step.
 `upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate preview/inspection paths.
 Scoped external-code trust, ownership, and administrator authorization remain additional gates.
+After approval, the CLI upgrade report applies the same relevance rule to unchanged App and Sys
+outcomes; `--verbose --full-plan` restores their individual rows (ADR 0098). The structured
+lifecycle result still includes every selected item.
 
 Sys bootstrap uses the dedicated `sys-bootstrap` Plan operation rather than a lifecycle install.
 Interactive or profile selection resolves to an exact ordered item list before planning. The pure

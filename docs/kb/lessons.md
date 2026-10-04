@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-10-04 — Upgrade execution reports must match review relevance
+
+- **Symptom**: a one-category Shell update had a concise Security Plan but its verbose execution
+  report listed every current App file, a current Sys item, and all installed Shell categories.
+- **Cause**: execution reporters used `verbose` to include no-op rows and emitted Sys progress
+  before the final outcome could be filtered.
+- **Fix**: show relevant outcomes with detailed changed-resource output, suppress no-op progress
+  sections, and retain all rows behind `--verbose --full-plan`.
+
 ## 2026-10-04 — Verbose upgrade review should expand relevant effects
 
 - **Symptom**: one Shell snapshot update produced verbose review sections full of unchanged App,

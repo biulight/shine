@@ -73,6 +73,11 @@ review requires a new Plan. Active generators, hooks and shared transactions ret
 permissions. Normal transaction codes and lifecycle snapshot identities appear only with
 `--verbose`; preservation, blocking and other diagnostic notices remain explicit.
 
+After approval, `upgrade --verbose` also omits unchanged App files, already-installed managed Sys
+items, and the total number of installed Shell categories. It still shows changed resources,
+conflicts, warnings, and failures in detail. `upgrade --verbose --full-plan` includes the
+unchanged execution rows. An ordinary fully unchanged run reports `Nothing to upgrade.`
+
 During Shell upgrade, the Plan compares the managed profile and configured shell startup files
 before review. It shows changed profile files under `Shell integration (internal)` and omits
 unchanged startup files and their permissions. `shell/profile` is an internal Plan identity, not a

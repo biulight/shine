@@ -205,18 +205,19 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
         _ => unreachable!("reviewed operation result type"),
     };
 
+    let show_unchanged = verbose && crate::presentation::full_upgrade_plan();
     let mut started = false;
     let begin = |reporter: &mut dyn LifecycleReporter, started: &mut bool| {
         if !*started {
             reporter.emit(PresentationEvent::SectionStart);
             reporter.emit(PresentationEvent::stdout(report::upgrade_header_text(
-                verbose,
+                show_unchanged,
                 core.files.len(),
             )));
             *started = true;
         }
     };
-    if verbose && !core.files.is_empty() {
+    if show_unchanged && !core.files.is_empty() {
         begin(reporter, &mut started);
     }
 
@@ -249,7 +250,7 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
                     },
                 )));
             }
-            AppFileAction::Unchanged if verbose => {
+            AppFileAction::Unchanged if show_unchanged => {
                 begin(reporter, &mut started);
                 reporter.emit(PresentationEvent::stdout(report::up_to_date_text(&source)));
             }
@@ -305,8 +306,18 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
         )));
     }
     for event in observer.events {
-        begin(reporter, &mut started);
-        render_runtime_event(reporter, event);
+        if matches!(
+            &event,
+            RuntimeEvent::Warning { .. }
+                | RuntimeEvent::Progress {
+                    code: "app_hook_completed",
+                    ..
+                }
+                | RuntimeEvent::ProcessOutput { .. }
+        ) {
+            begin(reporter, &mut started);
+            render_runtime_event(reporter, event);
+        }
     }
 
     let updated = core
@@ -360,5 +371,107 @@ fn render_runtime_event(reporter: &mut dyn LifecycleReporter, event: RuntimeEven
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    // HOME must remain stable across the asynchronous lifecycle calls.
+    #![allow(clippy::await_holding_lock)]
+
+    use super::*;
+    use crate::test_support::env_lock;
+    use tokio::fs;
+
+    #[derive(Default)]
+    struct RecordingReporter(Vec<PresentationEvent>);
+
+    impl LifecycleReporter for RecordingReporter {
+        fn emit(&mut self, event: PresentationEvent) {
+            self.0.push(event);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn verbose_upgrade_reports_changed_app_files_but_not_current_files() {
+        let _guard = env_lock();
+        let dir = crate::test_support::make_temp_dir("shine-app-upgrade-report").await;
+        let previous_home = std::env::var_os("HOME");
+        // SAFETY: `_guard` serializes HOME changes across tests in this process.
+        unsafe { std::env::set_var("HOME", &dir) };
+        let category = dir.join("presets/app/sample");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            "description = 'Sample app'\ndest = '~/.config/sample'\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = 'config.txt'\ntarget = 'config.txt'\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("config.txt"), b"old\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        super::super::install::handle_install(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+
+        let mut current = RecordingReporter::default();
+        handle_upgrade_installed_target_with_reporter(
+            &config,
+            Some("sample"),
+            false,
+            true,
+            true,
+            &mut current,
+        )
+        .await
+        .unwrap();
+        assert!(current.0.is_empty());
+
+        crate::presentation::with_full_upgrade_plan(true, async {
+            let mut full = RecordingReporter::default();
+            handle_upgrade_installed_target_with_reporter(
+                &config,
+                Some("sample"),
+                false,
+                true,
+                true,
+                &mut full,
+            )
+            .await
+            .unwrap();
+            assert!(full.0.iter().any(|event| matches!(
+                event,
+                PresentationEvent::Line { text, .. } if text.contains("up to date")
+            )));
+        })
+        .await;
+
+        fs::write(category.join("config.txt"), b"new\n")
+            .await
+            .unwrap();
+        let mut changed = RecordingReporter::default();
+        handle_upgrade_installed_target_with_reporter(
+            &config,
+            Some("sample"),
+            false,
+            true,
+            true,
+            &mut changed,
+        )
+        .await
+        .unwrap();
+        assert!(changed.0.iter().any(|event| matches!(
+            event,
+            PresentationEvent::Line { text, .. } if text.contains("config.txt")
+        )));
+
+        match previous_home {
+            Some(home) => unsafe { std::env::set_var("HOME", home) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        fs::remove_dir_all(dir).await.unwrap();
     }
 }

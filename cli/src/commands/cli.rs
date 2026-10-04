@@ -336,10 +336,10 @@ pub struct UpgradeCommand {
     /// Pull Git-managed preset sources before upgrading installed configs
     #[arg(long)]
     pub pull: bool,
-    /// Show detailed env-template checks and skipped rows
+    /// Show detailed results for changes and items needing attention
     #[arg(long)]
     pub verbose: bool,
-    /// Show every Plan scope and step, including unchanged entries
+    /// Show every Plan scope, step, and execution row, including unchanged entries
     #[arg(long, requires = "verbose")]
     pub full_plan: bool,
     /// Remove stale managed app files whose preset source no longer exists
