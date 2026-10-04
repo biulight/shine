@@ -45,6 +45,10 @@ MY_API_TOKEN = { value = "<令牌>", description = "内部 API 的访问令牌" 
 对已有详细条目执行 `shine env set MY_API_TOKEN <新值>` 时，Shine 会更新 `value` 并保留
 说明。
 
+在 Unix 上，Shine 保存 `config.toml`、`shine.config.toml` 和 `shine.env.toml` 时使用仅所有者
+可读写的权限（`0600`），替换已有文件时也一样。临时文件在写入任何值之前就已限制权限。
+这只保护本地文件访问，明文值仍然是明文。
+
 若同名键已由全局、overlay 或项目 `shine.env.toml` 覆盖，直接 `set`、`delete` 或 `env secret encrypt --set` 会被拒绝，防止写入一个不会生效的低优先级值。确认应修改该覆盖文件时，添加 `--force`：
 
 ```bash
@@ -412,10 +416,13 @@ shine env proxy disable cargo
 
 只代理你明确允许的裸命令名；命令名只能包含 ASCII 字母、数字、`-`、`_` 或 `.`。安装前请确认
 `~/.shine/bin/` 已在 `PATH` 的靠前位置，且目标命令不是另一个 Shine 代理。若同名入口已存在
-但并非 Shine 创建，安装会拒绝覆盖它。
+但并非 Shine 创建，安装会拒绝覆盖它。在 Windows 上，Shine 会在写入任何文件前检查整组启动器，
+包括 `.cmd` 和 `.ps1`；冲突文件或符号链接都会保留。查找真实命令时，会跳过实际指向 Shine bin 目录的 PATH 项，包括符号链接别名。在 Unix 上，修改代理规则也会保持配置文件
+仅所有者可读写的权限。
 
 默认规则保存在全局 `~/.shine/config.toml`。在含有 `shine.config.toml` 的项目内加入
-`--project`，可将该命令的规则限定到项目；同一命令的项目规则会覆盖全局规则：
+`--project`，可将该命令的规则限定到项目；同一命令的项目规则会覆盖全局规则。
+离开项目后，shim 会使用已有的全局规则；若没有适用规则，则直接执行原命令，不注入变量：
 
 ```bash
 shine env proxy install gh --with GH_TOKEN --project

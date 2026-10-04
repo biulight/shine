@@ -51,6 +51,11 @@ shine install shell/proxy --replace-managed
 `--replace-managed` overwrites the corresponding Shine-managed content. Inspect
 `shine info shell/proxy --diff` first so that intentional local changes are not mistaken for damage.
 
+After switching preset sources, run `shine upgrade shell/<CATEGORY>` to update installed commands.
+Shine uses their installation records to recognize managed commands at the old paths and move them
+to the current deployment location. This does not adopt unrelated command files. External code still
+requires review and confirmation for the current Plan.
+
 ## If installation, upgrade, or uninstall is interrupted {#recover-an-interrupted-shell-transaction}
 
 If a Shell preset operation is interrupted, Shine may pause later changes and ask you to

@@ -6,6 +6,7 @@ sidebar_position: 2
 # 配置参考
 
 Shine 将全局运行时状态保存在 `~/.shine/`。首次需要配置时会创建 `~/.shine/config.toml`。
+配置与清单文件的替换（包括 Windows）不会在重命名暂存文件前删除旧文件；重命名失败时保留原文件。
 
 交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
 必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
@@ -138,8 +139,14 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 3. 全局 `config.toml` 中的 `presets_dir`
 4. 默认 `~/.shine/presets/`
 
+外部预设或 overlay 的根目录可以是符号链接。Shine 会先解析该链接，并把解析后的来源
+用于 development trust；重新指向另一个目录需要重新审阅。失效的根目录链接会报错，
+预设树内部的符号链接仍不参与快照。
+
 使用外部 `presets_dir` 时，Shell 类别默认以 `snapshot` 模式复制到
-`~/.shine/installed/shell/` 后再运行。修改来源文件后，先用 `shine update` 检查，再用
+`~/.shine/installed/shell/` 后再运行。在 Unix 上，快照保留捕获时脚本和辅助文件的可执行标记，
+不复制所有者或特权权限位。仅执行权限变化（包括旧安装快照缺少可执行标记）也会出现在
+`shine update` 中，并由 `shine upgrade` 修复。修改来源文件后，先用 `shine update` 检查，再用
 `shine upgrade` 应用，便于审阅变化且与 app 配置的更新流程一致。仅在编写和调试预设时，才把
 `external_shell_mode` 设为 `live`：源文件内容会在下次调用时生效；但 `target`、`runtime`、
 `transforms` 和 `env` 等部署元数据变更仍须运行 `shine upgrade` 重新生成受管入口。Live 模式要求

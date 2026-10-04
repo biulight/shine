@@ -78,6 +78,13 @@ restores the original backup when one was created. A destination move also requi
 file to be unchanged and the new path to be free. If either location has changed, Shine leaves both
 untouched for review.
 
+When an automatic generator's destination moves during upgrade, the Plan also includes removal
+of the old managed file and restoration of its backup, including any administrator permission
+needed for the old location. Changes to the backup after review invalidate approval. If a recorded
+backup is missing or is not a regular file at the expected backup path, or the old managed file is
+missing while a backup is recorded, resolve that state before retrying. Generated-file moves
+remain outside the journaled static-file recovery workflow.
+
 `app uninstall --force` explicitly permits deletion of user-modified managed content. Preview it
 with `--dry-run`. `--purge` also removes the category's installed Preset files. During upgrade,
 obsolete managed entries are removed only when `--prune-stale` is part of the approved command;
@@ -120,6 +127,10 @@ An application `[[files]]` entry can declare a generator whose UTF-8 stdout beco
 managed content. Generated results still pass through normal transforms, hashing, manifest tracking,
 user-modification protection, and uninstall. A script must not bypass Shine and write the destination
 directly.
+
+Generator stdout is limited to 8 MiB and stderr to 64 KiB. Shine enforces these limits while
+reading output and terminates and reaps the child on overflow, including its process group on Unix.
+Output that exceeds a limit is never installed as managed content.
 
 Generators can be automatic or manual. Neither kind runs during ordinary `list`, `info`, or
 `update`. When Shine cannot determine dynamic desired content without execution, info/update shows
@@ -235,6 +246,12 @@ the category's `[permissions].environment`, plus path variables such as `SHINE_A
 `SHINE_CACHE_DIR`, and `SHINE_STATE_DIR`. They can generate resources under
 `~/.shine/http/app/<APP_ID>/`. See [Tasks and the local service](./tasks-and-serve.md) for the complete
 variable list.
+
+Generators, script hooks, artifacts, and teardown scripts run from temporary captured category
+copies. On Unix, executable helpers from external presets and overlays remain executable in those
+copies, including helpers without a filename extension. Source edits or permission changes after
+capture do not affect that invocation. Keep persistent output in the state, cache, or HTTP paths;
+the captured source and overlay copies are removed after execution.
 
 The built-in `surge` preset installs `local-proxies.conf`, `local-proxy-groups.conf`,
 `local-rules.conf`, and the optional subscription file in the Surge Profiles directory. After setting

@@ -5,41 +5,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
-## [Unreleased]
-
-### Bug Fixes
-
-- Preserve external Shell snapshot executable flags and repair permission-only drift on upgrade.
-- Require exact source ownership for App generator refresh, including when `--force` is used.
-- Reject Preset bundle outputs inside their source category through symbolic links or `..` paths.
-
-- Preserve existing Windows configuration and manifest files when replacement fails.
-- Switch managed Git overlays to the configured repository when relinking, and follow the remote
-  default branch when no branch is selected.
-- Forward project-only environment proxies outside their project without injecting values, and
-  exclude PATH aliases of Shine bin when locating the real command.
-
-- Save configuration and environment override files with owner-only Unix permissions, including
-  private temporary files during replacement and env proxy rule changes.
-- Preserve foreign Windows `.cmd` and `.ps1` launchers when installing an environment proxy;
-  check all launcher destinations before writing any file.
-- Bind generated App relocation approval to old-file removal, backup restoration, and old-path
-  administrator requirements; reject changed or incomplete backup state before execution.
-- Close Core subprocess stdin after writing so children waiting for EOF can finish.
-- Drain encryption output while writing plaintext so large GPG/age payloads cannot deadlock on
-  full pipes; terminate and reap failed encryption processes.
-- Retain external App helper executable flags in captured source and overlay copies, and bind
-  those flags into Plan and snapshot-trust digests. Existing grants for executable categories
-  may require renewed review.
-- Execute App generators, script hooks, and artifacts from independent captured category copies,
-  including helper and overlay files, so edits after review cannot replace the executed source.
-  App source path variables now refer to temporary snapshots; persistent output belongs in the
-  supplied state, cache, or HTTP directories.
-- Enforce subprocess stdout/stderr limits while reading and terminate the child on overflow.
-- Discover external Preset and overlay roots through symbolic links, and report broken root links.
-- Run Core tests and lint checks alongside CLI checks in CI and local verification hooks.
-
-## [2.3.0] — 2026-09-17
+## [2.3.0] — 2026-10-04
 
 ### Features
 
@@ -67,11 +33,49 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Point blocked external Shell commands to the exact command-scoped `trust inspect` and
   `trust grant` remediation accepted by the trust CLI.
+- Summarize Security Plan filesystem effects by purpose while keeping user resources, blockers,
+  recovery paths, and code authorization explicit; use `--verbose` for exact details.
+- Derive App, managed Sys, and Shell profile upgrade permissions from actual file changes.
+  Omit unchanged scopes and results from ordinary upgrade output, including `--verbose`;
+  use `upgrade --verbose --full-plan` for the complete review and execution report.
+- Preserve external Shell snapshot executable flags and repair permission-only drift on upgrade.
+- Require exact source ownership for App generator refresh, including when `--force` is used.
+- Reject Preset bundle outputs inside their source category through symbolic links or `..` paths.
+- Preserve existing Windows configuration and manifest files when replacement fails.
+- Switch managed Git overlays to the configured repository when relinking, and follow the remote
+  default branch when no branch is selected.
+- Forward project-only environment proxies outside their project without injecting values, and
+  exclude PATH aliases of Shine bin when locating the real command.
+- Save configuration and environment override files with owner-only Unix permissions, including
+  private temporary files during replacement and env proxy rule changes.
+- Preserve foreign Windows `.cmd` and `.ps1` launchers when installing an environment proxy;
+  check all launcher destinations before writing any file.
+- Bind generated App relocation approval to old-file removal, backup restoration, and old-path
+  administrator requirements; reject changed or incomplete backup state before execution.
+- Close Core subprocess stdin after writing so children waiting for EOF can finish.
+- Drain encryption output while writing plaintext so large GPG/age payloads cannot deadlock on
+  full pipes; terminate and reap failed encryption processes.
+- Retain external App helper executable flags in captured source and overlay copies, and bind
+  those flags into Plan and snapshot-trust digests. Existing grants for executable categories
+  may require renewed review.
+- Execute App generators, script hooks, and artifacts from independent captured category copies,
+  including helper and overlay files, so edits after review cannot replace the executed source.
+  App source path variables now refer to temporary snapshots; persistent output belongs in the
+  supplied state, cache, or HTTP directories.
+- Enforce subprocess stdout/stderr limits while reading and terminate the child on overflow.
+- Discover external Preset and overlay roots through symbolic links, and report broken root links.
+
+### Internal
+
+- Run Core tests and lint checks alongside CLI checks in CI and local verification hooks.
+- Stabilize cross-platform test fixtures and terminal-theme timing checks.
 
 ### Docs
 
-- Publish the bilingual 2.3 manual with separate capability and code-authorization guidance,
-  source-scoped Development trust, and one stable documentation snapshot per major.
+- Publish the bilingual 2.3 manual with capability and code-authorization guidance,
+  source-scoped Development trust, upgrade review controls, App execution snapshots,
+  executable-file trust, environment proxy behavior, and file ownership safeguards.
+  Retain one stable documentation snapshot per major.
 
 ## [2.2.0] — 2026-09-15
 

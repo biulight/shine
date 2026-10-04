@@ -48,6 +48,10 @@ MY_API_TOKEN = { value = "<token>", description = "Token for the internal API" }
 Running `shine env set MY_API_TOKEN <new-value>` on a detailed entry updates `value` and preserves the
 description.
 
+On Unix, Shine saves `config.toml`, `shine.config.toml`, and `shine.env.toml` with owner-only
+permissions (`0600`), including when replacing an existing file. Temporary files are private before
+any values are written. This protects local file access; plaintext values are still plaintext.
+
 When a global, overlay, or project `shine.env.toml` already overrides a key, `set`, `delete`, and
 `env secret encrypt --set` refuse to write a lower-priority value that would have no effect. Add
 `--force` only when you intend to modify that override file:
@@ -455,10 +459,16 @@ values. For an occasional yank, prefer the one-time `env run` form above.
 
 Proxy only an explicitly approved bare command name containing ASCII letters, numbers, `-`, `_`, or
 `.`. Make sure `~/.shine/bin/` is early in `PATH` and the target is not another Shine wrapper. Shine
-refuses to overwrite a same-name entry it does not own.
+refuses to overwrite a same-name entry it does not own. On Windows, it checks the entire launcher
+set, including `.cmd` and `.ps1`, before writing any file. A conflicting file or symbolic link is
+preserved. PATH entries that resolve to the Shine bin directory, including symbolic-link aliases,
+are skipped when locating the real command. Proxy rule changes also retain owner-only configuration
+permissions on Unix.
 
 Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
-`--project` to scope the rule; a project rule for the same command overrides the global one:
+`--project` to scope the rule; a project rule for the same command overrides the global one.
+Outside that project, the shim uses the global rule if present; otherwise it forwards to the real
+command without injecting values:
 
 ```bash
 shine env proxy install gh --with GH_TOKEN --project

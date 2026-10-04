@@ -70,6 +70,11 @@ install、upgrade、uninstall、generator refresh 和 artifact apply/remove 都�
 迁移目标路径时，旧受管文件必须未修改，新路径也必须空闲；任一位置发生变化，Shine 都会保持原状，
 留给用户检查。
 
+自动 generator 的目标路径在 upgrade 中迁移时，Plan 还会包含旧受管文件的移除、备份恢复，以及
+旧位置需要的管理员权限。审阅后备份发生变化会使审批失效。如果已记录的备份缺失、不是预期
+备份路径上的普通文件，或记录着备份但旧受管文件缺失，请先处理该状态再重试。生成式文件迁移
+仍不属于带事务日志的静态文件恢复流程。
+
 `app uninstall --force` 会显式允许删除用户修改过的受管内容，执行前务必使用 `--dry-run` 预览。
 `--purge` 还会删除该类别已安装的预设文件。upgrade 仅在获批命令包含 `--prune-stale` 时移除已从
 预设中删除且未被修改的受管条目；用户修改过的条目仍会保留。
@@ -104,6 +109,9 @@ shine app recover --yes
 ## 生成式文件与 Surge URI 订阅
 
 App 预设可以为 `[[files]]` 声明 generator，把命令的 UTF-8 stdout 作为该受管文件的预期内容。生成结果仍经过正常的变换、hash、manifest、用户修改保护和卸载流程，不应由脚本绕过 Shine 直接改写目标文件。
+
+Generator 的 stdout 上限为 8 MiB，stderr 上限为 64 KiB。Shine 在读取输出时检查限制，
+超限即终止并回收子进程；在 Unix 上也会终止它的进程组。超限输出不会安装为受管内容。
 
 生成器可分为自动和手动两类。普通 `list`、`info` 和 `update` 都不会运行它们；无法在不执行代码的
 情况下计算动态预期内容时，info/update 会醒目显示 `generator not evaluated`，不会声称已安装文件
@@ -195,6 +203,11 @@ Shine 不会隐式运行 artifact 命令。每次手动 apply/remove 都会显�
 这些 source 还必须在类别 `[permissions].environment` 中声明；此外会加入 `SHINE_APP_HTTP_DIR`、
 `SHINE_CACHE_DIR`、`SHINE_STATE_DIR` 等固定路径变量，适合生成放在
 `~/.shine/http/app/<APP_ID>/` 下的本地资源。完整变量说明见[任务与本地服务](./tasks-and-serve.md)。
+
+Generator、脚本钩子、artifact 和 teardown 脚本均从临时捕获的类别副本运行。在 Unix 上，外部
+预设及 overlay 中的可执行辅助文件在副本中仍可执行，包括没有扩展名的文件。捕获后修改原始
+文件内容或权限不会影响本次调用。持久输出应写入 state、cache 或 HTTP 路径；捕获的 source
+和 overlay 副本会在执行后删除。
 
 内置 `surge` app 预设会把 `local-proxies.conf`、`local-proxy-groups.conf`、`local-rules.conf` 和可选的订阅生成文件安装到 Surge Profiles 目录。设置 `[env]` 中的 `SURGE_PROFILE` 后，`shine app artifact apply surge` 使用内置 Bun artifact 幂等修补活动配置文件的 `[Proxy]`、`[Proxy Group]` 与 `[Rule]` `#!include` 行。Overlay 只需覆盖自己的策略文件，无需提供构建脚本。
 

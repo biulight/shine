@@ -64,9 +64,9 @@ variables:
 | Variable | Purpose |
 | --- | --- |
 | `SHINE_APP_ID` | Current application preset ID |
-| `SHINE_APP_DIR` | Application directory used to run the script; points to the overlay when it provides the script |
-| `SHINE_APP_SOURCE_DIR` | Base application preset directory |
-| `SHINE_APP_OVERLAY_DIR` | Current application overlay directory; unset without an overlay |
+| `SHINE_APP_DIR` | Temporary App snapshot for this invocation, containing effective base and overlay files |
+| `SHINE_APP_SOURCE_DIR` | Same effective source snapshot directory as `SHINE_APP_DIR` |
+| `SHINE_APP_OVERLAY_DIR` | Captured effective overlay files for this invocation; unset without an overlay |
 | `SHINE_APP_HTTP_DIR` | Publishable application directory under `~/.shine/http/app/<APP_ID>/` |
 | `SHINE_CONFIG_DIR` | Current Shine runtime directory |
 | `SHINE_CACHE_DIR` | Current application cache directory |
@@ -75,6 +75,12 @@ variables:
 Each environment source must also appear in `[permissions].environment`; missing optional sources
 are omitted. Values are passed as stored. Secret-classified inputs are Plan-bound by an opaque
 version but are not decrypted automatically and do not trigger GPG, age, or Touch ID prompts.
+
+App generators, script hooks, and artifacts (including teardown) execute from the captured category
+snapshot, with relative helper files from that same snapshot. Source edits after capture do not
+change the code used by the invocation. These directories are cleaned after execution; write persistent
+output to `SHINE_STATE_DIR`, `SHINE_CACHE_DIR`, or `SHINE_APP_HTTP_DIR` instead of modifying the
+execution snapshot. Scripts still run with the process's existing access and are not sandboxed.
 
 ## Start the local HTTP service
 

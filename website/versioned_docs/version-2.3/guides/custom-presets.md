@@ -96,7 +96,8 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 
 The returned hash identifies the bundle. `shine.test.toml` remains author-only and is not included.
 A pack-policy failure must be fixed in the source; `--force` only replaces the output file and never
-bypasses validation or policy.
+bypasses validation or policy. The output directory is checked after resolving symbolic links and
+parent components (`..`); it must remain outside the category, even with `--force`.
 
 ## Migrate a 1.x source
 
@@ -205,7 +206,9 @@ shine trust grant <TARGET> --development
 ```
 
 Snapshot trust binds the target, capability, and complete effective category snapshot, including
-logical paths, exact bytes, and source layers. Any category file change requires renewed authorization.
+logical paths, exact bytes, source layers, and captured Unix executable flags. Changing category
+content or whether a file is executable requires renewed snapshot authorization. Existing snapshot
+grants for categories containing executable files may require review again after upgrading.
 Author statements appear in review and affect the Plan, but are not separately compared as trust identity.
 Editing statements in `shine.toml` still changes the snapshot bytes.
 The snapshot excludes `node_modules`; trust does not constrain interpreters, PATH tools, dependencies,
@@ -341,6 +344,9 @@ The first `shine preset pull` shallow-clones the repository under `~/.shine/over
 mirror that directory to the latest state of the remote branch. It is a disposable cache: the next
 pull discards local edits. Make changes and push them in an upstream checkout, then synchronize each
 device with `shine preset pull`, `shine update --pull`, or `shine upgrade --pull`.
+Relinking with a different Git URL switches the existing mirror to that repository. Without
+`--branch`, each sync follows the configured remote's default branch. A failed fetch preserves
+the previous checkout.
 
 To customize one built-in category, copy it at the overlay root instead of exporting everything. For
 example, copy Surge before editing its local proxy, group, and rule files:

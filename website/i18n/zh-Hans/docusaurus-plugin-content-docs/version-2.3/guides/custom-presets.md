@@ -84,7 +84,8 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 ```
 
 返回的 hash 用于标识 bundle。`shine.test.toml` 只供作者使用，不会进入 bundle。Pack policy 失败
-必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。
+必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。输出目录会在解析
+符号链接和父目录组件（`..`）后检查；即使使用 `--force`，也必须位于类别目录外。
 
 ## 迁移 1.x 来源
 
@@ -183,8 +184,9 @@ shine trust grant <TARGET>
 shine trust grant <TARGET> --development
 ```
 
-Snapshot trust 绑定 target、capability 和完整有效类别快照，包括逻辑路径、精确字节和来源层。
-类别文件发生变化后需要重新授权。作者说明仍进入审阅与 Plan，但不再单独作为 trust 身份比较；
+Snapshot trust 绑定 target、capability 和完整有效类别快照，包括逻辑路径、精确字节、来源层及
+捕获的 Unix 可执行标记。改变类别文件内容或是否可执行都需要重新进行快照授权；升级后，包含可执行
+文件的类别所持有的旧 snapshot grant 可能需要重新审阅。作者说明仍进入审阅与 Plan，但不再单独作为 trust 身份比较；
 修改 `shine.toml` 中的说明仍会改变快照字节。
 快照排除 `node_modules`；trust 不约束解释器、PATH 工具、依赖、下载内容或运行副作用。
 
@@ -302,6 +304,8 @@ shine preset overlay info
 ```
 
 首次 `shine preset pull` 会在 `~/.shine/overlay/` 浅克隆仓库；以后会把该目录镜像到远端分支的最新状态。此目录是缓存，任何本地修改都会在下次拉取时丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
+
+使用不同的 Git URL 重新链接时，现有镜像会切换到该仓库。未指定 `--branch` 时，每次同步都跟随所配置远端的默认分支。拉取失败会保留之前的 checkout。
 
 如果只想定制一个内置类别，可在 overlay 根目录复制该预设，无需导出整套内容。例如，Surge 的本地代理、策略组和规则文件应从内置预设复制后再修改：
 

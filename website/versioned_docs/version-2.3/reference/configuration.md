@@ -6,7 +6,8 @@ sidebar_position: 2
 # Configuration reference
 
 Shine stores global runtime state under `~/.shine/` and creates `~/.shine/config.toml` when global
-configuration is first needed.
+configuration is first needed. Configuration and manifest replacement does not delete the old file
+before renaming the staged file, including on Windows; a failed rename preserves the existing file.
 
 Interactive lifecycle Plan confirmation can authorize the listed external code for that operation only,
 without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
@@ -157,8 +158,15 @@ Without `SHINE_CONFIG_DIR`, the base preset directory is selected in this order:
 3. global `config.toml` `presets_dir`;
 4. default `~/.shine/presets/`.
 
+An external preset or overlay root may be a symbolic link. Shine resolves that root before capture
+and uses the resolved source for development trust; retargeting it requires review again. A broken
+root link is an error. Symbolic links inside the preset tree remain excluded from the snapshot.
+
 External shell categories default to `snapshot`: Shine copies them to
-`~/.shine/installed/shell/`. After source edits, inspect with `shine update` and apply with
+`~/.shine/installed/shell/`. On Unix, snapshots retain captured executable flags for scripts and
+helpers without copying ownership or privileged mode bits. Permission-only changes, including
+missing executable flags in an older installed snapshot, appear in `shine update` and are repaired
+by `shine upgrade`. After source edits, inspect with `shine update` and apply with
 `shine upgrade`. Set `external_shell_mode = "live"` only for development; source content takes effect
 on the next invocation, but changes to `target`, `runtime`, `transforms`, or `env` still require
 `shine upgrade` to rebuild managed entries. Live mode requires an explicit development trust grant;
