@@ -249,6 +249,7 @@ mod tests {
 // Core requests or approval, and concurrent CLI embedding cannot leak the setting.
 tokio::task_local! {
     static VERBOSE_SECURITY_PLAN: bool;
+    static FULL_UPGRADE_PLAN: bool;
 }
 
 pub async fn with_security_plan_verbosity<T>(
@@ -261,6 +262,19 @@ pub async fn with_security_plan_verbosity<T>(
 pub(crate) fn security_plan_verbose() -> bool {
     VERBOSE_SECURITY_PLAN
         .try_with(|verbose| *verbose)
+        .unwrap_or(false)
+}
+
+pub async fn with_full_upgrade_plan<T>(
+    full_plan: bool,
+    command: impl std::future::Future<Output = T>,
+) -> T {
+    FULL_UPGRADE_PLAN.scope(full_plan, command).await
+}
+
+pub(crate) fn full_upgrade_plan() -> bool {
+    FULL_UPGRADE_PLAN
+        .try_with(|full_plan| *full_plan)
         .unwrap_or(false)
 }
 
@@ -281,5 +295,20 @@ mod security_review_tests {
         })
         .await;
         assert!(!security_plan_verbose());
+    }
+
+    #[tokio::test]
+    async fn full_upgrade_plan_is_scoped_and_restored() {
+        assert!(!full_upgrade_plan());
+        with_full_upgrade_plan(true, async {
+            assert!(full_upgrade_plan());
+            with_full_upgrade_plan(false, async {
+                assert!(!full_upgrade_plan());
+            })
+            .await;
+            assert!(full_upgrade_plan());
+        })
+        .await;
+        assert!(!full_upgrade_plan());
     }
 }

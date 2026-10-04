@@ -51,11 +51,13 @@ shine upgrade app/starship
 
 所有命令都接受全局选项 `--config-dir <PATH>`。
 
-Security Plan 默认显示用户文件的具体路径，并按用途汇总安装产物、Shine 内部维护及关联的备份/回滚文件，注明访问类型和路径数量。安装、升级、卸载、恢复、App refresh/artifact 和 Sys bootstrap/profile/apply 的审批都支持 `--verbose`，可展开完整文件路径、步骤、快照标识和诊断。
+Security Plan 默认显示用户文件的具体路径，并按用途汇总安装产物、Shine 内部维护及关联的备份/回滚文件，注明访问类型和路径数量。安装、升级、卸载、恢复、App refresh/artifact 和 Sys bootstrap/profile/apply 的审批都支持 `--verbose`，可展开已显示审阅范围中的文件路径、步骤、快照标识和诊断。
 
 Shell 命令安装按命令数合并，Shell 集成单独显示；内部状态与恢复文件合并统计路径数量，用户文件的备份关联仍会明确提示。`--verbose` 保留逐项明细。
 
-已确认无变化的 App 文件及受管 Sys 项目不会贡献本次操作权限，作者能力声明仍会显示。状态观察仍参与审批绑定，审阅后发生变化必须重新规划。实际触发的生成器、hook 和共享事务保留各自权限。正常事务码及生命周期快照标识仅在 `--verbose` 中显示；保留、阻塞及其它诊断提示仍明确展示。
+已确认无变化的 App 文件及受管 Sys 项目不会贡献本次操作权限。默认 `upgrade` 审阅不显示没有动作、所需权限、代码边界、阻塞或特殊诊断的范围，也不列出普通的未变化步骤和日常升级跳过的手动 App 生成器。`upgrade --verbose` 同样省略这些无关范围和步骤，并展开其余步骤、具体权限、快照标识、诊断码和指纹。需要查看所有计划范围和步骤时，可用 `upgrade --verbose --full-plan`；`--full-plan` 必须与 `--verbose` 一起使用。完整 Plan 仍参与审批绑定，审阅后发生变化必须重新规划。实际触发的生成器、hook 和共享事务保留各自权限。正常事务码及生命周期快照标识仅在 `--verbose` 中显示；保留、阻塞及其它诊断提示仍明确展示。
+
+Shell 升级会在审阅前比较 Shine 管理的 profile 和已配置的 Shell 启动文件。只有确实需要协调的文件才列在 `Shell integration (internal)` 下；未变化的启动文件及其权限不会显示。`shell/profile` 是内部 Plan 标识，不是 Shell 预设类别。
 
 恢复操作、阻塞的计划以及无法可靠归类的权限仍显示具体路径。代码信任、管理员权限和其它能力提示不会被省略。摘要只改变展示方式，不会授予整个 `~/.shine` 目录的访问权限，也不是脚本沙箱；`--dry-run` 的预览行为保持不变。
 
@@ -102,7 +104,7 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 shine list [--available [<app|shell|sys>]]
 shine info <TARGET> [--diff] [--verbose] [--run-generators]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
-shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
+shine upgrade [TARGET] [--pull] [--verbose] [--full-plan] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
 shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
 shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
@@ -112,7 +114,7 @@ shine completions install
 shine completions <bash|zsh|powershell>
 ```
 
-`update` 只读检查；`upgrade` 会显示计划并等待确认。只有审阅过同一范围后才应使用 `--yes`。
+`update` 只读检查；`upgrade` 显示计划，并在存在动作时等待确认。全部未变化时只报告 `Nothing to upgrade.`，不要求确认。只有审阅过同一范围后才应使用 `--yes`。
 `--pull` 会先更新符合条件的 Git 预设来源；`--prune-stale` 允许删除预设中已经不存在且未被修改的受管项。
 `trust grant --development` 会让所显示本地来源中的代码修改继续受信任，但 target、capability、
 来源目录与来源层必须保持不变。这是来源级长期授权，不代表持续代码审阅。

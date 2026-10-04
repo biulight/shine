@@ -2091,6 +2091,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .filter(|entry| shell_entry_selected(entry, selection.as_ref()))
                 .collect::<Vec<_>>(),
         )?;
+        if request.operation == LifecycleOperation::Upgrade {
+            // Profile reconciliation depends on source commands outside a targeted
+            // category as well as the selected receipts.
+            state.bytes("manifest:shell-profile", manifest_bytes.as_deref())?;
+        }
         if request.operation != LifecycleOperation::Uninstall
             && request.target.is_some()
             && !(request.operation == LifecycleOperation::Upgrade
@@ -2158,6 +2163,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 );
             }
         }
+        let profile_selected_categories = if request.operation == LifecycleOperation::Upgrade {
+            selected_categories.clone().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
 
         let available_shell_targets = self
             .shell_categories_or_missing(selection.as_ref().map(|target| target.category))?
@@ -3448,16 +3458,67 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             }
         }
 
+        let profile_changes = if request.operation == LifecycleOperation::Upgrade {
+            let mut projected = manifest
+                .entries
+                .iter()
+                .map(|entry| {
+                    (
+                        (entry.category.clone(), entry.command.clone()),
+                        entry.needs_source,
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            let selected = profile_selected_categories
+                .iter()
+                .flat_map(|category| {
+                    category.files.iter().map(|file| {
+                        (
+                            (category.name.clone(), file.command_name.clone()),
+                            file.needs_source,
+                        )
+                    })
+                })
+                .collect::<BTreeMap<_, _>>();
+            let mut changed = BTreeSet::new();
+            for (target, needs_source) in selected {
+                projected.insert(target, needs_source);
+                let source_commands = projected
+                    .iter()
+                    .filter_map(|((_, command), needs_source)| {
+                        needs_source.then_some(command.clone())
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                for file in super::shell::prepare_shell_profile_files(
+                    self.host(),
+                    self.context(),
+                    &source_commands,
+                    !projected.is_empty(),
+                    false,
+                )
+                .await?
+                {
+                    changed.insert(file.destination);
+                }
+            }
+            changed
+        } else {
+            BTreeSet::new()
+        };
+
         if steps.iter().any(|step| {
             matches!(
                 step.action,
                 PlanActionV1::Create | PlanActionV1::Update | PlanActionV1::Remove
             )
-        }) || (request.operation == LifecycleOperation::Uninstall
-            && manifest
-                .entries
-                .iter()
-                .any(|entry| shell_entry_selected(entry, selection.as_ref())))
+        }) || !profile_changes.is_empty()
+            || (request.operation == LifecycleOperation::Uninstall
+                && manifest
+                    .entries
+                    .iter()
+                    .any(|entry| shell_entry_selected(entry, selection.as_ref())))
         {
             add_shine_receipt_permission(
                 self.context(),
@@ -3495,12 +3556,36 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 )
                 .await?;
             }
-            add_shell_profile_permissions(self.context(), &mut permissions);
-            typed_launcher_transaction = true;
-            steps.push(
-                PlanStepV1::new("shell/profile", None::<String>, profile_action)
-                    .with_diagnostic_code("shell_profile_reconcile_transaction"),
-            );
+            if request.operation == LifecycleOperation::Upgrade {
+                let changed_paths = profile_changes.into_iter().collect::<Vec<_>>();
+                add_shell_profile_permissions(self.context(), &mut permissions, &changed_paths);
+                for path in &changed_paths {
+                    let action = if path_exists(self.host(), path).await? {
+                        PlanActionV1::Update
+                    } else {
+                        PlanActionV1::Create
+                    };
+                    steps.push(
+                        PlanStepV1::new(
+                            "shell/profile",
+                            Some(review_path(self.context(), path)),
+                            action,
+                        )
+                        .with_diagnostic_code("shell_profile_reconcile_transaction"),
+                    );
+                }
+                typed_launcher_transaction |= !changed_paths.is_empty();
+            } else {
+                let profile_paths = std::iter::once(managed_profile)
+                    .chain(self.context().shell_config_paths.iter().cloned())
+                    .collect::<Vec<_>>();
+                add_shell_profile_permissions(self.context(), &mut permissions, &profile_paths);
+                typed_launcher_transaction = true;
+                steps.push(
+                    PlanStepV1::new("shell/profile", None::<String>, profile_action)
+                        .with_diagnostic_code("shell_profile_reconcile_transaction"),
+                );
+            }
         }
         if typed_launcher_transaction {
             add_shell_journal_permissions(self.context(), &mut permissions);
@@ -6631,9 +6716,10 @@ fn add_shell_typed_permissions(
 fn add_shell_profile_permissions(
     context: &super::RuntimeContext,
     permissions: &mut PermissionAccumulator,
+    paths: &[PathBuf],
 ) {
     let managed_profile = super::managed_shell_profile_path(&context.shine_dir, context.shell);
-    for path in std::iter::once(&managed_profile).chain(context.shell_config_paths.iter()) {
+    for path in paths {
         let rollback = managed_file_rollback_path(path);
         for (access, effect) in [
             (FilesystemAccessV1::Write, path),
@@ -12182,6 +12268,181 @@ target = '$HOME/.config/disabled.txt'
         let mut runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
         trust_current_external_shell(&mut runtime);
         runtime
+    }
+
+    #[tokio::test]
+    async fn shell_upgrade_plans_only_profile_files_that_need_reconciliation() {
+        let metadata = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n";
+        let snapshot = |script: &[u8]| {
+            PresetSnapshot::builder(PresetSourceKind::External)
+                .file("shell/demo/shine.toml", metadata.to_vec())
+                .file("shell/demo/demo.sh", script.to_vec())
+                .build()
+        };
+        let installed = external_shell_runtime(snapshot(b"echo old\n"));
+        installed.host().put_file(
+            installed
+                .context()
+                .presets_dir
+                .join("shell/demo/shine.toml"),
+            metadata.to_vec(),
+        );
+        installed.host().put_file(
+            installed.context().presets_dir.join("shell/demo/demo.sh"),
+            b"echo old\n".to_vec(),
+        );
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &installed.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        installed
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+
+        let mut changed = CoreRuntime::new(
+            installed.host().clone(),
+            installed.context().clone(),
+            snapshot(b"echo new\n"),
+        );
+        trust_current_external_shell(&mut changed);
+        changed.host().put_file(
+            changed.context().presets_dir.join("shell/demo/demo.sh"),
+            b"echo new\n".to_vec(),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo/demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = changed.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("shared-snapshot")
+                && step.action == PlanActionV1::Update
+        }));
+        assert!(!plan.steps.iter().any(|step| step.target == "shell/profile"));
+        let shell_config = changed.context().shell_config_paths[0].clone();
+        let config_label = review_path(changed.context(), &shell_config);
+        assert!(!plan.permissions.required.iter().any(|permission| {
+            matches!(permission, PermissionV1::Filesystem { path, .. } if path == &config_label)
+        }));
+        let config_before = changed.host().read(&shell_config).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        changed
+            .upgrade_shells_approved(request.clone(), &approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            changed.host().read(&shell_config).await.unwrap(),
+            config_before
+        );
+
+        let managed_profile = super::super::managed_shell_profile_path(
+            &changed.context().shine_dir,
+            changed.context().shell,
+        );
+        changed
+            .host()
+            .put_file(&managed_profile, b"old profile\n".to_vec());
+        let profile_label = review_path(changed.context(), &managed_profile);
+        let profile_drift = changed.plan_shells(request.clone()).await.unwrap();
+        assert!(profile_drift.steps.iter().any(|step| {
+            step.target == "shell/profile"
+                && step.resource.as_deref() == Some(profile_label.as_str())
+        }));
+        assert!(
+            !profile_drift.permissions.required.iter().any(|permission| {
+                matches!(permission, PermissionV1::Filesystem { path, .. } if path == &config_label)
+            })
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&profile_drift).unwrap();
+        changed
+            .upgrade_shells_approved(request.clone(), &approval)
+            .await
+            .unwrap();
+
+        changed
+            .host()
+            .put_file(&shell_config, b"user config\n".to_vec());
+        let drifted = changed.plan_shells(request.clone()).await.unwrap();
+        assert!(drifted.is_ready());
+        assert!(drifted.steps.iter().any(|step| {
+            step.target == "shell/profile"
+                && step.resource.as_deref() == Some(config_label.as_str())
+                && step.action == PlanActionV1::Update
+        }));
+        assert!(
+            drifted
+                .permissions
+                .required
+                .contains(&PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: config_label,
+                })
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&drifted).unwrap();
+        changed
+            .upgrade_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        let updated = String::from_utf8(changed.host().read(&shell_config).await.unwrap()).unwrap();
+        assert!(updated.contains(super::super::profile::SHELL_SENTINEL_START));
+
+        let source_metadata =
+            b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\nneeds_source = true\n";
+        let source_snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("shell/demo/shine.toml", source_metadata.to_vec())
+            .file("shell/demo/demo.sh", b"echo new\n".to_vec())
+            .build();
+        let mut source_changed = CoreRuntime::new(
+            changed.host().clone(),
+            changed.context().clone(),
+            source_snapshot,
+        );
+        trust_current_external_shell(&mut source_changed);
+        source_changed.host().put_file(
+            source_changed
+                .context()
+                .presets_dir
+                .join("shell/demo/shine.toml"),
+            source_metadata.to_vec(),
+        );
+        let plan = source_changed
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo/demo".to_string()),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.target == "shell/profile"
+                && step.resource.as_deref() == Some(profile_label.as_str())
+        }));
+        assert!(!plan.permissions.required.iter().any(|permission| {
+            matches!(permission, PermissionV1::Filesystem { path, .. } if path == &review_path(source_changed.context(), &shell_config))
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        source_changed
+            .upgrade_shells_approved(
+                ShellPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: Some("demo/demo".to_string()),
+                    force: false,
+                    purge: false,
+                    input_versions: PlanningInputVersions::default(),
+                },
+                &approval,
+            )
+            .await
+            .unwrap();
     }
 
     fn trust_current_external_shell(runtime: &mut CoreRuntime<InMemoryHost>) {

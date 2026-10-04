@@ -339,6 +339,9 @@ pub struct UpgradeCommand {
     /// Show detailed env-template checks and skipped rows
     #[arg(long)]
     pub verbose: bool,
+    /// Show every Plan scope and step, including unchanged entries
+    #[arg(long, requires = "verbose")]
+    pub full_plan: bool,
     /// Remove stale managed app files whose preset source no longer exists
     #[arg(long)]
     pub prune_stale: bool,
@@ -348,6 +351,10 @@ pub struct UpgradeCommand {
 }
 
 impl Commands {
+    pub fn full_upgrade_plan(&self) -> bool {
+        matches!(self, Self::Upgrade(command) if command.full_plan)
+    }
+
     pub fn security_plan_verbose(&self) -> bool {
         match self {
             Self::Install { verbose, .. } | Self::Uninstall { verbose, .. } => *verbose,

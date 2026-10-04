@@ -4,6 +4,9 @@
 - **Date**: 2026-09-29
 - **Evidence**: `core/src/{plan.rs,runtime/planner.rs}`, `cli/src/lifecycle_plan.rs`
 - **Extends**: ADR 0078, ADR 0086, ADR 0091
+- **Updated by**: [ADR 0095](0095-hide-unchanged-upgrade-review-scopes.md) omits unchanged
+  upgrade scopes from the default compact review; [ADR 0097](0097-relevant-verbose-upgrade-review.md)
+  applies the same relevance rule to verbose upgrade review.
 
 ## Decision
 
@@ -47,4 +50,4 @@ omitted only after an unchanged result. Observations and author statements remai
 shared transaction permissions are not removed with a no-op item. This is a planning correction,
 not display filtering or implicit authorization. Lifecycle summaries omit snapshot identities and
 a closed list of routine transaction codes; unknown, preserve and blocked diagnostics stay visible.
-Verbose review retains the full Plan.
+Verbose upgrade review expands relevant scopes while the full Plan still binds approval.

@@ -41,11 +41,19 @@ bugs. Check this list before changing the modules named in each entry.
   bind exact permissions and their typed purpose/target into the Plan fingerprint. CLI summaries
   never infer ownership from path prefixes or suffixes, never remove required permissions, and
   leave user resources, ambiguous/unclassified effects, blockers and recovery paths explicit.
-  `--verbose` restores the complete review; no display mode creates directory-wide access (ADR 0094).
+  `--verbose` restores exact permissions in displayed scopes; upgrade review omits entirely
+  unchanged scopes by default, and `--verbose --full-plan` restores the complete review. The
+  complete Plan always binds approval (ADRs 0094, 0097). No display mode creates directory-wide
+  access.
 - **No-op capabilities are decided by Core, never hidden by the renderer.** Current App files
   and current managed Sys items do not contribute operation permissions. Their observations and
   author statements remain bound; generators, hooks, shared transactions, and blocked Sys items
   retain independent requirements. Changes after review still invalidate approval.
+- **Shell profile upgrade permissions follow observed file changes.** A Shell Preset update alone
+  does not imply a startup-file or managed-profile rewrite. Upgrade planning compares those files
+  using the same read-only preparation as execution, binds the full source-command manifest and
+  observed paths, and grants profile write/recovery permissions only for paths that can change.
+  Re-planning must reject a different profile state before mutation (ADR 0096).
 - **Bootstrap permission provenance is bound review data.** Target-local and shared permission
   scopes are captured before merging; their union must equal the aggregate required set. Scopes
   contain only safe capability identities/diagnostics and enter the Plan fingerprint. They do not

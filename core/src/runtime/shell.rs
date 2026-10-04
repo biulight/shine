@@ -10,10 +10,10 @@ use super::shell_action_executor::{
     ShellSnapshotReplacement,
 };
 use super::{
-    CoreRuntime, FileKind, FileSystemHost, InspectionChange, InspectionFileStatus, LinkConflict,
-    LinkConflictKind, LinkReport, LinkSpec, PathUpdateStatus, PrivilegedFileSystemHost,
-    ShellConfigUpdate, ShellFileInspection, ShellProfileRemoval, UnlinkReport,
-    command_path_for_name, link_executables_with_host, link_is_current_with_host,
+    CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, InspectionChange,
+    InspectionFileStatus, LinkConflict, LinkConflictKind, LinkReport, LinkSpec, PathUpdateStatus,
+    PrivilegedFileSystemHost, ShellConfigUpdate, ShellFileInspection, ShellProfileRemoval,
+    UnlinkReport, command_path_for_name, link_executables_with_host, link_is_current_with_host,
     unlink_managed_command_with_host,
 };
 use crate::action::{
@@ -3115,6 +3115,97 @@ impl<H> CoreRuntime<H> {
     }
 }
 
+pub(super) async fn prepare_shell_profile_files(
+    host: &impl FileSystemObservationHost,
+    context: &super::RuntimeContext,
+    source_commands: &[String],
+    has_installed_commands: bool,
+    remove_all: bool,
+) -> Result<Vec<ShellProfilePreparedFile>> {
+    let mut files = Vec::new();
+    let managed_profile = super::managed_shell_profile_path(&context.shine_dir, context.shell);
+    let desired_profile = (!remove_all).then(|| {
+        super::managed_profile_snippet(
+            context.shell,
+            &context.bin_dir,
+            &context.home_dir,
+            source_commands,
+        )
+        .into_bytes()
+    });
+    let current_profile = match host.read(&managed_profile).await {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.is_not_found() => None,
+        Err(error) => return Err(error.into_anyhow("reading managed Shell profile")),
+    };
+    if current_profile != desired_profile {
+        let mode = host
+            .metadata(&managed_profile)
+            .await
+            .ok()
+            .and_then(|metadata| metadata.unix_mode)
+            .or_else(|| cfg!(unix).then_some(0o644));
+        files.push(ShellProfilePreparedFile {
+            destination: managed_profile.clone(),
+            desired: desired_profile,
+            unix_mode: mode,
+            ownership: ShellProfileFileOwnershipV1::WholeFile,
+            previous_block_hash: None,
+            desired_block_hash: None,
+        });
+    }
+
+    if remove_all || has_installed_commands {
+        let profile = managed_profile.clone();
+        let snippet =
+            super::profile::shell_config_snippet(context.shell, &profile, &context.home_dir);
+        for path in &context.shell_config_paths {
+            let existing = match host.read(path).await {
+                Ok(bytes) => {
+                    String::from_utf8(bytes).context("Shell configuration is not UTF-8")?
+                }
+                Err(error) if error.is_not_found() => String::new(),
+                Err(error) => {
+                    return Err(error.into_anyhow("reading Shell configuration"));
+                }
+            };
+            let previous_block_hash = super::profile::shell_sentinel_block(&existing)
+                .map(|block| crate::install::hash_content(block.as_bytes()));
+            let desired = if remove_all {
+                if previous_block_hash.is_none() {
+                    continue;
+                }
+                super::profile::remove_shell_sentinel(&existing)
+            } else {
+                if super::profile::shell_sentinel_block(&existing)
+                    == Some(snippet.trim_end_matches('\n'))
+                {
+                    continue;
+                }
+                let cleaned = super::profile::remove_shell_sentinel(&existing);
+                format!("{cleaned}\n{snippet}")
+            };
+            let desired_block_hash = super::profile::shell_sentinel_block(&desired)
+                .map(|block| crate::install::hash_content(block.as_bytes()));
+            let mode = host
+                .metadata(path)
+                .await
+                .ok()
+                .and_then(|metadata| metadata.unix_mode)
+                .or_else(|| cfg!(unix).then_some(0o644));
+            files.push(ShellProfilePreparedFile {
+                destination: path.clone(),
+                desired: Some(desired.into_bytes()),
+                unix_mode: mode,
+                ownership: ShellProfileFileOwnershipV1::SentinelBlock,
+                previous_block_hash,
+                desired_block_hash,
+            });
+        }
+    }
+    Ok(files)
+}
+
 impl<H: FileSystemHost> CoreRuntime<H> {
     async fn prepare_shell_profile_reconciliation(
         &self,
@@ -3124,7 +3215,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         _force: bool,
         legacy_targets: &[String],
     ) -> Result<Vec<ShellProfileReconciliation>> {
-        let mut files = Vec::new();
         let source_commands = manifest_after
             .entries
             .iter()
@@ -3133,92 +3223,14 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let managed_profile =
-            super::managed_shell_profile_path(&self.context().shine_dir, self.context().shell);
-        let desired_profile = (!remove_all).then(|| {
-            super::managed_profile_snippet(
-                self.context().shell,
-                &self.context().bin_dir,
-                &self.context().home_dir,
-                &source_commands,
-            )
-            .into_bytes()
-        });
-        let current_profile = match self.host().read(&managed_profile).await {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.is_not_found() => None,
-            Err(error) => return Err(error.into_anyhow("reading managed Shell profile")),
-        };
-        if current_profile != desired_profile {
-            let mode = self
-                .host()
-                .metadata(&managed_profile)
-                .await
-                .ok()
-                .and_then(|metadata| metadata.unix_mode)
-                .or_else(|| cfg!(unix).then_some(0o644));
-            files.push(ShellProfilePreparedFile {
-                destination: managed_profile.clone(),
-                desired: desired_profile,
-                unix_mode: mode,
-                ownership: ShellProfileFileOwnershipV1::WholeFile,
-                previous_block_hash: None,
-                desired_block_hash: None,
-            });
-        }
-
-        if remove_all || !manifest_after.entries.is_empty() {
-            let profile = managed_profile.clone();
-            let snippet = super::profile::shell_config_snippet(
-                self.context().shell,
-                &profile,
-                &self.context().home_dir,
-            );
-            for path in &self.context().shell_config_paths {
-                let existing = match self.host().read(path).await {
-                    Ok(bytes) => {
-                        String::from_utf8(bytes).context("Shell configuration is not UTF-8")?
-                    }
-                    Err(error) if error.is_not_found() => String::new(),
-                    Err(error) => {
-                        return Err(error.into_anyhow("reading Shell configuration"));
-                    }
-                };
-                let previous_block_hash = super::profile::shell_sentinel_block(&existing)
-                    .map(|block| crate::install::hash_content(block.as_bytes()));
-                let desired = if remove_all {
-                    if previous_block_hash.is_none() {
-                        continue;
-                    }
-                    super::profile::remove_shell_sentinel(&existing)
-                } else {
-                    if super::profile::shell_sentinel_block(&existing)
-                        == Some(snippet.trim_end_matches('\n'))
-                    {
-                        continue;
-                    }
-                    let cleaned = super::profile::remove_shell_sentinel(&existing);
-                    format!("{cleaned}\n{snippet}")
-                };
-                let desired_block_hash = super::profile::shell_sentinel_block(&desired)
-                    .map(|block| crate::install::hash_content(block.as_bytes()));
-                let mode = self
-                    .host()
-                    .metadata(path)
-                    .await
-                    .ok()
-                    .and_then(|metadata| metadata.unix_mode)
-                    .or_else(|| cfg!(unix).then_some(0o644));
-                files.push(ShellProfilePreparedFile {
-                    destination: path.clone(),
-                    desired: Some(desired.into_bytes()),
-                    unix_mode: mode,
-                    ownership: ShellProfileFileOwnershipV1::SentinelBlock,
-                    previous_block_hash,
-                    desired_block_hash,
-                });
-            }
-        }
+        let files = prepare_shell_profile_files(
+            self.host(),
+            self.context(),
+            &source_commands,
+            !manifest_after.entries.is_empty(),
+            remove_all,
+        )
+        .await?;
         if files.is_empty() {
             return Ok(Vec::new());
         }

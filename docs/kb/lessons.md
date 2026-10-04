@@ -1,5 +1,24 @@
 # Lessons Learned
 
+## 2026-10-04 — Verbose upgrade review should expand relevant effects
+
+- **Symptom**: one Shell snapshot update produced verbose review sections full of unchanged App,
+  Sys, and Shell entries, obscuring the required Shell permissions.
+- **Cause**: verbose upgrade review rendered every step and scope from the complete Plan.
+- **Fix**: apply the compact upgrade relevance rule to verbose review, then expand exact paths,
+  diagnostics, and identities only for visible effects. Keep the complete Plan approval-bound.
+
+## 2026-10-04 — Shell profile review must follow the actual file comparison
+
+- **Symptom**: a content-only Shell snapshot upgrade displayed `shell/profile` alongside Preset
+  targets and requested `.zshrc` write/remove access although execution would leave it unchanged.
+- **Cause**: the planner added every profile path whenever any Shell step changed, while execution
+  already compared generated and observed profile content before preparing files.
+- **Fix**: share the read-only comparison, project source-command receipts in upgrade order, grant
+  only changed profile paths, and label resulting steps as internal Shell integration.
+- **Rule**: derive operation permissions from observed effects in Core; presentation must not make
+  internal transaction identities look like Preset categories.
+
 ## 2026-10-03 — Snapshot modes, refresh ownership, and pack aliases need boundary tests
 
 - **Symptoms**: an external Shell install succeeded but its command failed with permission denied;

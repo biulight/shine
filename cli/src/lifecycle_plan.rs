@@ -182,7 +182,11 @@ pub(crate) async fn review_upgrade_plans(
         requests,
         yes,
         if verbose {
-            PlanRenderMode::Detailed
+            if crate::presentation::full_upgrade_plan() {
+                PlanRenderMode::Detailed
+            } else {
+                PlanRenderMode::UpgradeDetailed
+            }
         } else {
             PlanRenderMode::Compact
         },
@@ -195,6 +199,7 @@ enum PlanRenderMode {
     Bootstrap,
     Compact,
     Detailed,
+    UpgradeDetailed,
 }
 
 async fn review_plans_with_render_mode(
@@ -249,7 +254,14 @@ async fn review_plans_with_render_mode(
         planned.push((request, plan));
     }
 
-    let development_trust_targets = active_development_trust_targets(&runtime, &planned).await;
+    let filtered_upgrade = matches!(
+        render_mode,
+        PlanRenderMode::Compact | PlanRenderMode::UpgradeDetailed
+    ) && planned
+        .iter()
+        .all(|(_, plan)| plan.operation == shine_core::plan::PlanOperationV1::Upgrade);
+    let development_trust_targets =
+        active_development_trust_targets(&runtime, &planned, filtered_upgrade).await;
     let mut rendered = match render_mode {
         PlanRenderMode::Compact
             if planned.iter().all(|(_, plan)| {
@@ -257,6 +269,9 @@ async fn review_plans_with_render_mode(
             }) =>
         {
             render_compact_plan_lines(&planned, &config_digest)?
+        }
+        PlanRenderMode::UpgradeDetailed => {
+            render_upgrade_detailed_plan_lines(&planned, &config_digest)?
         }
         PlanRenderMode::Detailed | PlanRenderMode::Bootstrap | PlanRenderMode::Compact => planned
             .iter()
@@ -278,7 +293,7 @@ async fn review_plans_with_render_mode(
             .flatten()
             .collect(),
     };
-    if !development_trust_targets.is_empty() {
+    if !rendered.is_empty() && !development_trust_targets.is_empty() {
         rendered.push(String::new());
         rendered.push(format!("  {}", crate::colors::bold("Development trust")));
         for target in development_trust_targets {
@@ -340,15 +355,27 @@ async fn review_plans_with_render_mode(
 async fn active_development_trust_targets<H>(
     runtime: &shine_core::runtime::CoreRuntime<H>,
     planned: &[(LifecyclePlanRequest, PlanV1)],
+    filtered_upgrade: bool,
 ) -> Vec<String> {
     let involved = planned
         .iter()
         .flat_map(|(_, plan)| {
-            plan.steps.iter().map(|step| step.target.as_str()).chain(
-                plan.permission_scopes
+            if filtered_upgrade {
+                plan.code_boundaries
                     .iter()
-                    .filter_map(|scope| scope.target.as_deref()),
-            )
+                    .map(|boundary| boundary.target.as_str())
+                    .collect::<Vec<_>>()
+            } else {
+                plan.steps
+                    .iter()
+                    .map(|step| step.target.as_str())
+                    .chain(
+                        plan.permission_scopes
+                            .iter()
+                            .filter_map(|scope| scope.target.as_deref()),
+                    )
+                    .collect::<Vec<_>>()
+            }
         })
         .collect::<std::collections::BTreeSet<_>>();
     let candidates = runtime
@@ -607,11 +634,21 @@ fn render_compact_plan_lines(
     let Some((_, first)) = planned.first() else {
         return Ok(Vec::new());
     };
+    let visible = planned
+        .iter()
+        .filter(|(_, plan)| {
+            plan.operation != shine_core::plan::PlanOperationV1::Upgrade
+                || upgrade_plan_has_review_content(plan)
+        })
+        .collect::<Vec<_>>();
+    if visible.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut lines = vec![crate::colors::bold(&format!(
         "Security Plan · {}",
         first.operation.as_str()
     ))];
-    for (index, (request, plan)) in planned.iter().enumerate() {
+    for (index, (request, plan)) in visible.into_iter().enumerate() {
         if index > 0 {
             lines.push(String::new());
         }
@@ -624,14 +661,48 @@ fn render_compact_plan_lines(
         lines.extend(render_compact_permissions(plan));
     }
     lines.push(crate::colors::dim(
-        "  Use --verbose for all paths, steps, identities and diagnostic codes.",
+        "  Use --verbose for exact paths, relevant steps, identities and diagnostic codes.",
     ));
     Ok(lines)
 }
 
+fn render_upgrade_detailed_plan_lines(
+    planned: &[(LifecyclePlanRequest, PlanV1)],
+    config_digest: &str,
+) -> Result<Vec<String>> {
+    planned
+        .iter()
+        .filter(|(_, plan)| upgrade_plan_has_review_content(plan))
+        .map(|(_, plan)| render_plan_lines_with_steps(plan, config_digest, false))
+        .collect::<Result<Vec<_>>>()
+        .map(|sections| sections.into_iter().flatten().collect())
+}
+
+fn upgrade_plan_has_review_content(plan: &PlanV1) -> bool {
+    !plan.is_ready()
+        || plan.steps.iter().any(upgrade_step_has_review_content)
+        || !plan.permissions.required.is_empty()
+        || !plan.permissions.missing_declarations.is_empty()
+        || !plan.permissions.uncomputable_codes.is_empty()
+        || !plan.code_boundaries.is_empty()
+}
+
+fn upgrade_step_has_review_content(step: &shine_core::plan::PlanStepV1) -> bool {
+    step.action != PlanActionV1::None
+        || step
+            .diagnostic_codes
+            .iter()
+            .any(|code| code != "app_manual_refresh_required")
+}
+
 fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
+    let upgrade = plan.operation == shine_core::plan::PlanOperationV1::Upgrade;
     let mut lines = vec![format!("    {}", crate::colors::bold("Steps"))];
+    let mut shell_integration = Vec::new();
     if plan.steps.is_empty() {
+        if upgrade {
+            return Vec::new();
+        }
         lines.push(format!(
             "      {}",
             style_plan_action(PlanActionV1::None, "= no changes")
@@ -661,6 +732,13 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
                 index += 1;
             }
             let cache_steps = &plan.steps[start..index];
+            if upgrade
+                && cache_steps
+                    .iter()
+                    .all(|step| step.action == PlanActionV1::None)
+            {
+                continue;
+            }
             let action = cache_steps
                 .iter()
                 .map(|step| step.action)
@@ -670,12 +748,25 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
                 "      {} {} · preset cache ({})",
                 styled_action_name(action),
                 step.target,
-                compact_action_counts(cache_steps),
+                compact_action_counts(cache_steps, upgrade),
             ));
             continue;
         }
 
         index += 1;
+        if upgrade && step.target == "shell/profile" {
+            shell_integration.push(step);
+            continue;
+        }
+        if upgrade
+            && step.action == PlanActionV1::None
+            && step
+                .diagnostic_codes
+                .iter()
+                .all(|code| code == "app_manual_refresh_required")
+        {
+            continue;
+        }
         if step.action == PlanActionV1::None && step.diagnostic_codes.is_empty() {
             unchanged += 1;
             continue;
@@ -715,7 +806,7 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
             diagnostics
         ));
     }
-    if unchanged > 0 {
+    if unchanged > 0 && !upgrade {
         lines.push(format!(
             "      {}",
             style_plan_action(
@@ -727,10 +818,42 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
             )
         ));
     }
+    if upgrade && lines.len() == 1 {
+        lines.clear();
+    }
+    if !shell_integration.is_empty() {
+        lines.push(format!(
+            "    {}",
+            crate::colors::bold("Shell integration (internal)")
+        ));
+        for step in shell_integration {
+            let resource = step.resource.as_deref().unwrap_or("managed profile");
+            let label = if resource.starts_with("shine:shell/") {
+                "managed profile"
+            } else {
+                resource
+            };
+            let diagnostics = step
+                .diagnostic_codes
+                .iter()
+                .filter(|code| code.as_str() != "shell_profile_reconcile_transaction")
+                .cloned()
+                .collect::<Vec<_>>();
+            let diagnostics = if diagnostics.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", diagnostics.join(", "))
+            };
+            lines.push(format!(
+                "      {} {label}{diagnostics}",
+                styled_action_name(step.action)
+            ));
+        }
+    }
     lines
 }
 
-fn compact_action_counts(steps: &[shine_core::plan::PlanStepV1]) -> String {
+fn compact_action_counts(steps: &[shine_core::plan::PlanStepV1], omit_unchanged: bool) -> String {
     let actions = [
         (PlanActionV1::Create, "create"),
         (PlanActionV1::Update, "update"),
@@ -743,6 +866,9 @@ fn compact_action_counts(steps: &[shine_core::plan::PlanStepV1]) -> String {
     actions
         .into_iter()
         .filter_map(|(action, label)| {
+            if omit_unchanged && action == PlanActionV1::None {
+                return None;
+            }
             let count = steps.iter().filter(|step| step.action == action).count();
             (count > 0).then(|| style_plan_action(action, &format!("{count} {label}")))
         })
@@ -1268,6 +1394,14 @@ fn render_bootstrap_permissions(
 }
 
 fn render_plan_lines(plan: &PlanV1, config_digest: &str) -> Result<Vec<String>> {
+    render_plan_lines_with_steps(plan, config_digest, true)
+}
+
+fn render_plan_lines_with_steps(
+    plan: &PlanV1,
+    config_digest: &str,
+    include_unchanged_steps: bool,
+) -> Result<Vec<String>> {
     let mut lines = vec![crate::colors::bold(&format!(
         "Security Plan · {}",
         plan.operation.as_str()
@@ -1278,11 +1412,18 @@ fn render_plan_lines(plan: &PlanV1, config_digest: &str) -> Result<Vec<String>> 
     ));
     lines.push(format!("  Config snapshot  {config_digest}"));
     lines.push(format!("  State snapshot   {}", plan.inputs.state.as_hex()));
-    lines.push(format!("  {}", crate::colors::bold("Steps")));
-    if plan.steps.is_empty() {
-        lines.push(format!("    {}", crate::colors::dim("- none")));
+    let visible_steps = plan
+        .steps
+        .iter()
+        .filter(|step| include_unchanged_steps || upgrade_step_has_review_content(step))
+        .collect::<Vec<_>>();
+    if include_unchanged_steps || !visible_steps.is_empty() {
+        lines.push(format!("  {}", crate::colors::bold("Steps")));
+        if visible_steps.is_empty() {
+            lines.push(format!("    {}", crate::colors::dim("- none")));
+        }
     }
-    for step in &plan.steps {
+    for step in visible_steps {
         let resource = step
             .resource
             .as_deref()
@@ -2168,11 +2309,10 @@ mod tests {
             .join("\n");
 
         assert_eq!(rendered.matches("Security Plan · upgrade").count(), 1);
-        assert!(rendered.contains("Shell Presets\n    Steps\n      = 1 unchanged step"));
-        assert!(
-            rendered.contains("~ app/starship · preset cache (1 create, 1 update, 1 unchanged)")
-        );
+        assert!(!rendered.contains("Shell Presets"));
+        assert!(rendered.contains("~ app/starship · preset cache (1 create, 1 update)"));
         assert!(rendered.contains("~ app/starship · generated.toml"));
+        assert!(!rendered.contains("unchanged"));
         assert!(rendered.contains("! preserve app/starship · user.toml [app_user_modified]"));
         assert!(
             rendered.contains("x blocked app/starship · hook:0 [app_external_code_not_allowed]")
@@ -2182,6 +2322,265 @@ mod tests {
         assert!(!rendered.contains("present:0123456789"));
         assert!(!rendered.contains("preset-cache:shine.toml"));
         assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn compact_upgrade_hides_manual_refresh_and_fully_unchanged_scopes() {
+        let mut app = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("app-preset"),
+                state: digest("app-state"),
+            },
+            vec![
+                PlanStepV1::new("app/surge", Some("generated.conf"), PlanActionV1::None)
+                    .with_diagnostic_code("app_manual_refresh_required"),
+                PlanStepV1::new("app/demo", Some("static.conf"), PlanActionV1::None),
+            ],
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        app.author_capabilities = PermissionSetV1::new([PermissionV1::Network {
+            scope: NetworkScopeV1::Any,
+        }]);
+        let request = LifecyclePlanRequest::App(AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: None,
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        });
+        let mut planned = vec![(request, app)];
+
+        assert!(
+            render_compact_plan_lines(&planned, "config")
+                .unwrap()
+                .is_empty()
+        );
+        let detailed = render_plan_lines(&planned[0].1, "config")
+            .unwrap()
+            .join("\n");
+        assert!(detailed.contains("app/surge · generated.conf [app_manual_refresh_required]"));
+
+        planned[0].1.steps.push(PlanStepV1::new(
+            "app/demo",
+            Some("updated.conf"),
+            PlanActionV1::Update,
+        ));
+        let rendered = render_compact_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert!(rendered.contains("~ app/demo · updated.conf"));
+        assert!(!rendered.contains("app/surge"));
+        assert!(!rendered.contains("unchanged"));
+    }
+
+    #[test]
+    fn verbose_upgrade_expands_only_scopes_and_steps_needing_review() {
+        let shell = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("shell-preset"),
+                state: digest("shell-state"),
+            },
+            vec![
+                PlanStepV1::new("shell/agent/ccenv", None::<String>, PlanActionV1::None),
+                PlanStepV1::new("shell/utils", Some("shared-snapshot"), PlanActionV1::Update)
+                    .with_diagnostic_code("shell_snapshot_replace_transaction"),
+                PlanStepV1::new("shell/utils/copyfile", None::<String>, PlanActionV1::None),
+            ],
+            PermissionSetV1::new([PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: "shine:installed/shell/utils".into(),
+            }]),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let mut app = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("app-preset"),
+                state: digest("app-state"),
+            },
+            vec![
+                PlanStepV1::new(
+                    "app/surge",
+                    Some("subscription-proxies.conf"),
+                    PlanActionV1::None,
+                )
+                .with_diagnostic_code("app_manual_refresh_required"),
+            ],
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        app.author_capabilities = PermissionSetV1::new([PermissionV1::Network {
+            scope: NetworkScopeV1::Any,
+        }]);
+        let sys = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("sys-preset"),
+                state: digest("sys-state"),
+            },
+            vec![PlanStepV1::new(
+                "sys/split-dns",
+                None::<String>,
+                PlanActionV1::None,
+            )],
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let planned = vec![
+            (
+                LifecyclePlanRequest::Shell(ShellPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: None,
+                    force: false,
+                    purge: false,
+                    input_versions: PlanningInputVersions::default(),
+                }),
+                shell,
+            ),
+            (
+                LifecyclePlanRequest::App(AppPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: None,
+                    force: false,
+                    purge: false,
+                    prune_stale: false,
+                    input_versions: PlanningInputVersions::default(),
+                }),
+                app,
+            ),
+            (
+                LifecyclePlanRequest::Sys(SysManagedPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    os_id: "macos".into(),
+                    target: None,
+                    input_versions: PlanningInputVersions::default(),
+                }),
+                sys,
+            ),
+        ];
+
+        let rendered = render_upgrade_detailed_plan_lines(&planned, "config-snapshot")
+            .unwrap()
+            .join("\n");
+        assert_eq!(rendered.matches("Security Plan · upgrade").count(), 1);
+        assert!(
+            rendered
+                .contains("~ shell/utils · shared-snapshot [shell_snapshot_replace_transaction]")
+        );
+        assert!(rendered.contains("filesystem write shine:installed/shell/utils"));
+        assert!(rendered.contains("Config snapshot  config-snapshot"));
+        assert!(rendered.contains("Fingerprint"));
+        assert!(!rendered.contains("shell/agent/ccenv"));
+        assert!(!rendered.contains("shell/utils/copyfile"));
+        assert!(!rendered.contains("app/surge"));
+        assert!(!rendered.contains("sys/split-dns"));
+        assert!(!rendered.contains("Author capability statement"));
+
+        let full = planned
+            .iter()
+            .flat_map(|(_, plan)| render_plan_lines(plan, "config-snapshot").unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(full.contains("shell/agent/ccenv"));
+        assert!(full.contains("app/surge"));
+        assert!(full.contains("sys/split-dns"));
+    }
+
+    #[test]
+    fn compact_upgrade_keeps_permissions_and_unexpected_diagnostics_visible() {
+        let mut plan = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("shell-preset"),
+                state: digest("shell-state"),
+            },
+            vec![PlanStepV1::new(
+                "shell/demo/tool",
+                None::<String>,
+                PlanActionV1::None,
+            )],
+            PermissionSetV1::new([PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: "home:.zshrc".into(),
+            }]),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let request = LifecyclePlanRequest::Shell(ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: None,
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        });
+        let mut planned = vec![(request, plan.clone())];
+        let rendered = render_compact_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert!(rendered.contains("filesystem write"));
+        assert!(rendered.contains("home:.zshrc"));
+        let detailed = render_upgrade_detailed_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert!(detailed.contains("filesystem write home:.zshrc"));
+        assert!(!detailed.contains("shell/demo/tool"));
+
+        plan.permissions.required = PermissionSetV1::default();
+        plan.steps[0]
+            .diagnostic_codes
+            .push("unexpected_state".into());
+        planned[0].1 = plan;
+        let rendered = render_compact_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert!(rendered.contains("unexpected_state"));
+        let detailed = render_upgrade_detailed_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert!(detailed.contains("shell/demo/tool [unexpected_state]"));
+    }
+
+    #[test]
+    fn compact_upgrade_separates_internal_shell_integration_from_presets() {
+        let plan = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("shell-preset"),
+                state: digest("shell-state"),
+            },
+            vec![
+                PlanStepV1::new("shell/utils", Some("shared-snapshot"), PlanActionV1::Update),
+                PlanStepV1::new("shell/profile", Some("home:.zshrc"), PlanActionV1::Update)
+                    .with_diagnostic_code("shell_profile_reconcile_transaction"),
+            ],
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let planned = vec![(
+            LifecyclePlanRequest::Shell(ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            }),
+            plan,
+        )];
+        let rendered = render_compact_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert!(rendered.contains("Steps\n      ~ shell/utils · shared-snapshot"));
+        assert!(rendered.contains("Shell integration (internal)\n      ~ home:.zshrc"));
+        assert!(!rendered.contains("~ shell/profile"));
     }
 
     #[test]

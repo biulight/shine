@@ -52,11 +52,12 @@ capture current source/state → regenerate Plan → match approved fingerprint 
 ```
 
 App, Shell, managed Sys install/upgrade/uninstall, exact Sys bootstrap, App refresh/artifact, and
-Sys profile enable/disable route through this flow. Untargeted `shine upgrade` renders the three
-final lifecycle Plans together, confirms once, and prevalidates all three before protected mutation
-starts. `upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate
-preview/inspection paths. Scoped external-code trust, ownership, and administrator authorization
-remain additional gates.
+Sys profile enable/disable route through this flow. Untargeted `shine upgrade` plans all three
+lifecycles, displays only scopes needing review by default, confirms once when there are actions,
+and prevalidates all three before protected mutation starts. `upgrade --verbose` expands relevant
+scopes, while `upgrade --verbose --full-plan` displays every planned scope and step.
+`upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate preview/inspection paths.
+Scoped external-code trust, ownership, and administrator authorization remain additional gates.
 
 Sys bootstrap uses the dedicated `sys-bootstrap` Plan operation rather than a lifecycle install.
 Interactive or profile selection resolves to an exact ordered item list before planning. The pure
@@ -103,6 +104,9 @@ receipt roots. CLI update separates conflicts/missing Presets from pending updat
 keep the same status. Upgrade preserves absent-source commands and blocks shared snapshot
 replacement when it would affect a retained missing sibling. Explicit uninstall remains
 receipt-driven even after an external category disappears (ADR 0081).
+Shell upgrade planning also projects source-command receipts in execution order and reuses the
+read-only profile-file comparison. Only observed profile differences contribute profile steps and
+permissions; the compact review labels them as internal Shell integration (ADR 0096).
 
 ## Frontend Service inventory
 

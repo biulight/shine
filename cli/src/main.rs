@@ -61,7 +61,11 @@ fn main() -> Result<()> {
 }
 
 async fn run(cli: Cli) -> Result<()> {
-    cli::with_security_plan_verbosity(cli.command.security_plan_verbose(), run_command(cli)).await
+    cli::with_full_upgrade_plan(
+        cli.command.full_upgrade_plan(),
+        cli::with_security_plan_verbosity(cli.command.security_plan_verbose(), run_command(cli)),
+    )
+    .await
 }
 
 async fn run_command(cli: Cli) -> Result<()> {
@@ -1296,6 +1300,7 @@ mod tests {
                 target: None,
                 pull: false,
                 verbose: false,
+                full_plan: false,
                 prune_stale: false,
                 yes: false
             })
@@ -1308,6 +1313,7 @@ mod tests {
                 target: None,
                 pull: false,
                 verbose: true,
+                full_plan: false,
                 prune_stale: false,
                 yes: false
             })
@@ -1320,6 +1326,7 @@ mod tests {
                 target: None,
                 pull: false,
                 verbose: false,
+                full_plan: false,
                 prune_stale: true,
                 yes: false
             })
@@ -1332,6 +1339,7 @@ mod tests {
                 target: None,
                 pull: true,
                 verbose: false,
+                full_plan: false,
                 prune_stale: false,
                 yes: false
             })
@@ -1344,9 +1352,21 @@ mod tests {
                 target: Some(ref target),
                 pull: false,
                 verbose: false,
+                full_plan: false,
                 prune_stale: false,
                 yes: false,
             }) if target == "app/starship"
+        ));
+
+        assert!(Cli::try_parse_from(["shine", "upgrade", "--full-plan"]).is_err());
+        let cli = Cli::try_parse_from(["shine", "upgrade", "--verbose", "--full-plan"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Upgrade(UpgradeCommand {
+                verbose: true,
+                full_plan: true,
+                ..
+            })
         ));
 
         let cli = Cli::try_parse_from(["shine", "list", "--available", "app"]).unwrap();

@@ -55,17 +55,28 @@ Every command accepts the global `--config-dir <PATH>` option.
 Security Plans show user file paths explicitly and summarize installed files, Shine maintenance,
 and associated backup/recovery files by purpose, with access types and path counts. Installation,
 upgrade, uninstall, recovery, App refresh/artifact, and Sys bootstrap/profile/apply reviews accept
-`--verbose` to show all file paths, steps, snapshot identities, and diagnostics.
+`--verbose` to expand file paths, steps, snapshot identities, and diagnostics in the displayed
+review scopes.
 
 Shell command installations are grouped by command count, with Shell integration shown separately.
 Internal state and recovery files share one path count, while backup associations with user files
 remain explicit. Use `--verbose` for individual entries.
 
 For App files and managed Sys items confirmed unchanged, required permissions omit their operation
-effects; author capability statements remain visible. State observations still bind approval, so a
-change after review requires a new Plan. Active generators, hooks and shared transactions retain
-their own permissions. Normal transaction codes and lifecycle snapshot identities appear only
-with `--verbose`; preservation, blocking and other diagnostic notices remain explicit.
+effects. The default `upgrade` review hides scopes with no actions, required permissions, code
+boundaries, blockers, or exceptional diagnostics; it also hides ordinary unchanged steps and
+manual App generators skipped by routine upgrade. `upgrade --verbose` expands the remaining steps,
+exact permissions, snapshot identities, diagnostics, and fingerprints while omitting those same
+unchanged scopes and steps. Use `upgrade --verbose --full-plan` to see every planned scope and step;
+`--full-plan` requires `--verbose`. State observations still bind approval, so a change after
+review requires a new Plan. Active generators, hooks and shared transactions retain their own
+permissions. Normal transaction codes and lifecycle snapshot identities appear only with
+`--verbose`; preservation, blocking and other diagnostic notices remain explicit.
+
+During Shell upgrade, the Plan compares the managed profile and configured shell startup files
+before review. It shows changed profile files under `Shell integration (internal)` and omits
+unchanged startup files and their permissions. `shell/profile` is an internal Plan identity, not a
+Shell Preset category.
 
 Recovery operations, blocked Plans, and permissions without reliable classification still show
 concrete paths. Code trust, administrator access, and other capability notices remain visible.
@@ -119,7 +130,7 @@ See [Manage application configuration](../guides/app-presets.md).
 shine list [--available [<app|shell|sys>]]
 shine info <TARGET> [--diff] [--verbose] [--run-generators]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
-shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
+shine upgrade [TARGET] [--pull] [--verbose] [--full-plan] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
 shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
 shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
@@ -129,7 +140,8 @@ shine completions install
 shine completions <bash|zsh|powershell>
 ```
 
-`update` is read-only. `upgrade` displays the planned changes and asks for approval; use `--yes`
+`update` is read-only. `upgrade` displays the planned changes and asks for approval when there is
+an action; a fully unchanged run reports `Nothing to upgrade.` without confirmation. Use `--yes`
 only after reviewing the same scope. `--pull` first updates eligible Git-managed Preset sources.
 `--prune-stale` permits removal of unchanged managed entries no longer present in the Preset.
 `trust grant --development` keeps code edits from the displayed local source trusted while the
