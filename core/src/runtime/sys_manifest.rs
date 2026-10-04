@@ -7,7 +7,17 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 pub fn parse_sys_manifest(content: &str) -> Result<SysManifest> {
-    let manifest: SysManifest = toml::from_str(content)?;
+    let mut manifest: SysManifest = toml::from_str(content)?;
+    if let Some(defaults) = &manifest.permission_defaults {
+        defaults
+            .validate()
+            .context("invalid sys permission_defaults")?;
+        for item in &mut manifest.items {
+            if item.permissions.is_none() {
+                item.permissions = Some(defaults.clone());
+            }
+        }
+    }
     validate_sys_manifest(&manifest)?;
     Ok(manifest)
 }
@@ -477,10 +487,66 @@ fn config_string(config: &toml::Table, key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plan::{OpaqueCodeScopeV1, PermissionV1};
     use crate::runtime::{
         FileSystemObservationHost, HostOperation, InMemoryHost, PresetSnapshot, PresetSourceKind,
         RuntimeContext, RuntimePlatform,
     };
+
+    #[test]
+    fn sys_permission_defaults_resolve_per_item_with_explicit_override() {
+        let manifest = parse_sys_manifest(
+            r#"
+version = 2
+[permission_defaults]
+schema_version = 2
+opaque_code = "unrestricted"
+
+[[items]]
+id = "one"
+label = "One"
+detect = { kind = "path", path = "~/one" }
+install = { kind = "script", path = "one.sh" }
+
+[[items]]
+id = "two"
+label = "Two"
+detect = { kind = "path", path = "~/two" }
+install = { kind = "script", path = "two.sh" }
+[items.permissions]
+schema_version = 1
+commands = ["git"]
+"#,
+        )
+        .unwrap();
+
+        let inherited = manifest.items[0].permissions.as_ref().unwrap();
+        let overridden = manifest.items[1].permissions.as_ref().unwrap();
+        assert!(
+            inherited
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                })
+        );
+        assert!(
+            overridden
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::Command {
+                    program: "git".to_string(),
+                })
+        );
+        assert!(
+            !overridden
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                })
+        );
+    }
 
     #[tokio::test]
     async fn external_sys_preset_load_is_read_only_and_execution_materializes_snapshot() {

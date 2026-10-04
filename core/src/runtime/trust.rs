@@ -1,7 +1,11 @@
-use super::{AppCategory, CoreRuntime, PresetSourceKind, SysInstall, SysItem};
+use super::{
+    AppCategory, CoreRuntime, PresetSourceKind, ShellCategory, ShellFile, SysInstall, SysItem,
+};
 use crate::permission::PermissionDeclarationV1;
-use crate::plan::{FilesystemAccessV1, PermissionSetV1, PermissionV1};
-use crate::trust::{TrustCapabilityV1, TrustDecisionV1, TrustRequirementV1, evaluate_trust};
+use crate::plan::PermissionSetV1;
+use crate::trust::{
+    TrustCapabilityV1, TrustDecisionV1, TrustRequirementV1, TrustSourceV1, evaluate_trust,
+};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 
@@ -15,6 +19,31 @@ impl<H> CoreRuntime<H> {
         &self,
         target: &str,
     ) -> Result<ExternalCodeRequirementReport> {
+        if target == "preset" {
+            let mut requirements = Vec::new();
+            for category in self.app_categories(None)? {
+                requirements.extend(self.app_external_code_requirements(&category)?);
+            }
+            for category in self.shell_categories(None)? {
+                for file in &category.files {
+                    requirements.extend(self.shell_external_code_requirements(&category, file)?);
+                }
+            }
+            let os_id = match self.context().platform {
+                super::RuntimePlatform::Macos => "macos",
+                super::RuntimePlatform::Linux => "ubuntu",
+                super::RuntimePlatform::Windows => "windows",
+            };
+            if let Ok(loaded) = self.load_sys_preset(os_id).await {
+                for item in &loaded.manifest.items {
+                    requirements.extend(self.sys_external_code_requirements(os_id, item)?);
+                }
+            }
+            requirements.sort_by(|left, right| {
+                (&left.target, left.capability).cmp(&(&right.target, right.capability))
+            });
+            return Ok(ExternalCodeRequirementReport { requirements });
+        }
         if let Some(category_name) = target.strip_prefix("app/") {
             let category = self
                 .app_categories(Some(category_name))?
@@ -23,6 +52,25 @@ impl<H> CoreRuntime<H> {
                 .with_context(|| format!("app preset category not found: {category_name}"))?;
             return Ok(ExternalCodeRequirementReport {
                 requirements: self.app_external_code_requirements(&category)?,
+            });
+        }
+        if let Some(shell_target) = target.strip_prefix("shell/") {
+            let (category_name, command_name) =
+                shell_target.split_once('/').with_context(|| {
+                    format!("trust Shell target must be shell/<category>/<command>: {target}")
+                })?;
+            let category = self
+                .shell_categories(Some(category_name))?
+                .into_iter()
+                .find(|category| category.name == category_name)
+                .with_context(|| format!("shell preset category not found: {category_name}"))?;
+            let file = category
+                .files
+                .iter()
+                .find(|file| file.command_name == command_name)
+                .with_context(|| format!("shell command not found: {target}"))?;
+            return Ok(ExternalCodeRequirementReport {
+                requirements: self.shell_external_code_requirements(&category, file)?,
             });
         }
         if let Some(item_id) = target.strip_prefix("sys/") {
@@ -42,7 +90,9 @@ impl<H> CoreRuntime<H> {
                 requirements: self.sys_external_code_requirements(os_id, item)?,
             });
         }
-        bail!("trust target must be canonical app/<category> or sys/<item>: {target}")
+        bail!(
+            "trust target must be preset, app/<category>, shell/<category>/<command>, or sys/<item>: {target}"
+        )
     }
 
     pub(crate) fn app_external_code_requirements(
@@ -65,22 +115,7 @@ impl<H> CoreRuntime<H> {
                 )
             })
             .collect::<Vec<_>>();
-        let mut explicit_paths = generator_paths.clone();
-        if let Some(artifact) = &category.artifact {
-            explicit_paths.push(format!(
-                "app/{}/{}",
-                category.name,
-                artifact.script.replace('\\', "/")
-            ));
-            if let Some(teardown) = &artifact.teardown {
-                explicit_paths.push(format!(
-                    "app/{}/{}",
-                    category.name,
-                    teardown.replace('\\', "/")
-                ));
-            }
-        }
-        let category_paths = code_paths(self, &prefix, &permissions, explicit_paths);
+        let category_paths = category_paths(self, &prefix);
         let mut output = Vec::new();
 
         if (!category.post_install.is_empty() || !category.post_upgrade.is_empty())
@@ -126,22 +161,7 @@ impl<H> CoreRuntime<H> {
         let prefix = format!("sys/{os_id}/");
         let permissions_declared = item.permissions.is_some();
         let permissions = declared_permissions(item.permissions.as_ref())?;
-        let mut explicit_paths = Vec::new();
-        if let Some(SysInstall::Script { path, .. }) = &item.install {
-            explicit_paths.push(format!("sys/{os_id}/{}", path.replace('\\', "/")));
-        }
-        for integration in &item.shell {
-            for path in [
-                integration.source.as_deref(),
-                integration.fragment.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                explicit_paths.push(format!("sys/{os_id}/{}", path.replace('\\', "/")));
-            }
-        }
-        let category_paths = code_paths(self, &prefix, &permissions, explicit_paths);
+        let category_paths = category_paths(self, &prefix);
         let mut output = Vec::new();
         if matches!(&item.install, Some(SysInstall::Script { .. }))
             && any_external(self, category_paths.iter().copied())
@@ -175,8 +195,41 @@ impl<H> CoreRuntime<H> {
         Ok(output)
     }
 
+    pub(crate) fn shell_external_code_requirements(
+        &self,
+        category: &ShellCategory,
+        file: &ShellFile,
+    ) -> Result<Vec<TrustRequirementV1>> {
+        let target = format!("shell/{}/{}", category.name, file.command_name);
+        let prefix = format!("shell/{}/", category.name);
+        let permissions_declared = file.permissions.is_some();
+        let permissions = declared_permissions(file.permissions.as_ref())?;
+        let category_paths = category_paths(self, &prefix);
+        if !any_external(self, category_paths.iter().copied()) {
+            return Ok(Vec::new());
+        }
+        Ok(vec![self.requirement(
+            &target,
+            TrustCapabilityV1::ShellCommand,
+            category_paths,
+            permissions_declared,
+            permissions,
+        )?])
+    }
+
     pub(crate) fn trust_decision(&self, requirement: &TrustRequirementV1) -> TrustDecisionV1 {
-        evaluate_trust(&self.context().trust_grants, requirement)
+        let persistent = evaluate_trust(&self.context().trust_grants, requirement);
+        if persistent.is_trusted() {
+            persistent
+        } else if self
+            .operation_code_grants
+            .iter()
+            .any(|grant| grant.matches(requirement))
+        {
+            TrustDecisionV1::Trusted
+        } else {
+            persistent
+        }
     }
 
     pub(crate) fn app_capability_trusted(
@@ -188,7 +241,7 @@ impl<H> CoreRuntime<H> {
         Ok(requirements
             .iter()
             .filter(|requirement| requirement.capability == capability)
-            .all(|requirement| self.trust_decision(requirement) == TrustDecisionV1::Trusted))
+            .all(|requirement| self.trust_decision(requirement).is_trusted()))
     }
 
     pub(crate) fn sys_capability_trusted(
@@ -201,7 +254,34 @@ impl<H> CoreRuntime<H> {
         Ok(requirements
             .iter()
             .filter(|requirement| requirement.capability == capability)
-            .all(|requirement| self.trust_decision(requirement) == TrustDecisionV1::Trusted))
+            .all(|requirement| self.trust_decision(requirement).is_trusted()))
+    }
+
+    pub(crate) fn shell_command_trusted(
+        &self,
+        category: &ShellCategory,
+        file: &ShellFile,
+    ) -> Result<bool> {
+        if self.context().external_shell_mode == super::ExternalShellMode::Live {
+            return self.shell_command_development_trusted(category, file);
+        }
+        Ok(self
+            .shell_external_code_requirements(category, file)?
+            .iter()
+            .all(|requirement| self.trust_decision(requirement).is_trusted()))
+    }
+
+    pub(crate) fn shell_command_development_trusted(
+        &self,
+        category: &ShellCategory,
+        file: &ShellFile,
+    ) -> Result<bool> {
+        Ok(self
+            .shell_external_code_requirements(category, file)?
+            .iter()
+            .all(|requirement| {
+                self.trust_decision(requirement) == TrustDecisionV1::DevelopmentTrusted
+            }))
     }
 
     fn requirement<'a>(
@@ -216,11 +296,71 @@ impl<H> CoreRuntime<H> {
         Ok(TrustRequirementV1 {
             target: target.to_string(),
             capability,
-            code_digest: self.presets().code_digest_v1(paths)?,
+            code_digest: self.presets().code_digest_v1(paths.iter().copied())?,
             permissions_declared,
             permissions,
+            development_source: development_source(self, paths.iter().copied())?,
         })
     }
+}
+
+fn development_source<'a, H>(
+    runtime: &CoreRuntime<H>,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> Result<Option<TrustSourceV1>> {
+    let mut sources = BTreeSet::new();
+    for path in paths {
+        let Some(origin) = runtime.presets().origin(path) else {
+            continue;
+        };
+        if origin.source_kind == PresetSourceKind::Embedded {
+            continue;
+        }
+        let Some(root) = origin.category_root.as_ref() else {
+            return Ok(None);
+        };
+        sources.insert((origin.source_kind, root.clone()));
+    }
+    if sources.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = crate::plan::SnapshotDigestV1::builder("development-source");
+    let mut labels = Vec::with_capacity(sources.len());
+    for (index, (kind, root)) in sources.into_iter().enumerate() {
+        let kind = match kind {
+            PresetSourceKind::Embedded => "embedded",
+            PresetSourceKind::External => "external",
+            PresetSourceKind::Overlay => "overlay",
+        };
+        builder.add_observation(format!("source:{index}:kind"), kind)?;
+        builder.add_observation(format!("source:{index}:path"), source_path_bytes(&root))?;
+        let label = root.to_string_lossy().replace('\\', "/");
+        labels.push(format!("{kind}:{label}"));
+    }
+    Ok(Some(TrustSourceV1 {
+        identity: builder.finish(),
+        labels,
+    }))
+}
+
+#[cfg(unix)]
+fn source_path_bytes(path: &std::path::Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(windows)]
+fn source_path_bytes(path: &std::path::Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn source_path_bytes(path: &std::path::Path) -> Vec<u8> {
+    path.to_string_lossy().as_bytes().to_vec()
 }
 
 fn declared_permissions(declaration: Option<&PermissionDeclarationV1>) -> Result<PermissionSetV1> {
@@ -249,55 +389,14 @@ fn external_profile_base<H>(runtime: &CoreRuntime<H>, os_id: &str) -> bool {
     })
 }
 
-fn code_paths<'a, H>(
-    runtime: &'a CoreRuntime<H>,
-    prefix: &str,
-    permissions: &PermissionSetV1,
-    explicit_paths: impl IntoIterator<Item = String>,
-) -> Vec<&'a str> {
-    let mut selected = explicit_paths.into_iter().collect::<BTreeSet<_>>();
-    selected.insert(format!("{prefix}shine.toml"));
-    for permission in permissions.iter() {
-        if let PermissionV1::Filesystem {
-            access: FilesystemAccessV1::Execute,
-            path,
-        } = permission
-            && let Some(relative) = path.strip_prefix("preset:")
-        {
-            selected.insert(format!("{prefix}{relative}"));
-        }
-    }
+fn category_paths<'a, H>(runtime: &'a CoreRuntime<H>, prefix: &str) -> Vec<&'a str> {
     runtime
         .presets()
         .files()
         .keys()
         .filter(|path| path.starts_with(prefix))
-        .filter(|path| selected.contains(path.as_str()) || is_code_support_file(path))
         .map(String::as_str)
         .collect()
-}
-
-fn is_code_support_file(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    if matches!(name, "package.json" | "bun.lock" | "bun.lockb") {
-        return true;
-    }
-    matches!(
-        name.rsplit_once('.').map(|(_, extension)| extension),
-        Some(
-            "sh" | "bash"
-                | "zsh"
-                | "fish"
-                | "ps1"
-                | "cmd"
-                | "bat"
-                | "ts"
-                | "js"
-                | "mts"
-                | "mjs"
-                | "cjs"
-        )
-    )
 }
 
 #[cfg(test)]
@@ -318,6 +417,7 @@ mod tests {
         );
         context.is_external_presets = true;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/presets")
             .file("sys/ubuntu/shine.toml", manifest.as_bytes().to_vec())
             .file(
                 "sys/ubuntu/profile/base.pre.sh",
@@ -325,6 +425,142 @@ mod tests {
             )
             .build();
         CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    }
+
+    fn external_shell_runtime() -> CoreRuntime<InMemoryHost> {
+        let home = std::env::temp_dir().join("shine-external-shell-trust");
+        let shine = home.join(".shine");
+        let mut context = RuntimeContext::isolated(
+            home,
+            shine.clone(),
+            shine.join("presets"),
+            shine.join("bin"),
+            RuntimePlatform::Linux,
+        );
+        context.is_external_presets = true;
+        context.shell = crate::runtime::ShellType::Bash;
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/presets")
+            .file(
+                "shell/tools/shine.toml",
+                b"[[files]]\nsource = 'tool.sh'\ntarget = 'tool'\nplatforms = ['unix']\n".to_vec(),
+            )
+            .file("shell/tools/tool.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    }
+
+    fn external_app_runtime(hook: &[u8]) -> CoreRuntime<InMemoryHost> {
+        external_app_runtime_with_helper(hook, b"helper before")
+    }
+
+    fn external_app_runtime_with_helper(hook: &[u8], helper: &[u8]) -> CoreRuntime<InMemoryHost> {
+        let home = PathBuf::from("/home/test");
+        let shine = home.join(".shine");
+        let mut context = RuntimeContext::isolated(
+            home,
+            shine.clone(),
+            shine.join("presets"),
+            shine.join("bin"),
+            RuntimePlatform::Linux,
+        );
+        context.is_external_presets = true;
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/presets")
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_install = { script = 'hooks/install' }\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.toml'\n"
+                    .to_vec(),
+            )
+            .file("app/demo/config.toml", b"value = true\n".to_vec())
+            .file("app/demo/hooks/install", hook.to_vec())
+            .file("app/demo/hooks/helper.unknown", helper.to_vec())
+            .build();
+        CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    }
+
+    #[tokio::test]
+    async fn extensionless_app_hook_is_bound_into_the_trust_digest() {
+        let before = external_app_runtime(b"#!/bin/sh\necho before\n")
+            .external_code_requirements("app/demo")
+            .await
+            .unwrap();
+        let after = external_app_runtime(b"#!/bin/sh\necho after\n")
+            .external_code_requirements("app/demo")
+            .await
+            .unwrap();
+
+        assert_eq!(before.requirements.len(), 1);
+        assert_ne!(
+            before.requirements[0].code_digest,
+            after.requirements[0].code_digest
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_extension_helper_is_bound_into_the_complete_category_digest() {
+        let before = external_app_runtime_with_helper(b"#!/bin/sh\necho ok\n", b"before")
+            .external_code_requirements("app/demo")
+            .await
+            .unwrap();
+        let after = external_app_runtime_with_helper(b"#!/bin/sh\necho ok\n", b"after")
+            .external_code_requirements("app/demo")
+            .await
+            .unwrap();
+
+        assert_ne!(
+            before.requirements[0].code_digest,
+            after.requirements[0].code_digest
+        );
+    }
+
+    #[tokio::test]
+    async fn development_source_binds_the_external_category_root() {
+        let report = external_app_runtime(b"#!/bin/sh\necho ok\n")
+            .external_code_requirements("app/demo")
+            .await
+            .unwrap();
+
+        let source = report.requirements[0].development_source.as_ref().unwrap();
+        assert_eq!(source.labels, ["external:/presets/app/demo"]);
+    }
+
+    #[tokio::test]
+    async fn development_grant_survives_code_edits_from_the_same_category_root() {
+        let before = external_app_runtime(b"#!/bin/sh\necho before\n")
+            .external_code_requirements("app/demo")
+            .await
+            .unwrap();
+        let grant =
+            crate::trust::TrustGrantV1::for_development_requirement(&before.requirements[0])
+                .unwrap();
+        let mut after = external_app_runtime(b"#!/bin/sh\necho after\n");
+        after.context_mut_for_cli().trust_grants = vec![grant];
+        let category = after.app_categories(Some("demo")).unwrap().remove(0);
+
+        assert!(
+            after
+                .app_capability_trusted(&category, TrustCapabilityV1::AppHook)
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_and_batch_requirements_are_target_local_and_snapshot_bound() {
+        let runtime = external_shell_runtime();
+        let direct = runtime
+            .external_code_requirements("shell/tools/tool")
+            .await
+            .unwrap();
+        let batch = runtime.external_code_requirements("preset").await.unwrap();
+
+        assert_eq!(direct.requirements, batch.requirements);
+        assert_eq!(direct.requirements.len(), 1);
+        let requirement = &direct.requirements[0];
+        assert_eq!(requirement.target, "shell/tools/tool");
+        assert_eq!(requirement.capability, TrustCapabilityV1::ShellCommand);
+        assert!(!requirement.permissions_declared);
+        assert!(requirement.permissions.is_empty());
     }
 
     #[tokio::test]

@@ -4,6 +4,9 @@
 - **Date**: 2026-09-01
 - **Evidence**: `core/src/runtime/pack.rs`, `cli/src/preset_pack.rs`
 
+Bundle schema v2 extends this deterministic format with the opaque-code risk marker described in
+ADR 0088; the remaining archive and packing rules below are unchanged.
+
 ## Context
 
 Roadmap Phase 5 requires reproducible packing before Phase 9 adds signing and registry distribution.

@@ -168,6 +168,7 @@ mod tests {
             .unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
+        crate::trust::grant_current_for_test(&config, "shell/custom/one").await;
         handle_install(&config, Some("custom/one"), false)
             .await
             .unwrap();

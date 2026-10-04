@@ -45,6 +45,9 @@ pub enum Commands {
     },
     /// Install or repair one shell or app preset
     Install {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Preset target: app/<category>, shell/<category>[/<command>], or a unique category name
         #[arg(value_name = "TARGET")]
         target: String,
@@ -57,6 +60,9 @@ pub enum Commands {
     },
     /// Uninstall one shell or app preset
     Uninstall {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Preset target: app/<category>, shell/<category>[/<command>], or a unique category name
         #[arg(value_name = "TARGET")]
         target: String,
@@ -330,13 +336,105 @@ pub struct UpgradeCommand {
     /// Pull Git-managed preset sources before upgrading installed configs
     #[arg(long)]
     pub pull: bool,
-    /// Show detailed env-template checks and skipped rows
+    /// Show detailed results for changes and items needing attention
     #[arg(long)]
     pub verbose: bool,
+    /// Show every Plan scope, step, and execution row, including unchanged entries
+    #[arg(long, requires = "verbose")]
+    pub full_plan: bool,
     /// Remove stale managed app files whose preset source no longer exists
     #[arg(long)]
     pub prune_stale: bool,
     /// Approve every displayed lifecycle Plan without prompting
     #[arg(long)]
     pub yes: bool,
+}
+
+impl Commands {
+    pub fn full_upgrade_plan(&self) -> bool {
+        matches!(self, Self::Upgrade(command) if command.full_plan)
+    }
+
+    pub fn security_plan_verbose(&self) -> bool {
+        match self {
+            Self::Install { verbose, .. } | Self::Uninstall { verbose, .. } => *verbose,
+            Self::Upgrade(command) => command.verbose,
+            Self::App { command } => match command {
+                AppCommands::Install { verbose, .. }
+                | AppCommands::Uninstall { verbose, .. }
+                | AppCommands::Refresh { verbose, .. }
+                | AppCommands::Recover { verbose, .. } => *verbose,
+                AppCommands::Artifact { command } => match command {
+                    super::AppArtifactCommands::Apply { verbose, .. }
+                    | super::AppArtifactCommands::Remove { verbose, .. } => *verbose,
+                },
+                _ => false,
+            },
+            Self::Shell {
+                command:
+                    ShellCommands::Install { verbose, .. }
+                    | ShellCommands::Uninstall { verbose, .. }
+                    | ShellCommands::Recover { verbose, .. },
+            } => *verbose,
+            Self::Sys { command } => match command {
+                SysCommands::Bootstrap { verbose, .. }
+                | SysCommands::Apply { verbose, .. }
+                | SysCommands::Uninstall { verbose, .. }
+                | SysCommands::Recover { verbose, .. } => *verbose,
+                SysCommands::Profile { command } => match command {
+                    super::SysProfileCommands::Enable { verbose, .. }
+                    | super::SysProfileCommands::Disable { verbose, .. } => *verbose,
+                },
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod security_review_tests {
+    use super::*;
+
+    #[test]
+    fn every_security_review_entry_accepts_verbose() {
+        for args in [
+            vec!["install", "app/demo"],
+            vec!["uninstall", "shell/demo"],
+            vec!["upgrade"],
+            vec!["app", "install"],
+            vec!["app", "uninstall"],
+            vec!["app", "recover"],
+            vec!["app", "refresh", "demo"],
+            vec!["app", "artifact", "apply", "demo"],
+            vec!["app", "artifact", "remove", "demo"],
+            vec!["shell", "install"],
+            vec!["shell", "uninstall"],
+            vec!["shell", "recover"],
+            vec!["sys", "apply"],
+            vec!["sys", "uninstall", "demo"],
+            vec!["sys", "recover"],
+            vec!["sys", "bootstrap"],
+            vec!["sys", "profile", "enable", "demo"],
+            vec!["sys", "profile", "disable", "demo"],
+        ] {
+            let mut command = vec!["shine"];
+            command.extend(args);
+            assert!(
+                !Cli::try_parse_from(&command)
+                    .unwrap()
+                    .command
+                    .security_plan_verbose(),
+                "{command:?}"
+            );
+            command.push("--verbose");
+            assert!(
+                Cli::try_parse_from(&command)
+                    .unwrap()
+                    .command
+                    .security_plan_verbose(),
+                "{command:?}"
+            );
+        }
+    }
 }

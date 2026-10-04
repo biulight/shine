@@ -363,22 +363,28 @@ async fn mirror_managed_overlay(
     dir: &Path,
     verbose: bool,
 ) -> Result<()> {
-    let branch = match branch {
-        Some(branch) => branch.to_string(),
-        None => current_branch(dir).await?,
-    };
+    // The configured source is authoritative, even after relinking an existing
+    // checkout. HEAD follows the remote default rather than an old local branch.
+    let branch = branch.unwrap_or("HEAD");
     let before = head_short(dir).await?;
 
     // Fetch first, reset only on success: an unreachable remote leaves the
     // existing checkout intact and usable.
     run_git(
         dir,
-        &["fetch", "--depth", "1", "origin", &branch],
+        &["fetch", "--depth", "1", "--", url, branch],
         verbose,
         "fetch",
     )
     .await
     .with_context(|| format!("failed to fetch managed overlay from {url}"))?;
+    run_git(
+        dir,
+        &["remote", "set-url", "origin", url],
+        verbose,
+        "set-url",
+    )
+    .await?;
     run_git(dir, &["reset", "--hard", "FETCH_HEAD"], verbose, "reset").await?;
 
     let after = head_short(dir).await?;
@@ -412,14 +418,6 @@ fn temp_clone_path(dir: &Path) -> Result<PathBuf> {
     let mut tmp = name.to_os_string();
     tmp.push(".shine-clone-tmp");
     Ok(dir.with_file_name(tmp))
-}
-
-async fn current_branch(dir: &Path) -> Result<String> {
-    let output = git_output(dir, &["rev-parse", "--abbrev-ref", "HEAD"]).await?;
-    if !output.status.success() {
-        bail!("failed to resolve current branch in {}", dir.display());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Run a git command, inheriting stdin and (when verbose) stdout/stderr, and
@@ -634,6 +632,65 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn managed_overlay_relink_uses_new_source_and_remote_default() {
+        let root = temp_dir("relink");
+        let first = root.join("first");
+        let second = root.join("second");
+        init_repo(&first);
+        init_repo(&second);
+        git(&first, &["branch", "-M", "old-default"]);
+        git(&second, &["branch", "-M", "new-default"]);
+        std::fs::write(second.join("preset.txt"), "second source\n").unwrap();
+        git(&second, &["commit", "-am", "second source"]);
+        let dir = root.join("overlay");
+        sync_managed_overlay(first.to_str().unwrap(), None, &dir, false)
+            .await
+            .unwrap();
+        sync_managed_overlay(second.to_str().unwrap(), None, &dir, false)
+            .await
+            .unwrap();
+        assert_eq!(read_text(dir.join("preset.txt")), "second source\n");
+        let origin = git_output(&dir, &["remote", "get-url", "origin"])
+            .await
+            .unwrap();
+        assert!(origin.status.success());
+        assert_eq!(
+            String::from_utf8(origin.stdout).unwrap().trim(),
+            second.to_str().unwrap()
+        );
+
+        // A failed relink must retain both the last working content and origin.
+        assert!(
+            sync_managed_overlay(root.join("missing").to_str().unwrap(), None, &dir, false)
+                .await
+                .is_err()
+        );
+        assert_eq!(read_text(dir.join("preset.txt")), "second source\n");
+        assert_eq!(
+            git_output(&dir, &["remote", "get-url", "origin"])
+                .await
+                .unwrap()
+                .stdout,
+            format!("{}\n", second.display()).as_bytes()
+        );
+
+        // Explicit branch selection still overrides the remote's default.
+        git(&second, &["checkout", "-b", "selected"]);
+        std::fs::write(second.join("preset.txt"), "selected branch\n").unwrap();
+        git(&second, &["commit", "-am", "selected branch"]);
+        git(&second, &["checkout", "new-default"]);
+        sync_managed_overlay(second.to_str().unwrap(), Some("selected"), &dir, false)
+            .await
+            .unwrap();
+        assert_eq!(read_text(dir.join("preset.txt")), "selected branch\n");
+        sync_managed_overlay(second.to_str().unwrap(), None, &dir, false)
+            .await
+            .unwrap();
+        assert_eq!(read_text(dir.join("preset.txt")), "second source\n");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

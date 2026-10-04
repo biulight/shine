@@ -6,6 +6,7 @@
 mod action_executor;
 mod app;
 mod app_metadata;
+mod app_script;
 mod authoring;
 mod bootstrap;
 mod command_detection;
@@ -40,7 +41,8 @@ pub use action_executor::{
 };
 pub use authoring::{
     PRESET_AUTHORING_PLAN_SCHEMA_VERSION, PresetAuthoringPlanAssumptionsV1,
-    PresetAuthoringPlanReportV1, PresetAuthoringPlanSectionV1, plan_preset_path,
+    PresetAuthoringPlanReportV1, PresetAuthoringPlanReportV2, PresetAuthoringPlanSectionV1,
+    plan_preset_path,
 };
 pub use fixture::{
     PRESET_TEST_FIXTURE_FILE, PRESET_TEST_SCHEMA_VERSION, PresetTestCaseResultV1,
@@ -68,7 +70,8 @@ pub use lint::{
 };
 pub use memory::InMemoryHost;
 pub use pack::{
-    PRESET_BUNDLE_SCHEMA_VERSION, PresetPackArtifactV1, PresetPackReportV1, pack_preset_path,
+    PRESET_BUNDLE_SCHEMA_VERSION, PresetPackArtifactV1, PresetPackArtifactV2, PresetPackArtifactV3,
+    PresetPackReportV1, PresetPackReportV2, PresetPackReportV3, pack_preset_path,
 };
 pub use planner::{
     AppApprovedUpgradeOptions, AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest,
@@ -92,7 +95,8 @@ pub use profile::{
     shell_source_command, supports_completion_registration,
 };
 pub use schema::{
-    PRESET_SCHEMA_REFERENCE_VERSION, PresetSchemaReferenceV1, preset_schema_reference_v1,
+    PRESET_SCHEMA_REFERENCE_VERSION, PresetSchemaReferenceV1, PresetSchemaReferenceV2,
+    preset_schema_reference_v1, preset_schema_reference_v2,
 };
 pub use shell::{
     BunDependencyMode, BunRuntimeSpec, ExternalShellMode, LinkRuntime, SHELL_MANIFEST_FILE,
@@ -252,6 +256,7 @@ pub struct RuntimeInspection {
 /// Frontend-neutral runtime facade. Domain executors are added behind this
 /// facade as their Phase 2 slices migrate.
 pub struct CoreRuntime<H> {
+    pub(crate) operation_code_grants: Vec<crate::trust::TrustGrantV1>,
     host: H,
     context: RuntimeContext,
     presets: PresetSnapshot,
@@ -260,6 +265,7 @@ pub struct CoreRuntime<H> {
 impl<H> CoreRuntime<H> {
     pub fn new(host: H, context: RuntimeContext, presets: PresetSnapshot) -> Self {
         Self {
+            operation_code_grants: Vec::new(),
             host,
             context,
             presets,

@@ -326,6 +326,7 @@ async fn encrypt_age(plaintext: &[u8], recipients: &[&str]) -> Result<Vec<u8>> {
     }
 
     let output = command
+        .kill_on_drop(true)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())

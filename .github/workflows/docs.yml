@@ -49,6 +49,9 @@ jobs:
       - name: Type-check documentation site
         working-directory: website
         run: pnpm typecheck
+      - name: Check documentation versions
+        working-directory: website
+        run: pnpm check:versions
       - name: Check locale content parity
         working-directory: website
         run: pnpm check:locales

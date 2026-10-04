@@ -10,6 +10,7 @@ pub struct SysManifest {
     #[serde(default)]
     pub description: String,
     pub default_profile: Option<String>,
+    pub permission_defaults: Option<PermissionDeclarationV1>,
     #[serde(default)]
     pub items: Vec<SysItem>,
     #[serde(default)]

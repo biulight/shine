@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileKind {
@@ -555,29 +555,115 @@ impl ProcessHost for RealHost {
             if let Some(cwd) = &request.cwd {
                 command.current_dir(cwd);
             }
-            let mut child = command.spawn()?;
-            if !request.stdin.is_empty()
-                && let Some(mut stdin) = child.stdin.take()
-            {
-                stdin.write_all(&request.stdin).await?;
-                stdin.shutdown().await?;
+            let bounded = request.timeout.is_some()
+                || request.stdout_limit.is_some()
+                || request.stderr_limit.is_some();
+            #[cfg(unix)]
+            if bounded {
+                use std::os::unix::process::CommandExt;
+                command.as_std_mut().process_group(0);
             }
-            let output = if let Some(timeout) = request.timeout {
-                tokio::time::timeout(timeout, child.wait_with_output())
-                    .await
-                    .map_err(|_| anyhow::anyhow!("process timed out"))??
+            command.kill_on_drop(true);
+            let mut child = command.spawn()?;
+            let process_group = bounded.then(|| child.id()).flatten();
+            let stdin = child.stdin.take();
+            let mut stdout = child.stdout.take();
+            let mut stderr = child.stderr.take();
+            let mut stdout_bytes = Vec::new();
+            let mut stderr_bytes = Vec::new();
+            let mut completion = Box::pin(async {
+                let (status, (), (), ()) = tokio::try_join!(
+                    child.wait(),
+                    async {
+                        if let Some(mut stdin) = stdin {
+                            stdin.write_all(&request.stdin).await?;
+                            // ChildStdin::shutdown is a no-op on Unix. Drop the
+                            // pipe here so EOF reaches the child before wait().
+                            drop(stdin);
+                        }
+                        Ok::<_, std::io::Error>(())
+                    },
+                    read_process_stream(
+                        &mut stdout,
+                        &mut stdout_bytes,
+                        request.stdout_limit,
+                        "stdout"
+                    ),
+                    read_process_stream(
+                        &mut stderr,
+                        &mut stderr_bytes,
+                        request.stderr_limit,
+                        "stderr"
+                    ),
+                )?;
+                Ok::<_, std::io::Error>(status)
+            });
+            let result = if let Some(timeout) = request.timeout {
+                match tokio::time::timeout(timeout, &mut completion).await {
+                    Ok(result) => result,
+                    Err(_) => Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "process timed out",
+                    )),
+                }
             } else {
-                child.wait_with_output().await?
+                (&mut completion).await
             };
-            let stdout = enforce_output_limit(output.stdout, request.stdout_limit, "stdout")?;
-            let stderr = enforce_output_limit(output.stderr, request.stderr_limit, "stderr")?;
+            drop(completion);
+            let status = match result {
+                Ok(status) => status,
+                Err(error) => {
+                    terminate_process(&mut child, process_group).await;
+                    return Err(error.into());
+                }
+            };
+
             Ok(ProcessOutput {
-                exit_code: output.status.code(),
-                stdout,
-                stderr,
+                exit_code: status.code(),
+                stdout: stdout_bytes,
+                stderr: stderr_bytes,
             })
         })
     }
+}
+
+async fn read_process_stream<R: AsyncRead + Unpin>(
+    stream: &mut Option<R>,
+    output: &mut Vec<u8>,
+    limit: Option<usize>,
+    name: &'static str,
+) -> std::io::Result<()> {
+    if let Some(stream) = stream {
+        let mut buffer = [0u8; 8192];
+        loop {
+            let count = stream.read(&mut buffer).await?;
+            if count == 0 {
+                break;
+            }
+            if limit.is_some_and(|limit| count > limit.saturating_sub(output.len())) {
+                return Err(std::io::Error::other(format!(
+                    "process {name} exceeded configured limit"
+                )));
+            }
+            output.extend_from_slice(&buffer[..count]);
+        }
+    }
+    Ok(())
+}
+
+async fn terminate_process(child: &mut tokio::process::Child, process_group: Option<u32>) {
+    #[cfg(unix)]
+    if let Some(id) = process_group {
+        // Keep the original group ID even if wait() already reaped the parent:
+        // descendants may still hold a pipe open after the parent exits.
+        unsafe {
+            libc::kill(-(id as i32), libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = process_group;
+    let _ = child.start_kill();
+    let _ = child.wait().await;
 }
 
 impl PrivilegedFileSystemHost for RealHost {
@@ -630,17 +716,6 @@ impl PrivilegedFileSystemHost for RealHost {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(privileged_remove(path))
     }
-}
-
-fn enforce_output_limit(
-    output: Vec<u8>,
-    limit: Option<usize>,
-    stream: &'static str,
-) -> anyhow::Result<Vec<u8>> {
-    if limit.is_some_and(|limit| output.len() > limit) {
-        anyhow::bail!("process {stream} exceeded configured limit");
-    }
-    Ok(output)
 }
 
 impl SplitDnsObservationHost for RealHost {
@@ -946,4 +1021,117 @@ async fn restart_systemd_resolved() -> anyhow::Result<()> {
         anyhow::bail!("failed to restart systemd-resolved");
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn timed_process_terminates_its_process_group_before_returning() {
+        let marker = std::env::temp_dir().join(format!(
+            "shine-timeout-process-group-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let script = format!("(sleep 0.3; printf leaked > '{}') & wait", marker.display());
+        let error = RealHost
+            .run(ProcessRequest {
+                program: "sh".to_string(),
+                args: vec!["-c".to_string(), script],
+                timeout: Some(Duration::from_millis(50)),
+                ..ProcessRequest::default()
+            })
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("process timed out"));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(tokio::fs::metadata(&marker).await.is_err());
+    }
+    #[tokio::test]
+    async fn output_limits_kill_children_before_later_side_effects() {
+        for stream in ["stdout", "stderr"] {
+            let marker =
+                std::env::temp_dir().join(format!("shine-output-limit-{}", uuid::Uuid::new_v4()));
+            let redirection = if stream == "stderr" { " >&2" } else { "" };
+            let script = format!(
+                "(sleep 0.3; printf leaked > \"$1\") & printf 123456789{redirection}; wait"
+            );
+            let error = RealHost
+                .run(ProcessRequest {
+                    program: "sh".into(),
+                    args: vec![
+                        "-c".into(),
+                        script,
+                        "probe".into(),
+                        marker.display().to_string(),
+                    ],
+                    stdout_limit: (stream == "stdout").then_some(4),
+                    stderr_limit: (stream == "stderr").then_some(4),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("process {stream} exceeded configured limit"))
+            );
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            assert!(
+                !marker.exists(),
+                "child continued after {stream} exceeded its limit"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_accepts_exact_limit_without_retaining_overflow() {
+        let mut exact = Some(&b"1234"[..]);
+        let mut output = Vec::new();
+        read_process_stream(&mut exact, &mut output, Some(4), "stdout")
+            .await
+            .unwrap();
+        assert_eq!(output, b"1234");
+        let mut overflow = Some(&b"123456789"[..]);
+        output.clear();
+        assert!(
+            read_process_stream(&mut overflow, &mut output, Some(4), "stdout")
+                .await
+                .is_err()
+        );
+        assert!(output.len() <= 4);
+    }
+
+    #[tokio::test]
+    async fn timeout_also_bounds_a_child_that_never_reads_stdin() {
+        let error = RealHost
+            .run(ProcessRequest {
+                program: "sh".into(),
+                args: vec!["-c".into(), "sleep 5".into()],
+                stdin: vec![b'x'; 1024 * 1024],
+                timeout: Some(Duration::from_millis(50)),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("process timed out"));
+    }
+
+    #[tokio::test]
+    async fn process_receives_stdin_eof_while_output_is_drained() {
+        let input = vec![b'x'; 1024 * 1024];
+        let output = RealHost
+            .run(ProcessRequest {
+                program: "cat".into(),
+                stdin: input.clone(),
+                timeout: Some(Duration::from_secs(5)),
+                stdout_limit: Some(input.len()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout, input);
+    }
 }

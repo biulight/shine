@@ -37,6 +37,23 @@ bugs. Check this list before changing the modules named in each entry.
   preview contract. Specialized operations use `sys-bootstrap`, `app-refresh`,
   `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
   lifecycle Plans or `LifecycleResultV1` operations.
+- **Filesystem summaries are Core-attributed review data.** Optional `filesystem_review` groups
+  bind exact permissions and their typed purpose/target into the Plan fingerprint. CLI summaries
+  never infer ownership from path prefixes or suffixes, never remove required permissions, and
+  leave user resources, ambiguous/unclassified effects, blockers and recovery paths explicit.
+  `--verbose` restores exact permissions in displayed scopes; upgrade review omits entirely
+  unchanged scopes by default, and `--verbose --full-plan` restores the complete review. The
+  complete Plan always binds approval (ADRs 0094, 0097). No display mode creates directory-wide
+  access.
+- **No-op capabilities are decided by Core, never hidden by the renderer.** Current App files
+  and current managed Sys items do not contribute operation permissions. Their observations and
+  author statements remain bound; generators, hooks, shared transactions, and blocked Sys items
+  retain independent requirements. Changes after review still invalidate approval.
+- **Shell profile upgrade permissions follow observed file changes.** A Shell Preset update alone
+  does not imply a startup-file or managed-profile rewrite. Upgrade planning compares those files
+  using the same read-only preparation as execution, binds the full source-command manifest and
+  observed paths, and grants profile write/recovery permissions only for paths that can change.
+  Re-planning must reject a different profile state before mutation (ADR 0096).
 - **Bootstrap permission provenance is bound review data.** Target-local and shared permission
   scopes are captured before merging; their union must equal the aggregate required set. Scopes
   contain only safe capability identities/diagnostics and enter the Plan fingerprint. They do not
@@ -89,36 +106,55 @@ bugs. Check this list before changing the modules named in each entry.
   content or paths. Descriptions, labels, arguments, and other incidental strings never declare an
   executable payload.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
-  digest binds sorted effective logical paths, exact bytes, and each file's embedded, external, or
-  overlay origin. It must not include physical source roots: relocating unchanged source is not a
+  digest binds sorted effective logical paths, exact bytes, captured executable intent, and each
+  file's embedded, external, or overlay origin. It must not include physical source roots: relocating unchanged source is not a
   semantic change, while changing an effective layer is. State observations use the same framed
   SHA-256 contract. Labels use canonical targets and logical resources; request flags, relevant
   manifests/receipts, live fingerprints, platform/mode, and outcome-affecting input identities are
   all bound. Plain environment values contribute only a hash, while secrets require opaque handles
   or versions and never contribute plaintext.
-- **A Preset permission declaration is not a grant.** App categories, Shell commands, and Sys items
-  may declare schema-v1 capability identities, but those declarations do not create scoped
-  external-code trust or bypass administrator authorization, ownership checks, or Plan approval.
-  Declaration presence is distinct from the normalized permission set: a validated explicit empty
-  declaration is legitimate when typed metadata derives every required capability, while an absent
-  declaration remains a fail-closed error. Trust enrollment must preserve that distinction rather
-  than treating both cases as an empty set.
+- **A Preset capability statement is not a grant or sandbox.** App categories, Shell commands, and
+  Sys items may declare versioned command, filesystem, network, and system identities for review.
+  They are optional, unverified author statements and never restrict arbitrary code. Missing or
+  empty statements do not block planning or trust enrollment. Explicit statements remain validated,
+  enter the Plan fingerprint, and are not trust identity. Environment declarations and Administrator
+  authorization retain executor semantics: required managed injection or elevation without the
+  corresponding declaration remains fail-closed. No declaration creates external-code trust or
+  bypasses ownership checks or Plan approval.
+  Snapshot grants bind the complete effective category snapshot, including sorted logical paths,
+  bytes, executable intent, and source layers. An explicitly requested development grant may accept content changes
+  only while target, capability, physical source-root identity, and source
+  layer still match; Preset content cannot create that grant. Trust grant schemas older than v2 are
+  inspection/revocation state only and require a new review before execution.
   Untargeted upgrade includes declarations only from installed App categories, installed Shell
   commands, and enabled managed Sys items; merely available embedded, external, or overlay Presets
-  cannot contribute required permissions or missing-declaration blockers. A fully current Shell
+  cannot contribute required permissions or trust blockers. A fully current Shell
   command contributes no command-local mutation permissions; shared cache, snapshot, rendered, or
   profile actions contribute only their own exact transaction permissions.
   Filesystem declarations use logical bases and never embed a physical Preset
   checkout path; command entries contain no argv and environment entries contain names and
   sensitivity only. Pure planners merge explicit declarations with Core-bounded typed metadata and
-  receipt ownership. A missing declaration or uncomputable requirement blocks protected mutation;
-  it is never converted into a broad implicit grant.
+  receipt ownership. An uncomputable structured requirement still blocks protected mutation; it is
+  never converted into a broad implicit grant. Schema-v2 `opaque_code = "unrestricted"` is an
+  optional author statement and cannot enable, suppress, or narrow Core's code classification.
+  Shell/Sys permission defaults still resolve per target before planning.
+
+- **Unisolated code classification is Core-owned.** Triggered App hooks, generators and artifacts;
+  installed or sourced Shell commands; Sys scripts; and executable profile integrations are marked
+  unisolated from typed entry semantics regardless of permission-table presence. Plans separate
+  derived operation capabilities, author statements, and code-boundary/trust records. Built-in code
+  uses distribution provenance but carries the same unisolated warning. External Shell live
+  deployment requires development trust; snapshot trust permits only snapshot delivery. A shared
+  category snapshot replacement includes every installed dependent command as a selected or
+  shared-resource-affected code boundary, and each affected external target needs one-time human consent or matching trust before
+  mutation. Fully unchanged resources preserve no-op behavior, and uninstall/recovery do not require
+  trusting code merely to remove or restore owned resources (ADR 0091).
 
 - **Opaque Preset code is described conservatively, never sampled during planning.** A generator
   or lifecycle hook contributes known command/environment/administrator requirements plus an
   `execute` step and potential mutation step when its lifecycle trigger applies. Existing external-
-  code gates may still block it. Embedded generator execution also declares and binds its runtime
-  script materialization under the Shine directory. If the original Preset disappeared, supported
+  code gates may still block it. Every App script execution declares and binds its temporary category
+  snapshot creation and removal under the Shine directory. If the original Preset disappeared, supported
   manifests/receipts may drive owned-resource removal, but missing teardown code is never
   reconstructed or executed.
   A generated App file still participates in first-install destination and fixed-backup observation;
@@ -127,6 +163,29 @@ bugs. Check this list before changing the modules named in each entry.
   User modification, occupied destinations, foreign launchers, and managed Sys ownership conflicts
   remain `preserve`/`blocked`; force must produce a distinct step or diagnostic and fingerprint.
 
+- **App execution consumes captured bytes, never mutable source paths.** Generator, script hook,
+  artifact and teardown entrypoints use a fresh private category copy per invocation. Relative helpers
+  and the source/overlay path variables refer only to effective captured bytes. Cleanup removes only
+  that invocation's tree, including on spawn failure; persistent output uses the state/cache/HTTP
+  contract. Planners declare snapshot creation and removal. Unisolated code can still deliberately
+  access other host paths; this is source consistency, not a sandbox (ADR 0092).
+  External and overlay helper executable flags are captured with the bytes and restored in both
+  execution copies. Never re-read source modes at execution time or copy ownership/setuid/setgid
+  bits; executable intent also enters approval and snapshot-trust digests (ADR 0093).
+- **Process limits apply while draining pipes.** Bounded reads retain at most the configured stdout
+  and stderr limits, concurrently with stdin writes and child wait. Overflow, timeout, or I/O failure
+  kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
+  terminated too. A post-capture length check is never a memory bound. Drop piped stdin immediately
+  after writing to deliver EOF; Tokio's Unix `ChildStdin::shutdown` alone does not close the pipe.
+- **Root links and tree links have different policies.** A selected external/overlay root symlink
+  resolves before capture and records its resolved source identity; broken root links fail closed.
+  Ordinary directory origins keep their existing spelling for receipt/trust compatibility. Links
+  inside a preset tree remain excluded.
+
+- **App refresh requires exact receipt ownership.** Destination equality alone cannot select a
+  generated file: the receipt source must match the requested category and logical source file.
+  Both planning and execution enforce this even with force; a foreign receipt never authorizes
+  generator execution or reassignment of its destination.
 - **App executable environment is explicit.** Generators receive only fixed `SHINE_APP_*` contract
   variables plus their `generator.env` mappings. Artifacts receive only the fixed contract plus
   their `[artifact].env` mappings, whose sources must be declared by the category's
@@ -320,6 +379,12 @@ bugs. Check this list before changing the modules named in each entry.
   and removes only exact rollback material. The new receipt never inherits the old backup path. A
   missing old destination is eligible only without a persistent backup; JSON relocation does not
   inherit this whole-file proof.
+- **Generated App relocation still binds Core's known effects.** An upgrade Plan captures the old
+  destination and exact canonical regular-file backup, declares removal/restoration and both
+  privilege identities, and includes new-file rollback removal. Missing or unsupported backup
+  state blocks. Opaque output does not waive those checks or grant static relocation's journal
+  recovery proof. Execution obtains administrator authorization for a protected old location even
+  when the new destination is unprivileged.
 - **Privileged App static Copy changes the mutation port, not the rollback proof.** Create,
   backup-aware create, update, and the three removal actions persist `requires_admin`, derive
   Administrator permission, and require matching old/new receipts to carry the same flag. Planning
@@ -384,6 +449,10 @@ bugs. Check this list before changing the modules named in each entry.
   restoring exact resources. Any conflicting receipt, changed destination or rollback identity, or
   occupied rollback path blocks and preserves state. Foreign and modified launchers do not inherit
   this proof; shared snapshot/render state and profile sentinel blocks use separate actions.
+- **Shell upgrade retains receipt ownership across source relocation.** Planning and execution's
+  launcher filter both include the selected command's recorded source/rendered paths, even when
+  current preset roots change. Empty snapshot receipt-transition sets remain invalid; unrelated
+  launchers are never adopted merely because the operation is an upgrade.
 - **An external Shell snapshot is category-owned, and receipt presence is not its commit marker.**
   `ReplaceShellSnapshot` applies only to approved snapshot-mode selections whose selected commands
   require no rendering. It binds the whole sorted category tree, deterministic sibling stage and
@@ -491,19 +560,35 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **All `config.toml` writes go through `shine_core::sync_table`**, which preserves user comments.
   Never serialize the whole file from a struct — that destroys comments.
+- **Atomic file replacement never pre-deletes its destination.** Rename replaces existing files on
+  Windows as well as Unix. Failure cleanup removes only the staged file; the previous configuration
+  or receipt must survive a failed rename.
+- **Configuration and env overrides are saved privately.** Global/project configuration and
+  `shine.env.toml` writes use `atomic_write_private`: Unix temporary files start as `0600` before
+  any content is written, and replacement cannot widen an existing private file's permissions.
+  Env proxy rule install, toggle, and removal use the same private writer.
+- **Env proxy installation checks every launcher before writing any.** Windows extensionless,
+  `.cmd`, and `.ps1` destinations all require absence or a regular Shine-owned proxy file.
+  Foreign files, directories, and symlinks (including dangling links) remain untouched.
+- **Project-only proxies remain transparent outside the project.** Missing active rules forward
+  directly without environment injection. PATH discovery excludes the actual Shine bin directory,
+  including directory aliases, while preserving executable names such as `cargo` for dispatch.
+- **Managed overlay synchronization uses the configured source.** Fetch from the current URL and
+  explicit branch or remote HEAD before updating origin/resetting; failed fetches preserve the last
+  checkout and origin even during relink.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and
   [`data-flows.md`](data-flows.md#config-discovery) must agree.
 - **External app preset hooks and generators require scoped trust.** `post_upgrade`
   runs commands after upgrades, while an automatic file generator may run during an approved
   install/upgrade and supply effective source bytes. Embedded code may run implicitly, but external
-  preset or overlay code requires a grant matching canonical target, capability, code digest,
-  trust layer, and exact permission set. Read-oriented checks execute it only through the explicit
+  preset or overlay code requires one-operation human consent or a grant matching canonical target,
+  capability, code digest and trust layer. Read-oriented checks execute it only through the explicit
   `--run-generators` mode; ordinary inspection remains process-free.
 - **Script hooks belong to their parent lifecycle Plan.** A `post_install`/`post_upgrade` hook may
   resolve a native or Bun script from the immutable App snapshot and receive declared environment
   inputs plus the fixed `SHINE_APP_*` contract. Planning must bind its executable source, runtime,
-  environment identities, materialized embedded cache, and declared capabilities before App files
+  environment identities, temporary execution snapshot, and declared capabilities before App files
   mutate. It must execute only after that category changes. A hook must never recursively launch an
   artifact or another mutation with an independently approved Plan.
 - **Bun package installation is source-scoped and explicit.** Embedded scripts and external scripts
@@ -515,7 +600,8 @@ bugs. Check this list before changing the modules named in each entry.
   download never bypasses scoped trust. See ADR 0031 and ADR 0046.
 - **External sys executable code requires target-local scoped trust.** Static detection/provider metadata and
   declarative PATH/env/aliases are safe to inspect, but external or overlay bootstrap/managed scripts,
-  guarded eval/source, fragments, and base profile code require a matching `sys/<item>` grant.
+  guarded eval/source, fragments, and base profile code require human lifecycle consent or a matching
+  `sys/<item>` grant.
   Read-only status paths must never execute sys code. Project config and Presets cannot authorize
   their own executable content.
 - **Manual generators never run from implicit status or upgrade paths.**
@@ -585,6 +671,11 @@ bugs. Check this list before changing the modules named in each entry.
 - **External source selection and installed state are separate.** Snapshot mode materializes
   effective shell categories below `<shine_dir>/installed/shell/`; launchers must never point at
   the user-owned external tree unless `external_shell_mode = "live"` is explicit.
+- **Shell snapshot delivery retains captured executable intent.** Both transactional raw trees and
+  transformed snapshots restore executable flags from immutable Preset inputs, never by reopening
+  source modes. Inspection and planning share content-plus-executable comparison so mode-only
+  changes and older broken snapshots require upgrade. New recovery tree identities bind the flag;
+  old journals that omit it retain their original content-only comparison.
 - **Live transforms are manifest-constrained.** Generated launchers may request only a canonical
   target recorded in `shell-manifest.toml`; the renderer writes only below `rendered_dir`, stores
   no env values in the manifest, uses atomic replacement, and fails rather than executing stale
@@ -611,6 +702,9 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Encryption drains output while feeding plaintext.** GPG/age can write before reading all
+  input, so stdin writing, stdout/stderr draining, and child waiting must proceed concurrently.
+  I/O errors terminate and reap the child; encryption callers enable kill-on-drop for cancellation.
 - **Age sealing never drops unavailable recipients.** Age 1.3 native `age1tag` recipients remove
   the Secure Enclave and phone plugin dependencies from encryption, but explicit `age1phone` and legacy plugin
   recipients still require their named recipient plugins. Missing plugins fail before old-payload
@@ -740,3 +834,14 @@ bugs. Check this list before changing the modules named in each entry.
   `cfg(test)` does not cross that boundary).
 - **Tests that touch real system paths** (e.g. docker-engine's `/etc/docker/daemon.json`) must
   additionally hold the cross-process admin lock for their full body (commit `fbd9c55`).
+
+## One-operation external code consent
+
+Trusted human-facing lifecycle review may obtain one-time consent for exact external Preset code
+alongside Plan confirmation. Temporary grants are private Core runtime state, cleared after review,
+and carried only in the non-serializable ApprovedOperation. Execution reinstalls those exact
+identities and re-plans against fresh input; changed source, state or configuration rejects approval.
+No persistent grant is written. Automatic `--yes` and read-only/AI review use the ordinary path and
+remain blocked without persistent trust. Shell live always needs Development trust. Explicit
+info/update generator evaluation retains its persistent-grant requirement. Author statements are
+review data, not trust identity; env/admin remain per-operation executor contracts. See ADR 0091.

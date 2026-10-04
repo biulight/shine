@@ -36,12 +36,7 @@ env = ["CLASH_PROFILES_FILE", "CLASH_CONTROLLER_URL", "CLASH_CONTROLLER_TOKEN"]
 
 [permissions]
 schema_version = 1
-filesystem = [
-  { access = ["execute"], base = "preset", path = "build.ts" },
-  { access = ["execute"], base = "preset", path = "unbuild.ts" },
-]
 network = [{ scope = "any" }]
-commands = ["bun"]
 environment = [
   { name = "CLASH_PROFILES_FILE", sensitivity = "plain" },
   { name = "CLASH_CONTROLLER_URL", sensitivity = "plain" },

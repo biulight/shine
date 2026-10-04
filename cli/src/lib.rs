@@ -52,3 +52,6 @@ pub mod theme;
 pub mod trust;
 pub mod update_check;
 pub mod version;
+
+pub use presentation::with_full_upgrade_plan;
+pub use presentation::with_security_plan_verbosity;

@@ -9,7 +9,7 @@ use super::{
     SysBootstrapPlanRequest, SysItemMode, SysManagedPlanRequest,
 };
 use crate::lifecycle::LifecycleOperation;
-use crate::plan::{PermissionResolutionV1, PlanOperationV1, PlanStepV1, PlanV1};
+use crate::plan::{CodeBoundaryV2, PermissionResolutionV1, PlanOperationV1, PlanStepV1, PlanV1};
 use crate::trust::{TrustCapabilityV1, TrustGrantV1};
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use super::validation::{PresetDiagnostic, PresetDiagnosticSeverity};
 
-pub const PRESET_AUTHORING_PLAN_SCHEMA_VERSION: u32 = 1;
+pub const PRESET_AUTHORING_PLAN_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetAuthoringPlanAssumptionsV1 {
@@ -51,6 +51,8 @@ pub struct PresetAuthoringPlanSectionV1 {
     pub ready: bool,
     pub steps: Vec<PlanStepV1>,
     pub permissions: PermissionResolutionV1,
+    pub author_capabilities: crate::plan::PermissionSetV1,
+    pub code_boundaries: Vec<CodeBoundaryV2>,
 }
 
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
@@ -67,6 +69,8 @@ pub struct PresetAuthoringPlanReportV1 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plans: Vec<PresetAuthoringPlanSectionV1>,
 }
+
+pub type PresetAuthoringPlanReportV2 = PresetAuthoringPlanReportV1;
 
 impl PresetAuthoringPlanReportV1 {
     fn empty(platform: RuntimePlatform) -> Self {
@@ -244,12 +248,17 @@ pub(super) async fn plan_preset_source_scope_with_state(
             }),
     );
 
-    let home = PathBuf::from("/shine-author/home");
+    // Synthetic planning still uses the compiling host's native Path semantics.
+    #[cfg(windows)]
+    let root = PathBuf::from(r"C:\shine-author");
+    #[cfg(not(windows))]
+    let root = PathBuf::from("/shine-author");
+    let home = root.join("home");
     let shine = home.join(".shine");
     let mut context = RuntimeContext::isolated(
         home,
         shine.clone(),
-        PathBuf::from("/shine-author/presets"),
+        root.join("presets"),
         shine.join("bin"),
         platform,
     );
@@ -426,6 +435,8 @@ fn section(kind: &str, target: String, plan: PlanV1) -> PresetAuthoringPlanSecti
         ready: plan.is_ready(),
         steps: plan.steps,
         permissions: plan.permissions,
+        author_capabilities: plan.author_capabilities,
+        code_boundaries: plan.code_boundaries,
     }
 }
 
@@ -505,9 +516,14 @@ mod tests {
             let supplied_host = state.host.clone();
             let supplied = plan_preset_source_scope_with_state(scope, platform, state).await;
             assert!(
-                supplied.valid && supplied.ready,
+                supplied.valid && !supplied.ready,
                 "{platform:?}: {supplied:?}"
             );
+            assert!(supplied.plans[0].steps.iter().any(|step| {
+                step.diagnostic_codes
+                    .iter()
+                    .any(|code| code == "shell_external_code_not_allowed")
+            }));
             assert!(
                 supplied_host
                     .operations()
@@ -535,7 +551,7 @@ mod tests {
                 let json = serde_json::to_string(report).unwrap();
                 for forbidden in [
                     "/repo",
-                    "/shine-author",
+                    "shine-author",
                     "private-template-value",
                     "HTTP_PROXY_PORT",
                     "undefined template",
@@ -588,6 +604,7 @@ mod tests {
         assert_eq!(first, second);
         let json = serde_json::to_string(&first).unwrap();
         assert!(!json.contains("/repo"));
+        assert!(!json.contains("shine-author"));
         assert!(!json.contains("PlanApproval"));
     }
 
@@ -613,7 +630,7 @@ mod tests {
         let source = app_source();
         source.put_file(
             "/repo/app/demo/shine.toml",
-            b"dest = '~/.config/demo'\n[permissions]\nschema_version = 2\n[[files]]\nsource = 'config.toml'\n"
+            b"dest = '~/.config/demo'\n[permissions]\nschema_version = 3\n[[files]]\nsource = 'config.toml'\n"
                 .to_vec(),
         );
 

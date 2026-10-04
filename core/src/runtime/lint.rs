@@ -412,4 +412,21 @@ mod tests {
         assert!(codes.contains(&"missing_resource_description"));
         assert!(codes.contains(&"private_absolute_path"));
     }
+
+    #[tokio::test]
+    async fn unrestricted_opaque_code_is_accepted_without_an_unactionable_warning() {
+        let host = InMemoryHost::new();
+        host.put_file(
+            "/repo/app/demo/shine.toml",
+            b"description = 'Demo'\ndest = '~/.config/demo'\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.toml'\ndescription = 'Demo config'\n"
+                .to_vec(),
+        );
+        host.put_file("/repo/app/demo/config.toml", b"value = true\n".to_vec());
+
+        let report = lint_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+
+        assert!(report.valid, "{:?}", report.diagnostics);
+        assert!(report.clean, "{:?}", report.diagnostics);
+        assert_eq!(report.summary.warnings, 0);
+    }
 }

@@ -12,11 +12,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-pub const PLAN_SCHEMA_VERSION: u32 = 1;
-pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 1;
+pub const PLAN_SCHEMA_VERSION: u32 = 2;
+pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 2;
 
 const SNAPSHOT_HASH_DOMAIN: &[u8] = b"shine.snapshot.v1";
-const PLAN_HASH_DOMAIN: &[u8] = b"shine.plan.v1";
+const PLAN_HASH_DOMAIN: &[u8] = b"shine.plan.v2";
 
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
@@ -52,6 +52,12 @@ pub enum EnvironmentSensitivityV1 {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum PermissionV1 {
+    /// Opaque Preset code whose effects cannot be completely enumerated.
+    /// This remains a review identity; it does not expose ambient inputs or
+    /// replace administrator authorization.
+    OpaqueCode {
+        scope: OpaqueCodeScopeV1,
+    },
     Filesystem {
         access: FilesystemAccessV1,
         path: String,
@@ -72,6 +78,14 @@ pub enum PermissionV1 {
         #[serde(skip_serializing_if = "Option::is_none")]
         resource: Option<String>,
     },
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum OpaqueCodeScopeV1 {
+    Unrestricted,
 }
 
 /// A stable, sorted, duplicate-free permission set.
@@ -100,8 +114,19 @@ impl PermissionSetV1 {
         self.0.iter()
     }
 
-    fn difference(&self, declared: &Self) -> Self {
-        Self(self.0.difference(&declared.0).cloned().collect())
+    fn missing_execution_contracts(&self, declared: &Self) -> Self {
+        Self(
+            self.0
+                .difference(&declared.0)
+                .filter(|permission| {
+                    matches!(
+                        permission,
+                        PermissionV1::Environment { .. } | PermissionV1::Administrator
+                    )
+                })
+                .cloned()
+                .collect(),
+        )
     }
 }
 
@@ -113,8 +138,9 @@ impl FromIterator<PermissionV1> for PermissionSetV1 {
 
 /// Permission derivation for one complete operation.
 ///
-/// Missing declarations and uncomputable requirements are blockers. Codes are
-/// stable identifiers, never arbitrary error prose.
+/// Only declarations with executor semantics (managed environment injection and
+/// administrator authorization) may be missing blockers. Other author-declared
+/// capabilities are review statements and never constrain arbitrary code.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PermissionResolutionV1 {
     pub required: PermissionSetV1,
@@ -128,7 +154,7 @@ impl PermissionResolutionV1 {
         declared: &PermissionSetV1,
         uncomputable_codes: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        let missing_declarations = required.difference(declared);
+        let missing_declarations = required.missing_execution_contracts(declared);
         Self {
             required,
             missing_declarations,
@@ -151,6 +177,65 @@ pub enum PlanActionV1 {
     Execute,
     Preserve,
     Blocked,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeEntryKindV2 {
+    AppHook,
+    AppGenerator,
+    AppArtifact,
+    ShellCommand,
+    SysBootstrapScript,
+    SysProfileCode,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeTimingV2 {
+    ExecuteNow,
+    DeliverForLater,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeSourceV2 {
+    ShineDistribution,
+    ExternalOrOverlay,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeTrustStateV2 {
+    Distribution,
+    SnapshotTrusted,
+    OperationConfirmation,
+    DevelopmentTrusted,
+    MissingOrStale,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeTargetRoleV2 {
+    Selected,
+    SharedResourceAffected,
+}
+
+/// Core-owned classification of an executable Preset entry. It describes the
+/// trust boundary; it is not a sandbox or a claim about the code's full effects.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct CodeBoundaryV2 {
+    pub target: String,
+    pub entry_kind: CodeEntryKindV2,
+    pub timing: CodeTimingV2,
+    pub source: CodeSourceV2,
+    pub trust: CodeTrustStateV2,
+    pub unisolated: bool,
+    pub target_role: CodeTargetRoleV2,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_resource: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -346,6 +431,24 @@ pub struct PlanPermissionScopeV1 {
     pub permissions: PermissionResolutionV1,
 }
 
+/// Core-derived presentation provenance, never an authorization shortcut.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FilesystemPurposeV1 {
+    UserTarget,
+    Installation,
+    Maintenance,
+    Recovery,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FilesystemReviewGroupV1 {
+    pub purpose: FilesystemPurposeV1,
+    /// Canonical target or logical destination whose transaction owns these effects.
+    pub target: String,
+    pub permissions: PermissionSetV1,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PlanV1 {
     pub schema_version: u32,
@@ -353,8 +456,16 @@ pub struct PlanV1 {
     pub inputs: PlanInputsV1,
     pub steps: Vec<PlanStepV1>,
     pub permissions: PermissionResolutionV1,
+    /// Optional author-provided capability statements. These are review data,
+    /// not a runtime allow-list and do not satisfy arbitrary-code effects.
+    #[serde(default, skip_serializing_if = "PermissionSetV1::is_empty")]
+    pub author_capabilities: PermissionSetV1,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_boundaries: Vec<CodeBoundaryV2>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_scopes: Vec<PlanPermissionScopeV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filesystem_review: Vec<FilesystemReviewGroupV1>,
 }
 
 impl PlanV1 {
@@ -368,6 +479,9 @@ impl PlanV1 {
     ) -> Self {
         Self {
             permission_scopes: Vec::new(),
+            filesystem_review: Vec::new(),
+            author_capabilities: declared_permissions.clone(),
+            code_boundaries: Vec::new(),
             schema_version: PLAN_SCHEMA_VERSION,
             operation: operation.into(),
             inputs,
@@ -623,7 +737,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_and_uncomputable_permissions_fail_closed() {
+    fn descriptive_capability_gaps_do_not_block_but_uncomputable_contracts_fail_closed() {
         let required = PermissionSetV1::new([filesystem_permission("~/.config/demo")]);
         let resolution = PermissionResolutionV1::resolve(
             required.clone(),
@@ -631,12 +745,51 @@ mod tests {
             ["permission_command_uncomputable"],
         );
 
-        assert_eq!(resolution.missing_declarations, required);
+        assert!(resolution.missing_declarations.is_empty());
         assert_eq!(
             resolution.uncomputable_codes,
             BTreeSet::from(["permission_command_uncomputable".to_string()])
         );
         assert!(!resolution.is_satisfied());
+    }
+
+    #[test]
+    fn only_environment_and_administrator_declarations_are_execution_contracts() {
+        let opaque = PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        };
+        let required = PermissionSetV1::new([
+            opaque.clone(),
+            PermissionV1::Command {
+                program: "arbitrary-tool".to_string(),
+            },
+            filesystem_permission("~/.outside"),
+            PermissionV1::Environment {
+                name: "TOKEN".to_string(),
+                sensitivity: EnvironmentSensitivityV1::Secret,
+            },
+            PermissionV1::Administrator,
+        ]);
+        let resolution = PermissionResolutionV1::resolve(
+            required,
+            &PermissionSetV1::new([opaque]),
+            std::iter::empty::<String>(),
+        );
+
+        assert_eq!(resolution.missing_declarations.iter().count(), 2);
+        assert!(
+            resolution
+                .missing_declarations
+                .contains(&PermissionV1::Environment {
+                    name: "TOKEN".to_string(),
+                    sensitivity: EnvironmentSensitivityV1::Secret,
+                })
+        );
+        assert!(
+            resolution
+                .missing_declarations
+                .contains(&PermissionV1::Administrator)
+        );
     }
 
     #[test]
@@ -656,6 +809,38 @@ mod tests {
         assert_eq!(
             PlanApprovalV1::for_reviewed_plan(&unresolved),
             Err(PlanApprovalError::PlanNotReady)
+        );
+    }
+
+    #[test]
+    fn approval_binds_filesystem_review_purpose_and_target() {
+        let mut plan = ready_plan();
+        plan.filesystem_review.push(FilesystemReviewGroupV1 {
+            purpose: FilesystemPurposeV1::UserTarget,
+            target: "app/demo".into(),
+            permissions: PermissionSetV1::new([filesystem_permission(
+                "~/.config/demo/config.toml",
+            )]),
+        });
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let required = plan.permissions.required.clone();
+        let mut changed = plan.clone();
+        changed.filesystem_review[0].purpose = FilesystemPurposeV1::Maintenance;
+        assert_eq!(
+            approval.validate(&changed),
+            Err(PlanApprovalError::PlanChanged)
+        );
+        changed = plan.clone();
+        changed.filesystem_review[0].target = "app/other".into();
+        assert_eq!(
+            approval.validate(&changed),
+            Err(PlanApprovalError::PlanChanged)
+        );
+        assert_eq!(changed.permissions.required, required);
+        changed.filesystem_review.clear();
+        assert_eq!(
+            approval.validate(&changed),
+            Err(PlanApprovalError::PlanChanged)
         );
     }
 
@@ -703,10 +888,10 @@ mod tests {
         let plan_json = serde_json::to_string(&plan).unwrap();
         let approval_toml = toml::to_string(&approval).unwrap();
 
-        assert!(plan_json.contains("\"schema_version\":1"));
+        assert!(plan_json.contains("\"schema_version\":2"));
         assert!(plan_json.contains("\"operation\":\"install\""));
         assert!(plan_json.contains("\"action\":\"create\""));
-        assert!(approval_toml.contains("schema_version = 1"));
+        assert!(approval_toml.contains("schema_version = 2"));
         assert!(approval_toml.contains("plan_fingerprint = \""));
         for private in [
             "preset-content",

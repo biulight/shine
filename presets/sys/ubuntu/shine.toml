@@ -15,7 +15,6 @@ install = { kind = "script", path = "install/rust.sh" }
 id = "neovim"
 label = "Neovim"
 description = "Install the latest stable Neovim release (v0.10+)."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "nvim", version_args = ["--version"] }
 install = { kind = "package", provider = "apt", package = "neovim" }
@@ -120,7 +119,6 @@ fragment = "profile/zsh-vi-mode.sh"
 id = "fzf"
 label = "fzf"
 description = "Install the fzf command-line fuzzy finder."
-permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "fzf", version_args = ["--version"] }
 install = { kind = "package", provider = "apt", package = "fzf" }

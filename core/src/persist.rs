@@ -87,15 +87,10 @@ async fn write_temp(temp: &Path, contents: &[u8]) -> Result<()> {
 /// Renames `temp` over `dest`, for callers that already wrote/streamed their
 /// own temp file (e.g. large-file copies) and only need the finalize step.
 ///
-/// On Windows, an existing `dest` is removed first (`rename` there doesn't
-/// replace an existing file). On any failure, `temp` is removed.
+/// Rename replaces an existing file on both Unix and Windows. Never unlink
+/// `dest` first: a failed replacement must retain the previous contents.
+/// On failure, only `temp` is removed.
 pub async fn finalize_temp(temp: &Path, dest: &Path) -> Result<()> {
-    #[cfg(windows)]
-    if dest.exists() {
-        tokio::fs::remove_file(dest)
-            .await
-            .with_context(|| format!("removing {}", dest.display()))?;
-    }
     if let Err(error) = tokio::fs::rename(temp, dest).await {
         let _ = tokio::fs::remove_file(temp).await;
         return Err(error).with_context(|| format!("replacing {}", dest.display()));
@@ -219,6 +214,27 @@ mod tests {
         assert!(result.is_err());
         assert!(!temp.exists(), "temp file should be cleaned up on failure");
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_replacement_preserves_existing_destination() {
+        let dir = make_temp_dir("shine-persist-failure").await;
+        let dest = dir.join("config.toml");
+        tokio::fs::write(&dest, b"retained configuration")
+            .await
+            .unwrap();
+        // A missing staged file forces rename to fail even with a writable
+        // destination. In particular, Windows must not unlink dest beforehand.
+        assert!(
+            finalize_temp(&dir.join("missing-stage"), &dest)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            tokio::fs::read(&dest).await.unwrap(),
+            b"retained configuration"
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]

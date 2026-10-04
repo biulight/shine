@@ -18,18 +18,19 @@ for the supported metadata version (current App metadata declares `metadata_sche
 Prefer explicit file lists. Keep sources and generator/artifact scripts inside
 the category. Never use absolute source paths or `..`.
 
-## Permission declaration
+## Capability statements and input contracts
 
-Every App category has one top-level `[permissions]` table with
-`schema_version = 1`. Ordinary managed destinations and receipt operations are
-already bounded by typed App metadata; use the table for additional commands,
-network access, environment names, administrator authorization, system
-capabilities, or filesystem effects of hooks, generators, and artifacts.
+An App category may have one top-level `[permissions]` table. Do not create an
+empty table or repeat hook commands, runtime commands, script paths, managed
+destinations, or receipt operations already expressed by typed metadata. Optional
+command/filesystem/network/system entries are unverified review context. Environment
+names and Administrator authorization remain required when Shine injects or elevates them.
 
 Environment entries contain only a name and `plain`/`secret` sensitivity.
 Filesystem entries use `access`, a structured `base` (`home`, `shine`,
-`data-dir`, `preset`, or `absolute`), and a normalized path. A declaration does
-not enable external code: the user must separately review and grant target-scoped trust.
+`data-dir`, `preset`, or `absolute`), and a normalized path. A statement does not
+enable, restrict, or sandbox code: external/overlay executable entries require separate
+target-scoped trust for the complete effective category snapshot.
 
 ## Optional behavior
 
@@ -40,7 +41,7 @@ not enable external code: the user must separately review and grant target-scope
   `when_env` key included in `env`. Always provide a static source fallback.
 - `post_install` and `post_upgrade` hooks declare exactly one of `command` (direct argv)
   or `script` (optional `runtime = "bun"`). Script hooks share the parent lifecycle Plan;
-  declare their script execution, runtime command, and environment permissions there.
+  declare required environment inputs there; Core derives script/runtime execution identities.
   Never launch `shine app artifact apply` from a hook or add `--yes` to compose nested approvals.
 - `[artifact]` may declare `script`, optional `teardown`, `runtime`, and an
   explicit `env` allowlist. Every environment source must also have a

@@ -4,7 +4,8 @@ use super::authoring::{PresetAuthoringSyntheticState, plan_preset_source_scope_w
 use super::validation::load_preset_source_scope;
 use super::{FileSystemObservationHost, InMemoryHost, RuntimePlatform};
 use crate::plan::{
-    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, PermissionV1, PlanActionV1,
+    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, OpaqueCodeScopeV1, PermissionV1,
+    PlanActionV1,
 };
 use crate::trust::TrustCapabilityV1;
 use schemars::JsonSchema;
@@ -103,6 +104,7 @@ pub enum FixtureTrustCapabilityV1 {
     AppHook,
     AppGenerator,
     AppArtifact,
+    ShellCommand,
     SysBootstrapScript,
     SysProfileCode,
 }
@@ -113,6 +115,7 @@ impl From<FixtureTrustCapabilityV1> for TrustCapabilityV1 {
             FixtureTrustCapabilityV1::AppHook => Self::AppHook,
             FixtureTrustCapabilityV1::AppGenerator => Self::AppGenerator,
             FixtureTrustCapabilityV1::AppArtifact => Self::AppArtifact,
+            FixtureTrustCapabilityV1::ShellCommand => Self::ShellCommand,
             FixtureTrustCapabilityV1::SysBootstrapScript => Self::SysBootstrapScript,
             FixtureTrustCapabilityV1::SysProfileCode => Self::SysProfileCode,
         }
@@ -534,13 +537,18 @@ fn validate_receipt_document(name: &str, document: &str) -> Result<(), &'static 
 }
 
 fn is_canonical_trust_target(target: &str) -> bool {
-    let Some((kind, name)) = target.split_once('/') else {
-        return false;
-    };
-    matches!(kind, "app" | "sys")
-        && !name.is_empty()
-        && !name.contains(['/', '\\'])
-        && !matches!(name, "." | "..")
+    let parts = target.split('/').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["app" | "sys", name] => valid_trust_target_segment(name),
+        ["shell", category, command] => {
+            valid_trust_target_segment(category) && valid_trust_target_segment(command)
+        }
+        _ => false,
+    }
+}
+
+fn valid_trust_target_segment(value: &str) -> bool {
+    !value.is_empty() && !value.contains('\\') && !matches!(value, "." | "..")
 }
 
 fn compare(expected: Option<bool>, actual: bool, code: &str, failures: &mut Vec<String>) {
@@ -580,6 +588,9 @@ fn action_name(action: PlanActionV1) -> &'static str {
 
 fn permission_name(permission: &PermissionV1) -> String {
     match permission {
+        PermissionV1::OpaqueCode {
+            scope: OpaqueCodeScopeV1::Unrestricted,
+        } => "opaque-code:unrestricted".to_string(),
         PermissionV1::Filesystem { access, path } => format!(
             "filesystem:{}:{path}",
             match access {
@@ -720,6 +731,50 @@ permission_diagnostic_codes = []
         let encoded = serde_json::to_string(&report).unwrap();
         assert!(!encoded.contains("vault-revision-7"));
         assert!(!encoded.contains("generated'))"));
+    }
+
+    #[tokio::test]
+    async fn exact_trust_grant_makes_external_shell_command_plannable() {
+        let host = InMemoryHost::new();
+        host.put_file(
+            "/repo/shell/demo/shine.toml",
+            br#"description = "Demo"
+[[files]]
+source = "hello.sh"
+target = "hello"
+"#
+            .to_vec(),
+        );
+        host.put_file(
+            "/repo/shell/demo/hello.sh",
+            b"#!/bin/sh\nprintf 'hello\\n'\n".to_vec(),
+        );
+        host.put_file(
+            "/repo/shell/demo/shine.test.toml",
+            br#"schema_version = 1
+[[cases]]
+name = "trusted-shell-command"
+platform = "linux"
+[[cases.host.trust]]
+target = "shell/demo/hello"
+capability = "shell-command"
+[cases.expect]
+valid = true
+ready = true
+step_diagnostic_codes = ["shell_profile_reconcile_transaction", "shell_snapshot_replace_transaction"]
+"#
+            .to_vec(),
+        );
+
+        let report = test_preset_path(&host, Path::new("/repo"), Path::new("shell/demo")).await;
+
+        assert!(report.valid, "{:?}", report.diagnostics);
+        assert!(report.cases[0].passed, "{:?}", report.cases[0]);
+        assert!(
+            !report.cases[0]
+                .actual_step_diagnostic_codes
+                .contains(&"shell_external_code_not_allowed".to_string())
+        );
     }
 
     #[tokio::test]

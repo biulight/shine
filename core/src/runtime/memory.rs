@@ -185,7 +185,7 @@ impl FileSystemObservationHost for InMemoryHost {
                 Some(MemoryNode::Directory) => Ok(FileMetadata {
                     kind: FileKind::Directory,
                     len: 0,
-                    unix_mode: None,
+                    unix_mode: state.modes.get(path).copied(),
                 }),
                 Some(MemoryNode::File(bytes)) => Ok(FileMetadata {
                     kind: FileKind::File,
@@ -367,7 +367,10 @@ impl FileSystemHost for InMemoryHost {
     ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
         Box::pin(async move {
             let mut state = self.state.lock().expect("in-memory host lock");
-            if !matches!(state.nodes.get(path), Some(MemoryNode::File(_))) {
+            if !matches!(
+                state.nodes.get(path),
+                Some(MemoryNode::File(_) | MemoryNode::Directory)
+            ) {
                 return Err(not_found(path));
             }
             state.modes.insert(path.to_path_buf(), mode);

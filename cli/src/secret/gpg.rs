@@ -114,6 +114,7 @@ async fn encrypt_gpg(plaintext: &[u8], recipients: &[&str]) -> Result<Vec<u8>> {
     }
 
     let output = command
+        .kill_on_drop(true)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
@@ -226,6 +227,7 @@ pub(super) async fn encrypt_hybrid_key(plaintext: &[u8], recipients: &[String]) 
         command.arg("--recipient").arg(recipient);
     }
     let child = command
+        .kill_on_drop(true)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())

@@ -1,6 +1,6 @@
 # 0046 — External Preset code trust is snapshot-scoped and target-local
 
-- **Status**: Accepted
+- **Status**: Superseded in part by ADR 0091
 - **Date**: 2026-08-30
 - **Evidence**: `core/src/trust.rs`, `cli/src/trust.rs`, `core/src/runtime/planner.rs`
 
@@ -36,9 +36,11 @@ grants automatically and cannot authorize new execution.
 
 ## Consequences
 
-- Trusting one target cannot authorize another target or later code.
+- A snapshot grant for one target cannot authorize another target or later code. ADR 0090 adds a
+  separately requested source-scoped development mode.
 - Permission expansion and source-layer changes require a new grant.
-- The trust store contains identities and digests, never code, argv, environment values, secrets,
-  or physical checkout paths.
+- Snapshot grants contain identities and digests, never code, argv, environment values, secrets,
+  or physical checkout paths. Development grants may contain private local source labels as defined
+  by ADR 0090.
 - Opaque code is not sandboxed by the declaration; the UI must describe the grant as trust rather
   than enforcement.

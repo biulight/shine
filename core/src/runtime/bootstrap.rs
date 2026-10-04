@@ -40,27 +40,55 @@ pub async fn capture_preset_snapshot(
     let mut builder = match request.source {
         PresetSnapshotSource::Embedded(files) => embedded_snapshot_builder(files),
         PresetSnapshotSource::External(root) => {
+            let root = resolve_preset_root(host, &root).await?;
             let mut builder =
                 PresetSnapshot::builder(PresetSourceKind::External).base_root(root.clone());
-            for (logical, bytes) in capture_preset_tree(host, &root).await? {
-                builder = builder.file(logical, bytes);
+            for (logical, bytes, executable) in capture_preset_tree(host, &root).await? {
+                builder = builder.file_with_executable(logical, bytes, executable);
             }
             builder
         }
     };
     if let Some(root) = request.overlay_root {
+        let root = resolve_preset_root(host, &root).await?;
         builder = builder.overlay_root(root.clone());
-        for (logical, bytes) in capture_preset_tree(host, &root).await? {
-            builder = builder.overlay_file(logical, bytes);
+        for (logical, bytes, executable) in capture_preset_tree(host, &root).await? {
+            builder = builder.overlay_file_with_executable(logical, bytes, executable);
         }
     }
     Ok(builder.build())
 }
 
+// Resolve only the selected root. Links inside the tree remain excluded, and
+// origins bind the resolved source so retargeting a link changes development trust.
+async fn resolve_preset_root(host: &impl FileSystemHost, root: &Path) -> Result<PathBuf> {
+    match host.metadata(root).await {
+        // Preserve existing lexical origins for ordinary directories (for
+        // example macOS /var versus /private/var) and their stored receipts.
+        Ok(metadata) if metadata.kind == FileKind::Directory => return Ok(root.to_path_buf()),
+        Err(error) if error.is_not_found() => return Ok(root.to_path_buf()),
+        Err(error) => return Err(error.into_anyhow("inspecting preset root")),
+        Ok(_) => {}
+    }
+    let resolved = host
+        .canonicalize(root)
+        .await
+        .map_err(|error| error.into_anyhow("resolving preset root"))?;
+    let metadata = host
+        .metadata(&resolved)
+        .await
+        .map_err(|error| error.into_anyhow("inspecting resolved preset root"))?;
+    anyhow::ensure!(
+        metadata.kind == FileKind::Directory,
+        "preset root is not a directory"
+    );
+    Ok(resolved)
+}
+
 async fn capture_preset_tree(
     host: &impl FileSystemHost,
     root: &Path,
-) -> Result<Vec<(String, Vec<u8>)>> {
+) -> Result<Vec<(String, Vec<u8>, bool)>> {
     match host.metadata(root).await {
         Ok(metadata) if metadata.kind == FileKind::Directory => {}
         Ok(_) => return Ok(Vec::new()),
@@ -98,7 +126,11 @@ async fn capture_preset_tree(
                         .await
                         .map_err(|error| error.into_anyhow("reading preset file"))
                         .with_context(|| format!("reading preset file {}", path.display()))?;
-                    files.push((logical_path(relative), bytes));
+                    files.push((
+                        logical_path(relative),
+                        bytes,
+                        metadata.unix_mode.unwrap_or(0) & 0o111 != 0,
+                    ));
                 }
                 FileKind::Symlink => {}
             }
@@ -148,5 +180,78 @@ mod tests {
                 .and_then(|origin| origin.physical_path.as_deref()),
             Some(Path::new("/virtual/overlay/app/demo/shine.toml"))
         );
+    }
+    #[tokio::test]
+    async fn linked_roots_capture_canonical_sources_but_skip_nested_links() {
+        let host = InMemoryHost::new();
+        host.put_file("/virtual/base/app/demo/data", b"base".to_vec());
+        host.put_file("/virtual/overlay/app/demo/data", b"overlay".to_vec());
+        host.put_file("/virtual/outside", b"not captured".to_vec());
+        host.symlink(Path::new("/virtual/base"), Path::new("/virtual/base-link"))
+            .await
+            .unwrap();
+        host.symlink(
+            Path::new("/virtual/overlay"),
+            Path::new("/virtual/overlay-link"),
+        )
+        .await
+        .unwrap();
+        host.symlink(
+            Path::new("/virtual/outside"),
+            Path::new("/virtual/base/app/demo/link"),
+        )
+        .await
+        .unwrap();
+        let snapshot = capture_preset_snapshot(
+            &host,
+            PresetSnapshotRequest {
+                source: PresetSnapshotSource::External("/virtual/base-link".into()),
+                overlay_root: Some("/virtual/overlay-link".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(snapshot.get("app/demo/data"), Some(b"overlay".as_slice()));
+        assert_eq!(
+            snapshot.base_bytes("app/demo/data"),
+            Some(b"base".as_slice())
+        );
+        assert!(snapshot.get("app/demo/link").is_none());
+        assert_eq!(
+            snapshot
+                .origin("app/demo/data")
+                .unwrap()
+                .category_root
+                .as_deref(),
+            Some(Path::new("/virtual/overlay/app/demo"))
+        );
+        let direct = capture_preset_snapshot(
+            &host,
+            PresetSnapshotRequest {
+                source: PresetSnapshotSource::External("/virtual/base".into()),
+                overlay_root: Some("/virtual/overlay".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(snapshot, direct);
+    }
+
+    #[tokio::test]
+    async fn broken_root_link_fails_instead_of_hiding_presets() {
+        let host = InMemoryHost::new();
+        host.symlink(Path::new("/missing"), Path::new("/virtual/link"))
+            .await
+            .unwrap();
+        let error = capture_preset_snapshot(
+            &host,
+            PresetSnapshotRequest {
+                source: PresetSnapshotSource::External("/virtual/link".into()),
+                overlay_root: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("resolving preset root"));
     }
 }

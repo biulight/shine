@@ -10,13 +10,14 @@ records the cross-module sequences and their gotchas.
 `runtime::planner` consumes one immutable `PresetSnapshot`, a validated App/Shell/managed Sys,
 exact Sys bootstrap, App refresh/artifact, or Sys profile request, captured runtime inputs,
 manifests, receipts, and live resource observations. It emits
-ordered semantic steps plus a required permission set; missing declarations, uncomputable
-permissions, or a blocked step make the Plan non-ready. Planning cannot invoke host mutation or
+ordered semantic steps plus derived permissions, optional author capability statements, and typed
+code boundaries. Missing environment/elevation contracts, uncomputable structured requirements, or
+a blocked step make the Plan non-ready. Planning cannot invoke host mutation or
 Preset code, and its output carries no content, env values, secret plaintext, raw errors, or raw
 command arguments.
 
-The effective Preset snapshot hashes sorted logical paths, bytes, and trust layers without hashing
-its physical checkout root. Target selection from immutable request/Preset input occurs before
+The effective Preset snapshot hashes sorted logical paths, bytes, captured executable flags, and
+trust layers without hashing its physical checkout root. Target selection from immutable request/Preset input occurs before
 host-state reads. Filesystem and split-DNS observation traits expose manifests, receipts, live
 resources, launchers, and system state without exposing write/process/privileged/apply methods.
 Planners hash every outcome-affecting observation using the same framed SHA-256 builder. Plain env
@@ -26,14 +27,23 @@ values contribute hashes; secrets contribute only caller-supplied opaque handles
 validated target + immutable Preset snapshot
     → observation-only manifest/receipt/live-state capture
     → ownership and lifecycle assessment
-    → merge typed effects + explicit target permissions
+    → derive typed effects + retain optional author statements
+    → classify triggered unisolated code and evaluate target trust
     → ordered payload-free PlanV1 + state/Preset digests
 ```
 
-Generator, hook, artifact, bootstrap, and profile-code triggers are modeled as conservative
-`execute` plus potential resource steps; the code is never run during planning and missing or stale
-target-scoped trust remains a blocker. A supported receipt can drive uninstall after source
+Generator, hook, artifact, Shell delivery, bootstrap, and profile-code triggers are modeled as
+unisolated code boundaries plus conservative semantic steps. Classification never depends on an
+author's `opaque_code` field. Code is never run during planning and missing or stale target-scoped
+trust remains a blocker for external code delivery/execution. A supported receipt can drive uninstall after source
 disappearance, but cannot recreate missing teardown code.
+Typed filesystem operations also record exact presentation-purpose groups. The CLI summarizes
+uniquely attributed installation, maintenance and recovery material in ordinary ready Plans;
+user destinations, ambiguous entries, blocked Plans and recovery reviews stay explicit. All
+Security Plan commands accept `--verbose`; the display preference is scoped to the command future
+and never changes the execution request. Full permissions and purpose groups remain fingerprint-bound
+(ADR 0094).
+
 CLI review creates approval for one exact ready Plan. Apply deliberately follows:
 
 ```text
@@ -42,11 +52,15 @@ capture current source/state → regenerate Plan → match approved fingerprint 
 ```
 
 App, Shell, managed Sys install/upgrade/uninstall, exact Sys bootstrap, App refresh/artifact, and
-Sys profile enable/disable route through this flow. Untargeted `shine upgrade` renders the three
-final lifecycle Plans together, confirms once, and prevalidates all three before protected mutation
-starts. `upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate
-preview/inspection paths. Scoped external-code trust, ownership, and administrator authorization
-remain additional gates.
+Sys profile enable/disable route through this flow. Untargeted `shine upgrade` plans all three
+lifecycles, displays only scopes needing review by default, confirms once when there are actions,
+and prevalidates all three before protected mutation starts. `upgrade --verbose` expands relevant
+scopes, while `upgrade --verbose --full-plan` displays every planned scope and step.
+`upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate preview/inspection paths.
+Scoped external-code trust, ownership, and administrator authorization remain additional gates.
+After approval, the CLI upgrade report applies the same relevance rule to unchanged App and Sys
+outcomes; `--verbose --full-plan` restores their individual rows (ADR 0098). The structured
+lifecycle result still includes every selected item.
 
 Sys bootstrap uses the dedicated `sys-bootstrap` Plan operation rather than a lifecycle install.
 Interactive or profile selection resolves to an exact ordered item list before planning. The pure
@@ -58,13 +72,31 @@ bootstrap review; `--verbose` expands identities and diagnostic codes (ADR 0086)
 materialization, profile write, or receipt mutation. Its existing domain report remains separate
 from `LifecycleResultV1`.
 
-Permission declaration schema v1 is parsed from the same immutable snapshot: one App category
-table, one table per Shell command/platform variant, and one table per Sys item. Static validation
-checks version, placement, structured paths, payload-free identities, and duplicates without
-executing Preset code. Typed metadata continues to describe Core-bounded effects; explicit tables
-record additional capabilities. Pure planners combine both sources into the required/declared
-resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
-protected execution fails closed.
+Capability statements are parsed from the same immutable snapshot: one App category table, one
+table per Shell command/platform variant, and one table per Sys item. Static validation checks
+version, placement, structured paths, payload-free identities, and duplicates without executing
+Preset code. Typed metadata describes Core-bounded effects; explicit command, filesystem, network,
+and system entries remain unverified author statements. Their absence does not block planning.
+Environment input identities and Administrator authorization keep executor semantics, so a missing
+required contract remains non-ready. Shell/Sys defaults resolve per target before fingerprinting.
+
+Core classifies triggered App, Shell and Sys executable entries independently of permission fields.
+The compatible v2 unrestricted identity is an author statement and cannot alter classification.
+The `preset` trust target enumerates current requirements and persists separate per-target grants.
+Snapshot grants bind the complete effective category files, bytes, executable flags and source layers. An explicit
+`--development` grant binds the target/capability and current local source-root/layer
+identity while allowing content changes. Schema v1 grants require review again.
+
+## App script execution snapshots
+
+After trust and Plan approval, App generators, script hooks and artifacts materialize the complete
+captured effective category into a fresh owner-only invocation directory below
+`shine_dir/runtime/app/<category>/`. Entry paths and cwd use that copy. `SHINE_APP_DIR` and
+`SHINE_APP_SOURCE_DIR` identify the effective copy; `SHINE_APP_OVERLAY_DIR` identifies the captured
+effective overlay subset. Relative imports therefore cannot reopen changed checkout helpers.
+Bun dependency mode still comes from the captured script's source layer. Execution and spawn errors
+both clean only the invocation tree; persistent artifact output uses the existing state/cache/HTTP
+paths. Plans declare the create/remove effects before execution (ADR 0092).
 
 ## Shell availability and ownership inspection
 
@@ -75,6 +107,9 @@ receipt roots. CLI update separates conflicts/missing Presets from pending updat
 keep the same status. Upgrade preserves absent-source commands and blocks shared snapshot
 replacement when it would affect a retained missing sibling. Explicit uninstall remains
 receipt-driven even after an external category disappears (ADR 0081).
+Shell upgrade planning also projects source-command receipts in execution order and reuses the
+read-only profile-file comparison. Only observed profile differences contribute profile steps and
+permissions; the compact review labels them as internal Shell integration (ADR 0096).
 
 ## Frontend Service inventory
 
@@ -250,7 +285,10 @@ live Clap preset subcommands → generated long help
 Packing validates one immutable category snapshot, then separately walks the physical category with
 an observation-only host so ignored trees and symlinks cannot evade policy. After policy checks,
 Core sorts logical files, excludes the author-only fixture, builds the versioned hash/mode manifest,
-and encodes fixed-metadata tar.gz bytes. The CLI performs only the requested atomic output write.
+and encodes fixed-metadata tar.gz bytes. The CLI resolves the category and output parent through
+symlinks and parent components, rejects output inside the category, and performs the requested
+atomic output write at the resolved parent. Missing output directories are created only after this
+check; a final output symlink is replaced as a directory entry and requires `--force`.
 
 ```text
 category → immutable validation → physical policy scan
@@ -261,12 +299,13 @@ category → immutable validation → physical policy scan
 ## Scoped external-code trust
 
 `core::runtime::trust` derives requirements only from the immutable logical Preset snapshot. Each
-requirement binds a canonical App/Sys target, capability kind, digest of the relevant code inputs
-and effective trust layers, and the exact target permission set. `core::trust::evaluate_trust`
+requirement binds a canonical App/Shell/Sys target, capability kind, digest of the complete effective
+category snapshot and source layers, and the target/capability identity.
+`core::trust::evaluate_trust`
 matches that requirement against versioned grants without consulting project configuration.
 
 ```text
-immutable code inputs + trust layers + declared permissions
+complete effective category snapshot + trust layers + target/capability
     → TrustRequirementV1
     → exact match against global owner-only trust.toml
     → trusted or stable missing/stale decision
@@ -275,8 +314,9 @@ immutable code inputs + trust layers + declared permissions
 
 The CLI loads `~/.shine/trust.toml` before constructing `RuntimeContext`. `shine trust grant`
 derives and renders the current requirement, confirms with default No, then atomically stores only
-the reviewed identities. Code, layer, or permission changes do not match. Legacy coarse booleans
-are diagnostic-only and never create grants.
+the reviewed identities. Category content or layer changes do not match snapshot grants; source
+root/layer changes do not match development grants. Old v1 grants remain listable
+and revocable but are unsupported for execution. Legacy coarse booleans are diagnostic-only.
 
 ## Shell install and uninstall
 
@@ -721,6 +761,12 @@ active source and upgrade refreshes it. Explicit `live` mode points raw commands
 category. Materialization skips every `node_modules/` directory but preserves `package.json` and
 `bun.lock`.
 
+Snapshot deployment accepts snapshot or development trust; live deployment accepts development
+trust only. Existing live launchers are preserved after upgrade, while inspection reports targets
+that need development-trust review. A category snapshot replacement expands the Plan to all
+installed commands that consume the shared tree and checks every affected target grant before the
+first mutation. Uninstalled siblings remain available only and do not gain launchers or grants.
+
 Every Bun launcher includes an explicit package policy. Embedded commands and unlocked external
 commands use `--no-install`. When the physical category owning an effective external/overlay script
 contains both lock files, the launcher uses `--install=fallback`; the Shell manifest records this
@@ -827,8 +873,9 @@ verbosely.
 A **shine-managed Git overlay** (`presets_overlay_git`) is handled separately, *before* the
 fast-forward loop, by `git_pull::sync_managed_overlay` against `<shine_dir>/overlay`. On first use
 it clones `--depth 1` via a temp sibling dir + atomic rename (a failed clone never leaves a
-half-populated overlay). On subsequent runs it **force-mirrors**: `git fetch --depth 1 origin
-<branch>` then `git reset --hard FETCH_HEAD`, so the checkout always equals the remote tip even
+half-populated overlay). On subsequent runs it **force-mirrors**: fetch depth 1 from the configured
+URL and branch (remote `HEAD` when omitted), update `origin` only after fetch succeeds, then
+`git reset --hard FETCH_HEAD`, so the checkout always equals the remote tip even
 across rebases/force-pushes, discarding local edits (the managed overlay is read-only by design).
 The fetch runs before the reset, so an unreachable remote leaves the previous checkout intact and
 usable. `shine preset overlay link --git <url>` writes the config and clones immediately;
@@ -872,7 +919,10 @@ values (`KEY_SECRET` decrypted first, then `KEY`) into the child process.
 Project rules replace the global rule for the same command. The shim never
 exports values to the parent shell and never scans all `_SECRET` values.
 Each rule defaults to `enabled = true`; `shine env proxy disable <command>`
-retains the shim but bypasses config lookup and secret decryption entirely.
+retains the shim but bypasses environment-value lookup and secret decryption entirely. Missing
+applicable rules also pass through without injection, so project-only proxies work outside that
+project. Target discovery compares canonical directory identities to exclude aliases of Shine bin,
+but retains the executable filename for rustup-style dispatch.
 
 ## SSH environment forwarding
 
@@ -990,3 +1040,14 @@ and workspace recipients inside the encrypted cache. Cache writes use only the s
 cache decryption cancellation never retries from sources. See [ADR 0085](../decisions/0085-local-hybrid-preferences-and-cache.md)
 for local trust and cache boundaries, and [ADR 0084](../decisions/0084-hybrid-secret-envelope.md)
 for the unchanged envelope and sealing concurrency contract.
+
+## One-operation external code consent
+
+Trusted human-facing lifecycle review may obtain one-time consent for exact external Preset code
+alongside Plan confirmation. Temporary grants are private Core runtime state, cleared after review,
+and carried only in the non-serializable ApprovedOperation. Execution reinstalls those exact
+identities and re-plans against fresh input; changed source, state or configuration rejects approval.
+No persistent grant is written. Automatic `--yes` and read-only/AI review use the ordinary path and
+remain blocked without persistent trust. Shell live always needs Development trust. Explicit
+info/update generator evaluation retains its persistent-grant requirement. Author statements are
+review data, not trust identity; env/admin remain per-operation executor contracts. See ADR 0091.

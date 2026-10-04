@@ -9,7 +9,7 @@ use crate::runtime::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PLAN_REVIEW_SCHEMA_VERSION: u32 = 1;
+pub const PLAN_REVIEW_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReviewRequest {
@@ -30,6 +30,8 @@ pub struct PlanReviewReportV1 {
     pub schema_version: u32,
     pub plan: PlanV1,
 }
+
+pub type PlanReviewReportV2 = PlanReviewReportV1;
 
 impl<H: FileSystemObservationHost + SplitDnsObservationHost> FrontendService<H> {
     /// Observe a fresh Plan. This neither executes code nor creates approval.

@@ -6,14 +6,14 @@ use super::shell_action_executor::{
     ShellCacheRemoval, ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation,
     ShellLauncherRemoval, ShellLauncherUpdate, ShellLegacyLauncherRemoval,
     ShellProfilePreparedFile, ShellProfileReconciliation, ShellRenderedFileRemoval,
-    ShellRenderedFileReplacement, ShellSharedReplacements, ShellSnapshotRemoval,
+    ShellRenderedFileReplacement, ShellSharedReplacements, ShellSnapshotFile, ShellSnapshotRemoval,
     ShellSnapshotReplacement,
 };
 use super::{
-    CoreRuntime, FileKind, FileSystemHost, InspectionChange, InspectionFileStatus, LinkConflict,
-    LinkConflictKind, LinkReport, LinkSpec, PathUpdateStatus, PrivilegedFileSystemHost,
-    ShellConfigUpdate, ShellFileInspection, ShellProfileRemoval, UnlinkReport,
-    command_path_for_name, link_executables_with_host, link_is_current_with_host,
+    CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, InspectionChange,
+    InspectionFileStatus, LinkConflict, LinkConflictKind, LinkReport, LinkSpec, PathUpdateStatus,
+    PrivilegedFileSystemHost, ShellConfigUpdate, ShellFileInspection, ShellProfileRemoval,
+    UnlinkReport, command_path_for_name, link_executables_with_host, link_is_current_with_host,
     unlink_managed_command_with_host,
 };
 use crate::action::{
@@ -35,6 +35,7 @@ use std::str::FromStr;
 #[derive(Debug, Deserialize)]
 struct ShellCategoryToml {
     description: Option<String>,
+    permission_defaults: Option<PermissionDeclarationV1>,
     files: Option<Vec<ShellFileToml>>,
 }
 
@@ -494,6 +495,9 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 };
                 let canonical = format!("shell/{}/{}", category.name, file.command_name);
                 let entry = manifest.find(&canonical);
+                let live_trust_review_required = self.context().is_external_presets
+                    && entry.is_some_and(|entry| entry.mode == ExternalShellMode::Live)
+                    && !self.shell_command_development_trusted(&category, file)?;
                 let launcher_probe = probe_shell_launcher(
                     self.host(),
                     self.context(),
@@ -620,6 +624,13 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 if self.context().is_external_presets && entry.is_none() && link_exists {
                     changes.push(InspectionChange::ManifestEntryMissing { target: canonical });
                 }
+                if live_trust_review_required {
+                    changes.push(InspectionChange::DeploymentChanged {
+                        field: "trust",
+                        from: "legacy or snapshot trust".to_string(),
+                        to: "development trust".to_string(),
+                    });
+                }
                 if !snapshot_current
                     && source_status != InspectionFileStatus::UpdateAvail
                     && self.context().external_shell_mode == ExternalShellMode::Snapshot
@@ -653,6 +664,11 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     )
                 } else if !installed {
                     (InspectionFileStatus::NotInstalled, "not installed")
+                } else if live_trust_review_required {
+                    (
+                        InspectionFileStatus::UpdateAvail,
+                        "development trust required",
+                    )
                 } else if (installed && !link_exists)
                     || (link_exists && (!link_current || !manifest_current || !snapshot_current))
                     || source_status == InspectionFileStatus::UpdateAvail
@@ -1029,7 +1045,10 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     })
                     .map(|category| category.name.as_str())
                     .unwrap_or_default();
-                let roots = self.shell_managed_roots(category, None);
+                let target = format!("shell/{category}/{command}");
+                // The planner includes the receipt's old paths when sources move.
+                // Reuse that ownership boundary instead of dropping valid launchers.
+                let roots = self.shell_managed_roots(category, manifest_before.find(&target));
                 let probe = unlink_managed_command_with_host(
                     self.host(),
                     &self.context().bin_dir,
@@ -1201,17 +1220,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             if !transactional_snapshot_categories.contains(&category.name) {
                 continue;
             }
-            let prefix = format!("shell/{}/", category.name);
-            let files = self
-                .presets()
-                .files()
-                .iter()
-                .filter_map(|(logical, bytes)| {
-                    logical
-                        .strip_prefix(&prefix)
-                        .map(|relative| (PathBuf::from(relative), bytes.clone()))
-                })
-                .collect::<Vec<_>>();
+            let files = self.shell_snapshot_files(&category.name);
             let mut receipt_transitions = Vec::new();
             for file in &category.files {
                 let target = format!("shell/{}/{}", category.name, file.command_name);
@@ -2272,6 +2281,52 @@ pub(super) fn planned_shell_managed_roots(
 }
 
 impl<H> CoreRuntime<H> {
+    pub(super) fn shell_snapshot_identities(
+        &self,
+        category: &str,
+    ) -> BTreeMap<PathBuf, (u64, bool)> {
+        let prefix = format!("shell/{category}/");
+        self.presets()
+            .files()
+            .iter()
+            .filter_map(|(logical, bytes)| {
+                logical.strip_prefix(&prefix).map(|relative| {
+                    (
+                        PathBuf::from(relative),
+                        (
+                            crate::install::hash_content(bytes),
+                            cfg!(unix)
+                                && self
+                                    .presets()
+                                    .file(logical)
+                                    .is_some_and(|file| file.executable),
+                        ),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn shell_snapshot_files(&self, category: &str) -> Vec<ShellSnapshotFile> {
+        let prefix = format!("shell/{category}/");
+        self.presets()
+            .files()
+            .iter()
+            .filter_map(|(logical, bytes)| {
+                logical
+                    .strip_prefix(&prefix)
+                    .map(|relative| ShellSnapshotFile {
+                        relative_path: PathBuf::from(relative),
+                        bytes: bytes.clone(),
+                        executable: self
+                            .presets()
+                            .file(logical)
+                            .is_some_and(|file| file.executable),
+                    })
+            })
+            .collect()
+    }
+
     pub fn desired_shell_source_path(&self, category: &str, source_rel: &Path) -> PathBuf {
         let logical = format!("shell/{category}/{}", shell_logical_path(source_rel));
         self.presets()
@@ -2492,7 +2547,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         }
         let mut changed = 0;
         for category in categories {
-            let prefix = format!("shell/{}/", category.name);
             let destination = self
                 .context()
                 .shine_dir
@@ -2506,17 +2560,17 @@ impl<H: FileSystemHost> CoreRuntime<H> {
                 .shine_dir
                 .join("installed/shell")
                 .join(format!(".{}-{}", category.name, uuid::Uuid::new_v4()));
-            for (logical, bytes) in self
-                .presets()
-                .files()
-                .iter()
-                .filter(|(path, _)| path.starts_with(&prefix))
-            {
-                let relative = logical.strip_prefix(&prefix).unwrap_or_default();
+            for file in self.shell_snapshot_files(&category.name) {
+                let path = stage.join(&file.relative_path);
                 self.host()
-                    .write_atomic(&stage.join(relative), bytes)
+                    .write_atomic(&path, &file.bytes)
                     .await
                     .map_err(|error| error.into_anyhow("staging Shell snapshot"))?;
+                if file.executable {
+                    self.host().set_executable(&path).await.map_err(|error| {
+                        error.into_anyhow("setting Shell snapshot executable mode")
+                    })?;
+                }
             }
             let backup = self
                 .context()
@@ -2561,36 +2615,13 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         {
             return Ok(true);
         }
-        let prefix = format!("shell/{category}/");
-        let expected = self
-            .presets()
-            .files()
-            .iter()
-            .filter_map(|(path, bytes)| {
-                path.strip_prefix(&prefix)
-                    .map(|relative| (PathBuf::from(relative), bytes))
-            })
-            .collect::<BTreeMap<_, _>>();
+        let expected = self.shell_snapshot_identities(category);
         let root = self
             .context()
             .shine_dir
             .join("installed/shell")
             .join(category);
-        let actual = collect_host_files(self.host(), &root).await?;
-        if expected.keys().cloned().collect::<BTreeSet<_>>() != actual {
-            return Ok(false);
-        }
-        for (relative, bytes) in expected {
-            if self
-                .host()
-                .read(&root.join(relative))
-                .await
-                .map_or(true, |current| current != *bytes)
-            {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        super::planner::shell_snapshot_tree_current(self.host(), &root, &expected).await
     }
 
     pub async fn update_shell_manifest(
@@ -2963,6 +2994,14 @@ impl<H> CoreRuntime<H> {
                     .with_context(|| format!("failed to parse {metadata_path}"))
             })
             .transpose()?;
+        if let Some(defaults) = parsed
+            .as_ref()
+            .and_then(|parsed| parsed.permission_defaults.as_ref())
+        {
+            defaults
+                .validate()
+                .with_context(|| format!("invalid permission_defaults in {metadata_path}"))?;
+        }
         let mut files = Vec::new();
         if let Some(entries) = parsed.as_ref().and_then(|parsed| parsed.files.as_ref()) {
             for entry in entries {
@@ -2998,7 +3037,12 @@ impl<H> CoreRuntime<H> {
                 if runtime != LinkRuntime::Bun && !env.is_empty() {
                     bail!("{metadata_path}: `env` is only valid when `runtime = \"bun\"`");
                 }
-                if let Some(permissions) = &entry.permissions {
+                let permissions = entry.permissions.as_ref().or_else(|| {
+                    parsed
+                        .as_ref()
+                        .and_then(|parsed| parsed.permission_defaults.as_ref())
+                });
+                if let Some(permissions) = permissions {
                     permissions
                         .validate()
                         .with_context(|| format!("invalid permissions in {metadata_path}"))?;
@@ -3022,7 +3066,7 @@ impl<H> CoreRuntime<H> {
                     runtime,
                     transforms,
                     env,
-                    permissions: entry.permissions.clone(),
+                    permissions: permissions.cloned(),
                 });
             }
         } else {
@@ -3045,7 +3089,9 @@ impl<H> CoreRuntime<H> {
                     runtime: LinkRuntime::Native,
                     transforms: Vec::new(),
                     env: Vec::new(),
-                    permissions: None,
+                    permissions: parsed
+                        .as_ref()
+                        .and_then(|parsed| parsed.permission_defaults.clone()),
                     source_rel,
                 });
             }
@@ -3069,6 +3115,97 @@ impl<H> CoreRuntime<H> {
     }
 }
 
+pub(super) async fn prepare_shell_profile_files(
+    host: &impl FileSystemObservationHost,
+    context: &super::RuntimeContext,
+    source_commands: &[String],
+    has_installed_commands: bool,
+    remove_all: bool,
+) -> Result<Vec<ShellProfilePreparedFile>> {
+    let mut files = Vec::new();
+    let managed_profile = super::managed_shell_profile_path(&context.shine_dir, context.shell);
+    let desired_profile = (!remove_all).then(|| {
+        super::managed_profile_snippet(
+            context.shell,
+            &context.bin_dir,
+            &context.home_dir,
+            source_commands,
+        )
+        .into_bytes()
+    });
+    let current_profile = match host.read(&managed_profile).await {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.is_not_found() => None,
+        Err(error) => return Err(error.into_anyhow("reading managed Shell profile")),
+    };
+    if current_profile != desired_profile {
+        let mode = host
+            .metadata(&managed_profile)
+            .await
+            .ok()
+            .and_then(|metadata| metadata.unix_mode)
+            .or_else(|| cfg!(unix).then_some(0o644));
+        files.push(ShellProfilePreparedFile {
+            destination: managed_profile.clone(),
+            desired: desired_profile,
+            unix_mode: mode,
+            ownership: ShellProfileFileOwnershipV1::WholeFile,
+            previous_block_hash: None,
+            desired_block_hash: None,
+        });
+    }
+
+    if remove_all || has_installed_commands {
+        let profile = managed_profile.clone();
+        let snippet =
+            super::profile::shell_config_snippet(context.shell, &profile, &context.home_dir);
+        for path in &context.shell_config_paths {
+            let existing = match host.read(path).await {
+                Ok(bytes) => {
+                    String::from_utf8(bytes).context("Shell configuration is not UTF-8")?
+                }
+                Err(error) if error.is_not_found() => String::new(),
+                Err(error) => {
+                    return Err(error.into_anyhow("reading Shell configuration"));
+                }
+            };
+            let previous_block_hash = super::profile::shell_sentinel_block(&existing)
+                .map(|block| crate::install::hash_content(block.as_bytes()));
+            let desired = if remove_all {
+                if previous_block_hash.is_none() {
+                    continue;
+                }
+                super::profile::remove_shell_sentinel(&existing)
+            } else {
+                if super::profile::shell_sentinel_block(&existing)
+                    == Some(snippet.trim_end_matches('\n'))
+                {
+                    continue;
+                }
+                let cleaned = super::profile::remove_shell_sentinel(&existing);
+                format!("{cleaned}\n{snippet}")
+            };
+            let desired_block_hash = super::profile::shell_sentinel_block(&desired)
+                .map(|block| crate::install::hash_content(block.as_bytes()));
+            let mode = host
+                .metadata(path)
+                .await
+                .ok()
+                .and_then(|metadata| metadata.unix_mode)
+                .or_else(|| cfg!(unix).then_some(0o644));
+            files.push(ShellProfilePreparedFile {
+                destination: path.clone(),
+                desired: Some(desired.into_bytes()),
+                unix_mode: mode,
+                ownership: ShellProfileFileOwnershipV1::SentinelBlock,
+                previous_block_hash,
+                desired_block_hash,
+            });
+        }
+    }
+    Ok(files)
+}
+
 impl<H: FileSystemHost> CoreRuntime<H> {
     async fn prepare_shell_profile_reconciliation(
         &self,
@@ -3078,7 +3215,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         _force: bool,
         legacy_targets: &[String],
     ) -> Result<Vec<ShellProfileReconciliation>> {
-        let mut files = Vec::new();
         let source_commands = manifest_after
             .entries
             .iter()
@@ -3087,92 +3223,14 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let managed_profile =
-            super::managed_shell_profile_path(&self.context().shine_dir, self.context().shell);
-        let desired_profile = (!remove_all).then(|| {
-            super::managed_profile_snippet(
-                self.context().shell,
-                &self.context().bin_dir,
-                &self.context().home_dir,
-                &source_commands,
-            )
-            .into_bytes()
-        });
-        let current_profile = match self.host().read(&managed_profile).await {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.is_not_found() => None,
-            Err(error) => return Err(error.into_anyhow("reading managed Shell profile")),
-        };
-        if current_profile != desired_profile {
-            let mode = self
-                .host()
-                .metadata(&managed_profile)
-                .await
-                .ok()
-                .and_then(|metadata| metadata.unix_mode)
-                .or_else(|| cfg!(unix).then_some(0o644));
-            files.push(ShellProfilePreparedFile {
-                destination: managed_profile.clone(),
-                desired: desired_profile,
-                unix_mode: mode,
-                ownership: ShellProfileFileOwnershipV1::WholeFile,
-                previous_block_hash: None,
-                desired_block_hash: None,
-            });
-        }
-
-        if remove_all || !manifest_after.entries.is_empty() {
-            let profile = managed_profile.clone();
-            let snippet = super::profile::shell_config_snippet(
-                self.context().shell,
-                &profile,
-                &self.context().home_dir,
-            );
-            for path in &self.context().shell_config_paths {
-                let existing = match self.host().read(path).await {
-                    Ok(bytes) => {
-                        String::from_utf8(bytes).context("Shell configuration is not UTF-8")?
-                    }
-                    Err(error) if error.is_not_found() => String::new(),
-                    Err(error) => {
-                        return Err(error.into_anyhow("reading Shell configuration"));
-                    }
-                };
-                let previous_block_hash = super::profile::shell_sentinel_block(&existing)
-                    .map(|block| crate::install::hash_content(block.as_bytes()));
-                let desired = if remove_all {
-                    if previous_block_hash.is_none() {
-                        continue;
-                    }
-                    super::profile::remove_shell_sentinel(&existing)
-                } else {
-                    if super::profile::shell_sentinel_block(&existing)
-                        == Some(snippet.trim_end_matches('\n'))
-                    {
-                        continue;
-                    }
-                    let cleaned = super::profile::remove_shell_sentinel(&existing);
-                    format!("{cleaned}\n{snippet}")
-                };
-                let desired_block_hash = super::profile::shell_sentinel_block(&desired)
-                    .map(|block| crate::install::hash_content(block.as_bytes()));
-                let mode = self
-                    .host()
-                    .metadata(path)
-                    .await
-                    .ok()
-                    .and_then(|metadata| metadata.unix_mode)
-                    .or_else(|| cfg!(unix).then_some(0o644));
-                files.push(ShellProfilePreparedFile {
-                    destination: path.clone(),
-                    desired: Some(desired.into_bytes()),
-                    unix_mode: mode,
-                    ownership: ShellProfileFileOwnershipV1::SentinelBlock,
-                    previous_block_hash,
-                    desired_block_hash,
-                });
-            }
-        }
+        let files = prepare_shell_profile_files(
+            self.host(),
+            self.context(),
+            &source_commands,
+            !manifest_after.entries.is_empty(),
+            remove_all,
+        )
+        .await?;
         if files.is_empty() {
             return Ok(Vec::new());
         }
@@ -3579,36 +3637,6 @@ async fn save_shell_manifest_with_host(
         .map_err(|error| error.into_anyhow("failed to write shell manifest"))
 }
 
-async fn collect_host_files(host: &impl FileSystemHost, root: &Path) -> Result<BTreeSet<PathBuf>> {
-    let mut result = BTreeSet::new();
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(directory) = pending.pop() {
-        let entries = match host.read_dir(&directory).await {
-            Ok(entries) => entries,
-            Err(error) if error.is_not_found() => return Ok(result),
-            Err(error) => return Err(error.into_anyhow("reading Shell snapshot")),
-        };
-        for path in entries {
-            match host.metadata(&path).await {
-                Ok(metadata) if metadata.kind == super::FileKind::Directory => pending.push(path),
-                Ok(metadata) if metadata.kind == super::FileKind::File => {
-                    result.insert(
-                        path.strip_prefix(root)
-                            .context("Shell snapshot escaped root")?
-                            .to_path_buf(),
-                    );
-                }
-                Ok(_) => bail!(
-                    "Shell snapshot contains unsupported symlink: {}",
-                    path.display()
-                ),
-                Err(error) => return Err(error.into_anyhow("inspecting Shell snapshot")),
-            }
-        }
-    }
-    Ok(result)
-}
-
 fn shell_platform_matches(
     platforms: Option<&[String]>,
     current: super::RuntimePlatform,
@@ -3855,10 +3883,110 @@ fn canonical_target(entry: &ShellManifestEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plan::{OpaqueCodeScopeV1, PermissionV1};
     use crate::runtime::{
         FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost,
         RuntimeContext, RuntimePlatform,
     };
+
+    #[test]
+    fn shell_permission_defaults_apply_and_entries_can_override_them() {
+        let parsed: ShellCategoryToml = toml::from_str(
+            r#"
+[permission_defaults]
+schema_version = 2
+opaque_code = "unrestricted"
+
+[[files]]
+source = "one.sh"
+
+[[files]]
+source = "two.sh"
+[files.permissions]
+schema_version = 1
+commands = ["git"]
+"#,
+        )
+        .unwrap();
+        let files = parsed.files.as_ref().unwrap();
+        let inherited = files[0]
+            .permissions
+            .as_ref()
+            .or(parsed.permission_defaults.as_ref())
+            .unwrap();
+        let overridden = files[1]
+            .permissions
+            .as_ref()
+            .or(parsed.permission_defaults.as_ref())
+            .unwrap();
+
+        assert!(
+            inherited
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                })
+        );
+        assert!(
+            !overridden
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                })
+        );
+        assert!(
+            overridden
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::Command {
+                    program: "git".to_string(),
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_permission_defaults_apply_to_compatible_auto_discovery() {
+        let home = std::env::temp_dir().join("shine-shell-permission-defaults");
+        let shine = home.join(".shine");
+        let mut context = RuntimeContext::isolated(
+            home,
+            shine.clone(),
+            shine.join("presets"),
+            shine.join("bin"),
+            RuntimePlatform::Linux,
+        );
+        context.shell = ShellType::Bash;
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "shell/tools/shine.toml",
+                b"[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\n"
+                    .to_vec(),
+            )
+            .file("shell/tools/tool.sh", b"#!/bin/sh\n".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
+
+        let category = runtime
+            .shell_categories(Some("tools"))
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        assert!(
+            category.files[0]
+                .permissions
+                .as_ref()
+                .unwrap()
+                .permission_set()
+                .unwrap()
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                })
+        );
+    }
 
     #[tokio::test]
     async fn in_memory_shell_lifecycle_covers_cache_launcher_profile_and_receipt() {
@@ -3866,13 +3994,14 @@ mod tests {
         let home_dir = std::env::temp_dir().join("shine-core-shell-lifecycle");
         let shine_dir = home_dir.join(".shine");
         let bin_dir = shine_dir.join("bin");
-        let context = RuntimeContext::isolated(
+        let mut context = RuntimeContext::isolated(
             home_dir,
             shine_dir.clone(),
             shine_dir.join("presets"),
             bin_dir.clone(),
             RuntimePlatform::Linux,
         );
+        context.shell = ShellType::Bash;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "shell/tools/shine.toml",
@@ -3914,7 +4043,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(removed.links.removed.len(), 1);
+        assert_eq!(
+            removed.links.removed.len(),
+            if cfg!(windows) { 2 } else { 1 }
+        );
         assert!(host.metadata(&launcher_path).await.is_err());
     }
 

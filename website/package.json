@@ -12,7 +12,8 @@
     "clear": "docusaurus clear",
     "serve": "docusaurus serve",
     "typecheck": "tsc --noEmit",
-    "write-translations": "docusaurus write-translations --locale zh-Hans"
+    "write-translations": "docusaurus write-translations --locale zh-Hans",
+    "check:versions": "node --test scripts/check-versions.test.mjs && node scripts/check-versions.mjs"
   },
   "dependencies": {
     "@docusaurus/core": "3.10.2",

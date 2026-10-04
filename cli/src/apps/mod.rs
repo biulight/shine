@@ -51,10 +51,10 @@ description = "My app configuration."
 dest = "~/.config/my-app"
 # Optional category platform destination. Exact OS keys override the Unix fallback:
 # dest = { macos = "~/Library/Application Support/My App", linux = "~/.config/my-app", windows = "~/AppData/Roaming/My App", unix = "~/.config/my-app" }
-
-[permissions]
-schema_version = 1
-# Additional capabilities not already bounded by typed destination metadata:
+# Optional author capability notes. Shine derives managed file operations from typed metadata;
+# these notes do not restrict arbitrary code:
+# [permissions]
+# schema_version = 1
 # commands = ["bun"]
 # network = [{ scope = "host", host = "api.example.com" }]
 # environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
@@ -74,16 +74,44 @@ transforms = []
 # generator = { script = "generate.ts", runtime = "bun", env = ["SOURCE_URL"], when_env = "SOURCE_URL", auto = false }
 "#;
 
-pub async fn handle_init_template(force: bool) -> Result<()> {
+pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
+    let template = init_template(unrestricted);
     let (path, overwritten) =
-        shine_core::init_template::write_shine_toml_template(&dir, force, APP_TEMPLATE)?;
+        shine_core::init_template::write_shine_toml_template(&dir, force, &template)?;
     if overwritten {
         println!("Updated app preset template: {}", path.display());
     } else {
         println!("Created app preset template: {}", path.display());
     }
     Ok(())
+}
+
+fn init_template(unrestricted: bool) -> String {
+    if unrestricted {
+        format!(
+            "{APP_TEMPLATE}\n[permissions]\nschema_version = 2\nopaque_code = \"unrestricted\"\n"
+        )
+    } else {
+        APP_TEMPLATE.to_string()
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn unrestricted_init_template_is_valid_schema_v2() {
+    let manifest: toml::Value = toml::from_str(&init_template(true)).unwrap();
+    let permissions = manifest.get("permissions").unwrap();
+    assert_eq!(
+        permissions
+            .get("schema_version")
+            .and_then(toml::Value::as_integer),
+        Some(2)
+    );
+    assert_eq!(
+        permissions.get("opaque_code").and_then(toml::Value::as_str),
+        Some("unrestricted")
+    );
 }
 
 /// Hash the effective install content for `file` — applies transforms if declared.
@@ -460,13 +488,7 @@ mod tests {
             categories[0].destination_root.as_deref(),
             Some("~/.config/my-app")
         );
-        assert_eq!(
-            categories[0]
-                .permissions
-                .as_ref()
-                .map(|permissions| permissions.schema_version),
-            Some(1)
-        );
+        assert!(categories[0].permissions.is_none());
         assert_eq!(
             categories[0].files[0].source_rel,
             PathBuf::from("config.toml")

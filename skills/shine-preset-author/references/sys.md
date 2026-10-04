@@ -15,12 +15,12 @@ relative script path. Keep installation scripts inside the category.
 Profiles list known init item ids. `default_profile`, when present, must name a
 defined profile. Profiles cannot include managed-mode items.
 
-Every `[[items]]` entry has an item-local permission declaration with
-`schema_version = 1`. Fixed package-provider mechanics and typed managed targets
-remain structurally bounded; item scripts must conservatively declare their
-executable Preset path plus any command, network, administrator, environment,
-or system capabilities visible from source review. Do not infer that a
-declaration makes opaque script behavior statically provable.
+Each `[[items]]` entry may have an item-local capability statement. Fixed package
+providers and typed managed targets need no empty table. Core automatically marks
+scripts and executable profile content as unisolated; do not repeat the script path
+or provider command. Optional command/filesystem/network/system entries are review
+context. Environment inputs and Administrator authorization remain explicit when
+Shine injects or elevates them. No statement makes script behavior statically provable.
 
 ## Shell integration and managed resources
 
@@ -33,8 +33,8 @@ Managed items use `mode = "managed"` and a supported driver; they do not declare
 bootstrap detect/install/shell fields. A `managed-file` driver requires an
 in-category `config.source` and an absolute destination after expansion.
 
-Permission declarations do not grant trust; external or overlay scripts and executable profile
-content remain blocked until the user grants the current canonical target-scoped code snapshot.
+Capability statements do not grant trust; external or overlay scripts and executable profile
+content remain blocked until the user grants the current canonical target-scoped complete OS snapshot.
 
 For host-matching bootstrap dry-runs, follow
 [verification](verification.md#isolated-runtime-dry-run).

@@ -1,5 +1,264 @@
 # Lessons Learned
 
+## 2026-10-04 — Upgrade execution reports must match review relevance
+
+- **Symptom**: a one-category Shell update had a concise Security Plan but its verbose execution
+  report listed every current App file, a current Sys item, and all installed Shell categories.
+- **Cause**: execution reporters used `verbose` to include no-op rows and emitted Sys progress
+  before the final outcome could be filtered.
+- **Fix**: show relevant outcomes with detailed changed-resource output, suppress no-op progress
+  sections, and retain all rows behind `--verbose --full-plan`.
+
+## 2026-10-04 — Verbose upgrade review should expand relevant effects
+
+- **Symptom**: one Shell snapshot update produced verbose review sections full of unchanged App,
+  Sys, and Shell entries, obscuring the required Shell permissions.
+- **Cause**: verbose upgrade review rendered every step and scope from the complete Plan.
+- **Fix**: apply the compact upgrade relevance rule to verbose review, then expand exact paths,
+  diagnostics, and identities only for visible effects. Keep the complete Plan approval-bound.
+
+## 2026-10-04 — Shell profile review must follow the actual file comparison
+
+- **Symptom**: a content-only Shell snapshot upgrade displayed `shell/profile` alongside Preset
+  targets and requested `.zshrc` write/remove access although execution would leave it unchanged.
+- **Cause**: the planner added every profile path whenever any Shell step changed, while execution
+  already compared generated and observed profile content before preparing files.
+- **Fix**: share the read-only comparison, project source-command receipts in upgrade order, grant
+  only changed profile paths, and label resulting steps as internal Shell integration.
+- **Rule**: derive operation permissions from observed effects in Core; presentation must not make
+  internal transaction identities look like Preset categories.
+
+## 2026-10-03 — Snapshot modes, refresh ownership, and pack aliases need boundary tests
+
+- **Symptoms**: an external Shell install succeeded but its command failed with permission denied;
+  App refresh overwrote another source's destination; packing through a directory symlink wrote
+  the archive back into its source category.
+- **Causes**: Shell delivery retained bytes alone, refresh matched receipts by destination alone,
+  and pack compared lexical rather than resolved output directories.
+- **Fix**: restore and compare captured executable flags, bind them in new recovery identities,
+  require exact refresh source ownership, and resolve output parents before containment checks.
+- **Rule**: test the delivered command, receipt identity, and resolved filesystem location—not
+  only successful installation, matching bytes, or path spelling.
+
+## 2026-10-02 — Filesystem review tests must cover native launcher resources
+
+- **Symptom**: Windows CI found no installation-purpose permission for `shine:bin/demo`.
+- **Cause**: the Shell review test assumed a Unix launcher name. Its Linux/Bash fixture
+  selects `.sh` sources, but launcher construction still follows compile-time host rules:
+  one extensionless resource on Unix, both `.ps1` and `.cmd` shims on Windows.
+- **Fix**: assert the exact host-specific set of installation paths, covering both Windows
+  shims while retaining the maintenance, recovery, permission-subset and read-only assertions.
+- **Rule**: a simulated runtime platform does not override native launcher construction.
+
+## 2026-10-01 — OSC deadline tests must not depend on CI scheduling
+
+- **Symptom**: macOS CI returned only three bytes in the 50 ms fragmented-reply test
+  with a 200 ms total deadline.
+- **Cause**: the test used a writer thread, real sleeps, and a wall-clock deadline;
+  scheduler delays could exhaust the budget even between readable bytes. Its no-reply
+  fixture also closed the socket immediately, testing EOF instead of timeout.
+- **Fix**: exercise the production deadline loop with a virtual clock and scheduled bytes,
+  asserting the remaining total budget on every read. Keep separate real socket and PTY
+  checks with generous integration budgets, and explicitly cover socket EOF.
+- **Rule**: test precise timeout policy with controlled time; test OS I/O separately.
+  Do not increase production timeouts to accommodate test-runner contention.
+
+## 2026-09-30 — Derive operation permissions after no-op assessment
+
+Bulk upgrade listed unchanged App destinations and administrator/system access for current Sys
+items because capabilities were accumulated before desired-state comparison. Scope destination
+permissions to actual App effects and accumulate managed Sys requirements per item, keeping
+observations and author statements for no-ops. Do not hide excess permissions in CLI rendering:
+changed resources, opaque execution and shared transactions still need their full requirements.
+Regression coverage binds unchanged resources into approval and rejects changes after review.
+
+
+## 2026-09-30 — Shell upgrade must retain receipt-owned paths after source relocation
+
+- **Symptom**: upgrading Bun commands after changing from embedded presets to an external source
+  passed Plan review but failed snapshot action validation with an empty receipt-transition set.
+- **Root cause**: planning recognized the old receipt paths, while execution's preliminary launcher
+  filter checked only the current source roots and excluded all three valid installed commands.
+- **Fix**: include the selected command's existing receipt in the execution ownership check, retain
+  strict snapshot validation, and identify empty snapshot receipt transitions explicitly. Regression
+  tests cover three Bun launchers moving to external snapshot delivery and foreign launcher refusal.
+- **Rule**: changing source configuration must not erase receipt ownership between planning and
+  execution; neither source relocation nor display summaries authorize adopting foreign launchers.
+
+## 2026-09-27 — Shared frontend fixtures need native absolute homes
+
+- **Symptom**: Windows CI rejected four frontend conformance tests during App inspection or
+  review because `/home/test` is not an absolute Windows path.
+- **Root cause**: the shared frontend fixture used Unix-rooted context paths; the simulated Linux
+  platform and `InMemoryHost` do not change native `Path` semantics.
+- **Fix**: derive the fixture home from the native temporary directory, use it for seeded state
+  and manifests, explicitly select Bash for the simulated Linux context, and resolve the foreign
+  Shell launcher with the production naming helper.
+  Redaction assertions check the unique home component so JSON-escaped Windows paths are covered.
+- **Rule**: update all consumers of a shared fixture path together, including state-change tests
+  and privacy assertions; select simulated shell behavior explicitly and keep runtime absolute-path
+  validation intact.
+
+## 2026-09-28 — Windows Shell cache observations ignore synthetic Unix modes
+
+- **Symptom**: Windows frontend conformance still failed after selecting Bash because Shell cache
+  receipt commit rejected files that had just been written.
+- **Root cause**: Windows cache identities have no Unix mode, but `InMemoryHost` records a synthetic
+  mode for every written file; the commit check treated that extra observation as a mismatch.
+- **Fix**: when the expected mode is absent on Windows, compare the regular-file kind and content
+  without requiring the synthetic mode to be absent. Keep exact mode comparisons when a mode is
+  expected and on Unix hosts.
+- **Rule**: in-memory metadata may be richer than native Windows metadata; optional Unix mode
+  observations must not become a Windows receipt requirement.
+
+## 2026-09-28 — Authoring simulations need a native absolute context root
+
+- **Symptom**: Windows rejected valid authoring, fixture, lint, and pack reports; planner and
+  Shell tests then failed to discover `.sh` commands.
+- **Root cause**: hypothetical Core planning used `/shine-author/home`, and static validation
+  derived a home from synthetic `/repo`; Windows treats both as rooted paths without a drive.
+  Shared Linux Shell test contexts also inherited the compiling host's PowerShell default.
+- **Fix**: use deterministic host-native roots for both authoring and static validation, and
+  explicitly select Linux/Bash in fixtures that exercise Unix Shell sources, including external
+  snapshot fixtures. Check inactive cache permissions by their canonical cache path, since a
+  Windows launcher may legitimately share the `.ps1` basename. Redaction checks cover the root's
+  platform-independent name.
+- **Rule**: simulated target platforms do not override the compiling host's `Path` semantics.
+
+## 2026-09-27 — Replacement and routing must preserve the effective target
+
+- **Symptom**: Windows replacement could lose the previous file; overlay relink kept the old
+  remote; project-only proxies failed outside the project and bin aliases could select the proxy itself.
+- **Root cause**: pre-deleting destinations, fetching stale origin, requiring an active rule for
+  every invocation, and comparing PATH directories only lexically.
+- **Rule**: rename without pre-delete; fetch the configured URL/ref before switching origin;
+  pass through absent rules; compare directory identities without resolving executable dispatch names.
+- **Coverage**: failed replacement retains existing bytes, two-repository relink with different
+  default branches and failed-fetch preservation, absent-rule execution, and bin-alias/rustup discovery.
+
+## 2026-09-27 — Generated relocation needs explicit old-path review
+
+- **Symptom**: changing a generated file's backup after approval did not invalidate the Plan,
+  and migration restored the changed bytes without showing the old-path effects.
+- **Root cause**: the opaque-generator planning branch returned before relocation state and
+  permissions were collected; elevation counted only the new file and static actions.
+- **Fix**: bind the canonical regular backup, enumerate old-path removal/restoration and rollback
+  permissions, reject incomplete backup state, and authorize the old receipt's administrator scope.
+- **Rule**: opaque output does not make known Core filesystem effects opaque or confer journal recovery.
+
+## 2026-09-27 — EOF and multi-file ownership require complete boundary checks
+
+- **Symptoms**: a Core child waiting for stdin EOF timed out; proxy rule edits widened `0600`
+  configuration permissions; Windows proxy installation overwrote foreign `.cmd`/`.ps1` files.
+- **Root causes**: Unix pipe shutdown was a no-op, a secondary config writer used ordinary atomic
+  replacement, and ownership preflight covered only the extensionless launcher.
+- **Fixes**: drop stdin after concurrent writing, use the private config writer for proxy edits,
+  and preflight the complete platform launcher set before writing any member.
+- **Rule**: verify successful EOF delivery, every writer of sensitive files, and conflicts in the
+  last member of a multi-file operation, not just the first.
+
+## 2026-09-26 — Private replacement, streaming pipes, and executable helpers need regression coverage
+
+- **Symptoms**: editing a `0600` env override produced `0644`; real age encryption hung on a 1 MiB
+  payload; a working external helper exited 126 inside an App snapshot.
+- **Root causes**: replacement inherited the temporary file's default mode; stdin was filled before
+  stdout was drained; snapshot materialization copied bytes without executable intent.
+- **Fixes**: use private atomic config/env writes, concurrently feed and drain encryption pipes with
+  failure cleanup, and capture/hash/restore executable flags for external and overlay App helpers.
+- **Rule**: verify both sides of a boundary: private temp creation plus final mode, input plus output
+  backpressure, and reviewed source bytes plus execution metadata. See ADR 0093.
+
+## 2026-09-26 — Snapshot review must bind the code actually launched
+
+- **Symptom**: an external App script edited after capture executed its new bytes under the old grant.
+- **Root cause**: trust used captured bytes but process argv used the mutable physical source path.
+- **Fix**: execute each App entrypoint and its helpers from an independent captured category copy;
+  point source/overlay environment paths at captured bytes and declare temporary writes/removal.
+- **Rule**: validating a digest is insufficient if execution reopens the original checkout. See ADR 0092.
+
+## 2026-09-26 — Runtime ports and workspace checks must retain safety coverage
+
+- **Symptom**: process limits were post-capture again; linked Preset roots disappeared; CI missed
+  453 Core tests on the review host.
+- **Root cause**: unbounded `read_to_end`, root `symlink_metadata` treated as an empty directory,
+  and CLI-only workspace default members despite moving behavior into Core.
+- **Fix**: bound concurrent pipe reads and terminate on errors; resolve selected root links while
+  preserving ordinary source spelling; explicitly include the workspace in CI and local checks.
+- **Rule**: preserve behavioral guarantees across host adapters, and enumerate tests when moving
+  ownership between workspace packages. Unix `/var` versus `/private/var` must not invent relocation.
+
+## 2026-09-17 — Fixture trust grammar must follow every code target kind
+
+- **Symptom**: the Shell authoring example started failing with
+  `shell_external_code_not_allowed` after Shell commands became derived code boundaries, while App
+  and Sys fixtures could still seed exact trust.
+- **Root cause**: the versioned fixture capability enum and its canonical-target validator were not
+  extended with `shell-command` and `shell/<category>/<command>` when the runtime trust grammar was.
+- **Fix**: expose the runtime capability in fixture schema, accept its exact target shape, seed the
+  example cases with derived snapshot trust, and cover the path with a Core regression test.
+- **Rule**: when adding a trust target or capability, update runtime parsing, fixture schema and
+  target validation, generated schema coverage, and at least one representative authoring example.
+
+## 2026-09-16 — Code consent must not be inferred from automatic confirmation
+
+- **Symptom**: snapshot trust duplicated human Plan approval, while missing optional statements still
+  appeared as trust blockers in CLI guidance.
+- **Fix**: separate one-operation human code consent from persistent trust; remove statements from
+  grant matching and keep env/admin checks in the Plan. Clear temporary review grants and replay
+  only exact identities from the non-serializable approved handoff.
+- **Rule**: `--yes`, AI review reports and model assertions cannot produce human code consent. Live
+  sources still need explicit long-term Development trust. Tool hosts must constrain agents that
+  otherwise have unrestricted shell or synthetic terminal access.
+
+## 2026-09-16 — Author capability statements cannot classify or constrain code
+
+- **Symptom**: missing or empty permission tables let some external Shell commands avoid trust,
+  while detailed tables suggested that unlisted script behavior was prevented.
+- **Root cause**: automatic operation capabilities, unverified author descriptions, and executable
+  code trust were represented by one permission-resolution path.
+- **Fix**: derive unisolated entry kinds in Core, retain author statements separately, preserve only
+  environment and Administrator declarations as executor contracts, and bind target trust to the
+  complete effective category snapshot.
+- **Rule**: typed entry semantics classify code; author metadata may add review context but cannot
+  turn code into data, establish a sandbox, or authorize execution.
+
+## 2026-09-16 — Shared code replacement expands the trust review set
+
+- **Symptom**: updating selected Shell command A could replace a category tree used by installed B
+  after checking only A's grant.
+- **Root cause**: the selector was treated as the affected-target set even though ADR 0064 makes the
+  deployed snapshot category-scoped.
+- **Fix**: derive installed dependents from the manifest, record selected and shared-affected targets
+  in the Plan, and require each affected external target to match the new snapshot before mutation.
+- **Rule**: authorization scope follows changed shared resources and their installed consumers, not
+  only the command-line selector.
+
+
+## 2026-09-16 — New trust target kinds must join lifecycle remediation
+
+- **Symptom**: an external unrestricted Shell command blocked category upgrade with
+  `shell_external_code_not_allowed`, but the final error omitted the accepted command-scoped
+  `trust inspect` and `trust grant` remediation; retrying with the category target was rejected.
+- **Root cause**: `583873c` added Shell trust targets and the planner diagnostic after lifecycle
+  remediation had been written specifically for `app_external_code_not_allowed`.
+- **Fix**: collect both App and Shell external-code diagnostics, render each Plan step's canonical
+  target, and regression-test the Shell command scope.
+- **Rule**: when a new target kind joins an existing security workflow, extend the terminal
+  remediation and test its exact accepted target grammar together with the planner and callee.
+
+
+## 2026-09-16 — Stable documentation snapshots must replace older same-major versions
+
+- **Symptom**: the 2.2 release continued publishing 2.1 documentation after 2.0 had already
+  been retired during the 2.1 cycle.
+- **Root cause**: `9bc1e23` added 2.2 and moved 2.1 to a versioned route; the earlier cleanup
+  in `8a730bc` had no release-runbook rule or CI guard to prevent recurrence.
+- **Fix**: remove the 2.1 bilingual snapshots and metadata, record the retention policy in
+  [ADR 0089](decisions/0089-documentation-version-retention.md), and run `pnpm check:versions`
+  in documentation CI.
+- **Rule**: publish one stable documentation version per major plus `Next`; replace same-major
+  snapshots and remove their configuration, sidebars, and translation metadata together.
+
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
@@ -15,7 +274,7 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Rule**: isolate filesystem I/O and choose host-compatible fixtures independently. Do not weaken
   runtime path validation or drop Windows rendering coverage to accommodate a foreign OS fixture.
 
-## 2026-09-13 — Empty permission sets do not imply missing declarations
+## 2026-09-13 — Empty permission sets did not imply missing declarations (superseded by ADR 0091)
 
 - **Symptom**: an exported Sys collection could not grant profile-code trust for package-only
   `neovim` or `fzf`, leaving `sys bootstrap` blocked even though both items had schema-v1
@@ -1126,7 +1385,7 @@ the second was the real blocker.
   that *checked revents* showed `revents=POLLNVAL, POLLIN=False`. The mistake that cost a round:
   an earlier `poll` probe read the fd whenever poll returned *any* event and so "passed",
   masking the missing `POLLIN`. Always inspect `revents`, don't just test "poll returned".
-- **Why the tests missed both**: the `matrix_*` tests drive the loop over a `UnixStream` socket
+- **Why the tests missed both**: the original `matrix_*` tests drove the loop over a `UnixStream` socket
   pair — no line discipline (so canonical mode never applied) and no tty (so the macOS
   `poll`/`POLLNVAL` behavior never applied). The `openpty` regression test
   (`read_loop_reads_newline_free_response_through_pty`) exercises canonical mode on a real pty, but

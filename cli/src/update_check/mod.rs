@@ -364,7 +364,10 @@ mod tests {
     #[test]
     fn explicit_app_recovery_skips_background_update_gate() {
         let command = Commands::App {
-            command: AppCommands::Recover { yes: false },
+            command: AppCommands::Recover {
+                yes: false,
+                verbose: false,
+            },
         };
         assert!(skip_background_update_check(&command));
     }
@@ -372,7 +375,10 @@ mod tests {
     #[test]
     fn explicit_shell_recovery_skips_background_update_gate() {
         let command = Commands::Shell {
-            command: ShellCommands::Recover { yes: false },
+            command: ShellCommands::Recover {
+                yes: false,
+                verbose: false,
+            },
         };
         assert!(skip_background_update_check(&command));
     }
@@ -380,7 +386,10 @@ mod tests {
     #[test]
     fn explicit_sys_recovery_skips_background_update_gate() {
         let command = Commands::Sys {
-            command: SysCommands::Recover { yes: false },
+            command: SysCommands::Recover {
+                yes: false,
+                verbose: false,
+            },
         };
         assert!(skip_background_update_check(&command));
     }

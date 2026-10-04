@@ -3,6 +3,9 @@
 - **Status**: Accepted
 - **Date**: 2026-09-02
 - **Evidence**: `cli/src/lifecycle_plan.rs`, `cli/src/list.rs`
+- **Updated by**: [ADR 0095](0095-hide-unchanged-upgrade-review-scopes.md) omits unchanged
+  scopes and steps from the default upgrade review; [ADR 0097](0097-relevant-verbose-upgrade-review.md)
+  applies the same relevance rule to verbose upgrade review.
 
 ## Context
 
@@ -30,7 +33,8 @@ back to the same plain text when stdout does not support color or color is disab
 `PlanV1`, approval fingerprint, permission validation, fresh re-planning, and all-or-nothing
 preflight ordering are unchanged.
 
-`upgrade --verbose` retains the unabridged rendering with every ordered step and full identity.
+`upgrade --verbose` expands the relevant steps and exact identities while omitting ordinary
+unchanged steps and scopes; `upgrade --verbose --full-plan` retains the complete review (ADR 0097).
 Other lifecycle operations keep their existing full presentation.
 [ADR 0086](0086-bootstrap-plan-permission-provenance.md) later adds item-scoped bootstrap review. A blocked aggregate review
 collects all Plans before reporting and adds actionable guidance for missing Preset declarations and
@@ -43,8 +47,8 @@ recommends `shine upgrade <TARGET>`. Multiple targets retain the aggregate comma
 
 - The common one-update path does not unexpectedly traverse unrelated installed targets.
 - Global reconciliation and its single approval remain available and retain the same safety gates.
-- Default output is intentionally a compact projection, not a serialized Plan API; automation that
-  needs complete audit text uses `--verbose`.
+- Terminal output is a projection, not a serialized Plan API; `--verbose` expands relevant upgrade
+  effects and `--verbose --full-plan` shows every Plan step without changing approval.
 - Color is presentation-only and never enters Plan serialization, fingerprints, approvals, or
   hypothetical Preset authoring reports.
 - Renderer tests must cover scope grouping, no-op/cache summaries, exact permission identities,

@@ -12,6 +12,9 @@ pub enum ShellCommands {
     },
     /// Review and recover an interrupted shell launcher creation
     Recover {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Approve the displayed recovery Plan without prompting
         #[arg(long)]
         yes: bool,
@@ -19,6 +22,9 @@ pub enum ShellCommands {
     /// Install shell presets and create bin symlinks.
     /// Run 'shine shell list' to see available categories.
     Install {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Category or category/command to install (e.g. "proxy" or "utils/shine-env-export"). Installs all if omitted.
         /// Run 'shine shell list' to see available categories.
         #[arg(value_name = "TARGET")]
@@ -36,6 +42,9 @@ pub enum ShellCommands {
     /// Uninstall shell presets and remove bin symlinks.
     /// Run 'shine shell list' to see installed categories.
     Uninstall {
+        /// Show all security Plan paths, identities, and diagnostics
+        #[arg(long)]
+        verbose: bool,
         /// Category or category/command to uninstall. Uninstalls all if omitted.
         /// Run 'shine shell list' to see installed categories.
         #[arg(value_name = "TARGET")]

@@ -21,8 +21,15 @@ How to cut a stable release. Prerequisite reading:
    Features / Bug Fixes / Internal / Docs, plain English, user-facing. Do **not** use git-cliff
    for this file.
 5. **Verify public documentation** when the release changes user-visible behavior: update both the
-   English default manual and Simplified Chinese locale, then run `pnpm check:locales`,
-   `pnpm typecheck`, and `pnpm build` from `website/`.
+   English default manual and Simplified Chinese locale. Publish only the latest stable
+   documentation within each major, plus `Next` ([ADR 0089](../decisions/0089-documentation-version-retention.md)).
+   For a new minor release, replace the previous same-major snapshot in `website/versions.json`
+   and the Docusaurus version configuration; remove its English and Chinese snapshot directories,
+   versioned sidebar, and Chinese version metadata. Patch releases refresh the existing
+   major.minor snapshot instead of adding a patch-version entry. Keep the latest stable version
+   first and at the root URL, older majors at their version paths, and `Next` at `/next`.
+   Remove references to retired routes; they return 404 without redirects. Run
+   `pnpm check:versions`, `pnpm check:locales`, `pnpm typecheck`, and `pnpm build` from `website/`.
 6. **Commit** as `chore(release): prepare vX.Y.Z` (pre-commit gates must pass).
 7. **Get explicit user approval before pushing anything** (Git Push Policy). Then push the
    branch, tag `vX.Y.Z`, and push the tag.

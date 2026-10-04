@@ -110,6 +110,9 @@ pub enum PresetCommands {
     New {
         #[arg(value_enum)]
         kind: PresetTemplateKind,
+        /// Add the unrestricted author statement; all arbitrary code is unisolated either way
+        #[arg(long)]
+        unrestricted: bool,
         /// Overwrite shine.toml if it already exists
         #[arg(long, short = 'f')]
         force: bool,

@@ -18,8 +18,9 @@ overlay/preset checkouts are fast-forward-pulled.
 Add `presets_overlay_git` (+ optional `presets_overlay_git_branch`) to `config.toml`. When set (and
 no manual `presets_overlay_dir` is configured), shine owns the checkout at `<shine_dir>/overlay`
 (so it follows `SHINE_CONFIG_DIR`). `shine preset pull` clones it `--depth 1` on first use, then
-**force-mirrors** it to the remote tip on every subsequent run: `git fetch --depth 1 origin
-<branch>` followed by `git reset --hard FETCH_HEAD`. `shine preset overlay link --git <url>` writes the
+**force-mirrors** it to the configured URL and branch on every subsequent run: fetch depth 1
+directly from that URL (remote `HEAD` when no branch is specified), update `origin` after a successful
+fetch, then `git reset --hard FETCH_HEAD`. This also handles relinking an existing mirror. `shine preset overlay link --git <url>` writes the
 config and clones immediately; a manual `overlay link <path>` and a Git URL are mutually exclusive
 (setting one clears the other).
 

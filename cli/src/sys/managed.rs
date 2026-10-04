@@ -45,7 +45,9 @@ impl ManagedOutputMode {
     }
 
     fn show_all_outcomes(self) -> bool {
-        matches!(self, Self::Explicit | Self::Upgrade { verbose: true })
+        matches!(self, Self::Explicit)
+            || (matches!(self, Self::Upgrade { verbose: true })
+                && crate::presentation::full_upgrade_plan())
     }
 }
 
@@ -389,6 +391,7 @@ async fn run_managed_for_os_with_reporter(
         reporter,
         action,
         started: false,
+        show_item_progress: output_mode.show_all_outcomes(),
     };
     let core = runtime
         .preview_managed_sys(
@@ -432,6 +435,7 @@ async fn run_managed_for_os_with_prepared_reporter(
         reporter,
         action,
         started: false,
+        show_item_progress: output_mode.show_all_outcomes(),
     };
     let core = match crate::lifecycle_plan::execute_reviewed(
         config,
@@ -475,6 +479,7 @@ struct ManagedObserver<'a> {
     reporter: &'a mut dyn LifecycleReporter,
     action: SysAction,
     started: bool,
+    show_item_progress: bool,
 }
 
 impl ManagedObserver<'_> {
@@ -500,7 +505,7 @@ impl shine_core::runtime::RuntimeObserver for ManagedObserver<'_> {
             shine_core::runtime::RuntimeEvent::Progress {
                 code: "sys_managed_item",
                 target,
-            } => {
+            } if self.show_item_progress => {
                 self.begin();
                 self.reporter.emit(PresentationEvent::stdout(format!(
                     "  {} {target}",
@@ -1138,11 +1143,75 @@ target = {:?}
     }
 
     #[test]
-    fn managed_upgrade_verbose_output_includes_no_op_rows() {
+    fn managed_full_output_includes_no_op_rows() {
         assert!(should_print_managed_outcome(
             true,
             SysItemStatus::AlreadyInstalled
         ));
         assert!(should_print_managed_outcome(true, SysItemStatus::Skipped));
+    }
+
+    #[tokio::test]
+    async fn verbose_upgrade_hides_current_sys_items_and_full_plan_restores_them() {
+        #[derive(Default)]
+        struct RecordingReporter(Vec<PresentationEvent>);
+
+        impl LifecycleReporter for RecordingReporter {
+            fn emit(&mut self, event: PresentationEvent) {
+                self.0.push(event);
+            }
+        }
+
+        let report = || shine_core::runtime::SysManagedReport {
+            items: vec![SysItemOutcome {
+                item_id: "split-dns".into(),
+                label: "Private split DNS".into(),
+                status: SysItemStatus::AlreadyInstalled,
+                detail: "already installed".into(),
+                logs: Vec::new(),
+            }],
+            summary: SysUpgradeReport::default(),
+            lifecycle: LifecycleResultV1::new(LifecycleOperation::Upgrade, false),
+        };
+        let mode = ManagedOutputMode::Upgrade { verbose: true };
+        let mut reporter = RecordingReporter::default();
+        let mut observer = ManagedObserver {
+            reporter: &mut reporter,
+            action: SysAction::Apply,
+            started: false,
+            show_item_progress: mode.show_all_outcomes(),
+        };
+        shine_core::runtime::RuntimeObserver::emit(
+            &mut observer,
+            shine_core::runtime::RuntimeEvent::Progress {
+                code: "sys_managed_item",
+                target: "Private split DNS".into(),
+            },
+        );
+        finish_managed_report(report(), mode, &mut observer).unwrap();
+        assert!(reporter.0.is_empty());
+
+        crate::presentation::with_full_upgrade_plan(true, async {
+            let mut reporter = RecordingReporter::default();
+            let mut observer = ManagedObserver {
+                reporter: &mut reporter,
+                action: SysAction::Apply,
+                started: false,
+                show_item_progress: mode.show_all_outcomes(),
+            };
+            shine_core::runtime::RuntimeObserver::emit(
+                &mut observer,
+                shine_core::runtime::RuntimeEvent::Progress {
+                    code: "sys_managed_item",
+                    target: "Private split DNS".into(),
+                },
+            );
+            finish_managed_report(report(), mode, &mut observer).unwrap();
+            assert!(reporter.0.iter().any(|event| matches!(
+                event,
+                PresentationEvent::Line { text, .. } if text.contains("already installed")
+            )));
+        })
+        .await;
     }
 }

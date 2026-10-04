@@ -4,13 +4,13 @@ All workflows live in `.github/workflows/`.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `test.yml` | `workflow_call` only (reused by the others) | Ubuntu runs Bun checks, fmt, `cargo check --all`, clippy `-D warnings`, and `cargo audit`; a blocking Ubuntu x86_64 / macOS arm64 / Windows x86_64 matrix runs `cargo nextest run --all-features` natively |
+| `test.yml` | `workflow_call` only (reused by the others) | Ubuntu runs Bun checks, fmt, `cargo check --all`, clippy `-D warnings`, and `cargo audit`; a blocking Ubuntu x86_64 / macOS arm64 / Windows x86_64 matrix runs `cargo nextest run --workspace --all-features` natively |
 | `msrv.yml` | reusable by releases; push/PR to `release` or `main`, manual | `cargo check --locked --workspace` with Rust 1.88; release asset building and crate publishing wait for it |
 | `ci.yml` | push to `release`; PRs to `release`/`main` | calls `test.yml` |
 | `release.yml` | push of a `v*` tag | test + MSRV → `package-assets.yml` builds per-platform tarballs and crates.io publish → GitHub Release with git-cliff-generated notes + `install.sh`/`install.ps1` → `open-main-pr` job opens (or reuses) the `release` → `main` sync PR; RC notes are tag-to-tag increments, while stable notes cover the previous stable release through the new stable tag |
 | `preview.yml` | daily cron (00:00 UTC) + manual dispatch | if there are new commits since the `preview` tag: test → build assets → force-move `preview` tag → delete and re-publish the `Preview` prerelease |
 | `package-assets.yml` | `workflow_call` | builds the release tarballs consumed by `release.yml`/`preview.yml` |
-| `docs.yml` | documentation changes pushed to `release`, matching PRs, or manual dispatch | type-checks, checks locale parity, and builds the documentation; non-PR runs deploy to GitHub Pages and, when enabled, the configured documentation server |
+| `docs.yml` | documentation changes pushed to `release`, matching PRs, or manual dispatch | type-checks, checks documentation version retention and resource consistency (including regression tests), checks locale parity, and builds the documentation; non-PR runs deploy to GitHub Pages and, when enabled, the configured documentation server |
 | `setup-labels.yml` | (repo maintenance) | syncs GitHub issue labels |
 
 Notes:

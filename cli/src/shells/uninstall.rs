@@ -226,6 +226,7 @@ mod tests {
             .await
             .unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "preset").await;
 
         handle_install(&config, Some("custom/one"), false)
             .await
@@ -535,6 +536,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "preset").await;
 
         handle_install(&config, Some("custom"), false)
             .await
