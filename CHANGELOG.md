@@ -9,6 +9,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Distinguish managed Sys dry-run previews from executed changes with explicit dry-run headings
+  and `would update`/`would remove` labels; successful uninstall now displays `removed`.
+
 - Combine routine App and Shell preset cache writes into one internal maintenance summary in
   default upgrade reviews. Keep cache details in `--verbose`, with conflicts, preservation
   warnings, code boundaries, and required permissions still explicit. Place cache-only App

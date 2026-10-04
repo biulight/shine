@@ -71,9 +71,22 @@ pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
 }
 
 pub(super) fn item_outcome_lines(outcome: &SysItemOutcome, label_width: usize) -> Vec<String> {
-    let symbol = status_symbol(outcome.status);
+    item_outcome_lines_with_status(
+        outcome,
+        label_width,
+        status_symbol(outcome.status),
+        status_text(outcome.status),
+    )
+}
+
+pub(super) fn item_outcome_lines_with_status(
+    outcome: &SysItemOutcome,
+    label_width: usize,
+    symbol: &str,
+    status: &str,
+) -> Vec<String> {
     let label = format!("{:<label_width$}", outcome.label);
-    let status = format!("{:<17}", status_text(outcome.status));
+    let status = format!("{status:<17}");
     let detail = if outcome.detail.is_empty() {
         String::new()
     } else {

@@ -9,7 +9,7 @@ use anyhow::{Result, bail};
 use super::SysInstalledRow;
 use super::detect::detect_os_id;
 use super::execution::{
-    item_outcome_lines, presentation_bold, presentation_dim, presentation_symbol,
+    item_outcome_lines_with_status, presentation_bold, presentation_dim, presentation_symbol,
     presentation_symbol_stderr,
 };
 use super::{SysItemOutcome, SysItemStatus, SysUpdateRow, SysUpgradeReport};
@@ -390,6 +390,7 @@ async fn run_managed_for_os_with_reporter(
     let mut observer = ManagedObserver {
         reporter,
         action,
+        dry_run,
         started: false,
         show_item_progress: output_mode.show_all_outcomes(),
     };
@@ -422,6 +423,7 @@ async fn run_managed_for_os_with_prepared_reporter(
     let ManagedRunRequest {
         config,
         action,
+        dry_run,
         output_mode,
         ..
     } = request;
@@ -434,6 +436,7 @@ async fn run_managed_for_os_with_prepared_reporter(
     let mut observer = ManagedObserver {
         reporter,
         action,
+        dry_run,
         started: false,
         show_item_progress: output_mode.show_all_outcomes(),
     };
@@ -469,7 +472,13 @@ fn finish_managed_report(
     for outcome in &core.items {
         if should_print_managed_outcome(show_all, outcome.status) {
             observer.begin();
-            emit_item_outcome(observer.reporter, outcome, outcome.label.len().max(14));
+            emit_item_outcome(
+                observer.reporter,
+                outcome,
+                outcome.label.len().max(14),
+                observer.action,
+                observer.dry_run,
+            );
         }
     }
     Ok((core.summary, core.lifecycle))
@@ -478,6 +487,7 @@ fn finish_managed_report(
 struct ManagedObserver<'a> {
     reporter: &'a mut dyn LifecycleReporter,
     action: SysAction,
+    dry_run: bool,
     started: bool,
     show_item_progress: bool,
 }
@@ -490,10 +500,7 @@ impl ManagedObserver<'_> {
         self.reporter.emit(PresentationEvent::SectionStart);
         self.reporter
             .emit(PresentationEvent::stdout(presentation_bold(
-                match self.action {
-                    SysAction::Apply => "Managed System Configs",
-                    SysAction::Remove => "Remove Managed System Config",
-                },
+                &managed_header(self.action, self.dry_run),
             )));
         self.started = true;
     }
@@ -527,10 +534,44 @@ fn emit_item_outcome(
     reporter: &mut dyn LifecycleReporter,
     outcome: &SysItemOutcome,
     label_width: usize,
+    action: SysAction,
+    dry_run: bool,
 ) {
-    for line in item_outcome_lines(outcome, label_width) {
+    let (symbol, status) = managed_outcome_status(outcome.status, action, dry_run);
+    for line in item_outcome_lines_with_status(outcome, label_width, symbol, status) {
         reporter.emit(PresentationEvent::stdout(line));
     }
+}
+
+fn managed_header(action: SysAction, dry_run: bool) -> String {
+    let title = match action {
+        SysAction::Apply => "Managed System Configs",
+        SysAction::Remove => "Remove Managed System Config",
+    };
+    if dry_run {
+        format!("{title} (dry-run)")
+    } else {
+        title.to_string()
+    }
+}
+
+fn managed_outcome_status(
+    status: SysItemStatus,
+    action: SysAction,
+    dry_run: bool,
+) -> (&'static str, &'static str) {
+    if status == SysItemStatus::Updated {
+        return match (action, dry_run) {
+            (SysAction::Apply, true) => ("→", "would update"),
+            (SysAction::Remove, true) => ("→", "would remove"),
+            (SysAction::Remove, false) => ("✓", "removed"),
+            (SysAction::Apply, false) => ("✓", "updated"),
+        };
+    }
+    (
+        super::execution::status_symbol(status),
+        super::execution::status_text(status),
+    )
 }
 
 fn should_print_managed_outcome(show_all: bool, status: SysItemStatus) -> bool {
@@ -550,6 +591,99 @@ mod tests {
     use shine_core::lifecycle::{LifecycleEffect, LifecycleStatus};
     use std::path::PathBuf;
     use tokio::fs;
+
+    #[test]
+    fn managed_output_distinguishes_previews_from_execution() {
+        #[derive(Default)]
+        struct RecordingReporter(Vec<PresentationEvent>);
+        impl LifecycleReporter for RecordingReporter {
+            fn emit(&mut self, event: PresentationEvent) {
+                self.0.push(event);
+            }
+        }
+
+        for (action, dry_run, header, expected_row) in [
+            (
+                SysAction::Remove,
+                true,
+                "Remove Managed System Config (dry-run)",
+                "  → Private split DNS would remove      remove split DNS for biulight.internal",
+            ),
+            (
+                SysAction::Remove,
+                false,
+                "Remove Managed System Config",
+                "  ✓ Private split DNS removed           remove split DNS for biulight.internal",
+            ),
+            (
+                SysAction::Apply,
+                true,
+                "Managed System Configs (dry-run)",
+                "  → Private split DNS would update      biulight.internal -> 10.0.0.53",
+            ),
+            (
+                SysAction::Apply,
+                false,
+                "Managed System Configs",
+                "  ✓ Private split DNS updated           biulight.internal -> 10.0.0.53",
+            ),
+        ] {
+            let detail = if action == SysAction::Remove {
+                "remove split DNS for biulight.internal"
+            } else {
+                "biulight.internal -> 10.0.0.53"
+            };
+            let core = shine_core::runtime::SysManagedReport {
+                items: vec![SysItemOutcome {
+                    item_id: "split-dns".into(),
+                    label: "Private split DNS".into(),
+                    status: SysItemStatus::Updated,
+                    detail: detail.into(),
+                    logs: vec!["detail log".into()],
+                }],
+                summary: SysUpgradeReport::default(),
+                lifecycle: LifecycleResultV1::new(LifecycleOperation::Upgrade, dry_run),
+            };
+            let mut reporter = RecordingReporter::default();
+            let mut observer = ManagedObserver {
+                reporter: &mut reporter,
+                action,
+                dry_run,
+                started: false,
+                show_item_progress: true,
+            };
+            finish_managed_report(core, ManagedOutputMode::Explicit, &mut observer).unwrap();
+            let lines = reporter
+                .0
+                .iter()
+                .filter_map(|event| match event {
+                    PresentationEvent::Line { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(lines, vec![header, expected_row, "    detail log"]);
+        }
+    }
+
+    #[test]
+    fn managed_preview_preserves_failure_and_no_op_statuses() {
+        for action in [SysAction::Apply, SysAction::Remove] {
+            for status in [
+                SysItemStatus::Failed,
+                SysItemStatus::Skipped,
+                SysItemStatus::AlreadyInstalled,
+                SysItemStatus::NeedsAction,
+            ] {
+                assert_eq!(
+                    managed_outcome_status(status, action, true),
+                    (
+                        super::super::execution::status_symbol(status),
+                        super::super::execution::status_text(status)
+                    ),
+                );
+            }
+        }
+    }
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-sys").await
@@ -1178,6 +1312,7 @@ target = {:?}
         let mut observer = ManagedObserver {
             reporter: &mut reporter,
             action: SysAction::Apply,
+            dry_run: false,
             started: false,
             show_item_progress: mode.show_all_outcomes(),
         };
@@ -1196,6 +1331,7 @@ target = {:?}
             let mut observer = ManagedObserver {
                 reporter: &mut reporter,
                 action: SysAction::Apply,
+                dry_run: false,
                 started: false,
                 show_item_progress: mode.show_all_outcomes(),
             };

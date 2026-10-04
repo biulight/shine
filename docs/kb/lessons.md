@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-05 — Managed Sys previews looked like completed mutations
+
+- **Symptom**: `sys uninstall split-dns --dry-run` displayed `✓ updated`, suggesting that the DNS
+  configuration had already changed.
+- **Cause**: the CLI rendered the shared Sys item status without the requested action or preview
+  mode. Both apply and removal reported `Updated`, including previews.
+- **Rule**: retain action and preview context in the CLI renderer. Mark dry-run sections explicitly,
+  use prospective action labels for planned changes, and label executed removal as `removed`.
+  Keep failure/no-op labels and the Core receipt/result contracts unchanged.
+
 ## 2026-10-04 — Cache convergence must not look like unrelated user updates
 
 - **Symptom**: `update` reported only Shell utils, while upgrade review also listed proxy, Git,

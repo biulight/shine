@@ -631,7 +631,10 @@ configuration state before writing either the profile or receipt.
 
 Managed Sys presentation also flows through the CLI reporter. Item ownership is rendered before
 the interaction adapter requests administrator authorization, preserving prompt context without
-making terminal or privilege APIs part of the reusable lifecycle result.
+making terminal or privilege APIs part of the reusable lifecycle result. The renderer retains the
+managed action and dry-run mode: preview headings include `(dry-run)`, planned changes use
+`→ would update/remove`, and executed removal uses `✓ removed`. Core status enums, receipt
+serialization, and lifecycle results retain their existing contracts.
 
 `shine update --diff` expands stale shell/app rows, while `shine update <TARGET>` resolves one
 installed shell/app through the same aliases as `shine info` and prints only its stale files. Each

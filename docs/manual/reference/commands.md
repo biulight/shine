@@ -191,6 +191,10 @@ Use `bootstrap` to ensure selected software and shell integration are present. U
 access after you approve their plan. `--force-profile` may replace conflicting profile content, so
 review a dry run first.
 
+Managed configuration previews (`sys apply --dry-run` and `sys uninstall --dry-run`) mark the
+section with `(dry-run)` and show `→ would update` or `→ would remove` for planned changes.
+These rows do not indicate an applied change. Successful uninstall shows `✓ removed`.
+
 See [Initialize and manage a system](../guides/system-init.md).
 
 ## Preset authoring and sources

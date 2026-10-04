@@ -149,6 +149,10 @@ shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 这些操作可能在计划获批后请求管理员权限。`--force-profile` 可能替换冲突的配置文件内容，请先查看
 dry run。
 
+托管配置预览（`sys apply --dry-run` 和 `sys uninstall --dry-run`）会在标题标记 `(dry-run)`，
+并用 `→ would update` 或 `→ would remove` 表示计划中的变更。这些行不表示已经修改配置；
+实际卸载成功后显示 `✓ removed`。
+
 参见 [初始化与管理系统](../guides/system-init.md)。
 
 ## 预设创作与来源
