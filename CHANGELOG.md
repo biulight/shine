@@ -5,6 +5,14 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [Unreleased]
+
+### Bug Fixes
+
+- Combine routine App and Shell preset cache writes into one internal maintenance summary in
+  default upgrade reviews. Keep cache details in `--verbose`, with conflicts, preservation
+  warnings, code boundaries, and required permissions still explicit.
+
 ## [2.3.0] — 2026-10-04
 
 ### Features

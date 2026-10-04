@@ -73,6 +73,12 @@ review requires a new Plan. Active generators, hooks and shared transactions ret
 permissions. Normal transaction codes and lifecycle snapshot identities appear only with
 `--verbose`; preservation, blocking and other diagnostic notices remain explicit.
 
+The default upgrade review combines routine App and Shell preset cache writes into one internal
+maintenance summary. These source copies are not application configuration or command updates.
+Use `upgrade --verbose` for the affected categories and individual cache steps. Cache conflicts,
+preservation warnings (including missing old sources), code boundaries, and required permissions
+remain explicit; the complete Plan still binds approval.
+
 After approval, `upgrade --verbose` also omits unchanged App files, already-installed managed Sys
 items, and the total number of installed Shell categories. It still shows changed resources,
 conflicts, warnings, and failures in detail. `upgrade --verbose --full-plan` includes the

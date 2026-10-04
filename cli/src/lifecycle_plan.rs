@@ -648,6 +648,24 @@ fn render_compact_plan_lines(
         "Security Plan · {}",
         first.operation.as_str()
     ))];
+    let cache_targets = planned
+        .iter()
+        .filter(|(_, plan)| plan.operation == shine_core::plan::PlanOperationV1::Upgrade)
+        .flat_map(|(_, plan)| &plan.steps)
+        .filter(|step| is_routine_cache_maintenance(step))
+        .map(|step| step.target.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if !cache_targets.is_empty() {
+        lines.push(format!(
+            "  Internal preset cache maintenance · {} {} (source copies; details with --verbose)",
+            cache_targets.len(),
+            if cache_targets.len() == 1 {
+                "category"
+            } else {
+                "categories"
+            },
+        ));
+    }
     for (index, (request, plan)) in visible.into_iter().enumerate() {
         if index > 0 {
             lines.push(String::new());
@@ -695,6 +713,21 @@ fn upgrade_step_has_review_content(step: &shine_core::plan::PlanStepV1) -> bool 
             .any(|code| code != "app_manual_refresh_required")
 }
 
+fn is_routine_cache_maintenance(step: &shine_core::plan::PlanStepV1) -> bool {
+    matches!(step.action, PlanActionV1::Create | PlanActionV1::Update)
+        && match step.resource.as_deref() {
+            Some("preset-cache") => {
+                step.target.starts_with("shell/")
+                    && step.diagnostic_codes.len() == 1
+                    && step.diagnostic_codes[0] == "shell_cache_replace_transaction"
+            }
+            Some(resource) if resource.starts_with("preset-cache:") => {
+                step.target.starts_with("app/") && step.diagnostic_codes.is_empty()
+            }
+            _ => false,
+        }
+}
+
 fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
     let upgrade = plan.operation == shine_core::plan::PlanOperationV1::Upgrade;
     let mut lines = vec![format!("    {}", crate::colors::bold("Steps"))];
@@ -714,6 +747,10 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
     let mut index = 0usize;
     while index < plan.steps.len() {
         let step = &plan.steps[index];
+        if upgrade && is_routine_cache_maintenance(step) {
+            index += 1;
+            continue;
+        }
         if step.diagnostic_codes.is_empty()
             && step
                 .resource
@@ -723,6 +760,7 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
             let start = index;
             while index < plan.steps.len()
                 && plan.steps[index].target == step.target
+                && !(upgrade && is_routine_cache_maintenance(&plan.steps[index]))
                 && plan.steps[index].diagnostic_codes.is_empty()
                 && plan.steps[index]
                     .resource
@@ -2310,7 +2348,8 @@ mod tests {
 
         assert_eq!(rendered.matches("Security Plan · upgrade").count(), 1);
         assert!(!rendered.contains("Shell Presets"));
-        assert!(rendered.contains("~ app/starship · preset cache (1 create, 1 update)"));
+        assert!(rendered.contains("Internal preset cache maintenance · 1 category"));
+        assert!(!rendered.contains("app/starship · preset cache"));
         assert!(rendered.contains("~ app/starship · generated.toml"));
         assert!(!rendered.contains("unchanged"));
         assert!(rendered.contains("! preserve app/starship · user.toml [app_user_modified]"));
@@ -2322,6 +2361,113 @@ mod tests {
         assert!(!rendered.contains("present:0123456789"));
         assert!(!rendered.contains("preset-cache:shine.toml"));
         assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn compact_upgrade_summarizes_cache_only_work_but_retains_warnings_and_permissions() {
+        let plan = PlanV1::new(
+            LifecycleOperation::Upgrade,
+            PlanInputsV1 {
+                preset: digest("preset"),
+                state: digest("state"),
+            },
+            vec![
+                PlanStepV1::new("shell/proxy", Some("preset-cache"), PlanActionV1::Update)
+                    .with_diagnostic_code("shell_cache_replace_transaction"),
+                PlanStepV1::new("shell/utils", Some("preset-cache"), PlanActionV1::Create)
+                    .with_diagnostic_code("shell_cache_replace_transaction"),
+                PlanStepV1::new("shell/utils/copyfile", None::<String>, PlanActionV1::Update),
+                // An unchanged cache row before a mutation must not group it back into view.
+                PlanStepV1::new("app/git", Some("preset-cache:old.toml"), PlanActionV1::None),
+                PlanStepV1::new(
+                    "app/git",
+                    Some("preset-cache:shine.toml"),
+                    PlanActionV1::Create,
+                ),
+                PlanStepV1::new(
+                    "app/git",
+                    Some("preset-cache:gitconfig"),
+                    PlanActionV1::Create,
+                ),
+                PlanStepV1::new(
+                    "app/starship",
+                    Some("preset-cache:shine.toml"),
+                    PlanActionV1::Create,
+                ),
+                PlanStepV1::new("app/docker", Some("daemon.jsonc"), PlanActionV1::Preserve)
+                    .with_diagnostic_code("app_stale_source_preserved"),
+                PlanStepV1::new(
+                    "shell/conflict",
+                    Some("preset-cache"),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code("shell_cache_destination_conflict"),
+                PlanStepV1::new(
+                    "app/exception",
+                    Some("preset-cache:shine.toml"),
+                    PlanActionV1::Update,
+                )
+                .with_diagnostic_code("unexpected_cache_diagnostic"),
+            ],
+            PermissionSetV1::new([PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: "shine:presets/app/git/gitconfig".into(),
+            }]),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let planned = vec![(
+            LifecyclePlanRequest::App(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            }),
+            plan,
+        )];
+        let fingerprint = planned[0].1.fingerprint().unwrap();
+        let permissions = planned[0].1.permissions.required.clone();
+        let compact = render_compact_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert!(compact.contains("Internal preset cache maintenance · 4 categories"));
+        assert!(!compact.contains("shell/proxy"));
+        assert!(!compact.contains("app/git · preset cache"));
+        assert!(!compact.contains("app/git · preset-cache"));
+        assert!(!compact.contains("app/starship"));
+        assert!(!compact.contains("shell_cache_replace_transaction"));
+        assert!(compact.contains("~ shell/utils/copyfile"));
+        assert!(compact.contains("app/docker · daemon.jsonc [app_stale_source_preserved]"));
+        assert!(compact.contains("shell_cache_destination_conflict"));
+        assert!(compact.contains("unexpected_cache_diagnostic"));
+        assert!(compact.contains("filesystem write"));
+        let verbose = render_upgrade_detailed_plan_lines(&planned, "config")
+            .unwrap()
+            .join("\n");
+        assert!(verbose.contains("shell/proxy · preset-cache [shell_cache_replace_transaction]"));
+        assert!(verbose.contains("app/git · preset-cache:gitconfig"));
+        assert!(verbose.contains("shine:presets/app/git/gitconfig"));
+        assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
+        assert_eq!(planned[0].1.permissions.required, permissions);
+
+        let mut cache_only = planned.clone();
+        cache_only[0].1.steps.retain(is_routine_cache_maintenance);
+        let compact = render_compact_plan_lines(&cache_only, "config")
+            .unwrap()
+            .join("\n");
+        assert!(compact.contains("Internal preset cache maintenance · 4 categories"));
+        assert!(compact.contains("filesystem write"));
+        assert!(!compact.contains("Steps"));
+
+        cache_only[0].1.operation = shine_core::plan::PlanOperationV1::Install;
+        let compact = render_compact_plan_lines(&cache_only, "config")
+            .unwrap()
+            .join("\n");
+        assert!(!compact.contains("Internal preset cache maintenance"));
+        assert!(compact.contains("shell/proxy · preset-cache"));
+        assert!(compact.contains("app/git · preset cache"));
     }
 
     #[test]

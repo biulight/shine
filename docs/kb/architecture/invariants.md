@@ -42,8 +42,10 @@ bugs. Check this list before changing the modules named in each entry.
   never infer ownership from path prefixes or suffixes, never remove required permissions, and
   leave user resources, ambiguous/unclassified effects, blockers and recovery paths explicit.
   `--verbose` restores exact permissions in displayed scopes; upgrade review omits entirely
-  unchanged scopes by default, and `--verbose --full-plan` restores the complete review. The
-  complete Plan always binds approval (ADRs 0094, 0097). No display mode creates directory-wide
+  unchanged scopes by default, and `--verbose --full-plan` restores the complete review. Routine
+  App/Shell cache writes share one internal maintenance summary in compact upgrade review;
+  verbose review retains their details, and conflicts/unknown diagnostics stay explicit. The
+  complete Plan always binds approval (ADRs 0094, 0097, 0099). No display mode creates directory-wide
   access.
 - **No-op capabilities are decided by Core, never hidden by the renderer.** Current App files
   and current managed Sys items do not contribute operation permissions. Their observations and
