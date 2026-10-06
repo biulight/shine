@@ -7,6 +7,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [2.3.1] — 2026-10-06
+
 ### Bug Fixes
 
 - Distinguish managed Sys dry-run previews from executed changes with explicit dry-run headings
@@ -17,6 +19,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   warnings, code boundaries, and required permissions still explicit. Place cache-only App
   permissions under maintenance and missing-source preservation notices under Warnings instead
   of presenting an App configuration update.
+
+### Docs
+
+- Refresh the English and Simplified Chinese 2.3 manuals with upgrade cache maintenance
+  summaries, preservation warnings, and managed Sys preview and removal labels.
 
 ## [2.3.0] — 2026-10-04
 

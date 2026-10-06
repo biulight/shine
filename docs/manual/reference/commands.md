@@ -73,15 +73,12 @@ review requires a new Plan. Active generators, hooks and shared transactions ret
 permissions. Normal transaction codes and lifecycle snapshot identities appear only with
 `--verbose`; preservation, blocking and other diagnostic notices remain explicit.
 
-The default upgrade review combines routine App and Shell preset cache writes into one internal
-maintenance summary. These source copies are not application configuration or command updates.
-Use `upgrade --verbose` for the affected categories and individual cache steps. Cache conflicts,
-preservation warnings (including missing old sources), code boundaries, and required permissions
-remain explicit; the complete Plan still binds approval. When an App scope contains only cache
-maintenance and missing-source preservation notices, its Core-attributed cache permissions appear
-under internal maintenance and its preservation notices appear under Warnings. It does not create
-an App Configs section. Actual App changes, code, blockers, or ambiguous permission attribution
-retain the App review section.
+The default upgrade review groups routine App and Shell preset cache writes under internal
+maintenance. These source copies do not mean application configurations or commands have changed.
+Cache-only App work appears there rather than under `App Configs`, and missing-source preservation
+notices appear under Warnings. Actual App changes, code execution, blockers, conflicts, and effects
+that cannot be safely grouped remain explicit. Use `upgrade --verbose` to see the affected
+categories, individual cache steps, and exact permissions. The complete Plan still binds approval.
 
 After approval, `upgrade --verbose` also omits unchanged App files, already-installed managed Sys
 items, and the total number of installed Shell categories. It still shows changed resources,
