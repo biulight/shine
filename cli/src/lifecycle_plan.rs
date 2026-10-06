@@ -749,6 +749,17 @@ fn is_routine_cache_maintenance(step: &shine_core::plan::PlanStepV1) -> bool {
         }
 }
 
+fn stale_app_source_guidance(step: &shine_core::plan::PlanStepV1, indent: &str) -> Vec<String> {
+    if !is_stale_app_preservation(step) {
+        return Vec::new();
+    }
+    let category = step.target.strip_prefix("app/").unwrap_or_default();
+    vec![
+        format!("{indent}Preset source missing; installed content and receipt retained."),
+        format!("{indent}Preview uninstall: shine app uninstall {category} --dry-run"),
+    ]
+}
+
 fn is_stale_app_preservation(step: &shine_core::plan::PlanStepV1) -> bool {
     step.target.starts_with("app/")
         && step.action == PlanActionV1::Preserve
@@ -919,6 +930,7 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
             resource,
             diagnostics
         ));
+        lines.extend(stale_app_source_guidance(step, "        "));
     }
     if unchanged > 0 && !upgrade {
         lines.push(format!(
@@ -1555,6 +1567,7 @@ fn render_plan_lines_with_steps(
             resource,
             diagnostics
         ));
+        lines.extend(stale_app_source_guidance(step, "      "));
     }
     lines.extend(render_code_boundaries(plan, "  "));
     lines.push(format!("  {}", crate::colors::bold("Required permissions")));
@@ -2516,6 +2529,8 @@ mod tests {
         assert!(!compact.contains("shell_cache_replace_transaction"));
         assert!(compact.contains("~ shell/utils/copyfile"));
         assert!(compact.contains("app/docker · daemon.jsonc [app_stale_source_preserved]"));
+        assert!(compact.contains("Preset source missing; installed content and receipt retained."));
+        assert!(compact.contains("shine app uninstall docker --dry-run"));
         assert!(compact.contains("shell_cache_destination_conflict"));
         assert!(compact.contains("unexpected_cache_diagnostic"));
         assert!(compact.contains("filesystem write"));
@@ -2599,6 +2614,8 @@ mod tests {
         assert!(compact.contains("Installation state and recovery files · write (1 path)"));
         assert!(compact.contains("Warnings"));
         assert!(compact.contains("app/docker · daemon.jsonc [app_stale_source_preserved]"));
+        assert!(compact.contains("Preset source missing; installed content and receipt retained."));
+        assert!(compact.contains("shine app uninstall docker --dry-run"));
         assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
         let verbose = render_upgrade_detailed_plan_lines(&planned, "config")
             .unwrap()

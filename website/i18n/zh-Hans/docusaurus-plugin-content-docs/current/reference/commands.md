@@ -102,6 +102,18 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 
 参见 [管理应用配置](../guides/app-presets.md)。
 
+已安装的 App 类别或单个来源文件被删除、改名，或切换来源后不可用时，安装内容仍受管理。
+`list` 继续显示该类别；`list`、`update` 和 `upgrade` 会说明来源缺失并给出卸载预览命令。
+升级默认保留这些内容。
+
+先使用 `shine app uninstall <OLD_CATEGORY> --dry-run`，再使用
+`shine app uninstall <OLD_CATEGORY>`，即可在 Preset 不可用时按原安装记录卸载。
+卸载只选择该类别的安装记录，不会认领其他类别在同一目标路径的记录。
+复制安装会移除未修改的受管内容，并恢复仍存在的已记录备份；JSON 合并安装只移除安装记录
+拥有的键，保留无关键。用户修改过的受管内容及其记录默认保留，只有显式 `--force` 才可覆盖。
+目标不存在时，卸载清理安装记录，并保留已记录备份。预览不改变文件、备份或记录，
+会说明用户修改及已记录备份的恢复行为。来源代码缺失时无法运行其 teardown。
+
 ## 状态、更新、信任与补全
 
 ```text

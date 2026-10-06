@@ -1546,7 +1546,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 (Some(file), Some(bytes)) => installed_app_hash(file, bytes)
                     .map(|hash| hash.is_some_and(|hash| hash != entry.content_hash))
                     .unwrap_or(true),
-                (None, Some(bytes)) => crate::install::hash_content(bytes) != entry.content_hash,
+                (None, Some(bytes)) => installed_app_entry_hash(entry, bytes)
+                    .map(|hash| hash.is_some_and(|hash| hash != entry.content_hash))
+                    .unwrap_or(true),
                 (_, None) => false,
             };
             let action = if modified && !request.force {

@@ -310,7 +310,7 @@ pub(super) fn uninstall_not_found_text(config: &Config, destination: &Path) -> S
         "  {}  {}  {}",
         colors::dim("-"),
         colors::dim(&path_display::format_home(destination, &config.home_dir)),
-        colors::dim("not found, skipped"),
+        colors::dim("not found, installation receipt removed; recorded backup left in place"),
     )
 }
 
@@ -325,7 +325,7 @@ pub(super) fn user_modified_kept_text(config: &Config, destination: &Path) -> St
 
 pub(super) fn uninstall_dry_run_text(config: &Config, destination: &Path) -> String {
     format!(
-        "  {}  {}",
+        "  {}  {}  would remove managed content if present and its installation receipt",
         colors::dim("[dry-run]"),
         colors::dim(&path_display::format_home(destination, &config.home_dir)),
     )

@@ -821,6 +821,17 @@ bugs. Check this list before changing the modules named in each entry.
   of `http_root()` itself so log contents are never servable over HTTP. Two OS user accounts each
   running `shine serve install` would otherwise collide on the same fixed `/tmp/<label>.log` path.
 
+## Missing App sources
+
+- **App installation ownership survives source removal.** Installed categories remain visible
+  even when their effective category or source file disappears. List/update/upgrade explain
+  preservation and point to receipt-based uninstall. Uninstall selects the original category's
+  receipts, never another category's matching destination; missing external metadata must not
+  block receipt-owned removal. JSON ownership comparisons use the recorded managed keys when
+  source metadata is unavailable. Dry-run preserves files and receipts and reports user-modified
+  content as preserved. Missing destinations clear receipts on execution while leaving recorded
+  backups in place. Unavailable source code cannot supply teardown.
+
 ## Update check
 
 - **A failed or rate-limited version check must never fail the user's command** (`main.rs`,

@@ -7,6 +7,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- Keep installed App categories visible when their Preset sources disappear, explain retained
+  category/file receipts in list, update, and upgrade, and allow targeted uninstall of missing
+  external sources. Uninstall previews identify user modifications and recorded backups;
+  receipt-owned JSON keys remain distinct from unrelated content.
+
 ## [2.3.1] — 2026-10-06
 
 ### Bug Fixes

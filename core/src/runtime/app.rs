@@ -695,27 +695,14 @@ where
         interaction: &mut impl RuntimeInteraction,
     ) -> Result<AppLifecycleReport> {
         let mut manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        let target_destinations = if let Some(target) = &request.target {
-            self.app_categories(Some(target))?
-                .iter()
-                .flat_map(|category| {
-                    category
-                        .files
-                        .iter()
-                        .filter_map(|file| self.app_destination(category, file).ok())
-                })
-                .collect::<BTreeSet<_>>()
-        } else {
-            BTreeSet::new()
-        };
         let selected = manifest
             .entries
             .iter()
             .filter(|entry| {
-                request.target.as_ref().is_none_or(|category| {
-                    entry.source.starts_with(&format!("app/{category}/"))
-                        || target_destinations.contains(&entry.destination)
-                })
+                request
+                    .target
+                    .as_ref()
+                    .is_none_or(|category| entry.source.starts_with(&format!("app/{category}/")))
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -1967,6 +1954,31 @@ where
             .await
     }
 
+    /// Receipt-owned resources absent from the effective App metadata. No code is evaluated.
+    pub(crate) async fn missing_app_sources(&self) -> Result<Vec<(String, String)>> {
+        let active =
+            self.app_categories(None)?
+                .into_iter()
+                .flat_map(|category| {
+                    category.files.into_iter().map(move |file| {
+                        format!("app/{}/{}", category.name, file.source_rel.display())
+                    })
+                })
+                .collect::<BTreeSet<_>>();
+        let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
+        Ok(manifest
+            .entries
+            .iter()
+            .filter(|entry| !active.contains(&entry.source))
+            .filter_map(|entry| {
+                app_source_parts(&entry.source)
+                    .map(|(category, resource)| (category.to_string(), resource.to_string()))
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect())
+    }
+
     pub async fn inspect_apps_with_options(
         &self,
         options: AppInspectionOptions,
@@ -2257,6 +2269,21 @@ where
         dry_run: bool,
         force: bool,
     ) -> Result<UninstallOutcome> {
+        if dry_run {
+            let current = match self.host.read(&entry.destination).await {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.is_not_found() => None,
+                Err(error) => return Err(error.into_anyhow("observing App uninstall preview")),
+            };
+            if let Some(bytes) = &current {
+                let modified = installed_app_entry_hash(entry, bytes)?
+                    .is_some_and(|hash| hash != entry.content_hash);
+                if modified && !force {
+                    return Ok(UninstallOutcome::UserModified);
+                }
+            }
+            return Ok(UninstallOutcome::DryRun);
+        }
         match &entry.install_strategy {
             AppInstallStrategy::Copy if entry.requires_admin => {
                 uninstall_privileged_entry(&self.host, entry, dry_run, force).await

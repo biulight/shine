@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-06 — Missing App sources retain uninstall ownership
+
+- **Symptom**: upgrade warned about an old App category absent from list after a Preset rename.
+- **Cause**: list filtered receipt-owned categories by availability; targeted external uninstall
+  looked up the current category and also selected receipts by destination, unlike its Plan.
+- **Fix**: show missing category/file sources with receipt-based uninstall guidance; select
+  uninstall receipts by their original category and assess JSON ownership from the receipt.
+- **Rule**: source availability controls upgrades, not installation ownership. Preview must retain
+  user modifications, and unavailable source code cannot authorize teardown.
+
 ## 2026-10-05 — Managed Sys previews looked like completed mutations
 
 - **Symptom**: `sys uninstall split-dns --dry-run` displayed `✓ updated`, suggesting that the DNS

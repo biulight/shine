@@ -136,6 +136,21 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 
 See [Manage application configuration](../guides/app-presets.md).
 
+Installed App resources remain managed when their Preset category or an individual source file
+is removed, renamed, or absent after switching sources. `list` keeps the category visible;
+`list`, `update`, and `upgrade` explain missing sources and suggest an uninstall preview.
+Upgrade preserves these resources by default.
+
+Use `shine app uninstall <OLD_CATEGORY> --dry-run`, then `shine app uninstall <OLD_CATEGORY>`
+to uninstall using the original installation receipt even when the Preset is unavailable.
+Uninstall selects that category's receipts, not another category sharing its destination.
+For copy installs, unchanged managed content is removed and an existing recorded backup is
+restored. JSON merge installs remove only receipt-owned keys and preserve unrelated keys.
+User-modified managed content and its receipt are retained unless `--force` is explicit.
+If the destination is missing, uninstall clears its receipt and leaves any recorded backup in
+place. A dry-run preserves files, backups, and receipts; it reports user modifications and
+recorded backup restoration separately. Missing source code cannot be used to run teardown.
+
 ## Status, updates, trust, and completions
 
 ```text

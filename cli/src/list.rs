@@ -82,6 +82,26 @@ fn print_generator_notice(rows: &[AppRow], run_generators: bool) -> (bool, bool)
     (not_evaluated || !failures.is_empty(), !failures.is_empty())
 }
 
+async fn missing_app_sources(config: &Config) -> Result<Vec<(String, String)>> {
+    crate::core_runtime::frontend_from_config(config)
+        .await?
+        .missing_app_sources()
+        .await
+        .map_err(FrontendServiceError::into_source)
+}
+
+fn print_missing_app_sources(items: &[(String, String)]) {
+    for (category, resource) in items {
+        println!(
+            "{}",
+            colors::yellow(&format!(
+                "! app/{category} · {resource}: Preset source missing; installed content and receipt retained."
+            ))
+        );
+        println!("  Preview uninstall: shine app uninstall {category} --dry-run");
+    }
+}
+
 pub async fn handle_update_list(config: &Config, diff: bool, run_generators: bool) -> Result<bool> {
     let shell_rows = build_shell_rows(config).await?;
     let shell_lifecycle = crate::shells::collect_update_lifecycle_result(config).await?;
@@ -143,6 +163,7 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
         .collect::<Vec<_>>();
     let any_update =
         !update_shell.is_empty() || !actionable_app.is_empty() || !update_sys.is_empty();
+    let missing_sources = missing_app_sources(config).await?;
     let has_generator_attention = app_rows.iter().any(|row| {
         matches!(
             row.file_status,
@@ -151,12 +172,17 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
                 | FileStatus::GeneratorTrustRequired
         )
     });
-    if !any_update && !has_generator_attention && shell_attention.is_empty() {
+    if !any_update
+        && !has_generator_attention
+        && shell_attention.is_empty()
+        && missing_sources.is_empty()
+    {
         return Ok(false);
     }
 
     crate::config::print_presets_note(config);
     print_shell_attention(&shell_attention);
+    print_missing_app_sources(&missing_sources);
 
     if !diff {
         let shell_names = shell_categories(&update_shell);
@@ -657,6 +683,7 @@ pub async fn handle_list(config: &Config) -> Result<()> {
         .map_err(FrontendServiceError::into_source)?;
     let installed_sys = installed_sys_items_from_inventory(&sys_inventory);
 
+    let missing_sources = missing_app_sources(config).await?;
     let installed_shell = sorted_names(installed_shell);
     let installed_app = sorted_names(installed_app);
     let installed_sys = sorted_names(installed_sys);
@@ -677,6 +704,10 @@ pub async fn handle_list(config: &Config) -> Result<()> {
     print_name_section(&mut separator, "Shell Presets", &installed_shell);
     print_name_section(&mut separator, "App Configs", &installed_app);
     print_name_section(&mut separator, "System Configs", &installed_sys);
+    if !missing_sources.is_empty() {
+        separator.begin();
+        print_missing_app_sources(&missing_sources);
+    }
 
     Ok(())
 }
@@ -702,7 +733,7 @@ fn installed_app_categories_from_inventory(report: &InventoryReportV1) -> Vec<St
     report
         .items
         .iter()
-        .filter(|item| item.available && item.installed)
+        .filter(|item| item.installed)
         .filter_map(|item| item.target.strip_prefix("app/").map(str::to_string))
         .collect()
 }
@@ -1211,7 +1242,7 @@ mod tests {
 
         assert_eq!(
             installed_app_categories_from_inventory(&report),
-            ["installed"]
+            ["installed", "orphan"]
         );
         assert_eq!(
             installed_shell_categories_from_inventory(&report),
