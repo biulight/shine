@@ -3,9 +3,9 @@ use super::app::{
     merge_managed_json_bytes, parse_json_object, remove_managed_json_bytes,
     restore_managed_json_bytes,
 };
+use super::review_path::review_path;
 use super::{
     CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, PrivilegedFileSystemHost,
-    RuntimeContext,
 };
 use crate::action::{
     ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, RollbackSupportV1,
@@ -5571,31 +5571,6 @@ async fn path_exists(host: &impl FileSystemObservationHost, path: &Path) -> Resu
     }
 }
 
-fn review_path(context: &RuntimeContext, path: &Path) -> String {
-    for (base, root) in [
-        ("shine", &context.shine_dir),
-        ("data-dir", &context.data_dir),
-        ("home", &context.home_dir),
-    ] {
-        if let Ok(relative) = path.strip_prefix(root) {
-            let value = if relative.as_os_str().is_empty() {
-                ".".to_string()
-            } else {
-                logical_path(relative)
-            };
-            return format!("{base}:{value}");
-        }
-    }
-    format!("absolute:{}", logical_path(path))
-}
-
-fn logical_path(path: &Path) -> String {
-    path.components()
-        .map(|part| part.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5615,7 +5590,7 @@ mod tests {
     fn runtime() -> CoreRuntime<InMemoryHost> {
         let home = PathBuf::from("/home/test");
         let shine = home.join(".shine");
-        let context = RuntimeContext::isolated(
+        let context = super::super::RuntimeContext::isolated(
             home,
             shine.clone(),
             shine.join("presets"),

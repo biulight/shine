@@ -330,7 +330,7 @@ async fn review_plans_with_render_mode(
             bail!("security Plan approval requires an interactive terminal or explicit --yes");
         }
         let confirmed = dialoguer::Confirm::new()
-            .with_prompt("Apply this Plan, including use of its listed external code? No persistent trust will be saved.")
+            .with_prompt(confirmation_prompt(&planned))
             .default(false)
             .interact()?;
         if !confirmed {
@@ -584,6 +584,18 @@ pub(crate) async fn execute_reviewed(
         .await
         .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
     Ok(execution.details)
+}
+
+fn confirmation_prompt(planned: &[(LifecyclePlanRequest, PlanV1)]) -> &'static str {
+    if planned.iter().any(|(_, plan)| {
+        plan.code_boundaries
+            .iter()
+            .any(|boundary| boundary.source == CodeSourceV2::ExternalOrOverlay)
+    }) {
+        "Apply this Plan, including use of its listed external code? No persistent trust will be saved."
+    } else {
+        "Apply this Plan?"
+    }
 }
 
 async fn active_config_digest(config: &Config) -> Result<String> {
@@ -1229,11 +1241,14 @@ fn render_permission_summary(
     let mut lines = Vec::new();
     for (group, values) in explicit {
         lines.push(format!("{indent}{group}"));
-        lines.extend(
-            values
-                .into_iter()
-                .map(|value| format!("{indent}  - {value}")),
-        );
+        lines.extend(values.into_iter().map(|value| {
+            let display = if group.starts_with("filesystem ") {
+                crate::path_display::permission_path(&value)
+            } else {
+                value
+            };
+            format!("{indent}  - {display}")
+        }));
     }
     for (label, summary) in summaries {
         let count = if label == "Installed commands" {
@@ -1247,7 +1262,7 @@ fn render_permission_summary(
                     "; backups for {}",
                     backup_targets
                         .iter()
-                        .cloned()
+                        .map(|path| crate::path_display::permission_path(path))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -1522,7 +1537,7 @@ fn render_bootstrap_permissions(
                     FilesystemAccessV1::Execute => "Execute",
                 }
                 .to_string(),
-                path.clone(),
+                crate::path_display::permission_path(path),
             ),
             PermissionV1::Network { .. } => ("Network".to_string(), permission_group(permission).1),
             PermissionV1::Command { program } => ("Commands".to_string(), program.clone()),
@@ -1778,13 +1793,14 @@ pub(crate) fn permission_name(permission: &PermissionV1) -> String {
             scope: OpaqueCodeScopeV1::Unrestricted,
         } => "opaque Preset code with unrestricted effects".to_string(),
         PermissionV1::Filesystem { access, path } => format!(
-            "filesystem {} {path}",
+            "filesystem {} {}",
             match access {
                 FilesystemAccessV1::Read => "read",
                 FilesystemAccessV1::Write => "write",
                 FilesystemAccessV1::Remove => "remove",
                 FilesystemAccessV1::Execute => "execute",
-            }
+            },
+            crate::path_display::permission_path(path)
         ),
         PermissionV1::Network { scope } => match scope {
             NetworkScopeV1::Any => "network any".to_string(),
@@ -1819,6 +1835,63 @@ mod tests {
         let mut builder = SnapshotDigestV1::builder("test");
         builder.add_observation(label, b"value").unwrap();
         builder.finish()
+    }
+
+    #[test]
+    fn confirmation_mentions_external_code_only_when_listed() {
+        use shine_core::plan::CodeBoundaryV2;
+        let mut planned = vec![(
+            LifecyclePlanRequest::AppRecovery,
+            filesystem_summary_fixture(),
+        )];
+        assert_eq!(confirmation_prompt(&planned), "Apply this Plan?");
+        planned[0].1.code_boundaries.push(CodeBoundaryV2 {
+            target: "shell/test/mytool".into(),
+            entry_kind: CodeEntryKindV2::ShellCommand,
+            timing: CodeTimingV2::DeliverForLater,
+            source: CodeSourceV2::ShineDistribution,
+            trust: CodeTrustStateV2::OperationConfirmation,
+            unisolated: true,
+            target_role: CodeTargetRoleV2::Selected,
+            shared_resource: None,
+        });
+        assert_eq!(confirmation_prompt(&planned), "Apply this Plan?");
+        let mut external = planned[0].clone();
+        external.1.code_boundaries[0].source = CodeSourceV2::ExternalOrOverlay;
+        planned.push(external);
+        assert!(confirmation_prompt(&planned).contains("listed external code"));
+        assert!(confirmation_prompt(&planned).contains("No persistent trust will be saved"));
+    }
+
+    #[test]
+    fn absolute_permission_display_preserves_recovery_associations_and_approval() {
+        let mut plan = filesystem_summary_fixture();
+        // Replace the home target and its associated rollback permission, retaining Core provenance.
+        let replace =
+            |value: &str| value.replace("home:.zshrc", "absolute:/etc/docker/daemon.json");
+        let map_permission = |permission: &PermissionV1| match permission {
+            PermissionV1::Filesystem { access, path } => PermissionV1::Filesystem {
+                access: *access,
+                path: replace(path),
+            },
+            other => other.clone(),
+        };
+        plan.permissions.required =
+            PermissionSetV1::new(plan.permissions.required.iter().map(map_permission));
+        for group in &mut plan.filesystem_review {
+            group.target = replace(&group.target);
+            group.permissions = PermissionSetV1::new(group.permissions.iter().map(map_permission));
+        }
+        let fingerprint = plan.fingerprint().unwrap();
+        let permissions = plan.permissions.required.clone();
+        let compact = render_compact_permissions(&plan).join("\n");
+        assert!(compact.contains("- /etc/docker/daemon.json"));
+        assert!(compact.contains("backups for /etc/docker/daemon.json"));
+        let verbose = render_plan_lines(&plan, "config").unwrap().join("\n");
+        assert!(verbose.contains("filesystem remove /etc/docker/daemon.json"));
+        assert!(!verbose.contains("absolute:"));
+        assert_eq!(plan.permissions.required, permissions);
+        assert_eq!(plan.fingerprint().unwrap(), fingerprint);
     }
 
     #[test]
@@ -1999,11 +2072,11 @@ mod tests {
             .join("\n");
         assert_eq!(
             detailed
-                .matches(&format!("shine:runtime/sys/{os_id}"))
+                .matches(&format!("Shine state/runtime/sys/{os_id}"))
                 .count(),
             runtime_writes
         );
-        assert_eq!(detailed.matches("shine:sys-manifest.toml").count(), 1);
+        assert_eq!(detailed.matches("Shine state/sys-manifest.toml").count(), 1);
         for item in &items {
             assert!(
                 plan.permission_scopes
@@ -2053,8 +2126,8 @@ mod tests {
         assert!(compact[rust..fzf].contains("curl"));
         assert!(!compact[rust..fzf].contains("apt-get"));
         assert!(compact[fzf..profile].contains("apt-get"));
-        assert!(compact[profile..shared].contains("home:.bashrc"));
-        assert_eq!(compact.matches("shine:sys-manifest.toml").count(), 1);
+        assert!(compact[profile..shared].contains("~/.bashrc"));
+        assert_eq!(compact.matches("Shine state/sys-manifest.toml").count(), 1);
         assert!(compact.contains("Recovery is unsupported for this profile step"));
         assert!(!compact.contains("sys_bootstrap_profile_recovery_unsupported"));
         assert!(!compact.contains(&before.as_hex()));
@@ -2249,10 +2322,12 @@ mod tests {
         let plan = filesystem_summary_fixture();
         let fingerprint = plan.fingerprint().unwrap();
         let compact = render_compact_permissions(&plan).join("\n");
-        assert!(compact.contains("- home:.zshrc"));
+        assert!(compact.contains("- ~/.zshrc"));
         assert!(compact.contains("Installed files · shell/test/mytool"));
-        assert!(compact.contains("backups for home:.zshrc"));
-        assert!(compact.contains("Installation state and recovery files · remove/write (6 paths; backups for home:.zshrc)"));
+        assert!(compact.contains("backups for ~/.zshrc"));
+        assert!(compact.contains(
+            "Installation state and recovery files · remove/write (6 paths; backups for ~/.zshrc)"
+        ));
         assert!(!compact.contains(".shine.stage"));
         assert!(!compact.contains("shell-manifest.toml"));
         let full = render_plan_lines(&plan, "missing").unwrap().join("\n");
@@ -2352,7 +2427,7 @@ mod tests {
                 .count(),
             1
         );
-        assert!(summary.contains("12 paths; backups for home:.zshrc"));
+        assert!(summary.contains("12 paths; backups for ~/.zshrc"));
         assert!(!summary.contains("shell/test/convert"));
         let full = render_plan_lines(&plan, "missing").unwrap().join("\n");
         for permission in plan.permissions.required.iter() {
@@ -2367,8 +2442,8 @@ mod tests {
         let maintenance = plan.filesystem_review.last().unwrap().clone();
         plan.filesystem_review.clear();
         let legacy = render_compact_permissions(&plan).join("\n");
-        assert!(legacy.contains("shine:installed/shell/.test.shine.stage"));
-        assert!(legacy.contains("home:.zshrc.shine.rollback"));
+        assert!(legacy.contains("Shine state/installed/shell/.test.shine.stage"));
+        assert!(legacy.contains("~/.zshrc.shine.rollback"));
         plan.filesystem_review.push(maintenance.clone());
         let mut conflict = maintenance.clone();
         conflict.purpose = FilesystemPurposeV1::UserTarget;
@@ -2376,7 +2451,7 @@ mod tests {
         assert!(
             render_compact_permissions(&plan)
                 .join("\n")
-                .contains("shine:shell-manifest.toml")
+                .contains("Shine state/shell-manifest.toml")
         );
         plan.filesystem_review.pop();
         plan.filesystem_review[0]
@@ -2388,7 +2463,7 @@ mod tests {
         assert!(
             render_compact_permissions(&plan)
                 .join("\n")
-                .contains("shine:shell-manifest.toml")
+                .contains("Shine state/shell-manifest.toml")
         );
     }
 
@@ -2403,7 +2478,9 @@ mod tests {
             plan.operation = operation;
             let rendered = render_compact_permissions(&plan).join("\n");
             for permission in plan.permissions.required.iter() {
-                assert!(rendered.contains(&permission_group(permission).1));
+                assert!(rendered.contains(&crate::path_display::permission_path(
+                    &permission_group(permission).1
+                )));
             }
         }
         let mut plan = filesystem_summary_fixture();
@@ -2414,7 +2491,7 @@ mod tests {
         assert!(
             render_compact_permissions(&plan)
                 .join("\n")
-                .contains("shine:shell-manifest.toml")
+                .contains("Shine state/shell-manifest.toml")
         );
         assert!(
             render_compact_steps(&plan)
@@ -2646,7 +2723,7 @@ mod tests {
             .join("\n");
         assert!(verbose.contains("shell/proxy · preset-cache [shell_cache_replace_transaction]"));
         assert!(verbose.contains("app/git · preset-cache:gitconfig"));
-        assert!(verbose.contains("shine:presets/app/git/gitconfig"));
+        assert!(verbose.contains("Shine state/presets/app/git/gitconfig"));
         assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
         assert_eq!(planned[0].1.permissions.required, permissions);
 
@@ -2727,7 +2804,7 @@ mod tests {
         let verbose = render_upgrade_detailed_plan_lines(&planned, "config")
             .unwrap()
             .join("\n");
-        assert!(verbose.contains("shine:presets/app/git/gitconfig"));
+        assert!(verbose.contains("Shine state/presets/app/git/gitconfig"));
         assert!(verbose.contains("app/git · preset-cache:gitconfig"));
 
         let mut changed = planned.clone();
@@ -2741,7 +2818,7 @@ mod tests {
         ambiguous[0].1.filesystem_review.clear();
         let compact = render(&ambiguous);
         assert!(compact.contains("App Configs"));
-        assert!(compact.contains("shine:presets/app/git/gitconfig"));
+        assert!(compact.contains("Shine state/presets/app/git/gitconfig"));
         let mut conflict = planned.clone();
         let duplicate = conflict[0].1.filesystem_review[0].clone();
         conflict[0].1.filesystem_review.push(duplicate);
@@ -2921,7 +2998,7 @@ mod tests {
             rendered
                 .contains("~ shell/utils · shared-snapshot [shell_snapshot_replace_transaction]")
         );
-        assert!(rendered.contains("filesystem write shine:installed/shell/utils"));
+        assert!(rendered.contains("filesystem write Shine state/installed/shell/utils"));
         assert!(rendered.contains("Config snapshot  config-snapshot"));
         assert!(rendered.contains("Fingerprint"));
         assert!(!rendered.contains("shell/agent/ccenv"));
@@ -2972,11 +3049,11 @@ mod tests {
             .unwrap()
             .join("\n");
         assert!(rendered.contains("filesystem write"));
-        assert!(rendered.contains("home:.zshrc"));
+        assert!(rendered.contains("~/.zshrc"));
         let detailed = render_upgrade_detailed_plan_lines(&planned, "config")
             .unwrap()
             .join("\n");
-        assert!(detailed.contains("filesystem write home:.zshrc"));
+        assert!(detailed.contains("filesystem write ~/.zshrc"));
         assert!(!detailed.contains("shell/demo/tool"));
 
         plan.permissions.required = PermissionSetV1::default();

@@ -5,6 +5,12 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **Path presentation never changes permission identity.** Planners and App/Shell/Sys action
+  executors use one root-aware encoder, preserving Unix roots, Windows drive roots and UNC
+  prefixes. CLI path labels are applied only after exact permission/provenance matching and never
+  fed back into approval. External-code confirmation wording comes from typed code boundaries;
+  plans without external/overlay code still require normal snapshot-bound approval.
+
 - **Protected uninstall is incomplete in the CLI.** App and Shell report preserved/conflicting
   resources and failures explicitly, including partial completion, and actual commands return
   nonzero. A successfully generated dry-run remains zero and never describes its effects as

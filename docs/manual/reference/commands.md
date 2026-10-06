@@ -58,6 +58,13 @@ upgrade, uninstall, recovery, App refresh/artifact, and Sys bootstrap/profile/ap
 `--verbose` to expand file paths, steps, snapshot identities, and diagnostics in the displayed
 review scopes.
 
+Filesystem permission paths use familiar forms: `/etc/docker/daemon.json` for an absolute path,
+`~/.zshrc` under your home directory, `Shine state/...` under the configured Shine state directory,
+and `App data/...` under the platform application-data directory. Windows drive and network-share
+paths retain their roots. These display labels do not broaden the listed permissions.
+Confirmation asks `Apply this Plan?`; only Plans listing external/overlay code also ask you to
+allow that code for this operation and explain that no persistent trust will be saved.
+
 Shell command installations are grouped by command count, with Shell integration shown separately.
 Internal state and recovery files share one path count, while backup associations with user files
 remain explicit. Use `--verbose` for individual entries.

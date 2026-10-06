@@ -21,6 +21,7 @@ mod planner;
 mod preset;
 mod preset_migration;
 mod profile;
+mod review_path;
 mod schema;
 mod shell;
 mod shell_action_executor;

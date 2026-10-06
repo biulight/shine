@@ -9,6 +9,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Fix absolute filesystem permission identities and show familiar paths in Security Plans,
+  preserving Windows drive and network-share roots. Mention external-code consent in the
+  confirmation prompt only when the Plan lists external/overlay code.
+
 - Compact protected App/Shell uninstall output by grouping App force guidance, omitting known
   unchanged cache steps and empty permission sections from default review, and keeping backup
   paths in verbose/force previews. Already-reported incomplete results retain nonzero exits

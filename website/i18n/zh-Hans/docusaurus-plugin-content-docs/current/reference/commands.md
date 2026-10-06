@@ -53,6 +53,9 @@ shine upgrade app/starship
 
 Security Plan 默认显示用户文件的具体路径，并按用途汇总安装产物、Shine 内部维护及关联的备份/回滚文件，注明访问类型和路径数量。安装、升级、卸载、恢复、App refresh/artifact 和 Sys bootstrap/profile/apply 的审批都支持 `--verbose`，可展开已显示审阅范围中的文件路径、步骤、快照标识和诊断。
 
+文件系统权限路径使用常见形式：绝对路径显示为 `/etc/docker/daemon.json`，用户主目录下的路径显示为 `~/.zshrc`，已配置的 Shine 状态目录下显示为 `Shine state/...`，平台应用数据目录下显示为 `App data/...`。Windows 盘符和网络共享路径保留根路径。这些显示标签不会扩大所列权限。
+确认提示为 `Apply this Plan?`；只有列出外部/overlay 代码的 Plan 才会同时询问是否允许本次操作使用这些代码，并说明不会保存持久信任。
+
 Shell 命令安装按命令数合并，Shell 集成单独显示；内部状态与恢复文件合并统计路径数量，用户文件的备份关联仍会明确提示。`--verbose` 保留逐项明细。
 
 已确认无变化的 App 文件及受管 Sys 项目不会贡献本次操作权限。默认 `upgrade` 审阅不显示没有动作、所需权限、代码边界、阻塞或特殊诊断的范围，也不列出普通的未变化步骤和日常升级跳过的手动 App 生成器。`upgrade --verbose` 同样省略这些无关范围和步骤，并展开其余步骤、具体权限、快照标识、诊断码和指纹。需要查看所有计划范围和步骤时，可用 `upgrade --verbose --full-plan`；`--full-plan` 必须与 `--verbose` 一起使用。完整 Plan 仍参与审批绑定，审阅后发生变化必须重新规划。实际触发的生成器、hook 和共享事务保留各自权限。正常事务码及生命周期快照标识仅在 `--verbose` 中显示；保留、阻塞及其它诊断提示仍明确展示。

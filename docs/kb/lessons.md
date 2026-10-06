@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-07 — Absolute permission paths are identities, not URLs
+
+- **Symptom**: uninstall review displayed `absolute://etc/docker/daemon.json` and asked for
+  external-code consent even when no external code was listed.
+- **Cause**: joining `Path::components()` added a separator after the Unix root; the encoder
+  was copied in four modules and confirmation wording was unconditional.
+- **Fix**: share root-aware encoding across planning and execution, format logical identities
+  only at the CLI display boundary, and select consent wording from typed code boundaries.
+- **Rule**: never collapse all doubled separators: Windows UNC roots need them. Keep permission
+  and recovery-provenance comparisons on raw identities, with display-independent fingerprints.
+
 ## 2026-10-07 — Incomplete uninstall needs one result, not repeated errors
 
 - **Symptom**: protected uninstall repeated preservation in review, file detail, guidance,

@@ -37,6 +37,9 @@ unisolated code boundaries plus conservative semantic steps. Classification neve
 author's `opaque_code` field. Code is never run during planning and missing or stale target-scoped
 trust remains a blocker for external code delivery/execution. A supported receipt can drive uninstall after source
 disappearance, but cannot recreate missing teardown code.
+Planner and App/Shell/Sys action executors share `review_path` root-aware filesystem identity
+encoding. CLI display translates those identities only after exact permission/provenance matching;
+the displayed path is never used to grant access or compute an approval.
 Typed filesystem operations also record exact presentation-purpose groups. The CLI summarizes
 uniquely attributed installation, maintenance and recovery material in ordinary ready Plans;
 user destinations, ambiguous entries, blocked Plans and recovery reviews stay explicit. All
@@ -1059,7 +1062,8 @@ for the unchanged envelope and sealing concurrency contract.
 ## One-operation external code consent
 
 Trusted human-facing lifecycle review may obtain one-time consent for exact external Preset code
-alongside Plan confirmation. Temporary grants are private Core runtime state, cleared after review,
+alongside Plan confirmation. CLI confirmation mentions external-code consent only when a typed
+external/overlay boundary is listed; internal-only Plans use the ordinary apply question. Temporary grants are private Core runtime state, cleared after review,
 and carried only in the non-serializable ApprovedOperation. Execution reinstalls those exact
 identities and re-plans against fresh input; changed source, state or configuration rejects approval.
 No persistent grant is written. Automatic `--yes` and read-only/AI review use the ordinary path and

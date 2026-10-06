@@ -1,10 +1,10 @@
 //! Receipt-bound operation journal for declarative managed Sys resources.
 
+use super::review_path::review_path;
 use super::sys::{load_manifest_with_host, save_manifest_with_host};
 use super::{
     CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, PrivilegedFileSystemHost,
-    RuntimeContext, SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SysRunEntry,
-    SysRunManifest,
+    SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SysRunEntry, SysRunManifest,
 };
 use crate::action::{ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, SysSplitDnsStateV1};
 use crate::install::hash_content;
@@ -1549,29 +1549,4 @@ async fn remove_sys_operation_journal(host: &impl FileSystemHost, shine_dir: &Pa
         Err(error) if error.is_not_found() => Ok(()),
         Err(error) => Err(error.into_anyhow("removing Sys operation journal")),
     }
-}
-
-fn review_path(context: &RuntimeContext, path: &Path) -> String {
-    for (base, root) in [
-        ("shine", &context.shine_dir),
-        ("data-dir", &context.data_dir),
-        ("home", &context.home_dir),
-    ] {
-        if let Ok(relative) = path.strip_prefix(root) {
-            let value = if relative.as_os_str().is_empty() {
-                ".".to_string()
-            } else {
-                logical_path(relative)
-            };
-            return format!("{base}:{value}");
-        }
-    }
-    format!("absolute:{}", logical_path(path))
-}
-
-fn logical_path(path: &Path) -> String {
-    path.components()
-        .map(|part| part.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }

@@ -13,6 +13,7 @@ use super::launcher::{
     prepare_launcher_resources, prepared_launcher_resource_is_exact,
     probe_managed_command_with_host,
 };
+use super::review_path::{logical_path, review_path};
 use super::shell::has_template_annotation;
 use super::shell::shell_link_spec_from_manifest_entry;
 use super::{
@@ -41,7 +42,7 @@ use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::transforms::MissingTemplateVariables;
 use crate::install::{AppEntry, AppManifest};
 use crate::lifecycle::LifecycleOperation;
-use crate::permission::{PermissionDeclarationV1, PermissionPathBaseV1};
+use crate::permission::PermissionDeclarationV1;
 use crate::plan::{
     CodeBoundaryV2, CodeEntryKindV2, CodeSourceV2, CodeTargetRoleV2, CodeTimingV2,
     CodeTrustStateV2, EnvironmentSensitivityV1, FilesystemAccessV1, FilesystemPurposeV1,
@@ -7534,24 +7535,6 @@ fn captured_sys_path(raw: &str, home: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn review_path(context: &super::RuntimeContext, path: &Path) -> String {
-    for (base, root) in [
-        (PermissionPathBaseV1::Shine, &context.shine_dir),
-        (PermissionPathBaseV1::DataDir, &context.data_dir),
-        (PermissionPathBaseV1::Home, &context.home_dir),
-    ] {
-        if let Ok(relative) = path.strip_prefix(root) {
-            let value = if relative.as_os_str().is_empty() {
-                ".".to_string()
-            } else {
-                logical_path(relative)
-            };
-            return format!("{}:{value}", base.as_str());
-        }
-    }
-    format!("absolute:{}", logical_path(path))
-}
-
 fn logical_app_source(category: &AppCategory, file: &AppFile) -> String {
     format!("app/{}/{}", category.name, logical_path(&file.source_rel))
 }
@@ -7573,13 +7556,6 @@ fn split_dns_receipt_matches(previous: &SystemReceipt, desired: &super::SplitDns
 fn app_source_parts(source: &str) -> Option<(&str, &str)> {
     let mut parts = source.splitn(3, '/');
     (parts.next()? == "app").then_some((parts.next()?, parts.next()?))
-}
-
-fn logical_path(path: &Path) -> String {
-    path.components()
-        .map(|part| part.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 fn operation_name(operation: PlanOperationV1) -> &'static str {
@@ -16376,6 +16352,16 @@ servers_env = 'PRIVATE_DNS_SERVERS'
                 .required
                 .contains(&PermissionV1::Administrator)
         );
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: "absolute:/etc/demo/config.toml".into(),
+                    })
+            );
+        }
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         let actions = runtime
             .approved_app_file_action_irs(&request, &plan, &approval)

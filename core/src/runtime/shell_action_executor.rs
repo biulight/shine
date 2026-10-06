@@ -3,13 +3,14 @@
 use super::launcher::{
     PreparedLauncherResource, apply_prepared_launcher_resource, prepare_launcher_resources,
 };
+use super::review_path::review_path;
 use super::shell::{
     ShellManifest, ShellManifestEntry, load_shell_manifest_with_host,
     shell_link_spec_from_manifest_entry,
 };
 use super::{
     CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, LinkSpec,
-    PrivilegedFileSystemHost, RuntimeContext,
+    PrivilegedFileSystemHost,
 };
 use crate::action::{
     ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, DeclarativeActionV1,
@@ -4762,31 +4763,6 @@ async fn remove_shell_operation_journal(
         Err(error) if error.is_not_found() => Ok(()),
         Err(error) => Err(error.into_anyhow("removing Shell operation journal")),
     }
-}
-
-fn review_path(context: &RuntimeContext, path: &Path) -> String {
-    for (base, root) in [
-        ("shine", &context.shine_dir),
-        ("data-dir", &context.data_dir),
-        ("home", &context.home_dir),
-    ] {
-        if let Ok(relative) = path.strip_prefix(root) {
-            let value = if relative.as_os_str().is_empty() {
-                ".".to_string()
-            } else {
-                logical_path(relative)
-            };
-            return format!("{base}:{value}");
-        }
-    }
-    format!("absolute:{}", logical_path(path))
-}
-
-fn logical_path(path: &Path) -> String {
-    path.components()
-        .map(|part| part.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 #[cfg(test)]
