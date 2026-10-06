@@ -31,7 +31,7 @@ pub async fn handle_uninstall_approved(
     let mut renderer = TerminalRenderer::stdio();
     handle_uninstall_with_reporter(config, category, force, purge, dry_run, yes, &mut renderer)
         .await
-        .map(|_| ())
+        .and_then(|result| crate::uninstall::check_completion(&result, dry_run))
 }
 
 #[cfg(test)]
@@ -128,7 +128,8 @@ async fn handle_uninstall_with_reporter(
     let mut removed = 0usize;
     let mut restored = 0usize;
     let mut user_modified = 0usize;
-    let mut skipped = 0usize;
+    let mut cleared_receipts = 0usize;
+    let mut previewed = 0usize;
     for file in &core_report.files {
         match file.action {
             shine_core::runtime::AppFileAction::Removed => {
@@ -174,7 +175,7 @@ async fn handle_uninstall_with_reporter(
                 observer.reporter.emit(PresentationEvent::stdout(
                     report::uninstall_not_found_text(config, &file.destination),
                 ));
-                skipped += 1;
+                cleared_receipts += 1;
             }
             shine_core::runtime::AppFileAction::UserModified => {
                 observer
@@ -183,6 +184,9 @@ async fn handle_uninstall_with_reporter(
                         config,
                         &file.destination,
                     )));
+                for line in protected_file_guidance(config, file) {
+                    observer.reporter.emit(PresentationEvent::stdout(line));
+                }
                 user_modified += 1;
             }
             shine_core::runtime::AppFileAction::PreviewRemove => {
@@ -192,13 +196,10 @@ async fn handle_uninstall_with_reporter(
                         config,
                         &file.destination,
                     )));
-                if let Some(backup) = &file.backup {
-                    observer.reporter.emit(PresentationEvent::stdout(format!(
-                        "    Would restore recorded backup if present: {}",
-                        backup.display()
-                    )));
+                for line in uninstall_impact_lines(config, file) {
+                    observer.reporter.emit(PresentationEvent::stdout(line));
                 }
-                skipped += 1;
+                previewed += 1;
             }
             shine_core::runtime::AppFileAction::Failed => {
                 let error = anyhow::anyhow!(
@@ -225,14 +226,60 @@ async fn handle_uninstall_with_reporter(
                 None => report::purge_all_text(),
             }));
     }
-    let summary_parts = report::uninstall_summary_parts(removed, restored, user_modified, skipped);
+    let mut summary_parts = report::uninstall_summary_parts(removed, restored, user_modified, 0);
+    if cleared_receipts > 0 {
+        summary_parts.push(format!("{cleared_receipts} installation receipts cleared"));
+    }
+    if previewed > 0 {
+        summary_parts.push(format!("{previewed} planned"));
+    }
+    let failed = core_report.lifecycle.summary().failed;
+    if failed > 0 {
+        summary_parts.push(format!("{failed} failed"));
+    }
     observer.reporter.emit(PresentationEvent::BlankLine);
     observer
         .reporter
-        .emit(PresentationEvent::stdout(report::done_summary_text(
+        .emit(PresentationEvent::stdout(crate::output::summary_line_text(
+            crate::uninstall::summary_label(&core_report.lifecycle, dry_run),
             &summary_parts,
         )));
     Ok(core_report.lifecycle)
+}
+
+fn uninstall_impact_lines(
+    config: &Config,
+    file: &shine_core::runtime::AppFileLifecycleReport,
+) -> Vec<String> {
+    use shine_core::install::AppInstallStrategy;
+    match &file.uninstall_strategy {
+        Some(AppInstallStrategy::JsonMerge { managed_keys }) => vec![format!(
+            "    Would remove {} receipt-owned JSON keys and the installation receipt; unrelated keys remain.",
+            managed_keys.len()
+        )],
+        Some(AppInstallStrategy::Copy) => match &file.backup {
+            Some(backup) => vec![format!(
+                "    Would replace current content with recorded backup if present: {}; otherwise remove the file. The installation receipt would be cleared.",
+                crate::path_display::format_home(backup, &config.home_dir)
+            )],
+            None => {
+                vec!["    Would delete the managed file and clear its installation receipt.".into()]
+            }
+        },
+        None => Vec::new(),
+    }
+}
+
+fn protected_file_guidance(
+    config: &Config,
+    file: &shine_core::runtime::AppFileLifecycleReport,
+) -> Vec<String> {
+    let mut lines = vec![
+        "    Uninstall blocked by modification protection; current managed content and installation receipt retained.".into(),
+        format!("    To override this protection, preview: shine app uninstall {} --force --dry-run", file.category),
+    ];
+    lines.extend(uninstall_impact_lines(config, file));
+    lines
 }
 
 struct UninstallObserver<'a> {
@@ -273,6 +320,142 @@ mod tests {
     #[cfg(unix)]
     use crate::test_support::env_lock;
     use tokio::fs;
+
+    #[derive(Default)]
+    struct RecordingReporter(Vec<PresentationEvent>);
+    impl LifecycleReporter for RecordingReporter {
+        fn emit(&mut self, event: PresentationEvent) {
+            self.0.push(event);
+        }
+    }
+    impl RecordingReporter {
+        fn text(&self) -> String {
+            self.0
+                .iter()
+                .filter_map(|event| match event {
+                    PresentationEvent::Line { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    }
+
+    #[tokio::test]
+    async fn protected_uninstall_reports_partial_completion_and_strategy_specific_guidance() {
+        for mode in [0, 1, 2] {
+            let dir = make_temp_dir().await;
+            let mut config = Config::new_for_test(&dir);
+            config.is_external_presets = true;
+            fs::create_dir_all(config.shine_dir()).await.unwrap();
+            let protected = dir.join("protected");
+            let clean = dir.join("clean");
+            let backup = dir.join("protected.shine.bak");
+            fs::write(
+                &protected,
+                if mode == 2 {
+                    br#"{"managed":false,"user":"keep"}"#.as_slice()
+                } else {
+                    b"user change"
+                },
+            )
+            .await
+            .unwrap();
+            fs::write(&clean, b"managed").await.unwrap();
+            if mode == 1 {
+                fs::write(&backup, b"original").await.unwrap();
+            }
+            let entry = AppEntry {
+                source: "app/sample/protected".into(),
+                destination: protected.clone(),
+                backup: (mode == 1).then(|| backup.clone()),
+                content_hash: crate::install_core::hash_content(b"managed"),
+                install_strategy: if mode == 2 {
+                    AppInstallStrategy::JsonMerge {
+                        managed_keys: vec!["managed".into()],
+                    }
+                } else {
+                    AppInstallStrategy::Copy
+                },
+                uses_env: false,
+                requires_admin: false,
+            };
+            let manifest = AppManifest {
+                entries: vec![
+                    entry.clone(),
+                    AppEntry {
+                        source: "app/sample/clean".into(),
+                        destination: clean.clone(),
+                        backup: None,
+                        install_strategy: AppInstallStrategy::Copy,
+                        ..entry
+                    },
+                ],
+                ..AppManifest::default()
+            };
+            manifest
+                .save(&shine_core::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap();
+            let mut preview = RecordingReporter::default();
+            let result = handle_uninstall_with_reporter(
+                &config,
+                Some("sample"),
+                false,
+                false,
+                true,
+                true,
+                &mut preview,
+            )
+            .await
+            .unwrap();
+            assert!(crate::uninstall::check_completion(&result, true).is_ok());
+            assert!(
+                preview
+                    .text()
+                    .contains("Preview · protection would prevent complete uninstall")
+            );
+            assert!(clean.exists());
+            let mut actual = RecordingReporter::default();
+            let result = handle_uninstall_with_reporter(
+                &config,
+                Some("sample"),
+                false,
+                false,
+                false,
+                true,
+                &mut actual,
+            )
+            .await
+            .unwrap();
+            assert!(crate::uninstall::check_completion(&result, false).is_err());
+            let text = actual.text();
+            assert!(text.contains("NOT UNINSTALLED"));
+            assert!(text.contains("Uninstall incomplete"));
+            assert!(!text.contains("Done"));
+            assert!(text.contains("1 removed"));
+            assert!(text.contains("shine app uninstall sample --force --dry-run"));
+            match mode {
+                0 => assert!(text.contains("Would delete the managed file")),
+                1 => assert!(text.contains("Would replace current content with recorded backup")),
+                _ => {
+                    assert!(text.contains("receipt-owned JSON keys"));
+                    assert!(!text.contains("Would delete the managed file"));
+                }
+            }
+            assert!(protected.exists());
+            assert!(!clean.exists());
+            assert_eq!(
+                AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+                    .await
+                    .unwrap()
+                    .entries
+                    .len(),
+                1
+            );
+            fs::remove_dir_all(dir).await.unwrap();
+        }
+    }
 
     async fn make_temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-apps").await

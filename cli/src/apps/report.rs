@@ -319,7 +319,7 @@ pub(super) fn user_modified_kept_text(config: &Config, destination: &Path) -> St
         "  {}  {}  {}",
         colors::symbol("!"),
         path_display::format_home(destination, &config.home_dir),
-        colors::yellow("modified after install, left in place"),
+        colors::yellow("differs from installation receipt; NOT UNINSTALLED"),
     )
 }
 
@@ -375,7 +375,7 @@ mod tests {
         );
         assert_eq!(
             user_modified_kept_text(&config, &destination),
-            "  !  ~/.config/sample/config.toml  modified after install, left in place"
+            "  !  ~/.config/sample/config.toml  differs from installation receipt; NOT UNINSTALLED"
         );
     }
 }

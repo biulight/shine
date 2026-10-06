@@ -111,6 +111,10 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [-
 - If Shine reports an interrupted operation, run `shine shell recover`. Changed files are preserved
   and may require manual review.
 
+- Shell uninstall identifies retained launcher paths when ownership conflicts prevent removal.
+  It has no `--force` override: inspect those files before deciding whether to move or remove them.
+  A conflicting file may remain even after its installation receipt is cleared; the report says so.
+
 See [Manage shell presets](../guides/shell-presets.md).
 
 ## Application presets
@@ -132,6 +136,9 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
   source file; `--force` cannot refresh a destination owned by another source.
 - `app uninstall --force` may delete user-modified managed content. Always preview it with
   `--dry-run`.
+- Protected App files are marked `NOT UNINSTALLED`, with their content and receipts retained.
+  The suggested `--force --dry-run` explains whether forcing would delete the file, restore a
+  recorded backup if present, or remove only receipt-owned JSON keys. Unrelated JSON keys remain.
 - Use `shine app recover` when an interrupted App operation blocks later changes.
 
 See [Manage application configuration](../guides/app-presets.md).
@@ -150,6 +157,12 @@ User-modified managed content and its receipt are retained unless `--force` is e
 If the destination is missing, uninstall clears its receipt and leaves any recorded backup in
 place. A dry-run preserves files, backups, and receipts; it reports user modifications and
 recorded backup restoration separately. Missing source code cannot be used to run teardown.
+
+App and Shell uninstall distinguish `Uninstall complete`, `Uninstall incomplete`, and
+`Uninstall preview`. Actual uninstall returns a nonzero exit status if protected or conflicting
+resources remain, or an operation fails, including partial completion. Review the per-resource
+results: a nonzero exit status does not undo completed removals. A successfully generated dry-run
+returns zero even when it shows protection; preview errors still return nonzero.
 
 ## Status, updates, trust, and completions
 

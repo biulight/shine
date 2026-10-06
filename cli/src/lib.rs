@@ -55,3 +55,5 @@ pub mod version;
 
 pub use presentation::with_full_upgrade_plan;
 pub use presentation::with_security_plan_verbosity;
+
+pub(crate) mod uninstall;

@@ -5,6 +5,12 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **Protected uninstall is incomplete in the CLI.** App and Shell report preserved/conflicting
+  resources and failures explicitly, including partial completion, and actual commands return
+  nonzero. A successfully generated dry-run remains zero and never describes its effects as
+  executed. This policy uses typed lifecycle outcomes; Core ownership and approval stay unchanged.
+  App force guidance uses the receipt strategy, while Shell conflicts never imply a force option.
+
 - **Frontend approval is a consumed local capability.** Trusted human review retains the exact
   request and opaque configuration revision. Execution consumes a non-cloneable, non-serializable
   handoff and regenerates the Plan before delegating to approved Core methods. Read-only adapters

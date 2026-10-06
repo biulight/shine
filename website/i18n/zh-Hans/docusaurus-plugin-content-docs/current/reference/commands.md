@@ -79,6 +79,9 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [-
 - `--replace-managed` 可能覆盖安装后被修改的受管内容，请先运行 `shine info <TARGET> --diff`。
 - 如果 Shine 报告操作曾被中断，请运行 `shine shell recover`。发生过变化的文件会保留，可能需要人工处理。
 
+- Shell 卸载遇到归属冲突时，会列出未删除的启动器路径。Shell 没有 `--force` 覆盖选项；
+  请先检查这些文件，再决定是否移动或删除。冲突文件可能在安装记录清理后仍保留，输出会明确说明。
+
 参见 [管理 Shell 预设](../guides/shell-presets.md)。
 
 ## 应用预设
@@ -98,6 +101,9 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 - `app refresh` 显式刷新生成文件；`--force` 允许替换用户修改过的受管目标。安装收据必须属于
   该类别下的同一个源文件；`--force` 不能刷新由其他来源管理的目标。
 - `app uninstall --force` 可能删除用户修改过的受管内容，务必先使用 `--dry-run` 预览。
+- 受到保护的 App 文件会标记为 `NOT UNINSTALLED`，其内容和安装记录保留。
+  提示中的 `--force --dry-run` 会说明强制卸载将删除文件、恢复仍存在的已记录备份，
+  还是仅移除安装记录拥有的 JSON 键；无关 JSON 键仍保留。
 - App 操作中断并阻塞后续变更时，使用 `shine app recover`。
 
 参见 [管理应用配置](../guides/app-presets.md)。
@@ -113,6 +119,11 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 拥有的键，保留无关键。用户修改过的受管内容及其记录默认保留，只有显式 `--force` 才可覆盖。
 目标不存在时，卸载清理安装记录，并保留已记录备份。预览不改变文件、备份或记录，
 会说明用户修改及已记录备份的恢复行为。来源代码缺失时无法运行其 teardown。
+
+App 和 Shell 卸载会区分 `Uninstall complete`（已完成）、`Uninstall incomplete`（未完成）
+和 `Uninstall preview`（预览）。实际卸载留下受保护内容或冲突资源，或发生执行失败时，
+即使部分项目已完成，也会返回非零退出码。请检查各资源结果：非零退出码不会撤销已完成的删除。
+成功生成的预览即使提示保护也返回零；预览本身失败仍返回非零。
 
 ## 状态、更新、信任与补全
 

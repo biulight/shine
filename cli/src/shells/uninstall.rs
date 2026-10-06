@@ -32,7 +32,7 @@ pub async fn handle_uninstall_approved(
     let mut renderer = TerminalRenderer::stdio();
     handle_uninstall_with_reporter(config, target, purge, dry_run, yes, &mut renderer)
         .await
-        .map(|_| ())
+        .and_then(|result| crate::uninstall::check_completion(&result, dry_run))
 }
 
 #[cfg(test)]
@@ -113,12 +113,12 @@ async fn handle_uninstall_with_reporter(
     };
     reporter.emit(PresentationEvent::stdout(output::summary_line_text(
         "Bin Links",
-        &unlink_report_summary_parts(&core_report.links),
+        &unlink_report_summary_parts(&core_report.links, dry_run),
     )));
     if !config.is_external_presets {
         reporter.emit(PresentationEvent::stdout(output::summary_line_text(
             "Shell Presets",
-            &shell_cache_remove_summary_parts(&core_report.cache),
+            &shell_cache_remove_summary_parts(&core_report.cache, dry_run),
         )));
     }
     if purge && !dry_run && !config.is_external_presets {
@@ -131,17 +131,64 @@ async fn handle_uninstall_with_reporter(
     if let Some(profile) = &core_report.profile {
         for path in &profile.config_paths {
             reporter.emit(PresentationEvent::stdout(format!(
-                "Shell config ({}): shine entry removed",
-                crate::path_display::format_home(path, &config.home_dir)
+                "Shell config ({}): {}",
+                crate::path_display::format_home(path, &config.home_dir),
+                if dry_run {
+                    "would remove shine entry"
+                } else {
+                    "shine entry removed"
+                }
             )));
         }
         if let Some(path) = &profile.managed_profile {
             reporter.emit(PresentationEvent::stdout(format!(
-                "Shell profile ({}): removed",
-                crate::path_display::format_home(path, &config.home_dir)
+                "Shell profile ({}): {}",
+                crate::path_display::format_home(path, &config.home_dir),
+                if dry_run { "would remove" } else { "removed" }
             )));
         }
     }
+    for path in &core_report.links.skipped {
+        reporter.emit(PresentationEvent::stdout(format!(
+            "! NOT REMOVED: {} · launcher ownership conflict; file retained.",
+            crate::path_display::format_home(path, &config.home_dir)
+        )));
+    }
+    if !core_report.links.skipped.is_empty() {
+        reporter.emit(PresentationEvent::stdout(
+            "Inspect retained launcher paths before deciding whether to move or remove them. Shell uninstall has no --force override."
+        ));
+    }
+    if crate::uninstall::incomplete(&core_report.lifecycle) {
+        for outcome in &core_report.lifecycle.outcomes {
+            if matches!(
+                outcome.status,
+                shine_core::lifecycle::LifecycleStatus::Conflict
+                    | shine_core::lifecycle::LifecycleStatus::Preserved
+                    | shine_core::lifecycle::LifecycleStatus::Failed
+            ) {
+                reporter.emit(PresentationEvent::stdout(format!(
+                    "! {}: {}",
+                    outcome.target,
+                    if outcome.status == shine_core::lifecycle::LifecycleStatus::Failed {
+                        "uninstall failed"
+                    } else {
+                        "uninstall blocked by ownership protection"
+                    }
+                )));
+                if outcome
+                    .effects
+                    .contains(&shine_core::lifecycle::LifecycleEffect::ReceiptRemoved)
+                {
+                    reporter.emit(PresentationEvent::stdout("  Installation receipt cleared; retained conflicting files were not deleted."));
+                }
+            }
+        }
+    }
+    reporter.emit(PresentationEvent::stdout(crate::uninstall::summary_label(
+        &core_report.lifecycle,
+        dry_run,
+    )));
     Ok(core_report.lifecycle)
 }
 
@@ -153,6 +200,26 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use tokio::fs;
+
+    #[derive(Default)]
+    struct RecordingReporter(Vec<PresentationEvent>);
+    impl LifecycleReporter for RecordingReporter {
+        fn emit(&mut self, event: PresentationEvent) {
+            self.0.push(event);
+        }
+    }
+    impl RecordingReporter {
+        fn text(&self) -> String {
+            self.0
+                .iter()
+                .filter_map(|event| match event {
+                    PresentationEvent::Line { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    }
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-shell").await
@@ -345,11 +412,38 @@ mod tests {
             "user-owned command\n"
         );
 
-        let result =
-            handle_uninstall_with_result(&config, Some("utils/shine-env-export"), false, false)
-                .await
-                .unwrap();
-
+        let mut reporter = RecordingReporter::default();
+        let preview = handle_uninstall_with_reporter(
+            &config,
+            Some("utils/shine-env-export"),
+            false,
+            true,
+            true,
+            &mut reporter,
+        )
+        .await
+        .unwrap();
+        assert!(crate::uninstall::check_completion(&preview, true).is_ok());
+        assert!(reporter.text().contains("NOT REMOVED"));
+        assert!(
+            reporter
+                .text()
+                .contains("Shell uninstall has no --force override")
+        );
+        reporter.0.clear();
+        let result = handle_uninstall_with_reporter(
+            &config,
+            Some("utils/shine-env-export"),
+            false,
+            false,
+            true,
+            &mut reporter,
+        )
+        .await
+        .unwrap();
+        assert!(crate::uninstall::check_completion(&result, false).is_err());
+        assert!(reporter.text().contains("Uninstall incomplete"));
+        assert!(reporter.text().contains("Installation receipt cleared"));
         assert_eq!(result.outcomes[0].status, LifecycleStatus::Conflict);
         assert!(
             result.outcomes[0]

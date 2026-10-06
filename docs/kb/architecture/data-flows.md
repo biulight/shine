@@ -461,6 +461,13 @@ Reverse of install, driven entirely by the manifest — never by re-scanning pre
 3. Restore `<name>.shine.bak` if one exists.
 4. Remove the manifest entry.
 
+CLI App and Shell uninstall share a completion policy over typed lifecycle outcomes. Preserved,
+conflicting, or failed outcomes produce an incomplete summary and a nonzero actual-command exit,
+even when independent resources were removed. Successful preview remains zero. App local file
+reports carry the receipt strategy solely for removal/backup/managed-key guidance; stable lifecycle
+results and snapshot-bound approval remain unchanged. Shell conflict reporting distinguishes
+retained files from receipt cleanup and offers no force override.
+
 ## Declarative App action and recovery
 
 Approved App install routes two deliberately narrow creation cases through the Roadmap Phase 4

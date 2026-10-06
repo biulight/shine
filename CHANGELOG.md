@@ -9,6 +9,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Make App and Shell uninstall protection explicit with retained-resource details and incomplete
+  summaries. App guidance explains forced file deletion, backup restoration, or managed JSON-key
+  removal; Shell guidance identifies ownership conflicts without suggesting an unsupported force
+  option. Actual partial/protected/failed uninstall returns nonzero; successful dry-run stays zero.
+
 - Keep installed App categories visible when their Preset sources disappear, explain retained
   category/file receipts in list, update, and upgrade, and allow targeted uninstall of missing
   external sources. Uninstall previews identify user modifications and recorded backups;

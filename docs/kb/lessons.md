@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-07 — Protected uninstall must not look complete
+
+- **Symptom**: App printed `Done` after preserving modified content; Shell summarized foreign
+  launchers as skipped. Both CLI commands returned success despite incomplete removal.
+- **Fix**: share a CLI completion/exit policy for preserved, conflicting, and failed outcomes.
+  App local reports retain the receipt strategy for force-impact guidance; Shell reports exact
+  retained paths and distinguishes cleared receipts from retained files.
+- **Rule**: partial completion is not complete uninstall and is not rolled back by a nonzero exit.
+  Successful dry-run remains zero with an explicit protection summary. Do not invent Shell force
+  semantics or change Core ownership/approval contracts to improve presentation.
+
 ## 2026-10-06 — Missing App sources retain uninstall ownership
 
 - **Symptom**: upgrade warned about an old App category absent from list after a Preset rename.
