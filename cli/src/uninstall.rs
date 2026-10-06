@@ -1,5 +1,5 @@
 //! Shared CLI completion policy for App and Shell uninstall.
-use anyhow::{Result, bail};
+use anyhow::Result;
 use shine_core::lifecycle::{LifecycleResultV1, LifecycleStatus};
 
 pub(crate) fn incomplete(result: &LifecycleResultV1) -> bool {
@@ -13,7 +13,7 @@ pub(crate) fn incomplete(result: &LifecycleResultV1) -> bool {
 
 pub(crate) fn summary_label(result: &LifecycleResultV1, dry_run: bool) -> &'static str {
     match (dry_run, incomplete(result)) {
-        (true, true) => "Preview · protection would prevent complete uninstall",
+        (true, true) => "Uninstall preview · protected",
         (true, false) => "Uninstall preview",
         (false, true) => "Uninstall incomplete",
         (false, false) => "Uninstall complete",
@@ -25,13 +25,9 @@ pub(crate) fn check_completion(result: &LifecycleResultV1, dry_run: bool) -> Res
         .outcomes
         .iter()
         .any(|outcome| outcome.status == LifecycleStatus::Failed)
+        || (!dry_run && incomplete(result))
     {
-        bail!("uninstall incomplete: one or more operations failed; see details above");
-    }
-    if !dry_run && incomplete(result) {
-        bail!(
-            "uninstall incomplete: protected or conflicting resources remain; see guidance above"
-        );
+        return Err(crate::output::ReportedCommandFailure.into());
     }
     Ok(())
 }
@@ -65,7 +61,12 @@ mod tests {
                     [],
                 ));
                 assert_eq!(summary_label(&result, false), "Uninstall incomplete");
-                assert!(check_completion(&result, false).is_err());
+                let error = check_completion(&result, false).unwrap_err();
+                assert!(error.is::<crate::output::ReportedCommandFailure>());
+                assert!(
+                    !anyhow::anyhow!("command incomplete; see reported results")
+                        .is::<crate::output::ReportedCommandFailure>()
+                );
                 assert_eq!(
                     check_completion(&result, true).is_err(),
                     status == LifecycleStatus::Failed

@@ -629,6 +629,35 @@ fn hex_digest(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn quiet_uninstall_step(step: &shine_core::plan::PlanStepV1) -> bool {
+    step.action == PlanActionV1::None
+        && (step.diagnostic_codes.is_empty()
+            || (step.resource.as_deref() == Some("preset-cache")
+                && step.diagnostic_codes.iter().all(|code| {
+                    matches!(
+                        code.as_str(),
+                        "app_preset_cache_remove" | "shell_cache_remove_transaction"
+                    )
+                })))
+}
+
+fn compact_protected_uninstall(plan: &PlanV1) -> bool {
+    plan.operation == shine_core::plan::PlanOperationV1::Uninstall
+        && plan.is_ready()
+        && plan.permissions.required.is_empty()
+        && plan.author_capabilities.is_empty()
+        && plan.code_boundaries.is_empty()
+        && plan
+            .steps
+            .iter()
+            .any(|step| step.action == PlanActionV1::Preserve)
+        && plan.steps.iter().all(|step| {
+            quiet_uninstall_step(step)
+                || (step.action == PlanActionV1::Preserve
+                    && step.diagnostic_codes == ["app_user_modified"])
+        })
+}
+
 fn render_compact_plan_lines(
     planned: &[(LifecyclePlanRequest, PlanV1)],
     _config_digest: &str,
@@ -682,6 +711,20 @@ fn render_compact_plan_lines(
             warnings.extend(render_compact_steps(&warning_plan).into_iter().skip(1));
             continue;
         }
+        if compact_protected_uninstall(plan) {
+            for step in plan.steps.iter().filter(|step| !quiet_uninstall_step(step)) {
+                let resource = step
+                    .resource
+                    .as_deref()
+                    .map(|resource| format!(" · {resource}"))
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "  ! {}{resource}: modified, will be preserved",
+                    step.target
+                ));
+            }
+            continue;
+        }
         if rendered_scopes > 0 {
             lines.push(String::new());
         }
@@ -699,9 +742,14 @@ fn render_compact_plan_lines(
         lines.push(format!("  {}", crate::colors::bold("Warnings")));
         lines.extend(warnings);
     }
-    lines.push(crate::colors::dim(
-        "  Use --verbose for exact paths, relevant steps, identities and diagnostic codes.",
-    ));
+    if !planned
+        .iter()
+        .all(|(_, plan)| compact_protected_uninstall(plan))
+    {
+        lines.push(crate::colors::dim(
+            "  Use --verbose for exact paths, relevant steps, identities and diagnostic codes.",
+        ));
+    }
     Ok(lines)
 }
 
@@ -817,6 +865,7 @@ fn compact_app_maintenance_only(plan: &PlanV1) -> bool {
 
 fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
     let upgrade = plan.operation == shine_core::plan::PlanOperationV1::Upgrade;
+    let uninstall = plan.operation == shine_core::plan::PlanOperationV1::Uninstall;
     let mut lines = vec![format!("    {}", crate::colors::bold("Steps"))];
     let mut shell_integration = Vec::new();
     if plan.steps.is_empty() {
@@ -834,6 +883,10 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
     let mut index = 0usize;
     while index < plan.steps.len() {
         let step = &plan.steps[index];
+        if uninstall && quiet_uninstall_step(step) {
+            index += 1;
+            continue;
+        }
         if upgrade && is_routine_cache_maintenance(step) {
             index += 1;
             continue;
@@ -932,7 +985,7 @@ fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
         ));
         lines.extend(stale_app_source_guidance(step, "        "));
     }
-    if unchanged > 0 && !upgrade {
+    if unchanged > 0 && !upgrade && !uninstall {
         lines.push(format!(
             "      {}",
             style_plan_action(
@@ -1015,6 +1068,14 @@ fn action_priority(action: PlanActionV1) -> usize {
 }
 
 fn render_compact_permissions(plan: &PlanV1) -> Vec<String> {
+    if plan.operation == shine_core::plan::PlanOperationV1::Uninstall
+        && plan.permissions.required.is_empty()
+        && plan.author_capabilities.is_empty()
+        && plan.permissions.missing_declarations.is_empty()
+        && plan.permissions.uncomputable_codes.is_empty()
+    {
+        return Vec::new();
+    }
     let mut lines = vec![format!(
         "    {}",
         crate::colors::bold("Required permissions")
@@ -2034,6 +2095,52 @@ mod tests {
             .join("\n");
         assert!(fallback.contains("command unattributed"));
         assert!(fallback.contains(&plan.fingerprint().unwrap().as_hex()));
+    }
+
+    #[test]
+    fn protected_uninstall_compacts_known_notices_without_changing_review_identity() {
+        let plan = PlanV1::new(
+            LifecycleOperation::Uninstall,
+            PlanInputsV1 {
+                preset: digest("preset"),
+                state: digest("state"),
+            },
+            vec![
+                PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Preserve)
+                    .with_diagnostic_code("app_user_modified"),
+                PlanStepV1::new("app/demo", Some("preset-cache"), PlanActionV1::None)
+                    .with_diagnostic_code("app_preset_cache_remove"),
+            ],
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        let request = LifecyclePlanRequest::App(AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".into()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        });
+        let before = plan.fingerprint().unwrap();
+        let compact = render_compact_plan_lines(&[(request.clone(), plan.clone())], "missing")
+            .unwrap()
+            .join("\n");
+        assert!(compact.contains("app/demo · config: modified, will be preserved"));
+        assert!(!compact.contains("preset-cache"));
+        assert!(!compact.contains("Required permissions"));
+        let verbose = render_plan_lines(&plan, "missing").unwrap().join("\n");
+        assert!(verbose.contains("app_user_modified"));
+        assert!(verbose.contains("preset-cache"));
+        assert!(verbose.contains("Required permissions"));
+        assert_eq!(plan.fingerprint().unwrap(), before);
+        let mut unknown = plan.clone();
+        unknown.steps[1].diagnostic_codes = vec!["future_cache_diagnostic".into()];
+        let output = render_compact_plan_lines(&[(request, unknown)], "missing")
+            .unwrap()
+            .join("\n");
+        assert!(output.contains("future_cache_diagnostic"));
     }
 
     #[test]

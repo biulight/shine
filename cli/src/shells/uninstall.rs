@@ -166,24 +166,27 @@ async fn handle_uninstall_with_reporter(
                 shine_core::lifecycle::LifecycleStatus::Conflict
                     | shine_core::lifecycle::LifecycleStatus::Preserved
                     | shine_core::lifecycle::LifecycleStatus::Failed
-            ) {
+            ) && (outcome.status == shine_core::lifecycle::LifecycleStatus::Failed
+                || core_report.links.skipped.is_empty())
+            {
                 reporter.emit(PresentationEvent::stdout(format!(
-                    "! {}: {}",
-                    outcome.target,
-                    if outcome.status == shine_core::lifecycle::LifecycleStatus::Failed {
-                        "uninstall failed"
-                    } else {
-                        "uninstall blocked by ownership protection"
-                    }
+                    "! {}: uninstall incomplete",
+                    outcome.target
                 )));
-                if outcome
-                    .effects
-                    .contains(&shine_core::lifecycle::LifecycleEffect::ReceiptRemoved)
-                {
-                    reporter.emit(PresentationEvent::stdout("  Installation receipt cleared; retained conflicting files were not deleted."));
-                }
             }
         }
+    }
+    if core_report.lifecycle.outcomes.iter().any(|outcome| {
+        outcome
+            .effects
+            .contains(&shine_core::lifecycle::LifecycleEffect::UserResourcePreserved)
+            && outcome
+                .effects
+                .contains(&shine_core::lifecycle::LifecycleEffect::ReceiptRemoved)
+    }) {
+        reporter.emit(PresentationEvent::stdout(
+            "  Installation receipt cleared; retained conflicting files were not deleted.",
+        ));
     }
     reporter.emit(PresentationEvent::stdout(crate::uninstall::summary_label(
         &core_report.lifecycle,

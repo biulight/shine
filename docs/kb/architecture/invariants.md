@@ -10,6 +10,10 @@ bugs. Check this list before changing the modules named in each entry.
   nonzero. A successfully generated dry-run remains zero and never describes its effects as
   executed. This policy uses typed lifecycle outcomes; Core ownership and approval stay unchanged.
   App force guidance uses the receipt strategy, while Shell conflicts never imply a force option.
+  Compact uninstall may omit only known unchanged cache notices and empty permission sections;
+  verbose review retains them and every Plan stays approval-bound. Only a typed already-reported
+  CLI failure may suppress the binary's duplicate error; its exit remains nonzero and other
+  errors/unknown diagnostics must remain visible.
 
 - **Frontend approval is a consumed local capability.** Trusted human review retains the exact
   request and opaque configuration revision. Execution consumes a non-cloneable, non-serializable

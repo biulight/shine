@@ -184,9 +184,6 @@ async fn handle_uninstall_with_reporter(
                         config,
                         &file.destination,
                     )));
-                for line in protected_file_guidance(config, file) {
-                    observer.reporter.emit(PresentationEvent::stdout(line));
-                }
                 user_modified += 1;
             }
             shine_core::runtime::AppFileAction::PreviewRemove => {
@@ -244,6 +241,41 @@ async fn handle_uninstall_with_reporter(
             crate::uninstall::summary_label(&core_report.lifecycle, dry_run),
             &summary_parts,
         )));
+    let protected = core_report
+        .files
+        .iter()
+        .filter(|file| file.action == shine_core::runtime::AppFileAction::UserModified)
+        .collect::<Vec<_>>();
+    if !protected.is_empty() {
+        observer.reporter.emit(PresentationEvent::stdout(
+            "  Current managed content and installation receipts retained.",
+        ));
+        let categories = protected
+            .iter()
+            .map(|file| file.category.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        for category in categories {
+            observer.reporter.emit(PresentationEvent::BlankLine);
+            observer.reporter.emit(PresentationEvent::stdout(format!(
+                "Preview forced uninstall: shine app uninstall {category} --force --dry-run"
+            )));
+            let files = protected
+                .iter()
+                .filter(|file| file.category == category)
+                .copied()
+                .collect::<Vec<_>>();
+            for line in grouped_impact_lines(&files) {
+                observer.reporter.emit(PresentationEvent::stdout(line));
+            }
+            if crate::presentation::security_plan_verbose() {
+                for file in files {
+                    for line in uninstall_impact_lines(config, file) {
+                        observer.reporter.emit(PresentationEvent::stdout(line));
+                    }
+                }
+            }
+        }
+    }
     Ok(core_report.lifecycle)
 }
 
@@ -270,15 +302,31 @@ fn uninstall_impact_lines(
     }
 }
 
-fn protected_file_guidance(
-    config: &Config,
-    file: &shine_core::runtime::AppFileLifecycleReport,
-) -> Vec<String> {
-    let mut lines = vec![
-        "    Uninstall blocked by modification protection; current managed content and installation receipt retained.".into(),
-        format!("    To override this protection, preview: shine app uninstall {} --force --dry-run", file.category),
-    ];
-    lines.extend(uninstall_impact_lines(config, file));
+fn grouped_impact_lines(files: &[&shine_core::runtime::AppFileLifecycleReport]) -> Vec<String> {
+    use shine_core::install::AppInstallStrategy;
+    let mut delete = false;
+    let mut restore = false;
+    let mut json = false;
+    for file in files {
+        match &file.uninstall_strategy {
+            Some(AppInstallStrategy::Copy) if file.backup.is_some() => restore = true,
+            Some(AppInstallStrategy::Copy) => delete = true,
+            Some(AppInstallStrategy::JsonMerge { .. }) => json = true,
+            None => {}
+        }
+    }
+    let mut lines = Vec::new();
+    if restore {
+        lines.push(
+            "  Restores recorded backups if present; otherwise deletes the affected files.".into(),
+        );
+    }
+    if delete {
+        lines.push("  Deletes affected managed files without recorded backups.".into());
+    }
+    if json {
+        lines.push("  Removes receipt-owned JSON keys; unrelated keys remain.".into());
+    }
     lines
 }
 
@@ -380,7 +428,7 @@ mod tests {
                 uses_env: false,
                 requires_admin: false,
             };
-            let manifest = AppManifest {
+            let mut manifest = AppManifest {
                 entries: vec![
                     entry.clone(),
                     AppEntry {
@@ -393,6 +441,15 @@ mod tests {
                 ],
                 ..AppManifest::default()
             };
+            if mode == 0 {
+                let another = dir.join("another");
+                fs::write(&another, b"another user change").await.unwrap();
+                manifest.entries.push(AppEntry {
+                    source: "app/sample/another".into(),
+                    destination: another,
+                    ..manifest.entries[0].clone()
+                });
+            }
             manifest
                 .save(&shine_core::runtime::RealHost, config.shine_dir())
                 .await
@@ -410,11 +467,7 @@ mod tests {
             .await
             .unwrap();
             assert!(crate::uninstall::check_completion(&result, true).is_ok());
-            assert!(
-                preview
-                    .text()
-                    .contains("Preview · protection would prevent complete uninstall")
-            );
+            assert!(preview.text().contains("Uninstall preview · protected"));
             assert!(clean.exists());
             let mut actual = RecordingReporter::default();
             let result = handle_uninstall_with_reporter(
@@ -430,17 +483,38 @@ mod tests {
             .unwrap();
             assert!(crate::uninstall::check_completion(&result, false).is_err());
             let text = actual.text();
-            assert!(text.contains("NOT UNINSTALLED"));
+            assert!(text.contains("differs from installation receipt"));
             assert!(text.contains("Uninstall incomplete"));
             assert!(!text.contains("Done"));
             assert!(text.contains("1 removed"));
             assert!(text.contains("shine app uninstall sample --force --dry-run"));
+            assert_eq!(text.matches("Preview forced uninstall:").count(), 1);
+            if mode == 1 {
+                assert!(!text.contains("protected.shine.bak"));
+                let mut verbose = RecordingReporter::default();
+                crate::with_security_plan_verbosity(
+                    true,
+                    handle_uninstall_with_reporter(
+                        &config,
+                        Some("sample"),
+                        false,
+                        false,
+                        true,
+                        true,
+                        &mut verbose,
+                    ),
+                )
+                .await
+                .unwrap();
+                assert!(verbose.text().contains("protected.shine.bak"));
+            }
+
             match mode {
-                0 => assert!(text.contains("Would delete the managed file")),
-                1 => assert!(text.contains("Would replace current content with recorded backup")),
+                0 => assert!(text.contains("Deletes affected managed files")),
+                1 => assert!(text.contains("Restores recorded backups if present")),
                 _ => {
                     assert!(text.contains("receipt-owned JSON keys"));
-                    assert!(!text.contains("Would delete the managed file"));
+                    assert!(!text.contains("Deletes affected managed files"));
                 }
             }
             assert!(protected.exists());
@@ -451,7 +525,7 @@ mod tests {
                     .unwrap()
                     .entries
                     .len(),
-                1
+                if mode == 0 { 2 } else { 1 }
             );
             fs::remove_dir_all(dir).await.unwrap();
         }

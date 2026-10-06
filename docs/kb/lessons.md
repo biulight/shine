@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-07 — Incomplete uninstall needs one result, not repeated errors
+
+- **Symptom**: protected uninstall repeated preservation in review, file detail, guidance,
+  summary, and the binary's generic error output.
+- **Fix**: group category guidance, keep verbose/force-preview backup details, omit only known
+  unchanged cache steps and empty permission sections in compact review, and use a typed
+  already-reported failure marker at the CLI boundary.
+- **Rule**: presentation never changes Plan identity or exit failure. Unknown diagnostics and
+  ordinary errors stay visible; never suppress errors by matching their message text.
+
 ## 2026-10-07 — Protected uninstall must not look complete
 
 - **Symptom**: App printed `Done` after preserving modified content; Shell summarized foreign

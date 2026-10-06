@@ -9,6 +9,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Compact protected App/Shell uninstall output by grouping App force guidance, omitting known
+  unchanged cache steps and empty permission sections from default review, and keeping backup
+  paths in verbose/force previews. Already-reported incomplete results retain nonzero exits
+  without a duplicate generic error; unexpected diagnostics and other errors remain visible.
+
 - Make App and Shell uninstall protection explicit with retained-resource details and incomplete
   summaries. App guidance explains forced file deletion, backup restoration, or managed JSON-key
   removal; Shell guidance identifies ownership conflicts without suggesting an unsupported force

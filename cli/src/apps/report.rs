@@ -107,9 +107,7 @@ pub(super) fn uninstall_summary_parts(
         parts.push(colors::green(&format!("{removed} removed{restore_note}")));
     }
     if user_modified > 0 {
-        parts.push(colors::yellow(&format!(
-            "{user_modified} user-modified (kept)"
-        )));
+        parts.push(colors::yellow(&format!("{user_modified} protected")));
     }
     if skipped > 0 {
         parts.push(colors::dim(&format!("{skipped} skipped")));
@@ -319,7 +317,7 @@ pub(super) fn user_modified_kept_text(config: &Config, destination: &Path) -> St
         "  {}  {}  {}",
         colors::symbol("!"),
         path_display::format_home(destination, &config.home_dir),
-        colors::yellow("differs from installation receipt; NOT UNINSTALLED"),
+        colors::yellow("differs from installation receipt"),
     )
 }
 
@@ -375,7 +373,7 @@ mod tests {
         );
         assert_eq!(
             user_modified_kept_text(&config, &destination),
-            "  !  ~/.config/sample/config.toml  differs from installation receipt; NOT UNINSTALLED"
+            "  !  ~/.config/sample/config.toml  differs from installation receipt"
         );
     }
 }

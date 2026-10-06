@@ -32,7 +32,19 @@ use cli::self_install::{
 };
 use cli::shim::{handle_install_shim_approved, handle_uninstall_shim_approved};
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
+    match run_main() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            if !error.is::<cli::output::ReportedCommandFailure>() {
+                eprintln!("Error: {error:?}");
+            }
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_main() -> Result<()> {
     completion::complete_from_env();
 
     let cli = Cli::parse();

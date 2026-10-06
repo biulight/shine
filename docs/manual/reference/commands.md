@@ -136,9 +136,10 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
   source file; `--force` cannot refresh a destination owned by another source.
 - `app uninstall --force` may delete user-modified managed content. Always preview it with
   `--dry-run`.
-- Protected App files are marked `NOT UNINSTALLED`, with their content and receipts retained.
-  The suggested `--force --dry-run` explains whether forcing would delete the file, restore a
-  recorded backup if present, or remove only receipt-owned JSON keys. Unrelated JSON keys remain.
+- Protected App files show the receipt mismatch, followed by one retained-content summary.
+  Force-preview guidance is grouped by category and explains file deletion, conditional backup
+  restoration, or receipt-owned JSON-key removal. Use `--force --dry-run` or `--verbose` for
+  recorded backup paths; unrelated JSON keys remain.
 - Use `shine app recover` when an interrupted App operation blocks later changes.
 
 See [Manage application configuration](../guides/app-presets.md).
@@ -163,6 +164,10 @@ App and Shell uninstall distinguish `Uninstall complete`, `Uninstall incomplete`
 resources remain, or an operation fails, including partial completion. Review the per-resource
 results: a nonzero exit status does not undo completed removals. A successfully generated dry-run
 returns zero even when it shows protection; preview errors still return nonzero.
+Default uninstall review omits known unchanged cache steps and empty permission sections;
+`--verbose` retains the complete review. Once an incomplete result and its reasons have been
+shown, the command exits nonzero without repeating a generic `Error` line. Other errors remain
+visible.
 
 ## Status, updates, trust, and completions
 
