@@ -73,6 +73,13 @@ review requires a new Plan. Active generators, hooks and shared transactions ret
 permissions. Normal transaction codes and lifecycle snapshot identities appear only with
 `--verbose`; preservation, blocking and other diagnostic notices remain explicit.
 
+The default upgrade review groups routine App and Shell preset cache writes under internal
+maintenance. These source copies do not mean application configurations or commands have changed.
+Cache-only App work appears there rather than under `App Configs`, and missing-source preservation
+notices appear under Warnings. Actual App changes, code execution, blockers, conflicts, and effects
+that cannot be safely grouped remain explicit. Use `upgrade --verbose` to see the affected
+categories, individual cache steps, and exact permissions. The complete Plan still binds approval.
+
 After approval, `upgrade --verbose` also omits unchanged App files, already-installed managed Sys
 items, and the total number of installed Shell categories. It still shows changed resources,
 conflicts, warnings, and failures in detail. `upgrade --verbose --full-plan` includes the
@@ -180,6 +187,10 @@ Use `bootstrap` to ensure selected software and shell integration are present. U
 `uninstall` for reversible managed system configuration. These operations may request administrator
 access after you approve their plan. `--force-profile` may replace conflicting profile content, so
 review a dry run first.
+
+Managed configuration previews (`sys apply --dry-run` and `sys uninstall --dry-run`) mark the
+section with `(dry-run)` and show `→ would update` or `→ would remove` for planned changes.
+These rows do not indicate an applied change. Successful uninstall shows `✓ removed`.
 
 See [Initialize and manage a system](../guides/system-init.md).
 

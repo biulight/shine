@@ -1,5 +1,29 @@
 # Lessons Learned
 
+## 2026-10-05 — Managed Sys previews looked like completed mutations
+
+- **Symptom**: `sys uninstall split-dns --dry-run` displayed `✓ updated`, suggesting that the DNS
+  configuration had already changed.
+- **Cause**: the CLI rendered the shared Sys item status without the requested action or preview
+  mode. Both apply and removal reported `Updated`, including previews.
+- **Rule**: retain action and preview context in the CLI renderer. Mark dry-run sections explicitly,
+  use prospective action labels for planned changes, and label executed removal as `removed`.
+  Keep failure/no-op labels and the Core receipt/result contracts unchanged.
+
+## 2026-10-04 — Cache convergence must not look like unrelated user updates
+
+- **Symptom**: `update` reported only Shell utils, while upgrade review also listed proxy, Git,
+  and Starship as update/create steps.
+- **Cause**: status assesses installed user resources, but global upgrade also converges internal
+  caches; missing cache copies and changed metadata are real maintenance effects.
+- **Fix**: summarize routine App/Shell cache writes once in compact review, retaining detailed
+  steps in verbose review and all permissions, code boundaries, conflicts and warnings.
+- **Follow-up**: hiding cache steps alone left an App Configs heading for cache permissions and
+  stale-source notices. Move a proven cache-only App scope’s permissions to maintenance and its
+  preservation notices to Warnings; retain original review for ambiguous effects.
+- **Rule**: classify only known routine cache writes; unknown diagnostics and preservation or
+  blocking steps must remain visible. Presentation never changes the approval-bound Plan.
+
 ## 2026-10-04 — Upgrade execution reports must match review relevance
 
 - **Symptom**: a one-category Shell update had a concise Security Plan but its verbose execution

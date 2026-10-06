@@ -57,6 +57,8 @@ Shell 命令安装按命令数合并，Shell 集成单独显示；内部状态�
 
 已确认无变化的 App 文件及受管 Sys 项目不会贡献本次操作权限。默认 `upgrade` 审阅不显示没有动作、所需权限、代码边界、阻塞或特殊诊断的范围，也不列出普通的未变化步骤和日常升级跳过的手动 App 生成器。`upgrade --verbose` 同样省略这些无关范围和步骤，并展开其余步骤、具体权限、快照标识、诊断码和指纹。需要查看所有计划范围和步骤时，可用 `upgrade --verbose --full-plan`；`--full-plan` 必须与 `--verbose` 一起使用。完整 Plan 仍参与审批绑定，审阅后发生变化必须重新规划。实际触发的生成器、hook 和共享事务保留各自权限。正常事务码及生命周期快照标识仅在 `--verbose` 中显示；保留、阻塞及其它诊断提示仍明确展示。
 
+默认升级审阅将常规 App 和 Shell 预设缓存写入归入内部维护。这些来源副本不代表应用配置或命令有更新。仅涉及缓存的 App 工作归入内部维护，不再显示于 `App Configs`；旧来源消失的保留提示单独显示在“警告”中。实际 App 变更、代码执行、阻塞、冲突及无法安全归组的影响仍明确展示。使用 `upgrade --verbose` 可查看受影响的分类、各个缓存步骤和具体权限。完整 Plan 仍参与审批绑定。
+
 确认后，`upgrade --verbose` 的执行报告也省略未变化的 App 文件、已安装的受管 Sys 项目及 Shell 已安装分类总数，但仍详细显示实际更新、冲突、警告和失败。`upgrade --verbose --full-plan` 会包含未变化的执行记录。普通模式下全部未变化时报告 `Nothing to upgrade.`。
 
 Shell 升级会在审阅前比较 Shine 管理的 profile 和已配置的 Shell 启动文件。只有确实需要协调的文件才列在 `Shell integration (internal)` 下；未变化的启动文件及其权限不会显示。`shell/profile` 是内部 Plan 标识，不是 Shell 预设类别。
@@ -146,6 +148,10 @@ shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 使用 `bootstrap` 确保选中的软件和 Shell 集成存在；使用 `apply` 与 `uninstall` 管理可撤销的系统配置。
 这些操作可能在计划获批后请求管理员权限。`--force-profile` 可能替换冲突的配置文件内容，请先查看
 dry run。
+
+托管配置预览（`sys apply --dry-run` 和 `sys uninstall --dry-run`）会在标题标记 `(dry-run)`，
+并用 `→ would update` 或 `→ would remove` 表示计划中的变更。这些行不表示已经修改配置；
+实际卸载成功后显示 `✓ removed`。
 
 参见 [初始化与管理系统](../guides/system-init.md)。
 
