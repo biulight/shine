@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-07 — Review utilities need platform and transport boundary tests
+
+- **Symptom**: lint panicked on macOS-only Surge and missed PowerShell-only warnings; SCP
+  reinterpreted SSH port/user flags; proxies selected non-executable PATH files; resource URLs
+  turned filename characters into queries or fragments.
+- **Fix**: skip unavailable App models, select the simulated platform's shell, translate trusted
+  SSH connection options for SCP, probe Unix execution bits while preserving symlink names,
+  and percent-encode normalized URL path segments. Add regression cases for each boundary.
+- **Rule**: validation success does not imply a resource exists on every platform. Transport
+  argv and URL output need their own encoding; file existence alone is not command availability.
+
 ## 2026-10-07 — Absolute permission paths are identities, not URLs
 
 - **Symptom**: uninstall review displayed `absolute://etc/docker/daemon.json` and asked for

@@ -464,6 +464,8 @@ set, including `.cmd` and `.ps1`, before writing any file. A conflicting file or
 preserved. PATH entries that resolve to the Shine bin directory, including symbolic-link aliases,
 are skipped when locating the real command. Proxy rule changes also retain owner-only configuration
 permissions on Unix.
+On Unix, target discovery also skips files without execute permission and follows executable
+symlinks without changing the command's invocation name.
 
 Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
 `--project` to scope the rule; a project rule for the same command overrides the global one.

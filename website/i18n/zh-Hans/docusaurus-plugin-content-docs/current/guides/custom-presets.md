@@ -68,6 +68,8 @@ shine preset new sys --unrestricted
 
 校验后运行 `preset lint`，检查作者质量和可移植性。warning 默认只是建议；CI 可在审阅后
 添加 `--deny-warnings`。
+Lint 会检查每个平台适用的资源，包括 Windows 的 PowerShell 命令；明确不适用于某个操作系统的
+App 类别或文件会在该操作系统的检查中跳过。
 
 然后对每个目标平台运行 `preset plan`。它会预览一次假设的首次安装，显示操作、权限和 blocker，
 但不会修改机器。blocker 通常表示预览缺少环境变量、信任决定、命令或管理员状态；这属于作者反馈，

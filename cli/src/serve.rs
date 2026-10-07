@@ -288,10 +288,23 @@ pub fn handle_url(path: &str, port: u16) -> Result<()> {
 
 pub fn public_url(path: &str, port: u16) -> Result<String> {
     let rel = normalize_resource_path(path)?;
-    Ok(format!(
-        "http://{DEFAULT_HOST}:{port}/{}",
-        rel.to_string_lossy()
-    ))
+    let encoded = rel
+        .components()
+        .map(|component| {
+            let mut encoded = String::new();
+            for byte in component.as_os_str().to_string_lossy().bytes() {
+                if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                    encoded.push(char::from(byte));
+                } else {
+                    use std::fmt::Write;
+                    write!(encoded, "%{byte:02X}").expect("writing to a String");
+                }
+            }
+            encoded
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    Ok(format!("http://{DEFAULT_HOST}:{port}/{encoded}"))
 }
 
 pub fn http_root(config: &Config) -> PathBuf {
@@ -757,6 +770,29 @@ mod tests {
             public_url("/app/surge/custom-rules.sgmodule", 6174).unwrap(),
             "http://127.0.0.1:6174/app/surge/custom-rules.sgmodule"
         );
+    }
+
+    #[test]
+    fn public_urls_round_trip_reserved_characters_and_unicode() {
+        for (resource, encoded) in [
+            ("app/a#b.txt", "app/a%23b.txt"),
+            ("app/a?b.txt", "app/a%3Fb.txt"),
+            ("app/a%25b.txt", "app/a%25b.txt"),
+            ("app/a b.txt", "app/a%20b.txt"),
+            ("app/中文.txt", "app/%E4%B8%AD%E6%96%87.txt"),
+            ("app/a%23b.txt", "app/a%23b.txt"),
+        ] {
+            let url = public_url(resource, 6174).unwrap();
+            assert_eq!(url, format!("http://127.0.0.1:6174/{encoded}"));
+            let url = reqwest::Url::parse(&url).unwrap();
+            assert!(url.query().is_none());
+            assert!(url.fragment().is_none());
+            assert_eq!(
+                normalize_resource_path(url.path()).unwrap(),
+                normalize_resource_path(resource).unwrap()
+            );
+        }
+        assert!(public_url("app/%2E%2E/secret", 6174).is_err());
     }
 
     #[test]

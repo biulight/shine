@@ -87,7 +87,11 @@ pub async fn lint_preset_path(
         return finish(scope.categories.len(), diagnostics);
     }
 
-    let home = PathBuf::from("/shine-author/home");
+    #[cfg(windows)]
+    let root = PathBuf::from(r"C:\shine-author");
+    #[cfg(not(windows))]
+    let root = PathBuf::from("/shine-author");
+    let home = root.join("home");
     let shine = home.join(".shine");
     let mut unique = BTreeMap::new();
     for category in &scope.categories {
@@ -95,10 +99,15 @@ pub async fn lint_preset_path(
             let mut context = RuntimeContext::isolated(
                 home.clone(),
                 shine.clone(),
-                PathBuf::from("/shine-author/presets"),
+                root.join("presets"),
                 shine.join("bin"),
                 platform,
             );
+            context.shell = if platform == RuntimePlatform::Windows {
+                super::ShellType::PowerShell
+            } else {
+                super::ShellType::Zsh
+            };
             context.is_external_presets = true;
             let runtime = CoreRuntime::new(InMemoryHost::new(), context, scope.snapshot.clone());
             let findings = match category.kind {
@@ -136,11 +145,10 @@ fn lint_app(
     runtime: &CoreRuntime<InMemoryHost>,
     name: &str,
 ) -> anyhow::Result<Vec<PresetLintDiagnosticV1>> {
-    let category = runtime
-        .app_categories(Some(name))?
-        .into_iter()
-        .next()
-        .expect("validated App category");
+    let Some(category) = runtime.app_categories(Some(name))?.into_iter().next() else {
+        // Valid metadata can intentionally omit all files on this platform.
+        return Ok(Vec::new());
+    };
     let target = format!("app/{name}");
     let mut diagnostics = Vec::new();
     if !category.uses_metadata {
@@ -371,6 +379,45 @@ fn finish(categories: usize, mut diagnostics: Vec<PresetLintDiagnosticV1>) -> Pr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn platform_limited_apps_skip_unavailable_platforms_and_keep_findings() {
+        for metadata in [
+            "dest = { macos = '~/.config/demo' }\n[[files]]\nsource = 'config.toml'\n",
+            "dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\nplatforms = ['windows']\n",
+        ] {
+            let host = InMemoryHost::new();
+            host.put_file("/repo/app/demo/shine.toml", metadata.as_bytes().to_vec());
+            host.put_file("/repo/app/demo/config.toml", b"value = true\n".to_vec());
+            let report = lint_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+            assert!(report.valid, "{:?}", report.diagnostics);
+            assert_eq!(report.summary.categories, 1);
+            assert_eq!(report.summary.warnings, 2);
+            assert!(report.diagnostics.iter().any(|finding| {
+                finding.code == "missing_resource_description"
+                    && finding.resource.as_deref() == Some("config.toml")
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn powershell_only_commands_receive_quality_and_permission_checks() {
+        let host = InMemoryHost::new();
+        host.put_file(
+            "/repo/shell/demo/shine.toml",
+            b"description = 'Demo'\n[[files]]\nsource = 'only.ps1'\ntarget = 'only'\n[files.permissions]\nschema_version = 1\nnetwork = [{ scope = 'any' }]\n".to_vec(),
+        );
+        host.put_file("/repo/shell/demo/only.ps1", b"Write-Output hi\n".to_vec());
+        let report = lint_preset_path(&host, Path::new("/repo"), Path::new("shell/demo")).await;
+        assert!(report.valid, "{:?}", report.diagnostics);
+        assert!(!report.clean);
+        assert_eq!(report.summary.warnings, 2);
+        for code in ["missing_resource_description", "broad_network_permission"] {
+            assert!(report.diagnostics.iter().any(|finding| {
+                finding.code == code && finding.resource.as_deref() == Some("only")
+            }));
+        }
+    }
 
     #[tokio::test]
     async fn clean_app_metadata_has_no_findings() {

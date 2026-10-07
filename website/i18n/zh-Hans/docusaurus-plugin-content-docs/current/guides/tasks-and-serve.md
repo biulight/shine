@@ -98,4 +98,7 @@ shine serve url app/surge/custom-rules.sgmodule
 shine serve url app/surge/custom-rules.sgmodule --port 6180
 ```
 
+生成的 URL 会对路径段中的空格、Unicode 字符以及 `#`、`?` 等保留字符进行百分号编码。
+已编码的输入会先规范化；字面量 `%` 请使用 `%25` 表示。
+
 不要把令牌、私钥、cookies 或其它敏感内容写入 `~/.shine/http/`。服务没有额外认证；在共享机器上，本机其它用户也可能访问这个端口读取可发布目录中的文件。

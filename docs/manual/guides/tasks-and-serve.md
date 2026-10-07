@@ -109,6 +109,9 @@ shine serve url app/surge/custom-rules.sgmodule
 shine serve url app/surge/custom-rules.sgmodule --port 6180
 ```
 
+The generated URL percent-encodes spaces, Unicode, and reserved characters such as `#` and `?`
+within path segments. Already percent-encoded input is normalized; use `%25` for a literal `%`.
+
 Never put tokens, private keys, cookies, or other sensitive content under `~/.shine/http/`. The
 service has no additional authentication; on a shared machine, other local users may be able to read
 files exposed through the port.

@@ -250,6 +250,8 @@ process, network, privilege, or mutation operations.
 Only a validation-clean immutable snapshot reaches lint policy. Core loads the already-authoritative
 App, Shell, and Sys models for each relevant platform, deduplicates logical findings, and emits a
 versioned report with no physical checkout or suspected private path.
+Unavailable App models are a normal per-platform omission. Synthetic contexts select PowerShell
+on Windows and Zsh on Unix so lint covers the same resources as validation.
 
 ```text
 repository/category/manifest path → immutable scope → all-platform validation

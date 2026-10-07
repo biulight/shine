@@ -9,6 +9,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Make Preset lint tolerate platform-limited App categories and check Windows PowerShell
+  commands. Translate SSH connection options for SCP transfers, skip non-executable Unix
+  PATH entries when installing environment proxies, and encode reserved characters in
+  `serve url` resource paths.
+
 - Fix absolute filesystem permission identities and show familiar paths in Security Plans,
   preserving Windows drive and network-share roots. Mention external-code consent in the
   confirmation prompt only when the Plan lists external/overlay code.

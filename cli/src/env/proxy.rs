@@ -224,7 +224,7 @@ fn find_target_in_paths(
             continue;
         }
         let candidate = dir.join(command);
-        if candidate.is_file() {
+        if is_executable_target(&candidate) {
             // Do not canonicalize here. Cargo (and other rustup proxies) are
             // symlinks whose filename is their dispatch identity: resolving
             // `.../cargo` to `.../rustup` makes rustup see `argv[0] == rustup`
@@ -244,6 +244,24 @@ fn find_target_in_paths(
         "{command} is not installed on PATH outside {}",
         shine_bin.display()
     )
+}
+
+fn is_executable_target(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn absolute_path(path: PathBuf) -> Result<PathBuf> {
@@ -401,6 +419,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn target_discovery_skips_bin_alias_without_resolving_executable_name() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = crate::test_support::make_temp_dir("shine-proxy-paths").await;
         let bin = dir.join("bin");
         let real = dir.join("real");
@@ -408,6 +427,9 @@ mod tests {
         tokio::fs::create_dir_all(&real).await.unwrap();
         tokio::fs::write(bin.join("cargo"), MARKER).await.unwrap();
         tokio::fs::write(real.join("rustup"), b"real executable")
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(real.join("rustup"), std::fs::Permissions::from_mode(0o755))
             .await
             .unwrap();
         tokio::fs::symlink(real.join("rustup"), real.join("cargo"))
@@ -420,6 +442,40 @@ mod tests {
             find_target_in_paths("cargo", &bin, [alias, real.clone()]).unwrap(),
             real.join("cargo")
         );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn target_discovery_skips_non_executable_files_and_links() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::test_support::make_temp_dir("shine-proxy-executable").await;
+        let shadow = dir.join("shadow");
+        let real = dir.join("real");
+        tokio::fs::create_dir_all(&shadow).await.unwrap();
+        tokio::fs::create_dir_all(&real).await.unwrap();
+        tokio::fs::write(shadow.join("tool"), b"not executable")
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(shadow.join("tool"), std::fs::Permissions::from_mode(0o644))
+            .await
+            .unwrap();
+        tokio::fs::write(real.join("tool"), b"executable")
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(real.join("tool"), std::fs::Permissions::from_mode(0o755))
+            .await
+            .unwrap();
+        let bin = dir.join("bin");
+        assert!(find_target_in_paths("tool", &bin, [shadow.clone()]).is_err());
+        assert_eq!(
+            find_target_in_paths("tool", &bin, [shadow.clone(), real.clone()]).unwrap(),
+            real.join("tool")
+        );
+        tokio::fs::symlink(shadow.join("tool"), shadow.join("linked"))
+            .await
+            .unwrap();
+        assert!(find_target_in_paths("linked", &bin, [shadow]).is_err());
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 

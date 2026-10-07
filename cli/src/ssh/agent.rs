@@ -535,7 +535,7 @@ pub(crate) fn build_transfer_argv(
         }
         Tool::Scp => {
             args.push("-r".to_string());
-            for opt in scp_connection_options(ctx) {
+            for opt in scp_connection_options(ctx)? {
                 args.push(opt);
             }
             args.push("--".to_string());
@@ -604,10 +604,66 @@ fn rsync_rsh(ctx: &SessionContext) -> Result<Option<String>> {
     Ok(Some(format!("ssh {}", options.join(" "))))
 }
 
-/// scp connection options: the same reconnection settings, passed as individual
-/// argv tokens. (scp reads `~/.ssh/config`, so an alias needs nothing here.)
-fn scp_connection_options(ctx: &SessionContext) -> Vec<String> {
-    ssh_reconnect_options(ctx)
+/// Translate trusted SSH connection options into SCP options. Several short
+/// options have different meanings in SCP; session/forwarding flags are omitted.
+fn scp_connection_options(ctx: &SessionContext) -> Result<Vec<String>> {
+    let options = ssh_reconnect_options(ctx);
+    let mut tokens = options.iter();
+    let mut args = Vec::new();
+    while let Some(token) = tokens.next() {
+        let letters = token
+            .strip_prefix('-')
+            .filter(|letters| !letters.is_empty() && !letters.starts_with('-'))
+            .context("invalid SSH reconnection option")?;
+        let mut letters = letters.char_indices().peekable();
+        while let Some((_, letter)) = letters.next() {
+            if super::VALUE_OPTION_LETTERS.contains(&letter) {
+                let value = if let Some((offset, _)) = letters.peek() {
+                    &token[1 + offset..]
+                } else {
+                    tokens
+                        .next()
+                        .with_context(|| format!("SSH option -{letter} requires a value"))?
+                        .as_str()
+                };
+                let setting = match letter {
+                    'B' => Some("BindInterface"),
+                    'b' => Some("BindAddress"),
+                    'I' => Some("PKCS11Provider"),
+                    'l' => Some("User"),
+                    'm' => Some("MACs"),
+                    'p' => Some("Port"),
+                    'S' => Some("ControlPath"),
+                    'c' | 'F' | 'i' | 'J' | 'o' => {
+                        args.extend([format!("-{letter}"), value.to_string()]);
+                        None
+                    }
+                    // These affect the original session, not its transfer connection.
+                    'D' | 'E' | 'e' | 'L' | 'O' | 'Q' | 'R' | 'W' | 'w' => None,
+                    _ => bail!("unsupported SSH reconnection option -{letter}"),
+                };
+                if let Some(setting) = setting {
+                    args.extend(["-o".to_string(), format!("{setting}={value}")]);
+                }
+                break;
+            }
+            match letter {
+                '4' | '6' | 'A' | 'C' | 'q' | 'v' => args.push(format!("-{letter}")),
+                'a' => args.extend(["-o".into(), "ForwardAgent=no".into()]),
+                'K' => args.extend([
+                    "-o".into(),
+                    "GSSAPIAuthentication=yes".into(),
+                    "-o".into(),
+                    "GSSAPIDelegateCredentials=yes".into(),
+                ]),
+                'k' => args.extend(["-o".into(), "GSSAPIDelegateCredentials=no".into()]),
+                'f' | 'G' | 'g' | 'M' | 'N' | 'n' | 's' | 'T' | 't' | 'V' | 'X' | 'x' | 'Y'
+                | 'y' => {}
+                _ => bail!("unsupported SSH reconnection option -{letter}"),
+            }
+        }
+    }
+    Ok(args)
 }
 
 /// Resolves the binary for a tool, honoring a per-tool test-override env var so
@@ -837,6 +893,113 @@ mod tests {
         let sep = cmd.args.iter().position(|a| a == "--").unwrap();
         assert_eq!(cmd.args[sep + 1], "dev:/abs/file");
         assert_eq!(cmd.args[sep + 2], "/home/u/proj");
+    }
+
+    #[test]
+    fn scp_reconnect_translates_split_glued_and_clustered_ssh_options() {
+        for options in [
+            vec![
+                "-v",
+                "-p",
+                "2222",
+                "-l",
+                "alice",
+                "-S",
+                "/tmp/control socket",
+            ],
+            vec!["-vp2222", "-lalice", "-S/tmp/control socket"],
+        ] {
+            let ctx = ctx_with("dev", options, None);
+            assert_eq!(
+                scp_connection_options(&ctx).unwrap(),
+                [
+                    "-v",
+                    "-o",
+                    "Port=2222",
+                    "-o",
+                    "User=alice",
+                    "-o",
+                    "ControlPath=/tmp/control socket"
+                ]
+            );
+            // The same conversion is used for explicit SCP and rsync fallback.
+            let plan = plan(Direction::Download, "/file", &["/local"], false);
+            let command = build_transfer_argv(Tool::Scp, &ctx, &plan).unwrap();
+            assert!(
+                !command
+                    .args
+                    .iter()
+                    .any(|arg| arg == "-p" || arg == "-l" || arg == "-S")
+            );
+            assert_eq!(
+                &command.args[command.args.len() - 3..],
+                ["--", "dev:/file", "/local"]
+            );
+        }
+    }
+
+    #[test]
+    fn scp_reconnect_preserves_connection_values_without_session_flags() {
+        let ctx = ctx_with(
+            "dev",
+            vec![
+                "-tt",
+                "-R",
+                "9000:localhost:9000",
+                "-L8080:localhost:80",
+                "-e",
+                "none",
+                "-Nn",
+                "-F",
+                "/tmp/ssh config",
+                "-i/tmp/key",
+                "-J",
+                "jump",
+                "-o",
+                "ControlMaster=no",
+                "-oProxyCommand=ssh jump nc %h %p",
+                "-b127.0.0.1",
+                "-B",
+                "en0",
+                "-m",
+                "hmac-sha2-256",
+                "-I",
+                "/tmp/provider",
+            ],
+            None,
+        );
+        assert_eq!(
+            scp_connection_options(&ctx).unwrap(),
+            [
+                "-F",
+                "/tmp/ssh config",
+                "-i",
+                "/tmp/key",
+                "-J",
+                "jump",
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "ProxyCommand=ssh jump nc %h %p",
+                "-o",
+                "BindAddress=127.0.0.1",
+                "-o",
+                "BindInterface=en0",
+                "-o",
+                "MACs=hmac-sha2-256",
+                "-o",
+                "PKCS11Provider=/tmp/provider",
+            ]
+        );
+        assert!(rsync_rsh(&ctx).is_err());
+        for invalid in [vec!["-p"], vec!["-Z"], vec!["not-an-option"]] {
+            assert!(scp_connection_options(&ctx_with("dev", invalid, None)).is_err());
+        }
+        let master = ctx_with("dev", vec!["-p2222", "-tt"], Some("/tmp/master"));
+        assert_eq!(
+            scp_connection_options(&master).unwrap(),
+            ["-o", "ControlPath=/tmp/master", "-o", "ControlMaster=no"]
+        );
     }
 
     #[test]

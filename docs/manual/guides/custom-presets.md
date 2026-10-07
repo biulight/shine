@@ -77,6 +77,8 @@ check for App, Shell, and Sys metadata.
 
 Run `preset lint` after validation to find author-quality and portability issues. Warnings are
 advisory by default; CI can add `--deny-warnings` after reviewing them.
+Lint checks each platform's applicable resources, including PowerShell commands on Windows;
+App categories or files intentionally unavailable on an OS are skipped for that OS.
 
 Then run `preset plan` for each target platform. It previews a hypothetical first installation and
 shows actions, permissions, and blockers without changing the machine. A blocker commonly means the

@@ -785,6 +785,9 @@ bugs. Check this list before changing the modules named in each entry.
   `agent_handle.abort()` only stops new connections, never an in-flight transfer. `handle_ssh`
   must drain `ConnectionTasks` before removing the session directory or exiting, so a still-running
   transfer's own error-path cleanup gets to finish instead of being cut off by process exit.
+- **SSH argv is not SCP argv.** SCP reconnect options come only from the local session context;
+  translate port, user, and control-path values to connection settings, retain supported
+  connection options, and omit session/forwarding flags. Unknown options fail before transfer.
 
 ## SSH secret broker
 
@@ -822,6 +825,9 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Local HTTP server
 
+- **Resource URL output encodes normalized path segments.** Keep decoding and traversal checks
+  shared with request handling, then encode reserved bytes again and join components with `/`.
+  A filename's `#`, `?`, percent sign, or Unicode must survive a generated URL round-trip.
 - **`serve::handle_start`/`handle_install` have no authentication of their own.** Binding
   loopback-only (`127.0.0.1`) keeps the server off the network, but it does not stop other local
   OS user accounts on a shared/multi-user machine from connecting and reading any file under
