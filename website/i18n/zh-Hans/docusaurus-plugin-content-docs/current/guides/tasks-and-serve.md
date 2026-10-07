@@ -58,7 +58,7 @@ shine app artifact apply surge
 | `SHINE_APP_ID` | 当前 app 预设 ID |
 | `SHINE_APP_DIR` | 本次执行的临时 app 快照目录，包含生效的基础文件和 overlay 文件 |
 | `SHINE_APP_SOURCE_DIR` | 与 `SHINE_APP_DIR` 相同的生效源文件快照目录 |
-| `SHINE_APP_OVERLAY_DIR` | 本次快照中生效的 overlay 文件副本；没有 overlay 时不设置 |
+| `SHINE_APP_OVERLAY_DIR` | 本次快照中生效的 overlay 文件副本；没有 overlay 时显式设为空值，覆盖继承的同名变量 |
 | `SHINE_APP_HTTP_DIR` | 该 app 可发布资源目录，位于 `~/.shine/http/app/<APP_ID>/` |
 | `SHINE_CONFIG_DIR` | 当前 Shine 运行时目录 |
 | `SHINE_CACHE_DIR` | 当前 app 的缓存目录 |

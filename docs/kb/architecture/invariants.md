@@ -186,7 +186,9 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **App execution consumes captured bytes, never mutable source paths.** Generator, script hook,
   artifact and teardown entrypoints use a fresh private category copy per invocation. Relative helpers
-  and the source/overlay path variables refer only to effective captured bytes. Cleanup removes only
+  and the source/overlay path variables refer only to effective captured bytes.
+  Without a captured overlay, explicitly inject an empty
+  `SHINE_APP_OVERLAY_DIR` to override both inherited and caller-injected paths. Cleanup removes only
   that invocation's tree, including on spawn failure; persistent output uses the state/cache/HTTP
   contract. Planners declare snapshot creation and removal. Unisolated code can still deliberately
   access other host paths; this is source consistency, not a sandbox (ADR 0092).
@@ -591,6 +593,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **Env proxy installation checks every launcher before writing any.** Windows extensionless,
   `.cmd`, and `.ps1` destinations all require absence or a regular Shine-owned proxy file.
   Foreign files, directories, and symlinks (including dangling links) remain untouched.
+  Uninstall checks the complete launcher set before changing any launcher, rule, or receipt;
+  ownership conflicts preserve all three. Installation rejects `shine` and `shine.exe`, ignoring
+  case, because proxy launchers invoke Shine through PATH and would otherwise recurse.
 - **Project-only proxies remain transparent outside the project.** Missing active rules forward
   directly without environment injection. PATH discovery excludes the actual Shine bin directory,
   including directory aliases, while preserving executable names such as `cargo` for dispatch.
@@ -788,6 +793,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **SSH argv is not SCP argv.** SCP reconnect options come only from the local session context;
   translate port, user, and control-path values to connection settings, retain supported
   connection options, and omit session/forwarding flags. Unknown options fail before transfer.
+- **Rsync flags must work with the system implementation.** Availability via `--version` does not
+  imply support for modern GNU options. Use per-file `--progress`, supported by macOS's rsync
+  2.6.9-compatible implementation, rather than `--info=progress2`.
 
 ## SSH secret broker
 

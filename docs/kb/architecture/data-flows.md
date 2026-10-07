@@ -101,7 +101,9 @@ After trust and Plan approval, App generators, script hooks and artifacts materi
 captured effective category into a fresh owner-only invocation directory below
 `shine_dir/runtime/app/<category>/`. Entry paths and cwd use that copy. `SHINE_APP_DIR` and
 `SHINE_APP_SOURCE_DIR` identify the effective copy; `SHINE_APP_OVERLAY_DIR` identifies the captured
-effective overlay subset. Relative imports therefore cannot reopen changed checkout helpers.
+effective overlay subset. Without a captured overlay, execution explicitly injects an empty
+`SHINE_APP_OVERLAY_DIR` so ambient or caller-injected paths cannot select uncaptured files.
+Relative imports therefore cannot reopen changed checkout helpers.
 Bun dependency mode still comes from the captured script's source layer. Execution and spawn errors
 both clean only the invocation tree; persistent artifact output uses the existing state/cache/HTTP
 paths. Plans declare the create/remove effects before execution (ADR 0092).

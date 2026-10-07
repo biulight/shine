@@ -66,7 +66,7 @@ variables:
 | `SHINE_APP_ID` | Current application preset ID |
 | `SHINE_APP_DIR` | Temporary App snapshot for this invocation, containing effective base and overlay files |
 | `SHINE_APP_SOURCE_DIR` | Same effective source snapshot directory as `SHINE_APP_DIR` |
-| `SHINE_APP_OVERLAY_DIR` | Captured effective overlay files for this invocation; unset without an overlay |
+| `SHINE_APP_OVERLAY_DIR` | Captured effective overlay files for this invocation; explicitly empty without an overlay, overriding inherited values |
 | `SHINE_APP_HTTP_DIR` | Publishable application directory under `~/.shine/http/app/<APP_ID>/` |
 | `SHINE_CONFIG_DIR` | Current Shine runtime directory |
 | `SHINE_CACHE_DIR` | Current application cache directory |

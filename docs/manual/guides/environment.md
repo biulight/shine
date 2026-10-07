@@ -466,6 +466,9 @@ are skipped when locating the real command. Proxy rule changes also retain owner
 permissions on Unix.
 On Unix, target discovery also skips files without execute permission and follows executable
 symlinks without changing the command's invocation name.
+Shine refuses to proxy `shine` or `shine.exe` (case-insensitive) to prevent recursive launcher calls.
+Uninstall checks every launcher before changing rules or receipts; an ownership conflict leaves
+the launcher set and configuration unchanged.
 
 Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
 `--project` to scope the rule; a project rule for the same command overrides the global one.

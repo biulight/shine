@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-07 — Ambient paths and launcher boundaries need real-process checks
+
+- **Symptoms**: App scripts inherited an uncaptured overlay path; macOS rsync rejected a transfer
+  flag; proxying Shine recursed; uninstall removed a rule before refusing a foreign launcher.
+- **Causes**: removing an env-map entry does not clear inherited process env; `--version` does not
+  establish modern flag support; launchers invoke Shine through PATH; removal checked ownership
+  after writing configuration and omitted Windows companion conflicts.
+- **Fixes**: explicitly override absent overlay paths with an empty value, use compatible rsync
+  `--progress`, reject Shine proxy names, and preflight all uninstall launchers before mutation.
+- **Coverage**: subprocess-inherited and caller-injected overlay values, real macOS rsync dry-run
+  and overwrite protection, case-insensitive self-proxy rejection, and conflict/link preservation
+  of launchers, configuration, and receipts.
+
 ## 2026-10-07 — Review utilities need platform and transport boundary tests
 
 - **Symptom**: lint panicked on macOS-only Surge and missed PowerShell-only warnings; SCP

@@ -117,7 +117,9 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 .extend(self.fixed_app_contract_env(category, &app_dir));
             // Never inherit a caller-supplied overlay override when none was captured.
             if self.context().overlay_dir.is_none() {
-                request.env.remove("SHINE_APP_OVERLAY_DIR");
+                request
+                    .env
+                    .insert("SHINE_APP_OVERLAY_DIR".into(), String::new());
             }
             self.host().run(request).await
         }
@@ -146,6 +148,66 @@ fn validate_relative(path: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::runtime::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn app_without_overlay_overrides_the_inherited_overlay_path() {
+        const CHILD: &str = "SHINE_TEST_APP_OVERLAY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // Give only this subprocess an ambient overlay; no process-global env mutation.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "runtime::app_script::tests::app_without_overlay_overrides_the_inherited_overlay_path",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("SHINE_APP_OVERLAY_DIR", "/uncaptured/overlay")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("shine-app-overlay-{}", uuid::Uuid::new_v4()));
+        let context = RuntimeContext::isolated(
+            root.join("home"),
+            root.join("state"),
+            root.join("presets"),
+            root.join("bin"),
+            RuntimePlatform::current(),
+        );
+        let runtime = CoreRuntime::new(
+            RealHost,
+            context,
+            PresetSnapshot::builder(PresetSourceKind::Embedded)
+                .file(
+                    "app/demo/probe.sh",
+                    b"#!/bin/sh\nprintf '%s' \"$SHINE_APP_OVERLAY_DIR\"\n".to_vec(),
+                )
+                .build(),
+        );
+        let output = runtime
+            .run_app_script(
+                "demo",
+                "app/demo/probe.sh",
+                ArtifactRuntime::Native,
+                ProcessRequest {
+                    env: std::collections::BTreeMap::from([(
+                        "SHINE_APP_OVERLAY_DIR".into(),
+                        "/injected/overlay".into(),
+                    )]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(output.exit_code, Some(0));
+        assert!(
+            output.stdout.is_empty(),
+            "uncaptured overlay reached the App script"
+        );
+    }
 
     #[tokio::test]
     async fn failed_spawn_cleans_only_its_own_snapshot() {

@@ -240,6 +240,7 @@ the item is placed in the local directory from which `shine ssh` started, using 
 The local side starts system `rsync` or `scp`, preferring rsync and falling back to scp. Both ends need
 SSH, and directory transfer requires a common tool. Existing files are not overwritten by default;
 for an existing directory, `--force` merges into it. Use `--scp` to skip rsync probing.
+Rsync progress uses the per-file `--progress` option, compatible with the system rsync on macOS.
 When reconnecting through SCP, Shine translates SSH port, user, and control-socket options,
 preserves connection settings such as identity files and jump hosts, and omits terminal and
 forwarding flags from the original session.

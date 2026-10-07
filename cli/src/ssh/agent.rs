@@ -522,7 +522,8 @@ pub(crate) fn build_transfer_argv(
                 args.push("-n".to_string());
                 args.push("--itemize-changes".to_string());
             }
-            args.push("--info=progress2".to_string());
+            // macOS ships an rsync 2.6.9-compatible implementation without --info.
+            args.push("--progress".to_string());
             if !plan.force {
                 // Never clobber without --force. rsync otherwise always overwrites.
                 args.push("--ignore-existing".to_string());
@@ -853,6 +854,7 @@ mod tests {
         assert_eq!(cmd.program, "rsync");
         assert!(cmd.args.contains(&"--".to_string()));
         assert!(cmd.args.contains(&"-a".to_string()));
+        assert!(cmd.args.contains(&"--progress".to_string()));
         assert!(cmd.args.contains(&"--ignore-existing".to_string()));
         // -e string is built only from ctx (control master), never the wire.
         let e_idx = cmd.args.iter().position(|a| a == "-e").unwrap();
@@ -864,6 +866,37 @@ mod tests {
         let sep = cmd.args.iter().position(|a| a == "--").unwrap();
         assert_eq!(cmd.args[sep + 1], "dev:/abs/logs/*.log");
         assert_eq!(cmd.args[sep + 2], "/home/u/proj");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn system_rsync_accepts_transfer_flags_and_preserves_existing_files() {
+        let dir = crate::test_support::make_temp_dir("shine-system-rsync").await;
+        let source = dir.join("source");
+        let destination = dir.join("destination");
+        tokio::fs::write(&source, b"new").await.unwrap();
+        tokio::fs::write(&destination, b"existing").await.unwrap();
+        let ctx = ctx_with("unused", vec![], None);
+        for (dry_run, force, expected) in [
+            (true, true, b"existing".as_slice()),
+            (false, false, b"existing"),
+            (false, true, b"new"),
+        ] {
+            let mut request = plan(Direction::Download, "/unused", &["/unused"], force);
+            request.dry_run = dry_run;
+            let command = build_transfer_argv(Tool::Rsync, &ctx, &request).unwrap();
+            let separator = command.args.iter().position(|arg| arg == "--").unwrap();
+            // Exercise the actual local rsync parser and copy without opening SSH.
+            let output = std::process::Command::new("/usr/bin/rsync")
+                .args(&command.args[..=separator])
+                .arg(&source)
+                .arg(&destination)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(tokio::fs::read(&destination).await.unwrap(), expected);
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]

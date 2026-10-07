@@ -21,7 +21,8 @@ receive a separate captured subset. The invocation directory is private on Unix,
 entrypoint is executable, and command hooks continue to invoke their declared external command.
 
 `SHINE_APP_DIR` and `SHINE_APP_SOURCE_DIR` point to the effective copy. `SHINE_APP_OVERLAY_DIR`
-points to its captured overlay subset when an overlay is active. These paths are temporary;
+points to its captured overlay subset when an overlay is active and is explicitly empty otherwise,
+overriding inherited values. These paths are temporary;
 persistent output uses `SHINE_STATE_DIR`, `SHINE_CACHE_DIR`, or `SHINE_APP_HTTP_DIR`.
 The source-layer check for Bun package/lock declarations remains unchanged.
 

@@ -21,6 +21,9 @@ struct ProxyManifest {
 
 pub async fn install(config: &Config, command: &str, with: &[String], project: bool) -> Result<()> {
     validate_command(command)?;
+    if command.eq_ignore_ascii_case("shine") || command.eq_ignore_ascii_case("shine.exe") {
+        bail!("cannot proxy Shine itself: the launcher would recursively invoke itself");
+    }
     parse_env_specs(with)?;
     if project && !config.is_project_config() {
         bail!("--project requires a shine.config.toml in the current directory or an ancestor");
@@ -114,32 +117,42 @@ pub async fn set_enabled(
 
 pub async fn uninstall(config: &Config, command: &str) -> Result<()> {
     validate_command(command)?;
+    uninstall_for_platform(config, command, cfg!(windows)).await
+}
+
+async fn uninstall_for_platform(config: &Config, command: &str, windows: bool) -> Result<()> {
     let path = config.shine_dir().join("config.toml");
-    remove_rule(&path, command).await?;
     let mut manifest = load_manifest(config.shine_dir()).await?;
-    let shim = config.bin_dir().join(command);
-    if shim.is_file() {
-        let body = tokio::fs::read_to_string(&shim).await.unwrap_or_default();
-        if body.contains(MARKER) {
-            tokio::fs::remove_file(&shim).await?;
-        } else {
-            bail!(
-                "refusing to remove {}: it is not a shine env proxy",
-                shim.display()
-            );
+    let mut launchers = vec![config.bin_dir().join(command)];
+    if windows {
+        for ext in ["cmd", "ps1"] {
+            launchers.push(config.bin_dir().join(format!("{command}.{ext}")));
         }
     }
-    #[cfg(windows)]
-    for ext in ["cmd", "ps1"] {
-        let candidate = config.bin_dir().join(format!("{command}.{ext}"));
-        if candidate.is_file() {
-            let body = tokio::fs::read_to_string(&candidate)
+    let mut owned = Vec::new();
+    // Inspect every member before changing rules, receipts, or another launcher.
+    for launcher in launchers {
+        let metadata = match tokio::fs::symlink_metadata(&launcher).await {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).context("inspecting env proxy destination"),
+        };
+        if !metadata.is_file()
+            || !tokio::fs::read_to_string(&launcher)
                 .await
-                .unwrap_or_default();
-            if body.contains(MARKER) {
-                tokio::fs::remove_file(candidate).await?;
-            }
+                .with_context(|| format!("reading {}", launcher.display()))?
+                .contains(MARKER)
+        {
+            bail!(
+                "refusing to remove {}: it is not a shine env proxy",
+                launcher.display()
+            );
         }
+        owned.push(launcher);
+    }
+    remove_rule(&path, command).await?;
+    for launcher in owned {
+        tokio::fs::remove_file(launcher).await?;
     }
     manifest.entries.remove(command);
     save_manifest(config.shine_dir(), &manifest).await?;
@@ -406,6 +419,139 @@ mod tests {
         assert!(validate_command("tool-name").is_ok());
         assert!(validate_command("../gh").is_err());
         assert!(validate_command("a/b").is_err());
+    }
+
+    #[tokio::test]
+    async fn proxy_install_rejects_shine_before_writing_state() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-self").await;
+        let config = Config::new_for_test(&dir);
+        for name in ["shine", "ShInE", "shine.exe", "SHINE.EXE"] {
+            let error = install(&config, name, &["TOKEN".into()], false)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("cannot proxy Shine itself"));
+        }
+        assert!(
+            tokio::fs::read_dir(&dir)
+                .await
+                .unwrap()
+                .next_entry()
+                .await
+                .unwrap()
+                .is_none()
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    async fn uninstall_fixture(dir: &Path) -> Config {
+        let config = Config::new_for_test(dir);
+        upsert_rule(
+            config.config_path(),
+            EnvProxyRule {
+                command: "demo".into(),
+                with: vec!["TOKEN".into()],
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+        let mut manifest = ProxyManifest::default();
+        manifest.entries.insert("demo".into(), dir.join("real"));
+        save_manifest(config.shine_dir(), &manifest).await.unwrap();
+        install_shims_for_platform(config.bin_dir(), "demo", &dir.join("real"), true)
+            .await
+            .unwrap();
+        config
+    }
+
+    #[tokio::test]
+    async fn proxy_uninstall_preflights_every_launcher_and_preserves_state_on_conflict() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-uninstall-conflict").await;
+        for name in ["demo", "demo.cmd", "demo.ps1"] {
+            let config = uninstall_fixture(&dir.join(name)).await;
+            let foreign = config.bin_dir().join(name);
+            tokio::fs::write(&foreign, b"user replacement")
+                .await
+                .unwrap();
+            let config_before = tokio::fs::read(config.config_path()).await.unwrap();
+            let manifest_before = tokio::fs::read(manifest_path(config.shine_dir()))
+                .await
+                .unwrap();
+            let mut launchers = Vec::new();
+            for candidate in ["demo", "demo.cmd", "demo.ps1"] {
+                let path = config.bin_dir().join(candidate);
+                launchers.push((path.clone(), tokio::fs::read(path).await.unwrap()));
+            }
+            assert!(uninstall_for_platform(&config, "demo", true).await.is_err());
+            assert_eq!(
+                tokio::fs::read(config.config_path()).await.unwrap(),
+                config_before
+            );
+            assert_eq!(
+                tokio::fs::read(manifest_path(config.shine_dir()))
+                    .await
+                    .unwrap(),
+                manifest_before
+            );
+            for (path, bytes) in launchers {
+                assert_eq!(tokio::fs::read(path).await.unwrap(), bytes);
+            }
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn proxy_uninstall_rejects_links_even_when_the_target_has_a_proxy_marker() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-uninstall-link").await;
+        for dangling in [false, true] {
+            let config = uninstall_fixture(&dir.join(dangling.to_string())).await;
+            let launcher = config.bin_dir().join("demo.ps1");
+            tokio::fs::remove_file(&launcher).await.unwrap();
+            let target = config.shine_dir().join("target");
+            if !dangling {
+                tokio::fs::write(&target, MARKER).await.unwrap();
+            }
+            tokio::fs::symlink(&target, &launcher).await.unwrap();
+            let before = tokio::fs::read(config.config_path()).await.unwrap();
+            assert!(uninstall_for_platform(&config, "demo", true).await.is_err());
+            assert_eq!(tokio::fs::read(config.config_path()).await.unwrap(), before);
+            assert_eq!(tokio::fs::read_link(launcher).await.unwrap(), target);
+            assert!(config.bin_dir().join("demo").is_file());
+            assert!(
+                load_manifest(config.shine_dir())
+                    .await
+                    .unwrap()
+                    .entries
+                    .contains_key("demo")
+            );
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn proxy_uninstall_removes_owned_launchers_rule_and_receipt() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-uninstall-owned").await;
+        let config = uninstall_fixture(&dir).await;
+        uninstall_for_platform(&config, "demo", true).await.unwrap();
+        for name in ["demo", "demo.cmd", "demo.ps1"] {
+            assert!(!config.bin_dir().join(name).exists());
+        }
+        let table: toml::Table = toml::from_str(
+            &tokio::fs::read_to_string(config.config_path())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!table.contains_key("env_proxy"));
+        assert!(
+            load_manifest(config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]

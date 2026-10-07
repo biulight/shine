@@ -9,6 +9,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Prevent App scripts from inheriting uncaptured overlay paths. Use macOS-compatible rsync
+  progress flags, reject recursive proxies for Shine itself, and preserve proxy configuration
+  and launchers when uninstall encounters an ownership conflict.
+
 - Make Preset lint tolerate platform-limited App categories and check Windows PowerShell
   commands. Translate SSH connection options for SCP transfers, skip non-executable Unix
   PATH entries when installing environment proxies, and encode reserved characters in
