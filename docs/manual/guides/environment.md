@@ -475,6 +475,11 @@ Shine refuses to proxy `shine` or `shine.exe` (case-insensitive) to prevent recu
 Uninstall checks every launcher before changing rules or receipts; an ownership conflict leaves
 the launcher set and configuration unchanged.
 
+Installation validates the rule file, manifest, and complete launcher set before writing. If a
+write fails, Shine attempts to restore previous file contents and Unix permissions and removes new
+files. Concurrent edits are preserved; an incomplete rollback is reported explicitly. This rollback
+covers reported write failures, not abrupt process termination.
+
 Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
 `--project` to scope the rule; a project rule for the same command overrides the global one.
 Outside that project, the shim uses the global rule if present; otherwise it forwards to the real

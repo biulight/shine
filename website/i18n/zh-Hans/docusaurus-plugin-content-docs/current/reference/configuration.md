@@ -128,6 +128,9 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 
 ## 目录与来源优先级
 
+相对的 `--config-dir`、`SHINE_CONFIG_DIR` 和 `SHINE_PRESETS` 路径会在生命周期规划或脚本执行前，
+按调用时的工作目录解析。子进程切换工作目录不会改变选定的运行时根目录。
+
 `SHINE_CONFIG_DIR` 的优先级最高。它会改变全局配置和运行时状态目录；不在 Shine 项目中时，
 预设目录也固定为 `$SHINE_CONFIG_DIR/presets/`，此时 `SHINE_PRESETS` 和全局 `presets_dir`
 都不能覆盖它。
@@ -146,6 +149,7 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 外部预设或 overlay 的根目录可以是符号链接。Shine 会先解析该链接，并把解析后的来源
 用于 development trust；重新指向另一个目录需要重新审阅。失效的根目录链接会报错，
 预设树内部的符号链接仍不参与快照。
+FIFO、套接字和设备等特殊条目会使快照捕获报错；Shine 不会将它们作为预设文件读取。
 
 使用外部 `presets_dir` 时，Shell 类别默认以 `snapshot` 模式复制到
 `~/.shine/installed/shell/` 后再运行。在 Unix 上，快照保留捕获时脚本和辅助文件的可执行标记，

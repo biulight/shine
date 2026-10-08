@@ -147,6 +147,10 @@ instead of silently dropping active values.
 
 ## Directory and source precedence
 
+Relative `--config-dir`, `SHINE_CONFIG_DIR`, and `SHINE_PRESETS` paths are resolved against the
+invoking working directory before lifecycle planning or script execution. Child working-directory
+changes do not change the selected runtime roots.
+
 `SHINE_CONFIG_DIR` has the highest priority. It changes the global configuration and runtime root
 and, outside a project, fixes the preset directory at `$SHINE_CONFIG_DIR/presets/`; `SHINE_PRESETS`
 and a global `presets_dir` do not override it.
@@ -165,6 +169,8 @@ Without `SHINE_CONFIG_DIR`, the base preset directory is selected in this order:
 An external preset or overlay root may be a symbolic link. Shine resolves that root before capture
 and uses the resolved source for development trust; retargeting it requires review again. A broken
 root link is an error. Symbolic links inside the preset tree remain excluded from the snapshot.
+Special entries such as FIFOs, sockets, and devices fail snapshot capture with an error; Shine does
+not read them as preset files.
 
 External shell categories default to `snapshot`: Shine copies them to
 `~/.shine/installed/shell/`. On Unix, snapshots retain captured executable flags for scripts and

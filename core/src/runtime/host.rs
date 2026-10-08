@@ -358,8 +358,13 @@ impl FileSystemObservationHost for RealHost {
                 FileKind::Symlink
             } else if metadata.is_dir() {
                 FileKind::Directory
-            } else {
+            } else if metadata.is_file() {
                 FileKind::File
+            } else {
+                return Err(HostError::io(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "special filesystem entries are not supported",
+                )));
             };
             #[cfg(unix)]
             let unix_mode = {
@@ -1059,6 +1064,36 @@ mod atomic_write_tests {
 
 #[cfg(all(test, unix))]
 mod tests {
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn special_entries_fail_snapshot_capture_without_opening_them() {
+        let root = std::env::temp_dir().join(format!("shine-fifo-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let fifo = root.join("pipe");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::super::capture_preset_snapshot(
+                &super::super::RealHost,
+                super::super::PresetSnapshotRequest {
+                    source: super::super::PresetSnapshotSource::External(root.clone()),
+                    overlay_root: None,
+                },
+            ),
+        )
+        .await
+        .expect("snapshot capture opened a FIFO");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("inspecting preset entry")
+        );
+        assert!(fifo.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     use super::*;
 
     #[tokio::test]

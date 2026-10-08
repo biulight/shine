@@ -34,19 +34,7 @@ pub async fn install(config: &Config, command: &str, with: &[String], project: b
     } else {
         &config.shine_dir().join("config.toml")
     };
-    install_shim(config, command, &target).await?;
-    upsert_rule(
-        path,
-        EnvProxyRule {
-            command: command.into(),
-            with: with.to_vec(),
-            enabled: true,
-        },
-    )
-    .await?;
-    let mut manifest = load_manifest(config.shine_dir()).await?;
-    manifest.entries.insert(command.into(), target.clone());
-    save_manifest(config.shine_dir(), &manifest).await?;
+    install_proxy_files(config, command, with, &target, path, cfg!(windows)).await?;
     println!(
         "installed transparent proxy {command} -> {}",
         target.display()
@@ -287,17 +275,263 @@ fn absolute_path(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
-async fn install_shim(config: &Config, command: &str, target: &Path) -> Result<()> {
-    install_shims_for_platform(
+struct InstallFile {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    mode: Option<u32>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct FileSnapshot {
+    bytes: Vec<u8>,
+    mode: Option<u32>,
+}
+
+async fn capture_file(path: &Path) -> Result<Option<FileSnapshot>> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
+    };
+    if !metadata.is_file() {
+        bail!("refusing to replace non-regular file {}", path.display());
+    }
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        Some(metadata.permissions().mode() & 0o7777)
+    };
+    #[cfg(not(unix))]
+    let mode = None;
+    Ok(Some(FileSnapshot {
+        bytes: tokio::fs::read(path).await?,
+        mode,
+    }))
+}
+
+fn prepare_shims(
+    bin_dir: &Path,
+    command: &str,
+    target: &Path,
+    shine_dir: &Path,
+    windows: bool,
+) -> Result<Vec<InstallFile>> {
+    let config_string = absolute_path(shine_dir.to_path_buf())?
+        .to_string_lossy()
+        .into_owned();
+    let config_q = shell_quote::single_quote(&config_string);
+    let target_string = target.to_string_lossy().into_owned();
+    let target_q = shell_quote::single_quote(&target_string);
+    let command_q = shell_quote::single_quote(command);
+    let mut files = vec![InstallFile {
+        path: bin_dir.join(command),
+        bytes: format!("#!/bin/sh\n# {MARKER}\nexec shine --config-dir {config_q} env proxy exec --target {target_q} {command_q} \"$@\"\n").into_bytes(),
+        mode: Some(0o755),
+    }];
+    if windows {
+        let config_cmd = config_string.replace('%', "%%");
+        let target_cmd = target_string.replace('%', "%%");
+        let config_ps = config_string.replace('\'', "''");
+        let target_ps = target_string.replace('\'', "''");
+        files.extend([
+            InstallFile {
+                path: bin_dir.join(format!("{command}.cmd")),
+                bytes: format!("@echo off\r\nREM {MARKER}\r\nshine --config-dir \"{config_cmd}\" env proxy exec --target \"{target_cmd}\" {command} %*\r\n").into_bytes(),
+                mode: None,
+            },
+            InstallFile {
+                path: bin_dir.join(format!("{command}.ps1")),
+                bytes: format!("# {MARKER}\n& shine --config-dir '{config_ps}' env proxy exec --target '{target_ps}' {command} @args\nexit $LASTEXITCODE\n").into_bytes(),
+                mode: None,
+            },
+        ]);
+    }
+    Ok(files)
+}
+
+async fn capture_install_files(
+    files: &[InstallFile],
+    launcher_count: usize,
+) -> Result<Vec<Option<FileSnapshot>>> {
+    let mut snapshots = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        let snapshot = capture_file(&file.path).await?;
+        if index < launcher_count
+            && snapshot
+                .as_ref()
+                .is_some_and(|previous| !String::from_utf8_lossy(&previous.bytes).contains(MARKER))
+        {
+            bail!(
+                "{} already exists and is not a shine env proxy",
+                file.path.display()
+            );
+        }
+        snapshots.push(snapshot);
+    }
+    Ok(snapshots)
+}
+
+async fn install_proxy_files(
+    config: &Config,
+    command: &str,
+    with: &[String],
+    target: &Path,
+    rule_path: &Path,
+    windows: bool,
+) -> Result<()> {
+    let mut files = prepare_shims(
         config.bin_dir(),
         command,
         target,
         config.shine_dir(),
-        cfg!(windows),
-    )
+        windows,
+    )?;
+    let launcher_count = files.len();
+    files.push(InstallFile {
+        path: rule_path.to_path_buf(),
+        bytes: Vec::new(),
+        mode: Some(0o600),
+    });
+    files.push(InstallFile {
+        path: manifest_path(config.shine_dir()),
+        bytes: Vec::new(),
+        mode: None,
+    });
+    // Capture and parse the same bytes before changing any launcher or rule.
+    let snapshots = capture_install_files(&files, launcher_count).await?;
+    let text = snapshots[launcher_count]
+        .as_ref()
+        .map(|snapshot| std::str::from_utf8(&snapshot.bytes))
+        .transpose()?
+        .unwrap_or_default();
+    let manifest_text = snapshots[launcher_count + 1]
+        .as_ref()
+        .map(|snapshot| std::str::from_utf8(&snapshot.bytes))
+        .transpose()?
+        .unwrap_or_default();
+    let mut manifest: ProxyManifest = if snapshots[launcher_count + 1].is_some() {
+        toml::from_str(manifest_text).context("parsing env proxy manifest")?
+    } else {
+        ProxyManifest::default()
+    };
+    manifest
+        .entries
+        .insert(command.into(), target.to_path_buf());
+    let rule = EnvProxyRule {
+        command: command.into(),
+        with: with.to_vec(),
+        enabled: true,
+    };
+    files[launcher_count].bytes = render_rules(text, |rules| {
+        rules.retain(|existing| existing.command != command);
+        rules.push(rule);
+        Ok(())
+    })?
+    .into_bytes();
+    files[launcher_count + 1].bytes = toml::to_string_pretty(&manifest)?.into_bytes();
+    for (file, snapshot) in files.iter_mut().zip(&snapshots) {
+        if file.mode.is_none() {
+            file.mode = snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.mode)
+                .or(Some(0o644));
+        }
+    }
+    apply_install_files(&files, &snapshots, |file| {
+        Box::pin(write_install_file(file))
+    })
     .await
 }
 
+async fn write_install_file(file: &InstallFile) -> Result<()> {
+    // Keep configuration and rollback plaintext private during replacement.
+    crate::persist::atomic_write_private(&file.path, &file.bytes).await?;
+    #[cfg(unix)]
+    if let Some(mode) = file.mode {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&file.path, std::fs::Permissions::from_mode(mode)).await?;
+    }
+    Ok(())
+}
+
+async fn apply_install_files<F>(
+    files: &[InstallFile],
+    snapshots: &[Option<FileSnapshot>],
+    mut write: F,
+) -> Result<()>
+where
+    F: for<'a> FnMut(
+        &'a InstallFile,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>,
+    >,
+{
+    for (index, file) in files.iter().enumerate() {
+        let mut attempted = false;
+        let result = async {
+            if capture_file(&file.path).await? != snapshots[index] {
+                bail!("proxy installation input changed: {}", file.path.display());
+            }
+            attempted = true;
+            write(file).await
+        }
+        .await;
+        if let Err(error) = result {
+            let mut rollback_errors = Vec::new();
+            let touched = index + usize::from(attempted);
+            for previous in (0..touched).rev() {
+                if let Err(rollback) =
+                    restore_install_file(&files[previous], snapshots[previous].as_ref()).await
+                {
+                    rollback_errors
+                        .push(format!("{}: {rollback:#}", files[previous].path.display()));
+                }
+            }
+            if rollback_errors.is_empty() {
+                return Err(error);
+            }
+            return Err(error.context(format!(
+                "proxy installation rollback incomplete: {}",
+                rollback_errors.join("; ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+async fn restore_install_file(file: &InstallFile, snapshot: Option<&FileSnapshot>) -> Result<()> {
+    let current = capture_file(&file.path).await?;
+    if current.as_ref() == snapshot {
+        return Ok(());
+    }
+    if current
+        .as_ref()
+        .is_none_or(|current| current.bytes != file.bytes)
+    {
+        bail!("file changed during installation; preserving it");
+    }
+    #[cfg(unix)]
+    if current
+        .as_ref()
+        .is_some_and(|current| current.mode != Some(0o600) && current.mode != file.mode)
+    {
+        bail!("file permissions changed during installation; preserving it");
+    }
+    if let Some(snapshot) = snapshot {
+        write_install_file(&InstallFile {
+            path: file.path.clone(),
+            bytes: snapshot.bytes.clone(),
+            mode: snapshot.mode,
+        })
+        .await
+    } else {
+        tokio::fs::remove_file(&file.path)
+            .await
+            .context("removing newly installed proxy file")
+    }
+}
+
+#[cfg(test)]
 async fn install_shims_for_platform(
     bin_dir: &Path,
     command: &str,
@@ -305,65 +539,15 @@ async fn install_shims_for_platform(
     shine_dir: &Path,
     windows: bool,
 ) -> Result<()> {
-    let path = bin_dir.join(command);
-    let mut paths = vec![path.clone()];
-    if windows {
-        paths.push(bin_dir.join(format!("{command}.cmd")));
-        paths.push(bin_dir.join(format!("{command}.ps1")));
-    }
-    // Check the entire launcher set before writing any member. Inspect links
-    // themselves, including dangling links, rather than following their target.
-    for candidate in &paths {
-        let metadata = match tokio::fs::symlink_metadata(candidate).await {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error).context("inspecting env proxy destination"),
-        };
-        if !metadata.is_file()
-            || !tokio::fs::read_to_string(candidate)
-                .await
-                .with_context(|| format!("reading {}", candidate.display()))?
-                .contains(MARKER)
-        {
-            bail!(
-                "{} already exists and is not a shine env proxy",
-                candidate.display()
-            );
-        }
-    }
-    tokio::fs::create_dir_all(bin_dir).await?;
-    let config_dir = absolute_path(shine_dir.to_path_buf())?;
-    let config_string = config_dir.to_string_lossy().into_owned();
-    let config_q = shell_quote::single_quote(&config_string);
-    let target_string = target.to_string_lossy().into_owned();
-    let target = shell_quote::single_quote(&target_string);
-    let command_q = shell_quote::single_quote(command);
-    atomic_write(&path, format!("#!/bin/sh\n# {MARKER}\nexec shine --config-dir {config_q} env proxy exec --target {target} {command_q} \"$@\"\n").as_bytes()).await?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).await?;
-    }
-    if windows {
-        install_windows_shims(bin_dir, command, &target_string, &config_string).await?;
-    }
-    Ok(())
+    let files = prepare_shims(bin_dir, command, target, shine_dir, windows)?;
+    let snapshots = capture_install_files(&files, files.len()).await?;
+    apply_install_files(&files, &snapshots, |file| {
+        Box::pin(write_install_file(file))
+    })
+    .await
 }
 
-async fn install_windows_shims(
-    bin_dir: &Path,
-    command: &str,
-    target: &str,
-    config_dir: &str,
-) -> Result<()> {
-    let config_cmd = config_dir.replace('%', "%%");
-    let target_cmd = target.replace('%', "%%");
-    let config_ps = config_dir.replace('\'', "''");
-    atomic_write(&bin_dir.join(format!("{command}.cmd")), format!("@echo off\r\nREM {MARKER}\r\nshine --config-dir \"{config_cmd}\" env proxy exec --target \"{target_cmd}\" {command} %*\r\n").as_bytes()).await?;
-    let target_ps = target.replace('\'', "''");
-    atomic_write(&bin_dir.join(format!("{command}.ps1")), format!("# {MARKER}\n& shine --config-dir '{config_ps}' env proxy exec --target '{target_ps}' {command} @args\nexit $LASTEXITCODE\n").as_bytes()).await
-}
-
+#[cfg(test)]
 async fn upsert_rule(path: &Path, rule: EnvProxyRule) -> Result<()> {
     mutate_rules(path, |rules| {
         rules.retain(|r| r.command != rule.command);
@@ -383,13 +567,24 @@ async fn mutate_rules(
     path: &Path,
     change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
 ) -> Result<()> {
-    let text = match tokio::fs::read_to_string(path).await {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
-    };
-    let mut table: toml::Table =
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let text = read_rules_text(path).await?;
+    let contents = render_rules(&text, change)?;
+    crate::persist::atomic_write_private(path, contents.as_bytes()).await
+}
+
+async fn read_rules_text(path: &Path) -> Result<String> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+fn render_rules(
+    text: &str,
+    change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
+) -> Result<String> {
+    let mut table: toml::Table = toml::from_str(text).context("parsing env proxy rules")?;
     let mut rules: Vec<EnvProxyRule> = table
         .get("env_proxy")
         .map(|v| v.clone().try_into())
@@ -401,11 +596,9 @@ async fn mutate_rules(
     } else {
         table.insert("env_proxy".into(), toml::Value::try_from(rules)?);
     }
-    let mut doc: toml_edit::DocumentMut = text
-        .parse()
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let mut doc: toml_edit::DocumentMut = text.parse().context("parsing env proxy rules")?;
     shine_core::migration::sync_table(doc.as_table_mut(), &table);
-    crate::persist::atomic_write_private(path, doc.to_string().as_bytes()).await
+    Ok(doc.to_string())
 }
 
 fn manifest_path(shine_dir: &Path) -> PathBuf {
@@ -431,6 +624,212 @@ async fn save_manifest(shine_dir: &Path, manifest: &ProxyManifest) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn proxy_install_commits_requested_mapping_and_preserves_unrelated_config() {
+        for windows in [false, true] {
+            let dir = crate::test_support::make_temp_dir("shine-proxy-install-success").await;
+            let config = Config::new_for_test(&dir);
+            let path = dir.join("project/shine.config.toml");
+            tokio::fs::create_dir_all(path.parent().unwrap())
+                .await
+                .unwrap();
+            tokio::fs::write(&path, "# retain this comment\n[env]\nPRIVATE = 'keep'\n[[env_proxy]]\ncommand = 'other'\nwith = ['OTHER']\n").await.unwrap();
+            install_proxy_files(
+                &config,
+                "demo",
+                &["KEY=ALIAS".into()],
+                Path::new("/real/demo"),
+                &path,
+                windows,
+            )
+            .await
+            .unwrap();
+            let contents = tokio::fs::read_to_string(&path).await.unwrap();
+            assert!(contents.contains("# retain this comment"));
+            let table: toml::Table = toml::from_str(&contents).unwrap();
+            assert_eq!(table["env"]["PRIVATE"].as_str(), Some("keep"));
+            let rules: Vec<EnvProxyRule> = table["env_proxy"].clone().try_into().unwrap();
+            assert_eq!(rules.len(), 2);
+            assert_eq!(
+                rules
+                    .iter()
+                    .find(|rule| rule.command == "demo")
+                    .unwrap()
+                    .with,
+                ["KEY=ALIAS"]
+            );
+            assert_eq!(
+                load_manifest(config.shine_dir()).await.unwrap().entries["demo"],
+                Path::new("/real/demo")
+            );
+            assert!(config.bin_dir().join("demo").is_file());
+            assert_eq!(config.bin_dir().join("demo.cmd").is_file(), windows);
+            assert_eq!(config.bin_dir().join("demo.ps1").is_file(), windows);
+            #[cfg(unix)]
+            assert_eq!(
+                capture_file(&path).await.unwrap().unwrap().mode,
+                Some(0o600)
+            );
+            tokio::fs::remove_dir_all(dir).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_proxy_state_preserves_all_installation_files() {
+        for windows in [false, true] {
+            for corrupt_manifest in [false, true] {
+                let dir = crate::test_support::make_temp_dir("shine-proxy-invalid-state").await;
+                let config = Config::new_for_test(&dir);
+                let rule_path = config.shine_dir().join("config.toml");
+                tokio::fs::create_dir_all(config.bin_dir()).await.unwrap();
+                let launcher = config.bin_dir().join("demo");
+                tokio::fs::write(&launcher, format!("# {MARKER} original"))
+                    .await
+                    .unwrap();
+                tokio::fs::write(
+                    &rule_path,
+                    if corrupt_manifest {
+                        "# private config\n[env]\nKEY = 'value'\n"
+                    } else {
+                        "invalid ["
+                    },
+                )
+                .await
+                .unwrap();
+                tokio::fs::write(
+                    manifest_path(config.shine_dir()),
+                    if corrupt_manifest {
+                        "invalid ["
+                    } else {
+                        "[entries]\n"
+                    },
+                )
+                .await
+                .unwrap();
+                let paths = [
+                    launcher.clone(),
+                    rule_path.clone(),
+                    manifest_path(config.shine_dir()),
+                ];
+                let mut before = Vec::new();
+                for path in &paths {
+                    before.push(capture_file(path).await.unwrap());
+                }
+                assert!(
+                    install_proxy_files(
+                        &config,
+                        "demo",
+                        &["KEY".into()],
+                        Path::new("/real/demo"),
+                        &rule_path,
+                        windows
+                    )
+                    .await
+                    .is_err()
+                );
+                for (path, previous) in paths.iter().zip(before) {
+                    assert!(capture_file(path).await.unwrap() == previous);
+                }
+                assert!(!config.bin_dir().join("demo.cmd").exists());
+                assert!(!config.bin_dir().join("demo.ps1").exists());
+                tokio::fs::remove_dir_all(dir).await.unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_install_rolls_back_every_failed_write_including_visible_replacements() {
+        for existing in [false, true] {
+            for after_write in [false, true] {
+                for failed_index in 0..5 {
+                    let dir = crate::test_support::make_temp_dir("shine-proxy-rollback").await;
+                    let mut files = prepare_shims(
+                        &dir.join("bin"),
+                        "demo",
+                        Path::new("/real/demo"),
+                        &dir,
+                        true,
+                    )
+                    .unwrap();
+                    files.extend([
+                        InstallFile {
+                            path: dir.join("config.toml"),
+                            bytes: b"new rules".to_vec(),
+                            mode: Some(0o600),
+                        },
+                        InstallFile {
+                            path: dir.join("proxy-manifest.toml"),
+                            bytes: b"new receipt".to_vec(),
+                            mode: Some(0o600),
+                        },
+                    ]);
+                    if existing {
+                        for file in &files {
+                            write_install_file(&InstallFile {
+                                path: file.path.clone(),
+                                bytes: format!("# {MARKER} original").into_bytes(),
+                                mode: Some(0o600),
+                            })
+                            .await
+                            .unwrap();
+                        }
+                    }
+                    let snapshots = capture_install_files(&files, 3).await.unwrap();
+                    let failed_path = files[failed_index].path.clone();
+                    let result = apply_install_files(&files, &snapshots, |file| {
+                        let fail = file.path == failed_path;
+                        Box::pin(async move {
+                            if fail && !after_write {
+                                bail!("injected write failure");
+                            }
+                            write_install_file(file).await?;
+                            if fail {
+                                bail!("injected synchronization failure");
+                            }
+                            Ok(())
+                        })
+                    })
+                    .await;
+                    assert!(result.is_err());
+                    for (file, previous) in files.iter().zip(&snapshots) {
+                        assert!(
+                            capture_file(&file.path).await.unwrap() == *previous,
+                            "{}",
+                            file.path.display()
+                        );
+                    }
+                    tokio::fs::remove_dir_all(dir).await.unwrap();
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_rollback_preserves_concurrent_edits_and_reports_incomplete_restore() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-rollback-edit").await;
+        let files = prepare_shims(&dir, "demo", Path::new("/real/demo"), &dir, true).unwrap();
+        let snapshots = capture_install_files(&files, 3).await.unwrap();
+        let edited = files[0].path.clone();
+        let failed = files[2].path.clone();
+        let error = apply_install_files(&files, &snapshots, |file| {
+            let edited = edited.clone();
+            let fail = file.path == failed;
+            Box::pin(async move {
+                if fail {
+                    tokio::fs::write(edited, b"user edit").await?;
+                    bail!("injected failure");
+                }
+                write_install_file(file).await
+            })
+        })
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("rollback incomplete"));
+        assert_eq!(tokio::fs::read(&edited).await.unwrap(), b"user edit");
+        assert!(!files[1].path.exists());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
 
     #[test]
     fn proxy_command_must_be_a_bare_name() {

@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-09 — Runtime capture and proxy installation must preflight file boundaries
+
+- **Symptoms**: a FIFO stalled read-only listing; relative config roots broke App generators after
+  changing cwd; a corrupt proxy manifest left an active launcher and rule after installation failed.
+- **Fix**: RealHost rejects special filesystem entries, CLI runtime assembly resolves lexical roots
+  to absolute paths, and proxy installation captures and parses all inputs before writing. Reported
+  write failures restore prior bytes/modes or remove new files; concurrent edits are preserved and
+  incomplete rollback is explicit. Real-generator, FIFO, malformed-state and write-fault tests cover
+  these boundaries, including simulated Windows launcher pairs.
+- **Rule**: metadata must distinguish regular files from devices and pipes; resolve path identity
+  before changing cwd; preflight every persistent input before effects and retain rollback evidence.
+
 ## 2026-10-08 — Execution snapshots and process groups need invocation ownership
 
 - **Symptoms**: concurrent Sys installs read another operation’s helpers; captured helpers lost

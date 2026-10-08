@@ -205,6 +205,18 @@ bugs. Check this list before changing the modules named in each entry.
   Signal masks used for terminal handoff are thread-local and immediately restored.
   A post-capture length check is never a memory bound. Drop piped stdin immediately
   after writing to deliver EOF; Tokio's Unix `ChildStdin::shutdown` alone does not close the pipe.
+- **Runtime file types and paths must remain valid across execution.** RealHost rejects FIFOs,
+  sockets and devices rather than classifying them as regular files. CLI assembly makes runtime
+  roots lexically absolute before capture/planning, so child cwd changes cannot reinterpret script
+  paths or fixed App path variables. Ordinary source spelling and selected-root symlink policy
+  remain distinct from lexical absolute resolution.
+
+- **Proxy install preflights state before effects.** Parse the same regular-file configuration and
+  manifest bytes that are captured for rollback, and check every launcher for ownership. Recheck
+  each preimage before writing. A reported write failure restores touched files only while their
+  content and mode match installation-owned states; preserve concurrent edits and report incomplete
+  rollback. This does not provide crash recovery or expand lifecycle approval authority.
+
 - **Root links and tree links have different policies.** A selected external/overlay root symlink
   resolves before capture and records its resolved source identity; broken root links fail closed.
   Ordinary directory origins keep their existing spelling for receipt/trust compatibility. Links

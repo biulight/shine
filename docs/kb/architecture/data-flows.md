@@ -914,7 +914,10 @@ usable. `shine preset overlay link --git <url>` writes the config and clones imm
 `SHINE_CONFIG_DIR` env → `SHINE_PRESETS` env (presets dir only) → `presets_dir` in
 `config.toml` → default `~/.shine/`. Project-local configs inherit unset keys from the global
 config (see lessons entry 2026-07-04 on inheritance). `Config` saves go through
-`shine_core::sync_table`, which preserves TOML comments.
+`shine_core::sync_table`, which preserves TOML comments. CLI runtime assembly makes selected roots
+lexically absolute before snapshot capture and planning; it does not resolve ordinary directory
+symlinks or require missing destinations to exist. RealHost metadata rejects special filesystem
+entries, so capture cannot open a FIFO, socket, or device as a regular preset payload.
 
 ## Dynamic shell completion
 
@@ -936,6 +939,13 @@ workspace, at least one `--with` is required. The merged environment is applied 
 spawned child process, whose exit status is propagated by Shine.
 
 ## Transparent environment proxies
+
+Installation prepares all launcher bytes, captures regular-file preimages (including Unix modes),
+and parses the exact captured configuration/manifest before writing. Each write rechecks its
+preimage; reported failures roll back touched files in reverse order. Rollback accepts only this
+installation's expected bytes and mode states, preserves concurrent edits, and reports incomplete
+restoration. Configuration and restoration temporary files start private. This is an in-process
+failure rollback, not durable crash recovery ([ADR 0101](../decisions/0101-proxy-install-failure-rollback.md)).
 
 `shine env proxy install <command> --with KEY` places a Shine-owned PATH shim
 ahead of the real CLI. The shim records the resolved real executable and absolute installation
