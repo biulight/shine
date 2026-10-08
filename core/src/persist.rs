@@ -12,7 +12,8 @@ use tokio::io::AsyncWriteExt;
 /// Durably writes `contents` to `path`.
 ///
 /// Creates the parent directory if missing, writes to a uniquely-named temp
-/// file in the same directory, fsyncs it, then renames it over `path`. If
+/// file in the same directory with existing regular-file permissions, fsyncs it,
+/// then replaces `path` and synchronizes the directory entry. If
 /// anything fails after the temp file is created, the temp file is removed.
 pub async fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -21,7 +22,13 @@ pub async fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         .with_context(|| format!("creating {}", parent.display()))?;
     let temp = parent.join(format!(".shine-write-{}", uuid::Uuid::new_v4()));
 
-    if let Err(error) = write_temp(&temp, contents).await {
+    let permissions = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
+        Ok(_) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
+    if let Err(error) = write_temp(&temp, contents, permissions).await {
         let _ = tokio::fs::remove_file(&temp).await;
         return Err(error);
     }
@@ -68,13 +75,30 @@ async fn write_private_temp(temp: &Path, contents: &[u8]) -> Result<()> {
 
 #[cfg(not(unix))]
 async fn write_private_temp(temp: &Path, contents: &[u8]) -> Result<()> {
-    write_temp(temp, contents).await
+    write_temp(temp, contents, None).await
 }
 
-async fn write_temp(temp: &Path, contents: &[u8]) -> Result<()> {
-    let mut file = tokio::fs::File::create(temp)
+async fn write_temp(
+    temp: &Path,
+    contents: &[u8],
+    permissions: Option<std::fs::Permissions>,
+) -> Result<()> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Some(permissions) = &permissions {
+        use std::os::unix::fs::PermissionsExt;
+        options.mode(permissions.mode() & 0o7777);
+    }
+    let mut file = options
+        .open(temp)
         .await
         .with_context(|| format!("creating {}", temp.display()))?;
+    if let Some(permissions) = permissions {
+        file.set_permissions(permissions)
+            .await
+            .with_context(|| format!("setting permissions for {}", temp.display()))?;
+    }
     file.write_all(contents)
         .await
         .with_context(|| format!("writing {}", temp.display()))?;
@@ -89,13 +113,88 @@ async fn write_temp(temp: &Path, contents: &[u8]) -> Result<()> {
 ///
 /// Rename replaces an existing file on both Unix and Windows. Never unlink
 /// `dest` first: a failed replacement must retain the previous contents.
-/// On failure, only `temp` is removed.
+/// On failure, only `temp` is removed. A synchronization error after replacement
+/// is reported even though the new destination may already be visible.
 pub async fn finalize_temp(temp: &Path, dest: &Path) -> Result<()> {
-    if let Err(error) = tokio::fs::rename(temp, dest).await {
+    if let Err(error) = replace_synced(temp, dest).await {
         let _ = tokio::fs::remove_file(temp).await;
         return Err(error).with_context(|| format!("replacing {}", dest.display()));
     }
     Ok(())
+}
+
+// Keep blocking filesystem synchronization off the async runtime workers.
+async fn replace_synced(temp: &Path, dest: &Path) -> std::io::Result<()> {
+    let temp = temp.to_path_buf();
+    let dest = dest.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        #[cfg(unix)]
+        {
+            std::fs::rename(&temp, &dest)?;
+            let parent = dest
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            std::fs::File::open(parent)?.sync_all()?;
+            let source_parent = temp
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            if source_parent != parent {
+                std::fs::File::open(source_parent)?.sync_all()?;
+            }
+            Ok(())
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+            }
+            let encode = |path: &Path| -> std::io::Result<Vec<u16>> {
+                let mut value: Vec<u16> = path.as_os_str().encode_wide().collect();
+                if value.contains(&0) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "path contains NUL",
+                    ));
+                }
+                value.push(0);
+                Ok(value)
+            };
+            // std canonicalization supplies verbatim paths, retaining long-path support.
+            let existing = encode(&std::fs::canonicalize(&temp)?)?;
+            let parent = dest
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let name = dest.file_name().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "destination has no filename",
+                )
+            })?;
+            let new = encode(&std::fs::canonicalize(parent)?.join(name))?;
+            const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+            const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+            // Never unlink the destination; request completion of the move on disk.
+            // SAFETY: both buffers are NUL-terminated and live for this call.
+            if unsafe {
+                MoveFileExW(
+                    existing.as_ptr(),
+                    new.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    })
+    .await
+    .map_err(std::io::Error::other)?
 }
 
 /// Loads and parses a TOML file at `path`, or returns `T::default()` if it
@@ -134,6 +233,37 @@ mod tests {
         let path = std::env::temp_dir().join(format!("{label}-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&path).await.unwrap();
         path
+    }
+
+    #[tokio::test]
+    async fn atomic_write_relative_file_syncs_the_current_directory() {
+        const CHILD: &str = "SHINE_TEST_RELATIVE_PERSIST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            atomic_write(Path::new("receipt.toml"), b"committed")
+                .await
+                .unwrap();
+            assert_eq!(tokio::fs::read("receipt.toml").await.unwrap(), b"committed");
+            return;
+        }
+        let dir = make_temp_dir("shine-relative-persist").await;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "persist::tests::atomic_write_relative_file_syncs_the_current_directory",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]

@@ -28,6 +28,8 @@ shine install shell/utils/shine-env-export
 类别 target 会启用当前平台可用的全部命令；只需要其中一个命令时，使用明确的
 `category/command` target。修改型命令不接受裸命令名，因为不同类别可能出现同名命令。
 
+生成的 Shell profile 会按字面值处理目录名称，包括空格、美元符号和反引号。主目录下的路径会保留可移植的 `$HOME` 引用。
+
 安装后需打开新终端或重新加载 shell profile。需要补全时运行：
 
 ```bash
@@ -56,6 +58,7 @@ shine shell recover
 ```
 
 查看恢复计划，确认后执行。Shine 会根据中断位置撤销未完成的变更，或保留已完成的操作并清理残留文件。
+恢复 Shell profile 中的托管区块时，Shine 会保留无关内容以及 Unix 上当前的文件权限。
 
 如果相关文件在中断后被修改，Shine 会停止恢复并保留这些文件，避免覆盖你的修改。请保留报错信息和相关文件，根据提示排查，不要手动删除恢复记录或回滚文件。
 

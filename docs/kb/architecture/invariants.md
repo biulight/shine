@@ -570,6 +570,12 @@ bugs. Check this list before changing the modules named in each entry.
   Genuine content changes still write LF. The two sentinel *removal* styles above are unchanged —
   only the comparison layer normalizes.
 - **Paths under `$HOME` are written as `$HOME/...`**, not absolute, for portability.
+  Only that generated HOME prefix may expand. Literal path components must quote or escape dollar signs,
+  backticks, quotes and backslashes according to the selected shell in generated Shell PATH, source and function snippets.
+- **Shell sentinel recovery preserves current profile permissions.** Restoring the owned block
+  retains unrelated user edits and current Unix mode; when the destination is absent, use the
+  recorded previous mode. Atomic replacement stages existing private files with their mode before
+  writing bytes, rather than exposing them until a later chmod.
 - **PowerShell profiles: preserve a leading BOM** when rewriting the file
   (`core/src/runtime/sys_profile/blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
   `Documents/WindowsPowerShell/` profile files so pwsh and Windows PowerShell stay in sync.
@@ -585,7 +591,11 @@ bugs. Check this list before changing the modules named in each entry.
   Never serialize the whole file from a struct — that destroys comments.
 - **Atomic file replacement never pre-deletes its destination.** Rename replaces existing files on
   Windows as well as Unix. Failure cleanup removes only the staged file; the previous configuration
-  or receipt must survive a failed rename.
+  or receipt must survive a failed rename. `RealHost::write_atomic` uses the shared Core
+  persistence implementation: stage with `create_new`, retain existing regular-file permissions,
+  sync file bytes before replacement, and sync the containing directory on Unix or request
+  write-through replacement on Windows. A sync failure after replacement is an operation failure,
+  even when the new bytes are visible; callers must not discard recovery material on that error.
 - **Configuration and env overrides are saved privately.** Global/project configuration and
   `shine.env.toml` writes use `atomic_write_private`: Unix temporary files start as `0600` before
   any content is written, and replacement cannot widen an existing private file's permissions.

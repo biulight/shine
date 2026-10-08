@@ -425,23 +425,14 @@ impl FileSystemHost for RealHost {
         bytes: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
         Box::pin(async move {
-            let parent = path.parent().unwrap_or_else(|| Path::new("."));
-            tokio::fs::create_dir_all(parent)
+            crate::persist::atomic_write(path, bytes)
                 .await
-                .map_err(HostError::io)?;
-            let temp = parent.join(format!(".shine-core-write-{}", uuid::Uuid::new_v4()));
-            if let Err(error) = tokio::fs::write(&temp, bytes).await {
-                return Err(HostError::io(error));
-            }
-            #[cfg(windows)]
-            if path.exists() {
-                tokio::fs::remove_file(path).await.map_err(HostError::io)?;
-            }
-            if let Err(error) = tokio::fs::rename(&temp, path).await {
-                let _ = tokio::fs::remove_file(&temp).await;
-                return Err(HostError::io(error));
-            }
-            Ok(())
+                .map_err(|error| {
+                    let kind = error
+                        .downcast_ref::<std::io::Error>()
+                        .map_or(std::io::ErrorKind::Other, std::io::Error::kind);
+                    HostError::new(kind, error)
+                })
         })
     }
 
@@ -1021,6 +1012,38 @@ async fn restart_systemd_resolved() -> anyhow::Result<()> {
         anyhow::bail!("failed to restart systemd-resolved");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn atomic_replacement_failure_preserves_destination_and_cleans_stage() {
+        let dir = std::env::temp_dir().join(format!("shine-host-atomic-{}", uuid::Uuid::new_v4()));
+        let destination = dir.join("destination");
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::write(destination.join("retained"), "previous state").unwrap();
+        assert!(RealHost.write_atomic(&destination, b"new").await.is_err());
+        assert_eq!(
+            std::fs::read(destination.join("retained")).unwrap(),
+            b"previous state"
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn atomic_replacement_updates_existing_receipt_without_leaving_a_stage() {
+        let dir = std::env::temp_dir().join(format!("shine-host-receipt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("receipt");
+        std::fs::write(&path, "previous").unwrap();
+        RealHost.write_atomic(&path, b"committed").await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"committed");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[cfg(all(test, unix))]

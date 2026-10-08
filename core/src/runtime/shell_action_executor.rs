@@ -3964,6 +3964,13 @@ async fn restore_shell_profile_sentinel(
     host: &impl FileSystemHost,
     file: &ShellProfileFileV1,
 ) -> Result<()> {
+    let current_mode = match host.metadata(&file.destination).await {
+        Ok(metadata) => metadata.unix_mode,
+        Err(error) if error.is_not_found() => {
+            file.previous.as_ref().and_then(|file| file.unix_mode)
+        }
+        Err(error) => return Err(error.into_anyhow("reading Shell profile mode")),
+    };
     let current = match host.read(&file.destination).await {
         Ok(bytes) => String::from_utf8(bytes).context("Shell profile is not UTF-8")?,
         Err(error) if error.is_not_found() => String::new(),
@@ -3993,6 +4000,11 @@ async fn restore_shell_profile_sentinel(
         host.write_atomic(&file.destination, restored.as_bytes())
             .await
             .map_err(|error| error.into_anyhow("restoring Shell profile sentinel"))?;
+        if let Some(mode) = current_mode {
+            host.set_mode(&file.destination, mode)
+                .await
+                .map_err(|error| error.into_anyhow("restoring Shell profile mode"))?;
+        }
     }
     if file.previous.is_some() {
         host.remove_file(&file.rollback)
@@ -4769,6 +4781,61 @@ async fn remove_shell_operation_journal(
 mod tests {
     use super::*;
     use crate::runtime::InMemoryHost;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sentinel_recovery_preserves_private_mode_and_unrelated_edits() {
+        use crate::runtime::RealHost;
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("shine-profile-recovery-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let destination = dir.join("profile");
+        let rollback = dir.join("rollback");
+        let previous = b"original user content\n# >>> shine >>>\nsource old\n# <<< shine <<<\n";
+        let current = b"new user edit\n# >>> shine >>>\nsource new\n# <<< shine <<<\n";
+        for path in [&destination, &rollback] {
+            std::fs::write(
+                path,
+                if path == &destination {
+                    current.as_slice()
+                } else {
+                    previous.as_slice()
+                },
+            )
+            .unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let file = ShellProfileFileV1 {
+            destination: destination.clone(),
+            rollback: rollback.clone(),
+            ownership: ShellProfileFileOwnershipV1::SentinelBlock,
+            previous: Some(ShellFileIdentityV1 {
+                content_hash: hash_content(previous),
+                unix_mode: Some(0o600),
+            }),
+            desired: None,
+            previous_block_hash: None,
+            desired_block_hash: None,
+        };
+        restore_shell_profile_sentinel(&RealHost, &file)
+            .await
+            .unwrap();
+        let restored = std::fs::read_to_string(&destination).unwrap();
+        assert!(restored.contains("new user edit"));
+        assert!(restored.contains("source old"));
+        assert!(!restored.contains("source new"));
+        assert_eq!(
+            std::fs::metadata(&destination)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert!(!rollback.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn shell_file_identity_uses_native_mode_contract() {

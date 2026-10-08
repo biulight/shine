@@ -9,6 +9,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Preserve existing receipts when atomic replacement fails on Windows, synchronize runtime
+  journal and receipt writes before returning, retain Unix profile permissions during Shell
+  recovery, and treat shell metacharacters in generated profile paths literally.
+
 - Stop local SSH transfer processes when their control connection closes or the relay is
   cancelled, including descendants on Unix. Resolve sudo users through the system account
   database on macOS and Unix, and retain the installation's runtime directory in all

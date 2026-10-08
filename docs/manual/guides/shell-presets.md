@@ -33,6 +33,9 @@ A category target activates every command available for the current platform. Us
 `category/command` target when you need only one command. Mutation does not accept a bare command
 name because the same name may appear in more than one category.
 
+Generated shell profiles treat directory names literally, including spaces, dollar signs and
+backticks. Paths under your home directory retain the portable `$HOME` reference.
+
 Open a new terminal or reload the shell profile after installation. To install completions, run:
 
 ```bash
@@ -67,6 +70,8 @@ shine shell recover
 
 Review the recovery plan and confirm to proceed. Depending on where the operation stopped,
 Shine rolls back unfinished changes or keeps completed changes and cleans up leftover files.
+When restoring a managed block in your shell profile, Shine preserves unrelated content and the
+current file permissions on Unix.
 
 If relevant files have changed since the interruption, Shine stops recovery and preserves them
 to avoid overwriting your edits. Keep the error details and affected files, and follow the

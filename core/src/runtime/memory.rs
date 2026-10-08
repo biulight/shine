@@ -259,7 +259,7 @@ impl FileSystemHost for InMemoryHost {
             state
                 .nodes
                 .insert(path.to_path_buf(), MemoryNode::File(bytes.to_vec()));
-            state.modes.insert(path.to_path_buf(), 0o100644);
+            state.modes.entry(path.to_path_buf()).or_insert(0o100644);
             state
                 .operations
                 .push(HostOperation::Write(path.to_path_buf()));

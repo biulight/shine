@@ -1,5 +1,19 @@
 # Lessons Learned
 
+## 2026-10-08 — Recovery evidence and literal paths need shared persistence contracts
+
+- **Symptoms**: Windows runtime writes unlinked the old receipt before replacement; journal writes
+  returned before syncing bytes or directory entries; Shell sentinel recovery widened private
+  profiles; literal dollar signs and command substitutions in directory names were evaluated.
+- **Causes**: RealHost duplicated a weaker atomic writer; profile restoration omitted mode handling;
+  generated double-quoted paths escaped quotes but still allowed expansion of literal components.
+- **Fix**: route RealHost through shared synced persistence with no pre-delete, preserve existing
+  regular-file permissions before writing, restore current profile mode, and escape every literal
+  path component while retaining the generated HOME prefix. Real-filesystem and Bash subprocess
+  regressions cover replacement cleanup, private recovery, user edits, PATH and sourced commands.
+- **Rule**: visible bytes are not durable commit evidence; replacement failures retain recovery
+  material, and shell syntax must distinguish intended expansion from literal filesystem names.
+
 ## 2026-10-08 — Process and configuration boundaries must survive wrappers
 
 - **Symptoms**: a disconnected SSH relay left a transfer child writing files; a macOS sudo

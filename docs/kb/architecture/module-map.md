@@ -42,7 +42,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/preset_migration.rs` | Immutable legacy compatibility assessment, safe metadata candidate generation, released-1.x fingerprints, and versioned content-free migration reports |
 | `core/src/runtime/inspection.rs` | Typed App/Shell inspection status and structural change vocabulary |
 | `core/src/install/` | Core-owned transforms, EOL handling, host-required App manifest persistence, and host-neutral managed-file operations |
-| `core/src/persist.rs` | Core-owned atomic persistence and versioned TOML helpers |
+| `core/src/persist.rs` | Core-owned synced atomic replacement, mode preservation, Windows write-through replacement, and versioned TOML helpers |
 | `presets/` | Embedded shell, app, and OS bootstrap assets |
 | `skills/shine-preset-author/` | Portable AI workflow and kind-specific preset author references |
 | `docs/manual/` | Default English public manual |
