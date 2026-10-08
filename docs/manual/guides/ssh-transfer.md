@@ -25,6 +25,9 @@ Default `posix` mode requires a macOS or Linux remote capable of running a compa
 `shine local`. Windows can initiate such a session as the local host. For a Windows remote, use
 `--remote-shell windows`; that mode forwards environment values but provides no file transfer.
 
+When a transfer's control connection closes, Shine stops the local transfer process. On macOS
+and Linux, it also stops that process's descendants. Files already copied are not rolled back.
+
 ## Forward selected environment values
 
 Place forwarding options before the SSH target:

@@ -23,6 +23,9 @@ shine ssh user@example.com uname -a
 Windows 可以作为本机端发起这种传输会话。Windows 作为远端时需改用下文的
 `--remote-shell windows` 模式，该模式只转发环境，不提供文件传输。
 
+传输控制连接关闭时，Shine 会停止本机传输进程；在 macOS 和 Linux 上，也会停止其后代进程。
+已经复制的文件不会自动回滚。
+
 ## 转发选定的环境变量
 
 只在本次远端会话或命令中提供本机 Shine 环境值时，把选项写在 SSH 目标之前：

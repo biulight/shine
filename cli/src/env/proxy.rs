@@ -34,7 +34,7 @@ pub async fn install(config: &Config, command: &str, with: &[String], project: b
     } else {
         &config.shine_dir().join("config.toml")
     };
-    install_shim(config.bin_dir(), command, &target).await?;
+    install_shim(config, command, &target).await?;
     upsert_rule(
         path,
         EnvProxyRule {
@@ -287,14 +287,22 @@ fn absolute_path(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
-async fn install_shim(bin_dir: &Path, command: &str, target: &Path) -> Result<()> {
-    install_shims_for_platform(bin_dir, command, target, cfg!(windows)).await
+async fn install_shim(config: &Config, command: &str, target: &Path) -> Result<()> {
+    install_shims_for_platform(
+        config.bin_dir(),
+        command,
+        target,
+        config.shine_dir(),
+        cfg!(windows),
+    )
+    .await
 }
 
 async fn install_shims_for_platform(
     bin_dir: &Path,
     command: &str,
     target: &Path,
+    shine_dir: &Path,
     windows: bool,
 ) -> Result<()> {
     let path = bin_dir.join(command);
@@ -324,25 +332,36 @@ async fn install_shims_for_platform(
         }
     }
     tokio::fs::create_dir_all(bin_dir).await?;
+    let config_dir = absolute_path(shine_dir.to_path_buf())?;
+    let config_string = config_dir.to_string_lossy().into_owned();
+    let config_q = shell_quote::single_quote(&config_string);
     let target_string = target.to_string_lossy().into_owned();
     let target = shell_quote::single_quote(&target_string);
     let command_q = shell_quote::single_quote(command);
-    atomic_write(&path, format!("#!/bin/sh\n# {MARKER}\nexec shine env proxy exec --target {target} {command_q} \"$@\"\n").as_bytes()).await?;
+    atomic_write(&path, format!("#!/bin/sh\n# {MARKER}\nexec shine --config-dir {config_q} env proxy exec --target {target} {command_q} \"$@\"\n").as_bytes()).await?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).await?;
     }
     if windows {
-        install_windows_shims(bin_dir, command, &target_string).await?;
+        install_windows_shims(bin_dir, command, &target_string, &config_string).await?;
     }
     Ok(())
 }
 
-async fn install_windows_shims(bin_dir: &Path, command: &str, target: &str) -> Result<()> {
-    atomic_write(&bin_dir.join(format!("{command}.cmd")), format!("@echo off\r\nREM {MARKER}\r\nshine env proxy exec --target \"{target}\" {command} %*\r\n").as_bytes()).await?;
+async fn install_windows_shims(
+    bin_dir: &Path,
+    command: &str,
+    target: &str,
+    config_dir: &str,
+) -> Result<()> {
+    let config_cmd = config_dir.replace('%', "%%");
+    let target_cmd = target.replace('%', "%%");
+    let config_ps = config_dir.replace('\'', "''");
+    atomic_write(&bin_dir.join(format!("{command}.cmd")), format!("@echo off\r\nREM {MARKER}\r\nshine --config-dir \"{config_cmd}\" env proxy exec --target \"{target_cmd}\" {command} %*\r\n").as_bytes()).await?;
     let target_ps = target.replace('\'', "''");
-    atomic_write(&bin_dir.join(format!("{command}.ps1")), format!("# {MARKER}\n& shine env proxy exec --target '{target_ps}' {command} @args\nexit $LASTEXITCODE\n").as_bytes()).await
+    atomic_write(&bin_dir.join(format!("{command}.ps1")), format!("# {MARKER}\n& shine --config-dir '{config_ps}' env proxy exec --target '{target_ps}' {command} @args\nexit $LASTEXITCODE\n").as_bytes()).await
 }
 
 async fn upsert_rule(path: &Path, rule: EnvProxyRule) -> Result<()> {
@@ -458,9 +477,15 @@ mod tests {
         let mut manifest = ProxyManifest::default();
         manifest.entries.insert("demo".into(), dir.join("real"));
         save_manifest(config.shine_dir(), &manifest).await.unwrap();
-        install_shims_for_platform(config.bin_dir(), "demo", &dir.join("real"), true)
-            .await
-            .unwrap();
+        install_shims_for_platform(
+            config.bin_dir(),
+            "demo",
+            &dir.join("real"),
+            config.shine_dir(),
+            true,
+        )
+        .await
+        .unwrap();
         config
     }
 
@@ -685,6 +710,38 @@ mod tests {
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn proxy_launchers_pin_absolute_config_with_platform_quoting() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-config").await;
+        let state = dir.join("state with 'quotes' and %NAME%");
+        let target = dir.join("real tool");
+        install_shims_for_platform(&dir.join("bin"), "demo", &target, &state, true)
+            .await
+            .unwrap();
+        let sh = tokio::fs::read_to_string(dir.join("bin/demo"))
+            .await
+            .unwrap();
+        assert!(sh.contains(&format!(
+            "--config-dir {} env proxy",
+            shell_quote::single_quote(&state.display().to_string())
+        )));
+        let cmd = tokio::fs::read_to_string(dir.join("bin/demo.cmd"))
+            .await
+            .unwrap();
+        assert!(cmd.contains(&format!(
+            "--config-dir \"{}\" env proxy",
+            state.display().to_string().replace('%', "%%")
+        )));
+        let ps = tokio::fs::read_to_string(dir.join("bin/demo.ps1"))
+            .await
+            .unwrap();
+        assert!(ps.contains(&format!(
+            "--config-dir '{}' env proxy",
+            state.display().to_string().replace('\'', "''")
+        )));
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
     #[test]
     fn legacy_rule_defaults_to_enabled() {
         let rule: EnvProxyRule =
@@ -752,7 +809,7 @@ mod tests {
             let foreign = bin.join(occupied);
             tokio::fs::write(&foreign, b"user launcher").await.unwrap();
             assert!(
-                install_shims_for_platform(&bin, "demo", &dir.join("real-demo"), true)
+                install_shims_for_platform(&bin, "demo", &dir.join("real-demo"), &dir, true)
                     .await
                     .is_err()
             );
@@ -762,7 +819,7 @@ mod tests {
             }
         }
         let bin = dir.join("owned");
-        install_shims_for_platform(&bin, "demo", &dir.join("first"), true)
+        install_shims_for_platform(&bin, "demo", &dir.join("first"), &dir, true)
             .await
             .unwrap();
         let before = tokio::fs::read(bin.join("demo")).await.unwrap();
@@ -770,13 +827,13 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            install_shims_for_platform(&bin, "demo", &dir.join("second"), true)
+            install_shims_for_platform(&bin, "demo", &dir.join("second"), &dir, true)
                 .await
                 .is_err()
         );
         assert_eq!(tokio::fs::read(bin.join("demo")).await.unwrap(), before);
         tokio::fs::remove_file(bin.join("demo.ps1")).await.unwrap();
-        install_shims_for_platform(&bin, "demo", &dir.join("second"), true)
+        install_shims_for_platform(&bin, "demo", &dir.join("second"), &dir, true)
             .await
             .unwrap();
         for name in ["demo", "demo.cmd", "demo.ps1"] {
@@ -799,7 +856,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            install_shims_for_platform(&dir, "demo", &dir.join("real"), true)
+            install_shims_for_platform(&dir, "demo", &dir.join("real"), &dir, true)
                 .await
                 .is_err()
         );

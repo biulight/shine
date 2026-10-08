@@ -596,6 +596,12 @@ bugs. Check this list before changing the modules named in each entry.
   Uninstall checks the complete launcher set before changing any launcher, rule, or receipt;
   ownership conflicts preserve all three. Installation rejects `shine` and `shine.exe`, ignoring
   case, because proxy launchers invoke Shine through PATH and would otherwise recurse.
+- **Proxy launchers bind their installation's runtime directory.** All platform launchers pass
+  an absolute `--config-dir`; a caller's environment cannot silently select another trust/env store.
+  Project discovery still follows the caller cwd. Reinstallation upgrades legacy launchers.
+- **Sudo home lookup uses the OS account database.** Use reentrant account lookup, including
+  macOS Directory Services and Unix NSS, rather than parsing `/etc/passwd`. Copy account strings
+  before dropping the lookup buffer; non-UTF-8 home paths must retain their bytes.
 - **Project-only proxies remain transparent outside the project.** Missing active rules forward
   directly without environment injection. PATH discovery excludes the actual Shine bin directory,
   including directory aliases, while preserving executable names such as `cargo` for dispatch.
@@ -776,15 +782,15 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## SSH transfer
 
-- **`ssh::agent` must not trust wire-supplied fields beyond the session token.** The token is the
-  only authorization check on a `PutFile`/`GetFile`/`Status` request, but it travels to the remote
-  host as plain argv/environ (`env SHINE_SSH_TOKEN=...` in `ssh::mod`), so it can leak to other
-  local users there via `ps eww`. Any field documented as constrained (e.g. `PutFile.filename` is
-  meant to always be a bare basename) must be validated as such where it's consumed
-  (`agent::ensure_single_path_component`), not just produced correctly by the one trusted
-  `remote_client` implementation. `dest_hint`/`source_hint` are expanded with `~`-only
-  substitution (`home::tilde_expand`), never the full `${VAR}` expansion used for locally-typed
-  paths elsewhere, so a forged hint can't pull values out of the local agent's own environment.
+- **`ssh::agent` must not trust wire-supplied fields beyond the session token.** Transfer/Status
+  tokens travel to the remote host as plain argv/environ and may leak there. Validate remote specs
+  at consumption, place them only after argv's option separator, and use tilde-only expansion for
+  local hints rather than expanding the agent's environment. Reconnection options come only from
+  the locally captured session context; tokens never authorize broker decryption.
+- **Transfer failure and cancellation stop child processes.** Detect a closed control connection
+  even while a child is silent or has closed its output pipes. Error paths terminate and reap the
+  child; cancellation has a drop guard. On Unix, isolate and terminate the whole process group,
+  retaining its identity even if the parent has exited while descendants still hold pipes.
 - **Per-connection transfer tasks must stay tracked in `agent::ConnectionTasks`, not bare
   `tokio::spawn`.** `agent_handle` (the accept loop's `JoinHandle`) does not cover them —
   `agent_handle.abort()` only stops new connections, never an in-flight transfer. `handle_ssh`

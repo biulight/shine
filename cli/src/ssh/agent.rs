@@ -753,54 +753,115 @@ fn describe_transfer(
     }
 }
 
-/// Spawns the transfer command and relays its stdout/stderr to the remote as
-/// `Log` frames, returning the child's exit code. Argv only — never a shell.
+/// Owns transfer cleanup across relay errors and async cancellation.
+struct TransferChild {
+    child: tokio::process::Child,
+    #[cfg(unix)]
+    group: Option<u32>,
+}
+
+impl TransferChild {
+    fn stop(&mut self) {
+        #[cfg(unix)]
+        if let Some(group) = self.group.take() {
+            // SAFETY: the child was started in its own process group. Keep its ID
+            // even after wait reaps it, since descendants may still hold pipes.
+            unsafe { libc::kill(-(group as i32), libc::SIGKILL) };
+        }
+        let _ = self.child.start_kill();
+    }
+}
+
+impl Drop for TransferChild {
+    fn drop(&mut self) {
+        // Also cover cancellation while reading, relaying, or waiting.
+        self.stop();
+    }
+}
+
+/// Spawns an argv-only transfer and monitors its control connection through exit.
 async fn spawn_and_relay(stream: &mut impl DuplexStream, command: TransferCommand) -> Result<i32> {
-    let mut child = tokio::process::Command::new(&command.program)
+    let mut process = tokio::process::Command::new(&command.program);
+    process
         .args(&command.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        process.as_std_mut().process_group(0);
+    }
+    let child = process
         .spawn()
         .with_context(|| format!("failed to spawn {}", command.program))?;
-
-    let mut stdout = child
-        .stdout
-        .take()
-        .context("child stdout was not captured")?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .context("child stderr was not captured")?;
-
-    let mut out_buf = vec![0u8; 16 * 1024];
-    let mut err_buf = vec![0u8; 16 * 1024];
-    let mut out_open = true;
-    let mut err_open = true;
-
-    while out_open || err_open {
-        tokio::select! {
-            result = stdout.read(&mut out_buf), if out_open => {
-                let n = result.context("reading child stdout")?;
-                if n == 0 {
-                    out_open = false;
-                } else {
-                    relay_chunk(stream, LogStream::Stdout, &out_buf[..n]).await?;
+    let mut transfer = TransferChild {
+        #[cfg(unix)]
+        group: child.id(),
+        child,
+    };
+    let result = async {
+        let mut stdout = transfer
+            .child
+            .stdout
+            .take()
+            .context("child stdout was not captured")?;
+        let mut stderr = transfer
+            .child
+            .stderr
+            .take()
+            .context("child stderr was not captured")?;
+        let mut out_buf = vec![0u8; 16 * 1024];
+        let mut err_buf = vec![0u8; 16 * 1024];
+        let mut connection_buf = [0u8; 1];
+        let mut out_open = true;
+        let mut err_open = true;
+        while out_open || err_open {
+            tokio::select! {
+                closed = stream.read(&mut connection_buf) => {
+                    closed.context("monitoring transfer connection")?;
+                    bail!("transfer control connection closed or sent unexpected data");
                 }
-            }
-            result = stderr.read(&mut err_buf), if err_open => {
-                let n = result.context("reading child stderr")?;
-                if n == 0 {
-                    err_open = false;
-                } else {
-                    relay_chunk(stream, LogStream::Stderr, &err_buf[..n]).await?;
+                result = stdout.read(&mut out_buf), if out_open => {
+                    let n = result.context("reading child stdout")?;
+                    if n == 0 {
+                        out_open = false;
+                    } else {
+                        relay_chunk(stream, LogStream::Stdout, &out_buf[..n]).await?;
+                    }
+                }
+                result = stderr.read(&mut err_buf), if err_open => {
+                    let n = result.context("reading child stderr")?;
+                    if n == 0 {
+                        err_open = false;
+                    } else {
+                        relay_chunk(stream, LogStream::Stderr, &err_buf[..n]).await?;
+                    }
                 }
             }
         }
+        tokio::select! {
+            status = transfer.child.wait() => {
+                Ok(status.context("waiting for transfer child")?.code().unwrap_or(-1))
+            }
+            closed = stream.read(&mut connection_buf) => {
+                closed.context("monitoring transfer connection")?;
+                bail!("transfer control connection closed or sent unexpected data");
+            }
+        }
     }
-
-    let status = child.wait().await.context("waiting for transfer child")?;
-    Ok(status.code().unwrap_or(-1))
+    .await;
+    if result.is_err() {
+        transfer.stop();
+        let _ = transfer.child.wait().await;
+    } else {
+        #[cfg(unix)]
+        {
+            transfer.group = None;
+        }
+    }
+    result
 }
 
 async fn relay_chunk(
@@ -821,6 +882,69 @@ async fn relay_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transfer_disconnect_and_cancellation_stop_silent_child_and_descendants() {
+        use std::os::unix::fs::PermissionsExt;
+        for cancel in [false, true] {
+            let dir = crate::test_support::make_temp_dir("shine-transfer-stop").await;
+            let pid_file = dir.join("pid");
+            let ready = dir.join("ready");
+            let marker = dir.join("continued");
+            let script = dir.join("transfer.sh");
+            std::fs::write(&script, format!(
+                "#!/bin/sh\nprintf '%s' $$ > '{}'\n(sleep 1; printf continued > '{}') &\nprintf ready > '{}'\nwait\n",
+                pid_file.display(), marker.display(), ready.display()
+            )).unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let (mut server, client) = tokio::io::duplex(1024);
+            let task = tokio::spawn(async move {
+                spawn_and_relay(
+                    &mut server,
+                    TransferCommand {
+                        program: script.display().to_string(),
+                        args: vec![],
+                    },
+                )
+                .await
+            });
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !ready.exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+            if cancel {
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+                drop(client);
+            } else {
+                drop(client);
+                assert!(
+                    tokio::time::timeout(Duration::from_secs(5), task)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .is_err()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            assert!(
+                !marker.exists(),
+                "descendant kept writing after transfer ended"
+            );
+            // Signal zero probes existence. The parent must also have been reaped.
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+            tokio::fs::remove_dir_all(dir).await.unwrap();
+        }
+    }
 
     fn ctx_with(host: &str, ssh_options: Vec<&str>, control_path: Option<&str>) -> SessionContext {
         SessionContext {

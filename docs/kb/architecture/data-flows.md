@@ -934,7 +934,8 @@ spawned child process, whose exit status is propagated by Shine.
 ## Transparent environment proxies
 
 `shine env proxy install <command> --with KEY` places a Shine-owned PATH shim
-ahead of the real CLI. The shim records the resolved real executable and invokes
+ahead of the real CLI. The shim records the resolved real executable and absolute installation
+runtime directory, passes that directory through `--config-dir`, and invokes
 `env::proxy::exec`, which reloads the effective global/project configuration,
 selects that command's `[[env_proxy]]` rule, and injects only its declared
 values (`KEY_SECRET` decrypted first, then `KEY`) into the child process.
@@ -945,6 +946,11 @@ retains the shim but bypasses environment-value lookup and secret decryption ent
 applicable rules also pass through without injection, so project-only proxies work outside that
 project. Target discovery compares canonical directory identities to exclude aliases of Shine bin,
 but retains the executable filename for rustup-style dispatch.
+
+Transfer control connections monitor peer closure concurrently with child output and final wait.
+Failure terminates and reaps the local transfer child, and cancellation drops a child guard. Unix
+children have a dedicated process group so cleanup also terminates descendants. Already-copied
+files remain the transfer tool's responsibility; Shine does not roll them back.
 
 ## SSH environment forwarding
 

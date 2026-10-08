@@ -8,6 +8,10 @@ sidebar_position: 2
 Shine 将全局运行时状态保存在 `~/.shine/`。首次需要配置时会创建 `~/.shine/config.toml`。
 配置与清单文件的替换（包括 Windows）不会在重命名暂存文件前删除旧文件；重命名失败时保留原文件。
 
+在 Unix 上，若 `SUDO_USER` 指定了发起 sudo 的用户，Shine 会通过系统账户数据库解析其主目录，
+包括 macOS 的 Directory Services。依赖主目录的配置和路径展开会使用该用户的主目录，而非
+sudo 设置的 root `HOME`。
+
 交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
 必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
 

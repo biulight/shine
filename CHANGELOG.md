@@ -9,6 +9,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Stop local SSH transfer processes when their control connection closes or the relay is
+  cancelled, including descendants on Unix. Resolve sudo users through the system account
+  database on macOS and Unix, and retain the installation's runtime directory in all
+  environment-proxy launchers while preserving project rules.
+
 - Prevent App scripts from inheriting uncaptured overlay paths. Use macOS-compatible rsync
   progress flags, reject recursive proxies for Shine itself, and preserve proxy configuration
   and launchers when uninstall encounters an ownership conflict.

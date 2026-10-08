@@ -9,6 +9,10 @@ Shine stores global runtime state under `~/.shine/` and creates `~/.shine/config
 configuration is first needed. Configuration and manifest replacement does not delete the old file
 before renaming the staged file, including on Windows; a failed rename preserves the existing file.
 
+On Unix, when `SUDO_USER` identifies the invoking user, Shine resolves that user's home through
+the system account database, including macOS Directory Services. Home-relative configuration and
+path expansion therefore use the invoking user's home rather than sudo's root `HOME`.
+
 Interactive lifecycle Plan confirmation can authorize the listed external code for that operation only,
 without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
 Development trust; explicit `--run-generators` inspection also requires a grant.

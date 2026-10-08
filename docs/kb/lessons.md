@@ -1,5 +1,19 @@
 # Lessons Learned
 
+## 2026-10-08 — Process and configuration boundaries must survive wrappers
+
+- **Symptoms**: a disconnected SSH relay left a transfer child writing files; a macOS sudo
+  invocation selected root HOME; a proxy installed with a custom config directory silently loaded
+  another store on its next invocation.
+- **Causes**: dropping a Tokio child does not kill it by default; `/etc/passwd` omits macOS
+  Directory Services users; generated proxies omitted the installation's runtime directory.
+- **Fix**: monitor control EOF, terminate/reap children with cancellation guards and Unix process
+  groups; use `getpwnam_r`; pass an absolute `--config-dir` in every proxy launcher while retaining
+  cwd-based project rules. Local regression tests cover silent children and descendants, real
+  system-account lookup, and proxy calls with a different inherited runtime directory.
+- **Rule**: bind wrapper configuration explicitly, use platform account APIs, and treat child
+  lifetime as part of connection/task ownership rather than relying on handle drop.
+
 ## 2026-10-07 — Ambient paths and launcher boundaries need real-process checks
 
 - **Symptoms**: App scripts inherited an uncaptured overlay path; macOS rsync rejected a transfer
