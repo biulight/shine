@@ -59,6 +59,10 @@ provider 不需要空的作者能力表。多个安装项都需要同一权限�
 Administrator 要求仍是显式执行契约。External/overlay 代码还需对完整有效 `sys/<os>/` 快照建立
 target-scoped trust。
 
+每次脚本调用都从独立的 Preset 快照副本运行，并保留辅助文件的执行权限；并发调用不会替换该副本。
+安装器可以读取继承的前台终端输入；安装器结束、失败、超时或被取消后，Shine 会恢复终端控制权。
+取消正在运行的操作会终止其隔离的 Unix 进程组，包括子进程。
+
 默认输出缩短快照标识。添加 `--verbose`（例如 `shine sys bootstrap --preset recommended --verbose`）
 可查看完整文件路径、标识与诊断码。两种视图审阅的是同一个完整 Plan，对选中的操作仍只进行一次确认。
 `--verbose` 不改变更早阶段的 `--dry-run` 预览。

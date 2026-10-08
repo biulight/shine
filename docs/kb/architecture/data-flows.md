@@ -845,9 +845,13 @@ installer execution, or profile writes.
 
 Inspection, preview, preflight, and profile composition read the immutable Sys snapshot without
 materializing it. Script existence is proven by the logical snapshot entry. After authorization,
-script execution atomically replaces `<shine_dir>/runtime/sys/<os-id>/` with the captured category
-and runs that staged copy; neither external-source paths nor `Path::is_file` can reopen ambient
-preset state after shared bootstrap capture.
+script execution creates a private `<shine_dir>/runtime/sys/<os-id>/<invocation>/` copy of the
+captured category, restores captured helper executable intent, and runs that copy. It removes only
+its own invocation after success or error; other invocations and legacy runtime files remain untouched.
+Creation and cleanup permissions share the category runtime scope; random IDs never enter the Plan.
+Neither external-source paths nor `Path::is_file` can reopen ambient preset state after capture.
+Bounded Unix processes have cancellation guards for their process groups; inherited foreground
+terminal input is handed to the child and restored after it finishes or is cancelled (ADR 0100).
 
 Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`.
 `core/src/runtime/sys_profile/compose.rs` combines base pre/post content with all enabled item

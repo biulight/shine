@@ -25,6 +25,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
 | `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, process, privileged, and system mutation ports |
+| `core/src/runtime/process_scope.rs` | Isolated-process cancellation guard and scoped Unix foreground-terminal handoff |
 | `core/src/runtime/review_path.rs` | Shared root-aware path identity encoding for planners and App/Shell/Sys action executors |
 | `core/src/runtime/planner.rs` | Pure App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
 | `core/src/runtime/action_executor.rs` | Phase 4 App static Copy and key-owned JSON create/update/relocate/ordinary-or-forced-remove journal, manifest-receipt-gated commit, lock-spanning privileged/unprivileged path dispatch, persistent backup restoration, same-directory rollback material, explicit recovery Plan, and fingerprint/key-guarded remove/restore |

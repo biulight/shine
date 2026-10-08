@@ -20,6 +20,7 @@ mod pack;
 mod planner;
 mod preset;
 mod preset_migration;
+mod process_scope;
 mod profile;
 mod review_path;
 mod schema;

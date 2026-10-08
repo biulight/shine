@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-08 — Execution snapshots and process groups need invocation ownership
+
+- **Symptoms**: concurrent Sys installs read another operation’s helpers; captured helpers lost
+  execution bits; cancelled Core tasks left descendants writing files; interactive installers could
+  not read inherited terminal input.
+- **Causes**: Sys reused one category directory and copied only bytes; process-group cleanup ran
+  only after an awaited error; isolated child groups never received foreground terminal ownership.
+- **Fix**: private per-invocation Sys copies retain captured executable intent and have approved
+  cleanup scopes. Process guards terminate groups on cancellation and temporarily hand foreground
+  input to the child. Real-process and independent PTY tests cover these boundaries.
+- **Rule**: directory swaps do not freeze a running process’s path namespace; kill-on-drop covers
+  only the direct child. Process isolation and terminal ownership must be designed together.
+
 ## 2026-10-08 — Recovery evidence and literal paths need shared persistence contracts
 
 - **Symptoms**: Windows runtime writes unlinked the old receipt before replacement; journal writes

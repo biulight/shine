@@ -6185,6 +6185,17 @@ fn add_sys_bootstrap_install_permissions<H>(
                 FilesystemPurposeV1::Maintenance,
                 "sys/bootstrap",
             );
+            shared_permissions.implicit_for(
+                PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Remove,
+                    path: review_path(
+                        runtime.context(),
+                        &runtime.context().shine_dir.join("runtime/sys").join(os_id),
+                    ),
+                },
+                FilesystemPurposeV1::Maintenance,
+                "sys/bootstrap",
+            );
         }
     }
     if super::sys_install_requires_admin(os_id, install, item)? {

@@ -70,6 +70,11 @@ permission tables are unverified author statements; `opaque_code = "unrestricted
 Administrator requirements remain explicit executor contracts. External/overlay code also needs
 target-scoped trust for its complete effective `sys/<os>/` snapshot.
 
+Each script invocation runs from its own captured Preset copy, preserving executable helper files.
+Concurrent invocations cannot replace that copy. Installers can read inherited foreground terminal
+input; Shine restores terminal control when the installer finishes, fails, times out, or is cancelled.
+Cancelling a running operation stops its isolated Unix process group, including child processes.
+
 Snapshot identities are shortened in the default display. Add `--verbose`, for example
 `shine sys bootstrap --preset recommended --verbose`, to show all file paths, full identities, and diagnostic codes.
 Both views review the same complete Plan and use a single confirmation for the selected operation.

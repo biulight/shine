@@ -141,70 +141,72 @@ impl<H> CoreRuntime<H> {
 }
 
 impl<H: FileSystemHost> CoreRuntime<H> {
-    /// Materialize one captured Sys category for process execution.
-    ///
+    /// Materialize a private invocation; never replace another running snapshot.
     /// Inspection, preview and profile composition must not call this method.
-    /// A directory swap removes stale files while ensuring executors never
-    /// observe a partially written category.
     pub(crate) async fn materialize_sys_preset(&self, os_id: &str) -> Result<PathBuf> {
-        if os_id.contains(['/', '\\']) || os_id.contains("..") {
+        if os_id.is_empty() || os_id.contains(['/', '\\']) || os_id.contains("..") {
             bail!("invalid os id: {os_id:?}");
         }
         let prefix = format!("sys/{os_id}/");
-        let parent = self.context().shine_dir.join("runtime").join("sys");
-        let root = parent.join(os_id);
-        let nonce = uuid::Uuid::new_v4();
-        let staging = parent.join(format!(".{os_id}.staging-{nonce}"));
-        let backup = parent.join(format!(".{os_id}.backup-{nonce}"));
-        self.host()
-            .create_dir_all(&staging)
-            .await
-            .map_err(|error| error.into_anyhow("creating Sys preset staging directory"))?;
-        for (logical, bytes) in self
-            .presets()
-            .files()
-            .iter()
-            .filter(|(path, _)| path.starts_with(&prefix))
-        {
-            let relative = logical
-                .strip_prefix(&prefix)
-                .expect("filtered Sys snapshot path");
-            if let Err(error) = self
-                .host()
-                .write_atomic(&staging.join(relative), bytes)
-                .await
-            {
-                let _ = self.host().remove_dir_all(&staging).await;
-                return Err(error.into_anyhow("staging Sys preset snapshot"));
-            }
-        }
-
-        let had_previous = match self.host().metadata(&root).await {
-            Ok(_) => {
-                self.host()
-                    .rename(&root, &backup)
-                    .await
-                    .map_err(|error| error.into_anyhow("backing up prior Sys preset snapshot"))?;
-                true
-            }
-            Err(error) if error.is_not_found() => false,
-            Err(error) => return Err(error.into_anyhow("inspecting prior Sys preset snapshot")),
-        };
-        if let Err(error) = self.host().rename(&staging, &root).await {
-            if had_previous {
-                let _ = self.host().rename(&backup, &root).await;
-            }
-            let _ = self.host().remove_dir_all(&staging).await;
-            return Err(error.into_anyhow("installing Sys preset snapshot"));
-        }
-        if had_previous {
+        let root = self
+            .context()
+            .shine_dir
+            .join("runtime/sys")
+            .join(os_id)
+            .join(uuid::Uuid::new_v4().to_string());
+        let result = async {
             self.host()
-                .remove_dir_all(&backup)
+                .create_dir_all(&root)
                 .await
-                .map_err(|error| error.into_anyhow("removing prior Sys preset snapshot"))?;
+                .map_err(|error| error.into_anyhow("creating Sys execution snapshot"))?;
+            self.host()
+                .set_mode(&root, 0o700)
+                .await
+                .map_err(|error| error.into_anyhow("protecting Sys execution snapshot"))?;
+            for (logical, bytes) in self
+                .presets()
+                .files()
+                .iter()
+                .filter(|(path, _)| path.starts_with(&prefix))
+            {
+                let relative = logical
+                    .strip_prefix(&prefix)
+                    .expect("filtered Sys snapshot path");
+                let path = safe_snapshot_path(&root, relative)?;
+                self.host()
+                    .write_atomic(&path, bytes)
+                    .await
+                    .map_err(|error| error.into_anyhow("materializing Sys execution snapshot"))?;
+                if self
+                    .presets()
+                    .file(logical)
+                    .is_some_and(|file| file.executable)
+                {
+                    self.host().set_executable(&path).await.map_err(|error| {
+                        error.into_anyhow("making Sys snapshot helper executable")
+                    })?;
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = self.host().remove_dir_all(&root).await;
+            return Err(error);
         }
         Ok(root)
     }
+}
+
+fn safe_snapshot_path(root: &Path, relative: &str) -> Result<PathBuf> {
+    if relative.is_empty()
+        || !Path::new(relative)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+    {
+        bail!("Sys snapshot path must stay inside its category");
+    }
+    Ok(root.join(relative))
 }
 
 fn validate_driver(item: &SysItem) -> Result<()> {
@@ -548,6 +550,79 @@ commands = ["git"]
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn running_sys_snapshot_retains_its_helpers_when_another_is_materialized() {
+        use crate::runtime::{ProcessHost, ProcessRequest, RealHost};
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+        let root =
+            std::env::temp_dir().join(format!("shine-sys-snapshot-{}", uuid::Uuid::new_v4()));
+        let context = RuntimeContext::isolated(
+            root.clone(),
+            root.join("state"),
+            root.join("presets"),
+            root.join("bin"),
+            RuntimePlatform::current(),
+        );
+        let snapshot = |value: &str| {
+            PresetSnapshot::builder(PresetSourceKind::External)
+            .file("sys/test/install.sh", b"printf ready > \"$1\"; while [ ! -e \"$2\" ]; do sleep 0.01; done; ./helper\n".to_vec())
+            .file_with_executable("sys/test/helper", format!("#!/bin/sh\nprintf '{value}'\n").into_bytes(), true)
+            .file("sys/test/data", b"data".to_vec()).build()
+        };
+        let first = CoreRuntime::new(RealHost, context.clone(), snapshot("captured-first"));
+        let second = CoreRuntime::new(RealHost, context, snapshot("captured-second"));
+        let first_root = first.materialize_sys_preset("test").await.unwrap();
+        let ready = root.join("ready");
+        let release = root.join("release");
+        let process = tokio::spawn(RealHost.run(ProcessRequest {
+            program: "sh".into(),
+            args: vec![
+                first_root.join("install.sh").display().to_string(),
+                ready.display().to_string(),
+                release.display().to_string(),
+            ],
+            cwd: Some(first_root.clone()),
+            timeout: Some(Duration::from_secs(5)),
+            ..Default::default()
+        }));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !ready.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let second_root = second.materialize_sys_preset("test").await.unwrap();
+        assert_ne!(first_root, second_root);
+        let second_output = RealHost
+            .run(ProcessRequest {
+                program: second_root.join("helper").display().to_string(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(second_output.stdout, b"captured-second");
+        std::fs::write(release, b"go").unwrap();
+        let output = process.await.unwrap().unwrap();
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout, b"captured-first");
+        assert_eq!(
+            std::fs::metadata(&first_root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(first_root.join("data"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o111,
+            0
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn external_sys_preset_load_is_read_only_and_execution_materializes_snapshot() {
         let host = InMemoryHost::new();
@@ -596,8 +671,8 @@ commands = ["git"]
 
         let execution_root = runtime.materialize_sys_preset("test").await.unwrap();
         assert_eq!(
-            execution_root,
-            Path::new("/virtual/home/.shine/runtime/sys/test")
+            execution_root.parent(),
+            Some(Path::new("/virtual/home/.shine/runtime/sys/test"))
         );
         assert_eq!(
             host.read(&execution_root.join("install.sh")).await.unwrap(),

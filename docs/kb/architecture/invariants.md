@@ -198,7 +198,12 @@ bugs. Check this list before changing the modules named in each entry.
 - **Process limits apply while draining pipes.** Bounded reads retain at most the configured stdout
   and stderr limits, concurrently with stdin writes and child wait. Overflow, timeout, or I/O failure
   kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
-  terminated too. A post-capture length check is never a memory bound. Drop piped stdin immediately
+  terminated too, including when the run Future is cancelled. A drop guard retains the group ID
+  after the direct child exits; a failed or signalled child terminates the group before waiting for
+  inherited output pipes to close. When inherited stdin is the foreground controlling terminal, execution
+  lends it to the child group and restores the original group on success, error, timeout, or cancellation.
+  Signal masks used for terminal handoff are thread-local and immediately restored.
+  A post-capture length check is never a memory bound. Drop piped stdin immediately
   after writing to deliver EOF; Tokio's Unix `ChildStdin::shutdown` alone does not close the pipe.
 - **Root links and tree links have different policies.** A selected external/overlay root symlink
   resolves before capture and records its resolved source identity; broken root links fail closed.
@@ -225,8 +230,11 @@ bugs. Check this list before changing the modules named in each entry.
   App/Shell/Sys domain logic never rediscovers them from ambient globals. Distribution-only
   embedded bytes enter from the frontend. Validation additionally receives captured cwd, manifest
   persistence always requires a filesystem host, and Sys inspection/preflight stays read-only;
-  only authorized script execution atomically materializes the category below the Shine runtime
-  root. Core never reopens an external preset tree through `Path` helpers.
+  only authorized script execution materializes a private invocation below the Shine runtime
+  root. Sys invocations never replace a running snapshot, retain captured helper executable intent,
+  and clean only their own tree after success or error. Random invocation IDs are execution details,
+  while creation/removal permissions remain bound to the category runtime root (ADR 0100).
+  Core never reopens an external preset tree through `Path` helpers.
 - **A host abstraction does not weaken ownership checks.** Real and in-memory managed-file paths
   share the same content hash, backup suffix, receipt, user-modification preservation, and
   manifest-version gates. Adding a new host operation must retain those checks rather than treating

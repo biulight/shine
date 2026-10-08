@@ -2007,26 +2007,26 @@ mod tests {
         use shine_core::runtime::{
             InMemoryHost, RuntimeContext, RuntimePlatform, capture_embedded_preset_snapshot,
         };
-        let (platform, shell, profile, package_command, administrator, runtime_writes) = match os_id
-        {
-            "ubuntu" => (
-                RuntimePlatform::Linux,
-                shine_core::runtime::ShellType::Bash,
-                ".bashrc",
-                "apt-get",
-                true,
-                1,
-            ),
-            "windows" => (
-                RuntimePlatform::Windows,
-                shine_core::runtime::ShellType::PowerShell,
-                "Documents/PowerShell/Microsoft.PowerShell_profile.ps1",
-                "winget",
-                false,
-                0,
-            ),
-            _ => unreachable!("unsupported test platform"),
-        };
+        let (platform, shell, profile, package_command, administrator, runtime_permissions) =
+            match os_id {
+                "ubuntu" => (
+                    RuntimePlatform::Linux,
+                    shine_core::runtime::ShellType::Bash,
+                    ".bashrc",
+                    "apt-get",
+                    true,
+                    2,
+                ),
+                "windows" => (
+                    RuntimePlatform::Windows,
+                    shine_core::runtime::ShellType::PowerShell,
+                    "Documents/PowerShell/Microsoft.PowerShell_profile.ps1",
+                    "winget",
+                    false,
+                    0,
+                ),
+                _ => unreachable!("unsupported test platform"),
+            };
         let home = std::env::temp_dir().join(format!("shine-bootstrap-render-{os_id}"));
         let mut context = RuntimeContext::isolated(
             home.clone(),
@@ -2074,7 +2074,7 @@ mod tests {
             detailed
                 .matches(&format!("Shine state/runtime/sys/{os_id}"))
                 .count(),
-            runtime_writes
+            runtime_permissions
         );
         assert_eq!(detailed.matches("Shine state/sys-manifest.toml").count(), 1);
         for item in &items {

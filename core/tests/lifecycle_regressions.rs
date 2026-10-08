@@ -247,3 +247,88 @@ async fn shell_snapshots_preserve_captured_executables_and_repair_mode_only_chan
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sys_bootstrap_approved_snapshots_execute_helpers_and_clean_success_and_failure() {
+    for failure in [false, true] {
+        let root =
+            std::env::temp_dir().join(format!("shine-sys-invocation-{}", uuid::Uuid::new_v4()));
+        let mut context = RuntimeContext::isolated(
+            root.clone(),
+            root.join("state"),
+            root.join("presets"),
+            root.join("bin"),
+            RuntimePlatform::current(),
+        );
+        context.shell = ShellType::Bash;
+        let tail = if failure {
+            "exit 2"
+        } else {
+            "touch \"$SHINE_TARGET_HOME/detected\""
+        };
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'demo'
+label = 'Demo'
+permissions = { schema_version = 1 }
+detect = { kind = 'path', path = '~/detected' }
+install = { kind = 'script', path = 'install.sh' }
+"#
+                .to_vec(),
+            )
+            .file(
+                "sys/test/install.sh",
+                format!("set -e\n./helper\n{tail}\n").into_bytes(),
+            )
+            .file_with_executable(
+                "sys/test/helper",
+                b"#!/bin/sh\nprintf helper-ran\n".to_vec(),
+                true,
+            )
+            .build();
+        let runtime = CoreRuntime::new(RealHost, context, snapshot);
+        let request = SysBootstrapPlanRequest {
+            os_id: "test".into(),
+            item_ids: vec!["demo".into()],
+            sys_shell: "bash".into(),
+            force_profile: false,
+            input_versions: Default::default(),
+        };
+        let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
+        let cleanup = shine_core::plan::PermissionV1::Filesystem {
+            access: shine_core::plan::FilesystemAccessV1::Remove,
+            path: "shine:runtime/sys/test".into(),
+        };
+        assert!(plan.permissions.required.contains(&cleanup));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let report = runtime
+            .run_sys_bootstrap_approved(request, &approval, &mut Interaction, &mut NullObserver)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.outcomes[0].status,
+            if failure {
+                SysItemStatus::Failed
+            } else {
+                SysItemStatus::Installed
+            }
+        );
+        assert!(
+            report.outcomes[0]
+                .logs
+                .iter()
+                .any(|line| line.contains("helper-ran"))
+        );
+        assert_eq!(
+            std::fs::read_dir(root.join("state/runtime/sys/test"))
+                .unwrap()
+                .count(),
+            0
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
