@@ -134,6 +134,10 @@ shine sys recover --yes        # 非交互批准
 非 dry-run 的 managed 操作会显示绑定快照的 Plan，确认默认是 No。`--yes` 只跳过提示，不能
 跳过 Plan 展示、权限 blocker 或执行前复核。若项目需要管理员权限，会在 Plan 批准后另行请求。
 
+同一配置目录中的 Sys 变更会依次执行，包括 bootstrap、profile 变更和恢复。等待结束后，Shine
+会重新校验已审阅的 Plan；观察到的状态有变化时，需要重新审阅。等待超过 30 秒会报错，不执行
+等待中的操作，已完成操作的安装记录会保留。
+
 受管操作中断后，后续 Sys 改动会停止并提示运行 `shine sys recover`。只有相关状态在中断后未发生
 变化时，恢复才会完成或回退原操作；它不会覆盖修改过的资源或无关的 Shell profile 内容。
 

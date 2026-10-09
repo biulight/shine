@@ -268,6 +268,9 @@ The built-in `surge` preset installs `local-proxies.conf`, `local-proxy-groups.c
 idempotently patch `[Proxy]`, `[Proxy Group]`, and `[Rule]` `#!include` lines in the active profile.
 An overlay supplies only its policy files and does not need its own build script.
 
+If a legacy Shine proxy-group block has a missing or nested marker, both applying and undoing the
+patch fail without changing the profile. Repair the malformed markers in your profile before retrying.
+
 The preset includes commented, inert examples for `LAN Network`, `LAN PROXY`, and `Other Direct`.
 Each traffic class has three mutually exclusive rule sources in `local-rules.conf`: relative
 `rules/*.list` files installed with the profile, loopback HTTP on the same device, or a remote HTTPS

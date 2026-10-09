@@ -4634,7 +4634,11 @@ async fn shell_upgrade_ignores_uninstalled_categories_and_noop_permissions() {
     let operations = runtime.host().operations();
     let new_mutations = operations[operation_count..]
         .iter()
-        .filter(|operation| !matches!(operation, HostOperation::Read(_)))
+        .filter(|operation| {
+            !matches!(operation, HostOperation::Read(_))
+                && !matches!(operation, HostOperation::AcquireOperationLock(path)
+                    if path == &runtime.context().shine_dir.join("shell-lifecycle.lock"))
+        })
         .collect::<Vec<_>>();
     assert!(new_mutations.is_empty(), "{new_mutations:?}");
 

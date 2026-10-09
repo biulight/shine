@@ -439,6 +439,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     }
 
     pub async fn install_shell_completion(&self, force: bool) -> Result<ShellCompletionReport> {
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         let source_commands = self.installed_shell_source_commands(None).await?;
         let profile = self
             .install_shell_profile(&self.context().shell_config_paths, force, &source_commands)
@@ -1417,7 +1418,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             .extend(launcher_updates.iter().map(|(_, _, spec, _)| {
                 command_path_for_name(&self.context().bin_dir, &spec.link_name)
             }));
-        self.update_shell_manifest(&manifest_categories, scope)
+        self.update_shell_manifest_unlocked(&manifest_categories, scope)
             .await?;
         if let Some(execution) = &shell_execution {
             self.mark_shell_launcher_receipt_committed(execution)
@@ -2736,6 +2737,15 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         categories: &[ShellCategory],
         scope: ShellManifestUpdateScope,
     ) -> Result<()> {
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
+        self.update_shell_manifest_unlocked(categories, scope).await
+    }
+
+    async fn update_shell_manifest_unlocked(
+        &self,
+        categories: &[ShellCategory],
+        scope: ShellManifestUpdateScope,
+    ) -> Result<()> {
         let mut manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let previous = manifest.clone();
@@ -2874,6 +2884,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
     where
         H: PrivilegedFileSystemHost,
     {
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         let _guard = self.host().acquire_privileged_operation().await?;
         if self.shell_operation_journal_bytes().await?.is_some() {
             bail!("an interrupted Shell operation requires explicit recovery");
@@ -2940,6 +2951,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         category: Option<&str>,
         command: Option<&str>,
     ) -> Result<()> {
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         let mut manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         match (category, command) {

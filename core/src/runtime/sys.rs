@@ -1943,6 +1943,11 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         &self,
         request: ManagedFileRequest,
     ) -> Result<LifecycleResultV1> {
+        let _lifecycle_guard = if request.dry_run {
+            None
+        } else {
+            Some(self.acquire_sys_lifecycle_operation().await?)
+        };
         if request.privileged {
             bail!("managed Sys file requires a privileged host capability");
         }
@@ -2056,6 +2061,11 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         &self,
         request: ManagedFileRemoveRequest,
     ) -> Result<LifecycleResultV1> {
+        let _lifecycle_guard = if request.dry_run {
+            None
+        } else {
+            Some(self.acquire_sys_lifecycle_operation().await?)
+        };
         let mut manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
         let position = manifest
             .entries

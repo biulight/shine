@@ -15,6 +15,8 @@ mod fixture;
 mod host;
 mod inspection;
 mod launcher;
+#[cfg(test)]
+mod lifecycle_concurrency_tests;
 mod lint;
 mod memory;
 mod metadata_diagnostic;

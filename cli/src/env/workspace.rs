@@ -625,9 +625,8 @@ pub async fn handle_run(
         }
         let mode = mode_arg.context("workspace --secret-broker requires --mode")?;
         let snapshot = snapshot_for_broker(workspace_arg, mode).await?;
-        let mut values = plain_values_from_broker_snapshot(&snapshot)?;
         let secrets = crate::ssh::request_workspace_secrets(snapshot.clone(), &argv).await?;
-        values.extend(secrets);
+        let values = merge_broker_values(&snapshot, secrets)?;
         return run_broker_command(command, values, snapshot.override_process_env, explicit).await;
     }
     // `--no-workspace` disables discovery entirely: only explicit `--with` values
@@ -1037,7 +1036,43 @@ pub fn plain_values_from_broker_snapshot(
     let mut values = BTreeMap::new();
     for source in &snapshot.sources {
         let parsed = parse_source(Path::new(&source.path), &source.contents)?;
+        for key in parsed.secret.keys() {
+            values.remove(key);
+        }
         values.extend(parsed.plain);
+    }
+    Ok(values)
+}
+
+/// Keep the winning source index for each secret without decrypting any payload.
+fn broker_secret_sources(snapshot: &WorkspaceSnapshot) -> Result<BTreeMap<String, usize>> {
+    let mut sources = BTreeMap::new();
+    for (index, source) in snapshot.sources.iter().enumerate() {
+        let parsed = parse_source(Path::new(&source.path), &source.contents)?;
+        for key in parsed.plain.keys() {
+            sources.remove(key);
+        }
+        for key in parsed.secret.keys() {
+            sources.insert(key.clone(), index);
+        }
+    }
+    Ok(sources)
+}
+
+fn merge_broker_values(
+    snapshot: &WorkspaceSnapshot,
+    secrets: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    let mut values = plain_values_from_broker_snapshot(snapshot)?;
+    let sources = broker_secret_sources(snapshot)?;
+    // Older brokers may return a declared secret shadowed by a later plain value.
+    // Snapshot precedence still determines the remote child's effective values.
+    for (key, mut value) in secrets {
+        if sources.contains_key(&key) {
+            values.insert(key, value);
+        } else {
+            value.zeroize();
+        }
     }
     Ok(values)
 }
@@ -1048,8 +1083,25 @@ pub async fn decrypt_broker_snapshot(
     release: &[String],
 ) -> Result<BTreeMap<String, String>> {
     let release = release.iter().cloned().collect::<BTreeSet<_>>();
+    let declared = snapshot
+        .sources
+        .iter()
+        .map(|source| declared_secrets_from_source(&source.path, &source.contents))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<BTreeSet<_>>();
+    if !release.is_subset(&declared) {
+        bail!("broker release contains an undeclared secret key");
+    }
+    let sources = broker_secret_sources(snapshot)?;
+    let expected_release = release
+        .iter()
+        .filter(|key| sources.contains_key(*key))
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let mut values = BTreeMap::new();
-    for source in &snapshot.sources {
+    for (index, source) in snapshot.sources.iter().enumerate() {
         let path = Path::new(&source.path);
         let parsed = parse_source(path, &source.contents)?;
         for (key, state) in &parsed.secret {
@@ -1066,9 +1118,15 @@ pub async fn decrypt_broker_snapshot(
                 source.path
             );
         }
-        values.extend(secrets.into_iter().filter(|(key, _)| release.contains(key)));
+        for (key, mut value) in secrets {
+            if release.contains(&key) && sources.get(&key) == Some(&index) {
+                values.insert(key, value);
+            } else {
+                value.zeroize();
+            }
+        }
     }
-    if values.keys().cloned().collect::<BTreeSet<_>>() != release {
+    if values.keys().cloned().collect::<BTreeSet<_>>() != expected_release {
         bail!("broker response does not contain every released secret key");
     }
     Ok(values)
@@ -1892,6 +1950,144 @@ mod tests {
         assert_eq!(values.get("A").map(String::as_str), Some("base"));
         assert_eq!(values.get("B").map(String::as_str), Some("local"));
         tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broker_preserves_source_precedence_and_releases_only_winning_secrets() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::test_support::env_lock();
+        struct RestorePath(Option<OsString>);
+        impl Drop for RestorePath {
+            fn drop(&mut self) {
+                // SAFETY: env_lock is retained throughout this test.
+                unsafe {
+                    match &self.0 {
+                        Some(value) => std::env::set_var("PATH", value),
+                        None => std::env::remove_var("PATH"),
+                    }
+                }
+            }
+        }
+        fn source(path: &str, plain: &[(&str, &str)], secrets: &[(&str, &str)]) -> SourceSnapshot {
+            let mut document = DocumentMut::new();
+            document["version"] = value(1);
+            for (key, text) in plain {
+                document["plain"][key] = value(*text);
+            }
+            for (key, _) in secrets {
+                document["secret"][key] = value(true);
+            }
+            let payload = SecretPayload {
+                version: SECRET_PAYLOAD_VERSION,
+                values: secrets
+                    .iter()
+                    .map(|(key, value)| ((*key).into(), (*value).into()))
+                    .collect(),
+            };
+            if !secrets.is_empty() {
+                document["payload"]["data"] =
+                    value(STANDARD.encode(toml::to_string(&payload).unwrap()));
+            }
+            SourceSnapshot {
+                path: path.into(),
+                contents: document.to_string(),
+            }
+        }
+        let root =
+            std::env::temp_dir().join(format!("shine-broker-precedence-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("gpg"),
+            "#!/bin/sh\nfor arg in \"$@\"; do file=\"$arg\"; done\n/bin/cat \"$file\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(root.join("gpg"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _restore = RestorePath(std::env::var_os("PATH"));
+        // SAFETY: all environment-mutating tests hold env_lock.
+        unsafe { std::env::set_var("PATH", &root) };
+        let snapshot = WorkspaceSnapshot {
+            workspace_path: root.join(WORKSPACE_FILE).to_string_lossy().into_owned(),
+            workspace_contents:
+                "version = 2\n[env]\nfiles = ['base.toml', 'local.toml', 'final.toml']\n".into(),
+            mode: "development".into(),
+            override_process_env: true,
+            sources: vec![
+                source(
+                    "base.toml",
+                    &[("UNRELEASED", "old-plain")],
+                    &[
+                        ("PLAIN", "old-secret"),
+                        ("TOKEN", "old-token"),
+                        ("AGAIN", "old-secret"),
+                        ("UNSELECTED", "private"),
+                    ],
+                ),
+                source(
+                    "local.toml",
+                    &[("PLAIN", "later-plain"), ("AGAIN", "middle-plain")],
+                    &[("TOKEN", "new-token"), ("UNRELEASED", "private")],
+                ),
+                source("final.toml", &[], &[("AGAIN", "final-secret")]),
+            ],
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let config = Config::new_for_test(&root);
+            let release = vec!["PLAIN".into(), "TOKEN".into(), "AGAIN".into()];
+            let secrets = decrypt_broker_snapshot(&config, &snapshot, &release)
+                .await
+                .unwrap();
+            assert_eq!(
+                secrets,
+                BTreeMap::from([
+                    ("TOKEN".into(), "new-token".into()),
+                    ("AGAIN".into(), "final-secret".into())
+                ])
+            );
+            let merged = merge_broker_values(&snapshot, secrets).unwrap();
+            assert_eq!(
+                merged,
+                BTreeMap::from([
+                    ("PLAIN".into(), "later-plain".into()),
+                    ("TOKEN".into(), "new-token".into()),
+                    ("AGAIN".into(), "final-secret".into())
+                ])
+            );
+            // The receiving side also preserves order when an older broker
+            // returns a secret that is now shadowed by plain metadata.
+            let old_response = BTreeMap::from([("PLAIN".into(), "old-secret".into())]);
+            assert_eq!(
+                merge_broker_values(&snapshot, old_response).unwrap(),
+                BTreeMap::from([("PLAIN".into(), "later-plain".into())])
+            );
+            assert!(
+                decrypt_broker_snapshot(&config, &snapshot, &["UNKNOWN".into()])
+                    .await
+                    .is_err()
+            );
+            let captured = snapshot
+                .sources
+                .iter()
+                .map(|source| {
+                    (
+                        PathBuf::from(&source.path),
+                        Some(Zeroizing::new(source.contents.clone())),
+                    )
+                })
+                .collect();
+            let local = compile_captured_sources(&captured, &config).await.unwrap();
+            for (key, value) in &merged {
+                assert_eq!(local.get(key), Some(value));
+            }
+            assert!(!merged.contains_key("UNRELEASED"));
+            assert!(!merged.contains_key("UNSELECTED"));
+        });
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

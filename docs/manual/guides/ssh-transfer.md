@@ -131,6 +131,11 @@ Run the exact command from the remote project:
 shine env run --mode development --secret-broker -- bun run build
 ```
 
+Workspace values follow source order, just as in local `env run`. A later plain value overrides an
+earlier secret; the shadowed secret is not sent to the remote. A later secret declaration hides an
+earlier plain value even when that secret is not released. Policies still bind every source and its
+complete declared-secret list.
+
 Local confirmation remains the default. Add `--trust-remote-session` to the local SSH command only
 after accepting the risk of trusting that remote session and same-account processes. It automatically
 approves only exact workspace-policy matches.

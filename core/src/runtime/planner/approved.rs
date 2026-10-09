@@ -243,6 +243,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         if request.operation != LifecycleOperation::Install {
             bail!("approved Shell install requires an install Plan");
         }
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         approval.validate(&self.plan_shells(request.clone()).await?)?;
         self.install_shells_with_approval(
             ShellLifecycleRequest {
@@ -265,6 +266,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         if request.operation != LifecycleOperation::Uninstall {
             bail!("approved Shell uninstall requires an uninstall Plan");
         }
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         approval.validate(&self.plan_shells(request.clone()).await?)?;
         self.uninstall_shells_with_approval(
             ShellUninstallRequest {
@@ -287,6 +289,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         if request.operation != LifecycleOperation::Upgrade {
             bail!("approved Shell upgrade requires an upgrade Plan");
         }
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         approval.validate(&self.plan_shells(request.clone()).await?)?;
         self.upgrade_shells(
             ShellUpgradeRequest {
@@ -326,6 +329,7 @@ where
         interaction: &mut impl RuntimeInteraction,
         observer: &mut impl RuntimeObserver,
     ) -> Result<SysManagedReport> {
+        let _lifecycle_guard = self.acquire_sys_lifecycle_operation().await?;
         let plan = self.plan_managed_sys(request.clone()).await?;
         approval.validate(&plan)?;
         let action = if request.operation == LifecycleOperation::Uninstall {
@@ -373,6 +377,7 @@ where
         request: SysProfilePlanRequest,
         approval: &PlanApprovalV1,
     ) -> Result<SysProfileStateReport> {
+        let _lifecycle_guard = self.acquire_sys_lifecycle_operation().await?;
         let plan = self.plan_sys_profile(request.clone()).await?;
         approval.validate(&plan)?;
         self.set_sys_profile_state_with_approval(
@@ -417,6 +422,7 @@ where
         interaction: &mut impl RuntimeInteraction,
         observer: &mut impl RuntimeObserver,
     ) -> Result<SysBootstrapBatchReport> {
+        let _lifecycle_guard = self.acquire_sys_lifecycle_operation().await?;
         approval.validate(&self.plan_sys_bootstrap(request.clone()).await?)?;
         self.run_sys_bootstrap_batch(
             SysBootstrapBatchRequest {

@@ -71,8 +71,12 @@ function withoutLegacyGroupBlock(lines: Line[]): Line[] {
   let inLegacyBlock = false;
   for (const line of lines) {
     if (line.text === "# >>> shine local proxy groups >>>") {
+      if (inLegacyBlock) throw new Error("nested legacy Shine proxy-group block");
       inLegacyBlock = true;
       continue;
+    }
+    if (line.text === "# <<< shine local proxy groups <<<" && !inLegacyBlock) {
+      throw new Error("legacy Shine proxy-group block has no opening marker");
     }
     if (inLegacyBlock) {
       if (line.text === "# <<< shine local proxy groups <<<") {
@@ -82,6 +86,7 @@ function withoutLegacyGroupBlock(lines: Line[]): Line[] {
     }
     result.push(line);
   }
+  if (inLegacyBlock) throw new Error("legacy Shine proxy-group block has no closing marker");
   return result;
 }
 

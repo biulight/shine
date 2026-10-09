@@ -116,6 +116,10 @@ shine env broker policy add \
 shine env run --mode development --secret-broker -- bun run build
 ```
 
+Workspace 值与本地 `env run` 一样按环境源顺序覆盖。后面的明文值会覆盖前面的 secret，被覆盖的
+secret 不会发送到远端。后面的 secret 声明会隐藏前面的明文值，即使该 secret 没有获准释放。
+策略仍会绑定每个环境源及其完整的 secret 声明列表。
+
 默认仍会逐次在本机确认。只有已理解“信任该远端 SSH 会话及同账号进程”这一风险时，才在本机 SSH 命令上添加 `--trust-remote-session`；它只会自动批准精确匹配的 workspace 策略。
 
 如果策略不应写进默认的 `~/.shine/ssh-secret-broker.toml`，可额外加载受本机保护的临时或团队策略文件。它与默认策略合并；请求必须恰好命中一条策略，零条或多条都会拒绝：

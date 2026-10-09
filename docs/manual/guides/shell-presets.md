@@ -65,6 +65,11 @@ existing command launchers; their original installation records remain usable fo
 
 ## If installation, upgrade, or uninstall is interrupted {#recover-an-interrupted-shell-transaction}
 
+Shell changes using the same configuration directory run one at a time, including recovery and
+live rendering. After waiting, Shine checks the reviewed Plan again; if the affected state changed,
+review a new Plan before retrying. Waiting longer than 30 seconds fails without applying the waiting
+operation. Changes to other categories retain their installation records.
+
 If a Shell preset operation is interrupted, Shine may pause later changes and ask you to
 run recovery:
 

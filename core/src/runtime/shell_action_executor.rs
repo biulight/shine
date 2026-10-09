@@ -2870,6 +2870,7 @@ where
         &self,
         approval: &PlanApprovalV1,
     ) -> Result<ShellRecoveryReportV1> {
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         approval.validate(&self.plan_shell_operation_recovery().await?)?;
         let _guard = self.host().acquire_privileged_operation().await?;
         approval.validate(&self.plan_shell_operation_recovery().await?)?;

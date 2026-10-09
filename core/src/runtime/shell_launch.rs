@@ -38,6 +38,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     /// The returned description owns no lock, configuration values, or runtime.
     pub async fn prepare_live_bun_launch(&self, target: &str) -> Result<LiveBunLaunch> {
         validate_live_shell_target(target)?;
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         let _guard = self.host().acquire_privileged_operation().await?;
         if self.shell_operation_journal_bytes().await?.is_some() {
             bail!("an interrupted Shell operation requires explicit recovery");
@@ -128,7 +129,9 @@ mod tests {
             .filter(|operation| {
                 !matches!(
                     operation,
-                    HostOperation::Read(_) | HostOperation::AcquirePrivilegedOperation
+                    HostOperation::Read(_)
+                        | HostOperation::AcquirePrivilegedOperation
+                        | HostOperation::AcquireOperationLock(_)
                 )
             })
             .collect()

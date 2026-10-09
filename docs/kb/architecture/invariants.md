@@ -350,6 +350,11 @@ bugs. Check this list before changing the modules named in each entry.
   `FileSystemHost` operation lock before replanning and approval validation, retaining it through
   effects and receipt persistence. Unrelated receipt changes must survive; relevant changes while
   waiting invalidate approval. Acquire this lock before the privileged transaction lock (ADR 0105).
+- **Shell and Sys mutation serialize before approval revalidation.** Each domain holds its own
+  configuration-scoped lifecycle lock through manifest saves and transaction cleanup. Shell recovery,
+  completion, live rendering and standalone receipt updates share the Shell lock; Sys bootstrap,
+  profile changes, managed operations and recovery share the Sys lock. Internal helpers reuse the
+  outer guard. Acquire lifecycle locks before privileged transaction locks (ADR 0106).
 - **Lock timeouts never revoke a live owner's authority.** Operation locks use persistent regular
   files and OS exclusive locks. A 30-second timeout returns an error; neither timeout nor guard
   destruction unlinks the file. Process exit releases ownership through the OS (ADR 0105).
@@ -711,6 +716,8 @@ bugs. Check this list before changing the modules named in each entry.
   file, and preserves mode and per-line endings. A missing patchable
   `#!include` is an error, never a successful no-op. Keep parsing and filesystem
   behavior shared by build and teardown; do not duplicate it in an overlay.
+  Missing, unmatched, or nested legacy proxy-group markers fail before any write; an unterminated
+  block must never turn the remaining user content into deletion material.
 - **Local HTTP resources share one loopback server.** Files that need stable local URLs live under
   `<shine_dir>/http/` and are served by `shine serve start`; `shine serve install` registers one
   global user service for that server. Do not add per-app HTTP daemons, ports, or launchd jobs.
@@ -889,6 +896,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **Workspace files are read once per broker run.** The remote snapshot sent for authorization and
   the values later merged into the child environment derive from the same in-memory bytes; never
   re-open a source after the local agent approves its hash.
+- **Broker values preserve complete source order across plain and secret declarations.** A later
+  secret hides earlier plain values even without release; later plain values suppress earlier
+  secrets in both the local response and remote merge. Only the winning approved secret source is
+  released. Policy identities still bind every source and the complete declared-secret union.
 - **Broker policies are local security state.** `<shine_dir>/ssh-secret-broker.toml` must not be a
   symlink, must be owned by the current Unix user, and must have mode `0600`; writes use an atomic
   same-directory temporary file. Remote enrollment is allowed only in the explicit trusted mode

@@ -5,6 +5,22 @@ use fs2::FileExt;
 use std::{path::Path, time::Duration};
 
 impl<H: super::FileSystemHost> super::CoreRuntime<H> {
+    pub(super) async fn acquire_shell_lifecycle_operation(
+        &self,
+    ) -> Result<super::PrivilegedOperationGuard> {
+        self.host()
+            .acquire_operation_lock(&self.context().shine_dir.join("shell-lifecycle.lock"))
+            .await
+    }
+
+    pub(super) async fn acquire_sys_lifecycle_operation(
+        &self,
+    ) -> Result<super::PrivilegedOperationGuard> {
+        self.host()
+            .acquire_operation_lock(&self.context().shine_dir.join("sys-lifecycle.lock"))
+            .await
+    }
+
     pub(super) async fn acquire_app_lifecycle_operation(
         &self,
     ) -> Result<super::PrivilegedOperationGuard> {

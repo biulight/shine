@@ -432,6 +432,7 @@ where
         &self,
         approval: &PlanApprovalV1,
     ) -> Result<SysRecoveryReportV1> {
+        let _lifecycle_guard = self.acquire_sys_lifecycle_operation().await?;
         let plan = self.plan_sys_operation_recovery().await?;
         approval.validate(&plan)?;
         if !plan.is_ready() {

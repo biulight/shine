@@ -160,6 +160,11 @@ Non-dry-run managed operations display a snapshot-bound Plan and default to No. 
 the prompt, not Plan rendering, permission blockers, or fresh validation. Administrator access, if
 required, is requested separately after Plan approval.
 
+Sys changes using the same configuration directory run one at a time, including bootstrap, profile
+changes, and recovery. After waiting, Shine checks the reviewed Plan again; changed observations
+require a new review. Waiting longer than 30 seconds fails without applying the waiting operation,
+and completed operations retain their installation records.
+
 If a managed operation is interrupted, later Sys changes stop and ask you to run
 `shine sys recover`. Recovery completes or rolls back only state that has not changed since the
 interruption. It never overwrites modified resources or unrelated shell-profile content.

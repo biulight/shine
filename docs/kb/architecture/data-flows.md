@@ -345,6 +345,11 @@ Shell lifecycle targets are either a category (`utils`) or one command in a cate
 deployment material so a command can consume sibling resources, while launchers and
 `shell-manifest.toml` receipts are command-scoped.
 
+Approved lifecycle execution takes `shell-lifecycle.lock` before regenerating and validating its
+Plan and retains it through receipt persistence and cleanup. Recovery, completion updates and live
+rendering use the same lock; any privileged transaction lock is acquired afterward. Standalone
+receipt updates also lock, while internal updates reuse the outer guard (ADR 0106).
+
 Command install filters metadata before transforms and launcher creation, then upserts only the
 selected manifest target. Category install retains the existing replace-category reconciliation.
 For embedded sources, Core derives one payload-free `ReplaceShellCache` action per selected category
@@ -833,6 +838,12 @@ invocation, then executes or sources the atomically refreshed file under `render
 
 ## Managed Sys apply and recovery
 
+Approved managed operations, bootstrap, profile changes, and recovery acquire `sys-lifecycle.lock`
+before fresh approval validation, retaining it through shared manifest persistence and cleanup.
+Standalone managed-file mutations and profile synchronization use the same lock. The privileged
+transaction lock is acquired afterward; a manifest change while waiting invalidates an approval
+that observes it (ADR 0106).
+
 Managed-file and split-DNS apply/update/uninstall first derive typed actions and an exact previous
 and desired `SysRunEntry`. Core writes `sys-operation-journal.toml` before the first resource
 mutation, persists the desired receipt, records receipt commit, and then removes exact rollback
@@ -1039,9 +1050,14 @@ For a workspace request, `env/workspace.rs` reads the workspace and all selected
 into a bounded `WorkspaceSnapshot`. The request carries the exact bytes and SHA-256 identities,
 mode, complete declared-secret set, requested release mapping, and argv. `env/broker.rs` accepts
 only an exact match in `<shine_dir>/ssh-secret-broker.toml`; the local agent then confirms unless
-`--trust-remote-session` was explicitly set, decrypts only the policy-approved release subset, and
-sends values back. The remote merges those values with non-secret entries parsed from the same
+`--trust-remote-session` was explicitly set, decrypts captured sealed payloads, and returns only
+policy-approved effective secrets. The remote merges those values with non-secret entries from the same
 snapshot bytes and injects them only into the child process.
+
+Both sides preserve source order across plain and secret declarations: later plain suppresses an
+earlier secret response, later secret removes an earlier plain value even if unreleased, and only
+the winning approved secret source contributes a returned value. The policy still binds complete
+source hashes and declared-secret lists, including shadowed declarations.
 
 `shine ssh --secret-broker-inspect` displays one remote description without decrypting or writing.
 `--secret-broker-enroll --trust-remote-metadata` may create a local policy after local confirmation

@@ -1,5 +1,25 @@
 # Lessons Learned
 
+## 2026-10-09 — Lifecycle locks must precede whole-manifest reads
+
+- **Symptoms**: Shell uninstall dropped a concurrent category's receipt; concurrent managed Sys
+  installs lost the earlier receipt despite both reporting success.
+- **Cause**: the privileged transaction lock serialized effects after whole manifests were loaded.
+- **Fix**: acquire domain lifecycle locks before fresh approval validation and retain them through
+  receipt saves; include recovery, live rendering, bootstrap and profile writers (ADR 0106).
+- **Rule**: serialize the read/validate/effect/save lifecycle. Test contention with a held guard;
+  a fake host whose lock is a no-op cannot expose stale read races.
+
+## 2026-10-09 — Reject ambiguous user-file boundaries and preserve source precedence
+
+- **Symptoms**: an unterminated Surge legacy block discarded the remaining profile during teardown;
+  a broker secret overrode a later plain value, and an unreleased later secret exposed earlier plain.
+- **Causes**: block removal treated EOF as closure; broker merging separated plain and secret passes.
+- **Fix**: reject unmatched/nested markers before writing; compute each key's winning source before
+  secret release and remote merge, while retaining complete policy declarations.
+- **Rule**: ambiguous boundaries grant no deletion authority. Value precedence applies to declarations,
+  independently of whether a secret is authorized for release.
+
 ## 2026-10-09 — Preserve execution authority and serialize App receipts
 
 - **Symptoms**: reinstall overwrote a user-modified file despite a Preserve Plan; concurrent App

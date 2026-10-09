@@ -53,6 +53,30 @@ async function makeFixture(profileContent: string): Promise<{
 }
 
 describe("Surge profile artifact", () => {
+  for (const [name, markers] of [
+    ["missing closing marker", "# >>> shine local proxy groups >>>\nOld = select, DIRECT\n"],
+    ["missing opening marker", "# <<< shine local proxy groups <<<\n"],
+    ["nested markers", "# >>> shine local proxy groups >>>\n# >>> shine local proxy groups >>>\n# <<< shine local proxy groups <<<\n"],
+  ]) {
+    test(`build and unbuild preserve user content with ${name}`, async () => {
+      const original = "[Proxy]\n#!include proxies.conf\n[Proxy Group]\n#!include groups.conf\n"
+        + markers + "[Rule]\n#!include rules.conf\nFINAL,Proxy\n";
+      const fixture = await makeFixture(original);
+      try {
+        await chmod(fixture.profile, 0o600);
+        for (const script of [buildScript, unbuildScript]) {
+          const result = await runArtifact(script, fixture.profile);
+          expect(result.code).not.toBe(0);
+          expect(result.stderr).toContain("legacy Shine proxy-group block");
+          expect(await readFile(fixture.profile, "utf8")).toBe(original);
+          expect((await stat(fixture.profile)).mode & 0o777).toBe(0o600);
+        }
+      } finally {
+        await rm(fixture.dir, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("build patches precedence idempotently while preserving CRLF and mode", async () => {
     const fixture = await makeFixture(
       [
