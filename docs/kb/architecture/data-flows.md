@@ -404,7 +404,7 @@ entries are never removed.
 
 Every mutating or dry-run Shell lifecycle entry loads `shell-manifest.toml` before extraction,
 snapshot, render, launcher, receipt, or profile work. Legacy v0 normalizes in memory, successful
-mutations save schema v1, read-only status/update does not rewrite it, and a future version fails
+mutations save schema v2 (legacy v0/v1 normalize in memory), read-only status/update does not rewrite it, and a future version fails
 before mutation. The Shell adapter emits one `shell/<category>/<command>` outcome per installed or
 selected command. Read-only update maps typed row changes to `pending` plus write-preview effects;
 foreign launcher ownership is `conflict`, not pending, and upgrade preserves that launcher and its
@@ -414,6 +414,25 @@ presence into installation evidence.
 Shell execution emits CLI-private presentation events instead of writing terminal output. The
 terminal renderer owns shared upgrade-section state, while writer-backed recording tests pin
 quiet/verbose sections, conflicts, profile hints, and stdout/stderr routing.
+
+## Transformed Live Bun invocation
+
+A `live-bun-v2` launcher binds its absolute installation root and calls hidden `__shell-launch`
+once. CLI loads global/project/env override configuration once, then constructs the existing captured
+Core runtime. `prepare_live_bun_launch` holds the operation lock while refusing a pending Shell journal,
+validating one installed receipt and its env/transform/path contract, and rendering it. The description
+contains only the script path, dependency enum and env specs. CLI drops the runtime and releases the
+lock before encrypted-first declared-value resolution and direct Bun spawn. Stdio/cwd are inherited,
+workspace discovery is absent, and the hidden route skips version notifications. Empty declarations
+still allow template rendering, but never inject the whole Config env table. Later env/spawn errors
+leave successful rendered output in place; shared output remains mutable after preparation.
+The Windows PowerShell entry explicitly encodes argv for `ProcessStartInfo` with shell execution
+disabled, preserving empty args, literal `--`, quotes and trailing backslashes under PowerShell 5.1.
+It starts the PATH-resolved Shine executable with inherited stdio/cwd; no additional shell is spawned.
+
+Missing format fields select the frozen legacy launcher. Schema-2 manifest plus strict Action receipt
+fields protect new formats from old readers. Upgrade, uninstall and recovery reconstruct resources
+from the captured format/root, including both Windows shims (ADR 0102).
 
 ## App install (`shine app install <category>`)
 

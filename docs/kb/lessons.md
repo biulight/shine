@@ -1,5 +1,40 @@
 # Lessons Learned
 
+## 2026-10-09 — PowerShell 5.1 native argument binding needs actual argv tests
+
+- **Symptom**: the Live Bun PowerShell shim lost empty args and literal `--` in real ConPTY
+  execution; a smoke test passing only `hello` did not detect it.
+- **Fix**: the unreleased new-format shim encodes Windows argv for `ProcessStartInfo` with shell
+  execution disabled. Native regression assertions cover empty args, `--`, whitespace, quotes,
+  trailing backslashes and backslashes before quotes. Legacy bytes remain available for recovery.
+- **Rule**: inspect child argv, not just wrapper text. ConPTY fixtures must avoid inherited SSH
+  pipe handles, restore Ctrl-C processing and check client PIDs before closing the pseudoconsole;
+  closing ConPTY can itself terminate clients and hide a lifecycle failure. Record outer-shell
+  Ctrl-C status separately from Unix signal mapping.
+
+## 2026-10-09 — Validate the Windows executable stack and isolated data directories
+
+- **Symptom**: native debug CLI startup/installation overflowed the main-thread stack even
+  though unit tests passed; isolated launches also failed Windows runtime-directory discovery.
+- **Fix**: reserve 8 MiB for the Windows MSVC Shine executable via its binary-specific linker
+  argument, and create the fixture's HOME/APPDATA/LOCALAPPDATA directories. Native CMD and
+  PowerShell launch, migration/recovery and uninstall checks then passed.
+- **Rule**: test the actual executable, not only Rust test-worker futures. Stack reserve is
+  virtual address space, not resident-memory measurement. Windows isolated fixtures must supply
+  existing data directories; do not fall back to a developer's real profile to make tests pass.
+
+## 2026-10-09 — Live launch consolidation needs versioned resource reconstruction
+
+- **Symptoms**: transformed Bun launchers selected a different env store for their second Shine
+  invocation, and any state directory named `.shine` lost its render binding.
+- **Cause**: wrapper-local env changes cannot alter the parent, while template replacement also
+  changes the exact bytes used to prove receipt-owned launcher updates and recovery.
+- **Fix**: schema-2 receipts bind an explicit installation root and `live-bun-v2`; one hidden
+  invocation renders under the lifecycle lock and resolves declared env from the same Config.
+  Legacy byte reconstruction and strict journal receipt decoding preserve recovery boundaries.
+- **Rule**: bind each wrapper invocation explicitly; migrate executable formats through receipts
+  and approved resource transactions, never by editing only the current template.
+
 ## 2026-10-09 — Runtime capture and proxy installation must preflight file boundaries
 
 - **Symptoms**: a FIFO stalled read-only listing; relative config roots broke App generators after

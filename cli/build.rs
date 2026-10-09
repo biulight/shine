@@ -2,6 +2,15 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    // Windows' 1 MiB default main-thread stack is too small for the CLI's
+    // nested async lifecycle futures, especially in debug builds. Reserve
+    // 8 MiB for the actual Shine binary; pages are committed as used.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        println!("cargo:rustc-link-arg-bin=shine=/STACK:8388608");
+    }
+
     println!("cargo:rerun-if-changed=presets");
     println!("cargo:rerun-if-env-changed=SHINE_VERSION_METADATA");
     println!("cargo:rerun-if-env-changed=SHINE_GIT_SHA");

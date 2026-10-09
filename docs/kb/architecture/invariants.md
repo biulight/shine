@@ -296,7 +296,7 @@ bugs. Check this list before changing the modules named in each entry.
 - **Every runtime manifest is a pre-mutation gate.** App, Shell, and Sys load their own manifest
   before destination/resource, embedded cache, snapshot/render, launcher, receipt, or profile
   mutation. Missing `schema_version` is legacy v0, read-only loads never rewrite it, the next
-  successful mutation writes v1, and an unsupported future version fails first. The inner Sys
+  successful mutation writes Shell v2 or App/Sys v1, and an unsupported future version fails first. The inner Sys
   receipt `version` is independent of `sys-manifest.toml`'s schema version.
 
 - **Uninstall never touches user files.** `presets::remove_prefix` removes only embedded-asset
@@ -312,9 +312,9 @@ bugs. Check this list before changing the modules named in each entry.
   root. An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user
   conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
   format change re-detects installed launchers as stale on upgrade; changing it is a format bump.
-  The content embeds the entry's ordered `env` spec (the `--with` tokens of the
-  `shine env run --no-workspace … -- bun … <script>` wrapper) and its Bun dependency policy, so
-  either declaration changing refreshes the launcher. Ownership/removal still key only on the
+  Legacy content embeds the ordered `env` specs and Bun dependency policy. The `live-bun-v2`
+  template reads those from its installed receipt; exact receipt comparisons still refresh both
+  changes through an approved lifecycle operation. Ownership/removal still key only on the
   marker + target, independent of `env` and dependency mode.
 - **Backups use the `<name>.shine.bak` suffix** (`install_core/file_ops.rs::backup_path`).
   Uninstall restores from that exact name; changing the suffix orphans existing backups.
@@ -742,6 +742,14 @@ bugs. Check this list before changing the modules named in each entry.
   target recorded in `shell-manifest.toml`; the renderer writes only below `rendered_dir`, stores
   no env values in the manifest, uses atomic replacement, and fails rather than executing stale
   output after a transform error.
+- **Single-process Live Bun launch is receipt-bound.** Schema-2 Shell receipts record
+  `live-bun-v2` and an explicit installation root only for transformed, nonsourced Live Bun commands.
+  Legacy receipts reconstruct the exact old templates. Format/root affect Plan and Action receipt
+  identity, update, uninstall and recovery; old receipt readers reject new journal fields.
+  Preparation validates one unique canonical record and its regular, bounded paths under the same
+  operation lock, then renders once. CLI drops captured runtime inputs before declared env decryption
+  and Bun wait, using one layered Config and no workspace or version lookup. Rendering and launch
+  are not jointly transactional; output can change after lock release (ADR 0102).
 - **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
   files, manifest entries, and managed launchers, including legacy launchers pointing into the
   external tree. The external presets and overlay directories remain untouched.

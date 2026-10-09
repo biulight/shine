@@ -2,6 +2,7 @@ pub mod broker;
 pub mod catalog;
 pub mod commands;
 pub mod identity;
+pub(crate) mod live_bun;
 pub mod proxy;
 pub mod upgrade;
 pub mod workspace;

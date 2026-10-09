@@ -28,8 +28,7 @@ use super::{
     SysBootstrapBatchRequest, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall, SysItem,
     SysItemMode, SysManagedAction, SysManagedReport, SysManagedRequest, SysManifest,
     SysPackageProvider, SysProfileStateReport, SysProfileStateRequest, SysRunEntry, SysRunManifest,
-    SystemReceipt, command_path_for_name, link_is_current_with_host, parse_shell_lifecycle_target,
-    split_dns_receipt,
+    SystemReceipt, command_path_for_name, parse_shell_lifecycle_target, split_dns_receipt,
 };
 use crate::action::{
     ActionIrV1, DeclarativeActionV1, ForcedManagedFileBackupV1, ForcedManagedFileRemoveSpecV1,
@@ -3216,6 +3215,12 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         && !effective_transforms.is_empty())
                     .then(|| canonical.clone());
                     let desired_spec = LinkSpec {
+                        live_launch_config: self.live_bun_launcher_config(
+                            file.runtime,
+                            !effective_transforms.is_empty(),
+                            file.needs_source,
+                        ),
+
                         source: effective.clone(),
                         link_name: file.command_name.clone().into(),
                         runtime: file.runtime,
@@ -3237,18 +3242,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         all_launcher_resources_absent &=
                             self.host().metadata(resource.destination()).await.is_err();
                     }
-                    let link_current = exists
-                        && managed
-                        && link_is_current_with_host(
-                            self.host(),
-                            &link,
-                            &effective,
-                            file.runtime,
-                            bun.dependency_mode,
-                            &env,
-                            render_target.as_deref(),
-                        )
-                        .await?;
+                    let mut link_current = exists && managed;
+                    for resource in &desired_resources {
+                        link_current &=
+                            prepared_launcher_resource_is_exact(self.host(), resource).await?;
+                    }
                     let source_current = if self.context().is_external_presets
                         && self.context().external_shell_mode == ExternalShellMode::Live
                     {
@@ -3286,6 +3284,12 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             && entry.transforms == effective_transforms
                             && entry.env == env
                             && entry.needs_source == file.needs_source
+                            && entry.launcher_config_dir == desired_spec.live_launch_config
+                            && entry.launcher_format.as_deref()
+                                == desired_spec
+                                    .live_launch_config
+                                    .as_ref()
+                                    .map(|_| super::shell::LIVE_BUN_LAUNCHER_FORMAT)
                     });
                     let current =
                         link_current && source_current && rendered_current && manifest_current;
@@ -6618,14 +6622,7 @@ async fn load_shell_manifest(
         .map(toml::from_slice)
         .transpose()?
         .unwrap_or_default();
-    match manifest.schema_version {
-        0 => manifest.schema_version = super::SHELL_MANIFEST_SCHEMA_VERSION,
-        super::SHELL_MANIFEST_SCHEMA_VERSION => {}
-        version => bail!(
-            "shell manifest schema version {version} is newer than this Shine supports ({})",
-            super::SHELL_MANIFEST_SCHEMA_VERSION
-        ),
-    }
+    super::shell::normalize_shell_manifest(&mut manifest)?;
     Ok((manifest, bytes))
 }
 
@@ -12558,6 +12555,9 @@ target = '$HOME/.config/disabled.txt'
         let entries = ["a", "b"]
             .into_iter()
             .map(|command| ShellManifestEntry {
+                launcher_format: None,
+                launcher_config_dir: None,
+
                 category: "demo".to_string(),
                 command: command.to_string(),
                 mode: ExternalShellMode::Snapshot,
@@ -13313,6 +13313,9 @@ target = '$HOME/.config/disabled.txt'
         let entries = ["one", "two"]
             .into_iter()
             .map(|command| ShellManifestEntry {
+                launcher_format: None,
+                launcher_config_dir: None,
+
                 category: "demo".to_string(),
                 command: command.to_string(),
                 mode: ExternalShellMode::Snapshot,
@@ -13369,6 +13372,9 @@ target = '$HOME/.config/disabled.txt'
             toml::to_string(&ShellManifest {
                 schema_version: super::super::SHELL_MANIFEST_SCHEMA_VERSION,
                 entries: vec![ShellManifestEntry {
+                    launcher_format: None,
+                    launcher_config_dir: None,
+
                     category: "demo".to_string(),
                     command: "demo".to_string(),
                     mode: ExternalShellMode::Snapshot,
@@ -15247,6 +15253,9 @@ target = '$HOME/.config/disabled.txt'
         let entries = ["one", "two"]
             .into_iter()
             .map(|command| ShellManifestEntry {
+                launcher_format: None,
+                launcher_config_dir: None,
+
                 category: "demo".to_string(),
                 command: command.to_string(),
                 mode: ExternalShellMode::Snapshot,

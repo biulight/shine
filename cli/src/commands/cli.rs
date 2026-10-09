@@ -26,6 +26,13 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    #[command(name = "__shell-launch", hide = true)]
+    ShellLaunch {
+        #[arg(value_name = "TARGET")]
+        target: String,
+        #[arg(last = true, value_name = "ARGS")]
+        args: Vec<std::ffi::OsString>,
+    },
     #[command(name = "__shell-render", hide = true)]
     ShellRender {
         #[arg(value_name = "TARGET")]

@@ -53,7 +53,8 @@ struct ShellFileToml {
 }
 
 pub const SHELL_MANIFEST_FILE: &str = "shell-manifest.toml";
-pub const SHELL_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const SHELL_MANIFEST_SCHEMA_VERSION: u32 = 2;
+pub const LIVE_BUN_LAUNCHER_FORMAT: &str = "live-bun-v2";
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -100,6 +101,23 @@ pub struct BunRuntimeSpec {
 }
 
 pub(crate) fn shell_link_spec_from_manifest_entry(entry: &ShellManifestEntry) -> Result<LinkSpec> {
+    let live_launch_config = match (&entry.launcher_format, &entry.launcher_config_dir) {
+        (None, None) => None,
+        (Some(format), Some(config))
+            if format == LIVE_BUN_LAUNCHER_FORMAT
+                && entry.mode == ExternalShellMode::Live
+                && entry.runtime == "bun"
+                && !entry.transforms.is_empty()
+                && !entry.needs_source
+                && config.is_absolute()
+                && !config
+                    .components()
+                    .any(|part| part == std::path::Component::ParentDir) =>
+        {
+            Some(config.clone())
+        }
+        _ => bail!("unsupported or inconsistent Shell launcher format in receipt"),
+    };
     let runtime = match entry.runtime.as_str() {
         "native" => LinkRuntime::Native,
         "bun" => LinkRuntime::Bun,
@@ -118,6 +136,8 @@ pub(crate) fn shell_link_spec_from_manifest_entry(entry: &ShellManifestEntry) ->
     let render_target = (entry.mode == ExternalShellMode::Live && !entry.transforms.is_empty())
         .then(|| format!("shell/{}/{}", entry.category, entry.command));
     Ok(LinkSpec {
+        live_launch_config,
+
         source,
         link_name: OsString::from(&entry.command),
         runtime,
@@ -362,6 +382,22 @@ fn push_inspection_change(
     }
 }
 
+impl<H> CoreRuntime<H> {
+    pub(crate) fn live_bun_launcher_config(
+        &self,
+        runtime: LinkRuntime,
+        transforms: bool,
+        needs_source: bool,
+    ) -> Option<PathBuf> {
+        (self.context().is_external_presets
+            && self.context().external_shell_mode == ExternalShellMode::Live
+            && runtime == LinkRuntime::Bun
+            && transforms
+            && !needs_source)
+            .then(|| self.context().shine_dir.clone())
+    }
+}
+
 impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     pub async fn installed_shell_source_commands(
         &self,
@@ -479,7 +515,28 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     && self.context().external_shell_mode == ExternalShellMode::Live
                     && !effective_transforms.is_empty())
                 .then(|| format!("shell/{}/{}", category.name, file.command_name));
-                let link_current = if link_exists {
+                let live_launch_config = self.live_bun_launcher_config(
+                    file.runtime,
+                    !effective_transforms.is_empty(),
+                    file.needs_source,
+                );
+                let link_current = if let Some(config) = &live_launch_config {
+                    let spec = LinkSpec {
+                        source: effective_source.clone(),
+                        link_name: file.command_name.clone().into(),
+                        runtime: file.runtime,
+                        bun_dependencies: bun.dependency_mode,
+                        env: runtime_env.clone(),
+                        render_target: render_target.clone(),
+                        live_launch_config: Some(config.clone()),
+                    };
+                    let mut exact = true;
+                    for resource in prepare_launcher_resources(&self.context().bin_dir, &spec) {
+                        exact &=
+                            prepared_launcher_resource_is_exact(self.host(), &resource).await?;
+                    }
+                    exact
+                } else if link_exists {
                     link_is_current_with_host(
                         self.host(),
                         &link_path,
@@ -539,8 +596,26 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                             && entry.transforms == effective_transforms
                             && entry.env == runtime_env
                             && entry.needs_source == file.needs_source
+                            && entry.launcher_config_dir == live_launch_config
+                            && entry.launcher_format.as_deref()
+                                == live_launch_config
+                                    .as_ref()
+                                    .map(|_| LIVE_BUN_LAUNCHER_FORMAT)
                     });
                 if let Some(entry) = entry {
+                    push_inspection_change(
+                        &mut changes,
+                        "launcher format",
+                        entry
+                            .launcher_format
+                            .clone()
+                            .unwrap_or_else(|| "legacy".into()),
+                        live_launch_config
+                            .as_ref()
+                            .map(|_| LIVE_BUN_LAUNCHER_FORMAT)
+                            .unwrap_or("legacy")
+                            .into(),
+                    );
                     if entry.source_path != source_path {
                         changes.push(InspectionChange::SourceRelocated {
                             from: entry.source_path.clone(),
@@ -2197,6 +2272,12 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 };
                 let bun = self.shell_bun_runtime_spec(&category.name, file)?;
                 specs.push(LinkSpec {
+                    live_launch_config: self.live_bun_launcher_config(
+                        file.runtime,
+                        transforms,
+                        file.needs_source,
+                    ),
+
                     source: effective,
                     link_name: OsString::from(&file.command_name),
                     runtime: file.runtime,
@@ -2649,32 +2730,12 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         for category in categories {
             for file in &category.files {
                 let entry = self.shell_manifest_entry(category, file).await?;
-                let transforms = &entry.transforms;
-                let effective_source = if transforms.is_empty() {
-                    entry.source_path.as_path()
-                } else {
-                    entry.rendered_path.as_path()
-                };
-                let bun = self.shell_bun_runtime_spec(&category.name, file)?;
-                let render_target = (self.context().is_external_presets
-                    && self.context().external_shell_mode == ExternalShellMode::Live
-                    && !transforms.is_empty())
-                .then(|| format!("shell/{}/{}", category.name, file.command_name));
-                let link = super::command_path_for_name(
-                    &self.context().bin_dir,
-                    std::ffi::OsStr::new(&file.command_name),
-                );
-                if !link_is_current_with_host(
-                    self.host(),
-                    &link,
-                    effective_source,
-                    file.runtime,
-                    bun.dependency_mode,
-                    &entry.env,
-                    render_target.as_deref(),
-                )
-                .await?
-                {
+                let spec = shell_link_spec_from_manifest_entry(&entry)?;
+                let mut current = true;
+                for resource in prepare_launcher_resources(&self.context().bin_dir, &spec) {
+                    current &= prepared_launcher_resource_is_exact(self.host(), &resource).await?;
+                }
+                if !current {
                     continue;
                 }
                 entries.push(entry);
@@ -2746,6 +2807,15 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             .collect::<Vec<_>>();
         let bun = self.shell_bun_runtime_spec(&category.name, file)?;
         Ok(ShellManifestEntry {
+            launcher_format: self
+                .live_bun_launcher_config(file.runtime, !transforms.is_empty(), file.needs_source)
+                .map(|_| LIVE_BUN_LAUNCHER_FORMAT.to_string()),
+            launcher_config_dir: self.live_bun_launcher_config(
+                file.runtime,
+                !transforms.is_empty(),
+                file.needs_source,
+            ),
+
             category: category.name.clone(),
             command: file.command_name.clone(),
             mode: if self.context().is_external_presets {
@@ -2783,6 +2853,14 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         let entry = manifest
             .find(target)
             .with_context(|| format!("live shell command is not installed: {target}"))?;
+        self.render_live_shell_entry(entry, target).await
+    }
+
+    pub(super) async fn render_live_shell_entry(
+        &self,
+        entry: &ShellManifestEntry,
+        target: &str,
+    ) -> Result<()> {
         if entry.mode != ExternalShellMode::Live {
             bail!("shell command is not installed in live mode: {target}");
         }
@@ -3610,14 +3688,28 @@ pub(crate) async fn load_shell_manifest_with_host(
         Err(error) if error.is_not_found() => ShellManifest::default(),
         Err(error) => return Err(error.into_anyhow("failed to read shell manifest")),
     };
+    normalize_shell_manifest(&mut manifest)?;
+    Ok(manifest)
+}
+
+pub(crate) fn normalize_shell_manifest(manifest: &mut ShellManifest) -> Result<()> {
     match manifest.schema_version {
-        0 => manifest.schema_version = SHELL_MANIFEST_SCHEMA_VERSION,
+        0 | 1 => {
+            if manifest
+                .entries
+                .iter()
+                .any(|entry| entry.launcher_format.is_some() || entry.launcher_config_dir.is_some())
+            {
+                bail!("new Shell launcher format requires manifest schema version 2");
+            }
+            manifest.schema_version = SHELL_MANIFEST_SCHEMA_VERSION;
+        }
         SHELL_MANIFEST_SCHEMA_VERSION => {}
         version => bail!(
             "shell manifest schema version {version} is newer than this Shine supports ({SHELL_MANIFEST_SCHEMA_VERSION})"
         ),
     }
-    Ok(manifest)
+    Ok(())
 }
 
 async fn save_shell_manifest_with_host(
@@ -3782,6 +3874,10 @@ pub fn parse_shell_lifecycle_target(target: &str) -> Result<ShellTarget<'_>> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ShellManifestEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_config_dir: Option<PathBuf>,
     pub category: String,
     pub command: String,
     pub mode: ExternalShellMode,
@@ -3876,7 +3972,7 @@ impl ShellManifest {
     }
 }
 
-fn canonical_target(entry: &ShellManifestEntry) -> String {
+pub(super) fn canonical_target(entry: &ShellManifestEntry) -> String {
     format!("shell/{}/{}", entry.category, entry.command)
 }
 
@@ -4028,7 +4124,7 @@ commands = ["git"]
             host.read(&shine_dir.join("shell-manifest.toml"))
                 .await
                 .unwrap()
-                .starts_with(b"schema_version = 1")
+                .starts_with(b"schema_version = 2")
         );
         assert_eq!(
             runtime.installed_shell_source_commands(None).await.unwrap(),
@@ -4128,7 +4224,7 @@ commands = ["git"]
             host.read(&shine_dir.join(SHELL_MANIFEST_FILE))
                 .await
                 .unwrap()
-                .starts_with(b"schema_version = 1")
+                .starts_with(b"schema_version = 2")
         );
     }
 
@@ -4231,10 +4327,10 @@ commands = ["git"]
             tokio::fs::read_to_string(&path)
                 .await
                 .unwrap()
-                .contains("schema_version = 1")
+                .contains("schema_version = 2")
         );
 
-        tokio::fs::write(&path, "schema_version = 2\nentries = []\n")
+        tokio::fs::write(&path, "schema_version = 3\nentries = []\n")
             .await
             .unwrap();
         assert!(

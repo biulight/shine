@@ -727,7 +727,7 @@ fn merge_explicit(
     Ok(explicit)
 }
 
-async fn resolve_explicit_values(
+pub(super) async fn resolve_explicit_values(
     config: &Config,
     specs: &[String],
 ) -> Result<BTreeMap<String, String>> {
@@ -1528,12 +1528,12 @@ async fn run_broker_command(
     finish_command_status(status?)
 }
 
-async fn command_status(
+pub(super) fn command_builder(
     command: &[OsString],
     values: &BTreeMap<String, String>,
     override_process_env: bool,
     explicit: &BTreeMap<String, String>,
-) -> Result<std::process::ExitStatus> {
+) -> Result<Command> {
     let (program, args) = command
         .split_first()
         .context("a command is required after --")?;
@@ -1545,14 +1545,22 @@ async fn command_status(
         }
     }
     child.envs(explicit);
-    let status = child
-        .status()
-        .await
-        .with_context(|| format!("running {}", program.to_string_lossy()))?;
-    Ok(status)
+    Ok(child)
 }
 
-fn finish_command_status(status: std::process::ExitStatus) -> Result<()> {
+async fn command_status(
+    command: &[OsString],
+    values: &BTreeMap<String, String>,
+    override_process_env: bool,
+    explicit: &BTreeMap<String, String>,
+) -> Result<std::process::ExitStatus> {
+    command_builder(command, values, override_process_env, explicit)?
+        .status()
+        .await
+        .with_context(|| format!("running {}", command[0].to_string_lossy()))
+}
+
+pub(super) fn finish_command_status(status: std::process::ExitStatus) -> Result<()> {
     if status.success() {
         return Ok(());
     }

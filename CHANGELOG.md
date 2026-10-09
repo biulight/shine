@@ -9,6 +9,14 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Launch transformed Live Bun commands through one Shine process and bind rendering and declared
+  environment values to their installation directory while preserving project overrides. Existing
+  commands migrate through the normal reviewed upgrade and recovery workflow.
+  Reserve sufficient main-thread stack for the Windows MSVC executable to prevent stack overflow
+  during startup and installation.
+  Preserve empty arguments, literal `--`, quotes and trailing backslashes when refreshed Live Bun
+  commands run from Windows PowerShell 5.1.
+
 - Preserve existing receipts when atomic replacement fails on Windows, synchronize runtime
   journal and receipt writes before returning, retain Unix profile permissions during Shell
   recovery, and treat shell metacharacters in generated profile paths literally.

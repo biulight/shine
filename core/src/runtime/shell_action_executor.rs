@@ -3603,6 +3603,9 @@ fn resource_contract(resource: &PreparedLauncherResource) -> ShellLauncherResour
 
 fn receipt_contract(entry: &ShellManifestEntry) -> ShellLauncherReceiptV1 {
     ShellLauncherReceiptV1 {
+        launcher_format: entry.launcher_format.clone(),
+        launcher_config_dir: entry.launcher_config_dir.clone(),
+
         category: entry.category.clone(),
         command: entry.command.clone(),
         mode: match entry.mode {
@@ -3706,6 +3709,9 @@ fn manifest_entry_from_receipt(receipt: &ShellLauncherReceiptV1) -> Result<Shell
         _ => bail!("Shell launcher receipt contains an unsupported mode"),
     };
     Ok(ShellManifestEntry {
+        launcher_format: receipt.launcher_format.clone(),
+        launcher_config_dir: receipt.launcher_config_dir.clone(),
+
         category: receipt.category.clone(),
         command: receipt.command.clone(),
         mode,

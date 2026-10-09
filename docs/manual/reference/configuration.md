@@ -183,6 +183,15 @@ on the next invocation, but changes to `target`, `runtime`, `transforms`, or `en
 snapshot trust cannot authorize a launcher that reads mutable source. Existing live launchers are
 preserved, and status marks those missing development trust for review.
 
+After upgrading Shine, run `shine update` and `shine upgrade` to refresh existing transformed Live
+Bun commands. Their refreshed entries use the installation's configuration directory for both
+rendering and declared environment values, even when the caller sets a different `SHINE_CONFIG_DIR`.
+Project configuration and `shine.env.toml` overrides still follow the caller's working directory.
+The refreshed PowerShell entries preserve empty arguments and literal `--`, including on Windows
+PowerShell 5.1.
+This change covers Live Bun commands with transforms, including commands without declared `env`;
+raw Live commands, native/source commands and snapshot commands keep their existing launch behavior.
+
 An overlay replaces files at matching relative paths over the chosen base instead of replacing the
 whole tree. `presets_overlay_dir` and `presets_overlay_git` are mutually exclusive; use
 `shine preset overlay link` to configure them safely. A Git overlay becomes active after the first

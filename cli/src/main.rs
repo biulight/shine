@@ -47,7 +47,15 @@ fn main() -> std::process::ExitCode {
 fn run_main() -> Result<()> {
     completion::complete_from_env();
 
-    let cli = Cli::parse();
+    let argv = std::env::args_os().collect::<Vec<_>>();
+    let cli = Cli::parse_from(&argv);
+    if let Commands::ShellLaunch { target, .. } = &cli.command
+        && !argv
+            .windows(2)
+            .any(|pair| pair[0] == target.as_str() && pair[1] == "--")
+    {
+        bail!("__shell-launch requires -- immediately after the target");
+    }
 
     if let Commands::Completions { command } = &cli.command
         && CompletionShell::from_command(command).is_some()
@@ -212,6 +220,10 @@ async fn run_command(cli: Cli) -> Result<()> {
         );
     }
 
+    if let Commands::ShellLaunch { target, args } = &cli.command {
+        return shells::handle_launch_live(&config, target, args).await;
+    }
+
     if let Commands::ShellRender { target } = &cli.command {
         return shells::handle_render_live(&config, target).await;
     }
@@ -221,7 +233,7 @@ async fn run_command(cli: Cli) -> Result<()> {
     update_check::maybe_notify(&config, &cli.command).await?;
 
     match cli.command {
-        Commands::ShellRender { .. } => unreachable!(),
+        Commands::ShellRender { .. } | Commands::ShellLaunch { .. } => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Completions {
             command: CompletionCommands::Install,

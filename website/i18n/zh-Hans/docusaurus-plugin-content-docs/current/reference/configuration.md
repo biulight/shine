@@ -161,6 +161,13 @@ FIFO、套接字和设备等特殊条目会使快照捕获报错；Shine 不会�
 显式 development trust；snapshot trust 不能授权读取可变来源的 launcher。已有 live launcher 会
 保留，状态会把缺少 development trust 的目标标为需要审阅。
 
+升级 Shine 后，运行 `shine update` 检查，再用 `shine upgrade` 更新已有的带 transforms 的 Live
+Bun 命令。更新后的入口在渲染和读取声明的环境值时都使用安装目录对应的配置，即使调用者
+设置了不同的 `SHINE_CONFIG_DIR`。项目配置和 `shine.env.toml` 覆盖仍按调用者的工作目录生效。
+更新后的 PowerShell 入口会保留空参数和字面量 `--`，也支持 Windows PowerShell 5.1。
+此改动也覆盖未声明 `env` 的带 transforms 的 Live Bun 命令；无 transforms 的 Live 命令、
+Native/source 命令及 snapshot 命令保留现有启动方式。
+
 Overlay 在选定的基础预设来源上按相同相对路径覆盖文件，不替代整棵目录。手动关联的
 `presets_overlay_dir` 与 `presets_overlay_git` 互斥；使用 `shine preset overlay link` 可避免同时配置。
 Git 管理的 overlay 只有在首次 `shine preset pull` 克隆成功后才生效，本地检出会在后续拉取时

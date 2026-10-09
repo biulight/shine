@@ -26,6 +26,7 @@ mod review_path;
 mod schema;
 mod shell;
 mod shell_action_executor;
+mod shell_launch;
 mod sys;
 mod sys_action_executor;
 mod sys_bootstrap;
@@ -111,6 +112,7 @@ pub use shell::{
 pub use shell_action_executor::{
     SHELL_OPERATION_JOURNAL_FILE, ShellOperationExecutionV1, ShellRecoveryReportV1,
 };
+pub use shell_launch::{LiveBunLaunch, validate_live_shell_target};
 pub use sys::{
     ManagedFileReceipt, ManagedFileRemoveRequest, ManagedFileRequest, RECEIPT_VERSION,
     ResourceConflict, ResourceOutcome, ResourcePlan, SYS_MANIFEST_FILE,

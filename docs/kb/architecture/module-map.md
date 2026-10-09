@@ -12,7 +12,7 @@ Update this file when modules move, split, merge, or take on a different respons
 |---|---|
 | `Cargo.toml` | Workspace manifest and publishable `shine-cli` package root |
 | `cli/` | Main `shine` binary plus its library crate |
-| `cli/build.rs` | `rust-embed` rebuild trigger for `presets/` |
+| `cli/build.rs` | Embedded preset rebuild triggers, build metadata, and Windows MSVC executable stack reserve |
 | `core/` | Reusable `shine-core` package with no CLI/Tauri dependency |
 | `core/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
@@ -35,6 +35,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence plus target-local and current-Preset batch `shine trust` workflows |
 | `core/src/runtime/app_script.rs` | Per-invocation captured App script/helper materialization, fixed execution paths, and cleanup |
 | `core/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
 | `core/src/runtime/shell.rs` | Complete Shell assessment/install/upgrade/uninstall/live render, launcher, cache, profile, and manifest orchestration |
 | `core/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS transactional orchestration, and run-manifest persistence |
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
@@ -134,7 +135,7 @@ logic.
 | Path | Responsibility |
 |---|---|
 | `cli/src/shells/mod.rs` | Shell types, shared accessors, handler re-exports |
-| `cli/src/shells/deployment.rs` | Hidden live-render Core adapter |
+| `cli/src/shells/deployment.rs` | Hidden live-render and single-process Live Bun launch adapters |
 | `cli/src/shells/install.rs` | Core category/command install and upgrade adapter |
 | `cli/src/shells/recovery.rs` | Core explicit Shell transaction recovery Plan/apply adapter |
 | `cli/src/shells/uninstall.rs` | Category/command uninstall results with sibling/cache and foreign-launcher protection |
@@ -197,6 +198,7 @@ Config discovery priority is documented as a behavioral contract in
 |---|---|
 | `cli/src/env/mod.rs` | `[env]` configuration and substitution core |
 | `cli/src/env/commands.rs` | Env CRUD and secret command handlers |
+| `cli/src/env/live_bun.rs` | Receipt-prepared Bun execution, declared env injection, and direct-child Unix signal relay |
 | `cli/src/env/workspace.rs` | Workspace env sources, export, seal, and child execution |
 | `cli/src/env/catalog.rs` | Known variable metadata |
 | `cli/src/env/identity.rs` | age identity generation and recipient inspection |

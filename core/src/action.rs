@@ -1949,6 +1949,10 @@ pub struct ShellSnapshotRemovalSpecV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShellLauncherReceiptV1 {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_config_dir: Option<PathBuf>,
     pub category: String,
     pub command: String,
     pub mode: String,
@@ -1970,7 +1974,23 @@ pub struct ShellLauncherReceiptV1 {
 
 impl ShellLauncherReceiptV1 {
     fn is_valid(&self) -> bool {
-        !self.category.is_empty()
+        let format_valid = match (&self.launcher_format, &self.launcher_config_dir) {
+            (None, None) => true,
+            (Some(format), Some(root)) => {
+                format == "live-bun-v2"
+                    && root.is_absolute()
+                    && !root
+                        .components()
+                        .any(|part| part == std::path::Component::ParentDir)
+                    && self.mode == "live"
+                    && self.runtime == "bun"
+                    && !self.transforms.is_empty()
+                    && !self.needs_source
+            }
+            _ => false,
+        };
+        format_valid
+            && !self.category.is_empty()
             && !self.command.is_empty()
             && matches!(self.mode.as_str(), "snapshot" | "live")
             && !self.source_path.as_os_str().is_empty()
@@ -2364,6 +2384,53 @@ mod tests {
         )
     }
 
+    // Frozen pre-v2 receipt grammar: old Action/journal readers must fail closed.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct LegacyShellReceipt {
+        pub category: String,
+        pub command: String,
+        pub mode: String,
+        pub source_path: PathBuf,
+        pub rendered_path: PathBuf,
+        pub runtime: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub bun_dependencies: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub dependency_hash: Option<u64>,
+        #[serde(default)]
+        pub transforms: Vec<String>,
+        #[serde(default)]
+        pub env: Vec<String>,
+        #[serde(default)]
+        pub needs_source: bool,
+        pub content_hash: u64,
+    }
+
+    #[test]
+    fn live_bun_receipt_fields_are_rejected_by_legacy_action_journal_readers() {
+        let legacy = serde_json::json!({
+            "category": "demo", "command": "run", "mode": "live",
+            "source_path": "source.ts", "rendered_path": "rendered.ts",
+            "runtime": "bun", "transforms": ["template"], "content_hash": 0
+        });
+        serde_json::from_value::<LegacyShellReceipt>(legacy.clone()).unwrap();
+        let mut receipt: ShellLauncherReceiptV1 = serde_json::from_value(legacy).unwrap();
+        assert!(receipt.launcher_format.is_none());
+        assert!(receipt.launcher_config_dir.is_none());
+        let encoded = serde_json::to_value(&receipt).unwrap();
+        assert!(encoded.get("launcher_format").is_none());
+        assert!(encoded.get("launcher_config_dir").is_none());
+        receipt.launcher_format = Some("live-bun-v2".into());
+        receipt.launcher_config_dir = Some(std::env::temp_dir());
+        let error =
+            serde_json::from_value::<LegacyShellReceipt>(serde_json::to_value(&receipt).unwrap())
+                .err()
+                .unwrap();
+        assert!(error.to_string().contains("unknown field"));
+    }
+
     #[test]
     fn action_ir_roundtrip_is_stable_and_payload_free() {
         let value = ir();
@@ -2446,6 +2513,9 @@ mod tests {
                 "shell/demo/demo",
                 "launcher",
                 ShellLauncherReceiptV1 {
+                    launcher_format: None,
+                    launcher_config_dir: None,
+
                     category: "demo".to_string(),
                     command: "demo".to_string(),
                     mode: "snapshot".to_string(),
@@ -2492,6 +2562,9 @@ mod tests {
         let destination = PathBuf::from("/home/test/.shine/bin/demo");
         let rollback = managed_file_rollback_path(&destination);
         let previous_receipt = ShellLauncherReceiptV1 {
+            launcher_format: None,
+            launcher_config_dir: None,
+
             category: "demo".to_string(),
             command: "demo".to_string(),
             mode: "snapshot".to_string(),
@@ -2559,6 +2632,9 @@ mod tests {
                 "shell/demo/demo",
                 "launcher",
                 ShellLauncherReceiptV1 {
+                    launcher_format: None,
+                    launcher_config_dir: None,
+
                     category: "demo".to_string(),
                     command: "demo".to_string(),
                     mode: "snapshot".to_string(),
@@ -2627,6 +2703,9 @@ mod tests {
         let destination = PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh");
         let rollback = managed_file_rollback_path(&destination);
         let receipt = ShellLauncherReceiptV1 {
+            launcher_format: None,
+            launcher_config_dir: None,
+
             category: "demo".to_string(),
             command: "demo".to_string(),
             mode: "snapshot".to_string(),
@@ -2688,6 +2767,9 @@ mod tests {
         let destination = PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh");
         let rollback = managed_file_rollback_path(&destination);
         let receipt = ShellLauncherReceiptV1 {
+            launcher_format: None,
+            launcher_config_dir: None,
+
             category: "demo".to_string(),
             command: "demo".to_string(),
             mode: "live".to_string(),
@@ -2744,6 +2826,9 @@ mod tests {
         let destination = PathBuf::from("/home/test/.shine/presets/shell/demo/demo.sh");
         let rollback = managed_file_rollback_path(&destination);
         let receipt = ShellLauncherReceiptV1 {
+            launcher_format: None,
+            launcher_config_dir: None,
+
             category: "demo".to_string(),
             command: "demo".to_string(),
             mode: "snapshot".to_string(),
