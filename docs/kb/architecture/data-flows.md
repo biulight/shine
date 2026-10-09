@@ -938,6 +938,11 @@ lexically absolute before snapshot capture and planning; it does not resolve ord
 symlinks or require missing destinations to exist. RealHost metadata rejects special filesystem
 entries, so capture cannot open a FIFO, socket, or device as a regular preset payload.
 
+`env delete` checks the active project's actual `[env]` table before saving through the sparse
+project layer. An inherited key without a local entry is an error, including with `--force`;
+removing a local override reveals the global value. Override-file deletion retains its explicit
+force policy and does not implicitly mutate another configuration layer.
+
 ## Dynamic shell completion
 
 `main.rs` calls `completion::complete_from_env` before Clap parsing, Tokio startup, config

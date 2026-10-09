@@ -1,6 +1,6 @@
 use super::launcher::{
     prepare_launcher_resources, prepared_launcher_resource_is_exact,
-    probe_managed_command_with_host,
+    probe_managed_command_with_host, uses_native_cmd_literal_path,
 };
 use super::shell_action_executor::{
     ShellCacheRemoval, ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation,
@@ -55,6 +55,7 @@ struct ShellFileToml {
 pub const SHELL_MANIFEST_FILE: &str = "shell-manifest.toml";
 pub const SHELL_MANIFEST_SCHEMA_VERSION: u32 = 2;
 pub const LIVE_BUN_LAUNCHER_FORMAT: &str = "live-bun-v2";
+pub const NATIVE_CMD_LAUNCHER_FORMAT: &str = "native-cmd-v2";
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -103,6 +104,13 @@ pub struct BunRuntimeSpec {
 pub(crate) fn shell_link_spec_from_manifest_entry(entry: &ShellManifestEntry) -> Result<LinkSpec> {
     let live_launch_config = match (&entry.launcher_format, &entry.launcher_config_dir) {
         (None, None) => None,
+        (Some(format), None)
+            if format == NATIVE_CMD_LAUNCHER_FORMAT
+                && entry.runtime == "native"
+                && entry.source_path.extension() == Some(std::ffi::OsStr::new("ps1")) =>
+        {
+            None
+        }
         (Some(format), Some(config))
             if format == LIVE_BUN_LAUNCHER_FORMAT
                 && entry.mode == ExternalShellMode::Live
@@ -136,6 +144,8 @@ pub(crate) fn shell_link_spec_from_manifest_entry(entry: &ShellManifestEntry) ->
     let render_target = (entry.mode == ExternalShellMode::Live && !entry.transforms.is_empty())
         .then(|| format!("shell/{}/{}", entry.category, entry.command));
     Ok(LinkSpec {
+        native_cmd_literal_path: entry.launcher_format.as_deref()
+            == Some(NATIVE_CMD_LAUNCHER_FORMAT),
         live_launch_config,
 
         source,
@@ -528,6 +538,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         bun_dependencies: bun.dependency_mode,
                         env: runtime_env.clone(),
                         render_target: render_target.clone(),
+                        native_cmd_literal_path: false,
                         live_launch_config: Some(config.clone()),
                     };
                     let mut exact = true;
@@ -585,6 +596,13 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     LinkRuntime::Native => "native",
                     LinkRuntime::Bun => "bun",
                 };
+                let desired_launcher_format = if live_launch_config.is_some() {
+                    Some(LIVE_BUN_LAUNCHER_FORMAT)
+                } else if uses_native_cmd_literal_path(file.runtime, &effective_source) {
+                    Some(NATIVE_CMD_LAUNCHER_FORMAT)
+                } else {
+                    None
+                };
                 let manifest_current = (!self.context().is_external_presets && entry.is_none())
                     || entry.is_some_and(|entry| {
                         entry.mode == self.context().external_shell_mode
@@ -597,10 +615,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                             && entry.env == runtime_env
                             && entry.needs_source == file.needs_source
                             && entry.launcher_config_dir == live_launch_config
-                            && entry.launcher_format.as_deref()
-                                == live_launch_config
-                                    .as_ref()
-                                    .map(|_| LIVE_BUN_LAUNCHER_FORMAT)
+                            && entry.launcher_format.as_deref() == desired_launcher_format
                     });
                 if let Some(entry) = entry {
                     push_inspection_change(
@@ -610,11 +625,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                             .launcher_format
                             .clone()
                             .unwrap_or_else(|| "legacy".into()),
-                        live_launch_config
-                            .as_ref()
-                            .map(|_| LIVE_BUN_LAUNCHER_FORMAT)
-                            .unwrap_or("legacy")
-                            .into(),
+                        desired_launcher_format.unwrap_or("legacy").into(),
                     );
                     if entry.source_path != source_path {
                         changes.push(InspectionChange::SourceRelocated {
@@ -2272,6 +2283,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 };
                 let bun = self.shell_bun_runtime_spec(&category.name, file)?;
                 specs.push(LinkSpec {
+                    native_cmd_literal_path: uses_native_cmd_literal_path(file.runtime, &effective),
                     live_launch_config: self.live_bun_launcher_config(
                         file.runtime,
                         transforms,
@@ -2809,7 +2821,11 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(ShellManifestEntry {
             launcher_format: self
                 .live_bun_launcher_config(file.runtime, !transforms.is_empty(), file.needs_source)
-                .map(|_| LIVE_BUN_LAUNCHER_FORMAT.to_string()),
+                .map(|_| LIVE_BUN_LAUNCHER_FORMAT.to_string())
+                .or_else(|| {
+                    uses_native_cmd_literal_path(file.runtime, &source_path)
+                        .then(|| NATIVE_CMD_LAUNCHER_FORMAT.to_string())
+                }),
             launcher_config_dir: self.live_bun_launcher_config(
                 file.runtime,
                 !transforms.is_empty(),
@@ -3984,6 +4000,135 @@ mod tests {
         FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost,
         RuntimeContext, RuntimePlatform,
     };
+
+    #[test]
+    fn native_cmd_receipts_keep_legacy_format_and_validate_new_format() {
+        let mut entry: ShellManifestEntry = toml::from_str(
+            r#"
+category = "demo"
+command = "run"
+mode = "snapshot"
+source_path = "C:/Users/O'Connor/.shine/presets/shell/demo/run.ps1"
+rendered_path = "C:/Users/O'Connor/.shine/rendered/shell/demo/run.ps1"
+runtime = "native"
+content_hash = 1
+"#,
+        )
+        .unwrap();
+        assert!(
+            !shell_link_spec_from_manifest_entry(&entry)
+                .unwrap()
+                .native_cmd_literal_path
+        );
+        entry.launcher_format = Some(NATIVE_CMD_LAUNCHER_FORMAT.into());
+        let round_trip: ShellManifestEntry =
+            toml::from_str(&toml::to_string(&entry).unwrap()).unwrap();
+        assert!(
+            shell_link_spec_from_manifest_entry(&round_trip)
+                .unwrap()
+                .native_cmd_literal_path
+        );
+        entry.runtime = "bun".into();
+        assert!(shell_link_spec_from_manifest_entry(&entry).is_err());
+        entry.runtime = "native".into();
+        entry.source_path = "C:/other.sh".into();
+        assert!(shell_link_spec_from_manifest_entry(&entry).is_err());
+        entry.source_path = "C:/other.ps1".into();
+        entry.launcher_config_dir = Some("C:/state".into());
+        assert!(shell_link_spec_from_manifest_entry(&entry).is_err());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_cmd_legacy_receipt_upgrades_and_uninstalls_through_approval() {
+        let host = InMemoryHost::new();
+        let home = std::env::temp_dir().join("shine-native-cmd-O'Connor");
+        let shine = home.join(".shine");
+        let bin = shine.join("bin");
+        let mut context = RuntimeContext::isolated(
+            home,
+            shine.clone(),
+            shine.join("presets"),
+            bin.clone(),
+            RuntimePlatform::Windows,
+        );
+        context.shell = ShellType::PowerShell;
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'run.ps1'\ntarget = 'run'\n".to_vec(),
+            )
+            .file("shell/demo/run.ps1", b"Write-Output 'demo'\n".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(host.clone(), context, snapshot);
+        runtime
+            .install_shells(ShellLifecycleRequest {
+                target: Some("demo/run".into()),
+                dry_run: false,
+                force: false,
+            })
+            .await
+            .unwrap();
+        let mut manifest = ShellManifest::load(&host, &shine).await.unwrap();
+        let entry = manifest.entries.first_mut().unwrap();
+        assert_eq!(
+            entry.launcher_format.as_deref(),
+            Some(NATIVE_CMD_LAUNCHER_FORMAT)
+        );
+        entry.launcher_format = None;
+        let legacy_spec = shell_link_spec_from_manifest_entry(entry).unwrap();
+        let legacy_resources = prepare_launcher_resources(&bin, &legacy_spec);
+        let cmd = bin.join("run.cmd");
+        for resource in legacy_resources {
+            if let super::super::launcher::PreparedLauncherResource::File {
+                destination,
+                bytes,
+                ..
+            } = resource
+            {
+                host.put_file(destination, bytes);
+            }
+        }
+        manifest.save(&host, &shine).await.unwrap();
+        let before = host.read(&cmd).await.unwrap();
+        assert!(String::from_utf8_lossy(&before).contains("O''Connor"));
+        let request = super::super::ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo/run".into()),
+            force: false,
+            purge: false,
+            input_versions: Default::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .upgrade_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        let after = host.read(&cmd).await.unwrap();
+        assert_ne!(before, after);
+        assert!(!String::from_utf8_lossy(&after).contains("O''Connor"));
+        let manifest = ShellManifest::load(&host, &shine).await.unwrap();
+        assert_eq!(
+            manifest.entries[0].launcher_format.as_deref(),
+            Some(NATIVE_CMD_LAUNCHER_FORMAT)
+        );
+        let request = super::super::ShellPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo/run".into()),
+            force: false,
+            purge: false,
+            input_versions: Default::default(),
+        };
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(request.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        assert!(host.metadata(&cmd).await.is_err());
+    }
 
     #[test]
     fn shell_permission_defaults_apply_and_entries_can_override_them() {

@@ -59,6 +59,10 @@ Shine uses their installation records to recognize managed commands at the old p
 to the current deployment location. This does not adopt unrelated command files. External code still
 requires review and confirmation for the current Plan.
 
+On Windows, native PowerShell commands launched from CMD preserve apostrophes in script paths
+(for example, a user directory named `O'Connor`). Run `shine upgrade shell/<CATEGORY>` to refresh
+existing command launchers; their original installation records remain usable for recovery.
+
 ## If installation, upgrade, or uninstall is interrupted {#recover-an-interrupted-shell-transaction}
 
 If a Shell preset operation is interrupted, Shine may pause later changes and ask you to

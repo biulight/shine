@@ -3215,6 +3215,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         && !effective_transforms.is_empty())
                     .then(|| canonical.clone());
                     let desired_spec = LinkSpec {
+                        native_cmd_literal_path: super::launcher::uses_native_cmd_literal_path(
+                            file.runtime,
+                            &effective,
+                        ),
                         live_launch_config: self.live_bun_launcher_config(
                             file.runtime,
                             !effective_transforms.is_empty(),

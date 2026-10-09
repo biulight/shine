@@ -72,6 +72,8 @@ pub(crate) struct ManagedLauncherProbe {
 
 #[derive(Clone)]
 pub struct LinkSpec {
+    /// Corrected native CMD path format; false reconstructs legacy receipt bytes.
+    pub native_cmd_literal_path: bool,
     /// Explicit installation root for the single-process Live Bun format.
     pub live_launch_config: Option<PathBuf>,
     pub source: PathBuf,
@@ -169,14 +171,19 @@ pub(crate) fn prepare_launcher_resources(
             if let (Some(config), Some(target)) = (&spec.live_launch_config, &spec.render_target) {
                 cmd_live_bun_launch_content(&spec.source, config, target)
             } else {
-                cmd_shim_content(
+                let content = cmd_shim_content(
                     &spec.source,
                     spec.runtime,
                     &name,
                     spec.bun_dependencies,
                     &spec.env,
                     spec.render_target.as_deref(),
-                )
+                );
+                if spec.native_cmd_literal_path {
+                    correct_native_cmd_path(content, &spec.source)
+                } else {
+                    content
+                }
             };
         vec![
             PreparedLauncherResource::File {
@@ -297,6 +304,7 @@ async fn host_create_link(
     live_launch_config: Option<&Path>,
 ) -> Result<()> {
     let spec = LinkSpec {
+        native_cmd_literal_path: uses_native_cmd_literal_path(runtime, source),
         live_launch_config: live_launch_config.map(Path::to_path_buf),
 
         source: source.to_path_buf(),
@@ -361,6 +369,7 @@ async fn host_launcher_status(
             bun_dependencies,
             env: env.to_vec(),
             render_target: render_target.map(str::to_string),
+            native_cmd_literal_path: false,
             live_launch_config: Some(config.to_path_buf()),
         };
         let resources =
@@ -384,8 +393,11 @@ async fn host_launcher_status(
     let current = {
         let expected_ps1 =
             powershell_shim_content(source, runtime, &name, bun_dependencies, env, render_target);
-        let expected_cmd =
+        let mut expected_cmd =
             cmd_shim_content(source, runtime, &name, bun_dependencies, env, render_target);
+        if uses_native_cmd_literal_path(runtime, source) {
+            expected_cmd = correct_native_cmd_path(expected_cmd, source);
+        }
         let cmd_current = host
             .read(&link_path.with_extension("cmd"))
             .await
@@ -826,6 +838,7 @@ pub async fn link_executables(
     let specs: Vec<_> = sources
         .iter()
         .map(|source| LinkSpec {
+            native_cmd_literal_path: false,
             live_launch_config: None,
 
             source: source.clone(),
@@ -1630,7 +1643,7 @@ fn powershell_shim_content(
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(any(not(unix), test))]
 fn cmd_shim_content(
     source: &Path,
     runtime: LinkRuntime,
@@ -1687,7 +1700,24 @@ fn cmd_shim_content(
     }
 }
 
-#[cfg(not(unix))]
+pub(crate) fn uses_native_cmd_literal_path(runtime: LinkRuntime, source: &Path) -> bool {
+    cfg!(not(unix))
+        && runtime == LinkRuntime::Native
+        && source.extension() == Some(OsStr::new("ps1"))
+}
+
+#[cfg(any(not(unix), test))]
+fn correct_native_cmd_path(content: String, source: &Path) -> String {
+    // Keep the legacy generator byte-identical for receipt reconstruction; change
+    // only the native invocation argument, retaining the original ownership marker.
+    let target = windows_native_path(source);
+    content.replace(
+        &format!("-File \"{}\"", target.replace('\'', "''")),
+        &format!("-File \"{target}\""),
+    )
+}
+
+#[cfg(any(not(unix), test))]
 fn bash_compatible_path(path: &Path) -> String {
     windows_native_path(path).replace('\\', "/")
 }
@@ -1771,6 +1801,72 @@ async fn remove_windows_shims(ps1_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_cmd_paths_preserve_apostrophes_and_legacy_reconstruction() {
+        for source in [
+            r"C:\Users\O'Connor\.shine\presets\shell\demo\run.ps1",
+            r"\\?\C:\Users\O'Connor\.shine\presets\shell\demo\run.ps1",
+            r"\\?\UNC\server\O'Connor\run.ps1",
+        ] {
+            let source = Path::new(source);
+            let legacy = cmd_shim_content(
+                source,
+                LinkRuntime::Native,
+                "run",
+                BunDependencyMode::Disabled,
+                &[],
+                None,
+            );
+            let target = windows_native_path(source);
+            assert!(legacy.contains(&format!("-File \"{}\"", target.replace('\'', "''"))));
+            let corrected = correct_native_cmd_path(legacy.clone(), source);
+            assert!(corrected.contains(&format!("-File \"{target}\"")));
+            assert_eq!(
+                shim_target_from_content(&legacy),
+                shim_target_from_content(&corrected)
+            );
+            assert_ne!(legacy, corrected);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_cmd_shim_executes_powershell_file_in_apostrophe_directory() {
+        let root = std::env::temp_dir()
+            .join(format!("shine-cmd-{}", uuid::Uuid::new_v4()))
+            .join("O'Connor");
+        std::fs::create_dir_all(root.join("payload")).unwrap();
+        let source = root.join("payload/probe.ps1");
+        std::fs::write(&source, "[Console]::Write($args[0]); exit 17\n").unwrap();
+        let spec = LinkSpec {
+            native_cmd_literal_path: true,
+            live_launch_config: None,
+            source,
+            link_name: "probe".into(),
+            runtime: LinkRuntime::Native,
+            bun_dependencies: BunDependencyMode::Disabled,
+            env: Vec::new(),
+            render_target: None,
+        };
+        for resource in prepare_launcher_resources(&root, &spec) {
+            if let PreparedLauncherResource::File {
+                destination, bytes, ..
+            } = resource
+            {
+                std::fs::write(destination, bytes).unwrap();
+            }
+        }
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C"])
+            .arg(root.join("probe.cmd"))
+            .arg("sentinel")
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(output.status.code(), Some(17), "{output:?}");
+        assert_eq!(output.stdout, b"sentinel", "{output:?}");
+    }
+
     #[test]
     fn live_bun_windows_templates_bind_config_and_do_not_render_twice() {
         let source = Path::new(r"C:\state\rendered\shell\demo\run.ts");
@@ -1982,6 +2078,7 @@ mod tests {
         let (src, bin) = make_dirs().await;
         let exe = make_executable(&src, "set_proxy.sh").await;
         let specs = [LinkSpec {
+            native_cmd_literal_path: false,
             live_launch_config: None,
 
             source: exe.clone(),
@@ -2012,6 +2109,7 @@ mod tests {
         let script = src.join("set_proxy.sh");
         fs::write(&script, b"#!/bin/sh\n").await.unwrap();
         let specs = [LinkSpec {
+            native_cmd_literal_path: false,
             live_launch_config: None,
 
             source: script.clone(),
@@ -2040,6 +2138,7 @@ mod tests {
         let (src, bin) = make_dirs().await;
         let plain = make_plain(&src, "proxy.txt").await;
         let specs = [LinkSpec {
+            native_cmd_literal_path: false,
             live_launch_config: None,
 
             source: plain,
@@ -2172,6 +2271,7 @@ mod tests {
     #[cfg(unix)]
     fn locked_bun_spec(source: &Path, name: &str) -> LinkSpec {
         LinkSpec {
+            native_cmd_literal_path: false,
             live_launch_config: None,
 
             source: source.to_path_buf(),
@@ -2186,6 +2286,7 @@ mod tests {
     #[cfg(unix)]
     fn bun_spec_with_env(source: &Path, name: &str, env: Vec<String>) -> LinkSpec {
         LinkSpec {
+            native_cmd_literal_path: false,
             live_launch_config: None,
 
             source: source.to_path_buf(),

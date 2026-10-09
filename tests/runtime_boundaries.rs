@@ -77,6 +77,105 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn env_delete_rejects_inherited_values_and_preserves_both_config_layers() {
+    let fixture = Fixture::new();
+    // Complete ordinary default initialization before checking deletion's write boundary.
+    Fixture::assert_ok(
+        fixture
+            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .arg("--config-dir")
+            .arg(fixture.state())
+            .args(["env", "get", "REVIEW_TOKEN"])
+            .output()
+            .unwrap(),
+    );
+    let global = fixture.state().join("config.toml");
+    let project = fixture.0.join("project/shine.config.toml");
+    let original_global = fs::read(&global).unwrap();
+    let original_project = fs::read(&project).unwrap();
+    for force in [false, true] {
+        let mut command = fixture.command(Path::new(env!("CARGO_BIN_EXE_shine")));
+        command
+            .arg("--config-dir")
+            .arg(fixture.state())
+            .args(["env", "delete", "REVIEW_TOKEN"]);
+        if force {
+            command.arg("--force");
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("has no local entry"),
+            "{output:?}"
+        );
+        assert_eq!(fs::read(&global).unwrap(), original_global);
+        assert_eq!(fs::read(&project).unwrap(), original_project);
+    }
+    let output = Fixture::assert_ok(
+        fixture
+            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .arg("--config-dir")
+            .arg(fixture.state())
+            .args(["env", "get", "REVIEW_TOKEN"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(output.stdout, b"installed-value\n");
+}
+
+#[test]
+fn env_delete_removes_project_override_and_restores_global_value() {
+    let fixture = Fixture::new();
+    Fixture::assert_ok(
+        fixture
+            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .arg("--config-dir")
+            .arg(fixture.state())
+            .args(["env", "get", "REVIEW_TOKEN"])
+            .output()
+            .unwrap(),
+    );
+    let global = fixture.state().join("config.toml");
+    let project = fixture.0.join("project/shine.config.toml");
+    let original_global = fs::read(&global).unwrap();
+    fs::write(
+        &project,
+        "# keep this comment\n[env]\nREVIEW_TOKEN = 'project-value'\nOTHER = 'keep'\n",
+    )
+    .unwrap();
+    Fixture::assert_ok(
+        fixture
+            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .arg("--config-dir")
+            .arg(fixture.state())
+            .args(["env", "delete", "REVIEW_TOKEN"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(fs::read(&global).unwrap(), original_global);
+    let contents = fs::read_to_string(&project).unwrap();
+    assert!(contents.contains("# keep this comment"));
+    let table: toml::Table = toml::from_str(&contents).unwrap();
+    assert!(
+        !table["env"]
+            .as_table()
+            .unwrap()
+            .contains_key("REVIEW_TOKEN")
+    );
+    assert_eq!(table["env"]["OTHER"].as_str(), Some("keep"));
+    let output = Fixture::assert_ok(
+        fixture
+            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .arg("--config-dir")
+            .arg(fixture.state())
+            .args(["env", "get", "REVIEW_TOKEN"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(output.stdout, b"installed-value\n");
+}
+
+#[test]
 fn proxy_uses_install_state_and_still_honors_project_rules() {
     let fixture = Fixture::new();
     Fixture::assert_ok(

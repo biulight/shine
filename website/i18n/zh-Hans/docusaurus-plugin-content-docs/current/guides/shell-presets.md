@@ -49,6 +49,10 @@ shine install shell/proxy --replace-managed
 
 切换预设来源后，可运行 `shine upgrade shell/<CATEGORY>` 更新已安装命令。Shine 会根据安装记录识别旧路径上的受管命令，再迁移到当前部署位置；不会因此接管无关命令文件。外部代码仍需按当前计划审阅和确认。
 
+在 Windows 上，从 CMD 启动原生 PowerShell 命令时，脚本路径中的单引号会被原样保留
+（例如用户名目录 `O'Connor`）。运行 `shine upgrade shell/<CATEGORY>` 更新已有启动器；
+原有安装记录仍可用于恢复。
+
 ## 安装、升级或卸载中断后怎么办 {#恢复中断的-shell-事务}
 
 如果 Shell 预设操作意外中断，Shine 可能会暂停后续修改操作，并提示先执行恢复：

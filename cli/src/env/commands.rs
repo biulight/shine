@@ -290,6 +290,24 @@ pub async fn handle_delete(config: &Config, key: &str, force: bool) -> Result<()
     }
     match resolve_env_write_target(config, key, force)? {
         EnvWriteTarget::ConfigToml => {
+            if config.is_project_config() {
+                let contents = tokio::fs::read_to_string(config.config_path())
+                    .await
+                    .context("reading project config before deleting an environment variable")?;
+                let table: toml::Table = toml::from_str(&contents)
+                    .context("parsing project config before deleting an environment variable")?;
+                if !table
+                    .get("env")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|env| env.contains_key(key))
+                {
+                    bail!(
+                        "{key} is inherited and has no local entry in {}; nothing was deleted. To delete the global entry in {}, run `shine env delete {key}` outside this project using the same config directory.",
+                        path_display::format(config.config_path()),
+                        path_display::format(&config.global_config_path()),
+                    );
+                }
+            }
             let mut env = EnvConfig::load_or_init(config).await?;
             env.remove(key);
             env.save(config).await?;

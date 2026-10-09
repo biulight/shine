@@ -169,6 +169,7 @@ fn live_bun_launch_performance_matrix() {
                     bun_dependencies: BunDependencyMode::Disabled,
                     env: entry.env.clone(),
                     render_target: Some("shell/demo/run".into()),
+                    native_cmd_literal_path: false,
                     live_launch_config: None,
                 };
                 link_executables_with_host(&RealHost, &state.join("bin"), &[spec.clone()], false)

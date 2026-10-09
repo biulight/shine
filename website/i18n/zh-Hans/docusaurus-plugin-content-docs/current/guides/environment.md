@@ -45,6 +45,11 @@ MY_API_TOKEN = { value = "<令牌>", description = "内部 API 的访问令牌" 
 对已有详细条目执行 `shine env set MY_API_TOKEN <新值>` 时，Shine 会更新 `value` 并保留
 说明。
 
+在项目内，`shine env delete KEY` 只删除 `shine.config.toml` 的本地 `[env]` 条目。
+若该键来自继承且没有本地条目，删除会报错，并保留两层配置；添加 `--force` 也一样。
+需要删除全局条目时，请在项目之外使用同一配置目录运行命令。删除项目覆盖条目后，
+继承的全局值会重新生效。
+
 在 Unix 上，Shine 保存 `config.toml`、`shine.config.toml` 和 `shine.env.toml` 时使用仅所有者
 可读写的权限（`0600`），替换已有文件时也一样。临时文件在写入任何值之前就已限制权限。
 这只保护本地文件访问，明文值仍然是明文。

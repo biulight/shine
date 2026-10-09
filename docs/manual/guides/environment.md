@@ -48,6 +48,12 @@ MY_API_TOKEN = { value = "<token>", description = "Token for the internal API" }
 Running `shine env set MY_API_TOKEN <new-value>` on a detailed entry updates `value` and preserves the
 description.
 
+Inside a project, `shine env delete KEY` removes only a local `[env]` entry from
+`shine.config.toml`. If the key is inherited without a local entry, deletion fails without changing
+either configuration, even with `--force`. To delete the global entry, run the command outside the
+project using the same configuration directory. Removing a project override reveals any inherited
+global value again.
+
 On Unix, Shine saves `config.toml`, `shine.config.toml`, and `shine.env.toml` with owner-only
 permissions (`0600`), including when replacing an existing file. Temporary files are private before
 any values are written. This protects local file access; plaintext values are still plaintext.

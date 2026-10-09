@@ -9,6 +9,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Refuse project environment deletion when a variable has no local entry instead of reporting a
+  successful no-op. Preserve apostrophes in native PowerShell script paths launched from Windows
+  CMD; existing launchers migrate through reviewed upgrade while retaining legacy recovery bytes.
+
 - Launch transformed Live Bun commands through one Shine process and bind rendering and declared
   environment values to their installation directory while preserving project overrides. Existing
   commands migrate through the normal reviewed upgrade and recovery workflow.

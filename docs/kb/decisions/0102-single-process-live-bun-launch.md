@@ -25,6 +25,8 @@ instead encodes the complete Windows argv (including embedded quotes and trailin
 for `ProcessStartInfo` with shell execution disabled. It starts one PATH-resolved Shine executable
 and inherits stdio/cwd; it neither starts another shell nor changes legacy template bytes.
 
+Native CMD `.ps1` path correction is separately versioned by [ADR 0103](0103-native-cmd-literal-script-path.md).
+
 Shell manifest schema becomes 2. Readers normalize versions 0/1 only in memory and reject new-format
 fields in old-schema containers. Inspection never rewrites state; selected approved lifecycle work
 writes schema 2 without converting unselected legacy receipts. Both planner and executor use the same

@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-09 — Env deletion and CMD path fixes must preserve their source contracts
+
+- **Symptoms**: deleting an inherited env value inside a project reported success without changing
+  the effective value; CMD native PowerShell shims doubled apostrophes in script paths.
+- **Causes**: the effective env map does not prove a local project entry exists; PowerShell
+  single-quoted expression escaping does not apply to CMD's double-quoted `-File` argument.
+- **Fix**: reject deletion without a project entry, preserving both files; new `native-cmd-v2`
+  receipts select literal apostrophes while legacy receipts reconstruct their original bytes.
+- **Rule**: check the layer being mutated; version receipt-owned template changes so update,
+  uninstall and recovery retain exact ownership proofs. Windows-only execution tests complement
+  portable template and receipt validation tests.
+
 ## 2026-10-09 — PowerShell 5.1 native argument binding needs actual argv tests
 
 - **Symptom**: the Live Bun PowerShell shim lost empty args and literal `--` in real ConPTY

@@ -316,6 +316,9 @@ bugs. Check this list before changing the modules named in each entry.
   template reads those from its installed receipt; exact receipt comparisons still refresh both
   changes through an approved lifecycle operation. Ownership/removal still key only on the
   marker + target, independent of `env` and dependency mode.
+- **Native CMD script escaping is receipt-versioned.** `native-cmd-v2` preserves apostrophes in
+  a double-quoted PowerShell `-File` argument. Absent format fields retain exact legacy bytes for
+  update, uninstall and recovery; PowerShell expression escaping must not be applied to CMD argv.
 - **Backups use the `<name>.shine.bak` suffix** (`install_core/file_ops.rs::backup_path`).
   Uninstall restores from that exact name; changing the suffix orphans existing backups.
 - **An app source has exactly one manifest destination.** A per-file `dest` overrides the category
@@ -606,6 +609,10 @@ bugs. Check this list before changing the modules named in each entry.
   must leave the last installed profile intact.
 
 ## Config files
+
+- **Project env deletion requires a local entry.** `env delete` may remove a project `[env]`
+  override, revealing its inherited global value, but must reject a key absent from the project
+  table even with `--force`. It never removes a global entry implicitly or creates a tombstone.
 
 - **All `config.toml` writes go through `shine_core::sync_table`**, which preserves user comments.
   Never serialize the whole file from a struct — that destroys comments.
