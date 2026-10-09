@@ -36,6 +36,15 @@ shine upgrade
 `shine update` compares installed results with presets and reports status without applying it.
 `shine upgrade` updates managed shell and application configuration to current preset content.
 
+Reinstalling a category preserves files changed since installation, including managed JSON keys.
+Shine also skips the generator for a file that the reviewed Plan marks for preservation. To
+explicitly replace modified managed content, preview `shine app install starship --force --dry-run`
+and then review `shine app install starship --force`.
+
+App changes using the same configuration directory run one at a time. After waiting, Shine checks
+the reviewed Plan again; if the affected state changed, review a new Plan before retrying. A lock
+wait longer than 30 seconds fails without applying the waiting operation.
+
 To replace managed files for one category:
 
 ```bash

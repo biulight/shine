@@ -391,9 +391,57 @@ where
             report.lifecycle.push(cache);
         }
 
+        // Preserve steps have no execution authority, including generator code.
+        // Remove their files before assessment, not merely before the final write.
+        let mut execution_categories = categories.clone();
+        if let Some(approved) = &approved {
+            for category in &mut execution_categories {
+                let target = format!("app/{}", category.name);
+                let mut selected = Vec::new();
+                for file in std::mem::take(&mut category.files) {
+                    let resource = file.source_rel.display().to_string();
+                    let preserved = approved.plan.steps.iter().any(|step| {
+                        step.target == target
+                            && step.resource.as_deref() == Some(resource.as_str())
+                            && step.action == PlanActionV1::Preserve
+                    });
+                    if !preserved {
+                        selected.push(file);
+                        continue;
+                    }
+                    let destination = self.app_destination(category, &file)?;
+                    let backup = manifest
+                        .find_by_dest(&destination)
+                        .and_then(|entry| entry.backup.clone());
+                    report.lifecycle.push(
+                        LifecycleOutcomeV1::new(
+                            &target,
+                            Some(resource),
+                            LifecycleStatus::Preserved,
+                            [LifecycleEffect::UserResourcePreserved],
+                        )
+                        .with_diagnostic_code("app_user_modified"),
+                    );
+                    report.files.push(AppFileLifecycleReport {
+                        category: category.name.clone(),
+                        source: file.source_rel,
+                        destination,
+                        transforms: file.transforms,
+                        backup,
+                        uninstall_strategy: None,
+                        restart_hint: file.restart_hint,
+                        generator_error: None,
+                        error: None,
+                        status: LifecycleStatus::Preserved,
+                        action: AppFileAction::UserModified,
+                    });
+                }
+                category.files = selected;
+            }
+        }
         let assessed = self
             .assess_app_files(
-                &categories,
+                &execution_categories,
                 AppAssessmentOptions {
                     dry_run: request.dry_run,
                     run_generators: true,

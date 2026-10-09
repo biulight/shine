@@ -342,9 +342,20 @@ bugs. Check this list before changing the modules named in each entry.
   `70ee910`).
 - **Privileged filesystem transactions must hold the host-provided cross-process admin lock** for
   their complete ownership-check, backup, mutation, and rollback sequence
-  (`PrivilegedFileSystemHost::acquire_privileged_operation`, `$TMPDIR/shine-admin.lock`). Locking
+  (`PrivilegedFileSystemHost::acquire_privileged_operation`, `$TMPDIR/shine-admin.lockfile`). Locking
   individual writes is insufficient because another process could race between backup and replace.
   Self-install uses the same host lock (commit `fbd9c55`).
+- **App mutation serializes the entire manifest lifecycle per configuration directory.** Approved
+  install, uninstall, upgrade, generator refresh, artifact execution, and recovery acquire the
+  `FileSystemHost` operation lock before replanning and approval validation, retaining it through
+  effects and receipt persistence. Unrelated receipt changes must survive; relevant changes while
+  waiting invalidate approval. Acquire this lock before the privileged transaction lock (ADR 0105).
+- **Lock timeouts never revoke a live owner's authority.** Operation locks use persistent regular
+  files and OS exclusive locks. A 30-second timeout returns an error; neither timeout nor guard
+  destruction unlinks the file. Process exit releases ownership through the OS (ADR 0105).
+- **An approved App Preserve step must exclude the file before execution assessment.** This
+  retains user-modified Copy/JSON content, backups, and receipts, and prevents its generator from
+  running. Absence from the Action IR does not authorize a fallback write.
 - **No code path should ask the user to manually type `sudo` on Unix.** Frontend interaction
   authorizes through `privilege::ensure_admin`; the real privileged host performs non-interactive
   mutations with the cached authorization. Self-install uses its CLI-only command adapter.

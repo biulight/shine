@@ -2645,11 +2645,15 @@ async fn generated_relocation_binds_backup_changes_before_any_execution() {
                 .await
                 .is_err()
         );
-        assert!(
-            runtime.host().operations()[operations..]
-                .iter()
-                .all(|operation| matches!(operation, HostOperation::Read(_)))
-        );
+        assert!(runtime.host().operations()[operations..].iter().all(
+            |operation| match operation {
+                HostOperation::Read(_) => true,
+                HostOperation::AcquireOperationLock(path) => {
+                    path == &runtime.context().shine_dir.join("app-lifecycle.lock")
+                }
+                _ => false,
+            }
+        ));
         assert_eq!(runtime.host().read(&previous).await.unwrap(), b"managed");
         assert!(runtime.host().read(&desired).await.is_err());
     }

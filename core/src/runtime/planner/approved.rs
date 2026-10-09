@@ -50,6 +50,7 @@ where
         if request.operation != LifecycleOperation::Install {
             bail!("approved App install requires an install Plan");
         }
+        let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
         let plan = self.plan_apps(request.clone()).await?;
         approval.validate(&plan)?;
         let action_irs = self
@@ -85,6 +86,7 @@ where
         if request.operation != LifecycleOperation::Uninstall {
             bail!("approved App uninstall requires an uninstall Plan");
         }
+        let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
         let plan = self.plan_apps(request.clone()).await?;
         approval.validate(&plan)?;
         let action_irs = self
@@ -122,6 +124,7 @@ where
         if request.operation != LifecycleOperation::Upgrade {
             bail!("approved App upgrade requires an upgrade Plan");
         }
+        let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
         let plan = self.plan_apps(request.clone()).await?;
         approval.validate(&plan)?;
         let action_irs = self
@@ -155,6 +158,7 @@ where
         observer: &mut impl RuntimeObserver,
         interaction: &mut impl RuntimeInteraction,
     ) -> Result<AppLifecycleReport> {
+        let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
         approval.validate(&self.plan_app_refresh(request.clone()).await?)?;
         self.refresh_app_generators(
             AppRefreshRequest {
@@ -179,6 +183,7 @@ where
         approval: &PlanApprovalV1,
         observer: &mut impl RuntimeObserver,
     ) -> Result<crate::lifecycle::LifecycleOutcomeV1> {
+        let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
         approval.validate(&self.plan_app_artifact(request.clone()).await?)?;
         let category = self
             .app_categories(Some(&request.category))?

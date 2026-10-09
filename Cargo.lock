@@ -1711,6 +1711,7 @@ dependencies = [
  "anyhow",
  "directories",
  "flate2",
+ "fs2",
  "jsonc-parser",
  "libc",
  "schemars",

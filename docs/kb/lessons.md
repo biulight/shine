@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-09 — Preserve execution authority and serialize App receipts
+
+- **Symptoms**: reinstall overwrote a user-modified file despite a Preserve Plan; concurrent App
+  installs lost one category's receipt; a 30-second wait stole a live admin lock.
+- **Causes**: files absent from the Action IR reached the fallback installer; separate operations
+  loaded and saved stale whole manifests; directory-lock timeout treated age as proof of abandonment.
+- **Fix**: exclude Preserve files before generator assessment; hold a configuration-scoped lock
+  from fresh approval validation through lifecycle persistence; use persistent OS file locks that
+  time out without unlinking and release ownership on process exit (ADR 0105).
+- **Rule**: absence of execution authority is not permission for fallback effects. Serialize the
+  read/validate/effect/save sequence, and never infer lock ownership from elapsed time.
+
 ## 2026-10-09 — Typed semantics must outlive names, messages and module layout
 
 - **Symptoms**: static App names such as `generator:config` created execute-now code boundaries;

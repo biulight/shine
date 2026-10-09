@@ -13,6 +13,7 @@ where
         &self,
         approval: &PlanApprovalV1,
     ) -> Result<AppRecoveryReportV1> {
+        let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
         approval.validate(&self.plan_app_operation_recovery().await?)?;
         let _guard = self.host().acquire_privileged_operation().await?;
         approval.validate(&self.plan_app_operation_recovery().await?)?;

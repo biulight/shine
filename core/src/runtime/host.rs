@@ -1,4 +1,3 @@
-use anyhow::Context;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -93,6 +92,13 @@ pub trait FileSystemObservationHost {
 /// Filesystem mutation capability. Security planners deliberately bind only
 /// [`FileSystemObservationHost`].
 pub trait FileSystemHost: FileSystemObservationHost {
+    /// Hold a configuration-scoped lifecycle transaction across fresh planning,
+    /// effects and receipt persistence. The lock is infrastructure, not approval.
+    fn acquire_operation_lock<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<PrivilegedOperationGuard>> + Send + 'a>>;
+
     fn write_atomic<'a>(
         &'a self,
         path: &'a Path,
@@ -250,6 +256,7 @@ pub trait SplitDnsHost: SplitDnsObservationHost {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostOperation {
+    AcquireOperationLock(PathBuf),
     AcquirePrivilegedOperation,
     WritePrivileged(PathBuf),
     SetModePrivileged { path: PathBuf, mode: u32 },
@@ -414,6 +421,13 @@ impl FileSystemObservationHost for RealHost {
 }
 
 impl FileSystemHost for RealHost {
+    fn acquire_operation_lock<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<PrivilegedOperationGuard>> + Send + 'a>> {
+        Box::pin(super::operation_lock::acquire(path))
+    }
+
     fn set_mode<'a>(
         &'a self,
         path: &'a Path,
@@ -686,7 +700,9 @@ impl PrivilegedFileSystemHost for RealHost {
     fn acquire_privileged_operation<'a>(
         &'a self,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<PrivilegedOperationGuard>> + Send + 'a>> {
-        Box::pin(acquire_admin_operation_lock())
+        Box::pin(async {
+            super::operation_lock::acquire(&std::env::temp_dir().join("shine-admin.lockfile")).await
+        })
     }
 
     fn write_privileged<'a>(
@@ -790,36 +806,6 @@ impl SplitDnsHost for RealHost {
             }
             Ok(())
         })
-    }
-}
-
-struct AdminOperationLock {
-    path: PathBuf,
-}
-
-impl Drop for AdminOperationLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir(&self.path);
-    }
-}
-
-async fn acquire_admin_operation_lock() -> anyhow::Result<PrivilegedOperationGuard> {
-    let path = std::env::temp_dir().join("shine-admin.lock");
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        match tokio::fs::create_dir(&path).await {
-            Ok(()) => return Ok(Box::new(AdminOperationLock { path })),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = tokio::fs::remove_dir(&path).await;
-                    continue;
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-            Err(error) => {
-                return Err(error).context("failed to acquire admin operation lock");
-            }
-        }
     }
 }
 

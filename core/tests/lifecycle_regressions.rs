@@ -24,6 +24,208 @@ impl RuntimeInteraction for Interaction {
     }
 }
 
+fn install_request(target: &str, force: bool) -> AppPlanRequest {
+    AppPlanRequest {
+        operation: shine_core::lifecycle::LifecycleOperation::Install,
+        target: Some(target.into()),
+        force,
+        purge: false,
+        prune_stale: false,
+        input_versions: Default::default(),
+    }
+}
+
+#[tokio::test]
+async fn reinstall_preserves_modified_copy_json_and_generated_files_before_execution() {
+    for (generated, json) in [(false, false), (false, true), (true, false)] {
+        let root = std::env::temp_dir().join("shine-reinstall-preserve");
+        let mut context = RuntimeContext::isolated(
+            root.join("home"),
+            root.join("state"),
+            root.join("presets"),
+            root.join("bin"),
+            RuntimePlatform::current(),
+        );
+        context.env.insert("SOURCE".into(), "yes".into());
+        let generator = if generated {
+            "generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }\n"
+        } else {
+            ""
+        };
+        let strategy = if json {
+            "install_mode = 'json-merge'\nmanaged_keys = ['owned']\n"
+        } else {
+            ""
+        };
+        let desired = if json {
+            b"{\"owned\":\"managed\"}".as_slice()
+        } else {
+            b"managed"
+        };
+        let current = if json {
+            b"{\"owned\":\"user-modified\",\"unowned\":true}".as_slice()
+        } else {
+            b"user-modified"
+        };
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("app/demo/shine.toml", format!("metadata_schema_version = 2\ndest = '~/.config/demo'\n[permissions]\nschema_version = 1\nenvironment = [{{ name = 'SOURCE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config'\n{strategy}{generator}").into_bytes())
+            .file("app/demo/config", desired.to_vec())
+            .file("app/demo/gen.ts", b"process.stdout.write('managed')".to_vec()).build();
+        let host = InMemoryHost::new();
+        let destination = context.home_dir.join(".config/demo/config");
+        let backup = destination.with_file_name("config.shine.bak");
+        host.put_file(&destination, current.to_vec());
+        host.put_file(&backup, b"original-backup".to_vec());
+        let entry = AppEntry {
+            source: "app/demo/config".into(),
+            destination: destination.clone(),
+            backup: Some(backup.clone()),
+            content_hash: if json {
+                hash_content(b"{\n  \"owned\": \"managed\"\n}\n")
+            } else {
+                hash_content(desired)
+            },
+            install_strategy: if json {
+                AppInstallStrategy::JsonMerge {
+                    managed_keys: vec!["owned".into()],
+                }
+            } else {
+                AppInstallStrategy::Copy
+            },
+            uses_env: generated,
+            requires_admin: false,
+        };
+        let manifest = AppManifest {
+            schema_version: 1,
+            entries: vec![entry],
+        };
+        manifest.save(&host, &context.shine_dir).await.unwrap();
+        let runtime = CoreRuntime::new(host, context, snapshot);
+        let request = install_request("demo", false);
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| step.resource.as_deref() == Some("config")
+                    && step.action == shine_core::plan::PlanActionV1::Preserve)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let start = runtime.host().operations().len();
+        let report = runtime
+            .install_apps_approved(request, &approval, &mut NullObserver, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(report.files[0].action, AppFileAction::UserModified);
+        assert!(
+            !runtime.host().operations()[start..]
+                .iter()
+                .any(|op| matches!(op, HostOperation::Run { .. }))
+        );
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), current);
+        assert_eq!(
+            runtime.host().read(&backup).await.unwrap(),
+            b"original-backup"
+        );
+        assert_eq!(
+            AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .entries,
+            manifest.entries
+        );
+        // An explicitly reviewed force install still permits the replacement.
+        if !generated {
+            let request = install_request("demo", true);
+            let plan = runtime.plan_apps(request.clone()).await.unwrap();
+            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+            runtime
+                .install_apps_approved(request, &approval, &mut NullObserver, &mut Interaction)
+                .await
+                .unwrap();
+            assert_ne!(runtime.host().read(&destination).await.unwrap(), current);
+        }
+    }
+}
+
+#[tokio::test]
+async fn app_install_waits_before_replanning_and_keeps_concurrent_receipts() {
+    for changed_target in ["other", "demo"] {
+        let root = std::env::temp_dir().join("shine-app-serialized-install");
+        let mut context = RuntimeContext::isolated(
+            root.join("home"),
+            root.join("state"),
+            root.join("presets"),
+            root.join("bin"),
+            RuntimePlatform::current(),
+        );
+        context.is_external_presets = true;
+        let host = InMemoryHost::new();
+        let mut manifest = AppManifest {
+            schema_version: 1,
+            entries: vec![],
+        };
+        manifest.save(&host, &context.shine_dir).await.unwrap();
+        let runtime = CoreRuntime::new(host.clone(), context.clone(), PresetSnapshot::builder(PresetSourceKind::External)
+            .file("app/demo/shine.toml", b"metadata_schema_version = 2\ndest = '~/.config/demo'\n[[files]]\nsource = 'config'\n".to_vec())
+            .file("app/demo/config", b"managed".to_vec()).build());
+        let request = install_request("demo", false);
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_apps(request.clone()).await.unwrap())
+                .unwrap();
+        // A competing lifecycle owns the lock and is about to commit its receipt.
+        let guard = host
+            .acquire_operation_lock(&context.shine_dir.join("app-lifecycle.lock"))
+            .await
+            .unwrap();
+        let mut observer = NullObserver;
+        let mut interaction = Interaction;
+        let execution =
+            runtime.install_apps_approved(request, &approval, &mut observer, &mut interaction);
+        tokio::pin!(execution);
+        std::future::poll_fn(|cx| {
+            assert!(
+                execution.as_mut().poll(cx).is_pending(),
+                "install did not wait for the lifecycle lock"
+            );
+            std::task::Poll::Ready(())
+        })
+        .await;
+        let destination = context
+            .home_dir
+            .join(format!(".config/{changed_target}/config"));
+        host.put_file(&destination, b"concurrent".to_vec());
+        let other_entry = AppEntry {
+            source: format!("app/{changed_target}/config"),
+            destination: destination.clone(),
+            backup: None,
+            content_hash: hash_content(b"concurrent"),
+            install_strategy: AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        };
+        manifest.upsert(other_entry.clone());
+        manifest.save(&host, &context.shine_dir).await.unwrap();
+        drop(guard);
+        let result = execution.await;
+        let manifest = AppManifest::load(&host, &context.shine_dir).await.unwrap();
+        assert_eq!(
+            manifest.find_by_source(&other_entry.source),
+            Some(&other_entry)
+        );
+        assert_eq!(host.read(&destination).await.unwrap(), b"concurrent");
+        if changed_target == "other" {
+            result.unwrap();
+            assert_eq!(manifest.entries.len(), 2);
+        } else {
+            assert!(
+                result.is_err(),
+                "a receipt changed while waiting must invalidate approval"
+            );
+            assert_eq!(manifest.entries.len(), 1);
+        }
+    }
+}
+
 #[tokio::test]
 async fn static_app_resources_never_infer_code_from_their_names() {
     use shine_core::lifecycle::LifecycleOperation;

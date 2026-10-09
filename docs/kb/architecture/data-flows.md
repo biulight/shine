@@ -452,6 +452,12 @@ external/overlay tree through `FileSystemHost`, constructs the immutable snapsho
 request; the CLI renders typed events/reports. There is no frontend-specific directory walker,
 prepared-file path, or CLI fallback executor.
 
+Approved App mutations first acquire the configuration-scoped lifecycle lock, then replan and
+validate the original approval against current state. The guard spans generators, hooks, file
+effects, and all manifest saves. Install excludes files marked Preserve before generator assessment
+and reports them as user-modified without changing their destination, backup, or receipt. Other
+App mutation entry points, including explicit recovery, share this lock (ADR 0105).
+
 The Core flow is:
 
 1. **Metadata** — `apps/metadata.rs` parses `presets/app/<category>/shine.toml` (category `dest`,
@@ -472,7 +478,8 @@ The Core flow is:
 4. **File ops** — `install_core/file_ops.rs` backs up any pre-existing user file to
    `<name>.shine.bak`, then writes the (transformed) content to `dest`. Destinations with
    `requires_admin = true` (e.g. `/etc/docker/daemon.json`) go through the sudo path, serialized
-   by a cross-process advisory lock (`$TMPDIR/shine-admin.lock`, `create_dir` as mutex).
+   by a cross-process OS file lock (`$TMPDIR/shine-admin.lockfile`). The persistent file is never
+   deleted to reclaim ownership; a 30-second wait timeout returns an error.
 5. **Manifest** — `install_core/manifest.rs` upserts an `AppEntry` into `~/.shine/app-manifest.toml`,
    recording dest, content hash, strategy, and **`requires_admin`** (must persist — uninstall
    routes on it; see lessons entry 2026-07-04). Successful saves from mutation commands write

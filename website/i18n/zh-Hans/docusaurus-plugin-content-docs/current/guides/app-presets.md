@@ -30,6 +30,13 @@ shine upgrade
 
 `shine update` 比较当前安装结果与预设，只报告状态；`shine upgrade` 将受管 shell 和应用配置更新到当前预设内容。
 
+重新安装类别时会保留安装后被修改的文件，包括受管 JSON 键。对于审阅过的 Plan 标为保留的文件，
+Shine 也会跳过其 generator。若要显式覆盖已修改的受管内容，先使用
+`shine app install starship --force --dry-run` 预览，再审阅 `shine app install starship --force`。
+
+使用同一配置目录的 App 改动会依次执行。等待结束后，Shine 会重新校验审阅过的 Plan；如果相关
+状态已经变化，需要审阅新 Plan 后重试。锁等待超过 30 秒会报错，等待中的操作不会执行改动。
+
 如果只需覆盖一个类别的受管文件：
 
 ```bash

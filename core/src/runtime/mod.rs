@@ -18,6 +18,7 @@ mod launcher;
 mod lint;
 mod memory;
 mod metadata_diagnostic;
+mod operation_lock;
 mod pack;
 mod planner;
 mod preset;
