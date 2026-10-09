@@ -1,5 +1,13 @@
-use super::*;
-use crate::{lifecycle::LifecycleOperation, plan::PlanApprovalV1};
+use crate::{
+    lifecycle::LifecycleOperation,
+    plan::{PlanApprovalError, PlanApprovalV1},
+    runtime::{
+        CoreRuntime, FileSystemObservationHost, InMemoryHost, NullObserver, PlanningInputVersions,
+        PresetSnapshot, PresetSourceKind, PrivilegedFileSystemHost, RuntimeContext,
+        RuntimeInteraction, RuntimePlatform, ShellManifest, ShellPlanRequest, ShellType,
+        SysManagedPlanRequest, SysRunManifest, command_path_for_name,
+    },
+};
 use anyhow::Result;
 use std::{future::Future, pin::Pin, task::Poll};
 
@@ -120,7 +128,11 @@ target = '~/.config/b.txt'
     first.await.unwrap();
     // The complete manifest observation changed while B waited. Waiting does
     // not authorize that new state, even though the targets are independent.
-    assert!(second.await.is_err());
+    let error = second.await.unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<PlanApprovalError>(),
+        Some(&PlanApprovalError::PlanChanged)
+    );
     let manifest = SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
         .await
         .unwrap();
