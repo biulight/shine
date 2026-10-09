@@ -1,5 +1,19 @@
 # Lessons Learned
 
+## 2026-10-09 — Typed semantics must outlive names, messages and module layout
+
+- **Symptoms**: static App names such as `generator:config` created execute-now code boundaries;
+  an unrelated validation failure in a category containing `bun-lock` became a Bun policy error.
+- **Causes**: resource prefixes and English error chains doubled as semantic classifiers; App
+  transition policy and authority gates were duplicated, and architecture tests scanned exact
+  implementation text rather than capability bounds.
+- **Fix**: record actual App code triggers, attach typed metadata error origins, share relocation
+  policy and authority validation, and bind typed step intent into approval. Split planning and
+  recovery phases without changing receipt, snapshot or rollback checks.
+- **Rule**: names and diagnostics are presentation data. Prove observation-only planning with
+  generic trait bounds, compile-fail mutation examples and InMemoryHost operation assertions;
+  preserve behavioral regression tests through module moves (ADR 0104).
+
 ## 2026-10-09 — Env deletion and CMD path fixes must preserve their source contracts
 
 - **Symptoms**: deleting an inherited env value inside a project reported success without changing
@@ -1093,10 +1107,10 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Rule**: capability-boundary tests should verify the bound and calls of the assessment seam, not
   ban a capability name from a module that also owns the post-approval gate.
 
-- **2026-09-05 follow-up**: Shell regression fixtures remove files from `InMemoryHost` inside the
-  planner's inline test module. Scan production source before the explicit `#[cfg(test)] mod tests`
-  boundary for forbidden mutation calls, and fail if that boundary is missing; fixture setup is
-  not a production planner effect.
+- **2026-10-09 follow-up**: fixture setup is not a production planner effect, and module layout
+  is not a capability proof. Replace the fixed inline-test source boundary with generic
+  observation-only planner callers, a compile-fail mutation example and Host operation assertions
+  so domain phases and test modules can move safely (ADR 0104).
 
 ## 2026-08-30 — Executor-side choices expanded reviewed lifecycle work
 

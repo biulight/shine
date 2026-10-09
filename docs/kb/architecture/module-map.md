@@ -27,8 +27,18 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, process, privileged, and system mutation ports |
 | `core/src/runtime/process_scope.rs` | Isolated-process cancellation guard and scoped Unix foreground-terminal handoff |
 | `core/src/runtime/review_path.rs` | Shared root-aware path identity encoding for planners and App/Shell/Sys action executors |
-| `core/src/runtime/planner.rs` | Pure App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
-| `core/src/runtime/action_executor.rs` | Phase 4 App static Copy and key-owned JSON create/update/relocate/ordinary-or-forced-remove journal, manifest-receipt-gated commit, lock-spanning privileged/unprivileged path dispatch, persistent backup restoration, same-directory rollback material, explicit recovery Plan, and fingerprint/key-guarded remove/restore |
+| `core/src/runtime/planner.rs` | Pure Plan request types and shared observation/permission accumulators; domain methods live in `planner/` |
+| `core/src/runtime/planner/{app_plan,app_convergence,app_file_plan,app_stale_plan,app_specialized,app_code}.rs` | App lifecycle orchestration, per-file convergence, stale receipt assessment, refresh/artifacts and triggered code |
+| `core/src/runtime/planner/{shell_plan,shell_removal,shell_convergence,shell_profile}.rs` | Shell orchestration and separate removal, convergence and profile assessment phases |
+| `core/src/runtime/planner/{sys_managed_plan,sys_specialized,sys_support}.rs` | Managed Sys, bootstrap and profile planning with shared Sys observation helpers |
+| `core/src/runtime/planner/{approved,app_actions,app_remove_actions}.rs` | Fresh-plan approval gates and typed App Action IR construction |
+| `core/src/runtime/planner/{observations,inputs,permissions,code_boundaries}.rs` | State/input capture, permissions, typed code-boundary assembly and Plan finalization |
+| `core/src/runtime/app_change.rs` | Shared static App relocation eligibility used by Plan and Action IR construction |
+| `core/src/runtime/action_executor.rs` | App journal/result/recovery models; `action_executor/` owns typed apply, commit, receipt and recovery phases |
+| `core/src/runtime/action_executor/{authority,file_apply,relocation_apply,json_apply,removal_apply,commit}.rs` | Shared exact approval/IR/permission gate and resource-specific transactions with receipt-gated commit |
+| `core/src/runtime/action_executor/{inspection,recovery_plan,recovery_apply}.rs` | Journal inspection, receipt-conflict recovery orchestration and approved reverse-order rollback dispatch |
+| `core/src/runtime/action_executor/recovery_{plan,apply}_{file,json,relocation,removal}.rs` | Action-specific read-only recovery review and mutation handlers; rollback semantics remain domain-owned |
+| `core/src/runtime/action_executor/{receipts,recovery_assessment,file_ops,journal_io}.rs` | Ownership predicates, exact live-state assessments, privileged path dispatch and durable journal IO |
 | `core/src/runtime/shell_action_executor.rs` | Phase 4 Shell launcher, embedded cache, external snapshot, rendered file, and profile-sentinel create/update/remove actions; per-resource rollback journal, receipt/positive-marker-gated commit, and explicit fingerprint/owned-subset recovery |
 | `core/src/runtime/sys_action_executor.rs` | Phase 4 managed Sys file, split-DNS, and explicit profile-sentinel actions; Sys receipt transition journal, exact rollback cleanup, and explicit recovery Plan/apply |
 | `core/src/runtime/trust.rs` | Derivation of App/Shell/Sys external-code requirements from immutable logical code inputs, resolved defaults, and declared permissions |
@@ -41,6 +51,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
 | `core/src/runtime/sys_profile/` | Sys profile composition, three-way reconciliation, phase sentinels, BOM and CRLF behavior |
 | `core/src/runtime/validation.rs` | Host-backed preset discovery from a captured cwd, V1 diagnostics, and App/Shell/Sys schema validation |
+| `core/src/runtime/metadata_diagnostic.rs` | Typed metadata error origins mapped to stable validation codes; message prose is not a classifier |
 | `core/src/runtime/preset_migration.rs` | Immutable legacy compatibility assessment, safe metadata candidate generation, released-1.x fingerprints, and versioned content-free migration reports |
 | `core/src/runtime/inspection.rs` | Typed App/Shell inspection status and structural change vocabulary |
 | `core/src/install/` | Core-owned transforms, EOL handling, host-required App manifest persistence, and host-neutral managed-file operations |

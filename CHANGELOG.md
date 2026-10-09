@@ -9,6 +9,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Keep static App files out of code-execution consent even when their names begin with
+  `generator:`, `hook:`, or `artifact:`. Make Preset validation codes reflect the failed check
+  independently of category names and diagnostic wording.
+
 - Refuse project environment deletion when a variable has no local entry instead of reporting a
   successful no-op. Preserve apostrophes in native PowerShell script paths launched from Windows
   CMD; existing launchers migrate through reviewed upgrade while retaining legacy recovery bytes.

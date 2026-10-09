@@ -61,6 +61,8 @@ shine preset new sys --unrestricted
 检查更新、写文件、联网或执行预设代码。
 
 默认输出文本；工具和 CI 可以使用 `--format json`。校验错误的退出码为 1，warning 不会导致失败。
+诊断代码表示未通过的检查，不受类别名称或消息措辞影响。例如，引用文件缺失时报告
+`missing_reference`，Bun 依赖声明不符合策略时报告 `bun_dependency_policy`。
 
 创作工具需要当前安装版本支持的精确报告与 fixture 格式时，运行
 `shine preset schema --format json`。App、Shell 和 Sys metadata 是否可用仍以
@@ -171,6 +173,8 @@ Administrator 要求仍须显式配置，因为 Shine 会执行这些受管注�
 安全 Plan 会分别展示 Shine 推导的操作、未经验证的作者说明，以及代码/信任边界。说明不是授权，
 也不能证明脚本已完整披露行为。任意代码可使用其进程已有的系统访问能力；Shine 不新增运行时沙箱，
 也不会在以后每次调用 Shell 命令时逐项拦截。
+静态 App 数据文件按文件操作审阅。文件名以 `generator:`、`hook:` 或 `artifact:` 开头，
+本身不会触发代码执行或外部代码授权。
 
 交互式生命周期操作可在用户确认 Plan 时，一并授权其中列出的外部代码。本次授权仅适用于当前
 操作和捕获快照，不保存持久 grant；确认也包含安装 Shell 命令等“交付后运行”的代码。

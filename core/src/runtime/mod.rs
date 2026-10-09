@@ -5,6 +5,7 @@
 
 mod action_executor;
 mod app;
+mod app_change;
 mod app_metadata;
 mod app_script;
 mod authoring;
@@ -16,6 +17,7 @@ mod inspection;
 mod launcher;
 mod lint;
 mod memory;
+mod metadata_diagnostic;
 mod pack;
 mod planner;
 mod preset;

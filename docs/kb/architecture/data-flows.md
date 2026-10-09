@@ -34,7 +34,9 @@ validated target + immutable Preset snapshot
 
 Generator, hook, artifact, Shell delivery, bootstrap, and profile-code triggers are modeled as
 unisolated code boundaries plus conservative semantic steps. Classification never depends on an
-author's `opaque_code` field. Code is never run during planning and missing or stale target-scoped
+author's `opaque_code` field. App assessments record typed triggered entry kinds; a static filename
+beginning with `generator:`, `hook:` or `artifact:` is ordinary data, not a code trigger.
+Code is never run during planning and missing or stale target-scoped
 trust remains a blocker for external code delivery/execution. A supported receipt can drive uninstall after source
 disappearance, but cannot recreate missing teardown code.
 Planner and App/Shell/Sys action executors share `review_path` root-aware filesystem identity
@@ -66,6 +68,12 @@ uniquely Core-attributed cache write permissions under maintenance and stale-sou
 under Warnings; ambiguous effects retain their original App review.
 `upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate preview/inspection paths.
 Scoped external-code trust, ownership, and administrator authorization remain additional gates.
+App Plan and Action IR construction share static relocation eligibility. Typed optional step kinds
+carry relocation, stale-prune, forced-removal and shared Shell code intent; they enter the fingerprint
+and replace diagnostic-string routing without turning Plan steps into executable Actions. App apply
+methods share exact approval/IR/permission validation and retain action-specific live-state checks.
+Recovery planning dispatches read-only action assessments after receipt-conflict checks; approved
+recovery re-plans under the lock and dispatches rollback handlers in reverse action order (ADR 0104).
 After approval, the CLI upgrade report applies the same relevance rule to unchanged App and Sys
 outcomes; `--verbose --full-plan` restores their individual rows (ADR 0098). The structured
 lifecycle result still includes every selected item.

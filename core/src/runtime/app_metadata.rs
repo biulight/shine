@@ -1,3 +1,4 @@
+use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind};
 use super::{
     AppArtifact, AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppHookAction,
     AppListMode, ArtifactRuntime, CoreRuntime, RuntimePlatform,
@@ -246,10 +247,13 @@ impl<H> CoreRuntime<H> {
                     .with_context(|| format!("invalid target for {metadata_path}"))?;
                 let source_logical = format!("{prefix}{}", logical(&source_rel));
                 if self.presets().get(&source_logical).is_none() {
-                    bail!(
-                        "app/{name}/shine.toml references missing file: {}",
-                        source_rel.display()
-                    );
+                    bail!(MetadataDiagnosticError::new(
+                        MetadataDiagnosticKind::MissingReference,
+                        format!(
+                            "app/{name}/shine.toml references missing file: {}",
+                            source_rel.display()
+                        ),
+                    ));
                 }
                 let transforms = transforms(&file, &metadata_path)?;
                 let install_strategy = install_strategy(&file, &metadata_path)?;
@@ -257,10 +261,13 @@ impl<H> CoreRuntime<H> {
                 if let Some(generator) = &generator {
                     let generator_path = format!("{prefix}{}", logical(&generator.script));
                     if self.presets().get(&generator_path).is_none() {
-                        bail!(
-                            "app/{name}/shine.toml references missing generator script: {}",
-                            generator.script.display()
-                        );
+                        bail!(MetadataDiagnosticError::new(
+                            MetadataDiagnosticKind::MissingReference,
+                            format!(
+                                "app/{name}/shine.toml references missing generator script: {}",
+                                generator.script.display()
+                            ),
+                        ));
                     }
                 }
                 resolved.push(AppFile {

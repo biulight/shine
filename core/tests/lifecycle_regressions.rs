@@ -25,6 +25,109 @@ impl RuntimeInteraction for Interaction {
 }
 
 #[tokio::test]
+async fn static_app_resources_never_infer_code_from_their_names() {
+    use shine_core::lifecycle::LifecycleOperation;
+
+    for filename in [
+        "config.toml",
+        "generator:config.toml",
+        "hook:config.toml",
+        "artifact:config.toml",
+        "profile-state",
+    ] {
+        for source_kind in [PresetSourceKind::Embedded, PresetSourceKind::External] {
+            let snapshot = PresetSnapshot::builder(source_kind)
+                .file(
+                    "app/demo/shine.toml",
+                    format!("metadata_schema_version = 2\ndest = '~/.config/demo'\n[[files]]\nsource = '{filename}'\ntarget = 'config.toml'\n").into_bytes(),
+                )
+                .file(format!("app/demo/{filename}"), b"static data".to_vec())
+                .build();
+            let root = std::env::temp_dir().join("shine-static-entry-test");
+            let mut context = RuntimeContext::isolated(
+                root.join("home"),
+                root.join("state"),
+                root.join("presets"),
+                root.join("bin"),
+                RuntimePlatform::current(),
+            );
+            context.is_external_presets = source_kind == PresetSourceKind::External;
+            let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
+            let request = AppPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: Some("demo".into()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            };
+            let plan = runtime.plan_apps(request.clone()).await.unwrap();
+            assert!(plan.is_ready());
+            assert!(
+                plan.code_boundaries.is_empty(),
+                "{filename}: {:?}",
+                plan.code_boundaries
+            );
+            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+            runtime
+                .install_apps_approved(request, &approval, &mut NullObserver, &mut Interaction)
+                .await
+                .unwrap();
+            assert_eq!(
+                runtime
+                    .host()
+                    .read(&runtime.context().home_dir.join(".config/demo/config.toml"))
+                    .await
+                    .unwrap(),
+                b"static data"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn metadata_diagnostic_identity_does_not_depend_on_category_names() {
+    for category in ["demo", "bun-lock-demo", "bun-package-demo"] {
+        for (metadata, files, expected) in [
+            (
+                "[[files]]\nsource = 'config.toml'\ntransforms = ['unsupported']\n",
+                vec!["config.toml"],
+                "invalid_metadata",
+            ),
+            (
+                "[[files]]\nsource = 'missing.toml'\n",
+                vec!["config.toml"],
+                "missing_reference",
+            ),
+            (
+                "[[files]]\nsource = 'config.toml'\ntarget = 'same.toml'\n[[files]]\nsource = 'other.toml'\ntarget = 'same.toml'\n",
+                vec!["config.toml", "other.toml"],
+                "duplicate_target",
+            ),
+        ] {
+            let root = std::env::temp_dir().join("shine-metadata-diagnostic-test");
+            let path = root.join("app").join(category);
+            let host = InMemoryHost::new();
+            host.put_file(
+                path.join("shine.toml"),
+                format!("metadata_schema_version = 2\ndest = '~/.config/demo'\n{metadata}")
+                    .into_bytes(),
+            );
+            for file in files {
+                host.put_file(path.join(file), b"static data".to_vec());
+            }
+            let report = validate_preset_path(&host, &root, &path).await;
+            assert!(!report.valid);
+            assert_eq!(
+                report.categories[0].diagnostics[0].code, expected,
+                "{category}: {:?}",
+                report.categories[0].diagnostics
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn refresh_requires_the_exact_generated_file_receipt_even_with_force() {
     let root = std::env::temp_dir().join("shine-refresh-ownership-test");
     let mut context = RuntimeContext::isolated(

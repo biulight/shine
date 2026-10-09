@@ -70,6 +70,9 @@ check for updates, write files, access the network, or execute preset code.
 
 The default output is text. `--format json` is available for tools and CI. Validation errors exit
 with status 1; warnings do not.
+Diagnostic codes identify the failed check, independently of category names or message wording.
+For example, a missing referenced file reports `missing_reference`, while a rejected Bun dependency
+declaration reports `bun_dependency_policy`.
 
 Run `shine preset schema --format json` when authoring tools need the exact report and fixture
 formats supported by the installed version. Continue to use `preset validate` as the acceptance
@@ -191,6 +194,8 @@ The security Plan presents Shine's derived operations, unverified author stateme
 boundaries separately. A statement is not an authorization grant or proof that script behavior is
 complete. Arbitrary code runs with the access already available to its process; Shine does not add a
 runtime sandbox or intercept every later Shell command invocation.
+Static App data files are reviewed as file operations. Names beginning with `generator:`, `hook:`,
+or `artifact:` do not by themselves request code execution or external-code consent.
 
 Interactive lifecycle operations can authorize the listed external code when you confirm the Plan.
 This authorization applies only to that operation and captured snapshot; it saves no persistent grant.

@@ -5,6 +5,16 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
+  from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
+  `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery
+  intent into the full Plan fingerprint. Executors use typed intent plus exact ownership/state
+  checks; diagnostic codes remain review output, not deletion authority (ADR 0104).
+- **Static validation codes follow typed error origins.** Missing references, duplicate targets
+  or commands and Bun policy failures carry structured kinds at the failing check. Category
+  names and human-readable error chains cannot change the code; unclassified metadata failures
+  use `invalid_metadata`.
+
 - **Path presentation never changes permission identity.** Planners and App/Shell/Sys action
   executors use one root-aware encoder, preserving Unix roots, Windows drive roots and UNC
   prefixes. CLI path labels are applied only after exact permission/provenance matching and never
@@ -398,7 +408,8 @@ bugs. Check this list before changing the modules named in each entry.
   Any changed kind, mode, hash, receipt, or claimed path blocks and preserves all three paths.
 - **A forced App removal binds the modified file separately from its receipt.** The applicable
   Phase 4 action is limited to a receipt-owned static Copy regular file whose current
-  hash differs from the receipt hash. The Plan must carry the explicit user-modification override.
+  hash differs from the receipt hash. The Plan must carry `AppForcedRemoval` intent plus the
+  explicit user-modification override diagnostic.
   The journal stores both hashes and the current mode, but never file bytes, before moving the
   modified destination to canonical same-directory rollback material and optionally restoring the
   exact fixed backup. Before receipt commit, recovery reconstructs a missing old receipt and
@@ -409,7 +420,7 @@ bugs. Check this list before changing the modules named in each entry.
   proof.
 - **App upgrade stale pruning is receipt removal, not a generic upgrade write.** A stale static
   Copy or JSON entry may reuse the corresponding removal Action only when its current owned state
-  still matches the receipt and the approved Upgrade Plan carries `app_stale_source_pruned` for the
+  still matches the receipt and the approved Upgrade Plan carries `AppStalePrune` intent for the
   exact target/resource. Planning must bind destination, optional persistent backup, canonical
   rollback material, manifest and journal effects with removal permissions even though the outer
   lifecycle operation is Upgrade. User-modified stale state is preserved, forced removal is not

@@ -2,6 +2,7 @@ use super::launcher::{
     prepare_launcher_resources, prepared_launcher_resource_is_exact,
     probe_managed_command_with_host, uses_native_cmd_literal_path,
 };
+use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind};
 use super::shell_action_executor::{
     ShellCacheRemoval, ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation,
     ShellLauncherRemoval, ShellLauncherUpdate, ShellLegacyLauncherRemoval,
@@ -909,11 +910,13 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let mut commands = BTreeSet::new();
             for file in &category.files {
                 if !commands.insert(file.command_name.clone()) {
-                    bail!(
-                        "shell/{} declares command `{}` more than once",
-                        category.name,
-                        file.command_name
-                    );
+                    bail!(MetadataDiagnosticError::new(
+                        MetadataDiagnosticKind::DuplicateCommand,
+                        format!(
+                            "shell/{} declares command `{}` more than once",
+                            category.name, file.command_name
+                        ),
+                    ));
                 }
                 if file.runtime == LinkRuntime::Bun {
                     self.shell_bun_runtime_spec(&category.name, file)?;
@@ -2455,6 +2458,17 @@ impl<H> CoreRuntime<H> {
         category: &str,
         file: &ShellFile,
     ) -> Result<BunRuntimeSpec> {
+        self.shell_bun_runtime_spec_inner(category, file)
+            .map_err(|error| {
+                MetadataDiagnosticError::wrap(MetadataDiagnosticKind::BunDependencyPolicy, error)
+            })
+    }
+
+    fn shell_bun_runtime_spec_inner(
+        &self,
+        category: &str,
+        file: &ShellFile,
+    ) -> Result<BunRuntimeSpec> {
         if file.runtime != LinkRuntime::Bun {
             return Ok(BunRuntimeSpec::default());
         }
@@ -3142,10 +3156,13 @@ impl<H> CoreRuntime<H> {
                         .with_context(|| format!("invalid permissions in {metadata_path}"))?;
                 }
                 let logical = format!("{prefix}{}", shell_logical_path(&source_rel));
-                let bytes = self.presets().get(&logical).with_context(|| {
-                    format!(
-                        "shell/{name}/shine.toml references missing file: {}",
-                        source_rel.display()
+                let bytes = self.presets().get(&logical).ok_or_else(|| {
+                    MetadataDiagnosticError::new(
+                        MetadataDiagnosticKind::MissingReference,
+                        format!(
+                            "shell/{name}/shine.toml references missing file: {}",
+                            source_rel.display()
+                        ),
                     )
                 })?;
                 let description = entry.description.clone().map_or_else(
@@ -3194,10 +3211,13 @@ impl<H> CoreRuntime<H> {
         let mut commands = BTreeSet::new();
         for file in &files {
             if !commands.insert(file.command_name.clone()) {
-                bail!(
-                    "shell/{name} declares command `{}` more than once",
-                    file.command_name
-                );
+                bail!(MetadataDiagnosticError::new(
+                    MetadataDiagnosticKind::DuplicateCommand,
+                    format!(
+                        "shell/{name} declares command `{}` more than once",
+                        file.command_name
+                    ),
+                ));
             }
         }
         Ok(ShellCategory {

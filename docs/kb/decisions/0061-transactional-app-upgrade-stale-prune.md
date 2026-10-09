@@ -1,5 +1,9 @@
 # 0061 — App upgrade stale pruning reuses receipt-gated removal transactions
 
+The diagnostic-string authorization described here is superseded by typed `AppStalePrune`
+intent in [ADR 0104](0104-typed-planning-semantics-and-domain-phases.md); the receipt/recovery proof
+remains unchanged.
+
 - **Status**: Accepted
 - **Date**: 2026-08-31
 - **Evidence**: `core/src/runtime/planner.rs`, `core/src/runtime/app.rs`,

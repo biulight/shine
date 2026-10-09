@@ -1,3 +1,4 @@
+use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind};
 use crate::action::{ActionIrV1, ActionKindV1};
 use crate::env::EnvVarSpec;
 use crate::install::file_ops::{
@@ -1387,9 +1388,7 @@ where
                                             )
                                             .as_str(),
                                         )
-                                    && step.diagnostic_codes.iter().any(|code| {
-                                        code == "app_generated_relocation_source_removed"
-                                    })
+                                    && step.kind == Some(crate::plan::PlanStepKindV1::AppGeneratedRelocationSourceRemoval)
                             })
                     })
             })
@@ -1457,9 +1456,7 @@ where
                     step.target == target
                         && step.resource.as_deref() == Some(resource.as_str())
                         && step.action == crate::plan::PlanActionV1::Remove
-                        && step
-                            .diagnostic_codes
-                            .contains(&"app_stale_source_pruned".to_string())
+                        && step.kind == Some(crate::plan::PlanStepKindV1::AppStalePrune)
                 });
                 let mut journal_execution = None;
                 let outcome = if let Some(index) = action_index {
@@ -2317,10 +2314,13 @@ fn validate_app_destinations<H>(
             let destination = runtime.app_destination(category, file)?;
             let source = format!("app/{}/{}", category.name, file.source_rel.display());
             if let Some(previous) = destinations.insert(destination.clone(), source.clone()) {
-                bail!(
-                    "app destinations conflict: {previous} and {source} both resolve to {}",
-                    destination.display()
-                );
+                bail!(MetadataDiagnosticError::new(
+                    MetadataDiagnosticKind::DuplicateTarget,
+                    format!(
+                        "app destinations conflict: {previous} and {source} both resolve to {}",
+                        destination.display()
+                    ),
+                ));
             }
         }
     }
@@ -3104,6 +3104,12 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
     }
 
     pub(crate) fn bun_dependency_arg(&self, logical: &str) -> Result<String> {
+        self.bun_dependency_arg_inner(logical).map_err(|error| {
+            MetadataDiagnosticError::wrap(MetadataDiagnosticKind::BunDependencyPolicy, error)
+        })
+    }
+
+    fn bun_dependency_arg_inner(&self, logical: &str) -> Result<String> {
         let script = self
             .presets
             .file(logical)

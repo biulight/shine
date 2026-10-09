@@ -54,6 +54,15 @@ impl HostError {
 
 /// Observation-only filesystem capability used by security planning and
 /// read-oriented runtime paths.
+///
+/// Mutation is unavailable through this capability, irrespective of module layout.
+///
+/// ```compile_fail,E0599
+/// use shine_core::runtime::FileSystemObservationHost;
+/// fn cannot_write<H: FileSystemObservationHost>(host: &H) {
+///     let _ = host.write_atomic(std::path::Path::new("destination"), b"data");
+/// }
+/// ```
 pub trait FileSystemObservationHost {
     fn canonicalize<'a>(
         &'a self,
