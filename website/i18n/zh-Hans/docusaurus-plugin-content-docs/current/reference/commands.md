@@ -152,6 +152,8 @@ shine completions <bash|zsh|powershell>
 来源目录与来源层必须保持不变。这是来源级长期授权，不代表持续代码审阅。
 `trust list` 会将共享同一安全范围的 grant 合并为紧凑行，并对照当前 Preset 检查状态；`--verbose`
 会展开 capability、开发来源标签与复查提示。
+并发执行 `trust grant` 与 `trust revoke` 会保留对其他 target 的修改；另一条命令保存旧版 trust
+存储时不会恢复已经完成的撤销。
 
 交互式生命周期确认可仅授权本次外部代码，不保存 grant；自动化与 `--yes` 必须已有 trust，
 Shell live 必须使用 Development trust。

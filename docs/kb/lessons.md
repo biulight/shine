@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-10 — Authorization revocation and private generation need end-to-end persistence
+
+- **Symptoms**: concurrent successful trust revocations and broker policy removals left grants
+  behind; dotenv import widened 0600 plaintext to 0644; identity `--force` still failed at keygen.
+- **Causes**: atomic replacements saved stale whole stores; import used the ordinary writer;
+  keygen received the occupied destination despite rejecting existing outputs.
+- **Fix**: serialize trust/policy writers from fresh read through save, recheck reviewed policy
+  targets after confirmation, import privately, and stage forced key generation before replacement.
+- **Rule**: revocation must survive unrelated writes. Protect plaintext before the first byte,
+  and keep the old identity until its replacement has been generated and validated.
+
 ## 2026-10-10 — Sealing must validate file aliases and ciphertext output
 
 - **Symptoms**: sealing a symbolic link replaced the link while its target retained plaintext;

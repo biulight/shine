@@ -142,6 +142,8 @@ shine env broker policy update \
   --mode development --release DEPLOY_TOKEN -- bun run build
 ```
 
+并发修改策略会保留对其他策略的更新。如果等待确认期间目标策略被修改或删除，更新会失败，需要重新审阅。
+
 若没有本机 checkout，可使用 inspect 会话查看候选描述。先在本机开启 inspect，再在远端项目目录运行 `describe`；该请求会显示 workspace、source 摘要、mode、完整 argv 与 release 键，并与本机策略比较：
 
 ```bash

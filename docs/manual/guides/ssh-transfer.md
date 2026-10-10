@@ -165,6 +165,9 @@ shine env broker policy update \
   --mode development --release DEPLOY_TOKEN -- bun run build
 ```
 
+Concurrent policy changes preserve updates to other policies. If the target policy changes or is
+removed while confirmation is pending, the update fails and requires a fresh review.
+
 Without a local checkout, open an inspect session and run `describe` remotely. It displays workspace
 and source digests, mode, complete argv, and release keys and compares them with local policies:
 

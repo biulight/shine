@@ -637,6 +637,10 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Config files
 
+- **Trust store mutations serialize the entire read/modify/write cycle.** Grant and revoke acquire
+  the persistent `trust.lock` OS lock before reading grants and retain it through private atomic
+  persistence. Human review happens before locking; only the reviewed code identities are granted.
+
 - **Project env deletion requires a local entry.** `env delete` may remove a project `[env]`
   override, revealing its inherited global value, but must reject a key absent from the project
   table even with `--force`. It never removes a global entry implicitly or creates a tombstone.
@@ -811,6 +815,13 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Dotenv import is private before writing pending plaintext.** Generated workspace and source
+  files use `atomic_write_private`, including forced replacements and unmarked imported values.
+- **Forced identity generation preserves the old identity until validation succeeds.** Generate
+  into an absent path inside a same-directory private staging directory, restrict the file to 0600
+  on Unix, extract its recipient, then use synced replacement. Never delete the old key before
+  invoking keygen. Normal initialization retains keygen's exclusive-create semantics.
+
 - **Sealing replaces only regular source files.** Reject symbolic links before capturing any
   sources and recheck before replacement; on Unix require exactly one hard link. Atomic rename
   over a linked path must not report plaintext cleared while another alias still holds it.
@@ -887,6 +898,11 @@ bugs. Check this list before changing the modules named in each entry.
   2.6.9-compatible implementation, rather than `--info=progress2`.
 
 ## SSH secret broker
+
+- **Policy writers share a persistent `ssh-secret-broker.lock`.** Add, remove, local update and
+  remote enrollment lock before the final store read and retain the guard through private atomic
+  persistence. Updates recheck the exact reviewed target after confirmation; a changed or removed
+  target fails rather than being restored, while unrelated policies retain their latest state.
 
 - **The session token is transport correlation, not broker authorization.** A remote peer that
   learns `SHINE_SSH_TOKEN` still must satisfy the session's exact direct allow-list or an exact

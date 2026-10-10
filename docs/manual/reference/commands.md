@@ -201,6 +201,8 @@ target, capability, source directory, and source layer remain unchanged. This is
 authorization, not continuous code review.
 `trust list` groups grants that share one security scope into a compact row and checks them against
 the active Preset; `--verbose` expands capabilities, development-source labels, and review guidance.
+Concurrent `trust grant` and `trust revoke` commands preserve changes to other targets; a completed
+revocation cannot be restored by another command saving an older copy of the trust store.
 
 Interactive lifecycle confirmation may authorize external code for that operation without saving
 a grant. Automation and `--yes` require existing trust; Shell live requires Development trust.

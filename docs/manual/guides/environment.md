@@ -143,6 +143,9 @@ shine env secret identity list
 ```
 
 A normal identity uses `age-keygen` and defaults to `~/.shine/age/identity.txt`.
+Existing files require `--force`. Forced replacement generates and checks the new identity in a
+private temporary directory before replacing the old file; generation or validation failure
+preserves the old identity. On Unix, the resulting identity file has owner-only `0600` permissions.
 
 ### Use Touch ID on macOS
 
@@ -550,6 +553,8 @@ shine env workspace init --from-dotenv --mode development --mode production
 
 Mark known sensitive keys for `[secret]`, then configure recipients and seal. Unmarked values are
 imported as plaintext; never accidentally commit credentials as ordinary configuration.
+Imported secrets also remain plaintext until sealing. On Unix, generated workspace and source
+files use owner-only `0600` permissions, including replacements with `--force`.
 
 ```bash
 shine env workspace init --from-dotenv --secret DATABASE_URL

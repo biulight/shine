@@ -152,26 +152,14 @@ pub async fn handle_identity_init(
             .with_context(|| format!("creating {}", parent.display()))?;
     }
 
-    if touch_id {
-        ensure_command("age-plugin-se")?;
-        run_keygen(
-            "age-plugin-se",
-            &touch_id_keygen_args(access_control, &output_path),
-        )
-        .await?;
+    let program = if touch_id {
+        "age-plugin-se"
     } else {
-        ensure_command("age-keygen")?;
-        run_keygen(
-            "age-keygen",
-            &["-o".to_string(), output_path.to_string_lossy().into_owned()],
-        )
-        .await?;
-    }
-
-    #[cfg(unix)]
-    set_owner_only_permissions(&output_path).await?;
-
-    let recipient = extract_recipient(&output_path).await?;
+        "age-keygen"
+    };
+    ensure_command(program)?;
+    let recipient =
+        generate_identity(program, touch_id, access_control, &output_path, force).await?;
     println!(
         "{}",
         colors::green(&format!(
@@ -451,9 +439,74 @@ fn default_identity_path(config: &Config) -> PathBuf {
     config.shine_dir().join("age").join("identity.txt")
 }
 
+/// A private directory gives keygen an absent output path without exposing its
+/// bytes while it writes. Drop also cleans up spawn, validation and replace errors.
+struct IdentityStage(PathBuf);
+
+impl IdentityStage {
+    fn new(output: &Path) -> Result<Self> {
+        let parent = output
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let path = parent.join(format!(".shine-identity-{}", uuid::Uuid::new_v4()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&path)
+            .context("creating private identity staging directory")?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for IdentityStage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+async fn generate_identity(
+    program: &str,
+    touch_id: bool,
+    access_control: &str,
+    output: &Path,
+    force: bool,
+) -> Result<String> {
+    // Without --force, keygen retains its own exclusive-create semantics.
+    let stage = force.then(|| IdentityStage::new(output)).transpose()?;
+    let generated = stage
+        .as_ref()
+        .map(|stage| stage.0.join("identity.txt"))
+        .unwrap_or_else(|| output.to_owned());
+    let args = if touch_id {
+        touch_id_keygen_args(access_control, &generated)
+    } else {
+        vec!["-o".to_string(), generated.to_string_lossy().into_owned()]
+    };
+    run_keygen(program, &args).await?;
+    #[cfg(unix)]
+    set_owner_only_permissions(&generated).await?;
+    let recipient = extract_recipient(&generated).await?;
+    if stage.is_some() {
+        tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&generated)
+            .await?
+            .sync_all()
+            .await?;
+        crate::persist::finalize_temp(&generated, output).await?;
+    }
+    Ok(recipient)
+}
+
 async fn run_keygen(program: &str, args: &[String]) -> Result<()> {
     let status = Command::new(program)
         .args(args)
+        .kill_on_drop(true)
         .status()
         .await
         .with_context(|| format!("running {program}"))?;

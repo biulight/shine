@@ -191,7 +191,7 @@ async fn init_from_dotenv_at(
         if dry_run {
             println!("Would create {display}");
         } else {
-            atomic_write(path, contents.as_bytes()).await?;
+            atomic_write_private(path, contents.as_bytes()).await?;
             println!("Created {display}");
         }
     }
@@ -1821,6 +1821,60 @@ mod tests {
                 .is_err()
         );
         tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dotenv_import_keeps_pending_plaintext_private_on_create_and_force() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::test_support::make_temp_dir("shine-dotenv-private").await;
+        let input = dir.join(".env");
+        let output = dir.join(".env.shine.toml");
+        tokio::fs::write(&input, "TOKEN=pending-secret\n")
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o600))
+            .await
+            .unwrap();
+        for force in [false, true] {
+            if force {
+                tokio::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o644))
+                    .await
+                    .unwrap();
+            }
+            init_from_dotenv_at(&dir, &[], &["TOKEN".into()], force, false)
+                .await
+                .unwrap();
+            assert_eq!(
+                tokio::fs::metadata(&output)
+                    .await
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert!(
+                tokio::fs::read_to_string(&output)
+                    .await
+                    .unwrap()
+                    .contains("pending-secret")
+            );
+            assert_eq!(
+                tokio::fs::read_to_string(&input).await.unwrap(),
+                "TOKEN=pending-secret\n"
+            );
+            assert_eq!(
+                tokio::fs::metadata(&input)
+                    .await
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]

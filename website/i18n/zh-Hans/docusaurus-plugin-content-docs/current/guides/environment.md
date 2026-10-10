@@ -129,6 +129,8 @@ shine env secret identity list
 ```
 
 普通 identity 使用 `age-keygen`，默认写入 `~/.shine/age/identity.txt`。
+已有文件需要 `--force` 才能替换。强制替换会先在私有临时目录生成并检查新 identity，再替换旧文件；
+生成或检查失败时保留旧 identity。Unix 上，生成的 identity 文件使用仅所有者可读写的 `0600` 权限。
 
 ### 在 macOS 上使用 Touch ID
 
@@ -495,6 +497,8 @@ shine env workspace init --from-dotenv --mode development --mode production
 ```
 
 导入时可将明确知道的敏感键放进 `[secret]`，之后配置 recipient 并封存。未标记的值会作为明文导入；不要把实际凭据误当作普通配置提交。
+导入的 Secret 在封存前也仍是明文。Unix 上，生成的 workspace 与环境源文件使用仅所有者可读写的
+`0600` 权限，使用 `--force` 替换时同样如此。
 
 ```bash
 shine env workspace init --from-dotenv --secret DATABASE_URL

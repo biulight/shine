@@ -9,6 +9,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Preserve concurrent trust grants, revocations and SSH broker policy changes. Reject policy
+  updates when the reviewed target changed or was removed while confirmation was pending.
+  Import dotenv files with owner-only Unix permissions, including pending plaintext secrets.
+  Make age identity `--force` generate and validate a private replacement before replacing the
+  existing identity, retaining the old file when generation or validation fails.
+
 - Reject linked environment sources during sealing to avoid leaving plaintext in another file.
   Force GPG output through stdout and reject empty ciphertext before replacing pending secrets.
   Serialize task saves and deletions before loading the registry so concurrent updates are retained.

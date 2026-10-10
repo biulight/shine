@@ -1073,6 +1073,9 @@ and fails closed until policy update. When no trusted local checkout exists,
 `--secret-broker-enroll --trust-remote-metadata --update-policy NAME` previews a full diff and may
 replace exactly one same-mode/same-argv allow while preserving the named policy's local identity
 fields; a concurrent local policy edit aborts the write.
+Local policy updates use the same exact-target recheck after human confirmation. Every writer
+acquires `ssh-secret-broker.lock` before its final store read and retains it through persistence;
+unrelated policy changes are merged from that fresh read, never from the review-time store.
 
 ## Personal task runner (`shine task run` / `shine run`)
 

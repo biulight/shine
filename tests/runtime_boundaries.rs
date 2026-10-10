@@ -69,6 +69,32 @@ impl Fixture {
         assert!(output.status.success(), "{:?}", output);
         output
     }
+    fn shine(&self) -> Command {
+        let mut command = self.command(Path::new(env!("CARGO_BIN_EXE_shine")));
+        command.arg("--config-dir").arg(self.state());
+        command
+    }
+
+    fn initialize(&self) {
+        Self::assert_ok(
+            self.shine()
+                .args(["env", "get", "REVIEW_TOKEN"])
+                .output()
+                .unwrap(),
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        fs::write(
+            self.state().join("update-check.json"),
+            format!(
+                r#"{{"latest_version":"{}","checked_at_unix_secs":{now}}}"#,
+                env!("CARGO_PKG_VERSION")
+            ),
+        )
+        .unwrap();
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -389,4 +415,182 @@ fn concurrent_task_saves_preserve_every_successful_update() {
             Some(index.to_string().as_str())
         );
     }
+}
+
+#[test]
+fn concurrent_trust_revocations_do_not_restore_revoked_grants() {
+    let fixture = Fixture::new();
+    fixture.initialize();
+    let path = fixture.state().join("trust.toml");
+    let mut encoded = "schema_version = 2\n".to_owned();
+    for index in 0..32 {
+        encoded.push_str(&format!(
+            "[[grants]]\nschema_version = 2\ntarget = 'app/demo-{index}'\ncapability = 'app-hook'\ncode_digest = '{}'\nmode = 'snapshot'\n", "0".repeat(64)));
+    }
+    fs::write(&path, encoded).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let mut children = Vec::new();
+    for index in 0..32 {
+        children.push(
+            fixture
+                .shine()
+                .args(["trust", "revoke", &format!("app/demo-{index}")])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    for child in children {
+        Fixture::assert_ok(child.wait_with_output().unwrap());
+    }
+    let store: shine_core::trust::TrustStoreV1 =
+        toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert!(
+        store.grants.is_empty(),
+        "successful revocations must remain revoked"
+    );
+}
+
+#[test]
+fn concurrent_broker_policy_adds_and_removes_preserve_successful_changes() {
+    let fixture = Fixture::new();
+    fixture.initialize();
+    let workspace = fixture.0.join("project/shine.workspace.toml");
+    fs::write(&workspace, "version = 2\n[env]\nfiles = ['source.toml']\n").unwrap();
+    fs::write(
+        fixture.0.join("project/source.toml"),
+        "version = 1\n[secret]\nTOKEN = true\n[payload]\ndata = 'synthetic-ciphertext'\n",
+    )
+    .unwrap();
+    let mut children = Vec::new();
+    for index in 0..32 {
+        children.push(
+            fixture
+                .shine()
+                .args([
+                    "env",
+                    "broker",
+                    "policy",
+                    "add",
+                    "--name",
+                    &format!("policy-{index}"),
+                    "--ssh-target",
+                    &format!("host-{index}"),
+                    "--workspace",
+                ])
+                .arg(&workspace)
+                .args([
+                    "--mode",
+                    "development",
+                    "--release",
+                    "TOKEN",
+                    "--",
+                    "echo",
+                    "test",
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    for child in children {
+        Fixture::assert_ok(child.wait_with_output().unwrap());
+    }
+    let path = fixture.state().join("ssh-secret-broker.toml");
+    let store: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(store["policy"].as_array().unwrap().len(), 32);
+    let mut children = Vec::new();
+    for index in 0..32 {
+        children.push(
+            fixture
+                .shine()
+                .args([
+                    "env",
+                    "broker",
+                    "policy",
+                    "remove",
+                    &format!("policy-{index}"),
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    for child in children {
+        Fixture::assert_ok(child.wait_with_output().unwrap());
+    }
+    let store: toml::Value = toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert!(store["policy"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn identity_force_stages_replacement_and_preserves_old_key_on_failure() {
+    let fixture = Fixture::new();
+    let keygen = fixture.0.join("tools/age-keygen");
+    fs::write(
+        &keygen,
+        r#"#!/bin/sh
+[ "$1" = '-o' ] && [ "$#" = 2 ] || exit 11
+[ ! -e "$2" ] || exit 12
+case "${SHINE_TEST_KEYGEN_MODE:-success}" in
+fail) printf 'partial' > "$2"; exit 13 ;;
+invalid) printf 'no recipient' > "$2" ;;
+*) printf '# public key: age1review\nAGE-SECRET-KEY-REVIEW\n' > "$2" ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(keygen, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = fixture.0.join("project/identity.txt");
+    let original = b"original private identity\n";
+    fs::write(&output, original).unwrap();
+    fs::set_permissions(&output, fs::Permissions::from_mode(0o600)).unwrap();
+    let run = |force: bool, mode: &str| {
+        let mut command = fixture.shine();
+        command
+            .env("SHINE_TEST_KEYGEN_MODE", mode)
+            .args(["env", "secret", "identity", "init", "--output"])
+            .arg(&output);
+        if force {
+            command.arg("--force");
+        }
+        command.output().unwrap()
+    };
+    assert!(!run(false, "success").status.success());
+    assert_eq!(fs::read(&output).unwrap(), original);
+    for mode in ["fail", "invalid"] {
+        let failed = run(true, mode);
+        assert!(!failed.status.success(), "{failed:?}");
+        assert_eq!(fs::read(&output).unwrap(), original);
+        assert!(
+            !fs::read_dir(output.parent().unwrap())
+                .unwrap()
+                .any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".shine-identity-"))
+        );
+    }
+    Fixture::assert_ok(run(true, "success"));
+    assert_eq!(
+        fs::read_to_string(&output).unwrap(),
+        "# public key: age1review\nAGE-SECRET-KEY-REVIEW\n"
+    );
+    assert_eq!(
+        fs::metadata(&output).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(
+        !fs::read_dir(output.parent().unwrap())
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".shine-identity-"))
+    );
 }
