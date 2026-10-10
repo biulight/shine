@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-10 — Shell receipt formats must agree across manifests and Action IR
+
+- **Symptom**: Windows Shell install, upgrade and uninstall setup failed Action validation for
+  cache, snapshot, rendered-file and launcher transactions.
+- **Cause**: manifests accepted `native-cmd-v2`, but the Action receipt validator only accepted
+  legacy and `live-bun-v2` formats, rejecting otherwise valid transaction receipt transitions.
+- **Fix**: accept `native-cmd-v2` only for native `.ps1` sources without a config-dir field,
+  matching manifest reconstruction. Cover round-tripping, legacy compatibility and invalid format
+  combinations in portable tests; verify lifecycle behavior on native Windows.
+- **Rule**: a new receipt format must update every persistence and transaction validator together;
+  valid manifest decoding alone does not prove approved execution or recovery can accept it.
+
 ## 2026-10-10 — Authorization revocation and private generation need end-to-end persistence
 
 - **Symptoms**: concurrent successful trust revocations and broker policy removals left grants

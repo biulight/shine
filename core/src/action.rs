@@ -1976,6 +1976,11 @@ impl ShellLauncherReceiptV1 {
     fn is_valid(&self) -> bool {
         let format_valid = match (&self.launcher_format, &self.launcher_config_dir) {
             (None, None) => true,
+            (Some(format), None) => {
+                format == "native-cmd-v2"
+                    && self.runtime == "native"
+                    && self.source_path.extension() == Some(std::ffi::OsStr::new("ps1"))
+            }
             (Some(format), Some(root)) => {
                 format == "live-bun-v2"
                     && root.is_absolute()
@@ -2406,6 +2411,52 @@ mod tests {
         #[serde(default)]
         pub needs_source: bool,
         pub content_hash: u64,
+    }
+
+    #[test]
+    fn native_cmd_action_receipt_validates_format_without_widening_legacy_contract() {
+        let receipt = ShellLauncherReceiptV1 {
+            launcher_format: Some("native-cmd-v2".into()),
+            launcher_config_dir: None,
+            category: "demo".into(),
+            command: "run".into(),
+            mode: "snapshot".into(),
+            source_path: "source.ps1".into(),
+            rendered_path: "rendered.ps1".into(),
+            runtime: "native".into(),
+            bun_dependencies: None,
+            dependency_hash: None,
+            transforms: Vec::new(),
+            env: Vec::new(),
+            needs_source: false,
+            content_hash: 0,
+        };
+        assert!(receipt.is_valid());
+        let decoded: ShellLauncherReceiptV1 =
+            toml::from_str(&toml::to_string(&receipt).unwrap()).unwrap();
+        assert_eq!(decoded, receipt);
+        assert!(decoded.is_valid());
+
+        let mut legacy = receipt.clone();
+        legacy.launcher_format = None;
+        assert!(legacy.is_valid());
+
+        let mut live = receipt.clone();
+        live.mode = "live".into();
+        assert!(live.is_valid());
+
+        let mut invalid = receipt.clone();
+        invalid.runtime = "bun".into();
+        assert!(!invalid.is_valid());
+        let mut invalid = receipt.clone();
+        invalid.source_path = "source.sh".into();
+        assert!(!invalid.is_valid());
+        let mut invalid = receipt.clone();
+        invalid.launcher_config_dir = Some(std::env::temp_dir());
+        assert!(!invalid.is_valid());
+        let mut invalid = receipt;
+        invalid.launcher_format = Some("native-cmd-v3".into());
+        assert!(!invalid.is_valid());
     }
 
     #[test]
