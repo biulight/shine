@@ -1,5 +1,25 @@
 # Lessons Learned
 
+## 2026-10-10 — Sealing must validate file aliases and ciphertext output
+
+- **Symptoms**: sealing a symbolic link replaced the link while its target retained plaintext;
+  a GPG `output` option produced an empty sealed payload despite exit status zero.
+- **Causes**: reads followed links but atomic rename replaced directory entries; backend success
+  was inferred from exit status without checking stdout or controlling its destination.
+- **Fix**: reject linked sources before any update and recheck at replacement; force GPG stdout
+  for encryption/decryption and reject empty ciphertext before source serialization.
+- **Rule**: validate the file being replaced, not only bytes read through it. A successful
+  subprocess must also satisfy the caller's output contract before destructive persistence.
+
+## 2026-10-10 — Task registry mutations need the same whole-manifest lock discipline
+
+- **Symptoms**: 32 concurrent successful task saves retained only a few entries.
+- **Cause**: atomic replacement prevented torn files but did not serialize stale manifest reads.
+- **Fix**: save and delete acquire the persistent runtime-scoped OS lock before loading tasks
+  and hold it through validation and persistence; add held-guard and cross-process regressions.
+- **Rule**: atomic writes and serializable updates are separate requirements. Apply lifecycle
+  locking to small registries as well as installation receipts.
+
 ## 2026-10-09 — Lifecycle locks must precede whole-manifest reads
 
 - **Symptoms**: Shell uninstall dropped a concurrent category's receipt; concurrent managed Sys

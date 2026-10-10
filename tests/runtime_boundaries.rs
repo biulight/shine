@@ -237,3 +237,156 @@ fn sudo_home_uses_system_account_instead_of_root_home() {
         expected
     );
 }
+
+#[test]
+fn gpg_uses_stdout_for_sealing_and_decryption_despite_configured_output() {
+    let fixture = Fixture::new();
+    let gpg = fixture.0.join("tools/gpg");
+    // Emulate GPG's output option: a local option file redirects output unless
+    // the invocation explicitly overrides it. No actual cryptography is needed here.
+    fs::write(
+        &gpg,
+        r#"#!/bin/sh
+mode=$1
+output=$REVIEW_GPG_OUTPUT
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --output) shift; output=$1 ;;
+    esac
+    last=$1
+    shift
+done
+if [ "$output" != - ]; then exec > "$output"; fi
+if [ "$mode" = --decrypt ]; then cat "$last"; else cat; fi
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(gpg, fs::Permissions::from_mode(0o755)).unwrap();
+    let source = fixture.0.join("project/source.toml");
+    fs::write(&source, "version = 1\n[secret]\nTOKEN = 'pending-value'\n").unwrap();
+    let redirected = fixture.0.join("redirected-output");
+    Fixture::assert_ok(
+        fixture
+            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .env("REVIEW_GPG_OUTPUT", &redirected)
+            .arg("--config-dir")
+            .arg(fixture.state())
+            .args(["env", "secret", "seal"])
+            .arg(&source)
+            .args(["--backend", "gpg", "-r", "review"])
+            .output()
+            .unwrap(),
+    );
+    let table: toml::Value = toml::from_str(&fs::read_to_string(source).unwrap()).unwrap();
+    assert_eq!(table["secret"]["TOKEN"].as_bool(), Some(true));
+    let ciphertext = table["payload"]["data"].as_str().unwrap();
+    assert!(!ciphertext.is_empty());
+    assert!(!redirected.exists());
+
+    fs::write(
+        fixture.state().join("config.toml"),
+        format!("schema_version = 2\n[env]\nCIPHER = '{ciphertext}'\n"),
+    )
+    .unwrap();
+    let output = Fixture::assert_ok(
+        fixture
+            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .env("REVIEW_GPG_OUTPUT", &redirected)
+            .arg("--config-dir")
+            .arg(fixture.state())
+            .args(["env", "secret", "decrypt", "CIPHER"])
+            .output()
+            .unwrap(),
+    );
+    let plaintext: toml::Value =
+        toml::from_str(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
+    assert_eq!(plaintext["values"]["TOKEN"].as_str(), Some("pending-value"));
+    assert!(!redirected.exists());
+}
+
+#[test]
+fn empty_gpg_ciphertext_preserves_pending_source() {
+    let fixture = Fixture::new();
+    let gpg = fixture.0.join("tools/gpg");
+    fs::write(&gpg, "#!/bin/sh\ncat >/dev/null\nexit 0\n").unwrap();
+    fs::set_permissions(gpg, fs::Permissions::from_mode(0o755)).unwrap();
+    let source = fixture.0.join("project/source.toml");
+    let original = b"version = 1\n[secret]\nTOKEN = 'pending-value'\n";
+    fs::write(&source, original).unwrap();
+    let output = fixture
+        .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+        .arg("--config-dir")
+        .arg(fixture.state())
+        .args(["env", "secret", "seal"])
+        .arg(&source)
+        .args(["--backend", "gpg", "-r", "review"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("no ciphertext"),
+        "{output:?}"
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("pending-value"));
+    assert_eq!(fs::read(source).unwrap(), original);
+}
+
+#[test]
+fn concurrent_task_saves_preserve_every_successful_update() {
+    let fixture = Fixture::new();
+    // Initialize once so this test isolates task persistence from config bootstrapping.
+    Fixture::assert_ok(
+        fixture
+            .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+            .arg("--config-dir")
+            .arg(fixture.state())
+            .args(["env", "get", "REVIEW_TOKEN"])
+            .output()
+            .unwrap(),
+    );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    fs::write(
+        fixture.state().join("update-check.json"),
+        format!(
+            r#"{{"latest_version":"{}","checked_at_unix_secs":{now}}}"#,
+            env!("CARGO_PKG_VERSION")
+        ),
+    )
+    .unwrap();
+    let mut children = Vec::new();
+    for index in 0..32 {
+        children.push(
+            fixture
+                .command(Path::new(env!("CARGO_BIN_EXE_shine")))
+                .arg("--config-dir")
+                .arg(fixture.state())
+                .args([
+                    "task",
+                    "save",
+                    &format!("task-{index}"),
+                    "--",
+                    "echo",
+                    &index.to_string(),
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    for child in children {
+        Fixture::assert_ok(child.wait_with_output().unwrap());
+    }
+    let table: toml::Value =
+        toml::from_str(&fs::read_to_string(fixture.state().join("tasks.toml")).unwrap()).unwrap();
+    assert_eq!(table["tasks"].as_table().unwrap().len(), 32);
+    for index in 0..32 {
+        assert_eq!(
+            table["tasks"][format!("task-{index}")]["command"][1].as_str(),
+            Some(index.to_string().as_str())
+        );
+    }
+}

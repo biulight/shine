@@ -534,6 +534,7 @@ pub async fn handle_seal(
     let scope = std::fs::canonicalize(lock_scope)?;
     let mut locked_paths = BTreeSet::new();
     for path in &files {
+        validate_seal_source(path).await?;
         let canonical = std::fs::canonicalize(path)?;
         if canonical != scope && locked_paths.insert(canonical.clone()) {
             source_locks.push(SealLock::acquire(&canonical)?);
@@ -1138,6 +1139,7 @@ async fn seal_file(
     config: &Config,
     encryption: Option<&EncryptRecipients>,
 ) -> Result<()> {
+    validate_seal_source(path).await?;
     let contents = tokio::fs::read_to_string(path).await?;
     let updated = prepare_sealed_file(path, &contents, config, encryption).await?;
     verify_snapshot(path, &contents).await?;
@@ -1232,6 +1234,29 @@ impl Drop for SealLock {
     }
 }
 
+async fn validate_seal_source(path: &Path) -> Result<()> {
+    let metadata = tokio::fs::symlink_metadata(path)
+        .await
+        .with_context(|| format!("inspecting environment source {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!(
+            "sealing requires a regular environment source file, not a symbolic link: {}",
+            path.display()
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() != 1 {
+            bail!(
+                "sealing requires an environment source file with one hard link: {}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn verify_snapshot(path: &Path, original: &str) -> Result<()> {
     let current = tokio::fs::read(path)
         .await
@@ -1249,6 +1274,7 @@ async fn replace_sealed_file(
     workspace: Option<(&Path, &str)>,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
+    validate_seal_source(path).await?;
     let temp = path.with_extension(format!("shine-seal-{}", uuid::Uuid::new_v4()));
     let result = async {
         let mut options = tokio::fs::OpenOptions::new();
@@ -1262,6 +1288,7 @@ async fn replace_sealed_file(
         if let Some((path, original)) = workspace {
             verify_snapshot(path, original).await?;
         }
+        validate_seal_source(path).await?;
         verify_snapshot(path, original).await?;
         // std/tokio rename uses replacing MoveFileExW on Windows. Never unlink the destination.
         tokio::fs::rename(&temp, path).await?;
@@ -2503,6 +2530,65 @@ mod hybrid_snapshot_tests {
         assert!(!source.exists());
         drop(lock);
         assert!(SealLock::acquire(&workspace).is_ok());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn seal_rejects_linked_sources_before_updating_any_file() {
+        let dir = crate::test_support::make_temp_dir("shine-seal-linked-source").await;
+        let workspace = dir.join("shine.workspace.toml");
+        let original = "version = 1\n[secret]\nTOKEN = 'pending-value'\n";
+        let public = "version = 1\n[plain]\nVALUE = 'public'\n";
+        tokio::fs::write(dir.join("target.toml"), original)
+            .await
+            .unwrap();
+        tokio::fs::write(dir.join("public.toml"), public)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &workspace,
+            "version = 2\n[env]\nfiles = ['public.toml', 'linked.toml']\n",
+        )
+        .await
+        .unwrap();
+        let linked = dir.join("linked.toml");
+        let config = Config::new_for_test(&dir);
+        for hard in [false, true] {
+            if hard {
+                std::fs::hard_link(dir.join("target.toml"), &linked).unwrap();
+            } else {
+                std::os::unix::fs::symlink(dir.join("target.toml"), &linked).unwrap();
+            }
+            let err = handle_seal(&config, Some(&workspace), None, None, &[])
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains(if hard {
+                "one hard link"
+            } else {
+                "regular environment source"
+            }));
+            assert_eq!(
+                tokio::fs::read_to_string(dir.join("public.toml"))
+                    .await
+                    .unwrap(),
+                public
+            );
+            assert_eq!(
+                tokio::fs::read_to_string(dir.join("target.toml"))
+                    .await
+                    .unwrap(),
+                original
+            );
+            // The replacement boundary must also reject a link introduced after capture.
+            assert!(
+                replace_sealed_file(&linked, b"sealed", original, None)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(tokio::fs::read_to_string(&linked).await.unwrap(), original);
+            tokio::fs::remove_file(&linked).await.unwrap();
+        }
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 }

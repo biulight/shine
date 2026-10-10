@@ -9,6 +9,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Bug Fixes
 
+- Reject linked environment sources during sealing to avoid leaving plaintext in another file.
+  Force GPG output through stdout and reject empty ciphertext before replacing pending secrets.
+  Serialize task saves and deletions before loading the registry so concurrent updates are retained.
+
 - Keep static App files out of code-execution consent even when their names begin with
   `generator:`, `hook:`, or `artifact:`. Make Preset validation codes reflect the failed check
   independently of category names and diagnostic wording.

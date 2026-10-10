@@ -17,6 +17,7 @@
 pub mod manifest;
 
 use anyhow::{Context, Result, bail};
+use shine_core::runtime::{FileSystemHost, RealHost};
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
@@ -39,12 +40,16 @@ pub async fn handle_save(
         );
     }
 
+    let cwd = resolve_task_cwd(config, cwd)?;
+    // Serialize the whole read/validate/write sequence, not just atomic replacement.
+    let _guard = RealHost
+        .acquire_operation_lock(&config.shine_dir().join("tasks.lock"))
+        .await?;
     let mut manifest = TaskManifest::load(config.shine_dir()).await?;
     if !force && manifest.get(name).is_some() {
         bail!("Task already exists: {name}\n\nUse `--force` to replace it.");
     }
 
-    let cwd = resolve_task_cwd(config, cwd)?;
     let rendered = render_command(&command);
     manifest.upsert(name, command, cwd.clone());
     manifest.save(config.shine_dir()).await?;
@@ -126,6 +131,9 @@ pub async fn handle_info(config: &Config, name: &str) -> Result<()> {
 }
 
 pub async fn handle_delete(config: &Config, name: &str) -> Result<()> {
+    let _guard = RealHost
+        .acquire_operation_lock(&config.shine_dir().join("tasks.lock"))
+        .await?;
     let mut manifest = TaskManifest::load(config.shine_dir()).await?;
     if !manifest.remove(name) {
         bail!("Task not found: {name}\n\n{NOT_FOUND_HINT}");
@@ -275,6 +283,50 @@ mod tests {
 
     async fn temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-task-test").await
+    }
+
+    #[tokio::test]
+    async fn mutations_read_the_manifest_only_after_acquiring_the_lock() {
+        let dir = temp_dir().await;
+        let config = config_in(&dir);
+        let lock_path = config.shine_dir().join("tasks.lock");
+        let guard = RealHost.acquire_operation_lock(&lock_path).await.unwrap();
+        let save = handle_save(&config, "new", false, None, vec!["echo".into()]);
+        tokio::pin!(save);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut save)
+                .await
+                .is_err()
+        );
+
+        let mut manifest = TaskManifest::default();
+        manifest.upsert("existing", vec!["true".into()], None);
+        manifest.save(config.shine_dir()).await.unwrap();
+        drop(guard);
+        save.await.unwrap();
+        let manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
+        assert!(manifest.get("existing").is_some());
+        assert!(manifest.get("new").is_some());
+
+        let guard = RealHost.acquire_operation_lock(&lock_path).await.unwrap();
+        let delete = handle_delete(&config, "new");
+        tokio::pin!(delete);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut delete)
+                .await
+                .is_err()
+        );
+        let mut manifest = manifest;
+        manifest.upsert("later", vec!["true".into()], None);
+        manifest.save(config.shine_dir()).await.unwrap();
+        drop(guard);
+        delete.await.unwrap();
+        let manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
+        assert!(manifest.get("new").is_none());
+        assert!(manifest.get("existing").is_some());
+        assert!(manifest.get("later").is_some());
+        assert!(lock_path.exists());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]

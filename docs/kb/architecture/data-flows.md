@@ -1086,7 +1086,10 @@ terminating signal becomes `128 + signal`), never wrapped in an anyhow error, so
 exit semantics survive Shine in the middle. `shine run <NAME>` is a top-level alias routed to the
 same handler. `task::handle_save` validates the name (`[A-Za-z0-9._-]`, letter/digit start) and
 rejects an empty command or a duplicate without `--force`; `info`/`list` render the argv back to a
-copy-paste-safe line by shell-quoting shell-significant arguments.
+copy-paste-safe line by shell-quoting shell-significant arguments. Save and delete acquire
+`<shine_dir>/tasks.lock` through `FileSystemHost::acquire_operation_lock` before loading the
+manifest, retain it through validation and atomic save, and release it without unlinking.
+The shared 30-second timeout fails without changing the manifest; reads remain lock-free.
 
 ## Secret backend routing (GPG / age)
 
@@ -1118,6 +1121,11 @@ merges the legacy `age_identity` path with that ordered list and passes each pat
 manages phone-plugin TPM/Secure Enclave keys, replay, locator, pairing, recovery, or cleanup state. See
 [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md).
 
+
+All workspace sealing rejects symbolic-link sources (and multiple hard links on Unix) before
+capturing any sources and rechecks file type/link count before atomic replacement. Ordinary GPG
+encryption and decryption force `--output -`; empty successful encryption output is rejected
+before serializing a sealed source, preserving pending plaintext on failure.
 
 Hybrid workspace sealing captures policy and source bytes under cooperating workspace/source
 locks, resolves exact GPG public encryption keys with option files disabled, and preflights both

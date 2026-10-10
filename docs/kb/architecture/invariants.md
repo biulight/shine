@@ -726,6 +726,9 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **`tasks.toml` lives under `Config::shine_dir()`**, so it follows `SHINE_CONFIG_DIR` for free.
   Never resolve it against `presets_dir` or `$HOME` directly — that would break test isolation.
+- **Task mutations lock before reading the whole manifest.** Save (including duplicate checks)
+  and delete hold the persistent `tasks.lock` OS guard through atomic persistence. Reuse the
+  bounded operation-lock port; never unlink the lock to resolve contention. Readers need no lock.
 - **`shine task run` propagates the child exit code verbatim** and never runs the saved argv
   through a shell. Wrapping the failure in an anyhow error (or defaulting to exit 1) would corrupt
   the task's own exit semantics. Shell syntax is opt-in via an explicit saved `sh -c '...'`.
@@ -808,6 +811,12 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Sealing replaces only regular source files.** Reject symbolic links before capturing any
+  sources and recheck before replacement; on Unix require exactly one hard link. Atomic rename
+  over a linked path must not report plaintext cleared while another alias still holds it.
+- **GPG output belongs to the caller.** Encryption and decryption pass `--output -`, overriding
+  local option-file destinations. Successful encryption with empty stdout is an error and must
+  not replace a pending-plaintext source with an empty payload.
 - **Encryption drains output while feeding plaintext.** GPG/age can write before reading all
   input, so stdin writing, stdout/stderr draining, and child waiting must proceed concurrently.
   I/O errors terminate and reap the child; encryption callers enable kill-on-drop for cancellation.

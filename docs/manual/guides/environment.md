@@ -725,6 +725,11 @@ It is trusted local project configuration, so a program able to edit it can chan
 the chosen authorization path. SSH broker requests do not load or transmit this file;
 the decrypting broker machine retains its own configured choice and release checks.
 
+Sealing requires regular source files and rejects symbolic links; on Unix, it also rejects
+files with multiple hard links. This prevents atomic replacement from leaving plaintext in
+another linked file. GPG encryption and decryption explicitly use standard output regardless
+of local `output` settings; empty encryption output fails without replacing the source.
+
 Sealing locks out cooperating Shine sealers and rechecks captured workspace and source
 bytes before replacement. Edits during hardware approval abort the current file;
 earlier completed files remain completed and remaining files are not processed. Do
