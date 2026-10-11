@@ -21,21 +21,46 @@ fn sudo_user_home() -> Option<PathBuf> {
     if sudo_user.is_empty() || sudo_user == "root" {
         return None;
     }
-    // /etc/passwd is authoritative for local accounts on both Linux and macOS.
-    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
-    for line in passwd.lines() {
-        let mut fields = line.splitn(7, ':');
-        let username = fields.next()?;
-        if username != sudo_user {
+    account_home(sudo_user)
+}
+
+/// Query the OS account database (including macOS Directory Services / Unix NSS).
+#[cfg(unix)]
+fn account_home(user: &str) -> Option<PathBuf> {
+    use std::ffi::{CStr, CString, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    let user = CString::new(user).ok()?;
+    let mut buffer = vec![0u8; 1024];
+    loop {
+        let mut entry = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut result = std::ptr::null_mut();
+        // SAFETY: all output pointers refer to valid storage for this call;
+        // the returned strings are copied before the buffer is dropped or resized.
+        let status = unsafe {
+            libc::getpwnam_r(
+                user.as_ptr(),
+                entry.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+        if status == libc::ERANGE && buffer.len() < 1024 * 1024 {
+            buffer.resize(buffer.len() * 2, 0);
             continue;
         }
-        // passwd field order: name:password:uid:gid:gecos:home:shell
-        let home = fields.nth(4)?; // skip password, uid, gid, gecos (index 1-4)
-        if !home.is_empty() {
-            return Some(PathBuf::from(home));
+        if status != 0 || result.is_null() {
+            return None;
         }
+        // SAFETY: a successful non-null result initialized entry and its pw_dir.
+        let entry = unsafe { entry.assume_init() };
+        if entry.pw_dir.is_null() {
+            return None;
+        }
+        let home = unsafe { CStr::from_ptr(entry.pw_dir) }.to_bytes();
+        return (!home.is_empty()).then(|| PathBuf::from(OsStr::from_bytes(home)));
     }
-    None
 }
 
 #[cfg(not(unix))]
@@ -100,4 +125,16 @@ fn default_config_dir() -> Result<PathBuf> {
 pub(crate) fn default_config_and_presets_dir() -> Result<(PathBuf, PathBuf)> {
     let config_dir = default_config_dir()?;
     Ok((config_dir.clone(), config_dir.join("presets")))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_lookup_rejects_missing_accounts_and_embedded_nuls() {
+        assert!(account_home(&format!("shine-missing-{}", uuid::Uuid::new_v4())).is_none());
+        assert!(account_home("root\0other").is_none());
+        assert!(account_home("root").is_some_and(|home| home.is_absolute()));
+    }
 }

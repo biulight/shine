@@ -23,6 +23,9 @@ shine ssh user@example.com uname -a
 Windows 可以作为本机端发起这种传输会话。Windows 作为远端时需改用下文的
 `--remote-shell windows` 模式，该模式只转发环境，不提供文件传输。
 
+传输控制连接关闭时，Shine 会停止本机传输进程；在 macOS 和 Linux 上，也会停止其后代进程。
+已经复制的文件不会自动回滚。
+
 ## 转发选定的环境变量
 
 只在本次远端会话或命令中提供本机 Shine 环境值时，把选项写在 SSH 目标之前：
@@ -113,6 +116,10 @@ shine env broker policy add \
 shine env run --mode development --secret-broker -- bun run build
 ```
 
+Workspace 值与本地 `env run` 一样按环境源顺序覆盖。后面的明文值会覆盖前面的 secret，被覆盖的
+secret 不会发送到远端。后面的 secret 声明会隐藏前面的明文值，即使该 secret 没有获准释放。
+策略仍会绑定每个环境源及其完整的 secret 声明列表。
+
 默认仍会逐次在本机确认。只有已理解“信任该远端 SSH 会话及同账号进程”这一风险时，才在本机 SSH 命令上添加 `--trust-remote-session`；它只会自动批准精确匹配的 workspace 策略。
 
 如果策略不应写进默认的 `~/.shine/ssh-secret-broker.toml`，可额外加载受本机保护的临时或团队策略文件。它与默认策略合并；请求必须恰好命中一条策略，零条或多条都会拒绝：
@@ -134,6 +141,8 @@ shine env broker policy update \
   --workspace ~/src/acme-api/shine.workspace.toml \
   --mode development --release DEPLOY_TOKEN -- bun run build
 ```
+
+并发修改策略会保留对其他策略的更新。如果等待确认期间目标策略被修改或删除，更新会失败，需要重新审阅。
 
 若没有本机 checkout，可使用 inspect 会话查看候选描述。先在本机开启 inspect，再在远端项目目录运行 `describe`；该请求会显示 workspace、source 摘要、mode、完整 argv 与 release 键，并与本机策略比较：
 
@@ -209,6 +218,9 @@ shine local download ./dist ./dist-copy
 
 Shine 会在本机端重新发起系统 `rsync` 或 `scp` 传输；优先使用 `rsync`，不可用时回退到 `scp`。两端都需要可用的 `ssh`，目录传输还需要两端具有同一种可用工具（优先 `rsync`，否则 `scp`）。目标文件已存在时默认拒绝覆盖；目录已存在时加 `--force` 表示合并写入。
 需要跳过 `rsync` 探测并强制使用 `scp` 时，添加 `--scp`。
+Rsync 使用逐文件显示进度的 `--progress` 选项，兼容 macOS 自带的系统 rsync。
+使用 SCP 重连时，Shine 会转换 SSH 的端口、用户名和控制 socket 选项，保留身份文件、跳板主机等
+连接设置，并跳过原会话的终端和端口转发选项。
 
 ## 从本机上传到远端
 

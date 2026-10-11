@@ -1,3 +1,4 @@
+use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind};
 use crate::action::{ActionIrV1, ActionKindV1};
 use crate::env::EnvVarSpec;
 use crate::install::file_ops::{
@@ -224,6 +225,8 @@ pub struct AppFileLifecycleReport {
     pub destination: PathBuf,
     pub transforms: Vec<String>,
     pub backup: Option<PathBuf>,
+    /// Receipt-owned strategy for uninstall guidance; absent for other operations.
+    pub uninstall_strategy: Option<AppInstallStrategy>,
     pub restart_hint: Option<String>,
     pub generator_error: Option<String>,
     pub error: Option<String>,
@@ -388,9 +391,57 @@ where
             report.lifecycle.push(cache);
         }
 
+        // Preserve steps have no execution authority, including generator code.
+        // Remove their files before assessment, not merely before the final write.
+        let mut execution_categories = categories.clone();
+        if let Some(approved) = &approved {
+            for category in &mut execution_categories {
+                let target = format!("app/{}", category.name);
+                let mut selected = Vec::new();
+                for file in std::mem::take(&mut category.files) {
+                    let resource = file.source_rel.display().to_string();
+                    let preserved = approved.plan.steps.iter().any(|step| {
+                        step.target == target
+                            && step.resource.as_deref() == Some(resource.as_str())
+                            && step.action == PlanActionV1::Preserve
+                    });
+                    if !preserved {
+                        selected.push(file);
+                        continue;
+                    }
+                    let destination = self.app_destination(category, &file)?;
+                    let backup = manifest
+                        .find_by_dest(&destination)
+                        .and_then(|entry| entry.backup.clone());
+                    report.lifecycle.push(
+                        LifecycleOutcomeV1::new(
+                            &target,
+                            Some(resource),
+                            LifecycleStatus::Preserved,
+                            [LifecycleEffect::UserResourcePreserved],
+                        )
+                        .with_diagnostic_code("app_user_modified"),
+                    );
+                    report.files.push(AppFileLifecycleReport {
+                        category: category.name.clone(),
+                        source: file.source_rel,
+                        destination,
+                        transforms: file.transforms,
+                        backup,
+                        uninstall_strategy: None,
+                        restart_hint: file.restart_hint,
+                        generator_error: None,
+                        error: None,
+                        status: LifecycleStatus::Preserved,
+                        action: AppFileAction::UserModified,
+                    });
+                }
+                category.files = selected;
+            }
+        }
         let assessed = self
             .assess_app_files(
-                &categories,
+                &execution_categories,
                 AppAssessmentOptions {
                     dry_run: request.dry_run,
                     run_generators: true,
@@ -430,6 +481,7 @@ where
                     destination: assessment.destination,
                     transforms: assessment.file.transforms,
                     backup: None,
+                    uninstall_strategy: None,
                     restart_hint: assessment.file.restart_hint,
                     generator_error: None,
                     error: Some("administrator permission was not granted".to_string()),
@@ -454,6 +506,7 @@ where
                     destination: assessment.destination,
                     transforms: assessment.file.transforms,
                     backup: None,
+                    uninstall_strategy: None,
                     restart_hint: assessment.file.restart_hint,
                     generator_error: Some(generator_error),
                     error: None,
@@ -623,6 +676,7 @@ where
                 destination: assessment.destination,
                 transforms: assessment.file.transforms,
                 backup,
+                uninstall_strategy: None,
                 restart_hint: assessment.file.restart_hint,
                 generator_error: None,
                 error,
@@ -695,27 +749,14 @@ where
         interaction: &mut impl RuntimeInteraction,
     ) -> Result<AppLifecycleReport> {
         let mut manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        let target_destinations = if let Some(target) = &request.target {
-            self.app_categories(Some(target))?
-                .iter()
-                .flat_map(|category| {
-                    category
-                        .files
-                        .iter()
-                        .filter_map(|file| self.app_destination(category, file).ok())
-                })
-                .collect::<BTreeSet<_>>()
-        } else {
-            BTreeSet::new()
-        };
         let selected = manifest
             .entries
             .iter()
             .filter(|entry| {
-                request.target.as_ref().is_none_or(|category| {
-                    entry.source.starts_with(&format!("app/{category}/"))
-                        || target_destinations.contains(&entry.destination)
-                })
+                request
+                    .target
+                    .as_ref()
+                    .is_none_or(|category| entry.source.starts_with(&format!("app/{category}/")))
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -833,6 +874,7 @@ where
                     destination: entry.destination,
                     transforms: Vec::new(),
                     backup: entry.backup,
+                    uninstall_strategy: Some(entry.install_strategy.clone()),
                     restart_hint: None,
                     generator_error: None,
                     error: Some("administrator permission was not granted".to_string()),
@@ -981,6 +1023,7 @@ where
                 destination: entry.destination,
                 transforms: Vec::new(),
                 backup: entry.backup,
+                uninstall_strategy: Some(entry.install_strategy.clone()),
                 restart_hint: None,
                 generator_error: None,
                 error,
@@ -1228,6 +1271,7 @@ where
                 destination,
                 transforms: file.transforms,
                 backup: entry.backup,
+                uninstall_strategy: None,
                 restart_hint: file.restart_hint,
                 generator_error: None,
                 error,
@@ -1392,9 +1436,7 @@ where
                                             )
                                             .as_str(),
                                         )
-                                    && step.diagnostic_codes.iter().any(|code| {
-                                        code == "app_generated_relocation_source_removed"
-                                    })
+                                    && step.kind == Some(crate::plan::PlanStepKindV1::AppGeneratedRelocationSourceRemoval)
                             })
                     })
             })
@@ -1462,9 +1504,7 @@ where
                     step.target == target
                         && step.resource.as_deref() == Some(resource.as_str())
                         && step.action == crate::plan::PlanActionV1::Remove
-                        && step
-                            .diagnostic_codes
-                            .contains(&"app_stale_source_pruned".to_string())
+                        && step.kind == Some(crate::plan::PlanStepKindV1::AppStalePrune)
                 });
                 let mut journal_execution = None;
                 let outcome = if let Some(index) = action_index {
@@ -1567,6 +1607,7 @@ where
                     destination: entry.destination,
                     transforms: Vec::new(),
                     backup: entry.backup,
+                    uninstall_strategy: None,
                     restart_hint: None,
                     generator_error: None,
                     error: None,
@@ -1967,6 +2008,31 @@ where
             .await
     }
 
+    /// Receipt-owned resources absent from the effective App metadata. No code is evaluated.
+    pub(crate) async fn missing_app_sources(&self) -> Result<Vec<(String, String)>> {
+        let active =
+            self.app_categories(None)?
+                .into_iter()
+                .flat_map(|category| {
+                    category.files.into_iter().map(move |file| {
+                        format!("app/{}/{}", category.name, file.source_rel.display())
+                    })
+                })
+                .collect::<BTreeSet<_>>();
+        let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
+        Ok(manifest
+            .entries
+            .iter()
+            .filter(|entry| !active.contains(&entry.source))
+            .filter_map(|entry| {
+                app_source_parts(&entry.source)
+                    .map(|(category, resource)| (category.to_string(), resource.to_string()))
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect())
+    }
+
     pub async fn inspect_apps_with_options(
         &self,
         options: AppInspectionOptions,
@@ -2257,6 +2323,21 @@ where
         dry_run: bool,
         force: bool,
     ) -> Result<UninstallOutcome> {
+        if dry_run {
+            let current = match self.host.read(&entry.destination).await {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.is_not_found() => None,
+                Err(error) => return Err(error.into_anyhow("observing App uninstall preview")),
+            };
+            if let Some(bytes) = &current {
+                let modified = installed_app_entry_hash(entry, bytes)?
+                    .is_some_and(|hash| hash != entry.content_hash);
+                if modified && !force {
+                    return Ok(UninstallOutcome::UserModified);
+                }
+            }
+            return Ok(UninstallOutcome::DryRun);
+        }
         match &entry.install_strategy {
             AppInstallStrategy::Copy if entry.requires_admin => {
                 uninstall_privileged_entry(&self.host, entry, dry_run, force).await
@@ -2281,10 +2362,13 @@ fn validate_app_destinations<H>(
             let destination = runtime.app_destination(category, file)?;
             let source = format!("app/{}/{}", category.name, file.source_rel.display());
             if let Some(previous) = destinations.insert(destination.clone(), source.clone()) {
-                bail!(
-                    "app destinations conflict: {previous} and {source} both resolve to {}",
-                    destination.display()
-                );
+                bail!(MetadataDiagnosticError::new(
+                    MetadataDiagnosticKind::DuplicateTarget,
+                    format!(
+                        "app destinations conflict: {previous} and {source} both resolve to {}",
+                        destination.display()
+                    ),
+                ));
             }
         }
     }
@@ -2329,6 +2413,7 @@ fn app_upgrade_file_report(
         destination: assessment.destination.clone(),
         transforms: assessment.file.transforms.clone(),
         backup: None,
+        uninstall_strategy: None,
         restart_hint: assessment.file.restart_hint.clone(),
         generator_error: (action == AppFileAction::GeneratorPreserved)
             .then(|| error.clone())
@@ -2950,11 +3035,6 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         let logical = format!("app/{}/{script}", request.category);
         for directory in [
             self.context
-                .shine_dir
-                .join("http")
-                .join("app")
-                .join(&request.category),
-            self.context
                 .cache_dir
                 .join("shine")
                 .join("app")
@@ -3067,6 +3147,12 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
     }
 
     pub(crate) fn bun_dependency_arg(&self, logical: &str) -> Result<String> {
+        self.bun_dependency_arg_inner(logical).map_err(|error| {
+            MetadataDiagnosticError::wrap(MetadataDiagnosticKind::BunDependencyPolicy, error)
+        })
+    }
+
+    fn bun_dependency_arg_inner(&self, logical: &str) -> Result<String> {
         let script = self
             .presets
             .file(logical)
@@ -3122,17 +3208,10 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             .join("state")
             .join("app")
             .join(category);
-        let http_dir = self
-            .context
-            .shine_dir
-            .join("http")
-            .join("app")
-            .join(category);
         for (key, value) in [
             ("SHINE_APP_ID", category.to_string()),
             ("SHINE_APP_DIR", app_dir.display().to_string()),
             ("SHINE_APP_SOURCE_DIR", source_dir.display().to_string()),
-            ("SHINE_APP_HTTP_DIR", http_dir.display().to_string()),
             (
                 "SHINE_CONFIG_DIR",
                 self.context.shine_dir.display().to_string(),

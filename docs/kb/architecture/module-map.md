@@ -12,7 +12,7 @@ Update this file when modules move, split, merge, or take on a different respons
 |---|---|
 | `Cargo.toml` | Workspace manifest and publishable `shine-cli` package root |
 | `cli/` | Main `shine` binary plus its library crate |
-| `cli/build.rs` | `rust-embed` rebuild trigger for `presets/` |
+| `cli/build.rs` | Embedded preset rebuild triggers, build metadata, and Windows MSVC executable stack reserve |
 | `core/` | Reusable `shine-core` package with no CLI/Tauri dependency |
 | `core/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
@@ -24,24 +24,40 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/trust.rs` | Versioned target-local external-code trust grants, exact matching, and stale-scope decisions |
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
 | `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
-| `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, process, privileged, and system mutation ports |
-| `core/src/runtime/planner.rs` | Pure App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
-| `core/src/runtime/action_executor.rs` | Phase 4 App static Copy and key-owned JSON create/update/relocate/ordinary-or-forced-remove journal, manifest-receipt-gated commit, lock-spanning privileged/unprivileged path dispatch, persistent backup restoration, same-directory rollback material, explicit recovery Plan, and fingerprint/key-guarded remove/restore |
+| `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, scoped operation-lock, process, privileged, and system mutation ports |
+| `core/src/runtime/operation_lock.rs` | Persistent OS file locks and configuration-scoped App/Shell/Sys lifecycle serialization |
+| `core/src/runtime/tests/` | Test-only runtime harness and regressions spanning domain modules; `lifecycle_concurrency.rs` covers receipt preservation and approval revalidation under contention |
+| `core/src/runtime/process_scope.rs` | Isolated-process cancellation guard and scoped Unix foreground-terminal handoff |
+| `core/src/runtime/review_path.rs` | Shared root-aware path identity encoding for planners and App/Shell/Sys action executors |
+| `core/src/runtime/planner.rs` | Pure Plan request types and shared observation/permission accumulators; domain methods live in `planner/` |
+| `core/src/runtime/planner/{app_plan,app_convergence,app_file_plan,app_stale_plan,app_specialized,app_code}.rs` | App lifecycle orchestration, per-file convergence, stale receipt assessment, refresh/artifacts and triggered code |
+| `core/src/runtime/planner/{shell_plan,shell_removal,shell_convergence,shell_profile}.rs` | Shell orchestration and separate removal, convergence and profile assessment phases |
+| `core/src/runtime/planner/{sys_managed_plan,sys_specialized,sys_support}.rs` | Managed Sys, bootstrap and profile planning with shared Sys observation helpers |
+| `core/src/runtime/planner/{approved,app_actions,app_remove_actions}.rs` | Fresh-plan approval gates and typed App Action IR construction |
+| `core/src/runtime/planner/{observations,inputs,permissions,code_boundaries}.rs` | State/input capture, permissions, typed code-boundary assembly and Plan finalization |
+| `core/src/runtime/app_change.rs` | Shared static App relocation eligibility used by Plan and Action IR construction |
+| `core/src/runtime/action_executor.rs` | App journal/result/recovery models; `action_executor/` owns typed apply, commit, receipt and recovery phases |
+| `core/src/runtime/action_executor/{authority,file_apply,relocation_apply,json_apply,removal_apply,commit}.rs` | Shared exact approval/IR/permission gate and resource-specific transactions with receipt-gated commit |
+| `core/src/runtime/action_executor/{inspection,recovery_plan,recovery_apply}.rs` | Journal inspection, receipt-conflict recovery orchestration and approved reverse-order rollback dispatch |
+| `core/src/runtime/action_executor/recovery_{plan,apply}_{file,json,relocation,removal}.rs` | Action-specific read-only recovery review and mutation handlers; rollback semantics remain domain-owned |
+| `core/src/runtime/action_executor/{receipts,recovery_assessment,file_ops,journal_io}.rs` | Ownership predicates, exact live-state assessments, privileged path dispatch and durable journal IO |
 | `core/src/runtime/shell_action_executor.rs` | Phase 4 Shell launcher, embedded cache, external snapshot, rendered file, and profile-sentinel create/update/remove actions; per-resource rollback journal, receipt/positive-marker-gated commit, and explicit fingerprint/owned-subset recovery |
 | `core/src/runtime/sys_action_executor.rs` | Phase 4 managed Sys file, split-DNS, and explicit profile-sentinel actions; Sys receipt transition journal, exact rollback cleanup, and explicit recovery Plan/apply |
 | `core/src/runtime/trust.rs` | Derivation of App/Shell/Sys external-code requirements from immutable logical code inputs, resolved defaults, and declared permissions |
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence plus target-local and current-Preset batch `shine trust` workflows |
 | `core/src/runtime/app_script.rs` | Per-invocation captured App script/helper materialization, fixed execution paths, and cleanup |
 | `core/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
 | `core/src/runtime/shell.rs` | Complete Shell assessment/install/upgrade/uninstall/live render, launcher, cache, profile, and manifest orchestration |
 | `core/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS transactional orchestration, and run-manifest persistence |
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
 | `core/src/runtime/sys_profile/` | Sys profile composition, three-way reconciliation, phase sentinels, BOM and CRLF behavior |
 | `core/src/runtime/validation.rs` | Host-backed preset discovery from a captured cwd, V1 diagnostics, and App/Shell/Sys schema validation |
+| `core/src/runtime/metadata_diagnostic.rs` | Typed metadata error origins mapped to stable validation codes; message prose is not a classifier |
 | `core/src/runtime/preset_migration.rs` | Immutable legacy compatibility assessment, safe metadata candidate generation, released-1.x fingerprints, and versioned content-free migration reports |
 | `core/src/runtime/inspection.rs` | Typed App/Shell inspection status and structural change vocabulary |
 | `core/src/install/` | Core-owned transforms, EOL handling, host-required App manifest persistence, and host-neutral managed-file operations |
-| `core/src/persist.rs` | Core-owned atomic persistence and versioned TOML helpers |
+| `core/src/persist.rs` | Core-owned synced atomic replacement, mode preservation, Windows write-through replacement, and versioned TOML helpers |
 | `presets/` | Embedded shell, app, and OS bootstrap assets |
 | `skills/shine-preset-author/` | Portable AI workflow and kind-specific preset author references |
 | `docs/manual/` | Default English public manual |
@@ -61,7 +77,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/completion.rs` | Static and dynamic shell completion before ordinary CLI initialization |
 | `cli/src/list.rs` | Top-level installed/available status views |
 | `cli/src/info/` | Canonical target resolution, installed data collection, and diff rendering |
-| `cli/src/path_display.rs` | Home-relative terminal path formatting |
+| `cli/src/path_display.rs` | Home-relative terminal paths and display-only logical filesystem permission labels |
 | `cli/src/colors.rs` | Terminal color helpers |
 | `cli/src/output.rs` | Shared command output mode and rendering support |
 | `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
@@ -90,6 +106,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `sys recover` | `cli/src/sys/recovery.rs` → Core explicit managed Sys recovery Plan/apply |
 | `sys list/bootstrap/profile/...` | `cli/src/sys/` |
 | `theme sync` | `cli/src/theme/` |
+| `clear serve` | `cli/src/legacy_serve.rs`; config-independent retired user-service cleanup |
+| `state check`, hidden `__maintenance-worker` | `cli/src/maintenance/`; best-effort advisory scheduling, scoped cache, detached read-only worker |
 | `env ...` | `cli/src/env/` plus `cli/src/secret/` |
 | `preset export/copy/link/unlink/overlay` | `cli/src/preset_commands.rs` |
 | `preset new/validate/lint/plan/test/pack` | Kind template handlers plus the `cli/src/preset_{validation,lint,authoring,test,pack}.rs` adapters |
@@ -99,7 +117,6 @@ Update this file when modules move, split, merge, or take on a different respons
 | `self install/upgrade` | `cli/src/self_install.rs`, `cli/src/update_check/` |
 | `update [TARGET]`, `upgrade [TARGET]` | filtered handlers; untargeted upgrade batches Shell/App/managed Sys review in `self_install.rs` |
 | `state migrate` | `cli/src/state.rs` |
-| `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `ssh ...` | `cli/src/ssh/mod.rs` |
 | `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
 | `task save/run/list/info/delete`, `run <NAME>` | `cli/src/task/` |
@@ -132,7 +149,7 @@ logic.
 | Path | Responsibility |
 |---|---|
 | `cli/src/shells/mod.rs` | Shell types, shared accessors, handler re-exports |
-| `cli/src/shells/deployment.rs` | Hidden live-render Core adapter |
+| `cli/src/shells/deployment.rs` | Hidden live-render and single-process Live Bun launch adapters |
 | `cli/src/shells/install.rs` | Core category/command install and upgrade adapter |
 | `cli/src/shells/recovery.rs` | Core explicit Shell transaction recovery Plan/apply adapter |
 | `cli/src/shells/uninstall.rs` | Category/command uninstall results with sibling/cache and foreign-launcher protection |
@@ -165,8 +182,10 @@ logic.
 | `cli/src/config/mod.rs` | `Config` model and accessors |
 | `cli/src/config/discovery.rs` | Global/project and environment path priority |
 | `cli/src/config/load.rs` | Load/init and schema/version layering |
-| `cli/src/config/save.rs` | Atomic, comment-preserving, sparse project saves |
-| `cli/src/config/env_layer.rs` | `[env]` parsing/defaults and override files |
+| `cli/src/config/save.rs` | Atomic, comment-preserving, raw-layer config saves |
+| `cli/src/config/env_layer.rs` | Env value parsing, removed-file diagnosis and override persistence |
+| `cli/src/config/env_resolution.rs` | Raw six-layer env resolution, input snapshots and independent value/description provenance |
+| `cli/src/config/env_write.rs` | Explicit write targets, preflight, snapshot checks and shared per-target config locks |
 | `cli/src/presets.rs` | Embedded extraction, active asset reads, category enumeration |
 | `cli/src/preset_commands.rs` | Preset copy/export/link/unlink/overlay commands |
 | `cli/src/preset_meta.rs` | Test-only Core capability-report renderer for public manual parity |
@@ -195,6 +214,7 @@ Config discovery priority is documented as a behavioral contract in
 |---|---|
 | `cli/src/env/mod.rs` | `[env]` configuration and substitution core |
 | `cli/src/env/commands.rs` | Env CRUD and secret command handlers |
+| `cli/src/env/live_bun.rs` | Receipt-prepared Bun execution, declared env injection, and direct-child Unix signal relay |
 | `cli/src/env/workspace.rs` | Workspace env sources, export, seal, and child execution |
 | `cli/src/env/catalog.rs` | Known variable metadata |
 | `cli/src/env/identity.rs` | age identity generation and recipient inspection |
@@ -231,7 +251,6 @@ See [`data-flows.md`](data-flows.md#ssh-environment-forwarding),
 | `cli/src/task/mod.rs` | Personal command registry handlers and direct argv execution |
 | `cli/src/task/manifest.rs` | `tasks.toml` model and persistence |
 | `cli/src/theme/` | Terminal theme detection and synchronization |
-| `cli/src/serve.rs` | Loopback server and per-user service management |
 | `cli/src/update_check/` | Release lookup, cache, notification, and binary upgrade |
 | `cli/src/self_install.rs` | Self-install and installed-configuration upgrade orchestration |
 | `cli/src/home.rs` | Sudo-aware home discovery and path expansion |

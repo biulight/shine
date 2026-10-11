@@ -36,6 +36,15 @@ shine upgrade
 `shine update` compares installed results with presets and reports status without applying it.
 `shine upgrade` updates managed shell and application configuration to current preset content.
 
+Reinstalling a category preserves files changed since installation, including managed JSON keys.
+Shine also skips the generator for a file that the reviewed Plan marks for preservation. To
+explicitly replace modified managed content, preview `shine app install starship --force --dry-run`
+and then review `shine app install starship --force`.
+
+App changes using the same configuration directory run one at a time. After waiting, Shine checks
+the reviewed Plan again; if the affected state changed, review a new Plan before retrying. A lock
+wait longer than 30 seconds fails without applying the waiting operation.
+
 To replace managed files for one category:
 
 ```bash
@@ -242,15 +251,14 @@ Preset authors should call the underlying script from a lifecycle hook rather th
 When an install or upgrade changes managed files for a category that declares an artifact, Shine
 prints the explicit apply command. It prints nothing when no managed files changed.
 Scripts receive configured `[artifact].env` sources only, and those sources must also be listed in
-the category's `[permissions].environment`, plus path variables such as `SHINE_APP_HTTP_DIR`,
-`SHINE_CACHE_DIR`, and `SHINE_STATE_DIR`. They can generate resources under
-`~/.shine/http/app/<APP_ID>/`. See [Tasks and the local service](./tasks-and-serve.md) for the complete
-variable list.
+the category's `[permissions].environment`, plus path variables such as
+`SHINE_CACHE_DIR` and `SHINE_STATE_DIR`. See
+[Tasks and application artifacts](./tasks-and-serve.md) for the complete variable list.
 
 Generators, script hooks, artifacts, and teardown scripts run from temporary captured category
 copies. On Unix, executable helpers from external presets and overlays remain executable in those
 copies, including helpers without a filename extension. Source edits or permission changes after
-capture do not affect that invocation. Keep persistent output in the state, cache, or HTTP paths;
+capture do not affect that invocation. Keep persistent output in the state or cache paths;
 the captured source and overlay copies are removed after execution.
 
 The built-in `surge` preset installs `local-proxies.conf`, `local-proxy-groups.conf`,
@@ -258,6 +266,9 @@ The built-in `surge` preset installs `local-proxies.conf`, `local-proxy-groups.c
 `SURGE_PROFILE` in `[env]`, `shine app artifact apply surge` uses a built-in Bun artifact to
 idempotently patch `[Proxy]`, `[Proxy Group]`, and `[Rule]` `#!include` lines in the active profile.
 An overlay supplies only its policy files and does not need its own build script.
+
+If a legacy Shine proxy-group block has a missing or nested marker, both applying and undoing the
+patch fail without changing the profile. Repair the malformed markers in your profile before retrying.
 
 The preset includes commented, inert examples for `LAN Network`, `LAN PROXY`, and `Other Direct`.
 Each traffic class has three mutually exclusive rule sources in `local-rules.conf`: relative

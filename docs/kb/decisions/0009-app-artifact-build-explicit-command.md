@@ -7,7 +7,8 @@
   [ADR 0016](0016-generated-app-files-and-surge-subscriptions.md), whose file
   generator is separate from artifact build scripts. The placement of the
   canonical Surge artifact in a private overlay is superseded by
-  [ADR 0017](0017-built-in-surge-profile-artifact.md).
+  [ADR 0017](0017-built-in-surge-profile-artifact.md). The HTTP output contract was removed by
+  [ADR 0107](0107-remove-local-http-service.md).
 - **Evidence**: `cli/src/apps/build.rs`, `core/src/runtime/app_metadata.rs` (`[artifact]`/`AppArtifact`),
   `shine app artifact apply <app-id>`, `presets/app/surge/build.ts`
 
@@ -38,7 +39,7 @@ Add a generic `[artifact].script` metadata field and a `shine app artifact apply
   category, not per file, since a build script's sibling files are conceptually one package with
   the script.
 - Injects a fixed environment-variable contract (`SHINE_APP_ID`, `SHINE_APP_DIR`,
-  `SHINE_APP_SOURCE_DIR`, `SHINE_APP_OVERLAY_DIR` when an overlay copy exists, `SHINE_APP_HTTP_DIR`,
+  `SHINE_APP_SOURCE_DIR`, `SHINE_APP_OVERLAY_DIR` when an overlay copy exists,
   `SHINE_CONFIG_DIR`, `SHINE_CACHE_DIR`, `SHINE_STATE_DIR`) **plus the active `[env]` table passed
   as stored** (via `EnvConfig::as_map` — plaintext keys as-is, `_SECRET` keys as ciphertext; **no
   decryption**, exactly like the `template` transform), so a script can read user-configured values

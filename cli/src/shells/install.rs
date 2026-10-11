@@ -841,7 +841,7 @@ mod tests {
         let config = Config::new_for_test(&dir);
         fs::write(
             config.shine_dir().join("shell-manifest.toml"),
-            "schema_version = 2\nentries = []\n",
+            "schema_version = 3\nentries = []\n",
         )
         .await
         .unwrap();
@@ -2097,7 +2097,7 @@ mod tests {
         let launcher = fs::read_to_string(config.bin_dir().join("mytool"))
             .await
             .unwrap();
-        assert!(launcher.contains("__shell-render"));
+        assert!(launcher.contains("__shell-launch"));
         assert!(launcher.contains("--config-dir"));
         fs::remove_dir_all(&dir).await.unwrap();
     }

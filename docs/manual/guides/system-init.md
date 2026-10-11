@@ -70,6 +70,11 @@ permission tables are unverified author statements; `opaque_code = "unrestricted
 Administrator requirements remain explicit executor contracts. External/overlay code also needs
 target-scoped trust for its complete effective `sys/<os>/` snapshot.
 
+Each script invocation runs from its own captured Preset copy, preserving executable helper files.
+Concurrent invocations cannot replace that copy. Installers can read inherited foreground terminal
+input; Shine restores terminal control when the installer finishes, fails, times out, or is cancelled.
+Cancelling a running operation stops its isolated Unix process group, including child processes.
+
 Snapshot identities are shortened in the default display. Add `--verbose`, for example
 `shine sys bootstrap --preset recommended --verbose`, to show all file paths, full identities, and diagnostic codes.
 Both views review the same complete Plan and use a single confirmation for the selected operation.
@@ -154,6 +159,11 @@ shine sys recover --yes        # Non-interactive approval
 Non-dry-run managed operations display a snapshot-bound Plan and default to No. `--yes` skips only
 the prompt, not Plan rendering, permission blockers, or fresh validation. Administrator access, if
 required, is requested separately after Plan approval.
+
+Sys changes using the same configuration directory run one at a time, including bootstrap, profile
+changes, and recovery. After waiting, Shine checks the reviewed Plan again; changed observations
+require a new review. Waiting longer than 30 seconds fails without applying the waiting operation,
+and completed operations retain their installation records.
 
 If a managed operation is interrupted, later Sys changes stop and ask you to run
 `shine sys recover`. Recovery completes or rolls back only state that has not changed since the

@@ -64,17 +64,19 @@ fn cache_summary_parts(created: usize, overwritten: usize, skipped: usize) -> Ve
 
 pub(super) fn unlink_report_summary_parts(
     unlink_report: &crate::bin_links::UnlinkReport,
+    dry_run: bool,
 ) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     if !unlink_report.removed.is_empty() {
         parts.push(colors::green(&format!(
-            "{} removed",
-            unlink_report.removed.len()
+            "{} {}",
+            unlink_report.removed.len(),
+            if dry_run { "would remove" } else { "removed" }
         )));
     }
     if !unlink_report.skipped.is_empty() {
         parts.push(colors::dim(&format!(
-            "{} skipped",
+            "{} retained (ownership conflict)",
             unlink_report.skipped.len()
         )));
     }
@@ -83,12 +85,13 @@ pub(super) fn unlink_report_summary_parts(
 
 pub(super) fn shell_cache_remove_summary_parts(
     report: &shine_core::runtime::ShellCacheReport,
+    dry_run: bool,
 ) -> Vec<String> {
     let mut parts = Vec::new();
     if !report.removed.is_empty() {
         parts.push(colors::green(&format_file_action(
             report.removed.len(),
-            "removed",
+            if dry_run { "would remove" } else { "removed" },
         )));
     }
     if !report.skipped.is_empty() {

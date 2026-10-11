@@ -29,10 +29,63 @@ fn normalize(value: &str) -> String {
     strip_windows_verbatim_prefix(value).replace('\\', "/")
 }
 
+/// Display a Plan's logical filesystem identity without changing its permission meaning.
+/// Unknown bases stay explicit; no filesystem resolution or ownership inference occurs.
+pub fn permission_path(identity: &str) -> String {
+    let Some((base, relative)) = identity.split_once(':') else {
+        return identity.to_string();
+    };
+    let relative = relative
+        .strip_prefix("//?/UNC/")
+        .map(|value| format!("//{value}"))
+        .or_else(|| relative.strip_prefix("//?/").map(str::to_string))
+        .unwrap_or_else(|| normalize(relative));
+    let root = match base {
+        "absolute" => return relative,
+        "home" => "~",
+        "shine" => "Shine state",
+        "data-dir" => "App data",
+        _ => return identity.to_string(),
+    };
+    if relative == "." || relative.is_empty() {
+        root.to_string()
+    } else {
+        format!("{root}/{relative}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn permission_identities_display_roots_without_uri_syntax() {
+        for (identity, expected) in [
+            (
+                "absolute:/etc/docker/daemon.json",
+                "/etc/docker/daemon.json",
+            ),
+            ("absolute:/", "/"),
+            (
+                "absolute:C:/ProgramData/Docker/config",
+                "C:/ProgramData/Docker/config",
+            ),
+            ("absolute://server/share/config", "//server/share/config"),
+            (
+                "absolute://?/UNC/server/share/config",
+                "//server/share/config",
+            ),
+            ("absolute://?/C:/config", "C:/config"),
+            ("home:.config/app", "~/.config/app"),
+            ("home:.", "~"),
+            ("shine:app-manifest.toml", "Shine state/app-manifest.toml"),
+            ("data-dir:.", "App data"),
+            ("future:config", "future:config"),
+        ] {
+            assert_eq!(permission_path(identity), expected);
+        }
+    }
 
     #[test]
     fn formats_paths_with_forward_slashes() {

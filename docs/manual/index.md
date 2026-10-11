@@ -24,7 +24,7 @@ of deleting it.
 
 **Make every step of personal automation visible—and leave a safe way back.**
 
-This manual applies to **Shine 2.3.0**. Use the version selector for the frozen 1.8.x manual.
+This manual applies to **Shine 2.4.0**. Use the version selector for the frozen 1.8.x manual.
 
 [![The three core values of Shine 2.0: repeatable deployment, one entry point for personal developer resources, and changes you can see before they happen and recover if interrupted.](/img/shine-core-values-v2-en.webp)](/img/shine-core-values-v2-en.webp)
 
@@ -119,7 +119,7 @@ third-party tool versions; see [system initialization](./guides/system-init.md) 
    [environment variables and secrets](./guides/environment.md),
    [system initialization](./guides/system-init.md),
    [terminal theme synchronization](./guides/terminal-theme-sync.md),
-   [tasks and the local service](./guides/tasks-and-serve.md), or
+   [tasks and application artifacts](./guides/tasks-and-serve.md), or
    [SSH sessions, secret brokering, and file transfer](./guides/ssh-transfer.md).
 
 If something is already failing, go directly to [Troubleshooting](./troubleshooting.md). Open the

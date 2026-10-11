@@ -522,7 +522,8 @@ pub(crate) fn build_transfer_argv(
                 args.push("-n".to_string());
                 args.push("--itemize-changes".to_string());
             }
-            args.push("--info=progress2".to_string());
+            // macOS ships an rsync 2.6.9-compatible implementation without --info.
+            args.push("--progress".to_string());
             if !plan.force {
                 // Never clobber without --force. rsync otherwise always overwrites.
                 args.push("--ignore-existing".to_string());
@@ -535,7 +536,7 @@ pub(crate) fn build_transfer_argv(
         }
         Tool::Scp => {
             args.push("-r".to_string());
-            for opt in scp_connection_options(ctx) {
+            for opt in scp_connection_options(ctx)? {
                 args.push(opt);
             }
             args.push("--".to_string());
@@ -604,10 +605,66 @@ fn rsync_rsh(ctx: &SessionContext) -> Result<Option<String>> {
     Ok(Some(format!("ssh {}", options.join(" "))))
 }
 
-/// scp connection options: the same reconnection settings, passed as individual
-/// argv tokens. (scp reads `~/.ssh/config`, so an alias needs nothing here.)
-fn scp_connection_options(ctx: &SessionContext) -> Vec<String> {
-    ssh_reconnect_options(ctx)
+/// Translate trusted SSH connection options into SCP options. Several short
+/// options have different meanings in SCP; session/forwarding flags are omitted.
+fn scp_connection_options(ctx: &SessionContext) -> Result<Vec<String>> {
+    let options = ssh_reconnect_options(ctx);
+    let mut tokens = options.iter();
+    let mut args = Vec::new();
+    while let Some(token) = tokens.next() {
+        let letters = token
+            .strip_prefix('-')
+            .filter(|letters| !letters.is_empty() && !letters.starts_with('-'))
+            .context("invalid SSH reconnection option")?;
+        let mut letters = letters.char_indices().peekable();
+        while let Some((_, letter)) = letters.next() {
+            if super::VALUE_OPTION_LETTERS.contains(&letter) {
+                let value = if let Some((offset, _)) = letters.peek() {
+                    &token[1 + offset..]
+                } else {
+                    tokens
+                        .next()
+                        .with_context(|| format!("SSH option -{letter} requires a value"))?
+                        .as_str()
+                };
+                let setting = match letter {
+                    'B' => Some("BindInterface"),
+                    'b' => Some("BindAddress"),
+                    'I' => Some("PKCS11Provider"),
+                    'l' => Some("User"),
+                    'm' => Some("MACs"),
+                    'p' => Some("Port"),
+                    'S' => Some("ControlPath"),
+                    'c' | 'F' | 'i' | 'J' | 'o' => {
+                        args.extend([format!("-{letter}"), value.to_string()]);
+                        None
+                    }
+                    // These affect the original session, not its transfer connection.
+                    'D' | 'E' | 'e' | 'L' | 'O' | 'Q' | 'R' | 'W' | 'w' => None,
+                    _ => bail!("unsupported SSH reconnection option -{letter}"),
+                };
+                if let Some(setting) = setting {
+                    args.extend(["-o".to_string(), format!("{setting}={value}")]);
+                }
+                break;
+            }
+            match letter {
+                '4' | '6' | 'A' | 'C' | 'q' | 'v' => args.push(format!("-{letter}")),
+                'a' => args.extend(["-o".into(), "ForwardAgent=no".into()]),
+                'K' => args.extend([
+                    "-o".into(),
+                    "GSSAPIAuthentication=yes".into(),
+                    "-o".into(),
+                    "GSSAPIDelegateCredentials=yes".into(),
+                ]),
+                'k' => args.extend(["-o".into(), "GSSAPIDelegateCredentials=no".into()]),
+                'f' | 'G' | 'g' | 'M' | 'N' | 'n' | 's' | 'T' | 't' | 'V' | 'X' | 'x' | 'Y'
+                | 'y' => {}
+                _ => bail!("unsupported SSH reconnection option -{letter}"),
+            }
+        }
+    }
+    Ok(args)
 }
 
 /// Resolves the binary for a tool, honoring a per-tool test-override env var so
@@ -696,54 +753,115 @@ fn describe_transfer(
     }
 }
 
-/// Spawns the transfer command and relays its stdout/stderr to the remote as
-/// `Log` frames, returning the child's exit code. Argv only — never a shell.
+/// Owns transfer cleanup across relay errors and async cancellation.
+struct TransferChild {
+    child: tokio::process::Child,
+    #[cfg(unix)]
+    group: Option<u32>,
+}
+
+impl TransferChild {
+    fn stop(&mut self) {
+        #[cfg(unix)]
+        if let Some(group) = self.group.take() {
+            // SAFETY: the child was started in its own process group. Keep its ID
+            // even after wait reaps it, since descendants may still hold pipes.
+            unsafe { libc::kill(-(group as i32), libc::SIGKILL) };
+        }
+        let _ = self.child.start_kill();
+    }
+}
+
+impl Drop for TransferChild {
+    fn drop(&mut self) {
+        // Also cover cancellation while reading, relaying, or waiting.
+        self.stop();
+    }
+}
+
+/// Spawns an argv-only transfer and monitors its control connection through exit.
 async fn spawn_and_relay(stream: &mut impl DuplexStream, command: TransferCommand) -> Result<i32> {
-    let mut child = tokio::process::Command::new(&command.program)
+    let mut process = tokio::process::Command::new(&command.program);
+    process
         .args(&command.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        process.as_std_mut().process_group(0);
+    }
+    let child = process
         .spawn()
         .with_context(|| format!("failed to spawn {}", command.program))?;
-
-    let mut stdout = child
-        .stdout
-        .take()
-        .context("child stdout was not captured")?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .context("child stderr was not captured")?;
-
-    let mut out_buf = vec![0u8; 16 * 1024];
-    let mut err_buf = vec![0u8; 16 * 1024];
-    let mut out_open = true;
-    let mut err_open = true;
-
-    while out_open || err_open {
-        tokio::select! {
-            result = stdout.read(&mut out_buf), if out_open => {
-                let n = result.context("reading child stdout")?;
-                if n == 0 {
-                    out_open = false;
-                } else {
-                    relay_chunk(stream, LogStream::Stdout, &out_buf[..n]).await?;
+    let mut transfer = TransferChild {
+        #[cfg(unix)]
+        group: child.id(),
+        child,
+    };
+    let result = async {
+        let mut stdout = transfer
+            .child
+            .stdout
+            .take()
+            .context("child stdout was not captured")?;
+        let mut stderr = transfer
+            .child
+            .stderr
+            .take()
+            .context("child stderr was not captured")?;
+        let mut out_buf = vec![0u8; 16 * 1024];
+        let mut err_buf = vec![0u8; 16 * 1024];
+        let mut connection_buf = [0u8; 1];
+        let mut out_open = true;
+        let mut err_open = true;
+        while out_open || err_open {
+            tokio::select! {
+                closed = stream.read(&mut connection_buf) => {
+                    closed.context("monitoring transfer connection")?;
+                    bail!("transfer control connection closed or sent unexpected data");
                 }
-            }
-            result = stderr.read(&mut err_buf), if err_open => {
-                let n = result.context("reading child stderr")?;
-                if n == 0 {
-                    err_open = false;
-                } else {
-                    relay_chunk(stream, LogStream::Stderr, &err_buf[..n]).await?;
+                result = stdout.read(&mut out_buf), if out_open => {
+                    let n = result.context("reading child stdout")?;
+                    if n == 0 {
+                        out_open = false;
+                    } else {
+                        relay_chunk(stream, LogStream::Stdout, &out_buf[..n]).await?;
+                    }
+                }
+                result = stderr.read(&mut err_buf), if err_open => {
+                    let n = result.context("reading child stderr")?;
+                    if n == 0 {
+                        err_open = false;
+                    } else {
+                        relay_chunk(stream, LogStream::Stderr, &err_buf[..n]).await?;
+                    }
                 }
             }
         }
+        tokio::select! {
+            status = transfer.child.wait() => {
+                Ok(status.context("waiting for transfer child")?.code().unwrap_or(-1))
+            }
+            closed = stream.read(&mut connection_buf) => {
+                closed.context("monitoring transfer connection")?;
+                bail!("transfer control connection closed or sent unexpected data");
+            }
+        }
     }
-
-    let status = child.wait().await.context("waiting for transfer child")?;
-    Ok(status.code().unwrap_or(-1))
+    .await;
+    if result.is_err() {
+        transfer.stop();
+        let _ = transfer.child.wait().await;
+    } else {
+        #[cfg(unix)]
+        {
+            transfer.group = None;
+        }
+    }
+    result
 }
 
 async fn relay_chunk(
@@ -764,6 +882,69 @@ async fn relay_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transfer_disconnect_and_cancellation_stop_silent_child_and_descendants() {
+        use std::os::unix::fs::PermissionsExt;
+        for cancel in [false, true] {
+            let dir = crate::test_support::make_temp_dir("shine-transfer-stop").await;
+            let pid_file = dir.join("pid");
+            let ready = dir.join("ready");
+            let marker = dir.join("continued");
+            let script = dir.join("transfer.sh");
+            std::fs::write(&script, format!(
+                "#!/bin/sh\nprintf '%s' $$ > '{}'\n(sleep 1; printf continued > '{}') &\nprintf ready > '{}'\nwait\n",
+                pid_file.display(), marker.display(), ready.display()
+            )).unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let (mut server, client) = tokio::io::duplex(1024);
+            let task = tokio::spawn(async move {
+                spawn_and_relay(
+                    &mut server,
+                    TransferCommand {
+                        program: script.display().to_string(),
+                        args: vec![],
+                    },
+                )
+                .await
+            });
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !ready.exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+            if cancel {
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+                drop(client);
+            } else {
+                drop(client);
+                assert!(
+                    tokio::time::timeout(Duration::from_secs(5), task)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .is_err()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            assert!(
+                !marker.exists(),
+                "descendant kept writing after transfer ended"
+            );
+            // Signal zero probes existence. The parent must also have been reaped.
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+            tokio::fs::remove_dir_all(dir).await.unwrap();
+        }
+    }
 
     fn ctx_with(host: &str, ssh_options: Vec<&str>, control_path: Option<&str>) -> SessionContext {
         SessionContext {
@@ -797,6 +978,7 @@ mod tests {
         assert_eq!(cmd.program, "rsync");
         assert!(cmd.args.contains(&"--".to_string()));
         assert!(cmd.args.contains(&"-a".to_string()));
+        assert!(cmd.args.contains(&"--progress".to_string()));
         assert!(cmd.args.contains(&"--ignore-existing".to_string()));
         // -e string is built only from ctx (control master), never the wire.
         let e_idx = cmd.args.iter().position(|a| a == "-e").unwrap();
@@ -808,6 +990,37 @@ mod tests {
         let sep = cmd.args.iter().position(|a| a == "--").unwrap();
         assert_eq!(cmd.args[sep + 1], "dev:/abs/logs/*.log");
         assert_eq!(cmd.args[sep + 2], "/home/u/proj");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn system_rsync_accepts_transfer_flags_and_preserves_existing_files() {
+        let dir = crate::test_support::make_temp_dir("shine-system-rsync").await;
+        let source = dir.join("source");
+        let destination = dir.join("destination");
+        tokio::fs::write(&source, b"new").await.unwrap();
+        tokio::fs::write(&destination, b"existing").await.unwrap();
+        let ctx = ctx_with("unused", vec![], None);
+        for (dry_run, force, expected) in [
+            (true, true, b"existing".as_slice()),
+            (false, false, b"existing"),
+            (false, true, b"new"),
+        ] {
+            let mut request = plan(Direction::Download, "/unused", &["/unused"], force);
+            request.dry_run = dry_run;
+            let command = build_transfer_argv(Tool::Rsync, &ctx, &request).unwrap();
+            let separator = command.args.iter().position(|arg| arg == "--").unwrap();
+            // Exercise the actual local rsync parser and copy without opening SSH.
+            let output = std::process::Command::new("/usr/bin/rsync")
+                .args(&command.args[..=separator])
+                .arg(&source)
+                .arg(&destination)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(tokio::fs::read(&destination).await.unwrap(), expected);
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]
@@ -837,6 +1050,113 @@ mod tests {
         let sep = cmd.args.iter().position(|a| a == "--").unwrap();
         assert_eq!(cmd.args[sep + 1], "dev:/abs/file");
         assert_eq!(cmd.args[sep + 2], "/home/u/proj");
+    }
+
+    #[test]
+    fn scp_reconnect_translates_split_glued_and_clustered_ssh_options() {
+        for options in [
+            vec![
+                "-v",
+                "-p",
+                "2222",
+                "-l",
+                "alice",
+                "-S",
+                "/tmp/control socket",
+            ],
+            vec!["-vp2222", "-lalice", "-S/tmp/control socket"],
+        ] {
+            let ctx = ctx_with("dev", options, None);
+            assert_eq!(
+                scp_connection_options(&ctx).unwrap(),
+                [
+                    "-v",
+                    "-o",
+                    "Port=2222",
+                    "-o",
+                    "User=alice",
+                    "-o",
+                    "ControlPath=/tmp/control socket"
+                ]
+            );
+            // The same conversion is used for explicit SCP and rsync fallback.
+            let plan = plan(Direction::Download, "/file", &["/local"], false);
+            let command = build_transfer_argv(Tool::Scp, &ctx, &plan).unwrap();
+            assert!(
+                !command
+                    .args
+                    .iter()
+                    .any(|arg| arg == "-p" || arg == "-l" || arg == "-S")
+            );
+            assert_eq!(
+                &command.args[command.args.len() - 3..],
+                ["--", "dev:/file", "/local"]
+            );
+        }
+    }
+
+    #[test]
+    fn scp_reconnect_preserves_connection_values_without_session_flags() {
+        let ctx = ctx_with(
+            "dev",
+            vec![
+                "-tt",
+                "-R",
+                "9000:localhost:9000",
+                "-L8080:localhost:80",
+                "-e",
+                "none",
+                "-Nn",
+                "-F",
+                "/tmp/ssh config",
+                "-i/tmp/key",
+                "-J",
+                "jump",
+                "-o",
+                "ControlMaster=no",
+                "-oProxyCommand=ssh jump nc %h %p",
+                "-b127.0.0.1",
+                "-B",
+                "en0",
+                "-m",
+                "hmac-sha2-256",
+                "-I",
+                "/tmp/provider",
+            ],
+            None,
+        );
+        assert_eq!(
+            scp_connection_options(&ctx).unwrap(),
+            [
+                "-F",
+                "/tmp/ssh config",
+                "-i",
+                "/tmp/key",
+                "-J",
+                "jump",
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "ProxyCommand=ssh jump nc %h %p",
+                "-o",
+                "BindAddress=127.0.0.1",
+                "-o",
+                "BindInterface=en0",
+                "-o",
+                "MACs=hmac-sha2-256",
+                "-o",
+                "PKCS11Provider=/tmp/provider",
+            ]
+        );
+        assert!(rsync_rsh(&ctx).is_err());
+        for invalid in [vec!["-p"], vec!["-Z"], vec!["not-an-option"]] {
+            assert!(scp_connection_options(&ctx_with("dev", invalid, None)).is_err());
+        }
+        let master = ctx_with("dev", vec!["-p2222", "-tt"], Some("/tmp/master"));
+        assert_eq!(
+            scp_connection_options(&master).unwrap(),
+            ["-o", "ControlPath=/tmp/master", "-o", "ControlMaster=no"]
+        );
     }
 
     #[test]

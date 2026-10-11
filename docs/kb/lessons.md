@@ -1,5 +1,293 @@
 # Lessons Learned
 
+## 2026-10-11 — Runtime path assertions must compare path components
+
+- **Symptom**: Windows CI failed the simulated macOS legacy-service cleanup and fixed App
+  environment tests, while the new env tests and Unix suites passed.
+- **Cause**: expected strings joined a slash-separated suffix in one call; runtime construction
+  used multiple joins, producing different Windows separator spelling for the same path.
+- **Fix**: compare path arguments and environment values as `Path` values, retaining exact command
+  switches, argument count and destination checks. Native Windows tests keep both cases enabled.
+- **Rule**: assert path identity separately from command syntax; do not require byte-identical
+  separators unless their spelling is itself part of the contract.
+
+## 2026-10-11 — Effective env maps cannot represent persistence intent
+
+- **Cause**: serializing effective defaults/overrides into global config obscured user intent;
+  comparing effective values alone also omitted an explicit set equal to an inherited default.
+- **Fix**: retain raw definitions and explicit pending edits, use one six-layer resolver, and apply
+  directed single-key edits. Keep description provenance separate from value provenance.
+- **Rule**: saving and taking effect are different outcomes. Capture before encryption, serialize
+  final validation/replacement with every config writer, and report post-save reload failures as
+  already saved. Tests cover two actual CLI processes competing from the same snapshot.
+
+## 2026-10-11 — Superseded explicit checks must not report successful inspection
+
+- **Symptom**: overlapping `state check` calls, or cleanup during a check, made the older call
+  report zero required actions and zero incomplete checks, even after detecting a legacy service.
+- **Cause**: the generation guard returned an empty successful report for both automatic and
+  explicit inspection; the explicit route treated discarded results as a completed clean check.
+- **Fix**: preserve supersession in the report, print a retry warning and return a nonzero exit
+  without a completion summary. Real-process regressions cover both overlapping checks and
+  cleanup, and verify the obsolete call cannot overwrite the newer cache.
+- **Rule**: discarding obsolete observations is safe for optional reminders; explicit inspection
+  must distinguish superseded work from a completed check that found nothing.
+
+## 2026-10-10 — Shell receipt formats must agree across manifests and Action IR
+
+- **Symptom**: Windows Shell install, upgrade and uninstall setup failed Action validation for
+  cache, snapshot, rendered-file and launcher transactions.
+- **Cause**: manifests accepted `native-cmd-v2`, but the Action receipt validator only accepted
+  legacy and `live-bun-v2` formats, rejecting otherwise valid transaction receipt transitions.
+- **Fix**: accept `native-cmd-v2` only for native `.ps1` sources without a config-dir field,
+  matching manifest reconstruction. Cover round-tripping, legacy compatibility and invalid format
+  combinations in portable tests; verify lifecycle behavior on native Windows.
+- **Rule**: a new receipt format must update every persistence and transaction validator together;
+  valid manifest decoding alone does not prove approved execution or recovery can accept it.
+
+## 2026-10-10 — Authorization revocation and private generation need end-to-end persistence
+
+- **Symptoms**: concurrent successful trust revocations and broker policy removals left grants
+  behind; dotenv import widened 0600 plaintext to 0644; identity `--force` still failed at keygen.
+- **Causes**: atomic replacements saved stale whole stores; import used the ordinary writer;
+  keygen received the occupied destination despite rejecting existing outputs.
+- **Fix**: serialize trust/policy writers from fresh read through save, recheck reviewed policy
+  targets after confirmation, import privately, and stage forced key generation before replacement.
+- **Rule**: revocation must survive unrelated writes. Protect plaintext before the first byte,
+  and keep the old identity until its replacement has been generated and validated.
+
+## 2026-10-10 — Sealing must validate file aliases and ciphertext output
+
+- **Symptoms**: sealing a symbolic link replaced the link while its target retained plaintext;
+  a GPG `output` option produced an empty sealed payload despite exit status zero.
+- **Causes**: reads followed links but atomic rename replaced directory entries; backend success
+  was inferred from exit status without checking stdout or controlling its destination.
+- **Fix**: reject linked sources before any update and recheck at replacement; force GPG stdout
+  for encryption/decryption and reject empty ciphertext before source serialization.
+- **Rule**: validate the file being replaced, not only bytes read through it. A successful
+  subprocess must also satisfy the caller's output contract before destructive persistence.
+
+## 2026-10-10 — Task registry mutations need the same whole-manifest lock discipline
+
+- **Symptoms**: 32 concurrent successful task saves retained only a few entries.
+- **Cause**: atomic replacement prevented torn files but did not serialize stale manifest reads.
+- **Fix**: save and delete acquire the persistent runtime-scoped OS lock before loading tasks
+  and hold it through validation and persistence; add held-guard and cross-process regressions.
+- **Rule**: atomic writes and serializable updates are separate requirements. Apply lifecycle
+  locking to small registries as well as installation receipts.
+
+## 2026-10-09 — Lifecycle locks must precede whole-manifest reads
+
+- **Symptoms**: Shell uninstall dropped a concurrent category's receipt; concurrent managed Sys
+  installs lost the earlier receipt despite both reporting success.
+- **Cause**: the privileged transaction lock serialized effects after whole manifests were loaded.
+- **Fix**: acquire domain lifecycle locks before fresh approval validation and retain them through
+  receipt saves; include recovery, live rendering, bootstrap and profile writers (ADR 0106).
+- **Rule**: serialize the read/validate/effect/save lifecycle. Test contention with a held guard;
+  a fake host whose lock is a no-op cannot expose stale read races.
+
+## 2026-10-09 — Reject ambiguous user-file boundaries and preserve source precedence
+
+- **Symptoms**: an unterminated Surge legacy block discarded the remaining profile during teardown;
+  a broker secret overrode a later plain value, and an unreleased later secret exposed earlier plain.
+- **Causes**: block removal treated EOF as closure; broker merging separated plain and secret passes.
+- **Fix**: reject unmatched/nested markers before writing; compute each key's winning source before
+  secret release and remote merge, while retaining complete policy declarations.
+- **Rule**: ambiguous boundaries grant no deletion authority. Value precedence applies to declarations,
+  independently of whether a secret is authorized for release.
+
+## 2026-10-09 — Preserve execution authority and serialize App receipts
+
+- **Symptoms**: reinstall overwrote a user-modified file despite a Preserve Plan; concurrent App
+  installs lost one category's receipt; a 30-second wait stole a live admin lock.
+- **Causes**: files absent from the Action IR reached the fallback installer; separate operations
+  loaded and saved stale whole manifests; directory-lock timeout treated age as proof of abandonment.
+- **Fix**: exclude Preserve files before generator assessment; hold a configuration-scoped lock
+  from fresh approval validation through lifecycle persistence; use persistent OS file locks that
+  time out without unlinking and release ownership on process exit (ADR 0105).
+- **Rule**: absence of execution authority is not permission for fallback effects. Serialize the
+  read/validate/effect/save sequence, and never infer lock ownership from elapsed time.
+
+## 2026-10-09 — Typed semantics must outlive names, messages and module layout
+
+- **Symptoms**: static App names such as `generator:config` created execute-now code boundaries;
+  an unrelated validation failure in a category containing `bun-lock` became a Bun policy error.
+- **Causes**: resource prefixes and English error chains doubled as semantic classifiers; App
+  transition policy and authority gates were duplicated, and architecture tests scanned exact
+  implementation text rather than capability bounds.
+- **Fix**: record actual App code triggers, attach typed metadata error origins, share relocation
+  policy and authority validation, and bind typed step intent into approval. Split planning and
+  recovery phases without changing receipt, snapshot or rollback checks.
+- **Rule**: names and diagnostics are presentation data. Prove observation-only planning with
+  generic trait bounds, compile-fail mutation examples and InMemoryHost operation assertions;
+  preserve behavioral regression tests through module moves (ADR 0104).
+
+## 2026-10-09 — Env deletion and CMD path fixes must preserve their source contracts
+
+- **Symptoms**: deleting an inherited env value inside a project reported success without changing
+  the effective value; CMD native PowerShell shims doubled apostrophes in script paths.
+- **Causes**: the effective env map does not prove a local project entry exists; PowerShell
+  single-quoted expression escaping does not apply to CMD's double-quoted `-File` argument.
+- **Fix**: reject deletion without a project entry, preserving both files; new `native-cmd-v2`
+  receipts select literal apostrophes while legacy receipts reconstruct their original bytes.
+- **Rule**: check the layer being mutated; version receipt-owned template changes so update,
+  uninstall and recovery retain exact ownership proofs. Windows-only execution tests complement
+  portable template and receipt validation tests.
+
+## 2026-10-09 — PowerShell 5.1 native argument binding needs actual argv tests
+
+- **Symptom**: the Live Bun PowerShell shim lost empty args and literal `--` in real ConPTY
+  execution; a smoke test passing only `hello` did not detect it.
+- **Fix**: the unreleased new-format shim encodes Windows argv for `ProcessStartInfo` with shell
+  execution disabled. Native regression assertions cover empty args, `--`, whitespace, quotes,
+  trailing backslashes and backslashes before quotes. Legacy bytes remain available for recovery.
+- **Rule**: inspect child argv, not just wrapper text. ConPTY fixtures must avoid inherited SSH
+  pipe handles, restore Ctrl-C processing and check client PIDs before closing the pseudoconsole;
+  closing ConPTY can itself terminate clients and hide a lifecycle failure. Record outer-shell
+  Ctrl-C status separately from Unix signal mapping.
+
+## 2026-10-09 — Validate the Windows executable stack and isolated data directories
+
+- **Symptom**: native debug CLI startup/installation overflowed the main-thread stack even
+  though unit tests passed; isolated launches also failed Windows runtime-directory discovery.
+- **Fix**: reserve 8 MiB for the Windows MSVC Shine executable via its binary-specific linker
+  argument, and create the fixture's HOME/APPDATA/LOCALAPPDATA directories. Native CMD and
+  PowerShell launch, migration/recovery and uninstall checks then passed.
+- **Rule**: test the actual executable, not only Rust test-worker futures. Stack reserve is
+  virtual address space, not resident-memory measurement. Windows isolated fixtures must supply
+  existing data directories; do not fall back to a developer's real profile to make tests pass.
+
+## 2026-10-09 — Live launch consolidation needs versioned resource reconstruction
+
+- **Symptoms**: transformed Bun launchers selected a different env store for their second Shine
+  invocation, and any state directory named `.shine` lost its render binding.
+- **Cause**: wrapper-local env changes cannot alter the parent, while template replacement also
+  changes the exact bytes used to prove receipt-owned launcher updates and recovery.
+- **Fix**: schema-2 receipts bind an explicit installation root and `live-bun-v2`; one hidden
+  invocation renders under the lifecycle lock and resolves declared env from the same Config.
+  Legacy byte reconstruction and strict journal receipt decoding preserve recovery boundaries.
+- **Rule**: bind each wrapper invocation explicitly; migrate executable formats through receipts
+  and approved resource transactions, never by editing only the current template.
+
+## 2026-10-09 — Runtime capture and proxy installation must preflight file boundaries
+
+- **Symptoms**: a FIFO stalled read-only listing; relative config roots broke App generators after
+  changing cwd; a corrupt proxy manifest left an active launcher and rule after installation failed.
+- **Fix**: RealHost rejects special filesystem entries, CLI runtime assembly resolves lexical roots
+  to absolute paths, and proxy installation captures and parses all inputs before writing. Reported
+  write failures restore prior bytes/modes or remove new files; concurrent edits are preserved and
+  incomplete rollback is explicit. Real-generator, FIFO, malformed-state and write-fault tests cover
+  these boundaries, including simulated Windows launcher pairs.
+- **Rule**: metadata must distinguish regular files from devices and pipes; resolve path identity
+  before changing cwd; preflight every persistent input before effects and retain rollback evidence.
+
+## 2026-10-08 — Execution snapshots and process groups need invocation ownership
+
+- **Symptoms**: concurrent Sys installs read another operation’s helpers; captured helpers lost
+  execution bits; cancelled Core tasks left descendants writing files; interactive installers could
+  not read inherited terminal input.
+- **Causes**: Sys reused one category directory and copied only bytes; process-group cleanup ran
+  only after an awaited error; isolated child groups never received foreground terminal ownership.
+- **Fix**: private per-invocation Sys copies retain captured executable intent and have approved
+  cleanup scopes. Process guards terminate groups on cancellation and temporarily hand foreground
+  input to the child. Real-process and independent PTY tests cover these boundaries.
+- **Rule**: directory swaps do not freeze a running process’s path namespace; kill-on-drop covers
+  only the direct child. Process isolation and terminal ownership must be designed together.
+
+## 2026-10-08 — Recovery evidence and literal paths need shared persistence contracts
+
+- **Symptoms**: Windows runtime writes unlinked the old receipt before replacement; journal writes
+  returned before syncing bytes or directory entries; Shell sentinel recovery widened private
+  profiles; literal dollar signs and command substitutions in directory names were evaluated.
+- **Causes**: RealHost duplicated a weaker atomic writer; profile restoration omitted mode handling;
+  generated double-quoted paths escaped quotes but still allowed expansion of literal components.
+- **Fix**: route RealHost through shared synced persistence with no pre-delete, preserve existing
+  regular-file permissions before writing, restore current profile mode, and escape every literal
+  path component while retaining the generated HOME prefix. Real-filesystem and Bash subprocess
+  regressions cover replacement cleanup, private recovery, user edits, PATH and sourced commands.
+- **Rule**: visible bytes are not durable commit evidence; replacement failures retain recovery
+  material, and shell syntax must distinguish intended expansion from literal filesystem names.
+
+## 2026-10-08 — Process and configuration boundaries must survive wrappers
+
+- **Symptoms**: a disconnected SSH relay left a transfer child writing files; a macOS sudo
+  invocation selected root HOME; a proxy installed with a custom config directory silently loaded
+  another store on its next invocation.
+- **Causes**: dropping a Tokio child does not kill it by default; `/etc/passwd` omits macOS
+  Directory Services users; generated proxies omitted the installation's runtime directory.
+- **Fix**: monitor control EOF, terminate/reap children with cancellation guards and Unix process
+  groups; use `getpwnam_r`; pass an absolute `--config-dir` in every proxy launcher while retaining
+  cwd-based project rules. Local regression tests cover silent children and descendants, real
+  system-account lookup, and proxy calls with a different inherited runtime directory.
+- **Rule**: bind wrapper configuration explicitly, use platform account APIs, and treat child
+  lifetime as part of connection/task ownership rather than relying on handle drop.
+
+## 2026-10-07 — Ambient paths and launcher boundaries need real-process checks
+
+- **Symptoms**: App scripts inherited an uncaptured overlay path; macOS rsync rejected a transfer
+  flag; proxying Shine recursed; uninstall removed a rule before refusing a foreign launcher.
+- **Causes**: removing an env-map entry does not clear inherited process env; `--version` does not
+  establish modern flag support; launchers invoke Shine through PATH; removal checked ownership
+  after writing configuration and omitted Windows companion conflicts.
+- **Fixes**: explicitly override absent overlay paths with an empty value, use compatible rsync
+  `--progress`, reject Shine proxy names, and preflight all uninstall launchers before mutation.
+- **Coverage**: subprocess-inherited and caller-injected overlay values, real macOS rsync dry-run
+  and overwrite protection, case-insensitive self-proxy rejection, and conflict/link preservation
+  of launchers, configuration, and receipts.
+
+## 2026-10-07 — Review utilities need platform and transport boundary tests
+
+- **Symptom**: lint panicked on macOS-only Surge and missed PowerShell-only warnings; SCP
+  reinterpreted SSH port/user flags; proxies selected non-executable PATH files; resource URLs
+  turned filename characters into queries or fragments.
+- **Fix**: skip unavailable App models, select the simulated platform's shell, translate trusted
+  SSH connection options for SCP, probe Unix execution bits while preserving symlink names,
+  and percent-encode normalized URL path segments. Add regression cases for each boundary.
+- **Rule**: validation success does not imply a resource exists on every platform. Transport
+  argv and URL output need their own encoding; file existence alone is not command availability.
+
+## 2026-10-07 — Absolute permission paths are identities, not URLs
+
+- **Symptom**: uninstall review displayed `absolute://etc/docker/daemon.json` and asked for
+  external-code consent even when no external code was listed.
+- **Cause**: joining `Path::components()` added a separator after the Unix root; the encoder
+  was copied in four modules and confirmation wording was unconditional.
+- **Fix**: share root-aware encoding across planning and execution, format logical identities
+  only at the CLI display boundary, and select consent wording from typed code boundaries.
+- **Rule**: never collapse all doubled separators: Windows UNC roots need them. Keep permission
+  and recovery-provenance comparisons on raw identities, with display-independent fingerprints.
+
+## 2026-10-07 — Incomplete uninstall needs one result, not repeated errors
+
+- **Symptom**: protected uninstall repeated preservation in review, file detail, guidance,
+  summary, and the binary's generic error output.
+- **Fix**: group category guidance, keep verbose/force-preview backup details, omit only known
+  unchanged cache steps and empty permission sections in compact review, and use a typed
+  already-reported failure marker at the CLI boundary.
+- **Rule**: presentation never changes Plan identity or exit failure. Unknown diagnostics and
+  ordinary errors stay visible; never suppress errors by matching their message text.
+
+## 2026-10-07 — Protected uninstall must not look complete
+
+- **Symptom**: App printed `Done` after preserving modified content; Shell summarized foreign
+  launchers as skipped. Both CLI commands returned success despite incomplete removal.
+- **Fix**: share a CLI completion/exit policy for preserved, conflicting, and failed outcomes.
+  App local reports retain the receipt strategy for force-impact guidance; Shell reports exact
+  retained paths and distinguishes cleared receipts from retained files.
+- **Rule**: partial completion is not complete uninstall and is not rolled back by a nonzero exit.
+  Successful dry-run remains zero with an explicit protection summary. Do not invent Shell force
+  semantics or change Core ownership/approval contracts to improve presentation.
+
+## 2026-10-06 — Missing App sources retain uninstall ownership
+
+- **Symptom**: upgrade warned about an old App category absent from list after a Preset rename.
+- **Cause**: list filtered receipt-owned categories by availability; targeted external uninstall
+  looked up the current category and also selected receipts by destination, unlike its Plan.
+- **Fix**: show missing category/file sources with receipt-based uninstall guidance; select
+  uninstall receipts by their original category and assess JSON ownership from the receipt.
+- **Rule**: source availability controls upgrades, not installation ownership. Preview must retain
+  user modifications, and unavailable source code cannot authorize teardown.
+
 ## 2026-10-05 — Managed Sys previews looked like completed mutations
 
 - **Symptom**: `sys uninstall split-dns --dry-run` displayed `✓ updated`, suggesting that the DNS
@@ -927,10 +1215,10 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Rule**: capability-boundary tests should verify the bound and calls of the assessment seam, not
   ban a capability name from a module that also owns the post-approval gate.
 
-- **2026-09-05 follow-up**: Shell regression fixtures remove files from `InMemoryHost` inside the
-  planner's inline test module. Scan production source before the explicit `#[cfg(test)] mod tests`
-  boundary for forbidden mutation calls, and fail if that boundary is missing; fixture setup is
-  not a production planner effect.
+- **2026-10-09 follow-up**: fixture setup is not a production planner effect, and module layout
+  is not a capability proof. Replace the fixed inline-test source boundary with generic
+  observation-only planner callers, a compile-fail mutation example and Host operation assertions
+  so domain phases and test modules can move safely (ADR 0104).
 
 ## 2026-08-30 — Executor-side choices expanded reviewed lifecycle work
 
@@ -1033,6 +1321,9 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
   only when the serialization format itself is the behavior under test.
 
 ## 2026-08-27 — Background services must pin the resolved Shine directory
+
+Historical context: the HTTP service was later removed by ADR 0107; the general persistence rule
+below still applies to any future background process.
 
 - **Symptom**: a service installed while using `--config-dir` or `SHINE_CONFIG_DIR` could later
   serve the default `~/.shine/http/` tree instead of the selected tree.
@@ -1435,31 +1726,15 @@ the second was the real blocker.
 
 ## 2026-07-15 — `env set`/`encrypt` silently wrote a value an override file kept shadowing
 
-- **Symptom**: `shine env encrypt --from KEY` (or `env set KEY value`) reported success and
-  wrote into `config.toml [env]`, but the effective value of `KEY` never changed when an
-  env override file (`shine.env.toml` — global, active overlay, or project) already defined
-  it.
-- **Root cause**: override files are merged strictly above **both** `config.toml [env]`
-  layers by design (`config/load.rs`: *"Environment override files deliberately sit above
-  both TOML layers"*), but `env set`/`encrypt`/`delete` had no awareness of that and always
-  wrote into whichever `config.toml` was active for the cwd. The write succeeded but was
-  dead on arrival — the override file kept winning at read time.
-- **Why precedence itself was not changed**: per
-  [ADR 0010](decisions/0010-git-managed-overlay.md), a shine-managed Git overlay exists
-  specifically so a value authored once on the maintaining device reliably wins on every
-  consuming machine, overriding whatever stale value a local `config.toml` holds. Flipping
-  overlay-vs-config.toml precedence would defeat that guarantee for every other key.
-- **Fix**: `Config` now tracks, per env key, which override file (if any) currently supplies
-  its effective value (`Config::env_override_sources` / `env_override_source()`, populated
-  in `apply_*_env_override`). `env set`/`encrypt`/`delete` consult it before writing: refuse
-  with a clear "this write would have no effect, X currently wins" error by default; `--force`
-  writes directly into that override file instead (`write_env_override_entry`, comment- and
-  description-preserving via the same `shine_core::migration::sync_table` `Config::save()` uses),
-  and warns loudly when the winning file is the shine-managed overlay mirror, since that
-  write is discarded on the next `shine preset pull`.
-- **Rule**: a `set`/`delete`-shaped command must never report success for a write that a
-  higher-precedence layer will keep shadowing — either make the write land where it's
-  actually effective, or refuse and say why.
+Historical policy, superseded by [ADR 0109](decisions/0109-env-baseline-and-directed-writes.md).
+
+- **Symptom**: config writes reported success while a higher env override kept winning.
+- **Original intent**: overlay priority deliberately let maintaining devices override stale local
+  config. Source-directed `--force` writes attempted to make a write effective, including in a
+  disposable mirror. This was a product policy, not an accidental sort bug.
+- **Current boundary**: overlays are baselines. Implicit writes still reject shadowed keys; explicit
+  targets can maintain them only with accurate saved/effective reporting. Env `--force` is rejected,
+  managed mirrors cannot be edited, and deletion requires an actual target-local definition.
 
 ## 2026-07-14 — OSC 11 response tail leaks when the reply arrives fragmented
 
@@ -1534,6 +1809,9 @@ measured, not inferred.
   as flags, and connection/transport options sourced only from local, trusted state.
 
 ## 2026-07-11 — Surge's `external-resource update` never covers URL-based Modules
+
+Historical context: ADR 0107 later removed the HTTP service. Current built-in presets install
+local rule files beside the profile rather than into the old publishing directory.
 
 - **Symptom**: after `shine upgrade` correctly rewrote the installed `custom-rules.sgmodule`
   (served via `shine serve` at `~/.shine/http/app/surge/`), Surge kept applying the old rules —

@@ -201,31 +201,124 @@ fn core_domain_sources_do_not_bypass_captured_hosts() {
     }
 }
 
-#[test]
-fn security_planners_use_observation_bounds_and_no_raw_mutation_calls() {
-    let core_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let planner = std::fs::read_to_string(core_root.join("src/runtime/planner.rs")).unwrap();
-    let planner = planner.replace("\r\n", "\n");
-    // Inline tests may mutate their virtual host to arrange observed state.
-    let (planner, _) = planner
-        .split_once("\n#[cfg(test)]\nmod tests {")
-        .expect("planner must retain its explicit inline test-module boundary");
-
-    assert!(planner.contains("impl<H: FileSystemObservationHost> CoreRuntime<H>"));
-    assert!(planner.contains("impl<H: FileSystemObservationHost + SplitDnsObservationHost>"));
-    for forbidden in [
-        ".write_atomic(",
-        ".remove_file(",
-        ".remove_dir_all(",
-        ".run_process(",
-        ".apply_split_dns(",
-        ".remove_split_dns(",
-    ] {
-        assert!(
-            !planner.contains(forbidden),
-            "security planner contains a raw mutation call `{forbidden}`"
-        );
+#[tokio::test]
+async fn security_planners_require_only_observation_capabilities() {
+    use shine_core::lifecycle::LifecycleOperation;
+    use shine_core::runtime::*;
+    // A generic observation-only bound is checked by Rust for every planner.
+    // This remains valid when implementations or test modules move between files.
+    async fn assess<H: FileSystemObservationHost + SplitDnsObservationHost>(
+        runtime: &CoreRuntime<H>,
+    ) {
+        let input_versions = PlanningInputVersions::default();
+        runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: Some("demo".into()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: input_versions.clone(),
+            })
+            .await
+            .unwrap();
+        runtime
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: Some("demo".into()),
+                force: false,
+                purge: false,
+                input_versions: input_versions.clone(),
+            })
+            .await
+            .unwrap();
+        runtime
+            .plan_managed_sys(SysManagedPlanRequest {
+                operation: LifecycleOperation::Install,
+                os_id: "test".into(),
+                target: Some("managed".into()),
+                input_versions: input_versions.clone(),
+            })
+            .await
+            .unwrap();
+        runtime
+            .plan_sys_bootstrap(SysBootstrapPlanRequest {
+                os_id: "test".into(),
+                item_ids: vec!["bootstrap".into()],
+                sys_shell: "bash".into(),
+                force_profile: false,
+                input_versions: input_versions.clone(),
+            })
+            .await
+            .unwrap();
+        runtime
+            .plan_app_refresh(AppRefreshPlanRequest {
+                category: "demo".into(),
+                file: None,
+                force: false,
+                input_versions: input_versions.clone(),
+            })
+            .await
+            .unwrap_err();
+        runtime
+            .plan_app_artifact(AppArtifactPlanRequest {
+                category: "demo".into(),
+                action: AppArtifactAction::Apply,
+                input_versions,
+            })
+            .await
+            .unwrap_err();
+        runtime
+            .plan_sys_profile(SysProfilePlanRequest {
+                os_id: "test".into(),
+                item_id: "managed".into(),
+                enabled: true,
+            })
+            .await
+            .unwrap_err();
+        runtime.plan_app_operation_recovery().await.unwrap_err();
+        runtime.plan_shell_operation_recovery().await.unwrap_err();
+        runtime.plan_sys_operation_recovery().await.unwrap_err();
     }
+    let host = InMemoryHost::new();
+    let root = std::env::temp_dir().join("shine-planner-boundary");
+    let mut context = RuntimeContext::isolated(
+        root.join("home"),
+        root.join("state"),
+        root.join("presets"),
+        root.join("bin"),
+        RuntimePlatform::Linux,
+    );
+    context.shell = ShellType::Bash;
+    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+        .file("app/demo/shine.toml", b"metadata_schema_version = 2\ndest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\n".to_vec())
+        .file("app/demo/config.toml", b"static data".to_vec())
+        .file("shell/demo/shine.toml", b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n".to_vec())
+        .file("shell/demo/demo.sh", b"#!/bin/sh\n".to_vec())
+        .file("sys/test/shine.toml", br#"version = 2
+[[items]]
+id = 'managed'
+label = 'Managed'
+mode = 'managed'
+driver = 'managed-file'
+config = { source = 'config.toml', target = '~/managed.toml' }
+[[items]]
+id = 'bootstrap'
+label = 'Bootstrap'
+detect = { kind = 'path', path = '~/detected' }
+install = { kind = 'script', path = 'install.sh' }
+"#.to_vec())
+        .file("sys/test/config.toml", b"managed data".to_vec())
+        .file("sys/test/install.sh", b"#!/bin/sh\n".to_vec()).build();
+    let runtime = CoreRuntime::new(host, context, snapshot);
+    assess(&runtime).await;
+    assert!(
+        runtime
+            .host()
+            .operations()
+            .iter()
+            .all(|operation| matches!(operation, HostOperation::Read(_)))
+    );
 }
 
 #[tokio::test]

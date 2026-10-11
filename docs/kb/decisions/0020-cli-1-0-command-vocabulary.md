@@ -36,3 +36,6 @@ The former command names are removed rather than retained as aliases. `update --
 ADR 0022 extends this vocabulary with an action-first everyday interface and canonical resource
 targets. It also removes the superseded pre-release lifecycle spellings instead of retaining
 hidden compatibility aliases.
+
+ADR 0107 later introduces `clear <TARGET>` for explicitly scoped resource cleanup. It does not
+restore the former bare `clear` behavior or rename `state migrate`.

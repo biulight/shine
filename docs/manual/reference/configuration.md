@@ -9,6 +9,10 @@ Shine stores global runtime state under `~/.shine/` and creates `~/.shine/config
 configuration is first needed. Configuration and manifest replacement does not delete the old file
 before renaming the staged file, including on Windows; a failed rename preserves the existing file.
 
+On Unix, when `SUDO_USER` identifies the invoking user, Shine resolves that user's home through
+the system account database, including macOS Directory Services. Home-relative configuration and
+path expansion therefore use the invoking user's home rather than sudo's root `HOME`.
+
 Interactive lifecycle Plan confirmation can authorize the listed external code for that operation only,
 without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
 Development trust; explicit `--run-generators` inspection also requires a grant.
@@ -119,7 +123,9 @@ DETAILED_VALUE = { value = "example", description = "Example value used by build
 - `description` appears only in `shine env list` and is never passed to templates or children.
 - Inline descriptions override the same key in the preset `<presets>/env.toml` catalog.
 - `shine env set` preserves the description of an existing detailed entry.
-- A detailed override replaces both value and description; a string replaces only the value.
+- Strings and detailed entries containing only `value` inherit lower-layer descriptions. An explicit
+  `description` replaces the inherited description; an empty string clears it and disables catalog
+  fallback. Value and description sources are tracked separately.
 - Invalid numbers, arrays, or tables without a string `value` report file and key instead of being
   ignored.
 
@@ -143,6 +149,10 @@ instead of silently dropping active values.
 
 ## Directory and source precedence
 
+Relative `--config-dir`, `SHINE_CONFIG_DIR`, and `SHINE_PRESETS` paths are resolved against the
+invoking working directory before lifecycle planning or script execution. Child working-directory
+changes do not change the selected runtime roots.
+
 `SHINE_CONFIG_DIR` has the highest priority. It changes the global configuration and runtime root
 and, outside a project, fixes the preset directory at `$SHINE_CONFIG_DIR/presets/`; `SHINE_PRESETS`
 and a global `presets_dir` do not override it.
@@ -161,6 +171,8 @@ Without `SHINE_CONFIG_DIR`, the base preset directory is selected in this order:
 An external preset or overlay root may be a symbolic link. Shine resolves that root before capture
 and uses the resolved source for development trust; retargeting it requires review again. A broken
 root link is an error. Symbolic links inside the preset tree remain excluded from the snapshot.
+Special entries such as FIFOs, sockets, and devices fail snapshot capture with an error; Shine does
+not read them as preset files.
 
 External shell categories default to `snapshot`: Shine copies them to
 `~/.shine/installed/shell/`. On Unix, snapshots retain captured executable flags for scripts and
@@ -173,6 +185,15 @@ on the next invocation, but changes to `target`, `runtime`, `transforms`, or `en
 snapshot trust cannot authorize a launcher that reads mutable source. Existing live launchers are
 preserved, and status marks those missing development trust for review.
 
+After upgrading Shine, run `shine update` and `shine upgrade` to refresh existing transformed Live
+Bun commands. Their refreshed entries use the installation's configuration directory for both
+rendering and declared environment values, even when the caller sets a different `SHINE_CONFIG_DIR`.
+Project configuration and `shine.env.toml` overrides still follow the caller's working directory.
+The refreshed PowerShell entries preserve empty arguments and literal `--`, including on Windows
+PowerShell 5.1.
+This change covers Live Bun commands with transforms, including commands without declared `env`;
+raw Live commands, native/source commands and snapshot commands keep their existing launch behavior.
+
 An overlay replaces files at matching relative paths over the chosen base instead of replacing the
 whole tree. `presets_overlay_dir` and `presets_overlay_git` are mutually exclusive; use
 `shine preset overlay link` to configure them safely. A Git overlay becomes active after the first
@@ -183,12 +204,24 @@ successful `shine preset pull`. Later pulls forcibly mirror its checkout, so nev
 
 Later layers override earlier values:
 
-1. built-in defaults;
-2. global `[env]`;
-3. project `[env]`;
-4. global `~/.shine/shine.env.toml`;
-5. active overlay `shine.env.toml`;
+1. built-in defaults (runtime fallback only);
+2. active overlay `shine.env.toml` (shared baseline);
+3. global `config.toml` `[env]`;
+4. global `shine.env.toml`;
+5. project `shine.config.toml` `[env]`;
 6. project `shine.env.toml`.
+
+Every installation uses this order. `SHINE_CONFIG_DIR` selects the global runtime root; paths are
+not fixed to `~/.shine/`. Loading or saving unrelated settings never expands built-in defaults into
+files. Existing entries remain explicit, including historical entries equal to old defaults; delete
+an entry from its selected layer to inherit again. A lone `shine.env.toml` does not define a project.
+Only the nearest `shine.config.toml` defines the project root and its env file; ancestor projects are
+not merged.
+
+Use `shine env explain KEY` for the value source, description source, override chain, and default
+write target. It hides all values unless `--reveal` is given and never decrypts. `env get` keeps its
+single-value output. See the [environment guide](../guides/environment.md) for manual upgrade and
+rollback steps.
 
 An override file has no `[env]` header:
 

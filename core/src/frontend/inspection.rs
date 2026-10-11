@@ -157,6 +157,15 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> FrontendService
         .await
     }
 
+    /// Local presentation details for receipt-owned sources absent from effective metadata.
+    /// Logical category/resource names only; no destination paths or file contents.
+    pub async fn missing_app_sources(&self) -> Result<Vec<(String, String)>, FrontendServiceError> {
+        self.runtime
+            .missing_app_sources()
+            .await
+            .map_err(|error| FrontendServiceError::new("frontend_inspection_app_failed", error))
+    }
+
     /// Trusted-local explicit evaluation; never expose this option through a read-only AI adapter.
     pub async fn inspect_apps_with_options(
         &self,

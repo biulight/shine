@@ -127,6 +127,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
     }
 
     pub async fn sync_composed_sys_profile(&self, os_id: &str) -> Result<SysItemOutcome> {
+        let _lifecycle_guard = self.acquire_sys_lifecycle_operation().await?;
         let loaded = self.load_sys_preset(os_id).await?;
         let manifest =
             super::sys::load_manifest_with_host(self.host(), &self.context().shine_dir).await?;

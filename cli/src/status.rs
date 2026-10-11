@@ -1372,6 +1372,9 @@ mod tests {
 
         ShellManifest {
             entries: vec![ShellManifestEntry {
+                launcher_format: None,
+                launcher_config_dir: None,
+
                 category: "custom".to_string(),
                 command: "mytool".to_string(),
                 mode: crate::config::ExternalShellMode::Snapshot,

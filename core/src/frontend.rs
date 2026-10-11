@@ -530,6 +530,9 @@ mod tests {
         app.save(host, &home_dir().join(".shine")).await.unwrap();
         let shell = ShellManifest {
             entries: vec![ShellManifestEntry {
+                launcher_format: None,
+                launcher_config_dir: None,
+
                 category: "tools".to_string(),
                 command: "tool".to_string(),
                 mode: crate::runtime::ExternalShellMode::Snapshot,

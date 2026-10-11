@@ -1,6 +1,8 @@
 pub(crate) mod deployment;
 mod install;
 mod links;
+#[cfg(all(test, unix))]
+mod live_bun_bench;
 pub mod metadata;
 mod profile;
 mod recovery;
@@ -8,7 +10,7 @@ mod report;
 mod uninstall;
 
 #[doc(hidden)]
-pub use deployment::handle_render_live;
+pub use deployment::{handle_launch_live, handle_render_live};
 pub(crate) use install::collect_update_lifecycle_result;
 pub use install::{
     handle_completion_install, handle_init_template, handle_install, handle_install_approved,

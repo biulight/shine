@@ -2,6 +2,7 @@ use crate::{config::Config, core_runtime};
 use anyhow::{Context, Result, bail};
 use shine_core::persist::atomic_write_private;
 use shine_core::plan::SnapshotDigestV1;
+use shine_core::runtime::{FileSystemHost, RealHost};
 use shine_core::trust::{
     LEGACY_TRUST_SCHEMA_VERSION, TRUST_STORE_SCHEMA_VERSION, TrustCapabilityV1, TrustDecisionV1,
     TrustGrantV1, TrustModeV1, TrustRequirementV1, TrustSourceV1, TrustStoreV1, evaluate_trust,
@@ -416,6 +417,9 @@ pub async fn handle_grant(
             bail!("external-code trust was not granted");
         }
     }
+    let _guard = RealHost
+        .acquire_operation_lock(&config.shine_dir().join("trust.lock"))
+        .await?;
     let mut store = load_store(config).await?;
     for requirement in report.requirements {
         store.grants.retain(|grant| {
@@ -443,6 +447,9 @@ pub async fn handle_grant(
 
 pub async fn handle_revoke(config: &Config, target: &str) -> Result<()> {
     validate_target(target)?;
+    let _guard = RealHost
+        .acquire_operation_lock(&config.shine_dir().join("trust.lock"))
+        .await?;
     let mut store = load_store(config).await?;
     let before = store.grants.len();
     if target == "preset" {
@@ -729,6 +736,50 @@ mod tests {
     use shine_core::plan::{PermissionSetV1, PermissionV1, SnapshotDigestV1};
     use shine_core::trust::TrustCapabilityV1;
 
+    #[tokio::test]
+    async fn revoke_reads_current_grants_after_waiting_for_the_store_lock() {
+        let dir = crate::test_support::make_temp_dir("shine-trust-contention").await;
+        let config = Config::new_for_test(&dir);
+        let grant = TrustGrantV1::for_reviewed_requirement(&requirement(false));
+        save_store(
+            &config,
+            &TrustStoreV1 {
+                grants: vec![grant.clone()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let guard = RealHost
+            .acquire_operation_lock(&dir.join("trust.lock"))
+            .await
+            .unwrap();
+        let revoke = handle_revoke(&config, &grant.target);
+        tokio::pin!(revoke);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut revoke)
+                .await
+                .is_err()
+        );
+        let mut later = grant.clone();
+        later.target = "sys/later".into();
+        save_store(
+            &config,
+            &TrustStoreV1 {
+                grants: vec![later],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        drop(guard);
+        revoke.await.unwrap();
+        let store = load_store(&config).await.unwrap();
+        assert_eq!(store.grants.len(), 1);
+        assert_eq!(store.grants[0].target, "sys/later");
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
     fn requirement(permissions_declared: bool) -> TrustRequirementV1 {
         TrustRequirementV1 {
             target: "sys/package-only".to_string(),
@@ -738,6 +789,53 @@ mod tests {
             permissions: PermissionSetV1::default(),
             development_source: None,
         }
+    }
+
+    #[tokio::test]
+    async fn grant_does_not_restore_an_unrelated_revocation_while_waiting() {
+        let dir = crate::test_support::make_temp_dir("shine-trust-grant-contention").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let category = config.presets_dir().join("shell/demo");
+        tokio::fs::create_dir_all(&category).await.unwrap();
+        tokio::fs::write(
+            category.join("shine.toml"),
+            "[[files]]\nsource = 'tool.ts'\ntarget = 'tool'\nruntime = 'bun'\nplatforms = ['unix', 'windows']\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(category.join("tool.ts"), "export {};\n")
+            .await
+            .unwrap();
+        let revoked = TrustGrantV1::for_reviewed_requirement(&requirement(false));
+        save_store(
+            &config,
+            &TrustStoreV1 {
+                grants: vec![revoked],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let guard = RealHost
+            .acquire_operation_lock(&dir.join("trust.lock"))
+            .await
+            .unwrap();
+        let grant = handle_grant(&config, "shell/demo/tool", true, false);
+        tokio::pin!(grant);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut grant)
+                .await
+                .is_err()
+        );
+        save_store(&config, &TrustStoreV1::default()).await.unwrap();
+        drop(guard);
+        grant.await.unwrap();
+        let store = load_store(&config).await.unwrap();
+        assert_eq!(store.grants.len(), 1);
+        assert_eq!(store.grants[0].target, "shell/demo/tool");
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]

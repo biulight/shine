@@ -18,6 +18,7 @@ Shine 可以保存预设模板变量，也可以使用 GPG 或 age 封存项目�
 ```bash
 shine env list
 shine env get HTTP_PROXY_PORT
+shine env explain HTTP_PROXY_PORT
 shine env set HTTP_PROXY_PORT 6152
 shine env delete HTTP_PROXY_PORT
 ```
@@ -30,7 +31,13 @@ shine env delete HTTP_PROXY_PORT
 `IMAGE_MAX_HEIGHT=1080`。可用 `--quality`、`--width`、`--height` 只覆盖当次运行，也可用
 `shine env set` 为当前机器保留不同默认值。
 
-`shine env list` 默认隐藏敏感值；`--reveal` 会显示完整值，应只在安全终端中使用。输出会按实际来源分为 `config.toml`、全局覆盖文件、overlay 和项目覆盖文件，便于确认哪个值正在生效。变量通常保存到当前配置的 `[env]` 表。
+`shine env list` 默认隐藏敏感值；`--reveal` 会显示完整值，应只在安全终端中使用。
+输出按 `builtin`、overlay、全局配置、全局 env 文件、项目配置、项目 env 文件分组，显示实际路径
+及当前项目根。`env explain KEY` 从低到高展示同一存储键的定义、胜出层和描述来源，默认隐藏
+所有值；`--reveal` 不会自动解密。显式注入仍先查找 `KEY_SECRET`，再查找 `KEY`；来源说明和
+写入输出会提示已有的密文键。
+
+默认值只在运行时兜底，查询不会创建配置。保存显式值时，即使与内置值相同也会记录该项。
 
 全局 `~/.shine/config.toml` 和项目 `shine.config.toml` 的 `[env]` 支持简写字符串，也支持
 同时记录值和说明：
@@ -45,19 +52,41 @@ MY_API_TOKEN = { value = "<令牌>", description = "内部 API 的访问令牌" 
 对已有详细条目执行 `shine env set MY_API_TOKEN <新值>` 时，Shine 会更新 `value` 并保留
 说明。
 
-在 Unix 上，Shine 保存 `config.toml`、`shine.config.toml` 和 `shine.env.toml` 时使用仅所有者
-可读写的权限（`0600`），替换已有文件时也一样。临时文件在写入任何值之前就已限制权限。
-这只保护本地文件访问，明文值仍然是明文。
+写入目标由参数和当前目录确定，与有效值来自哪里无关：
 
-若同名键已由全局、overlay 或项目 `shine.env.toml` 覆盖，直接 `set`、`delete` 或 `env secret encrypt --set` 会被拒绝，防止写入一个不会生效的低优先级值。确认应修改该覆盖文件时，添加 `--force`：
+| 参数 | 目标 |
+| --- | --- |
+| 无范围参数 | 当前项目 `shine.config.toml` 的 `[env]`，无项目时为全局配置 |
+| `--global` | 全局 `config.toml` 的 `[env]` |
+| `--project` | 最近项目的 `[env]`，无项目时报错 |
+| `--env-file` | 所选或默认范围的 `shine.env.toml` |
+| `--overlay` | 当前手动 overlay 的 `shine.env.toml` |
+
+范围参数互斥。`--overlay --env-file` 使用同一目标。脚本应同时指定范围和文件选项，
+避免依赖执行目录。未传任何目标参数时，同键被更高层定义就拒绝写入，即使值相同；显式选择
+目标允许维护被遮蔽项，只修改指定文件并分别报告保存位置、当前有效来源和值是否改变。
 
 ```bash
-shine env set HTTP_PROXY_PORT 7890 --force
-shine env delete HTTP_PROXY_PORT --force
-shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --force
+shine env set HTTP_PROXY_PORT 7890 --global
+shine env set HTTP_PROXY_PORT 8080 --project
+shine env set HTTP_PROXY_PORT 8081 --project --env-file
+shine env set HTTP_PROXY_PORT 6152 --overlay
+shine env delete HTTP_PROXY_PORT --global --env-file
+shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --project --env-file
 ```
 
-对于 `shine preset overlay link --git` 管理的镜像，`--force` 写入会在下次 `shine preset pull` 时被丢弃；应改在 overlay 上游仓库维护该值。
+`delete` 只删除目标文件实际存在的项，不删除其他层或同时删除 `KEY_SECRET`；不存在则报错。
+删除恢复继承，不表示禁用变量，空字符串仍是合法值。Git 托管 overlay 镜像禁止直接写入；
+应修改上游、使用手动维护目录，或选择本地覆盖层。上述三个写入入口的旧 `--force` 已停用，
+请求会失败且零写入，并提示准确的替代参数。
+
+写入预检在加密工具启动前完成。提交前会核对目标、配置来源和 `--from` 输入；期间发生变化
+则要求重试。Shine 对同一目标的最终核对和原子替换使用文件锁串行化。它不锁定外部编辑器
+或 Git 的所有操作。若提示“文件已保存，但有效状态核对失败”，命令返回失败，但文件已保存，
+请检查配置后重新查询；不要假定没有写入。
+
+Unix 配置与 env 文件及其临时文件使用仅所有者可读写的 `0600` 权限。原子替换失败保留原文件，
+拒绝符号链接及特殊文件目标，保留注释、无关项和详细条目的说明。明文值仍然是明文。
 
 不带 `[env]` 表头的全局、overlay 和项目 `shine.env.toml` 覆盖文件也支持这两种格式：
 
@@ -66,14 +95,36 @@ HTTP_PROXY_PORT = "7890"
 PROXY_HOST = { value = "127.0.0.1", description = "本地代理主机" }
 ```
 
-详细项同时覆盖值和说明；字符串只覆盖值，并保留低优先级配置或 preset catalog 提供的
-说明。数字、数组、缺少 `value` 等无效条目会直接报错，不会被静默忽略。
+字符串与仅含 `value` 的详细项继承低层说明；显式 `description` 才替换说明，空字符串清空
+说明且不再使用 preset catalog 兜底。数字、数组、缺少 `value` 等无效条目会直接报错，不会被静默忽略。
 
 修改用于模板渲染的值后，运行：
 
 ```bash
 shine upgrade
 ```
+
+## Env 分层变更的人工升级与回退
+
+新顺序统一为：内置默认值 < overlay 基线 < 全局 `[env]` < 全局 env 文件 < 项目 `[env]` <
+项目 env 文件。旧版 overlay 高于全局覆盖文件，所有独立 env 文件高于两层 `[env]`；
+升级可能改变有效值，不提供旧顺序模式或自动迁移。
+
+1. 升级前记录实际 runtime root、重要项目及关键变量来源。对准备编辑的配置做私有备份，
+   不把秘密提交仓库或复制进公开日志。
+2. 更新旧 `--force` 脚本：全局 env 文件改用 `--global --env-file`，项目 env 文件改用
+   `--project --env-file`，手动 overlay 改用 `--overlay`。托管镜像改为上游维护或本地覆盖。
+3. 升级后在项目外和各重要项目内分别运行 `env list`、`env explain KEY`。项目可选择不同的
+   overlay，一个项目的结果不能代表其他项目。
+4. 历史项（包括过去自动补写、等于旧默认值的项）全部保留为显式值。确认不再需要时，用明确
+   目标的 `env delete` 逐项清理并再次检查来源；不能只凭“等于默认值”判断删除。只有没有显式
+   定义的键才跟随新版默认值。希望 overlay 胜出的用户须人工删除不再需要的本机或项目同键项。
+5. 核对 `KEY_SECRET`；调整或删除明文键不取消密文键优先。运行 `shine update` 检查安装产物，
+   审阅 `shine upgrade` 的 Plan 后再更新。修改配置或升级二进制不会自动重渲染、执行或批准预设。
+
+回退二进制会恢复旧排序，但不能恢复手动删除的项或已更新的安装产物。按需核对并恢复私有备份，
+避免覆盖期间的无关编辑；产物仍需通过既有 lifecycle 审阅处理。没有专用 env 迁移或恢复命令。
+旧二进制还可能重新把缺失的内置默认值补写到全局配置中；这不能恢复已删除的自定义值。
 
 ## 使用 GPG 加密值
 
@@ -124,6 +175,8 @@ shine env secret identity list
 ```
 
 普通 identity 使用 `age-keygen`，默认写入 `~/.shine/age/identity.txt`。
+已有文件需要 `--force` 才能替换。强制替换会先在私有临时目录生成并检查新 identity，再替换旧文件；
+生成或检查失败时保留旧 identity。Unix 上，生成的 identity 文件使用仅所有者可读写的 `0600` 权限。
 
 ### 在 macOS 上使用 Touch ID
 
@@ -398,6 +451,10 @@ Shine 会在 `~/.shine/bin/` 创建同名 shim，并记录当前 `PATH` 中找�
 该值不会写回或导出到父 Shell。`--with` 可重复使用，也可写成 `KEY=ALIAS`，以不同的变量名
 传给目标命令。
 
+shim 会保留安装时选定的绝对运行时目录，包括自定义 `--config-dir`。之后即使调用者的
+`SHINE_CONFIG_DIR` 不同，仍会使用安装时的目录；项目规则仍按调用时的工作目录发现。
+重新运行 `env proxy install` 可更新旧 shim，或将其安装到另一个运行时目录。
+
 代理规则作用于整个命令，不能只匹配某个子命令。如果明确要代理 Cargo，应在不需要 token 时
 停止注入：
 
@@ -419,6 +476,14 @@ shine env proxy disable cargo
 但并非 Shine 创建，安装会拒绝覆盖它。在 Windows 上，Shine 会在写入任何文件前检查整组启动器，
 包括 `.cmd` 和 `.ps1`；冲突文件或符号链接都会保留。查找真实命令时，会跳过实际指向 Shine bin 目录的 PATH 项，包括符号链接别名。在 Unix 上，修改代理规则也会保持配置文件
 仅所有者可读写的权限。
+在 Unix 上，查找目标命令也会跳过没有执行权限的文件，并接受指向可执行文件的符号链接，
+同时保留命令的原始调用名称。
+Shine 拒绝代理 `shine` 或 `shine.exe`（不区分大小写），以防止启动器递归调用自身。
+卸载会在修改规则或安装记录前检查整组启动器；发生归属冲突时，启动器和配置保持原样。
+
+安装会在写入前校验规则文件、安装记录和整组启动器。写入失败时，Shine 会尝试恢复原文件
+内容和 Unix 权限，并移除新建文件。并发编辑会保留；回滚不完整时会明确报错。这一回滚处理
+可报告的写入失败，不涵盖进程突然终止。
 
 默认规则保存在全局 `~/.shine/config.toml`。在含有 `shine.config.toml` 的项目内加入
 `--project`，可将该命令的规则限定到项目；同一命令的项目规则会覆盖全局规则。
@@ -478,6 +543,8 @@ shine env workspace init --from-dotenv --mode development --mode production
 ```
 
 导入时可将明确知道的敏感键放进 `[secret]`，之后配置 recipient 并封存。未标记的值会作为明文导入；不要把实际凭据误当作普通配置提交。
+导入的 Secret 在封存前也仍是明文。Unix 上，生成的 workspace 与环境源文件使用仅所有者可读写的
+`0600` 权限，使用 `--force` 替换时同样如此。
 
 ```bash
 shine env workspace init --from-dotenv --secret DATABASE_URL
@@ -632,6 +699,10 @@ hybrid_decrypt_backend = "age"
 此文件目前只接受 `hybrid_decrypt_backend = "gpg" | "age"`。它属于受信任的本机项目配置，
 能够修改它的程序也能改变所选授权路径。SSH broker 请求不加载或传输此文件；实际解密
 机器仍使用自己的配置并执行原有释放检查。
+
+封存要求源文件为普通文件，拒绝符号链接；Unix 上还会拒绝具有多个硬链接的文件，避免
+原子替换后明文仍留在其他链接文件中。GPG 加密和解密显式使用标准输出，不受本机
+`output` 设置影响；加密输出为空时会报错，不会替换源文件。
 
 封存会锁定其他遵守协议的 Shine 封存进程，并在替换前复核工作区与源文件捕获字节。
 硬件批准期间编辑将终止当前文件；此前完成的文件保留，剩余文件不再处理。封存期间请勿

@@ -5,6 +5,7 @@
 
 mod action_executor;
 mod app;
+mod app_change;
 mod app_metadata;
 mod app_script;
 mod authoring;
@@ -16,20 +17,27 @@ mod inspection;
 mod launcher;
 mod lint;
 mod memory;
+mod metadata_diagnostic;
+mod operation_lock;
 mod pack;
 mod planner;
 mod preset;
 mod preset_migration;
+mod process_scope;
 mod profile;
+mod review_path;
 mod schema;
 mod shell;
 mod shell_action_executor;
+mod shell_launch;
 mod sys;
 mod sys_action_executor;
 mod sys_bootstrap;
 mod sys_manifest;
 mod sys_model;
 mod sys_profile;
+#[cfg(test)]
+mod tests;
 mod trust;
 mod validation;
 
@@ -109,6 +117,7 @@ pub use shell::{
 pub use shell_action_executor::{
     SHELL_OPERATION_JOURNAL_FILE, ShellOperationExecutionV1, ShellRecoveryReportV1,
 };
+pub use shell_launch::{LiveBunLaunch, validate_live_shell_target};
 pub use sys::{
     ManagedFileReceipt, ManagedFileRemoveRequest, ManagedFileRequest, RECEIPT_VERSION,
     ResourceConflict, ResourceOutcome, ResourcePlan, SYS_MANIFEST_FILE,
@@ -336,42 +345,3 @@ pub use bootstrap::{
     PresetSnapshotRequest, PresetSnapshotSource, capture_embedded_preset_snapshot,
     capture_preset_snapshot,
 };
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn context() -> RuntimeContext {
-        RuntimeContext::isolated(
-            PathBuf::from("/home/test"),
-            PathBuf::from("/home/test/.shine"),
-            PathBuf::from("/home/test/.shine/presets"),
-            PathBuf::from("/home/test/.shine/bin"),
-            RuntimePlatform::Linux,
-        )
-    }
-
-    #[tokio::test]
-    async fn core_only_harness_validates_and_inspects_without_real_host_access() {
-        let host = InMemoryHost::new();
-        host.put_file("/installed/app/demo/config.toml", b"current".to_vec());
-        let presets = PresetSnapshot::builder(PresetSourceKind::External)
-            .file(
-                "app/demo/shine.toml",
-                b"[[files]]\nsource = \"config.toml\"\n".to_vec(),
-            )
-            .file("app/demo/config.toml", b"desired".to_vec())
-            .build();
-        let runtime = CoreRuntime::new(host, context(), presets);
-
-        assert!(runtime.validate().valid);
-        let inspection = runtime
-            .inspect_snapshot(Path::new("/installed"))
-            .await
-            .unwrap();
-        assert_eq!(inspection.resources.len(), 2);
-        assert!(inspection.resources.iter().any(|row| {
-            row.logical_path == "app/demo/config.toml" && row.installed && !row.matches_snapshot
-        }));
-    }
-}

@@ -2,15 +2,15 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 
 use cli::{
-    apps, colors, commands, completion, config, env, git_pull, info, list, serve, shells, ssh,
-    state, sys, task, theme, update_check,
+    apps, colors, commands, completion, config, env, git_pull, info, list, shells, ssh, state, sys,
+    task, theme, update_check,
 };
 
 use commands::{
-    AppArtifactCommands, AppCommands, Cli, Commands, CompletionCommands, CompletionShell,
-    EnvBrokerPolicySubcommand, EnvBrokerSubcommand, EnvCommands, EnvIdentitySubcommand,
-    EnvProxySubcommand, EnvSecretSubcommand, EnvWorkspaceSubcommand, LocalCommands,
-    OverlayCommands, PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands,
+    AppArtifactCommands, AppCommands, ClearCommands, Cli, Commands, CompletionCommands,
+    CompletionShell, EnvBrokerPolicySubcommand, EnvBrokerSubcommand, EnvCommands,
+    EnvIdentitySubcommand, EnvProxySubcommand, EnvSecretSubcommand, EnvWorkspaceSubcommand,
+    LocalCommands, OverlayCommands, PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands,
     ShellCommands, StateCommands, SysCommands, SysProfileCommands, TaskCommands, ThemeCommands,
     TrustCommands,
 };
@@ -32,10 +32,30 @@ use cli::self_install::{
 };
 use cli::shim::{handle_install_shim_approved, handle_uninstall_shim_approved};
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
+    match run_main() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            if !error.is::<cli::output::ReportedCommandFailure>() {
+                eprintln!("Error: {error:?}");
+            }
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_main() -> Result<()> {
     completion::complete_from_env();
 
-    let cli = Cli::parse();
+    let argv = std::env::args_os().collect::<Vec<_>>();
+    let cli = Cli::parse_from(&argv);
+    if let Commands::ShellLaunch { target, .. } = &cli.command
+        && !argv
+            .windows(2)
+            .any(|pair| pair[0] == target.as_str() && pair[1] == "--")
+    {
+        bail!("__shell-launch requires -- immediately after the target");
+    }
 
     if let Commands::Completions { command } = &cli.command
         && CompletionShell::from_command(command).is_some()
@@ -69,6 +89,25 @@ async fn run(cli: Cli) -> Result<()> {
 }
 
 async fn run_command(cli: Cli) -> Result<()> {
+    if let Commands::MaintenanceWorker { scope, ticket } = &cli.command {
+        return cli::maintenance::handle_worker(scope, *ticket).await;
+    }
+
+    if let Commands::State {
+        command: StateCommands::Check,
+    } = &cli.command
+    {
+        return cli::maintenance::handle_check().await;
+    }
+
+    if let Commands::Clear {
+        command: ClearCommands::Serve,
+    } = &cli.command
+    {
+        // Cleanup must remain reachable after an upgrade, even with invalid or retired config.
+        return cli::legacy_serve::handle_uninstall().await;
+    }
+
     if let Commands::Init(cmd) = &cli.command {
         return cli::init::handle_init(cmd.yes).await;
     }
@@ -192,12 +231,70 @@ async fn run_command(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
-    let config = Box::pin(Config::load_or_init()).await?;
+    // Pure env inspection and directed writes must not initialize state, run
+    // advisory workers, sync overlays, or add output to `env get`.
+    if let Commands::Env { command } = &cli.command {
+        match command {
+            EnvCommands::List { reveal } => {
+                return env::commands::handle_list(&Config::load_read_only().await?, *reveal).await;
+            }
+            EnvCommands::Get { key } => {
+                return env::commands::handle_get(&Config::load_read_only().await?, key).await;
+            }
+            EnvCommands::Explain { key, reveal } => {
+                return env::commands::handle_explain(
+                    &Config::load_read_only().await?,
+                    key,
+                    *reveal,
+                )
+                .await;
+            }
+            EnvCommands::Set { key, value, target } => {
+                return env::commands::handle_set(
+                    &Config::load_read_only().await?,
+                    key,
+                    value,
+                    target,
+                )
+                .await;
+            }
+            EnvCommands::Delete { key, target } => {
+                return env::commands::handle_delete(&Config::load_read_only().await?, key, target)
+                    .await;
+            }
+            EnvCommands::Secret(cmd) => {
+                if let EnvSecretSubcommand::Encrypt(cmd) = &cmd.command {
+                    return env::commands::handle_encrypt(
+                        &Config::load_read_only().await?,
+                        cmd.backend.as_deref(),
+                        &cmd.recipients,
+                        cmd.set.as_deref(),
+                        cmd.from.as_deref(),
+                        &cmd.target,
+                    )
+                    .await;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    cli::maintenance::maybe_notify(&cli.command).await;
+
+    let config = if matches!(cli.command, Commands::Env { .. }) {
+        Box::pin(Config::load_read_only()).await?
+    } else {
+        Box::pin(Config::load_or_init()).await?
+    };
 
     if config.legacy_allow_app_hooks || config.legacy_allow_sys_code {
         eprintln!(
             "Warning: allow_app_hooks/allow_sys_code are retired and ignored; review current external code with `shine trust inspect <TARGET>` and enroll it with `shine trust grant <TARGET>`."
         );
+    }
+
+    if let Commands::ShellLaunch { target, args } = &cli.command {
+        return shells::handle_launch_live(&config, target, args).await;
     }
 
     if let Commands::ShellRender { target } = &cli.command {
@@ -209,7 +306,11 @@ async fn run_command(cli: Cli) -> Result<()> {
     update_check::maybe_notify(&config, &cli.command).await?;
 
     match cli.command {
-        Commands::ShellRender { .. } => unreachable!(),
+        Commands::MaintenanceWorker { .. } => {
+            unreachable!("maintenance worker routes before config loading")
+        }
+        Commands::Clear { .. } => unreachable!("legacy cleanup routes before config loading"),
+        Commands::ShellRender { .. } | Commands::ShellLaunch { .. } => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Completions {
             command: CompletionCommands::Install,
@@ -425,13 +526,6 @@ async fn run_command(cli: Cli) -> Result<()> {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
         },
-        Commands::Serve { command } => match command {
-            ServeCommands::Install(cmd) => serve::handle_install(&config, cmd.port).await,
-            ServeCommands::Start(cmd) => serve::handle_start(&config, cmd.port).await,
-            ServeCommands::Status => serve::handle_status(&config).await,
-            ServeCommands::Uninstall => serve::handle_uninstall(&config).await,
-            ServeCommands::Url(cmd) => serve::handle_url(&cmd.path, cmd.port),
-        },
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
             ShellCommands::Info { target } => Box::pin(shells::handle_info(&config, &target)).await,
@@ -479,11 +573,14 @@ async fn run_command(cli: Cli) -> Result<()> {
         },
         Commands::Env { command } => match command {
             EnvCommands::List { reveal } => env::commands::handle_list(&config, reveal).await,
-            EnvCommands::Set { key, value, force } => {
-                env::commands::handle_set(&config, &key, &value, force).await
+            EnvCommands::Set { key, value, target } => {
+                env::commands::handle_set(&config, &key, &value, &target).await
             }
-            EnvCommands::Delete { key, force } => {
-                env::commands::handle_delete(&config, &key, force).await
+            EnvCommands::Delete { key, target } => {
+                env::commands::handle_delete(&config, &key, &target).await
+            }
+            EnvCommands::Explain { key, reveal } => {
+                env::commands::handle_explain(&config, &key, reveal).await
             }
             EnvCommands::Get { key } => env::commands::handle_get(&config, &key).await,
             EnvCommands::Run(cmd) => {
@@ -638,7 +735,7 @@ async fn run_command(cli: Cli) -> Result<()> {
                         &cmd.recipients,
                         cmd.set.as_deref(),
                         cmd.from.as_deref(),
-                        cmd.force,
+                        &cmd.target,
                     )
                     .await
                 }
@@ -2863,45 +2960,22 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_unified_serve_commands() {
-        let cli = Cli::try_parse_from(["shine", "serve", "install"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Serve {
-                command: ServeCommands::Install(_)
-            }
-        ));
+    fn cli_rejects_removed_serve_commands() {
+        assert!(Cli::try_parse_from(["shine", "serve"]).is_err());
+        for subcommand in ["install", "start", "status", "url", "uninstall"] {
+            assert!(Cli::try_parse_from(["shine", "serve", subcommand]).is_err());
+        }
+    }
 
-        let cli = Cli::try_parse_from(["shine", "serve", "start"]).unwrap();
+    #[test]
+    fn cli_clears_legacy_serve_after_upgrade() {
+        assert!(Cli::try_parse_from(["shine", "clear"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "clear", "all"]).is_err());
+        let cli = Cli::try_parse_from(["shine", "clear", "serve"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Serve {
-                command: ServeCommands::Start(_)
-            }
-        ));
-
-        let cli = Cli::try_parse_from(["shine", "serve", "status"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Serve {
-                command: ServeCommands::Status
-            }
-        ));
-
-        let cli = Cli::try_parse_from(["shine", "serve", "uninstall"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Serve {
-                command: ServeCommands::Uninstall
-            }
-        ));
-
-        let cli = Cli::try_parse_from(["shine", "serve", "url", "app/surge/custom-rules.sgmodule"])
-            .unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Serve {
-                command: ServeCommands::Url(_)
+            Commands::Clear {
+                command: ClearCommands::Serve
             }
         ));
     }

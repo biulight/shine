@@ -5,6 +5,32 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
+  from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
+  `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery
+  intent into the full Plan fingerprint. Executors use typed intent plus exact ownership/state
+  checks; diagnostic codes remain review output, not deletion authority (ADR 0104).
+- **Static validation codes follow typed error origins.** Missing references, duplicate targets
+  or commands and Bun policy failures carry structured kinds at the failing check. Category
+  names and human-readable error chains cannot change the code; unclassified metadata failures
+  use `invalid_metadata`.
+
+- **Path presentation never changes permission identity.** Planners and App/Shell/Sys action
+  executors use one root-aware encoder, preserving Unix roots, Windows drive roots and UNC
+  prefixes. CLI path labels are applied only after exact permission/provenance matching and never
+  fed back into approval. External-code confirmation wording comes from typed code boundaries;
+  plans without external/overlay code still require normal snapshot-bound approval.
+
+- **Protected uninstall is incomplete in the CLI.** App and Shell report preserved/conflicting
+  resources and failures explicitly, including partial completion, and actual commands return
+  nonzero. A successfully generated dry-run remains zero and never describes its effects as
+  executed. This policy uses typed lifecycle outcomes; Core ownership and approval stay unchanged.
+  App force guidance uses the receipt strategy, while Shell conflicts never imply a force option.
+  Compact uninstall may omit only known unchanged cache notices and empty permission sections;
+  verbose review retains them and every Plan stays approval-bound. Only a typed already-reported
+  CLI failure may suppress the binary's duplicate error; its exit remains nonzero and other
+  errors/unknown diagnostics must remain visible.
+
 - **Frontend approval is a consumed local capability.** Trusted human review retains the exact
   request and opaque configuration revision. Execution consumes a non-cloneable, non-serializable
   handoff and regenerates the Plan before delegating to approved Core methods. Read-only adapters
@@ -170,8 +196,10 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **App execution consumes captured bytes, never mutable source paths.** Generator, script hook,
   artifact and teardown entrypoints use a fresh private category copy per invocation. Relative helpers
-  and the source/overlay path variables refer only to effective captured bytes. Cleanup removes only
-  that invocation's tree, including on spawn failure; persistent output uses the state/cache/HTTP
+  and the source/overlay path variables refer only to effective captured bytes.
+  Without a captured overlay, explicitly inject an empty
+  `SHINE_APP_OVERLAY_DIR` to override both inherited and caller-injected paths. Cleanup removes only
+  that invocation's tree, including on spawn failure; persistent output uses the state/cache
   contract. Planners declare snapshot creation and removal. Unisolated code can still deliberately
   access other host paths; this is source consistency, not a sandbox (ADR 0092).
   External and overlay helper executable flags are captured with the bytes and restored in both
@@ -180,8 +208,25 @@ bugs. Check this list before changing the modules named in each entry.
 - **Process limits apply while draining pipes.** Bounded reads retain at most the configured stdout
   and stderr limits, concurrently with stdin writes and child wait. Overflow, timeout, or I/O failure
   kills and reaps the child; Unix bounded commands use an isolated process group so descendants are
-  terminated too. A post-capture length check is never a memory bound. Drop piped stdin immediately
+  terminated too, including when the run Future is cancelled. A drop guard retains the group ID
+  after the direct child exits; a failed or signalled child terminates the group before waiting for
+  inherited output pipes to close. When inherited stdin is the foreground controlling terminal, execution
+  lends it to the child group and restores the original group on success, error, timeout, or cancellation.
+  Signal masks used for terminal handoff are thread-local and immediately restored.
+  A post-capture length check is never a memory bound. Drop piped stdin immediately
   after writing to deliver EOF; Tokio's Unix `ChildStdin::shutdown` alone does not close the pipe.
+- **Runtime file types and paths must remain valid across execution.** RealHost rejects FIFOs,
+  sockets and devices rather than classifying them as regular files. CLI assembly makes runtime
+  roots lexically absolute before capture/planning, so child cwd changes cannot reinterpret script
+  paths or fixed App path variables. Ordinary source spelling and selected-root symlink policy
+  remain distinct from lexical absolute resolution.
+
+- **Proxy install preflights state before effects.** Parse the same regular-file configuration and
+  manifest bytes that are captured for rollback, and check every launcher for ownership. Recheck
+  each preimage before writing. A reported write failure restores touched files only while their
+  content and mode match installation-owned states; preserve concurrent edits and report incomplete
+  rollback. This does not provide crash recovery or expand lifecycle approval authority.
+
 - **Root links and tree links have different policies.** A selected external/overlay root symlink
   resolves before capture and records its resolved source identity; broken root links fail closed.
   Ordinary directory origins keep their existing spelling for receipt/trust compatibility. Links
@@ -207,8 +252,11 @@ bugs. Check this list before changing the modules named in each entry.
   App/Shell/Sys domain logic never rediscovers them from ambient globals. Distribution-only
   embedded bytes enter from the frontend. Validation additionally receives captured cwd, manifest
   persistence always requires a filesystem host, and Sys inspection/preflight stays read-only;
-  only authorized script execution atomically materializes the category below the Shine runtime
-  root. Core never reopens an external preset tree through `Path` helpers.
+  only authorized script execution materializes a private invocation below the Shine runtime
+  root. Sys invocations never replace a running snapshot, retain captured helper executable intent,
+  and clean only their own tree after success or error. Random invocation IDs are execution details,
+  while creation/removal permissions remain bound to the category runtime root (ADR 0100).
+  Core never reopens an external preset tree through `Path` helpers.
 - **A host abstraction does not weaken ownership checks.** Real and in-memory managed-file paths
   share the same content hash, backup suffix, receipt, user-modification preservation, and
   manifest-version gates. Adding a new host operation must retain those checks rather than treating
@@ -258,7 +306,7 @@ bugs. Check this list before changing the modules named in each entry.
 - **Every runtime manifest is a pre-mutation gate.** App, Shell, and Sys load their own manifest
   before destination/resource, embedded cache, snapshot/render, launcher, receipt, or profile
   mutation. Missing `schema_version` is legacy v0, read-only loads never rewrite it, the next
-  successful mutation writes v1, and an unsupported future version fails first. The inner Sys
+  successful mutation writes Shell v2 or App/Sys v1, and an unsupported future version fails first. The inner Sys
   receipt `version` is independent of `sys-manifest.toml`'s schema version.
 
 - **Uninstall never touches user files.** `presets::remove_prefix` removes only embedded-asset
@@ -274,10 +322,13 @@ bugs. Check this list before changing the modules named in each entry.
   root. An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user
   conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
   format change re-detects installed launchers as stale on upgrade; changing it is a format bump.
-  The content embeds the entry's ordered `env` spec (the `--with` tokens of the
-  `shine env run --no-workspace … -- bun … <script>` wrapper) and its Bun dependency policy, so
-  either declaration changing refreshes the launcher. Ownership/removal still key only on the
+  Legacy content embeds the ordered `env` specs and Bun dependency policy. The `live-bun-v2`
+  template reads those from its installed receipt; exact receipt comparisons still refresh both
+  changes through an approved lifecycle operation. Ownership/removal still key only on the
   marker + target, independent of `env` and dependency mode.
+- **Native CMD script escaping is receipt-versioned.** `native-cmd-v2` preserves apostrophes in
+  a double-quoted PowerShell `-File` argument. Absent format fields retain exact legacy bytes for
+  update, uninstall and recovery; PowerShell expression escaping must not be applied to CMD argv.
 - **Backups use the `<name>.shine.bak` suffix** (`install_core/file_ops.rs::backup_path`).
   Uninstall restores from that exact name; changing the suffix orphans existing backups.
 - **An app source has exactly one manifest destination.** A per-file `dest` overrides the category
@@ -291,9 +342,25 @@ bugs. Check this list before changing the modules named in each entry.
   `70ee910`).
 - **Privileged filesystem transactions must hold the host-provided cross-process admin lock** for
   their complete ownership-check, backup, mutation, and rollback sequence
-  (`PrivilegedFileSystemHost::acquire_privileged_operation`, `$TMPDIR/shine-admin.lock`). Locking
+  (`PrivilegedFileSystemHost::acquire_privileged_operation`, `$TMPDIR/shine-admin.lockfile`). Locking
   individual writes is insufficient because another process could race between backup and replace.
   Self-install uses the same host lock (commit `fbd9c55`).
+- **App mutation serializes the entire manifest lifecycle per configuration directory.** Approved
+  install, uninstall, upgrade, generator refresh, artifact execution, and recovery acquire the
+  `FileSystemHost` operation lock before replanning and approval validation, retaining it through
+  effects and receipt persistence. Unrelated receipt changes must survive; relevant changes while
+  waiting invalidate approval. Acquire this lock before the privileged transaction lock (ADR 0105).
+- **Shell and Sys mutation serialize before approval revalidation.** Each domain holds its own
+  configuration-scoped lifecycle lock through manifest saves and transaction cleanup. Shell recovery,
+  completion, live rendering and standalone receipt updates share the Shell lock; Sys bootstrap,
+  profile changes, managed operations and recovery share the Sys lock. Internal helpers reuse the
+  outer guard. Acquire lifecycle locks before privileged transaction locks (ADR 0106).
+- **Lock timeouts never revoke a live owner's authority.** Operation locks use persistent regular
+  files and OS exclusive locks. A 30-second timeout returns an error; neither timeout nor guard
+  destruction unlinks the file. Process exit releases ownership through the OS (ADR 0105).
+- **An approved App Preserve step must exclude the file before execution assessment.** This
+  retains user-modified Copy/JSON content, backups, and receipts, and prevents its generator from
+  running. Absence from the Action IR does not authorize a fallback write.
 - **No code path should ask the user to manually type `sudo` on Unix.** Frontend interaction
   authorizes through `privilege::ensure_admin`; the real privileged host performs non-interactive
   mutations with the cached authorization. Self-install uses its CLI-only command adapter.
@@ -357,7 +424,8 @@ bugs. Check this list before changing the modules named in each entry.
   Any changed kind, mode, hash, receipt, or claimed path blocks and preserves all three paths.
 - **A forced App removal binds the modified file separately from its receipt.** The applicable
   Phase 4 action is limited to a receipt-owned static Copy regular file whose current
-  hash differs from the receipt hash. The Plan must carry the explicit user-modification override.
+  hash differs from the receipt hash. The Plan must carry `AppForcedRemoval` intent plus the
+  explicit user-modification override diagnostic.
   The journal stores both hashes and the current mode, but never file bytes, before moving the
   modified destination to canonical same-directory rollback material and optionally restoring the
   exact fixed backup. Before receipt commit, recovery reconstructs a missing old receipt and
@@ -368,7 +436,7 @@ bugs. Check this list before changing the modules named in each entry.
   proof.
 - **App upgrade stale pruning is receipt removal, not a generic upgrade write.** A stale static
   Copy or JSON entry may reuse the corresponding removal Action only when its current owned state
-  still matches the receipt and the approved Upgrade Plan carries `app_stale_source_pruned` for the
+  still matches the receipt and the approved Upgrade Plan carries `AppStalePrune` intent for the
   exact target/resource. Planning must bind destination, optional persistent backup, canonical
   rollback material, manifest and journal effects with removal permissions even though the outer
   lifecycle operation is Upgrade. User-modified stale state is preserved, forced removal is not
@@ -552,6 +620,12 @@ bugs. Check this list before changing the modules named in each entry.
   Genuine content changes still write LF. The two sentinel *removal* styles above are unchanged —
   only the comparison layer normalizes.
 - **Paths under `$HOME` are written as `$HOME/...`**, not absolute, for portability.
+  Only that generated HOME prefix may expand. Literal path components must quote or escape dollar signs,
+  backticks, quotes and backslashes according to the selected shell in generated Shell PATH, source and function snippets.
+- **Shell sentinel recovery preserves current profile permissions.** Restoring the owned block
+  retains unrelated user edits and current Unix mode; when the destination is absent, use the
+  recorded previous mode. Atomic replacement stages existing private files with their mode before
+  writing bytes, rather than exposing them until a later chmod.
 - **PowerShell profiles: preserve a leading BOM** when rewriting the file
   (`core/src/runtime/sys_profile/blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
   `Documents/WindowsPowerShell/` profile files so pwsh and Windows PowerShell stay in sync.
@@ -563,11 +637,39 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Config files
 
-- **All `config.toml` writes go through `shine_core::sync_table`**, which preserves user comments.
-  Never serialize the whole file from a struct — that destroys comments.
+- **Trust store mutations serialize the entire read/modify/write cycle.** Grant and revoke acquire
+  the persistent `trust.lock` OS lock before reading grants and retain it through private atomic
+  persistence. Human review happens before locking; only the reviewed code identities are granted.
+
+- **Env precedence is unified and defaults never persist implicitly.** Builtin < overlay baseline <
+  global config < global env file < project config < project env file. Keep raw definitions,
+  effective values and separate description provenance; missing descriptions inherit, explicit empty
+  descriptions suppress catalog fallback. Historical explicit entries remain untouched (ADR 0109).
+- **Env writes select a layer, never follow effective sources.** Default scope is the active project,
+  otherwise global. Implicit writes reject higher definitions even with equal values; explicit
+  targets can maintain shadowed entries and must distinguish saved location from effectiveness.
+  Delete requires a local entry, restores inheritance and never removes another key/layer. Old
+  env `--force` rejects without writing; managed Git mirrors always reject env mutation.
+- **Config writes serialize final snapshot validation and replacement per target.** Env writes,
+  ordinary config saves, proxy config updates and recipient config migrations share the persistent
+  `.<filename>.shine.lock` OS lock in the canonical target parent. Capture encryption inputs before
+  invoking tools and reject changed inputs at commit. Never hold that lock over encryption or
+  human input. This is not a multi-file transaction against external editors/Git. A failed post-save
+  reload reports that saving already occurred. Reject symlink/special targets before opening.
+- **Read-only env commands do not initialize runtime state.** List/get/explain share the runtime
+  resolver but route before advisory work, overlay synchronization and mutable initialization.
+  Explain hides all values unless revealed, never decrypts, and keeps paths out of safe DTOs.
+
+- **Configuration edits preserve comments and unrelated raw definitions.** Whole-table saves use
+  `shine_core::sync_table`; directed env and runtime-schema edits patch `toml_edit` entries. Never
+  replace a loaded file with a serialized effective struct.
 - **Atomic file replacement never pre-deletes its destination.** Rename replaces existing files on
   Windows as well as Unix. Failure cleanup removes only the staged file; the previous configuration
-  or receipt must survive a failed rename.
+  or receipt must survive a failed rename. `RealHost::write_atomic` uses the shared Core
+  persistence implementation: stage with `create_new`, retain existing regular-file permissions,
+  sync file bytes before replacement, and sync the containing directory on Unix or request
+  write-through replacement on Windows. A sync failure after replacement is an operation failure,
+  even when the new bytes are visible; callers must not discard recovery material on that error.
 - **Configuration and env overrides are saved privately.** Global/project configuration and
   `shine.env.toml` writes use `atomic_write_private`: Unix temporary files start as `0600` before
   any content is written, and replacement cannot widen an existing private file's permissions.
@@ -575,6 +677,15 @@ bugs. Check this list before changing the modules named in each entry.
 - **Env proxy installation checks every launcher before writing any.** Windows extensionless,
   `.cmd`, and `.ps1` destinations all require absence or a regular Shine-owned proxy file.
   Foreign files, directories, and symlinks (including dangling links) remain untouched.
+  Uninstall checks the complete launcher set before changing any launcher, rule, or receipt;
+  ownership conflicts preserve all three. Installation rejects `shine` and `shine.exe`, ignoring
+  case, because proxy launchers invoke Shine through PATH and would otherwise recurse.
+- **Proxy launchers bind their installation's runtime directory.** All platform launchers pass
+  an absolute `--config-dir`; a caller's environment cannot silently select another trust/env store.
+  Project discovery still follows the caller cwd. Reinstallation upgrades legacy launchers.
+- **Sudo home lookup uses the OS account database.** Use reentrant account lookup, including
+  macOS Directory Services and Unix NSS, rather than parsing `/etc/passwd`. Copy account strings
+  before dropping the lookup buffer; non-UTF-8 home paths must retain their bytes.
 - **Project-only proxies remain transparent outside the project.** Missing active rules forward
   directly without environment injection. PATH discovery excludes the actual Shine bin directory,
   including directory aliases, while preserving executable names such as `cargo` for dispatch.
@@ -625,14 +736,24 @@ bugs. Check this list before changing the modules named in each entry.
   file, and preserves mode and per-line endings. A missing patchable
   `#!include` is an error, never a successful no-op. Keep parsing and filesystem
   behavior shared by build and teardown; do not duplicate it in an overlay.
-- **Local HTTP resources share one loopback server.** Files that need stable local URLs live under
-  `<shine_dir>/http/` and are served by `shine serve start`; `shine serve install` registers one
-  global user service for that server. Do not add per-app HTTP daemons, ports, or launchd jobs.
+  Missing, unmatched, or nested legacy proxy-group markers fail before any write; an unterminated
+  block must never turn the remaining user content into deletion material.
+- **App persistent output uses state and cache directories.** Artifact Plans and execution create
+  the per-category state/cache directories; the fixed App environment exposes those paths without
+  an HTTP publishing directory. Legacy published files and native service registrations are not
+  automatically removed. See ADR 0107.
+- **Legacy HTTP service cleanup stays reachable after upgrades.** `shine clear serve` routes before
+  configuration initialization and release checks; it only stops/removes the fixed legacy user
+  service, preserves published files, and reports service-manager errors. Repeated cleanup is safe.
+  Bare `clear` requires a target; `state migrate` keeps its versioned migration semantics.
 
 ## Personal tasks
 
 - **`tasks.toml` lives under `Config::shine_dir()`**, so it follows `SHINE_CONFIG_DIR` for free.
   Never resolve it against `presets_dir` or `$HOME` directly — that would break test isolation.
+- **Task mutations lock before reading the whole manifest.** Save (including duplicate checks)
+  and delete hold the persistent `tasks.lock` OS guard through atomic persistence. Reuse the
+  bounded operation-lock port; never unlink the lock to resolve contention. Readers need no lock.
 - **`shine task run` propagates the child exit code verbatim** and never runs the saved argv
   through a shell. Wrapping the failure in an anyhow error (or defaulting to exit 1) would corrupt
   the task's own exit semantics. Shell syntax is opt-in via an explicit saved `sh -c '...'`.
@@ -685,6 +806,14 @@ bugs. Check this list before changing the modules named in each entry.
   target recorded in `shell-manifest.toml`; the renderer writes only below `rendered_dir`, stores
   no env values in the manifest, uses atomic replacement, and fails rather than executing stale
   output after a transform error.
+- **Single-process Live Bun launch is receipt-bound.** Schema-2 Shell receipts record
+  `live-bun-v2` and an explicit installation root only for transformed, nonsourced Live Bun commands.
+  Legacy receipts reconstruct the exact old templates. Format/root affect Plan and Action receipt
+  identity, update, uninstall and recovery; old receipt readers reject new journal fields.
+  Preparation validates one unique canonical record and its regular, bounded paths under the same
+  operation lock, then renders once. CLI drops captured runtime inputs before declared env decryption
+  and Bun wait, using one layered Config and no workspace or version lookup. Rendering and launch
+  are not jointly transactional; output can change after lock release (ADR 0102).
 - **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
   files, manifest entries, and managed launchers, including legacy launchers pointing into the
   external tree. The external presets and overlay directories remain untouched.
@@ -707,6 +836,19 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Dotenv import is private before writing pending plaintext.** Generated workspace and source
+  files use `atomic_write_private`, including forced replacements and unmarked imported values.
+- **Forced identity generation preserves the old identity until validation succeeds.** Generate
+  into an absent path inside a same-directory private staging directory, restrict the file to 0600
+  on Unix, extract its recipient, then use synced replacement. Never delete the old key before
+  invoking keygen. Normal initialization retains keygen's exclusive-create semantics.
+
+- **Sealing replaces only regular source files.** Reject symbolic links before capturing any
+  sources and recheck before replacement; on Unix require exactly one hard link. Atomic rename
+  over a linked path must not report plaintext cleared while another alias still holds it.
+- **GPG output belongs to the caller.** Encryption and decryption pass `--output -`, overriding
+  local option-file destinations. Successful encryption with empty stdout is an error and must
+  not replace a pending-plaintext source with an empty payload.
 - **Encryption drains output while feeding plaintext.** GPG/age can write before reading all
   input, so stdin writing, stdout/stderr draining, and child waiting must proceed concurrently.
   I/O errors terminate and reap the child; encryption callers enable kill-on-drop for cancellation.
@@ -755,22 +897,33 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## SSH transfer
 
-- **`ssh::agent` must not trust wire-supplied fields beyond the session token.** The token is the
-  only authorization check on a `PutFile`/`GetFile`/`Status` request, but it travels to the remote
-  host as plain argv/environ (`env SHINE_SSH_TOKEN=...` in `ssh::mod`), so it can leak to other
-  local users there via `ps eww`. Any field documented as constrained (e.g. `PutFile.filename` is
-  meant to always be a bare basename) must be validated as such where it's consumed
-  (`agent::ensure_single_path_component`), not just produced correctly by the one trusted
-  `remote_client` implementation. `dest_hint`/`source_hint` are expanded with `~`-only
-  substitution (`home::tilde_expand`), never the full `${VAR}` expansion used for locally-typed
-  paths elsewhere, so a forged hint can't pull values out of the local agent's own environment.
+- **`ssh::agent` must not trust wire-supplied fields beyond the session token.** Transfer/Status
+  tokens travel to the remote host as plain argv/environ and may leak there. Validate remote specs
+  at consumption, place them only after argv's option separator, and use tilde-only expansion for
+  local hints rather than expanding the agent's environment. Reconnection options come only from
+  the locally captured session context; tokens never authorize broker decryption.
+- **Transfer failure and cancellation stop child processes.** Detect a closed control connection
+  even while a child is silent or has closed its output pipes. Error paths terminate and reap the
+  child; cancellation has a drop guard. On Unix, isolate and terminate the whole process group,
+  retaining its identity even if the parent has exited while descendants still hold pipes.
 - **Per-connection transfer tasks must stay tracked in `agent::ConnectionTasks`, not bare
   `tokio::spawn`.** `agent_handle` (the accept loop's `JoinHandle`) does not cover them —
   `agent_handle.abort()` only stops new connections, never an in-flight transfer. `handle_ssh`
   must drain `ConnectionTasks` before removing the session directory or exiting, so a still-running
   transfer's own error-path cleanup gets to finish instead of being cut off by process exit.
+- **SSH argv is not SCP argv.** SCP reconnect options come only from the local session context;
+  translate port, user, and control-path values to connection settings, retain supported
+  connection options, and omit session/forwarding flags. Unknown options fail before transfer.
+- **Rsync flags must work with the system implementation.** Availability via `--version` does not
+  imply support for modern GNU options. Use per-file `--progress`, supported by macOS's rsync
+  2.6.9-compatible implementation, rather than `--info=progress2`.
 
 ## SSH secret broker
+
+- **Policy writers share a persistent `ssh-secret-broker.lock`.** Add, remove, local update and
+  remote enrollment lock before the final store read and retain the guard through private atomic
+  persistence. Updates recheck the exact reviewed target after confirmation; a changed or removed
+  target fails rather than being restored, while unrelated policies retain their latest state.
 
 - **The session token is transport correlation, not broker authorization.** A remote peer that
   learns `SHINE_SSH_TOKEN` still must satisfy the session's exact direct allow-list or an exact
@@ -789,6 +942,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **Workspace files are read once per broker run.** The remote snapshot sent for authorization and
   the values later merged into the child environment derive from the same in-memory bytes; never
   re-open a source after the local agent approves its hash.
+- **Broker values preserve complete source order across plain and secret declarations.** A later
+  secret hides earlier plain values even without release; later plain values suppress earlier
+  secrets in both the local response and remote merge. Only the winning approved secret source is
+  released. Policy identities still bind every source and the complete declared-secret union.
 - **Broker policies are local security state.** `<shine_dir>/ssh-secret-broker.toml` must not be a
   symlink, must be owned by the current Unix user, and must have mode `0600`; writes use an atomic
   same-directory temporary file. Remote enrollment is allowed only in the explicit trusted mode
@@ -804,24 +961,39 @@ bugs. Check this list before changing the modules named in each entry.
   those exact values inside the standard bracketed-paste wrapper; arbitrary ANSI/control-decorated
   input remains a rejection.
 
-## Local HTTP server
+## Missing App sources
 
-- **`serve::handle_start`/`handle_install` have no authentication of their own.** Binding
-  loopback-only (`127.0.0.1`) keeps the server off the network, but it does not stop other local
-  OS user accounts on a shared/multi-user machine from connecting and reading any file under
-  `serve::http_root()` (`~/.shine/http/`), bypassing the filesystem permissions that would
-  otherwise keep them out of this user's home directory. Preset authors must never route secrets
-  or other sensitive content through a `dest` that resolves under `~/.shine/http`.
-- **Persistent serve registrations are per-user and preserve the selected Shine directory.**
-  launchd, systemd, and Windows Task Scheduler entries must run without administrator privileges
-  and pass the resolved `shine_dir` back through `--config-dir`; background startup cannot depend on
-  the installing shell retaining `SHINE_CONFIG_DIR` or its current directory.
-- **launchd log paths must stay under the user's own `shine_dir`, never a shared path like
-  `/tmp`.** `serve::launchd_log_dir` writes to `shine_dir/run/http/serve.{out,err}.log`, kept out
-  of `http_root()` itself so log contents are never servable over HTTP. Two OS user accounts each
-  running `shine serve install` would otherwise collide on the same fixed `/tmp/<label>.log` path.
+- **App installation ownership survives source removal.** Installed categories remain visible
+  even when their effective category or source file disappears. List/update/upgrade explain
+  preservation and point to receipt-based uninstall. Uninstall selects the original category's
+  receipts, never another category's matching destination; missing external metadata must not
+  block receipt-owned removal. JSON ownership comparisons use the recorded managed keys when
+  source metadata is unavailable. Dry-run preserves files and receipts and reports user-modified
+  content as preserved. Missing destinations clear receipts on execution while leaving recorded
+  backups in place. Unavailable source code cannot supply teardown.
 
 ## Update check
+
+- **Maintenance advisories are independent of release and safety gates.** Four check frequencies
+  (every invocation, minute, hour, day) are separate from execution cost and per-action reminder
+  cooldown. Only ordinary terminal-stderr invocations run automatic maintenance; help, completion,
+  automation/authoring, theme, migration, cleanup, and recovery routes stay outside it. Explicit
+  `state check` is config-independent and synchronous. Required patch upgrades keep their existing
+  `update_check::maybe_notify` policy and must never be silently converted to eventual checks.
+- **Maintenance output forms a distinct stderr block.** Findings and explicit incomplete-check
+  warnings share bold yellow emphasis using stderr color support (including `NO_COLOR`). Append
+  one blank line after a nonempty block, never after an empty or cooldown-suppressed result.
+- **Heavy advisory checks outlive the calling CLI without inheriting its terminal.** The detached
+  worker has null stdio, performs only registered read-only probes, and writes bounded typed cache
+  results. Normal invocations only display results present at their start. User/config/native scope,
+  build and rule revision isolate caches; OS locks, pending tickets, leases, timeouts and failure
+  backoff bound duplicate work. Cache/worker failures cannot fail ordinary commands.
+- **Cleanup invalidates in-flight maintenance results.** `clear serve` advances the cache generation
+  and clears its action state in the selected config scope. A worker may publish only when both its
+  generation and per-rule ticket/revision still match. Never hold a state lock during native probes
+  or unlink an OS lock file while another process may hold it. A superseded explicit `state check`
+  reports a retry warning and exits nonzero without a completion summary or stale cache writes;
+  automatic advisories silently discard superseded results. See ADR 0108.
 
 - **A failed or rate-limited version check must never fail the user's command** (`main.rs`,
   commits `605fdd8`, `f033a25`). Network errors are tolerated; rate-limit cooldowns are cached.

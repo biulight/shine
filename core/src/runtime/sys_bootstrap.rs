@@ -308,15 +308,24 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 // preflight and denied authorization remain read-only.
                 let execution_root = self.materialize_sys_preset(&request.os_id).await?;
                 let script = execution_root.join(path);
-                self.run_sys_script(
-                    &request.os_id,
-                    &script,
-                    &execution_root,
-                    &request.sys_shell,
-                    item,
-                    requires_admin,
-                )
-                .await?
+                let result = self
+                    .run_sys_script(
+                        &request.os_id,
+                        &script,
+                        &execution_root,
+                        &request.sys_shell,
+                        item,
+                        requires_admin,
+                    )
+                    .await;
+                let cleanup = self.host().remove_dir_all(&execution_root).await;
+                match (result, cleanup) {
+                    (Err(error), _) => return Err(error),
+                    (Ok(_), Err(error)) => {
+                        return Err(error.into_anyhow("removing Sys execution snapshot"));
+                    }
+                    (Ok(execution), Ok(())) => execution,
+                }
             }
         };
         if !execution.success {

@@ -195,6 +195,15 @@ async fn handle_install_with_reporter(
                     ));
                 }
             }
+            AppFileAction::UserModified => {
+                skipped += 1;
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stderr(report::user_modified_kept_text(
+                        config,
+                        &file.destination,
+                    )));
+            }
             AppFileAction::Failed => {
                 if let Some(error) = &file.error {
                     observer

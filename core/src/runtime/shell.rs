@@ -1,7 +1,8 @@
 use super::launcher::{
     prepare_launcher_resources, prepared_launcher_resource_is_exact,
-    probe_managed_command_with_host,
+    probe_managed_command_with_host, uses_native_cmd_literal_path,
 };
+use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind};
 use super::shell_action_executor::{
     ShellCacheRemoval, ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation,
     ShellLauncherRemoval, ShellLauncherUpdate, ShellLegacyLauncherRemoval,
@@ -53,7 +54,9 @@ struct ShellFileToml {
 }
 
 pub const SHELL_MANIFEST_FILE: &str = "shell-manifest.toml";
-pub const SHELL_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const SHELL_MANIFEST_SCHEMA_VERSION: u32 = 2;
+pub const LIVE_BUN_LAUNCHER_FORMAT: &str = "live-bun-v2";
+pub const NATIVE_CMD_LAUNCHER_FORMAT: &str = "native-cmd-v2";
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -100,6 +103,30 @@ pub struct BunRuntimeSpec {
 }
 
 pub(crate) fn shell_link_spec_from_manifest_entry(entry: &ShellManifestEntry) -> Result<LinkSpec> {
+    let live_launch_config = match (&entry.launcher_format, &entry.launcher_config_dir) {
+        (None, None) => None,
+        (Some(format), None)
+            if format == NATIVE_CMD_LAUNCHER_FORMAT
+                && entry.runtime == "native"
+                && entry.source_path.extension() == Some(std::ffi::OsStr::new("ps1")) =>
+        {
+            None
+        }
+        (Some(format), Some(config))
+            if format == LIVE_BUN_LAUNCHER_FORMAT
+                && entry.mode == ExternalShellMode::Live
+                && entry.runtime == "bun"
+                && !entry.transforms.is_empty()
+                && !entry.needs_source
+                && config.is_absolute()
+                && !config
+                    .components()
+                    .any(|part| part == std::path::Component::ParentDir) =>
+        {
+            Some(config.clone())
+        }
+        _ => bail!("unsupported or inconsistent Shell launcher format in receipt"),
+    };
     let runtime = match entry.runtime.as_str() {
         "native" => LinkRuntime::Native,
         "bun" => LinkRuntime::Bun,
@@ -118,6 +145,10 @@ pub(crate) fn shell_link_spec_from_manifest_entry(entry: &ShellManifestEntry) ->
     let render_target = (entry.mode == ExternalShellMode::Live && !entry.transforms.is_empty())
         .then(|| format!("shell/{}/{}", entry.category, entry.command));
     Ok(LinkSpec {
+        native_cmd_literal_path: entry.launcher_format.as_deref()
+            == Some(NATIVE_CMD_LAUNCHER_FORMAT),
+        live_launch_config,
+
         source,
         link_name: OsString::from(&entry.command),
         runtime,
@@ -362,6 +393,22 @@ fn push_inspection_change(
     }
 }
 
+impl<H> CoreRuntime<H> {
+    pub(crate) fn live_bun_launcher_config(
+        &self,
+        runtime: LinkRuntime,
+        transforms: bool,
+        needs_source: bool,
+    ) -> Option<PathBuf> {
+        (self.context().is_external_presets
+            && self.context().external_shell_mode == ExternalShellMode::Live
+            && runtime == LinkRuntime::Bun
+            && transforms
+            && !needs_source)
+            .then(|| self.context().shine_dir.clone())
+    }
+}
+
 impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     pub async fn installed_shell_source_commands(
         &self,
@@ -392,6 +439,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     }
 
     pub async fn install_shell_completion(&self, force: bool) -> Result<ShellCompletionReport> {
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         let source_commands = self.installed_shell_source_commands(None).await?;
         let profile = self
             .install_shell_profile(&self.context().shell_config_paths, force, &source_commands)
@@ -479,7 +527,29 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     && self.context().external_shell_mode == ExternalShellMode::Live
                     && !effective_transforms.is_empty())
                 .then(|| format!("shell/{}/{}", category.name, file.command_name));
-                let link_current = if link_exists {
+                let live_launch_config = self.live_bun_launcher_config(
+                    file.runtime,
+                    !effective_transforms.is_empty(),
+                    file.needs_source,
+                );
+                let link_current = if let Some(config) = &live_launch_config {
+                    let spec = LinkSpec {
+                        source: effective_source.clone(),
+                        link_name: file.command_name.clone().into(),
+                        runtime: file.runtime,
+                        bun_dependencies: bun.dependency_mode,
+                        env: runtime_env.clone(),
+                        render_target: render_target.clone(),
+                        native_cmd_literal_path: false,
+                        live_launch_config: Some(config.clone()),
+                    };
+                    let mut exact = true;
+                    for resource in prepare_launcher_resources(&self.context().bin_dir, &spec) {
+                        exact &=
+                            prepared_launcher_resource_is_exact(self.host(), &resource).await?;
+                    }
+                    exact
+                } else if link_exists {
                     link_is_current_with_host(
                         self.host(),
                         &link_path,
@@ -528,6 +598,13 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     LinkRuntime::Native => "native",
                     LinkRuntime::Bun => "bun",
                 };
+                let desired_launcher_format = if live_launch_config.is_some() {
+                    Some(LIVE_BUN_LAUNCHER_FORMAT)
+                } else if uses_native_cmd_literal_path(file.runtime, &effective_source) {
+                    Some(NATIVE_CMD_LAUNCHER_FORMAT)
+                } else {
+                    None
+                };
                 let manifest_current = (!self.context().is_external_presets && entry.is_none())
                     || entry.is_some_and(|entry| {
                         entry.mode == self.context().external_shell_mode
@@ -539,8 +616,19 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                             && entry.transforms == effective_transforms
                             && entry.env == runtime_env
                             && entry.needs_source == file.needs_source
+                            && entry.launcher_config_dir == live_launch_config
+                            && entry.launcher_format.as_deref() == desired_launcher_format
                     });
                 if let Some(entry) = entry {
+                    push_inspection_change(
+                        &mut changes,
+                        "launcher format",
+                        entry
+                            .launcher_format
+                            .clone()
+                            .unwrap_or_else(|| "legacy".into()),
+                        desired_launcher_format.unwrap_or("legacy").into(),
+                    );
                     if entry.source_path != source_path {
                         changes.push(InspectionChange::SourceRelocated {
                             from: entry.source_path.clone(),
@@ -823,11 +911,13 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let mut commands = BTreeSet::new();
             for file in &category.files {
                 if !commands.insert(file.command_name.clone()) {
-                    bail!(
-                        "shell/{} declares command `{}` more than once",
-                        category.name,
-                        file.command_name
-                    );
+                    bail!(MetadataDiagnosticError::new(
+                        MetadataDiagnosticKind::DuplicateCommand,
+                        format!(
+                            "shell/{} declares command `{}` more than once",
+                            category.name, file.command_name
+                        ),
+                    ));
                 }
                 if file.runtime == LinkRuntime::Bun {
                     self.shell_bun_runtime_spec(&category.name, file)?;
@@ -1328,7 +1418,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             .extend(launcher_updates.iter().map(|(_, _, spec, _)| {
                 command_path_for_name(&self.context().bin_dir, &spec.link_name)
             }));
-        self.update_shell_manifest(&manifest_categories, scope)
+        self.update_shell_manifest_unlocked(&manifest_categories, scope)
             .await?;
         if let Some(execution) = &shell_execution {
             self.mark_shell_launcher_receipt_committed(execution)
@@ -2197,6 +2287,13 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 };
                 let bun = self.shell_bun_runtime_spec(&category.name, file)?;
                 specs.push(LinkSpec {
+                    native_cmd_literal_path: uses_native_cmd_literal_path(file.runtime, &effective),
+                    live_launch_config: self.live_bun_launcher_config(
+                        file.runtime,
+                        transforms,
+                        file.needs_source,
+                    ),
+
                     source: effective,
                     link_name: OsString::from(&file.command_name),
                     runtime: file.runtime,
@@ -2358,6 +2455,17 @@ impl<H> CoreRuntime<H> {
     }
 
     pub fn shell_bun_runtime_spec(
+        &self,
+        category: &str,
+        file: &ShellFile,
+    ) -> Result<BunRuntimeSpec> {
+        self.shell_bun_runtime_spec_inner(category, file)
+            .map_err(|error| {
+                MetadataDiagnosticError::wrap(MetadataDiagnosticKind::BunDependencyPolicy, error)
+            })
+    }
+
+    fn shell_bun_runtime_spec_inner(
         &self,
         category: &str,
         file: &ShellFile,
@@ -2629,6 +2737,15 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         categories: &[ShellCategory],
         scope: ShellManifestUpdateScope,
     ) -> Result<()> {
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
+        self.update_shell_manifest_unlocked(categories, scope).await
+    }
+
+    async fn update_shell_manifest_unlocked(
+        &self,
+        categories: &[ShellCategory],
+        scope: ShellManifestUpdateScope,
+    ) -> Result<()> {
         let mut manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let previous = manifest.clone();
@@ -2649,32 +2766,12 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         for category in categories {
             for file in &category.files {
                 let entry = self.shell_manifest_entry(category, file).await?;
-                let transforms = &entry.transforms;
-                let effective_source = if transforms.is_empty() {
-                    entry.source_path.as_path()
-                } else {
-                    entry.rendered_path.as_path()
-                };
-                let bun = self.shell_bun_runtime_spec(&category.name, file)?;
-                let render_target = (self.context().is_external_presets
-                    && self.context().external_shell_mode == ExternalShellMode::Live
-                    && !transforms.is_empty())
-                .then(|| format!("shell/{}/{}", category.name, file.command_name));
-                let link = super::command_path_for_name(
-                    &self.context().bin_dir,
-                    std::ffi::OsStr::new(&file.command_name),
-                );
-                if !link_is_current_with_host(
-                    self.host(),
-                    &link,
-                    effective_source,
-                    file.runtime,
-                    bun.dependency_mode,
-                    &entry.env,
-                    render_target.as_deref(),
-                )
-                .await?
-                {
+                let spec = shell_link_spec_from_manifest_entry(&entry)?;
+                let mut current = true;
+                for resource in prepare_launcher_resources(&self.context().bin_dir, &spec) {
+                    current &= prepared_launcher_resource_is_exact(self.host(), &resource).await?;
+                }
+                if !current {
                     continue;
                 }
                 entries.push(entry);
@@ -2746,6 +2843,19 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             .collect::<Vec<_>>();
         let bun = self.shell_bun_runtime_spec(&category.name, file)?;
         Ok(ShellManifestEntry {
+            launcher_format: self
+                .live_bun_launcher_config(file.runtime, !transforms.is_empty(), file.needs_source)
+                .map(|_| LIVE_BUN_LAUNCHER_FORMAT.to_string())
+                .or_else(|| {
+                    uses_native_cmd_literal_path(file.runtime, &source_path)
+                        .then(|| NATIVE_CMD_LAUNCHER_FORMAT.to_string())
+                }),
+            launcher_config_dir: self.live_bun_launcher_config(
+                file.runtime,
+                !transforms.is_empty(),
+                file.needs_source,
+            ),
+
             category: category.name.clone(),
             command: file.command_name.clone(),
             mode: if self.context().is_external_presets {
@@ -2774,6 +2884,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
     where
         H: PrivilegedFileSystemHost,
     {
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         let _guard = self.host().acquire_privileged_operation().await?;
         if self.shell_operation_journal_bytes().await?.is_some() {
             bail!("an interrupted Shell operation requires explicit recovery");
@@ -2783,6 +2894,14 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         let entry = manifest
             .find(target)
             .with_context(|| format!("live shell command is not installed: {target}"))?;
+        self.render_live_shell_entry(entry, target).await
+    }
+
+    pub(super) async fn render_live_shell_entry(
+        &self,
+        entry: &ShellManifestEntry,
+        target: &str,
+    ) -> Result<()> {
         if entry.mode != ExternalShellMode::Live {
             bail!("shell command is not installed in live mode: {target}");
         }
@@ -2832,6 +2951,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         category: Option<&str>,
         command: Option<&str>,
     ) -> Result<()> {
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         let mut manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         match (category, command) {
@@ -3048,10 +3168,13 @@ impl<H> CoreRuntime<H> {
                         .with_context(|| format!("invalid permissions in {metadata_path}"))?;
                 }
                 let logical = format!("{prefix}{}", shell_logical_path(&source_rel));
-                let bytes = self.presets().get(&logical).with_context(|| {
-                    format!(
-                        "shell/{name}/shine.toml references missing file: {}",
-                        source_rel.display()
+                let bytes = self.presets().get(&logical).ok_or_else(|| {
+                    MetadataDiagnosticError::new(
+                        MetadataDiagnosticKind::MissingReference,
+                        format!(
+                            "shell/{name}/shine.toml references missing file: {}",
+                            source_rel.display()
+                        ),
                     )
                 })?;
                 let description = entry.description.clone().map_or_else(
@@ -3100,10 +3223,13 @@ impl<H> CoreRuntime<H> {
         let mut commands = BTreeSet::new();
         for file in &files {
             if !commands.insert(file.command_name.clone()) {
-                bail!(
-                    "shell/{name} declares command `{}` more than once",
-                    file.command_name
-                );
+                bail!(MetadataDiagnosticError::new(
+                    MetadataDiagnosticKind::DuplicateCommand,
+                    format!(
+                        "shell/{name} declares command `{}` more than once",
+                        file.command_name
+                    ),
+                ));
             }
         }
         Ok(ShellCategory {
@@ -3610,14 +3736,28 @@ pub(crate) async fn load_shell_manifest_with_host(
         Err(error) if error.is_not_found() => ShellManifest::default(),
         Err(error) => return Err(error.into_anyhow("failed to read shell manifest")),
     };
+    normalize_shell_manifest(&mut manifest)?;
+    Ok(manifest)
+}
+
+pub(crate) fn normalize_shell_manifest(manifest: &mut ShellManifest) -> Result<()> {
     match manifest.schema_version {
-        0 => manifest.schema_version = SHELL_MANIFEST_SCHEMA_VERSION,
+        0 | 1 => {
+            if manifest
+                .entries
+                .iter()
+                .any(|entry| entry.launcher_format.is_some() || entry.launcher_config_dir.is_some())
+            {
+                bail!("new Shell launcher format requires manifest schema version 2");
+            }
+            manifest.schema_version = SHELL_MANIFEST_SCHEMA_VERSION;
+        }
         SHELL_MANIFEST_SCHEMA_VERSION => {}
         version => bail!(
             "shell manifest schema version {version} is newer than this Shine supports ({SHELL_MANIFEST_SCHEMA_VERSION})"
         ),
     }
-    Ok(manifest)
+    Ok(())
 }
 
 async fn save_shell_manifest_with_host(
@@ -3782,6 +3922,10 @@ pub fn parse_shell_lifecycle_target(target: &str) -> Result<ShellTarget<'_>> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ShellManifestEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_config_dir: Option<PathBuf>,
     pub category: String,
     pub command: String,
     pub mode: ExternalShellMode,
@@ -3876,7 +4020,7 @@ impl ShellManifest {
     }
 }
 
-fn canonical_target(entry: &ShellManifestEntry) -> String {
+pub(super) fn canonical_target(entry: &ShellManifestEntry) -> String {
     format!("shell/{}/{}", entry.category, entry.command)
 }
 
@@ -3888,6 +4032,135 @@ mod tests {
         FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost,
         RuntimeContext, RuntimePlatform,
     };
+
+    #[test]
+    fn native_cmd_receipts_keep_legacy_format_and_validate_new_format() {
+        let mut entry: ShellManifestEntry = toml::from_str(
+            r#"
+category = "demo"
+command = "run"
+mode = "snapshot"
+source_path = "C:/Users/O'Connor/.shine/presets/shell/demo/run.ps1"
+rendered_path = "C:/Users/O'Connor/.shine/rendered/shell/demo/run.ps1"
+runtime = "native"
+content_hash = 1
+"#,
+        )
+        .unwrap();
+        assert!(
+            !shell_link_spec_from_manifest_entry(&entry)
+                .unwrap()
+                .native_cmd_literal_path
+        );
+        entry.launcher_format = Some(NATIVE_CMD_LAUNCHER_FORMAT.into());
+        let round_trip: ShellManifestEntry =
+            toml::from_str(&toml::to_string(&entry).unwrap()).unwrap();
+        assert!(
+            shell_link_spec_from_manifest_entry(&round_trip)
+                .unwrap()
+                .native_cmd_literal_path
+        );
+        entry.runtime = "bun".into();
+        assert!(shell_link_spec_from_manifest_entry(&entry).is_err());
+        entry.runtime = "native".into();
+        entry.source_path = "C:/other.sh".into();
+        assert!(shell_link_spec_from_manifest_entry(&entry).is_err());
+        entry.source_path = "C:/other.ps1".into();
+        entry.launcher_config_dir = Some("C:/state".into());
+        assert!(shell_link_spec_from_manifest_entry(&entry).is_err());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_cmd_legacy_receipt_upgrades_and_uninstalls_through_approval() {
+        let host = InMemoryHost::new();
+        let home = std::env::temp_dir().join("shine-native-cmd-O'Connor");
+        let shine = home.join(".shine");
+        let bin = shine.join("bin");
+        let mut context = RuntimeContext::isolated(
+            home,
+            shine.clone(),
+            shine.join("presets"),
+            bin.clone(),
+            RuntimePlatform::Windows,
+        );
+        context.shell = ShellType::PowerShell;
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'run.ps1'\ntarget = 'run'\n".to_vec(),
+            )
+            .file("shell/demo/run.ps1", b"Write-Output 'demo'\n".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(host.clone(), context, snapshot);
+        runtime
+            .install_shells(ShellLifecycleRequest {
+                target: Some("demo/run".into()),
+                dry_run: false,
+                force: false,
+            })
+            .await
+            .unwrap();
+        let mut manifest = ShellManifest::load(&host, &shine).await.unwrap();
+        let entry = manifest.entries.first_mut().unwrap();
+        assert_eq!(
+            entry.launcher_format.as_deref(),
+            Some(NATIVE_CMD_LAUNCHER_FORMAT)
+        );
+        entry.launcher_format = None;
+        let legacy_spec = shell_link_spec_from_manifest_entry(entry).unwrap();
+        let legacy_resources = prepare_launcher_resources(&bin, &legacy_spec);
+        let cmd = bin.join("run.cmd");
+        for resource in legacy_resources {
+            if let super::super::launcher::PreparedLauncherResource::File {
+                destination,
+                bytes,
+                ..
+            } = resource
+            {
+                host.put_file(destination, bytes);
+            }
+        }
+        manifest.save(&host, &shine).await.unwrap();
+        let before = host.read(&cmd).await.unwrap();
+        assert!(String::from_utf8_lossy(&before).contains("O''Connor"));
+        let request = super::super::ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo/run".into()),
+            force: false,
+            purge: false,
+            input_versions: Default::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .upgrade_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        let after = host.read(&cmd).await.unwrap();
+        assert_ne!(before, after);
+        assert!(!String::from_utf8_lossy(&after).contains("O''Connor"));
+        let manifest = ShellManifest::load(&host, &shine).await.unwrap();
+        assert_eq!(
+            manifest.entries[0].launcher_format.as_deref(),
+            Some(NATIVE_CMD_LAUNCHER_FORMAT)
+        );
+        let request = super::super::ShellPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo/run".into()),
+            force: false,
+            purge: false,
+            input_versions: Default::default(),
+        };
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(request.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        assert!(host.metadata(&cmd).await.is_err());
+    }
 
     #[test]
     fn shell_permission_defaults_apply_and_entries_can_override_them() {
@@ -4028,7 +4301,7 @@ commands = ["git"]
             host.read(&shine_dir.join("shell-manifest.toml"))
                 .await
                 .unwrap()
-                .starts_with(b"schema_version = 1")
+                .starts_with(b"schema_version = 2")
         );
         assert_eq!(
             runtime.installed_shell_source_commands(None).await.unwrap(),
@@ -4128,7 +4401,7 @@ commands = ["git"]
             host.read(&shine_dir.join(SHELL_MANIFEST_FILE))
                 .await
                 .unwrap()
-                .starts_with(b"schema_version = 1")
+                .starts_with(b"schema_version = 2")
         );
     }
 
@@ -4231,10 +4504,10 @@ commands = ["git"]
             tokio::fs::read_to_string(&path)
                 .await
                 .unwrap()
-                .contains("schema_version = 1")
+                .contains("schema_version = 2")
         );
 
-        tokio::fs::write(&path, "schema_version = 2\nentries = []\n")
+        tokio::fs::write(&path, "schema_version = 3\nentries = []\n")
             .await
             .unwrap();
         assert!(

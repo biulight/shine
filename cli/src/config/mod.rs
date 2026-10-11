@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 
 mod discovery;
 mod env_layer;
+mod env_resolution;
+pub(crate) mod env_write;
+pub use env_resolution::{ConfigInput, EnvLayer, EnvLayerKind};
+pub use env_write::{EnvWriteOptions, EnvWritePlan};
 mod load;
 mod save;
 
@@ -90,10 +94,10 @@ pub struct Config {
     /// True when this config was loaded from a project presets config.
     #[serde(skip)]
     is_project_config: bool,
-    /// Original sparse project table plus the effective config at load time.
-    /// Used to avoid materializing inherited global values when saving.
+    /// Original active file plus the effective config at load time.
+    /// Used to avoid materializing inherited env and configuration values when saving.
     #[serde(skip)]
-    project_save_state: Option<ProjectSaveState>,
+    save_state: Option<ConfigSaveState>,
     /// Whether the active project explicitly replaces the global age identity set.
     #[serde(skip)]
     project_overrides_age_identities: bool,
@@ -218,10 +222,7 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub age_identities: Vec<String>,
     /// Environment variables substituted into template-enabled presets.
-    #[serde(
-        default = "default_env_map",
-        deserialize_with = "deserialize_env_values"
-    )]
+    #[serde(default, deserialize_with = "deserialize_env_values")]
     pub env: BTreeMap<String, String>,
     /// Command-specific, explicitly allow-listed secret injection rules.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -229,17 +230,21 @@ pub struct Config {
     /// Per-variable descriptions read from detailed `[env]` entries.
     #[serde(skip)]
     pub env_descriptions: BTreeMap<String, String>,
-    /// Which env override file (if any) currently supplies each key's effective
-    /// value. Only override files populate this — `config.toml [env]` layers
-    /// never do, since a plain write there is always effective unless shadowed
-    /// by one of these. Used to detect when `env set`/`encrypt`/`delete` would
-    /// otherwise silently write a value that an override file keeps shadowing.
+    /// Effective value sources, including builtin and configuration layers.
     #[serde(skip)]
     pub env_override_sources: BTreeMap<String, EnvOverrideSource>,
+    #[serde(skip)]
+    pub env_description_sources: BTreeMap<String, EnvLayerKind>,
+    #[serde(skip)]
+    pub env_layers: Vec<EnvLayer>,
+    #[serde(skip)]
+    pub config_inputs: Vec<ConfigInput>,
+    #[serde(skip)]
+    pub(crate) env_pending: BTreeMap<String, Option<String>>,
 }
 
-/// Identifies the override file (global/overlay/project `shine.env.toml`) that
-/// currently supplies a given env key's effective value, if any.
+/// Identifies the layer currently supplying an env key's effective value.
+/// Builtin sources have an empty path; file sources retain their actual path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvOverrideSource {
     pub path: PathBuf,
@@ -253,13 +258,14 @@ pub struct EnvOverrideSource {
     pub is_managed_overlay: bool,
 }
 
-/// Which override-file layer supplied an env key's effective value. Ordered
-/// low-to-high by precedence (a later layer shadows an earlier one), matching
-/// the apply order in `Config::load_or_init`.
+/// Compatibility source labels; precedence is defined by `EnvLayerKind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnvOverrideKind {
     /// Global `<shine_dir>/shine.env.toml`.
     Global,
+    Builtin,
+    GlobalConfig,
+    ProjectConfig,
     /// Overlay `<overlay_dir>/shine.env.toml` (managed-git or manual overlay).
     Overlay,
     /// Project `<project_root>/shine.env.toml`.
@@ -267,7 +273,7 @@ pub enum EnvOverrideKind {
 }
 
 #[derive(Clone, Debug)]
-struct ProjectSaveState {
+struct ConfigSaveState {
     original: toml::Table,
     loaded: toml::Table,
 }
@@ -324,7 +330,7 @@ impl Config {
         Self {
             config_path: dir.join("config.toml"),
             is_project_config: false,
-            project_save_state: None,
+            save_state: None,
             project_overrides_age_identities: false,
             shine_dir: dir.to_path_buf(),
             presets_dir: dir.join("presets"),
@@ -356,6 +362,10 @@ impl Config {
             env_proxy: Vec::new(),
             env_descriptions: BTreeMap::new(),
             env_override_sources: BTreeMap::new(),
+            env_description_sources: BTreeMap::new(),
+            env_layers: Vec::new(),
+            config_inputs: Vec::new(),
+            env_pending: BTreeMap::new(),
         }
     }
 
@@ -434,9 +444,7 @@ impl Config {
         }
     }
 
-    /// Which override file (if any) currently supplies `key`'s effective value.
-    /// `None` means the key resolves purely from `config.toml [env]` (global or
-    /// project), so writing there via `env set`/`encrypt`/`delete` is effective.
+    /// Effective source for `key`, including builtin and config layers.
     pub fn env_override_source(&self, key: &str) -> Option<&EnvOverrideSource> {
         self.env_override_sources.get(key)
     }
@@ -541,7 +549,7 @@ impl Default for Config {
             bin_dir: shine_dir.join("bin"),
             config_path: shine_dir.join("config.toml"),
             is_project_config: false,
-            project_save_state: None,
+            save_state: None,
             project_overrides_age_identities: false,
             shine_dir,
             home_dir,
@@ -567,10 +575,14 @@ impl Default for Config {
             age_recipients: Vec::new(),
             age_identity: None,
             age_identities: Vec::new(),
-            env: default_env_map(),
+            env: BTreeMap::new(),
             env_proxy: Vec::new(),
             env_descriptions: BTreeMap::new(),
             env_override_sources: BTreeMap::new(),
+            env_description_sources: BTreeMap::new(),
+            env_layers: Vec::new(),
+            config_inputs: Vec::new(),
+            env_pending: BTreeMap::new(),
         }
     }
 }

@@ -3,13 +3,14 @@
 use super::launcher::{
     PreparedLauncherResource, apply_prepared_launcher_resource, prepare_launcher_resources,
 };
+use super::review_path::review_path;
 use super::shell::{
     ShellManifest, ShellManifestEntry, load_shell_manifest_with_host,
     shell_link_spec_from_manifest_entry,
 };
 use super::{
     CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, LinkSpec,
-    PrivilegedFileSystemHost, RuntimeContext,
+    PrivilegedFileSystemHost,
 };
 use crate::action::{
     ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, DeclarativeActionV1,
@@ -2869,6 +2870,7 @@ where
         &self,
         approval: &PlanApprovalV1,
     ) -> Result<ShellRecoveryReportV1> {
+        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
         approval.validate(&self.plan_shell_operation_recovery().await?)?;
         let _guard = self.host().acquire_privileged_operation().await?;
         approval.validate(&self.plan_shell_operation_recovery().await?)?;
@@ -3602,6 +3604,9 @@ fn resource_contract(resource: &PreparedLauncherResource) -> ShellLauncherResour
 
 fn receipt_contract(entry: &ShellManifestEntry) -> ShellLauncherReceiptV1 {
     ShellLauncherReceiptV1 {
+        launcher_format: entry.launcher_format.clone(),
+        launcher_config_dir: entry.launcher_config_dir.clone(),
+
         category: entry.category.clone(),
         command: entry.command.clone(),
         mode: match entry.mode {
@@ -3705,6 +3710,9 @@ fn manifest_entry_from_receipt(receipt: &ShellLauncherReceiptV1) -> Result<Shell
         _ => bail!("Shell launcher receipt contains an unsupported mode"),
     };
     Ok(ShellManifestEntry {
+        launcher_format: receipt.launcher_format.clone(),
+        launcher_config_dir: receipt.launcher_config_dir.clone(),
+
         category: receipt.category.clone(),
         command: receipt.command.clone(),
         mode,
@@ -3963,6 +3971,13 @@ async fn restore_shell_profile_sentinel(
     host: &impl FileSystemHost,
     file: &ShellProfileFileV1,
 ) -> Result<()> {
+    let current_mode = match host.metadata(&file.destination).await {
+        Ok(metadata) => metadata.unix_mode,
+        Err(error) if error.is_not_found() => {
+            file.previous.as_ref().and_then(|file| file.unix_mode)
+        }
+        Err(error) => return Err(error.into_anyhow("reading Shell profile mode")),
+    };
     let current = match host.read(&file.destination).await {
         Ok(bytes) => String::from_utf8(bytes).context("Shell profile is not UTF-8")?,
         Err(error) if error.is_not_found() => String::new(),
@@ -3992,6 +4007,11 @@ async fn restore_shell_profile_sentinel(
         host.write_atomic(&file.destination, restored.as_bytes())
             .await
             .map_err(|error| error.into_anyhow("restoring Shell profile sentinel"))?;
+        if let Some(mode) = current_mode {
+            host.set_mode(&file.destination, mode)
+                .await
+                .map_err(|error| error.into_anyhow("restoring Shell profile mode"))?;
+        }
     }
     if file.previous.is_some() {
         host.remove_file(&file.rollback)
@@ -4764,35 +4784,65 @@ async fn remove_shell_operation_journal(
     }
 }
 
-fn review_path(context: &RuntimeContext, path: &Path) -> String {
-    for (base, root) in [
-        ("shine", &context.shine_dir),
-        ("data-dir", &context.data_dir),
-        ("home", &context.home_dir),
-    ] {
-        if let Ok(relative) = path.strip_prefix(root) {
-            let value = if relative.as_os_str().is_empty() {
-                ".".to_string()
-            } else {
-                logical_path(relative)
-            };
-            return format!("{base}:{value}");
-        }
-    }
-    format!("absolute:{}", logical_path(path))
-}
-
-fn logical_path(path: &Path) -> String {
-    path.components()
-        .map(|part| part.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime::InMemoryHost;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sentinel_recovery_preserves_private_mode_and_unrelated_edits() {
+        use crate::runtime::RealHost;
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("shine-profile-recovery-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let destination = dir.join("profile");
+        let rollback = dir.join("rollback");
+        let previous = b"original user content\n# >>> shine >>>\nsource old\n# <<< shine <<<\n";
+        let current = b"new user edit\n# >>> shine >>>\nsource new\n# <<< shine <<<\n";
+        for path in [&destination, &rollback] {
+            std::fs::write(
+                path,
+                if path == &destination {
+                    current.as_slice()
+                } else {
+                    previous.as_slice()
+                },
+            )
+            .unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let file = ShellProfileFileV1 {
+            destination: destination.clone(),
+            rollback: rollback.clone(),
+            ownership: ShellProfileFileOwnershipV1::SentinelBlock,
+            previous: Some(ShellFileIdentityV1 {
+                content_hash: hash_content(previous),
+                unix_mode: Some(0o600),
+            }),
+            desired: None,
+            previous_block_hash: None,
+            desired_block_hash: None,
+        };
+        restore_shell_profile_sentinel(&RealHost, &file)
+            .await
+            .unwrap();
+        let restored = std::fs::read_to_string(&destination).unwrap();
+        assert!(restored.contains("new user edit"));
+        assert!(restored.contains("source old"));
+        assert!(!restored.contains("source new"));
+        assert_eq!(
+            std::fs::metadata(&destination)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert!(!rollback.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn shell_file_identity_uses_native_mode_contract() {

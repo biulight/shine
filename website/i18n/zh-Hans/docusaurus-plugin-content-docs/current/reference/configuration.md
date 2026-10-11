@@ -8,6 +8,10 @@ sidebar_position: 2
 Shine 将全局运行时状态保存在 `~/.shine/`。首次需要配置时会创建 `~/.shine/config.toml`。
 配置与清单文件的替换（包括 Windows）不会在重命名暂存文件前删除旧文件；重命名失败时保留原文件。
 
+在 Unix 上，若 `SUDO_USER` 指定了发起 sudo 的用户，Shine 会通过系统账户数据库解析其主目录，
+包括 macOS 的 Directory Services。依赖主目录的配置和路径展开会使用该用户的主目录，而非
+sudo 设置的 root `HOME`。
+
 交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
 必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
 
@@ -107,8 +111,8 @@ DETAILED_VALUE = { value = "example", description = "供构建任务使用的示
 - `description` 只用于 `shine env list` 的可读说明，不会传入子进程或模板。
 - 当前配置中的内联 `description` 优先于预设 `<presets>/env.toml` catalog 的同名说明。
 - `shine env set` 更新已有详细条目时会保留其 `description`。
-- 覆盖文件中的详细项同时覆盖值和说明；字符串只覆盖值，并保留从低优先级配置或 preset
-  catalog 继承的说明。
+- 字符串与仅有 `value` 的详细项只覆盖值并继承低层说明。只有显式 `description` 才替换说明；
+  空字符串清空说明并阻止 catalog 兜底。值和说明分别追踪来源。
 - 数字、数组、缺少字符串 `value` 等无效类型会报告文件路径和变量名，不会被静默忽略。
 
 ## 项目配置
@@ -123,6 +127,9 @@ Shine 0.40.0 不再识别项目中的旧式 `config.toml` 和 `.env.toml`。升�
 Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前可先运行一次 v0.39 完成迁移；已经升级时，请将旧文件移动为 `~/.shine/shine.env.toml`，若目标文件已存在则手动合并。检测到旧文件时，普通配置加载会停止并显示恢复提示，避免悄悄忽略仍在使用的值。
 
 ## 目录与来源优先级
+
+相对的 `--config-dir`、`SHINE_CONFIG_DIR` 和 `SHINE_PRESETS` 路径会在生命周期规划或脚本执行前，
+按调用时的工作目录解析。子进程切换工作目录不会改变选定的运行时根目录。
 
 `SHINE_CONFIG_DIR` 的优先级最高。它会改变全局配置和运行时状态目录；不在 Shine 项目中时，
 预设目录也固定为 `$SHINE_CONFIG_DIR/presets/`，此时 `SHINE_PRESETS` 和全局 `presets_dir`
@@ -142,6 +149,7 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 外部预设或 overlay 的根目录可以是符号链接。Shine 会先解析该链接，并把解析后的来源
 用于 development trust；重新指向另一个目录需要重新审阅。失效的根目录链接会报错，
 预设树内部的符号链接仍不参与快照。
+FIFO、套接字和设备等特殊条目会使快照捕获报错；Shine 不会将它们作为预设文件读取。
 
 使用外部 `presets_dir` 时，Shell 类别默认以 `snapshot` 模式复制到
 `~/.shine/installed/shell/` 后再运行。在 Unix 上，快照保留捕获时脚本和辅助文件的可执行标记，
@@ -153,6 +161,13 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 显式 development trust；snapshot trust 不能授权读取可变来源的 launcher。已有 live launcher 会
 保留，状态会把缺少 development trust 的目标标为需要审阅。
 
+升级 Shine 后，运行 `shine update` 检查，再用 `shine upgrade` 更新已有的带 transforms 的 Live
+Bun 命令。更新后的入口在渲染和读取声明的环境值时都使用安装目录对应的配置，即使调用者
+设置了不同的 `SHINE_CONFIG_DIR`。项目配置和 `shine.env.toml` 覆盖仍按调用者的工作目录生效。
+更新后的 PowerShell 入口会保留空参数和字面量 `--`，也支持 Windows PowerShell 5.1。
+此改动也覆盖未声明 `env` 的带 transforms 的 Live Bun 命令；无 transforms 的 Live 命令、
+Native/source 命令及 snapshot 命令保留现有启动方式。
+
 Overlay 在选定的基础预设来源上按相同相对路径覆盖文件，不替代整棵目录。手动关联的
 `presets_overlay_dir` 与 `presets_overlay_git` 互斥；使用 `shine preset overlay link` 可避免同时配置。
 Git 管理的 overlay 只有在首次 `shine preset pull` 克隆成功后才生效，本地检出会在后续拉取时
@@ -162,12 +177,21 @@ Git 管理的 overlay 只有在首次 `shine preset pull` 克隆成功后才生�
 
 同名环境值按以下顺序合并，后者覆盖前者：
 
-1. 内置默认值
-2. 全局 `[env]`
-3. 项目 `[env]`
-4. 全局 `~/.shine/shine.env.toml`
-5. 当前 overlay 的 `shine.env.toml`
-6. 项目 `shine.env.toml`
+1. 内置默认值（仅运行时兜底）；
+2. 当前 overlay 的 `shine.env.toml`（共享基线）；
+3. 全局 `config.toml` 的 `[env]`；
+4. 全局 `shine.env.toml`；
+5. 项目 `shine.config.toml` 的 `[env]`；
+6. 项目 `shine.env.toml`。
+
+所有安装统一使用此顺序。`SHINE_CONFIG_DIR` 选择全局根目录，以上路径不硬编码为 `~/.shine/`。
+内置默认值不会因加载或保存其他配置而写入文件。已有项全部按显式配置保留，即使等于旧默认值；
+主动删除指定层的项后才恢复继承。单独存在 `shine.env.toml` 不构成项目。
+项目 env 文件只从最近 `shine.config.toml` 所在目录读取，不合并多个祖先项目。
+
+用 `shine env explain KEY` 查看值来源、描述来源、覆盖链和默认写入目标；默认不显示值，
+`--reveal` 才显示且不会解密。`env get` 保持单值输出。参见
+[环境管理指南](../guides/environment.md)中的人工升级和回退步骤。
 
 `shine.env.toml` 是不带 `[env]` 表头的覆盖文件，例如：
 

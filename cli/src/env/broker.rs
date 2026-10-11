@@ -5,6 +5,7 @@ use crate::config::Config;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use shine_core::runtime::{FileSystemHost, RealHost};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -534,6 +535,9 @@ pub async fn handle_policy_add(
         argv,
     )
     .await?;
+    let _guard = RealHost
+        .acquire_operation_lock(&config.shine_dir().join("ssh-secret-broker.lock"))
+        .await?;
     let mut store = load_store(config).await?;
     if store.policies.iter().any(|item| item.name == name) {
         bail!("policy {name} already exists; use `shine env broker policy update {name}`");
@@ -569,13 +573,13 @@ pub async fn handle_policy_update(
         argv,
     )
     .await?;
-    let mut store = load_store(config).await?;
+    let store = load_store(config).await?;
     let existing = store
         .policies
-        .iter_mut()
+        .iter()
         .find(|item| item.name == name)
         .with_context(|| format!("policy {name} does not exist"))?;
-    let old = toml::to_string_pretty(&*existing)?;
+    let old = toml::to_string_pretty(existing)?;
     let new = toml::to_string_pretty(&policy)?;
     if old == new {
         println!("policy {name} is current");
@@ -593,8 +597,17 @@ pub async fn handle_policy_update(
     if !confirmed {
         bail!("policy update cancelled");
     }
-    *existing = policy;
-    save_store(config, &store).await?;
+    // Re-read under the shared mutation lock after human review. A changed or
+    // revoked target invalidates this review; unrelated policy edits survive.
+    apply_remote_enrollment(
+        config,
+        &RemoteEnrollmentPlan {
+            name: name.to_owned(),
+            candidate: policy,
+            previous: Some(existing.clone()),
+        },
+    )
+    .await?;
     println!("updated SSH secret broker policy {name}");
     Ok(())
 }
@@ -625,6 +638,9 @@ pub async fn handle_policy_info(config: &Config, name: &str) -> Result<()> {
 }
 
 pub async fn handle_policy_remove(config: &Config, name: &str) -> Result<()> {
+    let _guard = RealHost
+        .acquire_operation_lock(&config.shine_dir().join("ssh-secret-broker.lock"))
+        .await?;
     let mut store = load_store(config).await?;
     let before = store.policies.len();
     store.policies.retain(|item| item.name != name);
@@ -845,6 +861,9 @@ pub async fn apply_remote_enrollment(
     config: &Config,
     plan: &RemoteEnrollmentPlan,
 ) -> Result<String> {
+    let _guard = RealHost
+        .acquire_operation_lock(&config.shine_dir().join("ssh-secret-broker.lock"))
+        .await?;
     let mut store = load_store(config).await?;
     if let Some(previous) = &plan.previous {
         let current = store
@@ -854,7 +873,7 @@ pub async fn apply_remote_enrollment(
             .with_context(|| format!("policy {} no longer exists", plan.name))?;
         if current != previous {
             bail!(
-                "policy {} changed after the enrollment preview; inspect and retry",
+                "policy {} changed after review; inspect and retry",
                 plan.name
             );
         }
@@ -862,7 +881,7 @@ pub async fn apply_remote_enrollment(
     } else {
         if store.policies.iter().any(|item| item.name == plan.name) {
             bail!(
-                "policy {} was created after the enrollment preview; inspect it explicitly",
+                "policy {} was created after review; inspect it explicitly",
                 plan.name
             );
         }
@@ -883,6 +902,107 @@ pub fn decrypt_workspace_snapshot<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reviewed_policy_updates_recheck_revocation_and_preserve_unrelated_changes() {
+        let dir = crate::test_support::make_temp_dir("shine-broker-contention").await;
+        let config = Config::new_for_test(&dir);
+        let request = snapshot();
+        let initial = plan_remote_enrollment(
+            &PolicyStore::default(),
+            "dev",
+            &request,
+            &["API_TOKEN".into()],
+            &["bun".into(), "test".into()],
+            None,
+        )
+        .unwrap();
+        apply_remote_enrollment(&config, &initial).await.unwrap();
+        let mut candidate = initial.candidate.clone();
+        candidate.project = "updated".into();
+        let plan = RemoteEnrollmentPlan {
+            name: initial.name.clone(),
+            candidate,
+            previous: Some(initial.candidate.clone()),
+        };
+
+        let guard = RealHost
+            .acquire_operation_lock(&dir.join("ssh-secret-broker.lock"))
+            .await
+            .unwrap();
+        let apply = apply_remote_enrollment(&config, &plan);
+        tokio::pin!(apply);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut apply)
+                .await
+                .is_err()
+        );
+        // Model a revocation that completed while the reviewed update was waiting.
+        save_store(&config, &PolicyStore::default()).await.unwrap();
+        drop(guard);
+        assert!(
+            apply
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("no longer exists")
+        );
+        assert!(load_store(&config).await.unwrap().policies.is_empty());
+
+        apply_remote_enrollment(&config, &initial).await.unwrap();
+        let mut unrelated = initial.candidate.clone();
+        unrelated.name = "unrelated".into();
+        unrelated.ssh_target = "other".into();
+        let guard = RealHost
+            .acquire_operation_lock(&dir.join("ssh-secret-broker.lock"))
+            .await
+            .unwrap();
+        let apply = apply_remote_enrollment(&config, &plan);
+        tokio::pin!(apply);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut apply)
+                .await
+                .is_err()
+        );
+        save_store(
+            &config,
+            &PolicyStore {
+                version: POLICY_VERSION,
+                policies: vec![initial.candidate.clone(), unrelated.clone()],
+            },
+        )
+        .await
+        .unwrap();
+        drop(guard);
+        apply.await.unwrap();
+        let store = load_store(&config).await.unwrap();
+        assert_eq!(store.policies, [plan.candidate.clone(), unrelated.clone()]);
+
+        let guard = RealHost
+            .acquire_operation_lock(&dir.join("ssh-secret-broker.lock"))
+            .await
+            .unwrap();
+        let remove = handle_policy_remove(&config, &plan.name);
+        tokio::pin!(remove);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut remove)
+                .await
+                .is_err()
+        );
+        save_store(
+            &config,
+            &PolicyStore {
+                version: POLICY_VERSION,
+                policies: vec![unrelated.clone()],
+            },
+        )
+        .await
+        .unwrap();
+        drop(guard);
+        assert!(remove.await.is_err());
+        assert_eq!(load_store(&config).await.unwrap().policies, [unrelated]);
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
 
     fn snapshot() -> WorkspaceSnapshot {
         WorkspaceSnapshot {

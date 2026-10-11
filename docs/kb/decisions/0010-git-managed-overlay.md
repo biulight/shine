@@ -29,6 +29,10 @@ of an overlay maintained elsewhere, so it should always equal the remote — eve
 rebases, amends, or force-pushes — with no merge conflicts to resolve on consumer devices. This
 matches the request's "只拉取最新的，无需关注 git 历史" intent.
 
+Env precedence and mutation semantics are defined by [ADR 0109](0109-env-baseline-and-directed-writes.md):
+overlay values now provide a baseline below explicit local/project configuration. Env commands
+reject writes to this mirror. The force-mirror synchronization decision remains unchanged.
+
 ## Consequences
 
 - Consumer devices need only the URL (in `config.toml` or via `overlay link --git`); no manual

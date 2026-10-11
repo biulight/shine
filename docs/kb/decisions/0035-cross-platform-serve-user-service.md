@@ -1,8 +1,8 @@
 # 0035 — Use native per-user persistence for the local HTTP server
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR 0107](0107-remove-local-http-service.md); retained as historical context
 - **Date**: 2026-08-27
-- **Evidence**: `cli/src/serve.rs`, `docs/kb/architecture/platform-support.md`
+- **Historical evidence**: `cli/src/serve.rs` at commit `0bae834` (removed by ADR 0107)
 
 ## Context
 

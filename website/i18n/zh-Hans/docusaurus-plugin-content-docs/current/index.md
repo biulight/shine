@@ -21,7 +21,7 @@ Shine 用 **Preset（预设）** 把脚本、个性化配置和安装方式集�
 
 **让个人自动化的每一步都看得见，也留有退路。**
 
-当前手册适用于 **Shine 2.3.0**。冻结的 1.8.x 手册可通过版本选择器查看。
+当前手册适用于 **Shine 2.4.0**。冻结的 1.8.x 手册可通过版本选择器查看。
 
 [![Shine 2.0 的三大核心价值：个人脚本与配置可重复部署、个人开发资源的统一入口，以及每次变更看得见、中断后也能恢复。](/img/shine-core-values-v2-zh-Hans.webp)](/img/shine-core-values-v2-zh-Hans.webp)
 
@@ -99,6 +99,6 @@ gh pr list
 1. [安装 Shine](./installation.md)
 2. [完成第一次预设安装](./quick-start.md)
 3. 查看[内置预设](./reference/built-in-presets.md)，看看现在有哪些内容可以直接使用
-4. 根据目标阅读 [Shell 预设](./guides/shell-presets.md)、[应用预设](./guides/app-presets.md)、[环境变量与密钥](./guides/environment.md)、[系统初始化](./guides/system-init.md)、[终端主题同步](./guides/terminal-theme-sync.md)、[任务与本地服务](./guides/tasks-and-serve.md) 或 [SSH 会话：密钥代理与文件传输](./guides/ssh-transfer.md)
+4. 根据目标阅读 [Shell 预设](./guides/shell-presets.md)、[应用预设](./guides/app-presets.md)、[环境变量与密钥](./guides/environment.md)、[系统初始化](./guides/system-init.md)、[终端主题同步](./guides/terminal-theme-sync.md)、[任务与应用构建产物](./guides/tasks-and-serve.md) 或 [SSH 会话：密钥代理与文件传输](./guides/ssh-transfer.md)
 
 如果已经遇到问题，直接前往[故障排查](./troubleshooting.md)；需要查看全部选项时再打开[命令参考](./reference/commands.md)。

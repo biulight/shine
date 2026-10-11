@@ -1,9 +1,8 @@
-//! Config persistence: atomic writes, comment preservation, and sparse
-//! project-layer diffing so inherited global values never materialize in
-//! project config files.
+//! Config persistence: coordinated atomic writes and raw-layer delta saves.
 
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
+#[cfg(test)]
 use tokio::fs;
 
 use super::Config;
@@ -12,23 +11,29 @@ impl Config {
     pub async fn save(&self) -> Result<()> {
         let config_path = self.resolve_config_path_for_save().await?;
 
+        let _guard = super::env_write::lock_target(&config_path).await?;
+        // Validate and parse the same regular-file preimage under the shared lock.
+        let current = super::ConfigInput::capture(&config_path).await?;
+        if let Some(input) = self
+            .config_inputs
+            .iter()
+            .find(|input| input.path == config_path)
+            && input != &current
+        {
+            bail!(
+                "configuration changed at {}; retry the command",
+                config_path.display()
+            );
+        }
         let new_table = self.serialize_table_for_save()?;
-        let new_toml = toml::to_string_pretty(&new_table).context("Failed to serialize config")?;
-
-        let toml_str = if config_path.exists() {
-            let existing = fs::read_to_string(&config_path).await.unwrap_or_default();
-            if existing.is_empty() {
-                new_toml
-            } else {
-                let mut doc: toml_edit::DocumentMut = existing
-                    .parse()
-                    .context("Fail to parse existing config for comment preservation")?;
-
-                shine_core::migration::sync_table(doc.as_table_mut(), &new_table);
-                doc.to_string()
-            }
+        let toml_str = if let Some(existing) = current.contents.filter(|text| !text.is_empty()) {
+            let mut doc: toml_edit::DocumentMut = existing
+                .parse()
+                .context("Failed to parse existing config for comment preservation")?;
+            shine_core::migration::sync_table(doc.as_table_mut(), &new_table);
+            doc.to_string()
         } else {
-            new_toml
+            toml::to_string_pretty(&new_table).context("Failed to serialize config")?
         };
 
         crate::persist::atomic_write_private(&config_path, toml_str.as_bytes())
@@ -40,15 +45,28 @@ impl Config {
 
     fn serialize_table_for_save(&self) -> Result<toml::Table> {
         let table = self.serialize_effective_table()?;
-
+        let mut sparse = if let Some(state) = &self.save_state {
+            let mut sparse = state.original.clone();
+            apply_table_changes(&mut sparse, &state.loaded, &table);
+            sparse
+        } else {
+            table
+        };
+        for (key, value) in &self.env_pending {
+            let env = sparse
+                .entry("env".to_string())
+                .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+            let env = env.as_table_mut().context("[env] must be a table")?;
+            match value {
+                Some(value) => {
+                    env.insert(key.clone(), toml::Value::String(value.clone()));
+                }
+                None => {
+                    env.remove(key);
+                }
+            }
+        }
         if self.is_project_config {
-            let mut sparse = if let Some(state) = &self.project_save_state {
-                let mut sparse = state.original.clone();
-                apply_table_changes(&mut sparse, &state.loaded, &table);
-                sparse
-            } else {
-                table
-            };
             sparse.remove("schema_version");
             sparse.remove("last_cleared_schema_version");
             // Executable sys-code permission is intentionally global-only. Never preserve or
@@ -59,7 +77,7 @@ impl Config {
             return Ok(sparse);
         }
 
-        Ok(table)
+        Ok(sparse)
     }
 
     pub(super) fn serialize_effective_table(&self) -> Result<toml::Table> {

@@ -33,6 +33,9 @@ A category target activates every command available for the current platform. Us
 `category/command` target when you need only one command. Mutation does not accept a bare command
 name because the same name may appear in more than one category.
 
+Generated shell profiles treat directory names literally, including spaces, dollar signs and
+backticks. Paths under your home directory retain the portable `$HOME` reference.
+
 Open a new terminal or reload the shell profile after installation. To install completions, run:
 
 ```bash
@@ -56,7 +59,16 @@ Shine uses their installation records to recognize managed commands at the old p
 to the current deployment location. This does not adopt unrelated command files. External code still
 requires review and confirmation for the current Plan.
 
+On Windows, native PowerShell commands launched from CMD preserve apostrophes in script paths
+(for example, a user directory named `O'Connor`). Run `shine upgrade shell/<CATEGORY>` to refresh
+existing command launchers; their original installation records remain usable for recovery.
+
 ## If installation, upgrade, or uninstall is interrupted {#recover-an-interrupted-shell-transaction}
+
+Shell changes using the same configuration directory run one at a time, including recovery and
+live rendering. After waiting, Shine checks the reviewed Plan again; if the affected state changed,
+review a new Plan before retrying. Waiting longer than 30 seconds fails without applying the waiting
+operation. Changes to other categories retain their installation records.
 
 If a Shell preset operation is interrupted, Shine may pause later changes and ask you to
 run recovery:
@@ -67,6 +79,8 @@ shine shell recover
 
 Review the recovery plan and confirm to proceed. Depending on where the operation stopped,
 Shine rolls back unfinished changes or keeps completed changes and cleans up leftover files.
+When restoring a managed block in your shell profile, Shine preserves unrelated content and the
+current file permissions on Unix.
 
 If relevant files have changed since the interruption, Shine stops recovery and preserves them
 to avoid overwriting your edits. Keep the error details and affected files, and follow the

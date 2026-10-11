@@ -1,3 +1,15 @@
+/// A command failed after its complete diagnostic and result were rendered locally.
+/// The binary uses this typed marker to retain a nonzero exit without printing another error.
+#[derive(Debug)]
+pub struct ReportedCommandFailure;
+
+impl std::fmt::Display for ReportedCommandFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("command incomplete; see reported results")
+    }
+}
+impl std::error::Error for ReportedCommandFailure {}
+
 use crate::colors;
 use console::measure_text_width;
 use std::io::IsTerminal;

@@ -5,7 +5,121 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
-## [Unreleased]
+## [2.4.0] — 2026-10-11
+
+### Breaking Changes
+
+- Use one env precedence order for all installations: builtin defaults, overlay baseline, global
+  `[env]`, global env file, project `[env]`, project env file. Defaults remain runtime-only; existing
+  entries are retained as explicit configuration. Review important projects and manually remove
+  unneeded historical entries to inherit again. Add `env explain KEY` for hidden-by-default source
+  chains and separate value/description provenance.
+
+- Replace env write redirection with `--global`, `--project`, `--overlay`, and `--env-file` targets.
+  Explicit targets can maintain shadowed values and report saving separately from effectiveness;
+  implicit targets retain shadow protection. Env set/delete/secret encrypt reject old `--force`
+  without writing, and managed overlay mirrors reject direct writes. Final snapshot checks and
+  per-file locks protect concurrent config saves; encryption preflights before invoking tools.
+  Update old scripts and review installed template changes through `update`/`upgrade`. Downgrading
+  restores old ordering but does not restore deleted entries or updated installed artifacts.
+
+- Remove `shine serve` and the `SHINE_APP_HTTP_DIR` App script variable. Artifacts no longer
+  create or request permissions for an HTTP output directory. Use local rule files for Surge
+  and Clash Verge, and state/cache directories for persistent artifact output. Remove an old
+  background service with `shine clear serve`, including after upgrading with an unreadable
+  configuration. Cleanup is repeatable and retains existing published files.
+
+### Features
+
+- Add maintenance advisories with per-invocation, minute, hour, and day schedules. Heavy checks
+  run in a detached process and report on a later interactive invocation. Detect retained HTTP
+  service registrations and loaded services, point to `shine clear serve`, and discard old
+  results after cleanup. `shine state check` performs an immediate read-only inspection without
+  loading configuration. Reminders and incomplete-check warnings use bold yellow where supported
+  and a blank line before command output. Superseded explicit checks ask for a retry and exit
+  nonzero without reporting completion. Existing required patch-upgrade behavior is unchanged.
+
+### Bug Fixes
+
+- Preserve user-edited App files selected for preservation before running generators. Serialize
+  App, Shell, and Sys lifecycle operations so concurrent installs, upgrades, removals, and recovery
+  retain each other's receipts and recheck approval against current state.
+
+- Preserve workspace source order across plaintext and encrypted SSH broker values: later plain
+  values suppress earlier secrets, and later secrets never expose earlier plain values without
+  authorization. Reject malformed legacy Surge rule blocks before modifying the profile.
+
+- Keep Sys bootstrap file inputs and working directories bound to the reviewed snapshot, stop
+  child processes after timeouts or cancellation, and restore previous proxy files and
+  configuration after an incomplete installation without overwriting concurrent edits.
+
+- Preserve concurrent trust grants, revocations and SSH broker policy changes. Reject policy
+  updates when the reviewed target changed or was removed while confirmation was pending.
+  Import dotenv files with owner-only Unix permissions, including pending plaintext secrets.
+  Make age identity `--force` generate and validate a private replacement before replacing the
+  existing identity, retaining the old file when generation or validation fails.
+
+- Reject linked environment sources during sealing to avoid leaving plaintext in another file.
+  Force GPG output through stdout and reject empty ciphertext before replacing pending secrets.
+  Serialize task saves and deletions before loading the registry so concurrent updates are retained.
+
+- Keep static App files out of code-execution consent even when their names begin with
+  `generator:`, `hook:`, or `artifact:`. Make Preset validation codes reflect the failed check
+  independently of category names and diagnostic wording.
+
+- Refuse project environment deletion when a variable has no local entry instead of reporting a
+  successful no-op. Preserve apostrophes in native PowerShell script paths launched from Windows
+  CMD; existing launchers migrate through reviewed upgrade while retaining legacy recovery bytes.
+
+- Launch transformed Live Bun commands through one Shine process and bind rendering and declared
+  environment values to their installation directory while preserving project overrides. Existing
+  commands migrate through the normal reviewed upgrade and recovery workflow.
+  Reserve sufficient main-thread stack for the Windows MSVC executable to prevent stack overflow
+  during startup and installation.
+  Preserve empty arguments, literal `--`, quotes and trailing backslashes when refreshed Live Bun
+  commands run from Windows PowerShell 5.1.
+
+- Preserve existing receipts when atomic replacement fails on Windows, synchronize runtime
+  journal and receipt writes before returning, retain Unix profile permissions during Shell
+  recovery, and treat shell metacharacters in generated profile paths literally.
+
+- Stop local SSH transfer processes when their control connection closes or the relay is
+  cancelled, including descendants on Unix. Resolve sudo users through the system account
+  database on macOS and Unix, and retain the installation's runtime directory in all
+  environment-proxy launchers while preserving project rules.
+
+- Prevent App scripts from inheriting uncaptured overlay paths. Use macOS-compatible rsync
+  progress flags, reject recursive proxies for Shine itself, and preserve proxy configuration
+  and launchers when uninstall encounters an ownership conflict.
+
+- Make Preset lint tolerate platform-limited App categories and check Windows PowerShell
+  commands. Translate SSH connection options for SCP transfers, skip non-executable Unix
+  PATH entries when installing environment proxies.
+
+- Fix absolute filesystem permission identities and show familiar paths in Security Plans,
+  preserving Windows drive and network-share roots. Mention external-code consent in the
+  confirmation prompt only when the Plan lists external/overlay code.
+
+- Compact protected App/Shell uninstall output by grouping App force guidance, omitting known
+  unchanged cache steps and empty permission sections from default review, and keeping backup
+  paths in verbose/force previews. Already-reported incomplete results retain nonzero exits
+  without a duplicate generic error; unexpected diagnostics and other errors remain visible.
+
+- Make App and Shell uninstall protection explicit with retained-resource details and incomplete
+  summaries. App guidance explains forced file deletion, backup restoration, or managed JSON-key
+  removal; Shell guidance identifies ownership conflicts without suggesting an unsupported force
+  option. Actual partial/protected/failed uninstall returns nonzero; successful dry-run stays zero.
+
+- Keep installed App categories visible when their Preset sources disappear, explain retained
+  category/file receipts in list, update, and upgrade, and allow targeted uninstall of missing
+  external sources. Uninstall previews identify user modifications and recorded backups;
+  receipt-owned JSON keys remain distinct from unrelated content.
+
+### Docs
+
+- Publish aligned English and Simplified Chinese 2.4 manuals with environment-layer migration,
+  explicit write targets, HTTP service cleanup, and lifecycle preservation guidance. Replace the
+  2.3 documentation snapshot while retaining the 1.8 manual and Next documentation.
 
 ## [2.3.1] — 2026-10-06
 

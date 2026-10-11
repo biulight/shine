@@ -1,5 +1,6 @@
 //! Core-owned static preset discovery and validation contract.
 
+use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind};
 use super::{
     CoreRuntime, FileKind, FileSystemObservationHost, InMemoryHost, PresetSnapshot,
     PresetSourceKind, RuntimeContext, RuntimePlatform, SysDriverKind, SysInstall,
@@ -143,7 +144,7 @@ pub(super) async fn validate_preset_source_scope(
                 .then(|| validate_all_app_destination_branches(&scope.snapshot, &category))
                 .transpose()
                 .err()
-                .map(|error| error_diagnostic("app", &category.root, format!("{error:#}")))
+                .map(|error| error_diagnostic(&category.root, error, None))
         } else {
             None
         };
@@ -182,11 +183,7 @@ pub(super) async fn validate_preset_source_scope(
             match result {
                 Ok(metadata) => has_metadata = metadata,
                 Err(error) => {
-                    diagnostic = Some(error_diagnostic(
-                        category.kind,
-                        &category.root,
-                        format!("{error:#} for {}", platform.as_str()),
-                    ));
+                    diagnostic = Some(error_diagnostic(&category.root, error, Some(platform)));
                     break;
                 }
             }
@@ -536,10 +533,12 @@ async fn validate_sys_category(
     category: &CategoryPath,
 ) -> anyhow::Result<bool> {
     let logical = format!("sys/{}/shine.toml", category.name);
-    let bytes = runtime
-        .presets()
-        .get(&logical)
-        .ok_or_else(|| anyhow::anyhow!("sys/{} requires a readable shine.toml", category.name))?;
+    let bytes = runtime.presets().get(&logical).ok_or_else(|| {
+        MetadataDiagnosticError::new(
+            MetadataDiagnosticKind::MissingMetadata,
+            format!("sys/{} requires a readable shine.toml", category.name),
+        )
+    })?;
     let text = std::str::from_utf8(bytes)?;
     let manifest = super::parse_sys_manifest(text)?;
     for item in &manifest.items {
@@ -611,35 +610,30 @@ fn validate_snapshot_reference<'a>(
     let path = Path::new(relative);
     snapshot
         .get(&format!("sys/{category}/{}", logical_path(path)))
-        .ok_or_else(|| anyhow::anyhow!("{label} is missing or unreadable"))
+        .ok_or_else(|| {
+            MetadataDiagnosticError::new(
+                MetadataDiagnosticKind::MissingReference,
+                format!("{label} is missing or unreadable"),
+            )
+            .into()
+        })
 }
 
-fn error_diagnostic(kind: &str, root: &Path, message: String) -> PresetDiagnostic {
-    let lower = message.to_ascii_lowercase();
-    let code = if lower.contains("references missing")
-        || lower.contains("is missing or unreadable")
-        || lower.contains("source file is missing")
-    {
-        "missing_reference"
-    } else if lower.contains("more than once") || lower.contains("duplicate command") {
-        "duplicate_command"
-    } else if lower.contains("destinations conflict")
-        || lower.contains("same effective destination")
-    {
-        "duplicate_target"
-    } else if lower.contains("bun") && (lower.contains("lock") || lower.contains("package")) {
-        "bun_dependency_policy"
-    } else if lower.contains("contains no") || lower.contains("no shell") {
-        "no_files"
-    } else if kind == "sys" && lower.contains("requires a readable shine.toml") {
-        "missing_metadata"
-    } else {
-        "invalid_metadata"
-    };
+fn error_diagnostic(
+    root: &Path,
+    error: anyhow::Error,
+    platform: Option<RuntimePlatform>,
+) -> PresetDiagnostic {
+    let kind = error
+        .downcast_ref::<MetadataDiagnosticError>()
+        .map_or(MetadataDiagnosticKind::InvalidMetadata, |error| error.kind);
     PresetDiagnostic {
         severity: PresetDiagnosticSeverity::Error,
-        code: code.to_string(),
-        message,
+        code: kind.code().to_string(),
+        message: platform.map_or_else(
+            || format!("{error:#}"),
+            |platform| format!("{error:#} for {}", platform.as_str()),
+        ),
         path: Some(root.join("shine.toml")),
     }
 }

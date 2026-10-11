@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 2.3.0. Run `shine <COMMAND> --help` for every option supported by the
+This page reflects Shine 2.4.0. Run `shine <COMMAND> --help` for every option supported by the
 installed version. The task guides explain complete workflows; this page is a compact command index.
 
 ## Targets
@@ -43,9 +43,10 @@ shine upgrade app/starship
 | `shine env ...` | Manage values, workspace environments, proxies, and secrets |
 | `shine ssh ...` / `shine local ...` | Open SSH sessions and transfer files |
 | `shine task ...` / `shine run <NAME>` | Save and run personal commands |
-| `shine serve ...` | Serve resources under `~/.shine/http/` |
 | `shine self ...` | Install or upgrade the Shine binary |
 | `shine state migrate` | Preview or apply supported legacy-state migrations |
+| `shine state check` | Check for maintenance actions now without applying them |
+| `shine clear serve` | Stop and remove the retired HTTP service registration |
 | `shine trust ...` | Review target-scoped trust for external Preset code |
 | `shine completions ...` | Generate or install shell completions |
 | `shine theme sync` | Print terminal-theme environment exports |
@@ -57,6 +58,13 @@ and associated backup/recovery files by purpose, with access types and path coun
 upgrade, uninstall, recovery, App refresh/artifact, and Sys bootstrap/profile/apply reviews accept
 `--verbose` to expand file paths, steps, snapshot identities, and diagnostics in the displayed
 review scopes.
+
+Filesystem permission paths use familiar forms: `/etc/docker/daemon.json` for an absolute path,
+`~/.zshrc` under your home directory, `Shine state/...` under the configured Shine state directory,
+and `App data/...` under the platform application-data directory. Windows drive and network-share
+paths retain their roots. These display labels do not broaden the listed permissions.
+Confirmation asks `Apply this Plan?`; only Plans listing external/overlay code also ask you to
+allow that code for this operation and explain that no persistent trust will be saved.
 
 Shell command installations are grouped by command count, with Shell integration shown separately.
 Internal state and recovery files share one path count, while backup associations with user files
@@ -111,6 +119,10 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [-
 - If Shine reports an interrupted operation, run `shine shell recover`. Changed files are preserved
   and may require manual review.
 
+- Shell uninstall identifies retained launcher paths when ownership conflicts prevent removal.
+  It has no `--force` override: inspect those files before deciding whether to move or remove them.
+  A conflicting file may remain even after its installation receipt is cleared; the report says so.
+
 See [Manage shell presets](../guides/shell-presets.md).
 
 ## Application presets
@@ -132,9 +144,38 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
   source file; `--force` cannot refresh a destination owned by another source.
 - `app uninstall --force` may delete user-modified managed content. Always preview it with
   `--dry-run`.
+- Protected App files show the receipt mismatch, followed by one retained-content summary.
+  Force-preview guidance is grouped by category and explains file deletion, conditional backup
+  restoration, or receipt-owned JSON-key removal. Use `--force --dry-run` or `--verbose` for
+  recorded backup paths; unrelated JSON keys remain.
 - Use `shine app recover` when an interrupted App operation blocks later changes.
 
 See [Manage application configuration](../guides/app-presets.md).
+
+Installed App resources remain managed when their Preset category or an individual source file
+is removed, renamed, or absent after switching sources. `list` keeps the category visible;
+`list`, `update`, and `upgrade` explain missing sources and suggest an uninstall preview.
+Upgrade preserves these resources by default.
+
+Use `shine app uninstall <OLD_CATEGORY> --dry-run`, then `shine app uninstall <OLD_CATEGORY>`
+to uninstall using the original installation receipt even when the Preset is unavailable.
+Uninstall selects that category's receipts, not another category sharing its destination.
+For copy installs, unchanged managed content is removed and an existing recorded backup is
+restored. JSON merge installs remove only receipt-owned keys and preserve unrelated keys.
+User-modified managed content and its receipt are retained unless `--force` is explicit.
+If the destination is missing, uninstall clears its receipt and leaves any recorded backup in
+place. A dry-run preserves files, backups, and receipts; it reports user modifications and
+recorded backup restoration separately. Missing source code cannot be used to run teardown.
+
+App and Shell uninstall distinguish `Uninstall complete`, `Uninstall incomplete`, and
+`Uninstall preview`. Actual uninstall returns a nonzero exit status if protected or conflicting
+resources remain, or an operation fails, including partial completion. Review the per-resource
+results: a nonzero exit status does not undo completed removals. A successfully generated dry-run
+returns zero even when it shows protection; preview errors still return nonzero.
+Default uninstall review omits known unchanged cache steps and empty permission sections;
+`--verbose` retains the complete review. Once an incomplete result and its reasons have been
+shown, the command exits nonzero without repeating a generic `Error` line. Other errors remain
+visible.
 
 ## Status, updates, trust, and completions
 
@@ -144,6 +185,7 @@ shine info <TARGET> [--diff] [--verbose] [--run-generators]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
 shine upgrade [TARGET] [--pull] [--verbose] [--full-plan] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
+shine state check
 shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
 shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
 shine trust list [--verbose]
@@ -161,6 +203,8 @@ target, capability, source directory, and source layer remain unchanged. This is
 authorization, not continuous code review.
 `trust list` groups grants that share one security scope into a compact row and checks them against
 the active Preset; `--verbose` expands capabilities, development-source labels, and review guidance.
+Concurrent `trust grant` and `trust revoke` commands preserve changes to other targets; a completed
+revocation cannot be restored by another command saving an older copy of the trust store.
 
 Interactive lifecycle confirmation may authorize external code for that operation without saving
 a grant. Automation and `--yes` require existing trust; Shell live requires Development trust.
@@ -229,9 +273,10 @@ See [Customize presets](../guides/custom-presets.md) and
 
 ```text
 shine env list [--reveal]
-shine env set <KEY> <VALUE> [--force]
+shine env set <KEY> <VALUE> [--global|--project|--overlay] [--env-file]
 shine env get <KEY>
-shine env delete <KEY> [--force]
+shine env explain <KEY> [--reveal]
+shine env delete <KEY> [--global|--project|--overlay] [--env-file]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
@@ -240,7 +285,7 @@ shine env proxy list
 shine env proxy uninstall <COMMAND>
 shine env proxy enable <COMMAND> [--project]
 shine env proxy disable <COMMAND> [--project]
-shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>] [--set <KEY>] [--force]
+shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>] [--set <KEY>] [--global|--project|--overlay] [--env-file]
 shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
@@ -249,7 +294,13 @@ shine env secret identity init --phone [--recipient-type <tag|phone>] [--label <
 shine env secret identity list
 ```
 
-`env list --reveal`, `env get`, `env secret decrypt`, exports with `--include-secrets`, and child
+Scope options are mutually exclusive; the default is the active project, otherwise global.
+`--env-file` selects that scope's `shine.env.toml`; `--overlay` requires a manual directory.
+Implicit writes reject shadowed keys. Explicit targets may maintain shadowed entries and report
+both the saved file and current effective source. The old `--force` for `set`, `delete`, and
+`secret encrypt` is rejected without writing; use explicit scope and file options instead.
+
+`env explain --reveal`, `env list --reveal`, `env get`, `env secret decrypt`, exports with `--include-secrets`, and child
 commands started by `env run` can expose plaintext. Run them only in a trusted terminal and never
 put secrets directly in command arguments or documentation.
 
@@ -258,7 +309,7 @@ Broker policy commands are documented with the complete remote workflow in
 workspace encryption, command wrappers, and hybrid backends, see
 [Manage environment variables and secrets](../guides/environment.md).
 
-## Tasks, local service, and theme
+## Tasks and theme
 
 ```text
 shine task save <NAME> [--force] [--cwd <PATH>] -- <COMMAND>...
@@ -268,20 +319,64 @@ shine task info <NAME>
 shine task delete <NAME>
 shine run <NAME> [-- EXTRA_ARGS...]
 
-shine serve install [--port <PORT>]
-shine serve start [--port <PORT>]
-shine serve status
-shine serve uninstall
-shine serve url <PATH> [--port <PORT>]
-
 shine theme sync [--auto] [--quiet]
 ```
 
-Saved tasks execute the stored command, optionally from its stored working directory. The local
-service publishes files under `~/.shine/http/`; do not place secrets there.
+Saved tasks execute the stored command, optionally from its stored working directory.
 
-See [Tasks and the local service](../guides/tasks-and-serve.md) and
+See [Tasks and application artifacts](../guides/tasks-and-serve.md) and
 [Synchronize the terminal theme](../guides/terminal-theme-sync.md).
+
+## Cleanup
+
+### Maintenance reminders
+
+Shine checks for manual maintenance on ordinary interactive invocations. Checks use one of four
+schedules: every invocation, once per minute, once per hour, or once per day. A due check runs when
+Shine is invoked; there is no permanent background service.
+
+The retired HTTP service's registration files are checked on each eligible invocation. Native
+service status is checked at most hourly by a short-lived background process, and its result is
+shown on a later invocation. The same maintenance action is normally reminded at most once per day.
+Checks only inspect state; they do not remove services, delete files, or execute Presets.
+
+Run all current maintenance checks immediately, including when configuration cannot be loaded:
+
+```text
+shine state check
+```
+
+Maintenance reminders and incomplete-check warnings use bold yellow when stderr supports color,
+with one blank line separating the reminder block from command output. `NO_COLOR` disables color.
+
+Automatic reminders go to terminal stderr. They are skipped in noninteractive use and for help,
+completion, Preset authoring, environment commands, command runners, SSH/transfer, theme sync,
+binary management, migration, cleanup, and recovery commands. Explicit `state check` also works
+with redirected output and repeats findings immediately. An incomplete check is reported there;
+automatic check failures do not block ordinary commands.
+
+If another check or cleanup runs in the same configuration directory while `state check` is
+inspecting, the older check asks you to retry and exits with a nonzero status instead of reporting
+completion.
+
+The existing version check and required patch-upgrade policy are unchanged. Maintenance checks
+do not replace permission, trust, compatibility, or approval checks before an operation.
+
+### Remove the retired HTTP service
+
+```text
+shine clear serve
+```
+
+`clear` requires an explicit target; running it alone does not clean up everything. `clear serve`
+stops and removes an older version's user service without loading Shine configuration or deleting
+published files. Repeating successful cleanup is safe; service-manager errors are reported.
+Successful cleanup resets its cached reminders and discards in-flight results in the selected
+configuration directory. Use the same `--config-dir` or `SHINE_CONFIG_DIR` when checking that state.
+The `shine serve` namespace is removed. See
+[Installation and upgrades](../installation.md#retire-an-older-local-http-service).
+
+`shine state migrate` remains the command for versioned runtime-state migrations.
 
 ## SSH and file transfer
 

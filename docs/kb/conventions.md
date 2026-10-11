@@ -37,6 +37,10 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 - Follow Semantic Versioning for the published CLI and `shine-core`: incompatible public CLI,
   configuration, automation, or library-contract changes → major; backward-compatible
   user-facing features → minor; only backward-compatible user-facing fixes → patch.
+- **2.4.0 release exception (2026-10-11):** the maintainer chose a minor release for removing the
+  optional HTTP service and changing env precedence and write targets. Keep the current behavior,
+  disclose incompatibilities and manual migration in CHANGELOG and both manual locales, and retain
+  `clear serve` for legacy service cleanup. This exception does not change the general rule above.
 - A versioned release candidate uses `X.Y.Z-rc.N`. It is a reproducible prerelease, does not
   replace the latest stable release, and does not trigger the stable `release` → `main` sync.
 - Generated RC notes cover the immediately preceding versioned tag; generated stable notes cover

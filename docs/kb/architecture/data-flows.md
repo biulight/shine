@@ -34,9 +34,14 @@ validated target + immutable Preset snapshot
 
 Generator, hook, artifact, Shell delivery, bootstrap, and profile-code triggers are modeled as
 unisolated code boundaries plus conservative semantic steps. Classification never depends on an
-author's `opaque_code` field. Code is never run during planning and missing or stale target-scoped
+author's `opaque_code` field. App assessments record typed triggered entry kinds; a static filename
+beginning with `generator:`, `hook:` or `artifact:` is ordinary data, not a code trigger.
+Code is never run during planning and missing or stale target-scoped
 trust remains a blocker for external code delivery/execution. A supported receipt can drive uninstall after source
 disappearance, but cannot recreate missing teardown code.
+Planner and App/Shell/Sys action executors share `review_path` root-aware filesystem identity
+encoding. CLI display translates those identities only after exact permission/provenance matching;
+the displayed path is never used to grant access or compute an approval.
 Typed filesystem operations also record exact presentation-purpose groups. The CLI summarizes
 uniquely attributed installation, maintenance and recovery material in ordinary ready Plans;
 user destinations, ambiguous entries, blocked Plans and recovery reviews stay explicit. All
@@ -63,6 +68,12 @@ uniquely Core-attributed cache write permissions under maintenance and stale-sou
 under Warnings; ambiguous effects retain their original App review.
 `upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate preview/inspection paths.
 Scoped external-code trust, ownership, and administrator authorization remain additional gates.
+App Plan and Action IR construction share static relocation eligibility. Typed optional step kinds
+carry relocation, stale-prune, forced-removal and shared Shell code intent; they enter the fingerprint
+and replace diagnostic-string routing without turning Plan steps into executable Actions. App apply
+methods share exact approval/IR/permission validation and retain action-specific live-state checks.
+Recovery planning dispatches read-only action assessments after receipt-conflict checks; approved
+recovery re-plans under the lock and dispatches rollback handlers in reverse action order (ADR 0104).
 After approval, the CLI upgrade report applies the same relevance rule to unchanged App and Sys
 outcomes; `--verbose --full-plan` restores their individual rows (ADR 0098). The structured
 lifecycle result still includes every selected item.
@@ -98,9 +109,11 @@ After trust and Plan approval, App generators, script hooks and artifacts materi
 captured effective category into a fresh owner-only invocation directory below
 `shine_dir/runtime/app/<category>/`. Entry paths and cwd use that copy. `SHINE_APP_DIR` and
 `SHINE_APP_SOURCE_DIR` identify the effective copy; `SHINE_APP_OVERLAY_DIR` identifies the captured
-effective overlay subset. Relative imports therefore cannot reopen changed checkout helpers.
+effective overlay subset. Without a captured overlay, execution explicitly injects an empty
+`SHINE_APP_OVERLAY_DIR` so ambient or caller-injected paths cannot select uncaptured files.
+Relative imports therefore cannot reopen changed checkout helpers.
 Bun dependency mode still comes from the captured script's source layer. Execution and spawn errors
-both clean only the invocation tree; persistent artifact output uses the existing state/cache/HTTP
+both clean only the invocation tree; persistent artifact output uses the existing state/cache
 paths. Plans declare the create/remove effects before execution (ADR 0092).
 
 ## Shell availability and ownership inspection
@@ -247,6 +260,8 @@ process, network, privilege, or mutation operations.
 Only a validation-clean immutable snapshot reaches lint policy. Core loads the already-authoritative
 App, Shell, and Sys models for each relevant platform, deduplicates logical findings, and emits a
 versioned report with no physical checkout or suspected private path.
+Unavailable App models are a normal per-platform omission. Synthetic contexts select PowerShell
+on Windows and Zsh on Unix so lint covers the same resources as validation.
 
 ```text
 repository/category/manifest path → immutable scope → all-platform validation
@@ -330,6 +345,11 @@ Shell lifecycle targets are either a category (`utils`) or one command in a cate
 deployment material so a command can consume sibling resources, while launchers and
 `shell-manifest.toml` receipts are command-scoped.
 
+Approved lifecycle execution takes `shell-lifecycle.lock` before regenerating and validating its
+Plan and retains it through receipt persistence and cleanup. Recovery, completion updates and live
+rendering use the same lock; any privileged transaction lock is acquired afterward. Standalone
+receipt updates also lock, while internal updates reuse the outer guard (ADR 0106).
+
 Command install filters metadata before transforms and launcher creation, then upserts only the
 selected manifest target. Category install retains the existing replace-category reconciliation.
 For embedded sources, Core derives one payload-free `ReplaceShellCache` action per selected category
@@ -397,7 +417,7 @@ entries are never removed.
 
 Every mutating or dry-run Shell lifecycle entry loads `shell-manifest.toml` before extraction,
 snapshot, render, launcher, receipt, or profile work. Legacy v0 normalizes in memory, successful
-mutations save schema v1, read-only status/update does not rewrite it, and a future version fails
+mutations save schema v2 (legacy v0/v1 normalize in memory), read-only status/update does not rewrite it, and a future version fails
 before mutation. The Shell adapter emits one `shell/<category>/<command>` outcome per installed or
 selected command. Read-only update maps typed row changes to `pending` plus write-preview effects;
 foreign launcher ownership is `conflict`, not pending, and upgrade preserves that launcher and its
@@ -408,6 +428,25 @@ Shell execution emits CLI-private presentation events instead of writing termina
 terminal renderer owns shared upgrade-section state, while writer-backed recording tests pin
 quiet/verbose sections, conflicts, profile hints, and stdout/stderr routing.
 
+## Transformed Live Bun invocation
+
+A `live-bun-v2` launcher binds its absolute installation root and calls hidden `__shell-launch`
+once. CLI loads global/project/env override configuration once, then constructs the existing captured
+Core runtime. `prepare_live_bun_launch` holds the operation lock while refusing a pending Shell journal,
+validating one installed receipt and its env/transform/path contract, and rendering it. The description
+contains only the script path, dependency enum and env specs. CLI drops the runtime and releases the
+lock before encrypted-first declared-value resolution and direct Bun spawn. Stdio/cwd are inherited,
+workspace discovery is absent, and the hidden route skips version notifications. Empty declarations
+still allow template rendering, but never inject the whole Config env table. Later env/spawn errors
+leave successful rendered output in place; shared output remains mutable after preparation.
+The Windows PowerShell entry explicitly encodes argv for `ProcessStartInfo` with shell execution
+disabled, preserving empty args, literal `--`, quotes and trailing backslashes under PowerShell 5.1.
+It starts the PATH-resolved Shine executable with inherited stdio/cwd; no additional shell is spawned.
+
+Missing format fields select the frozen legacy launcher. Schema-2 manifest plus strict Action receipt
+fields protect new formats from old readers. Upgrade, uninstall and recovery reconstruct resources
+from the captured format/root, including both Windows shims (ADR 0102).
+
 ## App install (`shine app install <category>`)
 
 `CoreRuntime` owns the complete App lifecycle from an immutable preset snapshot: metadata and
@@ -417,6 +456,12 @@ CLI supplies resolved config plus `rust-embed` bytes. Shared runtime bootstrap d
 external/overlay tree through `FileSystemHost`, constructs the immutable snapshot, and submits the
 request; the CLI renders typed events/reports. There is no frontend-specific directory walker,
 prepared-file path, or CLI fallback executor.
+
+Approved App mutations first acquire the configuration-scoped lifecycle lock, then replan and
+validate the original approval against current state. The guard spans generators, hooks, file
+effects, and all manifest saves. Install excludes files marked Preserve before generator assessment
+and reports them as user-modified without changing their destination, backup, or receipt. Other
+App mutation entry points, including explicit recovery, share this lock (ADR 0105).
 
 The Core flow is:
 
@@ -438,7 +483,8 @@ The Core flow is:
 4. **File ops** — `install_core/file_ops.rs` backs up any pre-existing user file to
    `<name>.shine.bak`, then writes the (transformed) content to `dest`. Destinations with
    `requires_admin = true` (e.g. `/etc/docker/daemon.json`) go through the sudo path, serialized
-   by a cross-process advisory lock (`$TMPDIR/shine-admin.lock`, `create_dir` as mutex).
+   by a cross-process OS file lock (`$TMPDIR/shine-admin.lockfile`). The persistent file is never
+   deleted to reclaim ownership; a 30-second wait timeout returns an error.
 5. **Manifest** — `install_core/manifest.rs` upserts an `AppEntry` into `~/.shine/app-manifest.toml`,
    recording dest, content hash, strategy, and **`requires_admin`** (must persist — uninstall
    routes on it; see lessons entry 2026-07-04). Successful saves from mutation commands write
@@ -460,6 +506,13 @@ Reverse of install, driven entirely by the manifest — never by re-scanning pre
    receipt-declared top-level keys for JSON merge.
 3. Restore `<name>.shine.bak` if one exists.
 4. Remove the manifest entry.
+
+CLI App and Shell uninstall share a completion policy over typed lifecycle outcomes. Preserved,
+conflicting, or failed outcomes produce an incomplete summary and a nonzero actual-command exit,
+even when independent resources were removed. Successful preview remains zero. App local file
+reports carry the receipt strategy solely for removal/backup/managed-key guidance; stable lifecycle
+results and snapshot-bound approval remain unchanged. Shell conflict reporting distinguishes
+retained files from receipt cleanup and offers no force override.
 
 ## Declarative App action and recovery
 
@@ -710,8 +763,8 @@ flow for an app preset's `[artifact].script`:
 2. Resolves the script's location: an overlay's `app/<name>/<script>` wins when that exact script
    exists; otherwise the source (built-in or external) script is used. This lets an overlay keep
    local policy files while inheriting a generic built-in artifact.
-3. Creates (idempotently, before spawning) `SHINE_APP_HTTP_DIR` (`<shine_dir>/http/app/<name>`),
-   `SHINE_STATE_DIR` (`<shine_dir>/state/app/<name>`), and `SHINE_CACHE_DIR` (the OS cache dir via
+3. Creates (idempotently, before spawning) `SHINE_STATE_DIR` (`<shine_dir>/state/app/<name>`)
+   and `SHINE_CACHE_DIR` (the OS cache dir via
    the `directories` crate — `<os-cache>/shine/app/<name>`, the same crate/pattern
    `env/workspace.rs::cache_path` already uses for its own per-project cache).
 4. Injects only `[artifact].env` mappings whose sources are listed by the category's
@@ -785,6 +838,12 @@ invocation, then executes or sources the atomically refreshed file under `render
 
 ## Managed Sys apply and recovery
 
+Approved managed operations, bootstrap, profile changes, and recovery acquire `sys-lifecycle.lock`
+before fresh approval validation, retaining it through shared manifest persistence and cleanup.
+Standalone managed-file mutations and profile synchronization use the same lock. The privileged
+transaction lock is acquired afterward; a manifest change while waiting invalidates an approval
+that observes it (ADR 0106).
+
 Managed-file and split-DNS apply/update/uninstall first derive typed actions and an exact previous
 and desired `SysRunEntry`. Core writes `sys-operation-journal.toml` before the first resource
 mutation, persists the desired receipt, records receipt commit, and then removes exact rollback
@@ -831,9 +890,13 @@ installer execution, or profile writes.
 
 Inspection, preview, preflight, and profile composition read the immutable Sys snapshot without
 materializing it. Script existence is proven by the logical snapshot entry. After authorization,
-script execution atomically replaces `<shine_dir>/runtime/sys/<os-id>/` with the captured category
-and runs that staged copy; neither external-source paths nor `Path::is_file` can reopen ambient
-preset state after shared bootstrap capture.
+script execution creates a private `<shine_dir>/runtime/sys/<os-id>/<invocation>/` copy of the
+captured category, restores captured helper executable intent, and runs that copy. It removes only
+its own invocation after success or error; other invocations and legacy runtime files remain untouched.
+Creation and cleanup permissions share the category runtime scope; random IDs never enter the Plan.
+Neither external-source paths nor `Path::is_file` can reopen ambient preset state after capture.
+Bounded Unix processes have cancellation guards for their process groups; inherited foreground
+terminal input is handed to the child and restored after it finishes or is cancelled (ADR 0100).
 
 Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`.
 `core/src/runtime/sys_profile/compose.rs` combines base pre/post content with all enabled item
@@ -850,6 +913,34 @@ Top-level `shine list` reads current-OS entries with `managed = true` directly f
 `sys-manifest.toml` for its installed-only `System Configs` section. It does not call the live
 desired-state checker; `shine update` remains responsible for showing only pending managed
 changes.
+
+## Maintenance advisories (`shine state check` / interactive invocation)
+
+`cli/src/maintenance/` owns this advisory flow independently of the version gate:
+
+1. Before normal config loading, eligible terminal-stderr invocations derive a scope from the
+   selected absolute config root, effective home, native config root and platform. No Presets or
+   secrets are loaded. `state check` and the hidden worker route before config loading as well.
+2. Under a nonblocking state lock, load the private atomic cache in
+   `<shine_dir>/maintenance/<scope-hash>/checks.json`. Missing/corrupt/foreign-build state is a miss.
+   Rules choose every invocation/minute/hour/day independently from inline/background execution.
+3. Snapshot existing background findings and reserve due heavy rules with a ticket and 120-second
+   lease. Release the lock before observing registration files (100 ms limit) or native processes.
+4. Commit inline results only if the generation still matches; deduplicate findings by action and
+   remind at most daily on stderr. Only background findings already present at invocation start
+   are eligible. Spawn the current executable's hidden worker with absolute config scope and ticket.
+5. The worker detaches its process session/group and stdio, takes a nonblocking worker lock, validates
+   pending tickets, and runs read-only native probes (10-second child timeout, bounded output).
+   Each result is committed under the state lock only if generation, rule revision and ticket match.
+   The whole worker is bounded to 30 seconds; failures retry no sooner than one minute, and lost
+   workers become retryable after the lease expires. Locks are never unlinked for reclamation.
+6. Explicit `state check` supersedes in-flight work, runs current rules synchronously, repeats findings
+   and reports incomplete probes. Successful `clear serve` advances the generation and resets its
+   action state in the selected config scope, so an older worker cannot resurrect a reminder.
+   If a newer check or cleanup supersedes an explicit check, it prints a retry warning and exits
+   nonzero without a completion summary; it cannot commit its obsolete findings.
+
+No advisory worker applies changes, executes Presets, or decides trust/approval/release gates.
 
 ## Update check (`shine update` / background check)
 
@@ -895,8 +986,30 @@ usable. `shine preset overlay link --git <url>` writes the config and clones imm
 `config/discovery.rs` priority chain (highest first):
 `SHINE_CONFIG_DIR` env → `SHINE_PRESETS` env (presets dir only) → `presets_dir` in
 `config.toml` → default `~/.shine/`. Project-local configs inherit unset keys from the global
-config (see lessons entry 2026-07-04 on inheritance). `Config` saves go through
-`shine_core::sync_table`, which preserves TOML comments.
+config (see lessons entry 2026-07-04 on inheritance). `Config` saves use
+`shine_core::sync_table`; directed key edits use `toml_edit`. Both preserve TOML comments. CLI runtime assembly makes selected roots
+lexically absolute before snapshot capture and planning; it does not resolve ordinary directory
+symlinks or require missing destinations to exist. RealHost metadata rejects special filesystem
+entries, so capture cannot open a FIFO, socket, or device as a regular preset payload.
+
+Env resolution captures and validates every selected file, then merges builtin defaults → active
+project-resolved overlay → global `[env]` → global env file → nearest project `[env]` → project env
+file. Strings and detailed entries missing `description` inherit descriptions independently of
+values; explicit empty descriptions clear them. Config retains raw layers, effective values, value
+and description provenance, and input preimages. Builtins never persist during initialization or
+unrelated saves; historical entries remain explicit. Global and sparse project saves apply deltas
+against raw active-file definitions, including explicit equal-value pending edits.
+
+Env list/get/explain and directed writes load without runtime initialization or advisory workers.
+Write options choose scope and file independently of the current source. Preflight protects
+implicit shadowed writes and rejects managed mirrors/retired force, then captures target and all
+configuration inputs. Encryption runs outside locks. Commit acquires the canonical target-parent
+`.<filename>.shine.lock`, rechecks inputs/context, and privately atomically updates only the selected
+key. Config saves, proxy config mutations and recipient migrations coordinate on that same lock.
+Deletion requires a target-local definition and reveals inheritance; it never seeks another layer.
+Post-save reload reports effective provenance and value change separately from saving. Errors after
+saving state that the file is already saved. External editors/Git are not transactionally locked.
+See [ADR 0109](../decisions/0109-env-baseline-and-directed-writes.md).
 
 ## Dynamic shell completion
 
@@ -919,8 +1032,16 @@ spawned child process, whose exit status is propagated by Shine.
 
 ## Transparent environment proxies
 
+Installation prepares all launcher bytes, captures regular-file preimages (including Unix modes),
+and parses the exact captured configuration/manifest before writing. Each write rechecks its
+preimage; reported failures roll back touched files in reverse order. Rollback accepts only this
+installation's expected bytes and mode states, preserves concurrent edits, and reports incomplete
+restoration. Configuration and restoration temporary files start private. This is an in-process
+failure rollback, not durable crash recovery ([ADR 0101](../decisions/0101-proxy-install-failure-rollback.md)).
+
 `shine env proxy install <command> --with KEY` places a Shine-owned PATH shim
-ahead of the real CLI. The shim records the resolved real executable and invokes
+ahead of the real CLI. The shim records the resolved real executable and absolute installation
+runtime directory, passes that directory through `--config-dir`, and invokes
 `env::proxy::exec`, which reloads the effective global/project configuration,
 selects that command's `[[env_proxy]]` rule, and injects only its declared
 values (`KEY_SECRET` decrypted first, then `KEY`) into the child process.
@@ -931,6 +1052,11 @@ retains the shim but bypasses environment-value lookup and secret decryption ent
 applicable rules also pass through without injection, so project-only proxies work outside that
 project. Target discovery compares canonical directory identities to exclude aliases of Shine bin,
 but retains the executable filename for rustup-style dispatch.
+
+Transfer control connections monitor peer closure concurrently with child output and final wait.
+Failure terminates and reaps the local transfer child, and cancellation drops a child guard. Unix
+children have a dedicated process group so cleanup also terminates descendants. Already-copied
+files remain the transfer tool's responsibility; Shine does not roll them back.
 
 ## SSH environment forwarding
 
@@ -966,9 +1092,14 @@ For a workspace request, `env/workspace.rs` reads the workspace and all selected
 into a bounded `WorkspaceSnapshot`. The request carries the exact bytes and SHA-256 identities,
 mode, complete declared-secret set, requested release mapping, and argv. `env/broker.rs` accepts
 only an exact match in `<shine_dir>/ssh-secret-broker.toml`; the local agent then confirms unless
-`--trust-remote-session` was explicitly set, decrypts only the policy-approved release subset, and
-sends values back. The remote merges those values with non-secret entries parsed from the same
+`--trust-remote-session` was explicitly set, decrypts captured sealed payloads, and returns only
+policy-approved effective secrets. The remote merges those values with non-secret entries from the same
 snapshot bytes and injects them only into the child process.
+
+Both sides preserve source order across plain and secret declarations: later plain suppresses an
+earlier secret response, later secret removes an earlier plain value even if unreleased, and only
+the winning approved secret source contributes a returned value. The policy still binds complete
+source hashes and declared-secret lists, including shadowed declarations.
 
 `shine ssh --secret-broker-inspect` displays one remote description without decrypting or writing.
 `--secret-broker-enroll --trust-remote-metadata` may create a local policy after local confirmation
@@ -984,6 +1115,9 @@ and fails closed until policy update. When no trusted local checkout exists,
 `--secret-broker-enroll --trust-remote-metadata --update-policy NAME` previews a full diff and may
 replace exactly one same-mode/same-argv allow while preserving the named policy's local identity
 fields; a concurrent local policy edit aborts the write.
+Local policy updates use the same exact-target recheck after human confirmation. Every writer
+acquires `ssh-secret-broker.lock` before its final store read and retains it through persistence;
+unrelated policy changes are merged from that fresh read, never from the review-time store.
 
 ## Personal task runner (`shine task run` / `shine run`)
 
@@ -997,7 +1131,10 @@ terminating signal becomes `128 + signal`), never wrapped in an anyhow error, so
 exit semantics survive Shine in the middle. `shine run <NAME>` is a top-level alias routed to the
 same handler. `task::handle_save` validates the name (`[A-Za-z0-9._-]`, letter/digit start) and
 rejects an empty command or a duplicate without `--force`; `info`/`list` render the argv back to a
-copy-paste-safe line by shell-quoting shell-significant arguments.
+copy-paste-safe line by shell-quoting shell-significant arguments. Save and delete acquire
+`<shine_dir>/tasks.lock` through `FileSystemHost::acquire_operation_lock` before loading the
+manifest, retain it through validation and atomic save, and release it without unlinking.
+The shared 30-second timeout fails without changing the manifest; reads remain lock-free.
 
 ## Secret backend routing (GPG / age)
 
@@ -1030,6 +1167,11 @@ manages phone-plugin TPM/Secure Enclave keys, replay, locator, pairing, recovery
 [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md).
 
 
+All workspace sealing rejects symbolic-link sources (and multiple hard links on Unix) before
+capturing any sources and rechecks file type/link count before atomic replacement. Ordinary GPG
+encryption and decryption force `--output -`; empty successful encryption output is rejected
+before serializing a sealed source, preserving pending plaintext on failure.
+
 Hybrid workspace sealing captures policy and source bytes under cooperating workspace/source
 locks, resolves exact GPG public encryption keys with option files disabled, and preflights both
 encryption branches before decrypting old payloads. A fresh OS-random data key encrypts one payload;
@@ -1052,7 +1194,8 @@ for the unchanged envelope and sealing concurrency contract.
 ## One-operation external code consent
 
 Trusted human-facing lifecycle review may obtain one-time consent for exact external Preset code
-alongside Plan confirmation. Temporary grants are private Core runtime state, cleared after review,
+alongside Plan confirmation. CLI confirmation mentions external-code consent only when a typed
+external/overlay boundary is listed; internal-only Plans use the ordinary apply question. Temporary grants are private Core runtime state, cleared after review,
 and carried only in the non-serializable ApprovedOperation. Execution reinstalls those exact
 identities and re-plans against fresh input; changed source, state or configuration rejects approval.
 No persistent grant is written. Automatic `--yes` and read-only/AI review use the ordinary path and

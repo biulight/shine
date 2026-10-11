@@ -1,4 +1,3 @@
-use anyhow::Context;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -54,6 +53,15 @@ impl HostError {
 
 /// Observation-only filesystem capability used by security planning and
 /// read-oriented runtime paths.
+///
+/// Mutation is unavailable through this capability, irrespective of module layout.
+///
+/// ```compile_fail,E0599
+/// use shine_core::runtime::FileSystemObservationHost;
+/// fn cannot_write<H: FileSystemObservationHost>(host: &H) {
+///     let _ = host.write_atomic(std::path::Path::new("destination"), b"data");
+/// }
+/// ```
 pub trait FileSystemObservationHost {
     fn canonicalize<'a>(
         &'a self,
@@ -84,6 +92,13 @@ pub trait FileSystemObservationHost {
 /// Filesystem mutation capability. Security planners deliberately bind only
 /// [`FileSystemObservationHost`].
 pub trait FileSystemHost: FileSystemObservationHost {
+    /// Hold a configuration-scoped lifecycle transaction across fresh planning,
+    /// effects and receipt persistence. The lock is infrastructure, not approval.
+    fn acquire_operation_lock<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<PrivilegedOperationGuard>> + Send + 'a>>;
+
     fn write_atomic<'a>(
         &'a self,
         path: &'a Path,
@@ -241,6 +256,7 @@ pub trait SplitDnsHost: SplitDnsObservationHost {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostOperation {
+    AcquireOperationLock(PathBuf),
     AcquirePrivilegedOperation,
     WritePrivileged(PathBuf),
     SetModePrivileged { path: PathBuf, mode: u32 },
@@ -358,8 +374,13 @@ impl FileSystemObservationHost for RealHost {
                 FileKind::Symlink
             } else if metadata.is_dir() {
                 FileKind::Directory
-            } else {
+            } else if metadata.is_file() {
                 FileKind::File
+            } else {
+                return Err(HostError::io(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "special filesystem entries are not supported",
+                )));
             };
             #[cfg(unix)]
             let unix_mode = {
@@ -400,6 +421,13 @@ impl FileSystemObservationHost for RealHost {
 }
 
 impl FileSystemHost for RealHost {
+    fn acquire_operation_lock<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<PrivilegedOperationGuard>> + Send + 'a>> {
+        Box::pin(super::operation_lock::acquire(path))
+    }
+
     fn set_mode<'a>(
         &'a self,
         path: &'a Path,
@@ -425,23 +453,14 @@ impl FileSystemHost for RealHost {
         bytes: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
         Box::pin(async move {
-            let parent = path.parent().unwrap_or_else(|| Path::new("."));
-            tokio::fs::create_dir_all(parent)
+            crate::persist::atomic_write(path, bytes)
                 .await
-                .map_err(HostError::io)?;
-            let temp = parent.join(format!(".shine-core-write-{}", uuid::Uuid::new_v4()));
-            if let Err(error) = tokio::fs::write(&temp, bytes).await {
-                return Err(HostError::io(error));
-            }
-            #[cfg(windows)]
-            if path.exists() {
-                tokio::fs::remove_file(path).await.map_err(HostError::io)?;
-            }
-            if let Err(error) = tokio::fs::rename(&temp, path).await {
-                let _ = tokio::fs::remove_file(&temp).await;
-                return Err(HostError::io(error));
-            }
-            Ok(())
+                .map_err(|error| {
+                    let kind = error
+                        .downcast_ref::<std::io::Error>()
+                        .map_or(std::io::ErrorKind::Other, std::io::Error::kind);
+                    HostError::new(kind, error)
+                })
         })
     }
 
@@ -565,7 +584,16 @@ impl ProcessHost for RealHost {
             }
             command.kill_on_drop(true);
             let mut child = command.spawn()?;
-            let process_group = bounded.then(|| child.id()).flatten();
+            let mut scope =
+                super::process_scope::ProcessScope::new(bounded.then(|| child.id()).flatten());
+            if request.inherit_stdin
+                && request.stdin.is_empty()
+                && let Err(error) = scope.inherit_terminal()
+            {
+                scope.stop();
+                let _ = child.kill().await;
+                return Err(error.into());
+            }
             let stdin = child.stdin.take();
             let mut stdout = child.stdout.take();
             let mut stderr = child.stderr.take();
@@ -573,7 +601,15 @@ impl ProcessHost for RealHost {
             let mut stderr_bytes = Vec::new();
             let mut completion = Box::pin(async {
                 let (status, (), (), ()) = tokio::try_join!(
-                    child.wait(),
+                    async {
+                        let status = child.wait().await?;
+                        if !status.success() {
+                            // Descendants may keep the captured pipes open after
+                            // the foreground child fails or receives a signal.
+                            scope.stop();
+                        }
+                        Ok::<_, std::io::Error>(status)
+                    },
                     async {
                         if let Some(mut stdin) = stdin {
                             stdin.write_all(&request.stdin).await?;
@@ -613,11 +649,20 @@ impl ProcessHost for RealHost {
             let status = match result {
                 Ok(status) => status,
                 Err(error) => {
-                    terminate_process(&mut child, process_group).await;
+                    scope.stop();
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
                     return Err(error.into());
                 }
             };
 
+            if status.success() {
+                scope.finish();
+            } else {
+                // A signal or failed installer must not leave background work
+                // running after the foreground command has returned.
+                scope.stop();
+            }
             Ok(ProcessOutput {
                 exit_code: status.code(),
                 stdout: stdout_bytes,
@@ -651,26 +696,13 @@ async fn read_process_stream<R: AsyncRead + Unpin>(
     Ok(())
 }
 
-async fn terminate_process(child: &mut tokio::process::Child, process_group: Option<u32>) {
-    #[cfg(unix)]
-    if let Some(id) = process_group {
-        // Keep the original group ID even if wait() already reaped the parent:
-        // descendants may still hold a pipe open after the parent exits.
-        unsafe {
-            libc::kill(-(id as i32), libc::SIGKILL);
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = process_group;
-    let _ = child.start_kill();
-    let _ = child.wait().await;
-}
-
 impl PrivilegedFileSystemHost for RealHost {
     fn acquire_privileged_operation<'a>(
         &'a self,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<PrivilegedOperationGuard>> + Send + 'a>> {
-        Box::pin(acquire_admin_operation_lock())
+        Box::pin(async {
+            super::operation_lock::acquire(&std::env::temp_dir().join("shine-admin.lockfile")).await
+        })
     }
 
     fn write_privileged<'a>(
@@ -774,36 +806,6 @@ impl SplitDnsHost for RealHost {
             }
             Ok(())
         })
-    }
-}
-
-struct AdminOperationLock {
-    path: PathBuf,
-}
-
-impl Drop for AdminOperationLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir(&self.path);
-    }
-}
-
-async fn acquire_admin_operation_lock() -> anyhow::Result<PrivilegedOperationGuard> {
-    let path = std::env::temp_dir().join("shine-admin.lock");
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        match tokio::fs::create_dir(&path).await {
-            Ok(()) => return Ok(Box::new(AdminOperationLock { path })),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = tokio::fs::remove_dir(&path).await;
-                    continue;
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-            Err(error) => {
-                return Err(error).context("failed to acquire admin operation lock");
-            }
-        }
     }
 }
 
@@ -1023,9 +1025,237 @@ async fn restart_systemd_resolved() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn atomic_replacement_failure_preserves_destination_and_cleans_stage() {
+        let dir = std::env::temp_dir().join(format!("shine-host-atomic-{}", uuid::Uuid::new_v4()));
+        let destination = dir.join("destination");
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::write(destination.join("retained"), "previous state").unwrap();
+        assert!(RealHost.write_atomic(&destination, b"new").await.is_err());
+        assert_eq!(
+            std::fs::read(destination.join("retained")).unwrap(),
+            b"previous state"
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn atomic_replacement_updates_existing_receipt_without_leaving_a_stage() {
+        let dir = std::env::temp_dir().join(format!("shine-host-receipt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("receipt");
+        std::fs::write(&path, "previous").unwrap();
+        RealHost.write_atomic(&path, b"committed").await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"committed");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn special_entries_fail_snapshot_capture_without_opening_them() {
+        let root = std::env::temp_dir().join(format!("shine-fifo-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let fifo = root.join("pipe");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::super::capture_preset_snapshot(
+                &super::super::RealHost,
+                super::super::PresetSnapshotRequest {
+                    source: super::super::PresetSnapshotSource::External(root.clone()),
+                    overlay_root: None,
+                },
+            ),
+        )
+        .await
+        .expect("snapshot capture opened a FIFO");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("inspecting preset entry")
+        );
+        assert!(fifo.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     use super::*;
+
+    #[tokio::test]
+    async fn failed_parent_stops_descendants_before_draining_their_pipes() {
+        let marker =
+            std::env::temp_dir().join(format!("shine-failed-child-{}", uuid::Uuid::new_v4()));
+        let output = RealHost
+            .run(ProcessRequest {
+                program: "sh".into(),
+                args: vec![
+                    "-c".into(),
+                    "(sleep 0.3; printf leaked > \"$1\") & exit 2".into(),
+                    "probe".into(),
+                    marker.display().to_string(),
+                ],
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(output.exit_code, Some(2));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            !marker.exists(),
+            "descendant survived failed foreground child"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_terminates_descendants_even_after_parent_exit() {
+        for parent_exits in [false, true] {
+            let root = std::env::temp_dir().join(format!("shine-cancel-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            let ready = root.join("ready");
+            let marker = root.join("continued");
+            let tail = if parent_exits { "exit 0" } else { "wait" };
+            let script =
+                format!("(printf ready > \"$1\"; sleep 0.5; printf continued > \"$2\") & {tail}");
+            let task = tokio::spawn(RealHost.run(ProcessRequest {
+                program: "sh".into(),
+                args: vec![
+                    "-c".into(),
+                    script,
+                    "probe".into(),
+                    ready.display().to_string(),
+                    marker.display().to_string(),
+                ],
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            }));
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !ready.exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            if parent_exits {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            assert!(!marker.exists(), "descendant survived cancellation");
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn inherited_terminal_is_usable_and_restored_on_every_exit() {
+        const FIXTURE: &str = "SHINE_PROCESS_TTY_FIXTURE";
+        if let Ok(mode) = std::env::var(FIXTURE) {
+            let original = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
+            assert_eq!(original, unsafe { libc::getpgrp() });
+            let request = ProcessRequest {
+                program: "sh".into(),
+                args: vec!["-c".into(), "read value; printf '%s' \"$value\"".into()],
+                inherit_stdin: true,
+                timeout: Some(Duration::from_secs(if mode == "success" { 5 } else { 1 })),
+                ..Default::default()
+            };
+            if mode == "cancel" {
+                let task = tokio::spawn(RealHost.run(request));
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) } == original {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+            } else {
+                let result = RealHost.run(request).await;
+                if mode == "success" {
+                    let output = result.unwrap();
+                    assert_eq!(output.exit_code, Some(0));
+                    assert_eq!(output.stdout, b"hello");
+                } else if mode == "timeout" {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("process timed out")
+                    );
+                } else {
+                    assert_ne!(result.unwrap().exit_code, Some(0));
+                }
+            }
+            assert_eq!(unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) }, original);
+            return;
+        }
+        for mode in ["success", "timeout", "cancel", "interrupt"] {
+            let mode = mode.to_string();
+            // Each fixture owns a separate controlling terminal and process
+            // environment, so test workers never alter the developer's terminal.
+            let output = tokio::task::spawn_blocking(move || {
+                // Use a single-threaded driver: macOS terminal setup after a
+                // fork from Tokio's multithreaded process is not reliable.
+                std::process::Command::new("python3")
+                    .args(["-c", r#"
+import os, pty, select, signal, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ['SHINE_PROCESS_TTY_FIXTURE'] = sys.argv[2]
+    os.execv(sys.argv[1], [sys.argv[1], '--exact', 'runtime::host::tests::inherited_terminal_is_usable_and_restored_on_every_exit', '--nocapture'])
+output = bytearray()
+sent = False
+status = None
+deadline = time.monotonic() + 10
+while time.monotonic() < deadline:
+    if select.select([fd], [], [], 0.05)[0]:
+        try: chunk = os.read(fd, 4096)
+        except OSError: break
+        if not chunk: break
+        output.extend(chunk)
+        if sys.argv[2] == 'success' and not sent:
+            os.write(fd, b'hello\n')
+            sent = True
+    if sys.argv[2] == 'interrupt' and not sent and os.tcgetpgrp(fd) != pid:
+        os.write(fd, b'\x03')
+        sent = True
+    done, value = os.waitpid(pid, os.WNOHANG)
+    if done:
+        status = value
+        break
+if status is None:
+    done, value = os.waitpid(pid, os.WNOHANG)
+    if done: status = value
+    else:
+        os.kill(pid, signal.SIGKILL)
+        _, status = os.waitpid(pid, 0)
+os.close(fd)
+sys.stdout.buffer.write(output)
+sys.exit(os.waitstatus_to_exitcode(status))
+"#])
+                    .arg(std::env::current_exe().unwrap()).arg(mode)
+                    .output().unwrap()
+            }).await.unwrap();
+            assert!(
+                output.status.success(),
+                "PTY fixture failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 
     #[tokio::test]
     async fn timed_process_terminates_its_process_group_before_returning() {

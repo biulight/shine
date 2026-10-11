@@ -59,6 +59,10 @@ provider 不需要空的作者能力表。多个安装项都需要同一权限�
 Administrator 要求仍是显式执行契约。External/overlay 代码还需对完整有效 `sys/<os>/` 快照建立
 target-scoped trust。
 
+每次脚本调用都从独立的 Preset 快照副本运行，并保留辅助文件的执行权限；并发调用不会替换该副本。
+安装器可以读取继承的前台终端输入；安装器结束、失败、超时或被取消后，Shine 会恢复终端控制权。
+取消正在运行的操作会终止其隔离的 Unix 进程组，包括子进程。
+
 默认输出缩短快照标识。添加 `--verbose`（例如 `shine sys bootstrap --preset recommended --verbose`）
 可查看完整文件路径、标识与诊断码。两种视图审阅的是同一个完整 Plan，对选中的操作仍只进行一次确认。
 `--verbose` 不改变更早阶段的 `--dry-run` 预览。
@@ -129,6 +133,10 @@ shine sys recover --yes        # 非交互批准
 
 非 dry-run 的 managed 操作会显示绑定快照的 Plan，确认默认是 No。`--yes` 只跳过提示，不能
 跳过 Plan 展示、权限 blocker 或执行前复核。若项目需要管理员权限，会在 Plan 批准后另行请求。
+
+同一配置目录中的 Sys 变更会依次执行，包括 bootstrap、profile 变更和恢复。等待结束后，Shine
+会重新校验已审阅的 Plan；观察到的状态有变化时，需要重新审阅。等待超过 30 秒会报错，不执行
+等待中的操作，已完成操作的安装记录会保留。
 
 受管操作中断后，后续 Sys 改动会停止并提示运行 `shine sys recover`。只有相关状态在中断后未发生
 变化时，恢复才会完成或回退原操作；它不会覆盖修改过的资源或无关的 Shell profile 内容。

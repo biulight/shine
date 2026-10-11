@@ -14,8 +14,10 @@ pub mod home;
 pub mod info;
 pub mod init;
 pub(crate) mod install_core;
+pub mod legacy_serve;
 pub(crate) mod lifecycle_plan;
 pub mod list;
+pub mod maintenance;
 pub mod output;
 pub mod path_display;
 pub mod persist;
@@ -38,7 +40,6 @@ pub mod proc;
 pub mod secret;
 pub mod self_install;
 pub mod sentinel;
-pub mod serve;
 pub mod shell_quote;
 pub mod shells;
 pub mod shim;
@@ -55,3 +56,5 @@ pub mod version;
 
 pub use presentation::with_full_upgrade_plan;
 pub use presentation::with_security_plan_verbosity;
+
+pub(crate) mod uninstall;

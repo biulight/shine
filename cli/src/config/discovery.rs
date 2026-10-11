@@ -59,6 +59,7 @@ pub(super) fn preliminary_shine_dir_from_env(default: &Path) -> PathBuf {
 /// Attempt to read the `presets_dir` key from an existing config without
 /// doing a full parse. Returns `None` if the file is absent, unreadable, or the
 /// key is not set.
+#[cfg(test)]
 pub(super) async fn read_presets_override_from_toml(config_path: &Path) -> Option<PathBuf> {
     let content = tokio::fs::read_to_string(config_path).await.ok()?;
     read_minimal_config(&content).ok()?.presets_dir

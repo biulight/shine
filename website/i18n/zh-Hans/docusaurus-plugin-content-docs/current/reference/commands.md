@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 2.3.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
+本页适用于 Shine 2.4.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
 请阅读对应指南；本页只提供便于查找的命令索引。
 
 ## 目标名称
@@ -42,9 +42,10 @@ shine upgrade app/starship
 | `shine env ...` | 管理变量、工作区环境、命令代理和密钥 |
 | `shine ssh ...` / `shine local ...` | 建立 SSH 会话与传输文件 |
 | `shine task ...` / `shine run <NAME>` | 保存和运行个人命令 |
-| `shine serve ...` | 提供 `~/.shine/http/` 下的本地资源 |
 | `shine self ...` | 安装或升级 Shine 程序 |
 | `shine state migrate` | 预览或应用受支持的旧状态迁移 |
+| `shine state check` | 立即检查需要手动处理的维护事项，不执行修改 |
+| `shine clear serve` | 停止并移除已退役的 HTTP 用户服务注册 |
 | `shine trust ...` | 审阅外部预设代码的目标级信任 |
 | `shine completions ...` | 生成或安装 Shell 补全 |
 | `shine theme sync` | 输出终端主题环境变量 |
@@ -52,6 +53,9 @@ shine upgrade app/starship
 所有命令都接受全局选项 `--config-dir <PATH>`。
 
 Security Plan 默认显示用户文件的具体路径，并按用途汇总安装产物、Shine 内部维护及关联的备份/回滚文件，注明访问类型和路径数量。安装、升级、卸载、恢复、App refresh/artifact 和 Sys bootstrap/profile/apply 的审批都支持 `--verbose`，可展开已显示审阅范围中的文件路径、步骤、快照标识和诊断。
+
+文件系统权限路径使用常见形式：绝对路径显示为 `/etc/docker/daemon.json`，用户主目录下的路径显示为 `~/.zshrc`，已配置的 Shine 状态目录下显示为 `Shine state/...`，平台应用数据目录下显示为 `App data/...`。Windows 盘符和网络共享路径保留根路径。这些显示标签不会扩大所列权限。
+确认提示为 `Apply this Plan?`；只有列出外部/overlay 代码的 Plan 才会同时询问是否允许本次操作使用这些代码，并说明不会保存持久信任。
 
 Shell 命令安装按命令数合并，Shell 集成单独显示；内部状态与恢复文件合并统计路径数量，用户文件的备份关联仍会明确提示。`--verbose` 保留逐项明细。
 
@@ -79,6 +83,9 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [-
 - `--replace-managed` 可能覆盖安装后被修改的受管内容，请先运行 `shine info <TARGET> --diff`。
 - 如果 Shine 报告操作曾被中断，请运行 `shine shell recover`。发生过变化的文件会保留，可能需要人工处理。
 
+- Shell 卸载遇到归属冲突时，会列出未删除的启动器路径。Shell 没有 `--force` 覆盖选项；
+  请先检查这些文件，再决定是否移动或删除。冲突文件可能在安装记录清理后仍保留，输出会明确说明。
+
 参见 [管理 Shell 预设](../guides/shell-presets.md)。
 
 ## 应用预设
@@ -98,9 +105,31 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 - `app refresh` 显式刷新生成文件；`--force` 允许替换用户修改过的受管目标。安装收据必须属于
   该类别下的同一个源文件；`--force` 不能刷新由其他来源管理的目标。
 - `app uninstall --force` 可能删除用户修改过的受管内容，务必先使用 `--dry-run` 预览。
+- 受到保护的 App 文件会说明与安装记录不一致，随后集中显示内容与记录保留的结果。
+  强制预览指引按类别汇总，说明删除文件、按备份是否存在恢复配置，或移除受管 JSON 键的影响。
+  使用 `--force --dry-run` 或 `--verbose` 查看已记录备份路径；无关 JSON 键仍保留。
 - App 操作中断并阻塞后续变更时，使用 `shine app recover`。
 
 参见 [管理应用配置](../guides/app-presets.md)。
+
+已安装的 App 类别或单个来源文件被删除、改名，或切换来源后不可用时，安装内容仍受管理。
+`list` 继续显示该类别；`list`、`update` 和 `upgrade` 会说明来源缺失并给出卸载预览命令。
+升级默认保留这些内容。
+
+先使用 `shine app uninstall <OLD_CATEGORY> --dry-run`，再使用
+`shine app uninstall <OLD_CATEGORY>`，即可在 Preset 不可用时按原安装记录卸载。
+卸载只选择该类别的安装记录，不会认领其他类别在同一目标路径的记录。
+复制安装会移除未修改的受管内容，并恢复仍存在的已记录备份；JSON 合并安装只移除安装记录
+拥有的键，保留无关键。用户修改过的受管内容及其记录默认保留，只有显式 `--force` 才可覆盖。
+目标不存在时，卸载清理安装记录，并保留已记录备份。预览不改变文件、备份或记录，
+会说明用户修改及已记录备份的恢复行为。来源代码缺失时无法运行其 teardown。
+
+App 和 Shell 卸载会区分 `Uninstall complete`（已完成）、`Uninstall incomplete`（未完成）
+和 `Uninstall preview`（预览）。实际卸载留下受保护内容或冲突资源，或发生执行失败时，
+即使部分项目已完成，也会返回非零退出码。请检查各资源结果：非零退出码不会撤销已完成的删除。
+成功生成的预览即使提示保护也返回零；预览本身失败仍返回非零。
+默认卸载计划隐藏已知的无变化缓存步骤和空权限段；`--verbose` 保留完整审查。
+完整展示未完成原因后，命令仍以非零退出，但不重复输出泛化的 `Error` 行；其他错误仍正常显示。
 
 ## 状态、更新、信任与补全
 
@@ -110,6 +139,7 @@ shine info <TARGET> [--diff] [--verbose] [--run-generators]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
 shine upgrade [TARGET] [--pull] [--verbose] [--full-plan] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
+shine state check
 shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
 shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
 shine trust list [--verbose]
@@ -124,6 +154,8 @@ shine completions <bash|zsh|powershell>
 来源目录与来源层必须保持不变。这是来源级长期授权，不代表持续代码审阅。
 `trust list` 会将共享同一安全范围的 grant 合并为紧凑行，并对照当前 Preset 检查状态；`--verbose`
 会展开 capability、开发来源标签与复查提示。
+并发执行 `trust grant` 与 `trust revoke` 会保留对其他 target 的修改；另一条命令保存旧版 trust
+存储时不会恢复已经完成的撤销。
 
 交互式生命周期确认可仅授权本次外部代码，不保存 grant；自动化与 `--yes` 必须已有 trust，
 Shell live 必须使用 Development trust。
@@ -189,9 +221,10 @@ shine preset pull
 
 ```text
 shine env list [--reveal]
-shine env set <KEY> <VALUE> [--force]
+shine env set <KEY> <VALUE> [--global|--project|--overlay] [--env-file]
 shine env get <KEY>
-shine env delete <KEY> [--force]
+shine env explain <KEY> [--reveal]
+shine env delete <KEY> [--global|--project|--overlay] [--env-file]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
@@ -200,7 +233,7 @@ shine env proxy list
 shine env proxy uninstall <COMMAND>
 shine env proxy enable <COMMAND> [--project]
 shine env proxy disable <COMMAND> [--project]
-shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>] [--set <KEY>] [--force]
+shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>] [--set <KEY>] [--global|--project|--overlay] [--env-file]
 shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
@@ -209,6 +242,11 @@ shine env secret identity init --phone [--recipient-type <tag|phone>] [--label <
 shine env secret identity list
 ```
 
+范围参数互斥；省略时选择当前项目，否则全局。`--env-file` 选择该范围的 `shine.env.toml`；
+`--overlay` 只允许手动目录。默认写入会拒绝被高层遮蔽的键；显式目标允许维护被遮蔽项，
+输出会分别报告保存位置和当前有效来源。`set`、`delete` 与 `secret encrypt` 的旧 `--force`
+已停用并拒绝零写入；请改用明确的范围与文件参数。
+
 `env list --reveal`、`env get`、`env secret decrypt`、带 `--include-secrets` 的导出，以及 `env run`
 启动的子进程都可能接触明文。只在可信终端运行，也不要把密钥直接写入命令参数或文档。
 
@@ -216,7 +254,7 @@ Broker policy 命令及完整远程流程见
 [SSH 会话、密钥代理与文件传输](../guides/ssh-transfer.md)。本地变量、工作区加密、命令包装和 hybrid
 后端见 [管理环境变量与密钥](../guides/environment.md)。
 
-## 任务、本地服务与主题
+## 任务与主题
 
 ```text
 shine task save <NAME> [--force] [--cwd <PATH>] -- <COMMAND>...
@@ -226,20 +264,60 @@ shine task info <NAME>
 shine task delete <NAME>
 shine run <NAME> [-- EXTRA_ARGS...]
 
-shine serve install [--port <PORT>]
-shine serve start [--port <PORT>]
-shine serve status
-shine serve uninstall
-shine serve url <PATH> [--port <PORT>]
-
 shine theme sync [--auto] [--quiet]
 ```
 
-任务会运行保存的命令，并可使用保存的工作目录。本地服务会发布 `~/.shine/http/` 下的文件，不要在该
-目录放置密钥。
+任务会运行保存的命令，并可使用保存的工作目录。
 
-参见 [任务与本地服务](../guides/tasks-and-serve.md)和
+参见 [任务与应用构建产物](../guides/tasks-and-serve.md)和
 [同步终端主题](../guides/terminal-theme-sync.md)。
+
+## 清理
+
+### 维护提醒
+
+Shine 会在普通交互式调用时检查需要手动处理的维护事项。检查支持每次调用、每分钟、每小时、
+每天四档频率，到期后在调用 Shine 时触发，无需常驻后台服务。
+
+旧 HTTP 服务的注册文件会在每次符合条件的调用中检查；系统服务状态最多每小时由短生命周期
+后台进程检查一次，结果在后续调用时显示。同一维护事项通常每天最多提醒一次。检查只读取状态，
+不会移除服务、删除文件或执行预设。
+
+若想立即运行全部现有维护检查，即使配置无法加载，也可以执行：
+
+```text
+shine state check
+```
+
+stderr 支持颜色时，维护提醒和检查未完成的警告会以加粗黄色显示，整组提示与命令输出之间
+空一行。设置 `NO_COLOR` 可关闭颜色。
+
+自动提醒写入终端 stderr。非交互调用，以及帮助、补全、预设创作、环境命令、命令运行器、
+SSH/传输、主题同步、程序管理、迁移、清理和恢复命令会跳过自动提醒。
+显式执行 `state check` 支持重定向输出，并会立即重复显示发现的事项；未能完成的检查也会在此
+报告。自动检查失败不会阻断普通命令。
+
+若 `state check` 检查期间在同一配置目录又执行了另一轮检查或清理，较早的检查会提示重试并
+返回非零状态，不会报告检查已完成。
+
+现有版本检查和补丁版本强制升级策略保持不变。维护检查也不会替代操作前的权限、信任、
+兼容性或审批检查。
+
+### 移除旧 HTTP 服务
+
+```text
+shine clear serve
+```
+
+`clear` 必须指定目标；单独运行不会清理所有内容。`clear serve` 会停止并移除旧版用户服务，
+无需加载 Shine 配置，也不会删除已发布的文件。成功后重复清理也是安全的；系统服务管理器
+报错时会报告失败。整个 `shine serve` 命令已移除。参见
+[安装与升级](../installation.md#清理旧版本的本地-http-服务)。
+
+成功清理后，会重置所选配置目录中的相关提醒缓存，并丢弃尚未完成的旧检查结果。
+检查该状态时，请使用相同的 `--config-dir` 或 `SHINE_CONFIG_DIR`。
+
+版本化运行时状态迁移仍使用 `shine state migrate`。
 
 ## SSH 与文件传输
 

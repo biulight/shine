@@ -191,7 +191,7 @@ async fn init_from_dotenv_at(
         if dry_run {
             println!("Would create {display}");
         } else {
-            atomic_write(path, contents.as_bytes()).await?;
+            atomic_write_private(path, contents.as_bytes()).await?;
             println!("Created {display}");
         }
     }
@@ -534,6 +534,7 @@ pub async fn handle_seal(
     let scope = std::fs::canonicalize(lock_scope)?;
     let mut locked_paths = BTreeSet::new();
     for path in &files {
+        validate_seal_source(path).await?;
         let canonical = std::fs::canonicalize(path)?;
         if canonical != scope && locked_paths.insert(canonical.clone()) {
             source_locks.push(SealLock::acquire(&canonical)?);
@@ -625,9 +626,8 @@ pub async fn handle_run(
         }
         let mode = mode_arg.context("workspace --secret-broker requires --mode")?;
         let snapshot = snapshot_for_broker(workspace_arg, mode).await?;
-        let mut values = plain_values_from_broker_snapshot(&snapshot)?;
         let secrets = crate::ssh::request_workspace_secrets(snapshot.clone(), &argv).await?;
-        values.extend(secrets);
+        let values = merge_broker_values(&snapshot, secrets)?;
         return run_broker_command(command, values, snapshot.override_process_env, explicit).await;
     }
     // `--no-workspace` disables discovery entirely: only explicit `--with` values
@@ -727,7 +727,7 @@ fn merge_explicit(
     Ok(explicit)
 }
 
-async fn resolve_explicit_values(
+pub(super) async fn resolve_explicit_values(
     config: &Config,
     specs: &[String],
 ) -> Result<BTreeMap<String, String>> {
@@ -1037,7 +1037,43 @@ pub fn plain_values_from_broker_snapshot(
     let mut values = BTreeMap::new();
     for source in &snapshot.sources {
         let parsed = parse_source(Path::new(&source.path), &source.contents)?;
+        for key in parsed.secret.keys() {
+            values.remove(key);
+        }
         values.extend(parsed.plain);
+    }
+    Ok(values)
+}
+
+/// Keep the winning source index for each secret without decrypting any payload.
+fn broker_secret_sources(snapshot: &WorkspaceSnapshot) -> Result<BTreeMap<String, usize>> {
+    let mut sources = BTreeMap::new();
+    for (index, source) in snapshot.sources.iter().enumerate() {
+        let parsed = parse_source(Path::new(&source.path), &source.contents)?;
+        for key in parsed.plain.keys() {
+            sources.remove(key);
+        }
+        for key in parsed.secret.keys() {
+            sources.insert(key.clone(), index);
+        }
+    }
+    Ok(sources)
+}
+
+fn merge_broker_values(
+    snapshot: &WorkspaceSnapshot,
+    secrets: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    let mut values = plain_values_from_broker_snapshot(snapshot)?;
+    let sources = broker_secret_sources(snapshot)?;
+    // Older brokers may return a declared secret shadowed by a later plain value.
+    // Snapshot precedence still determines the remote child's effective values.
+    for (key, mut value) in secrets {
+        if sources.contains_key(&key) {
+            values.insert(key, value);
+        } else {
+            value.zeroize();
+        }
     }
     Ok(values)
 }
@@ -1048,8 +1084,25 @@ pub async fn decrypt_broker_snapshot(
     release: &[String],
 ) -> Result<BTreeMap<String, String>> {
     let release = release.iter().cloned().collect::<BTreeSet<_>>();
+    let declared = snapshot
+        .sources
+        .iter()
+        .map(|source| declared_secrets_from_source(&source.path, &source.contents))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<BTreeSet<_>>();
+    if !release.is_subset(&declared) {
+        bail!("broker release contains an undeclared secret key");
+    }
+    let sources = broker_secret_sources(snapshot)?;
+    let expected_release = release
+        .iter()
+        .filter(|key| sources.contains_key(*key))
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let mut values = BTreeMap::new();
-    for source in &snapshot.sources {
+    for (index, source) in snapshot.sources.iter().enumerate() {
         let path = Path::new(&source.path);
         let parsed = parse_source(path, &source.contents)?;
         for (key, state) in &parsed.secret {
@@ -1066,9 +1119,15 @@ pub async fn decrypt_broker_snapshot(
                 source.path
             );
         }
-        values.extend(secrets.into_iter().filter(|(key, _)| release.contains(key)));
+        for (key, mut value) in secrets {
+            if release.contains(&key) && sources.get(&key) == Some(&index) {
+                values.insert(key, value);
+            } else {
+                value.zeroize();
+            }
+        }
     }
-    if values.keys().cloned().collect::<BTreeSet<_>>() != release {
+    if values.keys().cloned().collect::<BTreeSet<_>>() != expected_release {
         bail!("broker response does not contain every released secret key");
     }
     Ok(values)
@@ -1080,6 +1139,7 @@ async fn seal_file(
     config: &Config,
     encryption: Option<&EncryptRecipients>,
 ) -> Result<()> {
+    validate_seal_source(path).await?;
     let contents = tokio::fs::read_to_string(path).await?;
     let updated = prepare_sealed_file(path, &contents, config, encryption).await?;
     verify_snapshot(path, &contents).await?;
@@ -1174,6 +1234,29 @@ impl Drop for SealLock {
     }
 }
 
+async fn validate_seal_source(path: &Path) -> Result<()> {
+    let metadata = tokio::fs::symlink_metadata(path)
+        .await
+        .with_context(|| format!("inspecting environment source {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!(
+            "sealing requires a regular environment source file, not a symbolic link: {}",
+            path.display()
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() != 1 {
+            bail!(
+                "sealing requires an environment source file with one hard link: {}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn verify_snapshot(path: &Path, original: &str) -> Result<()> {
     let current = tokio::fs::read(path)
         .await
@@ -1191,6 +1274,7 @@ async fn replace_sealed_file(
     workspace: Option<(&Path, &str)>,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
+    validate_seal_source(path).await?;
     let temp = path.with_extension(format!("shine-seal-{}", uuid::Uuid::new_v4()));
     let result = async {
         let mut options = tokio::fs::OpenOptions::new();
@@ -1204,6 +1288,7 @@ async fn replace_sealed_file(
         if let Some((path, original)) = workspace {
             verify_snapshot(path, original).await?;
         }
+        validate_seal_source(path).await?;
         verify_snapshot(path, original).await?;
         // std/tokio rename uses replacing MoveFileExW on Windows. Never unlink the destination.
         tokio::fs::rename(&temp, path).await?;
@@ -1528,12 +1613,12 @@ async fn run_broker_command(
     finish_command_status(status?)
 }
 
-async fn command_status(
+pub(super) fn command_builder(
     command: &[OsString],
     values: &BTreeMap<String, String>,
     override_process_env: bool,
     explicit: &BTreeMap<String, String>,
-) -> Result<std::process::ExitStatus> {
+) -> Result<Command> {
     let (program, args) = command
         .split_first()
         .context("a command is required after --")?;
@@ -1545,14 +1630,22 @@ async fn command_status(
         }
     }
     child.envs(explicit);
-    let status = child
-        .status()
-        .await
-        .with_context(|| format!("running {}", program.to_string_lossy()))?;
-    Ok(status)
+    Ok(child)
 }
 
-fn finish_command_status(status: std::process::ExitStatus) -> Result<()> {
+async fn command_status(
+    command: &[OsString],
+    values: &BTreeMap<String, String>,
+    override_process_env: bool,
+    explicit: &BTreeMap<String, String>,
+) -> Result<std::process::ExitStatus> {
+    command_builder(command, values, override_process_env, explicit)?
+        .status()
+        .await
+        .with_context(|| format!("running {}", command[0].to_string_lossy()))
+}
+
+pub(super) fn finish_command_status(status: std::process::ExitStatus) -> Result<()> {
     if status.success() {
         return Ok(());
     }
@@ -1730,6 +1823,60 @@ mod tests {
         tokio::fs::remove_dir_all(directory).await.unwrap();
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dotenv_import_keeps_pending_plaintext_private_on_create_and_force() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::test_support::make_temp_dir("shine-dotenv-private").await;
+        let input = dir.join(".env");
+        let output = dir.join(".env.shine.toml");
+        tokio::fs::write(&input, "TOKEN=pending-secret\n")
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o600))
+            .await
+            .unwrap();
+        for force in [false, true] {
+            if force {
+                tokio::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o644))
+                    .await
+                    .unwrap();
+            }
+            init_from_dotenv_at(&dir, &[], &["TOKEN".into()], force, false)
+                .await
+                .unwrap();
+            assert_eq!(
+                tokio::fs::metadata(&output)
+                    .await
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert!(
+                tokio::fs::read_to_string(&output)
+                    .await
+                    .unwrap()
+                    .contains("pending-secret")
+            );
+            assert_eq!(
+                tokio::fs::read_to_string(&input).await.unwrap(),
+                "TOKEN=pending-secret\n"
+            );
+            assert_eq!(
+                tokio::fs::metadata(&input)
+                    .await
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
     #[test]
     fn resolves_vite_style_layers_in_declared_order() {
         let workspace = Path::new("/tmp/project/shine.workspace.toml");
@@ -1884,6 +2031,144 @@ mod tests {
         assert_eq!(values.get("A").map(String::as_str), Some("base"));
         assert_eq!(values.get("B").map(String::as_str), Some("local"));
         tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broker_preserves_source_precedence_and_releases_only_winning_secrets() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::test_support::env_lock();
+        struct RestorePath(Option<OsString>);
+        impl Drop for RestorePath {
+            fn drop(&mut self) {
+                // SAFETY: env_lock is retained throughout this test.
+                unsafe {
+                    match &self.0 {
+                        Some(value) => std::env::set_var("PATH", value),
+                        None => std::env::remove_var("PATH"),
+                    }
+                }
+            }
+        }
+        fn source(path: &str, plain: &[(&str, &str)], secrets: &[(&str, &str)]) -> SourceSnapshot {
+            let mut document = DocumentMut::new();
+            document["version"] = value(1);
+            for (key, text) in plain {
+                document["plain"][key] = value(*text);
+            }
+            for (key, _) in secrets {
+                document["secret"][key] = value(true);
+            }
+            let payload = SecretPayload {
+                version: SECRET_PAYLOAD_VERSION,
+                values: secrets
+                    .iter()
+                    .map(|(key, value)| ((*key).into(), (*value).into()))
+                    .collect(),
+            };
+            if !secrets.is_empty() {
+                document["payload"]["data"] =
+                    value(STANDARD.encode(toml::to_string(&payload).unwrap()));
+            }
+            SourceSnapshot {
+                path: path.into(),
+                contents: document.to_string(),
+            }
+        }
+        let root =
+            std::env::temp_dir().join(format!("shine-broker-precedence-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("gpg"),
+            "#!/bin/sh\nfor arg in \"$@\"; do file=\"$arg\"; done\n/bin/cat \"$file\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(root.join("gpg"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _restore = RestorePath(std::env::var_os("PATH"));
+        // SAFETY: all environment-mutating tests hold env_lock.
+        unsafe { std::env::set_var("PATH", &root) };
+        let snapshot = WorkspaceSnapshot {
+            workspace_path: root.join(WORKSPACE_FILE).to_string_lossy().into_owned(),
+            workspace_contents:
+                "version = 2\n[env]\nfiles = ['base.toml', 'local.toml', 'final.toml']\n".into(),
+            mode: "development".into(),
+            override_process_env: true,
+            sources: vec![
+                source(
+                    "base.toml",
+                    &[("UNRELEASED", "old-plain")],
+                    &[
+                        ("PLAIN", "old-secret"),
+                        ("TOKEN", "old-token"),
+                        ("AGAIN", "old-secret"),
+                        ("UNSELECTED", "private"),
+                    ],
+                ),
+                source(
+                    "local.toml",
+                    &[("PLAIN", "later-plain"), ("AGAIN", "middle-plain")],
+                    &[("TOKEN", "new-token"), ("UNRELEASED", "private")],
+                ),
+                source("final.toml", &[], &[("AGAIN", "final-secret")]),
+            ],
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let config = Config::new_for_test(&root);
+            let release = vec!["PLAIN".into(), "TOKEN".into(), "AGAIN".into()];
+            let secrets = decrypt_broker_snapshot(&config, &snapshot, &release)
+                .await
+                .unwrap();
+            assert_eq!(
+                secrets,
+                BTreeMap::from([
+                    ("TOKEN".into(), "new-token".into()),
+                    ("AGAIN".into(), "final-secret".into())
+                ])
+            );
+            let merged = merge_broker_values(&snapshot, secrets).unwrap();
+            assert_eq!(
+                merged,
+                BTreeMap::from([
+                    ("PLAIN".into(), "later-plain".into()),
+                    ("TOKEN".into(), "new-token".into()),
+                    ("AGAIN".into(), "final-secret".into())
+                ])
+            );
+            // The receiving side also preserves order when an older broker
+            // returns a secret that is now shadowed by plain metadata.
+            let old_response = BTreeMap::from([("PLAIN".into(), "old-secret".into())]);
+            assert_eq!(
+                merge_broker_values(&snapshot, old_response).unwrap(),
+                BTreeMap::from([("PLAIN".into(), "later-plain".into())])
+            );
+            assert!(
+                decrypt_broker_snapshot(&config, &snapshot, &["UNKNOWN".into()])
+                    .await
+                    .is_err()
+            );
+            let captured = snapshot
+                .sources
+                .iter()
+                .map(|source| {
+                    (
+                        PathBuf::from(&source.path),
+                        Some(Zeroizing::new(source.contents.clone())),
+                    )
+                })
+                .collect();
+            let local = compile_captured_sources(&captured, &config).await.unwrap();
+            for (key, value) in &merged {
+                assert_eq!(local.get(key), Some(value));
+            }
+            assert!(!merged.contains_key("UNRELEASED"));
+            assert!(!merged.contains_key("UNSELECTED"));
+        });
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -2299,6 +2584,65 @@ mod hybrid_snapshot_tests {
         assert!(!source.exists());
         drop(lock);
         assert!(SealLock::acquire(&workspace).is_ok());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn seal_rejects_linked_sources_before_updating_any_file() {
+        let dir = crate::test_support::make_temp_dir("shine-seal-linked-source").await;
+        let workspace = dir.join("shine.workspace.toml");
+        let original = "version = 1\n[secret]\nTOKEN = 'pending-value'\n";
+        let public = "version = 1\n[plain]\nVALUE = 'public'\n";
+        tokio::fs::write(dir.join("target.toml"), original)
+            .await
+            .unwrap();
+        tokio::fs::write(dir.join("public.toml"), public)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &workspace,
+            "version = 2\n[env]\nfiles = ['public.toml', 'linked.toml']\n",
+        )
+        .await
+        .unwrap();
+        let linked = dir.join("linked.toml");
+        let config = Config::new_for_test(&dir);
+        for hard in [false, true] {
+            if hard {
+                std::fs::hard_link(dir.join("target.toml"), &linked).unwrap();
+            } else {
+                std::os::unix::fs::symlink(dir.join("target.toml"), &linked).unwrap();
+            }
+            let err = handle_seal(&config, Some(&workspace), None, None, &[])
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains(if hard {
+                "one hard link"
+            } else {
+                "regular environment source"
+            }));
+            assert_eq!(
+                tokio::fs::read_to_string(dir.join("public.toml"))
+                    .await
+                    .unwrap(),
+                public
+            );
+            assert_eq!(
+                tokio::fs::read_to_string(dir.join("target.toml"))
+                    .await
+                    .unwrap(),
+                original
+            );
+            // The replacement boundary must also reject a link introduced after capture.
+            assert!(
+                replace_sealed_file(&linked, b"sealed", original, None)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(tokio::fs::read_to_string(&linked).await.unwrap(), original);
+            tokio::fs::remove_file(&linked).await.unwrap();
+        }
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 }

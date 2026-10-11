@@ -8,12 +8,12 @@ use tokio::fs;
 
 use super::discovery::{
     find_project_config, preliminary_shine_dir_from_env, read_minimal_config,
-    read_presets_override_from_toml, resolve_config_presets_path, resolve_runtime_config_dirs,
+    resolve_config_presets_path, resolve_runtime_config_dirs,
 };
 use super::env_layer::{deserialize_env_values, parse_env_descriptions};
 use super::{
-    Config, EnvProxyRule, ExternalShellMode, GLOBAL_CONFIG_FILE, PROJECT_CONFIG_FILE,
-    ProjectSaveState,
+    Config, ConfigSaveState, EnvProxyRule, ExternalShellMode, GLOBAL_CONFIG_FILE,
+    PROJECT_CONFIG_FILE,
 };
 use crate::home::{default_config_and_presets_dir, effective_home_dir};
 
@@ -69,7 +69,7 @@ impl Config {
         let config = Config {
             config_path: config_path.clone(),
             is_project_config: true,
-            project_save_state: None,
+            save_state: None,
             shine_dir: shine_dir.clone(),
             presets_dir: presets_dir.clone(),
             bin_dir: shine_dir.join("bin"),
@@ -85,31 +85,33 @@ impl Config {
     }
 
     pub async fn load_or_init() -> Result<Self> {
+        Self::load_current(true).await
+    }
+
+    /// Inspect the same layers without initializing runtime files or directories.
+    pub async fn load_read_only() -> Result<Self> {
+        Self::load_current(false).await
+    }
+
+    async fn load_current(initialize: bool) -> Result<Self> {
         let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
         let current_dir = std::env::current_dir().context("resolving current directory")?;
         let project_config = find_project_config(&current_dir);
         let Some(project_config) = project_config else {
-            return Self::load_global_runtime_or_init().await;
+            return Self::load_global_runtime(initialize).await;
         };
         // Initialize the global layer before applying the sparse project layer.
-        let (mut config, global_exists) = Self::load_global_runtime_base().await?;
-        let contents = fs::read_to_string(&project_config.path)
-            .await
-            .context("Failed to read project config file")?;
+        let (mut config, _) = Self::load_global_runtime_base().await?;
+        let project_input = super::ConfigInput::capture(&project_config.path).await?;
+        let contents = project_input
+            .contents
+            .clone()
+            .context("project config disappeared; retry")?;
+        config.config_inputs.push(project_input);
         let original: toml::Table =
             toml::from_str(&contents).context("Failed to parse project config file")?;
         let overrides: ProjectOverrides =
             toml::from_str(&contents).context("Failed to parse project config file")?;
-        fs::create_dir_all(config.shine_dir()).await?;
-        fs::create_dir_all(config.presets_dir()).await?;
-        fs::create_dir_all(config.bin_dir()).await?;
-        let global_has_env = if global_exists {
-            let contents = fs::read_to_string(config.config_path()).await?;
-            config_toml_has_env_table(&contents)
-        } else {
-            false
-        };
-        config.ensure_env_defaults(global_has_env).await?;
 
         let project_presets = overrides
             .presets_dir
@@ -147,7 +149,7 @@ impl Config {
             config.age_identity = overrides.age_identity;
             config.age_identities = overrides.age_identities.unwrap_or_default();
         }
-        config.env.extend(overrides.env);
+        let _ = overrides.env; // Parsed for validation; the shared resolver merges env layers.
         if let Some(project_rules) = overrides.env_proxy {
             for rule in project_rules {
                 config
@@ -190,47 +192,67 @@ impl Config {
         config.presets_dir = presets_dir;
         config.bin_dir = config.shine_dir.join("bin");
         config.is_external_presets = is_external_presets;
-        fs::create_dir_all(config.presets_dir()).await?;
-        fs::create_dir_all(config.bin_dir()).await?;
 
-        // Environment override files deliberately sit above both TOML layers.
-        config.apply_global_env_override().await?;
-        config.apply_overlay_env_override().await?;
-        config.apply_project_env_override(&project_config).await?;
+        config.reject_removed_global_env_file().await?;
+        if initialize {
+            config.initialize_runtime().await?;
+        }
+        config.resolve_env_layers().await?;
         crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
 
         let loaded = config.serialize_effective_table()?;
-        config.project_save_state = Some(ProjectSaveState { original, loaded });
+        config.save_state = Some(ConfigSaveState { original, loaded });
         Ok(config)
     }
 
     pub async fn load_global_runtime_or_init() -> Result<Self> {
-        let (mut config, exists) = Self::load_global_runtime_base().await?;
+        Self::load_global_runtime(true).await
+    }
 
-        fs::create_dir_all(config.shine_dir())
-            .await
-            .with_context(|| "creating shine config dir")?;
-        fs::create_dir_all(config.presets_dir())
-            .await
-            .with_context(|| "creating presets dir")?;
-        fs::create_dir_all(config.bin_dir())
-            .await
-            .with_context(|| "creating bin dir")?;
-
-        let config_has_env = if exists {
-            let contents = fs::read_to_string(config.config_path())
-                .await
-                .context("Failed to read global config file")?;
-            config_toml_has_env_table(&contents)
-        } else {
-            false
-        };
-        config.ensure_env_defaults(config_has_env).await?;
-        config.apply_global_env_override().await?;
-        config.apply_overlay_env_override().await?;
+    async fn load_global_runtime(initialize: bool) -> Result<Self> {
+        let (mut config, _) = Self::load_global_runtime_base().await?;
+        config.reject_removed_global_env_file().await?;
+        if initialize {
+            config.initialize_runtime().await?;
+        }
+        config.resolve_env_layers().await?;
+        let original = config
+            .config_inputs
+            .iter()
+            .find(|input| input.path == config.config_path())
+            .and_then(|input| input.contents.as_deref())
+            .map(toml::from_str)
+            .transpose()?
+            .unwrap_or_default();
+        let loaded = config.serialize_effective_table()?;
+        config.save_state = Some(ConfigSaveState { original, loaded });
         Ok(config)
     }
 
+    async fn initialize_runtime(&mut self) -> Result<()> {
+        fs::create_dir_all(self.shine_dir()).await?;
+        fs::create_dir_all(self.presets_dir()).await?;
+        fs::create_dir_all(self.bin_dir()).await?;
+        // Empty explicit env table: defaults are runtime-only.
+        if !self.global_config_path().exists() {
+            let mut initial = Self {
+                shine_dir: self.shine_dir.clone(),
+                config_path: self.global_config_path(),
+                ..Self::default()
+            };
+            initial.config_inputs.push(super::ConfigInput {
+                path: self.global_config_path(),
+                contents: None,
+            });
+            initial.save().await?;
+            let input = super::ConfigInput::capture(&self.global_config_path()).await?;
+            self.config_inputs.retain(|i| i.path != input.path);
+            self.config_inputs.push(input);
+        }
+        Ok(())
+    }
+
+    // Recovery/theme/identity settings only: deliberately does not resolve env.
     pub async fn load_global_runtime_for_dry_run() -> Result<Self> {
         let (config, _) = Self::load_global_runtime_base().await?;
         Ok(config)
@@ -241,11 +263,17 @@ impl Config {
         let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
         let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
         let config_path = preliminary_shine_dir.join(GLOBAL_CONFIG_FILE);
+        let global_input = super::ConfigInput::capture(&config_path).await?;
         let config_dir = config_path
             .parent()
             .context("Config path must have a parent directory")?
             .to_path_buf();
-        let toml_presets = read_presets_override_from_toml(&config_path).await;
+        let toml_presets = global_input
+            .contents
+            .as_deref()
+            .map(read_minimal_config)
+            .transpose()?
+            .and_then(|config| config.presets_dir);
         let toml_presets = toml_presets
             .as_deref()
             .map(|path| resolve_config_presets_path(path, &config_dir));
@@ -258,12 +286,9 @@ impl Config {
         );
         let bin_dir = shine_dir.join("bin");
 
-        if config_path.exists() {
-            let contents = fs::read_to_string(&config_path)
-                .await
-                .context("Failed to read global config file")?;
+        if let Some(contents) = &global_input.contents {
             let mut config: Config =
-                toml::from_str(&contents).context("Failed to parse global config file")?;
+                toml::from_str(contents).context("Failed to parse global config file")?;
             if config
                 .secret_backend
                 .as_deref()
@@ -277,7 +302,8 @@ impl Config {
                     _ => bail!("hybrid_decrypt_backend must be gpg or age"),
                 }
             }
-            config.env_descriptions = parse_env_descriptions(&contents);
+            config.env_descriptions = parse_env_descriptions(contents);
+            config.config_inputs.push(global_input.clone());
             config.config_path = config_path.clone();
             config.is_project_config = false;
             config.shine_dir = shine_dir;
@@ -295,17 +321,23 @@ impl Config {
                 config.self_install_dest = Some(resolve_config_presets_path(path, &config_dir));
             }
             crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
+            // Recovery/settings-only loaders also preserve raw unrelated fields.
+            config.save_state = Some(ConfigSaveState {
+                original: toml::from_str(contents)?,
+                loaded: config.serialize_effective_table()?,
+            });
             Ok((config, true))
         } else {
             let config = Config {
                 config_path: config_path.clone(),
                 is_project_config: false,
-                project_save_state: None,
+                save_state: None,
                 shine_dir,
                 presets_dir,
                 bin_dir,
                 home_dir,
                 is_external_presets,
+                config_inputs: vec![global_input],
                 ..Config::default()
             };
             crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
@@ -331,12 +363,6 @@ impl Config {
             .map(|config| config.schema_version)
             .with_context(|| format!("Failed to parse {}", config_path.display()))
     }
-}
-
-fn config_toml_has_env_table(contents: &str) -> bool {
-    toml::from_str::<toml::Table>(contents)
-        .map(|table| table.contains_key("env"))
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -395,7 +421,7 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
-    async fn load_or_init_backfills_missing_env_defaults() {
+    async fn load_or_init_keeps_missing_env_defaults_runtime_only() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
         fs::write(dir.join("config.toml"), "[env]\nCUSTOM = \"kept\"\n")
@@ -431,11 +457,11 @@ mod tests {
         );
         let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
         assert!(content.contains("CUSTOM = \"kept\""));
-        assert!(content.contains("HTTP_PROXY_PORT = \"6152\""));
-        assert!(content.contains("SOCKS5_PROXY_PORT = \"6153\""));
-        assert!(content.contains("IMAGE_QUALITY = \"80\""));
-        assert!(content.contains("IMAGE_MAX_WIDTH = \"1920\""));
-        assert!(content.contains("IMAGE_MAX_HEIGHT = \"1080\""));
+        assert!(!content.contains("HTTP_PROXY_PORT = \"6152\""));
+        assert!(!content.contains("SOCKS5_PROXY_PORT = \"6153\""));
+        assert!(!content.contains("IMAGE_QUALITY = \"80\""));
+        assert!(!content.contains("IMAGE_MAX_WIDTH = \"1920\""));
+        assert!(!content.contains("IMAGE_MAX_HEIGHT = \"1080\""));
 
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.

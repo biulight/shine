@@ -25,8 +25,9 @@ the current file mode, the canonical same-directory `.shine.rollback` path, and 
 canonical persistent backup's mode and hash. It stores no file bytes. An unchanged destination
 still uses the ordinary removal action even when the request includes `--force`.
 
-The approved Plan must contain the `app_user_modification_override` diagnostic and every derived
-path permission. Under the host operation lock, execution revalidates the exact receipt, modified
+The approved Plan must contain `AppForcedRemoval` intent and every derived path permission.
+[ADR 0104](0104-typed-planning-semantics-and-domain-phases.md) replaces diagnostic-string authority;
+review still displays `app_user_modification_override`. Under the host operation lock, execution revalidates the exact receipt, modified
 destination, optional backup, and absent unclaimed rollback path. It writes the prepared journal,
 moves the modified destination to `.shine.rollback`, optionally moves `.shine.bak` to the
 destination, and records the action as applied.

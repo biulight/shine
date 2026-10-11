@@ -239,11 +239,25 @@ pub struct CodeBoundaryV2 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlanStepKindV1 {
+    AppFileRelocation,
+    AppJsonRelocation,
+    AppGeneratedRelocationSourceRemoval,
+    AppStalePrune,
+    AppForcedRemoval,
+    ShellSharedCodeAffected,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PlanStepV1 {
     pub target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     pub action: PlanActionV1,
+    /// Optional semantic intent, bound into approval independently of diagnostic prose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<PlanStepKindV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostic_codes: Vec<String>,
 }
@@ -258,12 +272,18 @@ impl PlanStepV1 {
             target: target.into(),
             resource: resource.map(Into::into),
             action,
+            kind: None,
             diagnostic_codes: Vec::new(),
         }
     }
 
     pub fn with_diagnostic_code(mut self, code: impl Into<String>) -> Self {
         self.diagnostic_codes.push(code.into());
+        self
+    }
+
+    pub fn with_kind(mut self, kind: PlanStepKindV1) -> Self {
+        self.kind = Some(kind);
         self
     }
 }
@@ -879,6 +899,28 @@ mod tests {
             approval.validate(&expanded),
             Err(PlanApprovalError::PermissionSetChanged)
         );
+    }
+
+    #[test]
+    fn approval_binds_typed_step_intent_and_accepts_legacy_steps() {
+        let mut plan = ready_plan();
+        let legacy_json = serde_json::to_string(&plan).unwrap();
+        let legacy: PlanV1 = serde_json::from_str(&legacy_json).unwrap();
+        assert_eq!(legacy.steps[0].kind, None);
+        assert_eq!(legacy, plan);
+
+        plan.steps[0].kind = Some(PlanStepKindV1::AppFileRelocation);
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let decoded: PlanV1 = serde_json::from_str(&serde_json::to_string(&plan).unwrap()).unwrap();
+        assert_eq!(approval.validate(&decoded), Ok(()));
+        for changed_kind in [None, Some(PlanStepKindV1::AppJsonRelocation)] {
+            let mut changed = plan.clone();
+            changed.steps[0].kind = changed_kind;
+            assert_eq!(
+                approval.validate(&changed),
+                Err(PlanApprovalError::PlanChanged)
+            );
+        }
     }
 
     #[test]

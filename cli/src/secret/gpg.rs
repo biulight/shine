@@ -76,11 +76,12 @@ fn validate_recipients(recipients: &[String]) -> Result<Vec<&str>> {
 async fn decrypt_gpg_file(path: &Path, key: bool, strict: bool) -> Result<String> {
     let mut command = Command::new("gpg");
     if strict {
-        command.args(["--no-options", "--output", "-"]);
+        command.arg("--no-options");
     }
     let output = command
         .kill_on_drop(true)
         .arg("--decrypt")
+        .args(["--output", "-"])
         .arg(path)
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::piped())
@@ -108,7 +109,7 @@ async fn decrypt_gpg_file(path: &Path, key: bool, strict: bool) -> Result<String
 
 async fn encrypt_gpg(plaintext: &[u8], recipients: &[&str]) -> Result<Vec<u8>> {
     let mut command = Command::new("gpg");
-    command.arg("--encrypt");
+    command.args(["--encrypt", "--output", "-"]);
     for recipient in recipients {
         command.arg("-r").arg(recipient);
     }
@@ -124,6 +125,9 @@ async fn encrypt_gpg(plaintext: &[u8], recipients: &[&str]) -> Result<Vec<u8>> {
     let output = write_stdin_and_wait(output, plaintext).await?;
     if !output.status.success() {
         bail!("gpg encrypt failed");
+    }
+    if output.stdout.is_empty() {
+        bail!("gpg encrypt returned no ciphertext");
     }
     Ok(output.stdout)
 }

@@ -18,6 +18,8 @@ enum MemoryNode {
 
 #[derive(Default)]
 struct MemoryState {
+    privileged_operation_lock: Arc<tokio::sync::Mutex<()>>,
+    operation_locks: BTreeMap<PathBuf, Arc<tokio::sync::Mutex<()>>>,
     nodes: BTreeMap<PathBuf, MemoryNode>,
     modes: BTreeMap<PathBuf, u32>,
     operations: Vec<HostOperation>,
@@ -237,6 +239,32 @@ impl FileSystemObservationHost for InMemoryHost {
 }
 
 impl FileSystemHost for InMemoryHost {
+    fn acquire_operation_lock<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<super::PrivilegedOperationGuard>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let lock = {
+                let mut state = self.state.lock().expect("in-memory host lock");
+                state
+                    .operation_locks
+                    .entry(path.to_path_buf())
+                    .or_default()
+                    .clone()
+            };
+            let guard = tokio::time::timeout(std::time::Duration::from_secs(30), lock.lock_owned())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for operation lock"))?;
+            self.state
+                .lock()
+                .expect("in-memory host lock")
+                .operations
+                .push(HostOperation::AcquireOperationLock(path.to_path_buf()));
+            Ok(Box::new(guard) as super::PrivilegedOperationGuard)
+        })
+    }
+
     fn write_atomic<'a>(
         &'a self,
         path: &'a Path,
@@ -259,7 +287,7 @@ impl FileSystemHost for InMemoryHost {
             state
                 .nodes
                 .insert(path.to_path_buf(), MemoryNode::File(bytes.to_vec()));
-            state.modes.insert(path.to_path_buf(), 0o100644);
+            state.modes.entry(path.to_path_buf()).or_insert(0o100644);
             state
                 .operations
                 .push(HostOperation::Write(path.to_path_buf()));
@@ -480,12 +508,21 @@ impl PrivilegedFileSystemHost for InMemoryHost {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<super::PrivilegedOperationGuard>> + Send + 'a>>
     {
         Box::pin(async move {
+            let lock = self
+                .state
+                .lock()
+                .expect("in-memory host lock")
+                .privileged_operation_lock
+                .clone();
+            let guard = tokio::time::timeout(std::time::Duration::from_secs(30), lock.lock_owned())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for operation lock"))?;
             self.state
                 .lock()
                 .expect("in-memory host lock")
                 .operations
                 .push(HostOperation::AcquirePrivilegedOperation);
-            Ok(Box::new(()) as super::PrivilegedOperationGuard)
+            Ok(Box::new(guard) as super::PrivilegedOperationGuard)
         })
     }
 

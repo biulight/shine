@@ -25,6 +25,9 @@ Default `posix` mode requires a macOS or Linux remote capable of running a compa
 `shine local`. Windows can initiate such a session as the local host. For a Windows remote, use
 `--remote-shell windows`; that mode forwards environment values but provides no file transfer.
 
+When a transfer's control connection closes, Shine stops the local transfer process. On macOS
+and Linux, it also stops that process's descendants. Files already copied are not rolled back.
+
 ## Forward selected environment values
 
 Place forwarding options before the SSH target:
@@ -128,6 +131,11 @@ Run the exact command from the remote project:
 shine env run --mode development --secret-broker -- bun run build
 ```
 
+Workspace values follow source order, just as in local `env run`. A later plain value overrides an
+earlier secret; the shadowed secret is not sent to the remote. A later secret declaration hides an
+earlier plain value even when that secret is not released. Policies still bind every source and its
+complete declared-secret list.
+
 Local confirmation remains the default. Add `--trust-remote-session` to the local SSH command only
 after accepting the risk of trusting that remote session and same-account processes. It automatically
 approves only exact workspace-policy matches.
@@ -156,6 +164,9 @@ shine env broker policy update \
   --workspace ~/src/acme-api/shine.workspace.toml \
   --mode development --release DEPLOY_TOKEN -- bun run build
 ```
+
+Concurrent policy changes preserve updates to other policies. If the target policy changes or is
+removed while confirmation is pending, the update fails and requires a fresh review.
 
 Without a local checkout, open an inspect session and run `describe` remotely. It displays workspace
 and source digests, mode, complete argv, and release keys and compares them with local policies:
@@ -240,6 +251,10 @@ the item is placed in the local directory from which `shine ssh` started, using 
 The local side starts system `rsync` or `scp`, preferring rsync and falling back to scp. Both ends need
 SSH, and directory transfer requires a common tool. Existing files are not overwritten by default;
 for an existing directory, `--force` merges into it. Use `--scp` to skip rsync probing.
+Rsync progress uses the per-file `--progress` option, compatible with the system rsync on macOS.
+When reconnecting through SCP, Shine translates SSH port, user, and control-socket options,
+preserves connection settings such as identity files and jump hosts, and omits terminal and
+forwarding flags from the original session.
 
 ## Upload from local to remote
 

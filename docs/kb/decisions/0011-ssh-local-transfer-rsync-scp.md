@@ -73,7 +73,8 @@ its own.
   case; a password/2FA host without a control master would prompt on the *local*
   terminal. Windows OpenSSH ControlMaster support is limited — key auth
   recommended there.
-- **Progress fidelity**: progress is rsync/scp's own (`--info=progress2`),
+- **Progress fidelity**: progress is rsync/scp's own (rsync uses per-file `--progress` for
+  compatibility with macOS's system implementation),
   relayed as raw chunks (preserving `\r` redraws) — close but not identical to
   the old custom bar.
 - **Removals**: `cli/src/ssh/dir_transfer.rs` (tar staging) and the byte-stream

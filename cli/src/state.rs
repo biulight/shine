@@ -76,9 +76,7 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
             return Ok(());
         }
         if !dry_run && config.last_cleared_schema_version != Some(CURRENT_RUNTIME_SCHEMA_VERSION) {
-            let mut updated = config.clone();
-            updated.last_cleared_schema_version = Some(CURRENT_RUNTIME_SCHEMA_VERSION);
-            updated.save().await?;
+            save_runtime_schema_state(config).await?;
         }
         println!(
             "{}",
@@ -113,17 +111,7 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
-    let mut updated = config.clone();
-    if let Some(recipients) = gpg_recipients_from_config(config.config_path()).await? {
-        updated.gpg_recipients = recipients;
-    }
-    if let Some(recipients) = age_recipients_from_config(config.config_path()).await? {
-        updated.age_recipients = recipients;
-    }
-    updated.legacy_gpg_key_id = None;
-    updated.schema_version = CURRENT_RUNTIME_SCHEMA_VERSION;
-    updated.last_cleared_schema_version = Some(CURRENT_RUNTIME_SCHEMA_VERSION);
-    updated.save().await?;
+    save_runtime_schema_state(config).await?;
 
     println!();
     println!(
@@ -253,6 +241,7 @@ async fn validate_recipient_migration_inputs(config: &Config) -> Result<()> {
 }
 
 async fn migrate_config_gpg_recipient(path: &Path) -> Result<()> {
+    let _guard = crate::config::env_write::lock_target(path).await?;
     migrate_recipient_key(path, |document| {
         let mut changed = migrate_key(document, "gpg_key_id", "gpg_recipients")?;
         changed |= migrate_age_recipients(document.as_table_mut())? > 0;
@@ -291,14 +280,15 @@ async fn migrate_recipient_key(
     path: &Path,
     mutate: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<bool>,
 ) -> Result<bool> {
-    let contents = tokio::fs::read_to_string(path)
-        .await
-        .with_context(|| format!("reading {}", path.display()))?;
+    let input = crate::config::ConfigInput::capture(path).await?;
+    let contents = input
+        .contents
+        .context("recipient migration target disappeared; retry")?;
     let mut document = contents
         .parse::<toml_edit::DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
     if mutate(&mut document)? {
-        crate::persist::atomic_write(path, document.to_string().as_bytes())
+        crate::persist::atomic_write_private(path, document.to_string().as_bytes())
             .await
             .with_context(|| format!("writing {}", path.display()))?;
         return Ok(true);
@@ -439,39 +429,27 @@ fn migrate_table_key(table: &mut toml_edit::Table, old: &str, new: &str) -> Resu
     Ok(true)
 }
 
-async fn gpg_recipients_from_config(path: &Path) -> Result<Option<Vec<String>>> {
-    recipients_from_config(path, "gpg_recipients").await
-}
-
-async fn age_recipients_from_config(path: &Path) -> Result<Option<Vec<String>>> {
-    recipients_from_config(path, "age_recipients").await
-}
-
-async fn recipients_from_config(path: &Path, key: &str) -> Result<Option<Vec<String>>> {
-    let contents = match tokio::fs::read_to_string(path).await {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
-    };
-    let table: toml::Table =
-        toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
-    let Some(value) = table.get(key) else {
-        return Ok(None);
-    };
-    let recipients = value
-        .as_array()
-        .with_context(|| format!("{key} must be an array"))?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .with_context(|| format!("{key} entries must be strings"))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
-    Ok(Some(recipients))
+/// Migration already updated recipient fields under the target lock. Patch only
+/// runtime schema fields from a fresh raw file, never re-save a stale Config map.
+async fn save_runtime_schema_state(config: &Config) -> Result<()> {
+    let path = config.global_config_path();
+    let _guard = crate::config::env_write::lock_target(&path).await?;
+    let input = crate::config::ConfigInput::capture(&path).await?;
+    let mut document: toml_edit::DocumentMut =
+        input.contents.as_deref().unwrap_or_default().parse()?;
+    if document
+        .get("schema_version")
+        .and_then(toml_edit::Item::as_integer)
+        .is_some_and(|v| v > i64::from(CURRENT_RUNTIME_SCHEMA_VERSION))
+    {
+        bail!(
+            "runtime configuration changed to a newer schema; retry with a compatible Shine version"
+        );
+    }
+    document["schema_version"] = toml_edit::value(i64::from(CURRENT_RUNTIME_SCHEMA_VERSION));
+    document["last_cleared_schema_version"] =
+        toml_edit::value(i64::from(CURRENT_RUNTIME_SCHEMA_VERSION));
+    crate::persist::atomic_write_private(&path, document.to_string().as_bytes()).await
 }
 
 #[cfg(test)]
@@ -481,6 +459,22 @@ mod tests {
 
     async fn make_temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-state-migrate").await
+    }
+
+    #[tokio::test]
+    async fn runtime_schema_save_preserves_current_raw_env_without_expanding_defaults() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::write(config.config_path(), "# latest user edit\ncustom_field = 'keep'\n[env]\nTOKEN = { value = 'latest', description = 'keep' }\n").await.unwrap();
+        save_runtime_schema_state(&config).await.unwrap();
+        let text = fs::read_to_string(config.config_path()).await.unwrap();
+        assert!(text.contains("# latest user edit"));
+        let table: toml::Table = toml::from_str(&text).unwrap();
+        assert_eq!(table["env"].as_table().unwrap().len(), 1);
+        assert_eq!(table["env"]["TOKEN"]["value"].as_str(), Some("latest"));
+        assert_eq!(table["env"]["TOKEN"]["description"].as_str(), Some("keep"));
+        assert_eq!(table["custom_field"].as_str(), Some("keep"));
+        fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]

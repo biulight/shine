@@ -45,17 +45,18 @@ pub fn managed_profile_snippet(
     source_commands: &[String],
 ) -> String {
     let bin = home_relative_path(bin_dir, home_dir);
+    let quoted_bin = escape_shell_path_double_quoted(&bin, shell);
     let mut body = match shell {
-        ShellType::Fish => format!("fish_add_path \"{bin}\""),
+        ShellType::Fish => format!("fish_add_path \"{quoted_bin}\""),
         ShellType::PowerShell => powershell_path_snippet(&bin),
         _ => format!(
-            "if [[ \":$PATH:\" != *\":{bin}:\"* ]]; then\n  export PATH=\"{bin}:$PATH\"\nfi"
+            "if [[ \":$PATH:\" != *\":{quoted_bin}:\"* ]]; then\n  export PATH=\"{quoted_bin}:$PATH\"\nfi"
         ),
     };
     for command in source_commands {
         match shell {
             ShellType::Fish => body.push_str(&format!(
-                "\nfunction {command}\n  source \"{bin}/{command}\" $argv\nend"
+                "\nfunction {command}\n  source \"{quoted_bin}/{command}\" $argv\nend"
             )),
             ShellType::PowerShell => {
                 let script = if cfg!(windows) {
@@ -69,7 +70,7 @@ pub fn managed_profile_snippet(
                 ));
             }
             _ => body.push_str(&format!(
-                "\n{command}() {{ source \"{bin}/{command}\" \"$@\"; }}"
+                "\n{command}() {{ source \"{quoted_bin}/{command}\" \"$@\"; }}"
             )),
         }
     }
@@ -102,7 +103,7 @@ pub fn shell_config_snippet(shell: ShellType, profile_path: &Path, home_dir: &Pa
     let profile = home_relative_path(profile_path, home_dir);
     let body = match shell {
         ShellType::PowerShell => format!(". {}", powershell_path_expr(&profile)),
-        _ => format!("source {}", shell_quote_expand_home(&profile)),
+        _ => format!("source {}", shell_quote_expand_home(&profile, shell)),
     };
     format!("{SHELL_SENTINEL_START}\n{body}\n{SHELL_SENTINEL_END}\n")
 }
@@ -151,9 +152,27 @@ fn single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn shell_quote_expand_home(value: &str) -> String {
+fn escape_shell_path_double_quoted(value: &str, shell: ShellType) -> String {
+    let (prefix, literal) = if value == "$HOME" {
+        ("$HOME", "")
+    } else if let Some(relative) = value.strip_prefix("$HOME/") {
+        ("$HOME/", relative)
+    } else {
+        ("", value)
+    };
+    let mut escaped = literal
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$");
+    if shell != ShellType::Fish {
+        escaped = escaped.replace('`', "\\`");
+    }
+    format!("{prefix}{escaped}")
+}
+
+fn shell_quote_expand_home(value: &str, shell: ShellType) -> String {
     if value == "$HOME" || value.starts_with("$HOME/") {
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+        format!("\"{}\"", escape_shell_path_double_quoted(value, shell))
     } else {
         single_quote(value)
     }
@@ -322,6 +341,69 @@ fn strip_windows_verbatim_prefix(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn fish_paths_escape_expansion_without_adding_backslashes_to_backticks() {
+        let home = std::env::temp_dir().join("shine-fish-home");
+        let path = home.join("$literal`name").join("bin");
+        let snippet = managed_profile_snippet(ShellType::Fish, &path, &home, &[]);
+        assert_eq!(snippet, "fish_add_path \"$HOME/\\$literal`name/bin\"\n");
+        let snippet = shell_config_snippet(ShellType::Fish, &path, &home);
+        assert!(snippet.contains("source \"$HOME/\\$literal`name/bin\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_profiles_treat_shell_metacharacters_as_literal_paths() {
+        let home = std::env::temp_dir().join(format!("shine-profile-{}", uuid::Uuid::new_v4()));
+        let literal = "space ' \" $literal `printf injected` $(printf injected) \\";
+        for root in [home.clone(), home.with_extension("external")] {
+            let bin = root.join(literal).join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join("review_command"), "printf '%s' command-ok").unwrap();
+            let snippet =
+                managed_profile_snippet(ShellType::Bash, &bin, &home, &["review_command".into()]);
+            let output = std::process::Command::new("bash")
+                .args([
+                    "--noprofile",
+                    "--norc",
+                    "-c",
+                    &format!("{snippet}\nprintf '%s\\n' \"$PATH\"; review_command"),
+                ])
+                .env("HOME", &home)
+                .env("PATH", "/usr/bin:/bin")
+                .env_remove("literal")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("{}:/usr/bin:/bin\ncommand-ok", bin.display())
+            );
+
+            let profile = root.join(literal).join("profile.sh");
+            std::fs::write(&profile, "printf '%s' profile-ok").unwrap();
+            let snippet = shell_config_snippet(ShellType::Bash, &profile, &home);
+            let output = std::process::Command::new("bash")
+                .args(["--noprofile", "--norc", "-c", &snippet])
+                .env("HOME", &home)
+                .env_remove("literal")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.stdout, b"profile-ok");
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     #[test]
     fn bytewise_removal_preserves_crlf_and_preceding_blank_line_contract() {
