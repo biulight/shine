@@ -221,9 +221,10 @@ shine preset pull
 
 ```text
 shine env list [--reveal]
-shine env set <KEY> <VALUE> [--force]
+shine env set <KEY> <VALUE> [--global|--project|--overlay] [--env-file]
 shine env get <KEY>
-shine env delete <KEY> [--force]
+shine env explain <KEY> [--reveal]
+shine env delete <KEY> [--global|--project|--overlay] [--env-file]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
@@ -232,7 +233,7 @@ shine env proxy list
 shine env proxy uninstall <COMMAND>
 shine env proxy enable <COMMAND> [--project]
 shine env proxy disable <COMMAND> [--project]
-shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>] [--set <KEY>] [--force]
+shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>] [--set <KEY>] [--global|--project|--overlay] [--env-file]
 shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
@@ -240,6 +241,11 @@ shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PAT
 shine env secret identity init --phone [--recipient-type <tag|phone>] [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
 shine env secret identity list
 ```
+
+范围参数互斥；省略时选择当前项目，否则全局。`--env-file` 选择该范围的 `shine.env.toml`；
+`--overlay` 只允许手动目录。默认写入会拒绝被高层遮蔽的键；显式目标允许维护被遮蔽项，
+输出会分别报告保存位置和当前有效来源。`set`、`delete` 与 `secret encrypt` 的旧 `--force`
+已停用并拒绝零写入；请改用明确的范围与文件参数。
 
 `env list --reveal`、`env get`、`env secret decrypt`、带 `--include-secrets` 的导出，以及 `env run`
 启动的子进程都可能接触明文。只在可信终端运行，也不要把密钥直接写入命令参数或文档。

@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-11 — Effective env maps cannot represent persistence intent
+
+- **Cause**: serializing effective defaults/overrides into global config obscured user intent;
+  comparing effective values alone also omitted an explicit set equal to an inherited default.
+- **Fix**: retain raw definitions and explicit pending edits, use one six-layer resolver, and apply
+  directed single-key edits. Keep description provenance separate from value provenance.
+- **Rule**: saving and taking effect are different outcomes. Capture before encryption, serialize
+  final validation/replacement with every config writer, and report post-save reload failures as
+  already saved. Tests cover two actual CLI processes competing from the same snapshot.
+
 ## 2026-10-11 — Superseded explicit checks must not report successful inspection
 
 - **Symptom**: overlapping `state check` calls, or cleanup during a check, made the older call
@@ -1705,31 +1715,15 @@ the second was the real blocker.
 
 ## 2026-07-15 — `env set`/`encrypt` silently wrote a value an override file kept shadowing
 
-- **Symptom**: `shine env encrypt --from KEY` (or `env set KEY value`) reported success and
-  wrote into `config.toml [env]`, but the effective value of `KEY` never changed when an
-  env override file (`shine.env.toml` — global, active overlay, or project) already defined
-  it.
-- **Root cause**: override files are merged strictly above **both** `config.toml [env]`
-  layers by design (`config/load.rs`: *"Environment override files deliberately sit above
-  both TOML layers"*), but `env set`/`encrypt`/`delete` had no awareness of that and always
-  wrote into whichever `config.toml` was active for the cwd. The write succeeded but was
-  dead on arrival — the override file kept winning at read time.
-- **Why precedence itself was not changed**: per
-  [ADR 0010](decisions/0010-git-managed-overlay.md), a shine-managed Git overlay exists
-  specifically so a value authored once on the maintaining device reliably wins on every
-  consuming machine, overriding whatever stale value a local `config.toml` holds. Flipping
-  overlay-vs-config.toml precedence would defeat that guarantee for every other key.
-- **Fix**: `Config` now tracks, per env key, which override file (if any) currently supplies
-  its effective value (`Config::env_override_sources` / `env_override_source()`, populated
-  in `apply_*_env_override`). `env set`/`encrypt`/`delete` consult it before writing: refuse
-  with a clear "this write would have no effect, X currently wins" error by default; `--force`
-  writes directly into that override file instead (`write_env_override_entry`, comment- and
-  description-preserving via the same `shine_core::migration::sync_table` `Config::save()` uses),
-  and warns loudly when the winning file is the shine-managed overlay mirror, since that
-  write is discarded on the next `shine preset pull`.
-- **Rule**: a `set`/`delete`-shaped command must never report success for a write that a
-  higher-precedence layer will keep shadowing — either make the write land where it's
-  actually effective, or refuse and say why.
+Historical policy, superseded by [ADR 0109](decisions/0109-env-baseline-and-directed-writes.md).
+
+- **Symptom**: config writes reported success while a higher env override kept winning.
+- **Original intent**: overlay priority deliberately let maintaining devices override stale local
+  config. Source-directed `--force` writes attempted to make a write effective, including in a
+  disposable mirror. This was a product policy, not an accidental sort bug.
+- **Current boundary**: overlays are baselines. Implicit writes still reject shadowed keys; explicit
+  targets can maintain them only with accurate saved/effective reporting. Env `--force` is rejected,
+  managed mirrors cannot be edited, and deletion requires an actual target-local definition.
 
 ## 2026-07-14 — OSC 11 response tail leaks when the reply arrives fragmented
 

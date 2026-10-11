@@ -19,6 +19,7 @@ and brokered on-demand decryption as described below.
 ```bash
 shine env list
 shine env get HTTP_PROXY_PORT
+shine env explain HTTP_PROXY_PORT
 shine env set HTTP_PROXY_PORT 6152
 shine env delete HTTP_PROXY_PORT
 ```
@@ -31,9 +32,15 @@ The built-in image commands use `IMAGE_QUALITY=80`, `IMAGE_MAX_WIDTH=1920`, and
 `IMAGE_MAX_HEIGHT=1080` by default. Override them for one run with `--quality`, `--width`, or
 `--height`, or keep different machine-local defaults with `shine env set`.
 
-`shine env list` hides sensitive values by default. Use `--reveal` only in a trusted terminal. Output
-is grouped by the effective source—`config.toml`, global override, overlay, or project override—so
-you can identify which value wins. Values normally live in the active configuration's `[env]` table.
+`shine env list` hides sensitive values by default; use `--reveal` only in a trusted terminal.
+It groups effective values by builtin, overlay, global config, global env file, project config,
+and project env file, with actual file paths and the current project root. `env explain KEY` shows
+that storage key's definitions from low to high, its winning layer and description source, hiding
+all values by default. `--reveal` never decrypts. Explicit injection still prefers `KEY_SECRET`
+over `KEY`; explain and write output point out an existing encrypted key.
+
+Defaults are runtime fallbacks: queries create no configuration. Setting a value equal to a builtin
+still records an explicit entry.
 
 Global `~/.shine/config.toml` and project `shine.config.toml` support either a string or a value with
 a description:
@@ -48,28 +55,45 @@ MY_API_TOKEN = { value = "<token>", description = "Token for the internal API" }
 Running `shine env set MY_API_TOKEN <new-value>` on a detailed entry updates `value` and preserves the
 description.
 
-Inside a project, `shine env delete KEY` removes only a local `[env]` entry from
-`shine.config.toml`. If the key is inherited without a local entry, deletion fails without changing
-either configuration, even with `--force`. To delete the global entry, run the command outside the
-project using the same configuration directory. Removing a project override reveals any inherited
-global value again.
+Write targets depend on options and cwd, independently of the effective source:
 
-On Unix, Shine saves `config.toml`, `shine.config.toml`, and `shine.env.toml` with owner-only
-permissions (`0600`), including when replacing an existing file. Temporary files are private before
-any values are written. This protects local file access; plaintext values are still plaintext.
+| Options | Target |
+| --- | --- |
+| None | Active project `shine.config.toml` `[env]`, otherwise global config |
+| `--global` | Global `config.toml` `[env]` |
+| `--project` | Nearest project `[env]`; fails without an existing project |
+| `--env-file` | Selected or default scope's `shine.env.toml` |
+| `--overlay` | Active manual overlay's `shine.env.toml` |
 
-When a global, overlay, or project `shine.env.toml` already overrides a key, `set`, `delete`, and
-`env secret encrypt --set` refuse to write a lower-priority value that would have no effect. Add
-`--force` only when you intend to modify that override file:
+Scope options are mutually exclusive. `--overlay --env-file` selects the same overlay file. Scripts
+should specify both scope and file options to avoid cwd dependence. With no target options, a key
+defined in a higher layer is protected, even if values match. Explicit targets allow maintenance of
+shadowed entries and report the saved file, current effective source, and whether the value changed.
 
 ```bash
-shine env set HTTP_PROXY_PORT 7890 --force
-shine env delete HTTP_PROXY_PORT --force
-shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --force
+shine env set HTTP_PROXY_PORT 7890 --global
+shine env set HTTP_PROXY_PORT 8080 --project
+shine env set HTTP_PROXY_PORT 8081 --project --env-file
+shine env set HTTP_PROXY_PORT 6152 --overlay
+shine env delete HTTP_PROXY_PORT --global --env-file
+shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --project --env-file
 ```
 
-For a mirror managed by `shine preset overlay link --git`, the next `shine preset pull` discards a
-forced local write. Maintain that value in the upstream overlay repository instead.
+Deletion removes only an existing entry in the selected file; an absent local entry is an error.
+It restores inheritance, never disables a variable, removes other layers, or also deletes
+`KEY_SECRET`. Empty strings remain valid values. Managed Git overlay mirrors reject writes: edit
+upstream, use a manual maintenance directory, or choose local overrides. These three write entries
+reject the retired `--force` without writing and suggest the correct replacement options.
+
+Write preflight runs before encryption tools. Before committing, Shine rechecks the target,
+configuration sources, and `--from` input; changes require a retry. A per-target file lock serializes
+Shine's final validation and atomic replacement. It does not lock every external editor or Git
+operation. An error saying the file was saved but effective-state verification failed means the
+write happened: inspect configuration and query again.
+
+On Unix, configuration, env files, and temporary files use owner-only `0600` permissions. A failed
+atomic replacement preserves the original. Writes reject symlink and special-file targets and
+preserve comments, unrelated entries, and detailed descriptions. Plaintext remains plaintext.
 
 Global, overlay, and project `shine.env.toml` files omit the `[env]` header and support both forms:
 
@@ -78,8 +102,9 @@ HTTP_PROXY_PORT = "7890"
 PROXY_HOST = { value = "127.0.0.1", description = "Local proxy host" }
 ```
 
-A detailed entry overrides both value and description. A string overrides only the value and keeps a
-description from lower-priority configuration or the preset catalog. Invalid entries—numbers,
+Strings and detailed entries with only `value` inherit lower-layer descriptions. An explicit
+`description` replaces the description; an empty string clears it and disables preset catalog
+fallback. Invalid entries—numbers,
 arrays, or a table without `value`—fail explicitly.
 
 After changing a value used by template rendering, run:
@@ -87,6 +112,35 @@ After changing a value used by template rendering, run:
 ```bash
 shine upgrade
 ```
+
+## Manual upgrade and rollback for env layering
+
+The unified order is builtin defaults < overlay baseline < global `[env]` < global env file <
+project `[env]` < project env file. Previously overlays outranked global env files and every env file
+outranked both `[env]` layers. Upgrading can change values; there is no old-order mode or automatic
+migration.
+
+1. Before upgrading, record the actual runtime root, important projects, and key sources. Make
+   private backups of files you plan to edit; keep secrets out of repositories and public logs.
+2. Replace old `--force` scripts: use `--global --env-file` for global env files,
+   `--project --env-file` for project env files, and `--overlay` for manual overlays. Maintain managed
+   mirror values upstream or select local overrides.
+3. After upgrading, run `env list` and `env explain KEY` outside projects and in each important
+   project. Projects can select different overlays; one project's result does not describe another.
+4. All historical entries remain explicit, including auto-written entries equal to old defaults.
+   Delete selected entries with explicit targets only after review, then check inheritance again;
+   equality with a default alone is no reason to delete. Only keys without explicit definitions
+   follow new builtin defaults. To inherit overlay values, remove unneeded local or project entries.
+5. Check `KEY_SECRET`: changing or deleting plaintext does not cancel encrypted-first injection.
+   Run `shine update`, review the `shine upgrade` Plan, and apply installed-artifact changes through
+   that existing workflow. Editing config or upgrading the binary never rerenders, runs, or approves
+   presets automatically.
+
+Downgrading the binary restores old precedence, but cannot restore deleted entries or updated
+installed artifacts. Review and restore private backups as needed without overwriting unrelated
+edits; artifact changes still require lifecycle review. There is no env-specific migration or
+recovery command. Old binaries may also resume expanding missing builtin defaults into global
+config; this does not recover deleted custom values.
 
 ## Encrypt values with GPG
 

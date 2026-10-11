@@ -641,12 +641,28 @@ bugs. Check this list before changing the modules named in each entry.
   the persistent `trust.lock` OS lock before reading grants and retain it through private atomic
   persistence. Human review happens before locking; only the reviewed code identities are granted.
 
-- **Project env deletion requires a local entry.** `env delete` may remove a project `[env]`
-  override, revealing its inherited global value, but must reject a key absent from the project
-  table even with `--force`. It never removes a global entry implicitly or creates a tombstone.
+- **Env precedence is unified and defaults never persist implicitly.** Builtin < overlay baseline <
+  global config < global env file < project config < project env file. Keep raw definitions,
+  effective values and separate description provenance; missing descriptions inherit, explicit empty
+  descriptions suppress catalog fallback. Historical explicit entries remain untouched (ADR 0109).
+- **Env writes select a layer, never follow effective sources.** Default scope is the active project,
+  otherwise global. Implicit writes reject higher definitions even with equal values; explicit
+  targets can maintain shadowed entries and must distinguish saved location from effectiveness.
+  Delete requires a local entry, restores inheritance and never removes another key/layer. Old
+  env `--force` rejects without writing; managed Git mirrors always reject env mutation.
+- **Config writes serialize final snapshot validation and replacement per target.** Env writes,
+  ordinary config saves, proxy config updates and recipient config migrations share the persistent
+  `.<filename>.shine.lock` OS lock in the canonical target parent. Capture encryption inputs before
+  invoking tools and reject changed inputs at commit. Never hold that lock over encryption or
+  human input. This is not a multi-file transaction against external editors/Git. A failed post-save
+  reload reports that saving already occurred. Reject symlink/special targets before opening.
+- **Read-only env commands do not initialize runtime state.** List/get/explain share the runtime
+  resolver but route before advisory work, overlay synchronization and mutable initialization.
+  Explain hides all values unless revealed, never decrypts, and keeps paths out of safe DTOs.
 
-- **All `config.toml` writes go through `shine_core::sync_table`**, which preserves user comments.
-  Never serialize the whole file from a struct — that destroys comments.
+- **Configuration edits preserve comments and unrelated raw definitions.** Whole-table saves use
+  `shine_core::sync_table`; directed env and runtime-schema edits patch `toml_edit` entries. Never
+  replace a loaded file with a serialized effective struct.
 - **Atomic file replacement never pre-deletes its destination.** Rename replaces existing files on
   Windows as well as Unix. Failure cleanup removes only the staged file; the previous configuration
   or receipt must survive a failed rename. `RealHost::write_atomic` uses the shared Core

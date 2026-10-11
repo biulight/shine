@@ -123,7 +123,9 @@ DETAILED_VALUE = { value = "example", description = "Example value used by build
 - `description` appears only in `shine env list` and is never passed to templates or children.
 - Inline descriptions override the same key in the preset `<presets>/env.toml` catalog.
 - `shine env set` preserves the description of an existing detailed entry.
-- A detailed override replaces both value and description; a string replaces only the value.
+- Strings and detailed entries containing only `value` inherit lower-layer descriptions. An explicit
+  `description` replaces the inherited description; an empty string clears it and disables catalog
+  fallback. Value and description sources are tracked separately.
 - Invalid numbers, arrays, or tables without a string `value` report file and key instead of being
   ignored.
 
@@ -202,12 +204,24 @@ successful `shine preset pull`. Later pulls forcibly mirror its checkout, so nev
 
 Later layers override earlier values:
 
-1. built-in defaults;
-2. global `[env]`;
-3. project `[env]`;
-4. global `~/.shine/shine.env.toml`;
-5. active overlay `shine.env.toml`;
+1. built-in defaults (runtime fallback only);
+2. active overlay `shine.env.toml` (shared baseline);
+3. global `config.toml` `[env]`;
+4. global `shine.env.toml`;
+5. project `shine.config.toml` `[env]`;
 6. project `shine.env.toml`.
+
+Every installation uses this order. `SHINE_CONFIG_DIR` selects the global runtime root; paths are
+not fixed to `~/.shine/`. Loading or saving unrelated settings never expands built-in defaults into
+files. Existing entries remain explicit, including historical entries equal to old defaults; delete
+an entry from its selected layer to inherit again. A lone `shine.env.toml` does not define a project.
+Only the nearest `shine.config.toml` defines the project root and its env file; ancestor projects are
+not merged.
+
+Use `shine env explain KEY` for the value source, description source, override chain, and default
+write target. It hides all values unless `--reveal` is given and never decrypts. `env get` keeps its
+single-value output. See the [environment guide](../guides/environment.md) for manual upgrade and
+rollback steps.
 
 An override file has no `[env]` header:
 

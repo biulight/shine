@@ -111,8 +111,8 @@ DETAILED_VALUE = { value = "example", description = "供构建任务使用的示
 - `description` 只用于 `shine env list` 的可读说明，不会传入子进程或模板。
 - 当前配置中的内联 `description` 优先于预设 `<presets>/env.toml` catalog 的同名说明。
 - `shine env set` 更新已有详细条目时会保留其 `description`。
-- 覆盖文件中的详细项同时覆盖值和说明；字符串只覆盖值，并保留从低优先级配置或 preset
-  catalog 继承的说明。
+- 字符串与仅有 `value` 的详细项只覆盖值并继承低层说明。只有显式 `description` 才替换说明；
+  空字符串清空说明并阻止 catalog 兜底。值和说明分别追踪来源。
 - 数字、数组、缺少字符串 `value` 等无效类型会报告文件路径和变量名，不会被静默忽略。
 
 ## 项目配置
@@ -177,12 +177,21 @@ Git 管理的 overlay 只有在首次 `shine preset pull` 克隆成功后才生�
 
 同名环境值按以下顺序合并，后者覆盖前者：
 
-1. 内置默认值
-2. 全局 `[env]`
-3. 项目 `[env]`
-4. 全局 `~/.shine/shine.env.toml`
-5. 当前 overlay 的 `shine.env.toml`
-6. 项目 `shine.env.toml`
+1. 内置默认值（仅运行时兜底）；
+2. 当前 overlay 的 `shine.env.toml`（共享基线）；
+3. 全局 `config.toml` 的 `[env]`；
+4. 全局 `shine.env.toml`；
+5. 项目 `shine.config.toml` 的 `[env]`；
+6. 项目 `shine.env.toml`。
+
+所有安装统一使用此顺序。`SHINE_CONFIG_DIR` 选择全局根目录，以上路径不硬编码为 `~/.shine/`。
+内置默认值不会因加载或保存其他配置而写入文件。已有项全部按显式配置保留，即使等于旧默认值；
+主动删除指定层的项后才恢复继承。单独存在 `shine.env.toml` 不构成项目。
+项目 env 文件只从最近 `shine.config.toml` 所在目录读取，不合并多个祖先项目。
+
+用 `shine env explain KEY` 查看值来源、描述来源、覆盖链和默认写入目标；默认不显示值，
+`--reveal` 才显示且不会解密。`env get` 保持单值输出。参见
+[环境管理指南](../guides/environment.md)中的人工升级和回退步骤。
 
 `shine.env.toml` 是不带 `[env]` 表头的覆盖文件，例如：
 

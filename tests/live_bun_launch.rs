@@ -244,6 +244,27 @@ fn live_bun_launcher_binds_state_keeps_project_layers_and_argv() {
 }
 
 #[test]
+fn live_bun_uses_project_config_above_global_env_for_rendering_and_injection() {
+    let fixture = Fixture::new(true);
+    fs::remove_file(fixture.root.join("project/shine.env.toml")).unwrap();
+    fs::write(
+        fixture.state.join("shine.env.toml"),
+        "TOKEN = 'global-sidecar'\nVALUE = 'global-sidecar-template'\n",
+    )
+    .unwrap();
+    let output = fixture.assert_ok(fixture.launcher().output().unwrap());
+    assert!(output.contains("token=project"), "{output}");
+    assert!(output.contains("script=project-template"), "{output}");
+    fs::write(fixture.root.join("project/shine.config.toml"), "").unwrap();
+    let output = fixture.assert_ok(fixture.launcher().output().unwrap());
+    assert!(output.contains("token=global-sidecar"), "{output}");
+    assert!(
+        output.contains("script=global-sidecar-template"),
+        "{output}"
+    );
+}
+
+#[test]
 fn live_bun_empty_env_exit_codes_and_errors() {
     let fixture = Fixture::new(false);
     let output = fixture.assert_ok(fixture.launcher().output().unwrap());

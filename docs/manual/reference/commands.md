@@ -273,9 +273,10 @@ See [Customize presets](../guides/custom-presets.md) and
 
 ```text
 shine env list [--reveal]
-shine env set <KEY> <VALUE> [--force]
+shine env set <KEY> <VALUE> [--global|--project|--overlay] [--env-file]
 shine env get <KEY>
-shine env delete <KEY> [--force]
+shine env explain <KEY> [--reveal]
+shine env delete <KEY> [--global|--project|--overlay] [--env-file]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
@@ -284,7 +285,7 @@ shine env proxy list
 shine env proxy uninstall <COMMAND>
 shine env proxy enable <COMMAND> [--project]
 shine env proxy disable <COMMAND> [--project]
-shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>] [--set <KEY>] [--force]
+shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>] [--set <KEY>] [--global|--project|--overlay] [--env-file]
 shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
@@ -293,7 +294,13 @@ shine env secret identity init --phone [--recipient-type <tag|phone>] [--label <
 shine env secret identity list
 ```
 
-`env list --reveal`, `env get`, `env secret decrypt`, exports with `--include-secrets`, and child
+Scope options are mutually exclusive; the default is the active project, otherwise global.
+`--env-file` selects that scope's `shine.env.toml`; `--overlay` requires a manual directory.
+Implicit writes reject shadowed keys. Explicit targets may maintain shadowed entries and report
+both the saved file and current effective source. The old `--force` for `set`, `delete`, and
+`secret encrypt` is rejected without writing; use explicit scope and file options instead.
+
+`env explain --reveal`, `env list --reveal`, `env get`, `env secret decrypt`, exports with `--include-secrets`, and child
 commands started by `env run` can expose plaintext. Run them only in a trusted terminal and never
 put secrets directly in command arguments or documentation.
 

@@ -231,9 +231,61 @@ async fn run_command(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
+    // Pure env inspection and directed writes must not initialize state, run
+    // advisory workers, sync overlays, or add output to `env get`.
+    if let Commands::Env { command } = &cli.command {
+        match command {
+            EnvCommands::List { reveal } => {
+                return env::commands::handle_list(&Config::load_read_only().await?, *reveal).await;
+            }
+            EnvCommands::Get { key } => {
+                return env::commands::handle_get(&Config::load_read_only().await?, key).await;
+            }
+            EnvCommands::Explain { key, reveal } => {
+                return env::commands::handle_explain(
+                    &Config::load_read_only().await?,
+                    key,
+                    *reveal,
+                )
+                .await;
+            }
+            EnvCommands::Set { key, value, target } => {
+                return env::commands::handle_set(
+                    &Config::load_read_only().await?,
+                    key,
+                    value,
+                    target,
+                )
+                .await;
+            }
+            EnvCommands::Delete { key, target } => {
+                return env::commands::handle_delete(&Config::load_read_only().await?, key, target)
+                    .await;
+            }
+            EnvCommands::Secret(cmd) => {
+                if let EnvSecretSubcommand::Encrypt(cmd) = &cmd.command {
+                    return env::commands::handle_encrypt(
+                        &Config::load_read_only().await?,
+                        cmd.backend.as_deref(),
+                        &cmd.recipients,
+                        cmd.set.as_deref(),
+                        cmd.from.as_deref(),
+                        &cmd.target,
+                    )
+                    .await;
+                }
+            }
+            _ => {}
+        }
+    }
+
     cli::maintenance::maybe_notify(&cli.command).await;
 
-    let config = Box::pin(Config::load_or_init()).await?;
+    let config = if matches!(cli.command, Commands::Env { .. }) {
+        Box::pin(Config::load_read_only()).await?
+    } else {
+        Box::pin(Config::load_or_init()).await?
+    };
 
     if config.legacy_allow_app_hooks || config.legacy_allow_sys_code {
         eprintln!(
@@ -521,11 +573,14 @@ async fn run_command(cli: Cli) -> Result<()> {
         },
         Commands::Env { command } => match command {
             EnvCommands::List { reveal } => env::commands::handle_list(&config, reveal).await,
-            EnvCommands::Set { key, value, force } => {
-                env::commands::handle_set(&config, &key, &value, force).await
+            EnvCommands::Set { key, value, target } => {
+                env::commands::handle_set(&config, &key, &value, &target).await
             }
-            EnvCommands::Delete { key, force } => {
-                env::commands::handle_delete(&config, &key, force).await
+            EnvCommands::Delete { key, target } => {
+                env::commands::handle_delete(&config, &key, &target).await
+            }
+            EnvCommands::Explain { key, reveal } => {
+                env::commands::handle_explain(&config, &key, reveal).await
             }
             EnvCommands::Get { key } => env::commands::handle_get(&config, &key).await,
             EnvCommands::Run(cmd) => {
@@ -680,7 +735,7 @@ async fn run_command(cli: Cli) -> Result<()> {
                         &cmd.recipients,
                         cmd.set.as_deref(),
                         cmd.from.as_deref(),
-                        cmd.force,
+                        &cmd.target,
                     )
                     .await
                 }

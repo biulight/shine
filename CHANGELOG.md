@@ -9,6 +9,19 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Breaking Changes
 
+- Use one env precedence order for all installations: builtin defaults, overlay baseline, global
+  `[env]`, global env file, project `[env]`, project env file. Defaults remain runtime-only; existing
+  entries are retained as explicit configuration. Review important projects and manually remove
+  unneeded historical entries to inherit again. Add `env explain KEY` for hidden-by-default source
+  chains and separate value/description provenance.
+- Replace env write redirection with `--global`, `--project`, `--overlay`, and `--env-file` targets.
+  Explicit targets can maintain shadowed values and report saving separately from effectiveness;
+  implicit targets retain shadow protection. Env set/delete/secret encrypt reject old `--force`
+  without writing, and managed overlay mirrors reject direct writes. Final snapshot checks and
+  per-file locks protect concurrent config saves; encryption preflights before invoking tools.
+  Update old scripts and review installed template changes through `update`/`upgrade`. Downgrading
+  restores old ordering but does not restore deleted entries or updated installed artifacts.
+
 - Remove `shine serve` and the `SHINE_APP_HTTP_DIR` App script variable. Artifacts no longer
   create or request permissions for an HTTP output directory. Use local rule files for Surge
   and Clash Verge, and state/cache directories for persistent artifact output. Remove an old

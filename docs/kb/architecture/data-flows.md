@@ -986,16 +986,30 @@ usable. `shine preset overlay link --git <url>` writes the config and clones imm
 `config/discovery.rs` priority chain (highest first):
 `SHINE_CONFIG_DIR` env → `SHINE_PRESETS` env (presets dir only) → `presets_dir` in
 `config.toml` → default `~/.shine/`. Project-local configs inherit unset keys from the global
-config (see lessons entry 2026-07-04 on inheritance). `Config` saves go through
-`shine_core::sync_table`, which preserves TOML comments. CLI runtime assembly makes selected roots
+config (see lessons entry 2026-07-04 on inheritance). `Config` saves use
+`shine_core::sync_table`; directed key edits use `toml_edit`. Both preserve TOML comments. CLI runtime assembly makes selected roots
 lexically absolute before snapshot capture and planning; it does not resolve ordinary directory
 symlinks or require missing destinations to exist. RealHost metadata rejects special filesystem
 entries, so capture cannot open a FIFO, socket, or device as a regular preset payload.
 
-`env delete` checks the active project's actual `[env]` table before saving through the sparse
-project layer. An inherited key without a local entry is an error, including with `--force`;
-removing a local override reveals the global value. Override-file deletion retains its explicit
-force policy and does not implicitly mutate another configuration layer.
+Env resolution captures and validates every selected file, then merges builtin defaults → active
+project-resolved overlay → global `[env]` → global env file → nearest project `[env]` → project env
+file. Strings and detailed entries missing `description` inherit descriptions independently of
+values; explicit empty descriptions clear them. Config retains raw layers, effective values, value
+and description provenance, and input preimages. Builtins never persist during initialization or
+unrelated saves; historical entries remain explicit. Global and sparse project saves apply deltas
+against raw active-file definitions, including explicit equal-value pending edits.
+
+Env list/get/explain and directed writes load without runtime initialization or advisory workers.
+Write options choose scope and file independently of the current source. Preflight protects
+implicit shadowed writes and rejects managed mirrors/retired force, then captures target and all
+configuration inputs. Encryption runs outside locks. Commit acquires the canonical target-parent
+`.<filename>.shine.lock`, rechecks inputs/context, and privately atomically updates only the selected
+key. Config saves, proxy config mutations and recipient migrations coordinate on that same lock.
+Deletion requires a target-local definition and reveals inheritance; it never seeks another layer.
+Post-save reload reports effective provenance and value change separately from saving. Errors after
+saving state that the file is already saved. External editors/Git are not transactionally locked.
+See [ADR 0109](../decisions/0109-env-baseline-and-directed-writes.md).
 
 ## Dynamic shell completion
 

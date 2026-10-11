@@ -509,7 +509,11 @@ fn env_delete_rejects_inherited_values_and_preserves_both_config_layers() {
         let output = command.output().unwrap();
         assert!(!output.status.success(), "{output:?}");
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains("has no local entry"),
+            String::from_utf8_lossy(&output.stderr).contains(if force {
+                "--force is retired"
+            } else {
+                "has no local entry"
+            }),
             "{output:?}"
         );
         assert_eq!(fs::read(&global).unwrap(), original_global);

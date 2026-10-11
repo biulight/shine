@@ -379,6 +379,7 @@ async fn install_proxy_files(
     rule_path: &Path,
     windows: bool,
 ) -> Result<()> {
+    let _config_guard = crate::config::env_write::lock_target(rule_path).await?;
     let mut files = prepare_shims(
         config.bin_dir(),
         command,
@@ -567,17 +568,11 @@ async fn mutate_rules(
     path: &Path,
     change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
 ) -> Result<()> {
-    let text = read_rules_text(path).await?;
+    let _guard = crate::config::env_write::lock_target(path).await?;
+    let input = crate::config::ConfigInput::capture(path).await?;
+    let text = input.contents.unwrap_or_default();
     let contents = render_rules(&text, change)?;
     crate::persist::atomic_write_private(path, contents.as_bytes()).await
-}
-
-async fn read_rules_text(path: &Path) -> Result<String> {
-    match tokio::fs::read_to_string(path).await {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-    }
 }
 
 fn render_rules(

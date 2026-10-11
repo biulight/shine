@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 pub struct EnvConfig {
     vars: BTreeMap<String, String>,
     descriptions: BTreeMap<String, String>,
+    pending: BTreeMap<String, Option<String>>,
 }
 
 impl EnvConfig {
@@ -28,6 +29,7 @@ impl EnvConfig {
         Self {
             vars: config.env.clone(),
             descriptions: config.env_descriptions.clone(),
+            pending: BTreeMap::new(),
         }
     }
 
@@ -40,10 +42,14 @@ impl EnvConfig {
     }
 
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.vars.insert(key.into(), value.into());
+        let key = key.into();
+        let value = value.into();
+        self.pending.insert(key.clone(), Some(value.clone()));
+        self.vars.insert(key, value);
     }
 
     pub fn remove(&mut self, key: &str) -> Option<String> {
+        self.pending.insert(key.to_string(), None);
         self.vars.remove(key)
     }
 
@@ -62,6 +68,7 @@ impl EnvConfig {
     pub async fn save(&self, config: &Config) -> Result<()> {
         let mut updated = config.clone();
         updated.env = self.vars.clone();
+        updated.env_pending = self.pending.clone();
         updated.save().await
     }
 }
@@ -105,6 +112,7 @@ impl EnvConfig {
         Self {
             vars: crate::config::default_env_map(),
             descriptions: BTreeMap::new(),
+            pending: BTreeMap::new(),
         }
     }
 }

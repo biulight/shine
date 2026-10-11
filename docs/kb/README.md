@@ -26,6 +26,7 @@ It complements — and never duplicates — the existing docs:
 - [`operations/release-runbook.md`](operations/release-runbook.md) — how to cut a release
 - [`operations/ci-pipelines.md`](operations/ci-pipelines.md) — what each GitHub Actions workflow does
 - [`operations/troubleshooting.md`](operations/troubleshooting.md) — common failures and diagnosis
+- [`operations/env-configuration-validation.md`](operations/env-configuration-validation.md) — native Windows env layering, replacement and stable-binary downgrade evidence
 - [`lessons.md`](lessons.md) — dated symptom → root cause → rule entries mined from real bugs
 
 ## How to use this KB (for AI agents)

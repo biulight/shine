@@ -9,25 +9,26 @@ pub enum EnvCommands {
         #[arg(long)]
         reveal: bool,
     },
-    /// Set a variable in config.toml [env]
+    /// Set a variable in the selected env layer
     Set {
         /// Variable name (e.g. HTTP_PROXY_PORT)
         key: String,
         /// Variable value
         value: String,
-        /// Write directly into the env override file that currently shadows this
-        /// key (global/overlay/project shine.env.toml) instead of refusing
-        #[arg(long)]
-        force: bool,
+        #[command(flatten)]
+        target: crate::config::EnvWriteOptions,
     },
-    /// Delete a variable from config.toml [env]
+    /// Delete only the selected layer's definition, restoring inheritance
     Delete {
-        /// Variable name
         key: String,
-        /// Delete directly from the env override file that currently shadows
-        /// this key (global/overlay/project shine.env.toml) instead of refusing
+        #[command(flatten)]
+        target: crate::config::EnvWriteOptions,
+    },
+    /// Explain configured sources without displaying values by default
+    Explain {
+        key: String,
         #[arg(long)]
-        force: bool,
+        reveal: bool,
     },
     /// Get a single variable value
     Get {
@@ -299,16 +300,14 @@ pub struct EnvEncryptCommand {
     /// Recipient (repeatable): GPG key ID/fingerprint/email, or age recipient
     #[arg(short = 'r', long = "recipient")]
     pub recipients: Vec<String>,
-    /// Store the encrypted ciphertext in config.toml [env] instead of printing it
+    /// Store ciphertext in the selected env layer instead of printing it
     #[arg(long)]
     pub set: Option<String>,
-    /// Read plaintext from an existing config.toml [env] variable instead of stdin
+    /// Read plaintext from an effective Shine storage key instead of stdin
     #[arg(long)]
     pub from: Option<String>,
-    /// Write directly into the env override file that currently shadows the
-    /// target key (global/overlay/project shine.env.toml) instead of refusing
-    #[arg(long)]
-    pub force: bool,
+    #[command(flatten)]
+    pub target: crate::config::EnvWriteOptions,
 }
 
 #[derive(Args, Debug)]

@@ -6,14 +6,17 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use tokio::fs;
 
+#[cfg(test)]
+use super::EnvOverrideKind;
+#[cfg(test)]
 use super::discovery::ProjectConfig;
-use super::{Config, DEFAULT_ENV_VARS, EnvOverrideKind, EnvOverrideSource, PROJECT_ENV_FILE};
+use super::{Config, PROJECT_ENV_FILE};
 
 const REMOVED_GLOBAL_ENV_FILE: &str = "env.toml";
 
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
-enum EnvValue {
+pub(super) enum EnvValue {
     Plain(String),
     Detailed {
         value: String,
@@ -66,27 +69,7 @@ pub(super) fn parse_env_descriptions(contents: &str) -> BTreeMap<String, String>
 }
 
 impl Config {
-    pub(super) async fn ensure_env_defaults(&mut self, config_has_env: bool) -> Result<()> {
-        self.reject_removed_global_env_file().await?;
-        let mut needs_save = !config_has_env;
-
-        for (key, value) in DEFAULT_ENV_VARS {
-            if let std::collections::btree_map::Entry::Vacant(entry) =
-                self.env.entry(key.to_string())
-            {
-                entry.insert(value.to_string());
-                needs_save = true;
-            }
-        }
-
-        if needs_save {
-            self.save().await?;
-        }
-
-        Ok(())
-    }
-
-    async fn reject_removed_global_env_file(&self) -> Result<()> {
+    pub(super) async fn reject_removed_global_env_file(&self) -> Result<()> {
         let removed_path = self.shine_dir().join(REMOVED_GLOBAL_ENV_FILE);
         if !fs::try_exists(&removed_path)
             .await
@@ -115,69 +98,6 @@ impl Config {
             override_path.display()
         )
     }
-
-    pub(super) async fn apply_global_env_override(&mut self) -> Result<()> {
-        let env_path = self.shine_dir().join(PROJECT_ENV_FILE);
-        let Some(overrides) = read_env_file(&env_path).await? else {
-            return Ok(());
-        };
-        self.apply_env_overrides(env_path, EnvOverrideKind::Global, false, overrides);
-        Ok(())
-    }
-
-    pub(super) async fn apply_overlay_env_override(&mut self) -> Result<()> {
-        let Some(overlay_dir) = self.active_presets_overlay_dir() else {
-            return Ok(());
-        };
-        let env_path = overlay_dir.join(PROJECT_ENV_FILE);
-        let Some(overrides) = read_env_file(&env_path).await? else {
-            return Ok(());
-        };
-        // If no manual overlay dir is configured, `active_presets_overlay_dir()`
-        // can only have resolved to the shine-managed Git checkout.
-        let is_managed_overlay = self.presets_overlay_dir_override.is_none();
-        self.apply_env_overrides(
-            env_path,
-            EnvOverrideKind::Overlay,
-            is_managed_overlay,
-            overrides,
-        );
-        Ok(())
-    }
-
-    pub(super) async fn apply_project_env_override(
-        &mut self,
-        project_config: &ProjectConfig,
-    ) -> Result<()> {
-        let env_path = project_config.root.join(PROJECT_ENV_FILE);
-        let Some(overrides) = read_env_file(&env_path).await? else {
-            return Ok(());
-        };
-
-        self.apply_env_overrides(env_path, EnvOverrideKind::Project, false, overrides);
-        Ok(())
-    }
-
-    fn apply_env_overrides(
-        &mut self,
-        path: std::path::PathBuf,
-        kind: EnvOverrideKind,
-        is_managed_overlay: bool,
-        overrides: EnvOverrides,
-    ) {
-        for key in overrides.values.keys() {
-            self.env_override_sources.insert(
-                key.clone(),
-                EnvOverrideSource {
-                    path: path.clone(),
-                    kind,
-                    is_managed_overlay,
-                },
-            );
-        }
-        self.env.extend(overrides.values);
-        self.env_descriptions.extend(overrides.descriptions);
-    }
 }
 
 #[doc(hidden)]
@@ -190,11 +110,9 @@ pub async fn validate_env_override_file(path: &Path) -> Result<()> {
 /// `description` of a `{ value, description }` entry being updated. Creates the
 /// file (and its parent directory) if it doesn't exist yet.
 pub async fn write_env_override_entry(path: &Path, key: &str, value: Option<&str>) -> Result<()> {
-    let existing = match fs::read_to_string(path).await {
-        Ok(content) => content,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-    };
+    let _guard = super::env_write::lock_target(path).await?;
+    let input = super::ConfigInput::capture(path).await?;
+    let existing = input.contents.unwrap_or_default();
     let mut target: toml::Table = if existing.is_empty() {
         toml::Table::new()
     } else {
@@ -272,6 +190,14 @@ mod tests {
     use super::super::test_util::{config_in, make_temp_dir, restore_current_dir};
     use super::*;
     use crate::config::PROJECT_CONFIG_FILE;
+
+    impl Config {
+        async fn resolve_with_project(&mut self, project: &ProjectConfig) -> Result<()> {
+            self.is_project_config = true;
+            self.config_path = project.path.clone();
+            self.resolve_env_layers().await
+        }
+    }
     use crate::test_support::env_lock;
 
     #[test]
@@ -513,7 +439,7 @@ mod tests {
         let mut config = config_in(&dir);
 
         config
-            .apply_project_env_override(&ProjectConfig {
+            .resolve_with_project(&ProjectConfig {
                 path: project_dir.join(PROJECT_CONFIG_FILE),
                 root: project_dir,
             })
@@ -556,19 +482,16 @@ mod tests {
 
         let mut config = config_in(&dir);
         config.presets_overlay_dir_override = Some(overlay_dir);
-        config.apply_global_env_override().await.unwrap();
-        config.apply_overlay_env_override().await.unwrap();
-        assert_eq!(
-            config.env.get("SHARED").map(String::as_str),
-            Some("overlay")
-        );
+        config.resolve_env_layers().await.unwrap();
+        config.resolve_env_layers().await.unwrap();
+        assert_eq!(config.env.get("SHARED").map(String::as_str), Some("global"));
         assert_eq!(
             config.env.get("OVERLAY_ONLY").map(String::as_str),
             Some("yes")
         );
         assert_eq!(
             config.env_descriptions.get("SHARED").map(String::as_str),
-            Some("overlay description")
+            Some("global description")
         );
         assert_eq!(
             config
@@ -579,7 +502,7 @@ mod tests {
         );
 
         config
-            .apply_project_env_override(&ProjectConfig {
+            .resolve_with_project(&ProjectConfig {
                 path: project_dir.join(PROJECT_CONFIG_FILE),
                 root: project_dir,
             })
@@ -591,7 +514,7 @@ mod tests {
         );
         assert_eq!(
             config.env_descriptions.get("SHARED").map(String::as_str),
-            Some("overlay description"),
+            Some("global description"),
             "a plain override must preserve the inherited description"
         );
         assert_eq!(
@@ -646,7 +569,7 @@ mod tests {
         let mut config = config_in(&dir);
         config.presets_overlay_dir_override = Some(overlay_dir);
         config.is_external_presets = true;
-        config.apply_overlay_env_override().await.unwrap();
+        config.resolve_env_layers().await.unwrap();
         assert_eq!(
             config.env.get("OVERLAY_ONLY").map(String::as_str),
             Some("yes")
@@ -663,7 +586,7 @@ mod tests {
             .unwrap();
 
         let mut config = config_in(&dir);
-        config.apply_global_env_override().await.unwrap();
+        config.resolve_env_layers().await.unwrap();
 
         let source = config.env_override_source("TOKEN").unwrap();
         assert_eq!(source.path, dir.join(PROJECT_ENV_FILE));
@@ -684,7 +607,7 @@ mod tests {
 
         let mut config = config_in(&dir);
         config.presets_overlay_dir_override = Some(overlay_dir.clone());
-        config.apply_overlay_env_override().await.unwrap();
+        config.resolve_env_layers().await.unwrap();
 
         let source = config.env_override_source("TOKEN").unwrap();
         assert_eq!(source.path, overlay_dir.join(PROJECT_ENV_FILE));
@@ -710,7 +633,7 @@ mod tests {
         // No manual override configured; the managed checkout existing on disk
         // is what `active_presets_overlay_dir()` falls back to.
         config.managed_overlay_dir = Some(overlay_dir.clone());
-        config.apply_overlay_env_override().await.unwrap();
+        config.resolve_env_layers().await.unwrap();
 
         let source = config.env_override_source("TOKEN").unwrap();
         assert_eq!(source.path, overlay_dir.join(PROJECT_ENV_FILE));
@@ -742,16 +665,16 @@ mod tests {
 
         let mut config = config_in(&dir);
         config.presets_overlay_dir_override = Some(overlay_dir.clone());
-        config.apply_global_env_override().await.unwrap();
-        config.apply_overlay_env_override().await.unwrap();
+        config.resolve_env_layers().await.unwrap();
+        config.resolve_env_layers().await.unwrap();
         assert_eq!(
             config.env_override_source("SHARED").unwrap().path,
-            overlay_dir.join(PROJECT_ENV_FILE),
-            "overlay layer must overwrite the global layer's recorded source"
+            dir.join(PROJECT_ENV_FILE),
+            "global layer must overwrite the overlay layer's recorded source"
         );
 
         config
-            .apply_project_env_override(&ProjectConfig {
+            .resolve_with_project(&ProjectConfig {
                 path: project_dir.join(PROJECT_CONFIG_FILE),
                 root: project_dir.clone(),
             })
@@ -767,14 +690,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_toml_only_key_has_no_override_source() {
+    async fn config_toml_key_records_global_config_source() {
         let dir = make_temp_dir().await;
         let mut config = config_in(&dir);
-        config.env.insert("PLAIN".into(), "value".into());
-        config.apply_global_env_override().await.unwrap();
-        config.apply_overlay_env_override().await.unwrap();
+        fs::write(dir.join("config.toml"), "[env]\nPLAIN = \"value\"\n")
+            .await
+            .unwrap();
+        config.resolve_env_layers().await.unwrap();
+        config.resolve_env_layers().await.unwrap();
 
-        assert!(config.env_override_source("PLAIN").is_none());
+        assert_eq!(
+            config.env_override_source("PLAIN").unwrap().kind,
+            EnvOverrideKind::GlobalConfig
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
