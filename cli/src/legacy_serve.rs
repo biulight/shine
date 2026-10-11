@@ -390,7 +390,11 @@ mod tests {
         assert!(uninstall(&host, "macos", &home, None).await.unwrap());
         assert!(host.metadata(&path).await.unwrap_err().is_not_found());
         assert_eq!(host.read(&retained).await.unwrap(), b"user resource");
-        assert_eq!(runs(&host)[1].1, ["unload", "-w", path.to_str().unwrap()]);
+        let commands = runs(&host);
+        let unload_args = &commands[1].1;
+        assert_eq!(unload_args.len(), 3);
+        assert_eq!(unload_args[..2], ["unload", "-w"]);
+        assert_eq!(Path::new(&unload_args[2]), path);
         queue(&host, 0, "-\t0\ttop.biulight.shine.http.other\n");
         assert!(!uninstall(&host, "macos", &home, None).await.unwrap());
         assert_eq!(runs(&host).len(), 3);

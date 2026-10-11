@@ -167,17 +167,12 @@ mod tests {
         let env = runtime.fixed_app_contract_env("demo", &root.join("snapshot"));
         assert!(!env.contains_key("SHINE_APP_HTTP_DIR"));
         assert_eq!(
-            env["SHINE_STATE_DIR"],
-            root.join("state/state/app/demo").display().to_string()
+            Path::new(&env["SHINE_STATE_DIR"]),
+            root.join("state/state/app/demo")
         );
         assert_eq!(
-            env["SHINE_CACHE_DIR"],
-            runtime
-                .context()
-                .cache_dir
-                .join("shine/app/demo")
-                .display()
-                .to_string()
+            Path::new(&env["SHINE_CACHE_DIR"]),
+            runtime.context().cache_dir.join("shine/app/demo")
         );
     }
 

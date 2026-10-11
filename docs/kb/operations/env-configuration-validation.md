@@ -36,8 +36,8 @@ Executed in the isolated source directory after trusting its inspected, pinned `
 mise exec rust@1.96.0 -- cargo nextest run --locked --workspace --target-dir target --all-features --no-fail-fast -E 'test(config::) | test(env::) | test(persist::) | binary(env_configuration) | binary(live_bun_launch) | binary(runtime_boundaries) | test(state::tests::)'
 ```
 
-**223 tests passed; 1070 tests were excluded by the filter.** This is targeted native validation,
-not a claim that the whole Windows workspace suite ran. Compilation took 1m31s; the selected
+**223 tests passed; 1070 tests were excluded by the filter.** This initial run was targeted native
+validation; the later full-suite run is recorded below. Compilation took 1m31s; the selected
 tests took 4.637s. Windows conditional compilation emitted unused/dead-code warnings in existing
 modules; a Windows `clippy -D warnings` run was not part of this check.
 
@@ -94,6 +94,28 @@ CLI through Windows PowerShell 5.1 and PowerShell 7 using the same isolated envi
 Raw logs and final JSON were retained under the isolated Windows `%TEMP%` validation root and
 copied to the local temporary validation directory. They contain only fixture values. The script's
 retained JSON records the verified executable versions, all command results and restored hashes.
+
+## CI follow-up: full native Windows suite
+
+The [CI run for `8e9fb3b`](https://github.com/biulight/shine/actions/runs/38120987713) passed quality,
+Ubuntu, macOS, MSRV and documentation checks, but the Windows job reported 1291 passes and two
+failures. Both were path-string assertions in legacy-service cleanup and fixed App environment
+tests, outside the initial targeted filter. Mixed and native separators identified the same paths.
+The fix compares `Path` values while retaining exact command switches, argument count and target
+checks; no runtime behavior or platform coverage was removed.
+
+On `nuc.win.local`, the modified source passed the full CI target:
+
+```powershell
+cargo nextest run --locked --workspace --target-dir target --all-features --target x86_64-pc-windows-msvc --no-fail-fast
+```
+
+**1293 tests passed, 0 skipped, in 19.610s.** The process had fresh existing HOME, USERPROFILE,
+APPDATA and LOCALAPPDATA directories; CARGO_HOME/RUSTUP_HOME retained the pinned toolchain and
+dependency cache. The first full native attempt inherited the host profile and exposed an embedded
+completion assertion influenced by its configured presets. Isolating the test process resolved
+that fixture condition without changing or weakening the completion test. Both initial CI failures
+also passed on macOS in the 13-test legacy-service/App-script regression selection.
 
 ## Remaining boundaries
 

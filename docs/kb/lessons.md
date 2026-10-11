@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-11 — Runtime path assertions must compare path components
+
+- **Symptom**: Windows CI failed the simulated macOS legacy-service cleanup and fixed App
+  environment tests, while the new env tests and Unix suites passed.
+- **Cause**: expected strings joined a slash-separated suffix in one call; runtime construction
+  used multiple joins, producing different Windows separator spelling for the same path.
+- **Fix**: compare path arguments and environment values as `Path` values, retaining exact command
+  switches, argument count and destination checks. Native Windows tests keep both cases enabled.
+- **Rule**: assert path identity separately from command syntax; do not require byte-identical
+  separators unless their spelling is itself part of the contract.
+
 ## 2026-10-11 — Effective env maps cannot represent persistence intent
 
 - **Cause**: serializing effective defaults/overrides into global config obscured user intent;
