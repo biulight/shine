@@ -25,7 +25,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.3.0 sh install.sh
+SHINE_VERSION=2.4.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -39,7 +39,7 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.3.0"; .\install.ps1
+$env:SHINE_VERSION = "2.4.0"; .\install.ps1
 ```
 
 ## Install from source
@@ -66,8 +66,13 @@ shine self upgrade --channel preview
 `preview` is a continuously updated prerelease channel and is not included in routine automatic
 update checks. `shine update` checks both installed configuration and stable Shine releases.
 
-Shine 2.0 is available through `latest` and the stable channel. Before upgrading an existing 1.x
+Shine 2.4.0 is available through `latest` and the stable channel. Before upgrading an existing 1.x
 installation, read [Upgrade from Shine 1.x](./guides/upgrade-to-2.md) for the compatibility changes.
+
+When upgrading from 2.3.x or earlier, review the
+[environment-layer migration and rollback steps](./guides/environment.md#manual-upgrade-and-rollback-for-env-layering).
+Version 2.4.0 changes which layer wins when keys overlap and replaces env write `--force` with explicit
+target options. Keep private backups and check important projects with `shine env explain KEY`.
 
 On Unix, if `shine self install` copies the binary to a location the current user cannot modify,
 Shine interactively requests authorization and completes the installation through `sudo`. After a
@@ -78,11 +83,11 @@ installing or upgrading in a protected location requires a terminal with the nec
 
 ## Retire an older local HTTP service
 
-The Next version removes HTTP serving and the `SHINE_APP_HTTP_DIR` script variable. Use local
+Version 2.4.0 removes HTTP serving and the `SHINE_APP_HTTP_DIR` script variable. Use local
 files for Surge and Clash Verge rules; application artifacts can keep persistent output in
 `SHINE_STATE_DIR` or `SHINE_CACHE_DIR`.
 
-If you installed the old background service, remove it after upgrading to Next:
+If you installed the old background service, remove it after upgrading to 2.4.0:
 
 ```bash
 shine clear serve

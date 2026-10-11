@@ -5,7 +5,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
-## [Unreleased]
+## [2.4.0] — 2026-10-11
 
 ### Breaking Changes
 
@@ -14,6 +14,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   entries are retained as explicit configuration. Review important projects and manually remove
   unneeded historical entries to inherit again. Add `env explain KEY` for hidden-by-default source
   chains and separate value/description provenance.
+
 - Replace env write redirection with `--global`, `--project`, `--overlay`, and `--env-file` targets.
   Explicit targets can maintain shadowed values and report saving separately from effectiveness;
   implicit targets retain shadow protection. Env set/delete/secret encrypt reject old `--force`
@@ -39,6 +40,18 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   nonzero without reporting completion. Existing required patch-upgrade behavior is unchanged.
 
 ### Bug Fixes
+
+- Preserve user-edited App files selected for preservation before running generators. Serialize
+  App, Shell, and Sys lifecycle operations so concurrent installs, upgrades, removals, and recovery
+  retain each other's receipts and recheck approval against current state.
+
+- Preserve workspace source order across plaintext and encrypted SSH broker values: later plain
+  values suppress earlier secrets, and later secrets never expose earlier plain values without
+  authorization. Reject malformed legacy Surge rule blocks before modifying the profile.
+
+- Keep Sys bootstrap file inputs and working directories bound to the reviewed snapshot, stop
+  child processes after timeouts or cancellation, and restore previous proxy files and
+  configuration after an incomplete installation without overwriting concurrent edits.
 
 - Preserve concurrent trust grants, revocations and SSH broker policy changes. Reject policy
   updates when the reviewed target changed or was removed while confirmation was pending.
@@ -101,6 +114,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   category/file receipts in list, update, and upgrade, and allow targeted uninstall of missing
   external sources. Uninstall previews identify user modifications and recorded backups;
   receipt-owned JSON keys remain distinct from unrelated content.
+
+### Docs
+
+- Publish aligned English and Simplified Chinese 2.4 manuals with environment-layer migration,
+  explicit write targets, HTTP service cleanup, and lifecycle preservation guidance. Replace the
+  2.3 documentation snapshot while retaining the 1.8 manual and Next documentation.
 
 ## [2.3.1] — 2026-10-06
 

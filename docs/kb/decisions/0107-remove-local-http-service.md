@@ -40,7 +40,8 @@ service-manager integrations without a required consumer in the supported preset
 
 ## Consequences
 
-This is an incompatible CLI and script-contract change and must be included in the next major
-release under the repository's versioning convention. External consumers must migrate local
-resources to application-supported files or arrange their own HTTP hosting when a URL is required.
+The maintainer selected 2.4.0 for this optional service removal, with `clear serve` providing
+explicit legacy cleanup; see the [dated versioning exception](../conventions.md#versioning).
+The removed CLI and script contracts still require external consumers to migrate local resources
+to application-supported files or arrange their own HTTP hosting when a URL is required.
 No automatic cleanup or live application/service mutation occurs during ordinary upgrades.
