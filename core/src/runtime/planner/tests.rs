@@ -3983,6 +3983,10 @@ source = 'config.toml'
     assert_eq!(plan.operation, PlanOperationV1::AppArtifactApply);
     assert!(plan.is_ready());
     let encoded = serde_json::to_string(&plan).unwrap();
+    assert!(!encoded.contains("http-dir"));
+    assert!(!encoded.contains("http/app"));
+    assert!(encoded.contains("artifact:cache-dir"));
+    assert!(encoded.contains("artifact:state-dir"));
     assert!(!encoded.contains("top-secret-value"));
     assert!(!encoded.contains("vault-revision-9"));
     let remove = runtime
@@ -3994,6 +3998,21 @@ source = 'config.toml'
         .unwrap();
     assert_eq!(remove.operation, PlanOperationV1::AppArtifactRemove);
     assert!(remove.is_ready());
+    assert!(!serde_json::to_string(&remove).unwrap().contains("http-dir"));
+
+    // Legacy published files are outside artifact state and must not invalidate approval.
+    let legacy = runtime.context().shine_dir.join("http/app/demo/legacy.txt");
+    runtime.host().put_file(&legacy, b"retained".to_vec());
+    assert_eq!(
+        runtime
+            .plan_app_artifact(request.clone())
+            .await
+            .unwrap()
+            .fingerprint()
+            .unwrap(),
+        plan.fingerprint().unwrap()
+    );
+    assert_eq!(runtime.host().read(&legacy).await.unwrap(), b"retained");
 
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime.host().put_file(

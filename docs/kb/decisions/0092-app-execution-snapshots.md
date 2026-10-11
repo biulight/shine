@@ -23,7 +23,8 @@ entrypoint is executable, and command hooks continue to invoke their declared ex
 `SHINE_APP_DIR` and `SHINE_APP_SOURCE_DIR` point to the effective copy. `SHINE_APP_OVERLAY_DIR`
 points to its captured overlay subset when an overlay is active and is explicitly empty otherwise,
 overriding inherited values. These paths are temporary;
-persistent output uses `SHINE_STATE_DIR`, `SHINE_CACHE_DIR`, or `SHINE_APP_HTTP_DIR`.
+persistent output uses `SHINE_STATE_DIR` or `SHINE_CACHE_DIR` (the former HTTP output contract was
+removed by [ADR 0107](0107-remove-local-http-service.md)).
 The source-layer check for Bun package/lock declarations remains unchanged.
 
 Pure Plans declare creation and removal under the category runtime root and observe that root.

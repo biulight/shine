@@ -42,9 +42,10 @@ shine upgrade app/starship
 | `shine env ...` | 管理变量、工作区环境、命令代理和密钥 |
 | `shine ssh ...` / `shine local ...` | 建立 SSH 会话与传输文件 |
 | `shine task ...` / `shine run <NAME>` | 保存和运行个人命令 |
-| `shine serve ...` | 提供 `~/.shine/http/` 下的本地资源 |
 | `shine self ...` | 安装或升级 Shine 程序 |
 | `shine state migrate` | 预览或应用受支持的旧状态迁移 |
+| `shine state check` | 立即检查需要手动处理的维护事项，不执行修改 |
+| `shine clear serve` | 停止并移除已退役的 HTTP 用户服务注册 |
 | `shine trust ...` | 审阅外部预设代码的目标级信任 |
 | `shine completions ...` | 生成或安装 Shell 补全 |
 | `shine theme sync` | 输出终端主题环境变量 |
@@ -138,6 +139,7 @@ shine info <TARGET> [--diff] [--verbose] [--run-generators]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
 shine upgrade [TARGET] [--pull] [--verbose] [--full-plan] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
+shine state check
 shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
 shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
 shine trust list [--verbose]
@@ -246,7 +248,7 @@ Broker policy 命令及完整远程流程见
 [SSH 会话、密钥代理与文件传输](../guides/ssh-transfer.md)。本地变量、工作区加密、命令包装和 hybrid
 后端见 [管理环境变量与密钥](../guides/environment.md)。
 
-## 任务、本地服务与主题
+## 任务与主题
 
 ```text
 shine task save <NAME> [--force] [--cwd <PATH>] -- <COMMAND>...
@@ -256,20 +258,60 @@ shine task info <NAME>
 shine task delete <NAME>
 shine run <NAME> [-- EXTRA_ARGS...]
 
-shine serve install [--port <PORT>]
-shine serve start [--port <PORT>]
-shine serve status
-shine serve uninstall
-shine serve url <PATH> [--port <PORT>]
-
 shine theme sync [--auto] [--quiet]
 ```
 
-任务会运行保存的命令，并可使用保存的工作目录。本地服务会发布 `~/.shine/http/` 下的文件，不要在该
-目录放置密钥。
+任务会运行保存的命令，并可使用保存的工作目录。
 
-参见 [任务与本地服务](../guides/tasks-and-serve.md)和
+参见 [任务与应用构建产物](../guides/tasks-and-serve.md)和
 [同步终端主题](../guides/terminal-theme-sync.md)。
+
+## 清理
+
+### 维护提醒
+
+Shine 会在普通交互式调用时检查需要手动处理的维护事项。检查支持每次调用、每分钟、每小时、
+每天四档频率，到期后在调用 Shine 时触发，无需常驻后台服务。
+
+旧 HTTP 服务的注册文件会在每次符合条件的调用中检查；系统服务状态最多每小时由短生命周期
+后台进程检查一次，结果在后续调用时显示。同一维护事项通常每天最多提醒一次。检查只读取状态，
+不会移除服务、删除文件或执行预设。
+
+若想立即运行全部现有维护检查，即使配置无法加载，也可以执行：
+
+```text
+shine state check
+```
+
+stderr 支持颜色时，维护提醒和检查未完成的警告会以加粗黄色显示，整组提示与命令输出之间
+空一行。设置 `NO_COLOR` 可关闭颜色。
+
+自动提醒写入终端 stderr。非交互调用，以及帮助、补全、预设创作、环境命令、命令运行器、
+SSH/传输、主题同步、程序管理、迁移、清理和恢复命令会跳过自动提醒。
+显式执行 `state check` 支持重定向输出，并会立即重复显示发现的事项；未能完成的检查也会在此
+报告。自动检查失败不会阻断普通命令。
+
+若 `state check` 检查期间在同一配置目录又执行了另一轮检查或清理，较早的检查会提示重试并
+返回非零状态，不会报告检查已完成。
+
+现有版本检查和补丁版本强制升级策略保持不变。维护检查也不会替代操作前的权限、信任、
+兼容性或审批检查。
+
+### 移除旧 HTTP 服务
+
+```text
+shine clear serve
+```
+
+`clear` 必须指定目标；单独运行不会清理所有内容。`clear serve` 会停止并移除旧版用户服务，
+无需加载 Shine 配置，也不会删除已发布的文件。成功后重复清理也是安全的；系统服务管理器
+报错时会报告失败。整个 `shine serve` 命令已移除。参见
+[安装与升级](../installation.md#清理旧版本的本地-http-服务)。
+
+成功清理后，会重置所选配置目录中的相关提醒缓存，并丢弃尚未完成的旧检查结果。
+检查该状态时，请使用相同的 `--config-dir` 或 `SHINE_CONFIG_DIR`。
+
+版本化运行时状态迁移仍使用 `shine state migrate`。
 
 ## SSH 与文件传输
 

@@ -1,10 +1,10 @@
 mod app;
+mod clear;
 mod cli;
 mod env;
 mod local;
 mod preset;
 mod self_install;
-mod serve;
 mod shell;
 mod state;
 mod sys;
@@ -13,12 +13,12 @@ mod theme;
 mod trust;
 
 pub use app::*;
+pub use clear::*;
 pub use cli::*;
 pub use env::*;
 pub use local::*;
 pub use preset::*;
 pub use self_install::*;
-pub use serve::*;
 pub use shell::*;
 pub use state::*;
 pub use sys::*;

@@ -113,7 +113,7 @@ effective overlay subset. Without a captured overlay, execution explicitly injec
 `SHINE_APP_OVERLAY_DIR` so ambient or caller-injected paths cannot select uncaptured files.
 Relative imports therefore cannot reopen changed checkout helpers.
 Bun dependency mode still comes from the captured script's source layer. Execution and spawn errors
-both clean only the invocation tree; persistent artifact output uses the existing state/cache/HTTP
+both clean only the invocation tree; persistent artifact output uses the existing state/cache
 paths. Plans declare the create/remove effects before execution (ADR 0092).
 
 ## Shell availability and ownership inspection
@@ -763,8 +763,8 @@ flow for an app preset's `[artifact].script`:
 2. Resolves the script's location: an overlay's `app/<name>/<script>` wins when that exact script
    exists; otherwise the source (built-in or external) script is used. This lets an overlay keep
    local policy files while inheriting a generic built-in artifact.
-3. Creates (idempotently, before spawning) `SHINE_APP_HTTP_DIR` (`<shine_dir>/http/app/<name>`),
-   `SHINE_STATE_DIR` (`<shine_dir>/state/app/<name>`), and `SHINE_CACHE_DIR` (the OS cache dir via
+3. Creates (idempotently, before spawning) `SHINE_STATE_DIR` (`<shine_dir>/state/app/<name>`)
+   and `SHINE_CACHE_DIR` (the OS cache dir via
    the `directories` crate — `<os-cache>/shine/app/<name>`, the same crate/pattern
    `env/workspace.rs::cache_path` already uses for its own per-project cache).
 4. Injects only `[artifact].env` mappings whose sources are listed by the category's
@@ -913,6 +913,34 @@ Top-level `shine list` reads current-OS entries with `managed = true` directly f
 `sys-manifest.toml` for its installed-only `System Configs` section. It does not call the live
 desired-state checker; `shine update` remains responsible for showing only pending managed
 changes.
+
+## Maintenance advisories (`shine state check` / interactive invocation)
+
+`cli/src/maintenance/` owns this advisory flow independently of the version gate:
+
+1. Before normal config loading, eligible terminal-stderr invocations derive a scope from the
+   selected absolute config root, effective home, native config root and platform. No Presets or
+   secrets are loaded. `state check` and the hidden worker route before config loading as well.
+2. Under a nonblocking state lock, load the private atomic cache in
+   `<shine_dir>/maintenance/<scope-hash>/checks.json`. Missing/corrupt/foreign-build state is a miss.
+   Rules choose every invocation/minute/hour/day independently from inline/background execution.
+3. Snapshot existing background findings and reserve due heavy rules with a ticket and 120-second
+   lease. Release the lock before observing registration files (100 ms limit) or native processes.
+4. Commit inline results only if the generation still matches; deduplicate findings by action and
+   remind at most daily on stderr. Only background findings already present at invocation start
+   are eligible. Spawn the current executable's hidden worker with absolute config scope and ticket.
+5. The worker detaches its process session/group and stdio, takes a nonblocking worker lock, validates
+   pending tickets, and runs read-only native probes (10-second child timeout, bounded output).
+   Each result is committed under the state lock only if generation, rule revision and ticket match.
+   The whole worker is bounded to 30 seconds; failures retry no sooner than one minute, and lost
+   workers become retryable after the lease expires. Locks are never unlinked for reclamation.
+6. Explicit `state check` supersedes in-flight work, runs current rules synchronously, repeats findings
+   and reports incomplete probes. Successful `clear serve` advances the generation and resets its
+   action state in the selected config scope, so an older worker cannot resurrect a reminder.
+   If a newer check or cleanup supersedes an explicit check, it prints a retry warning and exits
+   nonzero without a completion summary; it cannot commit its obsolete findings.
+
+No advisory worker applies changes, executes Presets, or decides trust/approval/release gates.
 
 ## Update check (`shine update` / background check)
 

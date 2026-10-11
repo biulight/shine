@@ -7,6 +7,24 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Remove `shine serve` and the `SHINE_APP_HTTP_DIR` App script variable. Artifacts no longer
+  create or request permissions for an HTTP output directory. Use local rule files for Surge
+  and Clash Verge, and state/cache directories for persistent artifact output. Remove an old
+  background service with `shine clear serve`, including after upgrading with an unreadable
+  configuration. Cleanup is repeatable and retains existing published files.
+
+### Features
+
+- Add maintenance advisories with per-invocation, minute, hour, and day schedules. Heavy checks
+  run in a detached process and report on a later interactive invocation. Detect retained HTTP
+  service registrations and loaded services, point to `shine clear serve`, and discard old
+  results after cleanup. `shine state check` performs an immediate read-only inspection without
+  loading configuration. Reminders and incomplete-check warnings use bold yellow where supported
+  and a blank line before command output. Superseded explicit checks ask for a retry and exit
+  nonzero without reporting completion. Existing required patch-upgrade behavior is unchanged.
+
 ### Bug Fixes
 
 - Preserve concurrent trust grants, revocations and SSH broker policy changes. Reject policy
@@ -50,8 +68,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Make Preset lint tolerate platform-limited App categories and check Windows PowerShell
   commands. Translate SSH connection options for SCP transfers, skip non-executable Unix
-  PATH entries when installing environment proxies, and encode reserved characters in
-  `serve url` resource paths.
+  PATH entries when installing environment proxies.
 
 - Fix absolute filesystem permission identities and show familiar paths in Security Plans,
   preserving Windows drive and network-share roots. Mention external-code consent in the

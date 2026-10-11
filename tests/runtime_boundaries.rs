@@ -8,7 +8,385 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn clear_serve_survives_upgrade_with_invalid_config() {
+    let fixture = Fixture::new();
+    let config = fixture.state().join("config.toml");
+    fs::write(&config, "invalid = [").unwrap();
+    let legacy = fixture.state().join("http/app/demo/keep.txt");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    fs::write(&legacy, "user resource").unwrap();
+    let (program, relative) = if cfg!(target_os = "macos") {
+        (
+            "launchctl",
+            "Library/LaunchAgents/top.biulight.shine.http.plist",
+        )
+    } else {
+        ("systemctl", ".config/systemd/user/shine-http.service")
+    };
+    let registration = fixture.0.join("fake-root-home").join(relative);
+    fs::create_dir_all(registration.parent().unwrap()).unwrap();
+    fs::write(&registration, "legacy registration").unwrap();
+    let stub = fixture.0.join("tools").join(program);
+    fs::write(
+        &stub,
+        r#"#!/bin/sh
+if [ "${SHINE_SERVICE_FAIL:-}" = 1 ]; then exit 47; fi
+if [ "$1" = list ] && [ -f "$SHINE_SERVICE_REGISTRATION" ]; then
+    printf '%s\n' '- 0 top.biulight.shine.http'
+fi
+if [ "$2" = show ]; then
+    printf '%s\n' 'LoadState=not-found' 'ActiveState=inactive'
+fi
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    let run = |fail: bool| {
+        fixture
+            .shine()
+            .env("SHINE_SERVICE_REGISTRATION", &registration)
+            .env("SHINE_SERVICE_FAIL", if fail { "1" } else { "0" })
+            .args(["clear", "serve"])
+            .output()
+            .unwrap()
+    };
+    let failed = run(true);
+    assert!(!failed.status.success());
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("legacy service cleanup"),
+        "{failed:?}"
+    );
+    assert!(registration.exists());
+    Fixture::assert_ok(run(false));
+    assert!(!registration.exists());
+    Fixture::assert_ok(run(false));
+    assert_eq!(fs::read_to_string(&config).unwrap(), "invalid = [");
+    assert_eq!(fs::read_to_string(&legacy).unwrap(), "user resource");
+    assert!(!fixture.state().join("presets").exists());
+}
+
 struct Fixture(PathBuf);
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct MaintenanceFixture(Fixture);
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl MaintenanceFixture {
+    fn new() -> Self {
+        let fixture = Fixture::new();
+        fixture.initialize();
+        let program = if cfg!(target_os = "macos") {
+            "launchctl"
+        } else {
+            "systemctl"
+        };
+        let stub = fixture.0.join("tools").join(program);
+        fs::write(
+            &stub,
+            r#"#!/bin/sh
+query=0
+if [ "$1" = list ] || [ "$2" = show ]; then query=1; fi
+if [ "$query" = 1 ]; then
+    if [ "${SHINE_TEST_FAIL:-0}" = 1 ]; then exit 47; fi
+    present=1
+    if [ -f "$SHINE_TEST_MAINTENANCE/cleared" ]; then present=0; fi
+    printf '%s\n' probe >> "$SHINE_TEST_MAINTENANCE/calls"
+    : > "$SHINE_TEST_MAINTENANCE/started"
+    if [ "${SHINE_TEST_BLOCK:-0}" = 1 ]; then
+        while [ ! -f "$SHINE_TEST_MAINTENANCE/release" ]; do sleep 0.02; done
+    fi
+    if [ "$1" = list ]; then
+        if [ "$present" = 1 ]; then printf '%s\n' '- 0 top.biulight.shine.http'; fi
+    elif [ "$present" = 1 ]; then
+        printf '%s\n' 'LoadState=loaded' 'ActiveState=active' 'UnitFileState=disabled'
+    else
+        printf '%s\n' 'LoadState=not-found' 'ActiveState=inactive'
+    fi
+else
+    : > "$SHINE_TEST_MAINTENANCE/cleared"
+fi
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(stub, fs::Permissions::from_mode(0o755)).unwrap();
+        Self(fixture)
+    }
+    fn command(&self, args: &[&str], block: bool) -> Command {
+        let mut command = self.0.shine();
+        command
+            .args(args)
+            .env("SHINE_TEST_MAINTENANCE", &self.0.0)
+            .env("SHINE_TEST_BLOCK", if block { "1" } else { "0" });
+        command
+    }
+    fn interactive(&self, block: bool) -> (Output, String) {
+        self.interactive_command(self.command(&["task", "list"], block))
+    }
+    fn interactive_command(&self, mut command: Command) -> (Output, String) {
+        use std::io::Read;
+        use std::os::fd::FromRawFd;
+        let mut master = -1;
+        let mut slave = -1;
+        // SAFETY: openpty initializes the two descriptors; no termios or winsize override.
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        // Stdio duplicates the slave to fd 2. Keep the original PTY descriptors out of
+        // the worker: otherwise reading the master waits for an unrelated inherited fd.
+        for fd in [master, slave] {
+            assert_eq!(
+                unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+                0
+            );
+        }
+        let mut master = unsafe { fs::File::from_raw_fd(master) };
+        let slave = unsafe { fs::File::from_raw_fd(slave) };
+        // macOS may discard unread PTY data at the last slave close. Keep one local
+        // descriptor alive until the child's completed output has been drained.
+        let keep_alive = slave.try_clone().unwrap();
+        command
+            .env("TERM", "xterm-256color")
+            .stderr(Stdio::from(slave));
+        let output = command.output().unwrap();
+        drop(command);
+        use std::os::fd::AsRawFd;
+        assert_eq!(
+            unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
+            0
+        );
+        let mut text = Vec::new();
+        match master.read_to_end(&mut text) {
+            Ok(_) => {}
+            Err(error)
+                if error.raw_os_error() == Some(libc::EIO)
+                    || error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("reading maintenance PTY: {error}"),
+        }
+        drop(keep_alive);
+        (Fixture::assert_ok(output), String::from_utf8(text).unwrap())
+    }
+    fn wait(&self, mut ready: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while !ready() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "maintenance worker did not finish"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    fn cache_root(&self) -> PathBuf {
+        let mut scopes = fs::read_dir(self.0.state().join("maintenance")).unwrap();
+        scopes.next().unwrap().unwrap().path()
+    }
+    fn cache(&self) -> serde_json::Value {
+        serde_json::from_slice(&fs::read(self.cache_root().join("checks.json")).unwrap()).unwrap()
+    }
+    fn worker_finished(&self) -> bool {
+        use fs2::FileExt;
+        let path = self.cache_root().join("worker.lock");
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .ok()
+            .is_some_and(|file| file.try_lock_exclusive().is_ok())
+    }
+    fn release(&self) {
+        fs::write(self.0.0.join("release"), "").unwrap();
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn maintenance_background_survives_parent_exit_and_notifies_on_next_call() {
+    let f = MaintenanceFixture::new();
+    let start = std::time::Instant::now();
+    let (_, first) = f.interactive(true);
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    assert!(first.is_empty(), "{first:?}");
+    f.wait(|| f.0.0.join("started").exists());
+    let (_, second) = f.interactive(true);
+    assert!(second.is_empty(), "{second:?}");
+    assert_eq!(
+        fs::read_to_string(f.0.0.join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    f.release();
+    f.wait(|| f.cache()["entries"]["serve-native"]["required"] == true);
+    f.wait(|| f.worker_finished());
+    let before = f.cache();
+    let (output, third) = f.interactive(false);
+    assert!(
+        third.contains("shine clear serve"),
+        "stderr={third:?}\nbefore={before}\nafter={}",
+        f.cache()
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("shine clear serve"));
+    assert_highlighted_advisories(&third, 1);
+    let fourth = f.interactive(false).1;
+    assert!(fourth.is_empty(), "{fourth:?}");
+    f.wait(|| f.worker_finished());
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn assert_highlighted_advisories(text: &str, count: usize) {
+    use owo_colors::{OwoColorize, Style};
+    let normalized = text.replace("\r\n", "\n");
+    let lines: Vec<_> = normalized.lines().collect();
+    assert_eq!(lines.len(), count + 1, "{text:?}");
+    assert_eq!(lines[count], "", "{text:?}");
+    for line in &lines[..count] {
+        let (_, styled_message) = line.split_once('m').expect("ANSI style prefix");
+        let plain = styled_message.strip_suffix("\x1b[0m").expect("ANSI reset");
+        // Compare the whole styled line, including the reset before the separator.
+        assert_eq!(
+            *line,
+            plain.style(Style::new().bold().yellow()).to_string(),
+            "{text:?}"
+        );
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn maintenance_advisory_block_styles_findings_and_failures_and_respects_no_color() {
+    let f = MaintenanceFixture::new();
+    let relative = if cfg!(target_os = "macos") {
+        "Library/LaunchAgents/top.biulight.shine.http.plist"
+    } else {
+        ".config/systemd/user/shine-http.service"
+    };
+    let registration = f.0.0.join("fake-root-home").join(relative);
+    fs::create_dir_all(registration.parent().unwrap()).unwrap();
+    fs::write(&registration, "legacy registration").unwrap();
+    let mut command = f.command(&["state", "check"], false);
+    command.env("SHINE_TEST_FAIL", "1");
+    let (output, terminal) = f.interactive_command(command);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 check(s) incomplete"));
+    assert!(terminal.contains("shine clear serve"));
+    assert!(terminal.contains("Warning:"));
+    assert_highlighted_advisories(&terminal, 2);
+
+    let mut command = f.command(&["state", "check"], false);
+    command.env("SHINE_TEST_FAIL", "1").env("NO_COLOR", "1");
+    let (_, plain) = f.interactive_command(command);
+    assert!(!plain.contains('\x1b'), "{plain:?}");
+    assert_eq!(plain.replace("\r\n", "\n").lines().count(), 3);
+    assert!(plain.ends_with("\r\n\r\n"), "{plain:?}");
+
+    fs::remove_file(registration).unwrap();
+    fs::write(f.0.0.join("cleared"), "").unwrap();
+    let (output, empty) = f.interactive_command(f.command(&["state", "check"], false));
+    assert!(empty.is_empty(), "{empty:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("0 action(s) required"));
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn maintenance_clear_discards_a_result_from_an_already_running_worker() {
+    let f = MaintenanceFixture::new();
+    f.interactive(true);
+    f.wait(|| f.0.0.join("started").exists());
+    assert!(!f.worker_finished());
+    Fixture::assert_ok(f.command(&["clear", "serve"], false).output().unwrap());
+    let generation = f.cache()["generation"].clone();
+    f.release();
+    f.wait(|| f.worker_finished());
+    let cache = f.cache();
+    assert_eq!(cache["generation"], generation);
+    assert!(cache["entries"]["serve-native"].is_null());
+    Fixture::assert_ok(f.command(&["state", "check"], false).output().unwrap());
+    assert!(!f.interactive(false).1.contains("shine clear serve"));
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn assert_superseded_maintenance_check(replacement: &[&str]) {
+    let f = MaintenanceFixture::new();
+    let first = f
+        .command(&["state", "check"], true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    f.wait(|| f.0.0.join("started").exists());
+    let replacement = f.command(replacement, false).output().unwrap();
+    let cache = f.cache();
+    f.release();
+    let first = first.wait_with_output().unwrap();
+    Fixture::assert_ok(replacement);
+    assert!(!first.status.success(), "{first:?}");
+    assert!(first.stdout.is_empty(), "{first:?}");
+    let stderr = String::from_utf8(first.stderr).unwrap();
+    assert!(stderr.contains("superseded"), "{stderr:?}");
+    assert!(stderr.contains("retry `shine state check`"), "{stderr:?}");
+    assert_eq!(stderr.lines().count(), 2, "{stderr:?}");
+    assert!(stderr.ends_with("\n\n"), "{stderr:?}");
+    assert!(!stderr.contains('\x1b'), "{stderr:?}");
+    // The obsolete finding must not overwrite either a newer inspection or cleanup.
+    assert_eq!(f.cache(), cache);
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn maintenance_explicit_check_superseded_by_another_check_reports_retry() {
+    assert_superseded_maintenance_check(&["state", "check"]);
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn maintenance_explicit_check_superseded_by_cleanup_reports_retry() {
+    assert_superseded_maintenance_check(&["clear", "serve"]);
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn maintenance_noninteractive_is_quiet_and_explicit_check_bypasses_invalid_config_and_patch_gate() {
+    let f = MaintenanceFixture::new();
+    Fixture::assert_ok(f.command(&["task", "list"], false).output().unwrap());
+    assert!(!f.0.state().join("maintenance").exists());
+    assert!(!f.0.0.join("calls").exists());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut version = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+    version.patch += 1;
+    fs::write(
+        f.0.state().join("update-check.json"),
+        serde_json::json!({ "latest_version": version.to_string(), "checked_at_unix_secs": now })
+            .to_string(),
+    )
+    .unwrap();
+    let gated = f.command(&["task", "list"], false).output().unwrap();
+    assert!(!gated.status.success());
+    assert!(String::from_utf8_lossy(&gated.stderr).contains("newer patch release"));
+    fs::write(f.0.state().join("config.toml"), "invalid = [").unwrap();
+    let checked = Fixture::assert_ok(f.command(&["state", "check"], false).output().unwrap());
+    assert!(String::from_utf8_lossy(&checked.stderr).contains("shine clear serve"));
+    assert!(!checked.stderr.contains(&0x1b));
+    assert!(checked.stderr.ends_with(b"\n\n"));
+    assert!(String::from_utf8_lossy(&checked.stdout).contains("1 action(s) required"));
+    assert_eq!(
+        fs::read_to_string(f.0.state().join("config.toml")).unwrap(),
+        "invalid = ["
+    );
+}
+
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!("shine-boundaries-{}", uuid::Uuid::new_v4()));

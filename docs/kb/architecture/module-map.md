@@ -106,6 +106,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `sys recover` | `cli/src/sys/recovery.rs` → Core explicit managed Sys recovery Plan/apply |
 | `sys list/bootstrap/profile/...` | `cli/src/sys/` |
 | `theme sync` | `cli/src/theme/` |
+| `clear serve` | `cli/src/legacy_serve.rs`; config-independent retired user-service cleanup |
+| `state check`, hidden `__maintenance-worker` | `cli/src/maintenance/`; best-effort advisory scheduling, scoped cache, detached read-only worker |
 | `env ...` | `cli/src/env/` plus `cli/src/secret/` |
 | `preset export/copy/link/unlink/overlay` | `cli/src/preset_commands.rs` |
 | `preset new/validate/lint/plan/test/pack` | Kind template handlers plus the `cli/src/preset_{validation,lint,authoring,test,pack}.rs` adapters |
@@ -115,7 +117,6 @@ Update this file when modules move, split, merge, or take on a different respons
 | `self install/upgrade` | `cli/src/self_install.rs`, `cli/src/update_check/` |
 | `update [TARGET]`, `upgrade [TARGET]` | filtered handlers; untargeted upgrade batches Shell/App/managed Sys review in `self_install.rs` |
 | `state migrate` | `cli/src/state.rs` |
-| `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `ssh ...` | `cli/src/ssh/mod.rs` |
 | `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
 | `task save/run/list/info/delete`, `run <NAME>` | `cli/src/task/` |
@@ -248,7 +249,6 @@ See [`data-flows.md`](data-flows.md#ssh-environment-forwarding),
 | `cli/src/task/mod.rs` | Personal command registry handlers and direct argv execution |
 | `cli/src/task/manifest.rs` | `tasks.toml` model and persistence |
 | `cli/src/theme/` | Terminal theme detection and synchronization |
-| `cli/src/serve.rs` | Loopback server and per-user service management |
 | `cli/src/update_check/` | Release lookup, cache, notification, and binary upgrade |
 | `cli/src/self_install.rs` | Self-install and installed-configuration upgrade orchestration |
 | `cli/src/home.rs` | Sudo-aware home discovery and path expansion |

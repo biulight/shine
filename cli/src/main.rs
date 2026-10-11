@@ -2,15 +2,15 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 
 use cli::{
-    apps, colors, commands, completion, config, env, git_pull, info, list, serve, shells, ssh,
-    state, sys, task, theme, update_check,
+    apps, colors, commands, completion, config, env, git_pull, info, list, shells, ssh, state, sys,
+    task, theme, update_check,
 };
 
 use commands::{
-    AppArtifactCommands, AppCommands, Cli, Commands, CompletionCommands, CompletionShell,
-    EnvBrokerPolicySubcommand, EnvBrokerSubcommand, EnvCommands, EnvIdentitySubcommand,
-    EnvProxySubcommand, EnvSecretSubcommand, EnvWorkspaceSubcommand, LocalCommands,
-    OverlayCommands, PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands,
+    AppArtifactCommands, AppCommands, ClearCommands, Cli, Commands, CompletionCommands,
+    CompletionShell, EnvBrokerPolicySubcommand, EnvBrokerSubcommand, EnvCommands,
+    EnvIdentitySubcommand, EnvProxySubcommand, EnvSecretSubcommand, EnvWorkspaceSubcommand,
+    LocalCommands, OverlayCommands, PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands,
     ShellCommands, StateCommands, SysCommands, SysProfileCommands, TaskCommands, ThemeCommands,
     TrustCommands,
 };
@@ -89,6 +89,25 @@ async fn run(cli: Cli) -> Result<()> {
 }
 
 async fn run_command(cli: Cli) -> Result<()> {
+    if let Commands::MaintenanceWorker { scope, ticket } = &cli.command {
+        return cli::maintenance::handle_worker(scope, *ticket).await;
+    }
+
+    if let Commands::State {
+        command: StateCommands::Check,
+    } = &cli.command
+    {
+        return cli::maintenance::handle_check().await;
+    }
+
+    if let Commands::Clear {
+        command: ClearCommands::Serve,
+    } = &cli.command
+    {
+        // Cleanup must remain reachable after an upgrade, even with invalid or retired config.
+        return cli::legacy_serve::handle_uninstall().await;
+    }
+
     if let Commands::Init(cmd) = &cli.command {
         return cli::init::handle_init(cmd.yes).await;
     }
@@ -212,6 +231,8 @@ async fn run_command(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
+    cli::maintenance::maybe_notify(&cli.command).await;
+
     let config = Box::pin(Config::load_or_init()).await?;
 
     if config.legacy_allow_app_hooks || config.legacy_allow_sys_code {
@@ -233,6 +254,10 @@ async fn run_command(cli: Cli) -> Result<()> {
     update_check::maybe_notify(&config, &cli.command).await?;
 
     match cli.command {
+        Commands::MaintenanceWorker { .. } => {
+            unreachable!("maintenance worker routes before config loading")
+        }
+        Commands::Clear { .. } => unreachable!("legacy cleanup routes before config loading"),
         Commands::ShellRender { .. } | Commands::ShellLaunch { .. } => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Completions {
@@ -448,13 +473,6 @@ async fn run_command(cli: Cli) -> Result<()> {
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
-        },
-        Commands::Serve { command } => match command {
-            ServeCommands::Install(cmd) => serve::handle_install(&config, cmd.port).await,
-            ServeCommands::Start(cmd) => serve::handle_start(&config, cmd.port).await,
-            ServeCommands::Status => serve::handle_status(&config).await,
-            ServeCommands::Uninstall => serve::handle_uninstall(&config).await,
-            ServeCommands::Url(cmd) => serve::handle_url(&cmd.path, cmd.port),
         },
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
@@ -2887,45 +2905,22 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_unified_serve_commands() {
-        let cli = Cli::try_parse_from(["shine", "serve", "install"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Serve {
-                command: ServeCommands::Install(_)
-            }
-        ));
+    fn cli_rejects_removed_serve_commands() {
+        assert!(Cli::try_parse_from(["shine", "serve"]).is_err());
+        for subcommand in ["install", "start", "status", "url", "uninstall"] {
+            assert!(Cli::try_parse_from(["shine", "serve", subcommand]).is_err());
+        }
+    }
 
-        let cli = Cli::try_parse_from(["shine", "serve", "start"]).unwrap();
+    #[test]
+    fn cli_clears_legacy_serve_after_upgrade() {
+        assert!(Cli::try_parse_from(["shine", "clear"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "clear", "all"]).is_err());
+        let cli = Cli::try_parse_from(["shine", "clear", "serve"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Serve {
-                command: ServeCommands::Start(_)
-            }
-        ));
-
-        let cli = Cli::try_parse_from(["shine", "serve", "status"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Serve {
-                command: ServeCommands::Status
-            }
-        ));
-
-        let cli = Cli::try_parse_from(["shine", "serve", "uninstall"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Serve {
-                command: ServeCommands::Uninstall
-            }
-        ));
-
-        let cli = Cli::try_parse_from(["shine", "serve", "url", "app/surge/custom-rules.sgmodule"])
-            .unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Serve {
-                command: ServeCommands::Url(_)
+            Commands::Clear {
+                command: ClearCommands::Serve
             }
         ));
     }

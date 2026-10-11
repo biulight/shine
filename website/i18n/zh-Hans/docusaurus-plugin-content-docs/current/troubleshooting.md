@@ -107,19 +107,6 @@ shine sys uninstall <ITEM> --dry-run
 
 Windows 或其它工具改写过的 PowerShell、bash 或 zsh profile 可能使用 CRLF 换行。系统 profile 合并会按内容匹配受管区块，不会仅因 CRLF/LF 差异反复重写文件。若旧版本已留下冲突标记，先手工处理冲突，再重新运行 `shine sys bootstrap --dry-run` 或对应 `upgrade`。
 
-## 本地 HTTP 服务无法访问资源
-
-先确认服务和 URL：
-
-```bash
-shine serve status
-shine serve url app/surge/custom-rules.sgmodule
-```
-
-`shine serve install` 在 macOS 使用 launchd、在 Linux 使用 systemd user unit、在 Windows 使用当前用户的计划任务。服务只发布 `~/.shine/http/`（或当前 `--config-dir`）下的文件，资源不存在时应先运行对应的 `shine app artifact apply <APP_ID>`。
-
-请不要把敏感文件放入 `~/.shine/http/`。服务绑定在 `127.0.0.1`，但没有额外认证。
-
 ## 任务运行结果和手动执行不同
 
 `shine task` 不经过 shell，而是直接按保存的参数数组启动程序。包含管道、重定向、变量展开或通配符的命令需要显式保存 shell：
@@ -154,6 +141,12 @@ shine local upload ./local.log /tmp/local.log --dry-run
 ```
 
 目标文件已存在时默认拒绝覆盖；确认无误后加 `--force`。目录目标已存在时，`--force` 表示合并写入。
+
+## 没有显示维护提醒
+
+对于需要手动处理的维护提醒，可运行 `shine state check`。系统服务检查通常在后台完成，并在
+后续交互调用时显示结果；重定向或自动化命令会跳过自动维护检查。若检查无法完成，请确认当前
+用户能够访问系统服务管理器后重试。清理旧 HTTP 服务使用 `shine clear serve`。
 
 ## 自动更新检查失败
 

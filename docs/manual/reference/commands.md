@@ -43,9 +43,10 @@ shine upgrade app/starship
 | `shine env ...` | Manage values, workspace environments, proxies, and secrets |
 | `shine ssh ...` / `shine local ...` | Open SSH sessions and transfer files |
 | `shine task ...` / `shine run <NAME>` | Save and run personal commands |
-| `shine serve ...` | Serve resources under `~/.shine/http/` |
 | `shine self ...` | Install or upgrade the Shine binary |
 | `shine state migrate` | Preview or apply supported legacy-state migrations |
+| `shine state check` | Check for maintenance actions now without applying them |
+| `shine clear serve` | Stop and remove the retired HTTP service registration |
 | `shine trust ...` | Review target-scoped trust for external Preset code |
 | `shine completions ...` | Generate or install shell completions |
 | `shine theme sync` | Print terminal-theme environment exports |
@@ -184,6 +185,7 @@ shine info <TARGET> [--diff] [--verbose] [--run-generators]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
 shine upgrade [TARGET] [--pull] [--verbose] [--full-plan] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
+shine state check
 shine trust inspect <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM>
 shine trust grant <preset|app/CATEGORY|shell/CATEGORY/COMMAND|sys/ITEM> [--development] [--yes]
 shine trust list [--verbose]
@@ -300,7 +302,7 @@ Broker policy commands are documented with the complete remote workflow in
 workspace encryption, command wrappers, and hybrid backends, see
 [Manage environment variables and secrets](../guides/environment.md).
 
-## Tasks, local service, and theme
+## Tasks and theme
 
 ```text
 shine task save <NAME> [--force] [--cwd <PATH>] -- <COMMAND>...
@@ -310,20 +312,64 @@ shine task info <NAME>
 shine task delete <NAME>
 shine run <NAME> [-- EXTRA_ARGS...]
 
-shine serve install [--port <PORT>]
-shine serve start [--port <PORT>]
-shine serve status
-shine serve uninstall
-shine serve url <PATH> [--port <PORT>]
-
 shine theme sync [--auto] [--quiet]
 ```
 
-Saved tasks execute the stored command, optionally from its stored working directory. The local
-service publishes files under `~/.shine/http/`; do not place secrets there.
+Saved tasks execute the stored command, optionally from its stored working directory.
 
-See [Tasks and the local service](../guides/tasks-and-serve.md) and
+See [Tasks and application artifacts](../guides/tasks-and-serve.md) and
 [Synchronize the terminal theme](../guides/terminal-theme-sync.md).
+
+## Cleanup
+
+### Maintenance reminders
+
+Shine checks for manual maintenance on ordinary interactive invocations. Checks use one of four
+schedules: every invocation, once per minute, once per hour, or once per day. A due check runs when
+Shine is invoked; there is no permanent background service.
+
+The retired HTTP service's registration files are checked on each eligible invocation. Native
+service status is checked at most hourly by a short-lived background process, and its result is
+shown on a later invocation. The same maintenance action is normally reminded at most once per day.
+Checks only inspect state; they do not remove services, delete files, or execute Presets.
+
+Run all current maintenance checks immediately, including when configuration cannot be loaded:
+
+```text
+shine state check
+```
+
+Maintenance reminders and incomplete-check warnings use bold yellow when stderr supports color,
+with one blank line separating the reminder block from command output. `NO_COLOR` disables color.
+
+Automatic reminders go to terminal stderr. They are skipped in noninteractive use and for help,
+completion, Preset authoring, environment commands, command runners, SSH/transfer, theme sync,
+binary management, migration, cleanup, and recovery commands. Explicit `state check` also works
+with redirected output and repeats findings immediately. An incomplete check is reported there;
+automatic check failures do not block ordinary commands.
+
+If another check or cleanup runs in the same configuration directory while `state check` is
+inspecting, the older check asks you to retry and exits with a nonzero status instead of reporting
+completion.
+
+The existing version check and required patch-upgrade policy are unchanged. Maintenance checks
+do not replace permission, trust, compatibility, or approval checks before an operation.
+
+### Remove the retired HTTP service
+
+```text
+shine clear serve
+```
+
+`clear` requires an explicit target; running it alone does not clean up everything. `clear serve`
+stops and removes an older version's user service without loading Shine configuration or deleting
+published files. Repeating successful cleanup is safe; service-manager errors are reported.
+Successful cleanup resets its cached reminders and discards in-flight results in the selected
+configuration directory. Use the same `--config-dir` or `SHINE_CONFIG_DIR` when checking that state.
+The `shine serve` namespace is removed. See
+[Installation and upgrades](../installation.md#retire-an-older-local-http-service).
+
+`shine state migrate` remains the command for versioned runtime-state migrations.
 
 ## SSH and file transfer
 

@@ -251,15 +251,14 @@ Preset authors should call the underlying script from a lifecycle hook rather th
 When an install or upgrade changes managed files for a category that declares an artifact, Shine
 prints the explicit apply command. It prints nothing when no managed files changed.
 Scripts receive configured `[artifact].env` sources only, and those sources must also be listed in
-the category's `[permissions].environment`, plus path variables such as `SHINE_APP_HTTP_DIR`,
-`SHINE_CACHE_DIR`, and `SHINE_STATE_DIR`. They can generate resources under
-`~/.shine/http/app/<APP_ID>/`. See [Tasks and the local service](./tasks-and-serve.md) for the complete
-variable list.
+the category's `[permissions].environment`, plus path variables such as
+`SHINE_CACHE_DIR` and `SHINE_STATE_DIR`. See
+[Tasks and application artifacts](./tasks-and-serve.md) for the complete variable list.
 
 Generators, script hooks, artifacts, and teardown scripts run from temporary captured category
 copies. On Unix, executable helpers from external presets and overlays remain executable in those
 copies, including helpers without a filename extension. Source edits or permission changes after
-capture do not affect that invocation. Keep persistent output in the state, cache, or HTTP paths;
+capture do not affect that invocation. Keep persistent output in the state or cache paths;
 the captured source and overlay copies are removed after execution.
 
 The built-in `surge` preset installs `local-proxies.conf`, `local-proxy-groups.conf`,

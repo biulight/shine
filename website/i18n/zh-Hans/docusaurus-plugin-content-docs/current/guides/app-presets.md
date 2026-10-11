@@ -207,13 +207,13 @@ Shine 不会隐式运行 artifact 命令。每次手动 apply/remove 都会显�
 不要在钩子中嵌套 `app artifact apply`。
 当某个声明 artifact 的类别在安装或升级中确实改动了受管文件时，Shine 会打印显式 apply 命令；没有受管文件
 发生变化时则不提示。脚本只会收到 `[artifact].env` 列出且已配置的 source，并且
-这些 source 还必须在类别 `[permissions].environment` 中声明；此外会加入 `SHINE_APP_HTTP_DIR`、
-`SHINE_CACHE_DIR`、`SHINE_STATE_DIR` 等固定路径变量，适合生成放在
-`~/.shine/http/app/<APP_ID>/` 下的本地资源。完整变量说明见[任务与本地服务](./tasks-and-serve.md)。
+这些 source 还必须在类别 `[permissions].environment` 中声明；此外会加入
+`SHINE_CACHE_DIR`、`SHINE_STATE_DIR` 等固定路径变量。完整变量说明见
+[任务与应用构建产物](./tasks-and-serve.md)。
 
 Generator、脚本钩子、artifact 和 teardown 脚本均从临时捕获的类别副本运行。在 Unix 上，外部
 预设及 overlay 中的可执行辅助文件在副本中仍可执行，包括没有扩展名的文件。捕获后修改原始
-文件内容或权限不会影响本次调用。持久输出应写入 state、cache 或 HTTP 路径；捕获的 source
+文件内容或权限不会影响本次调用。持久输出应写入 state 或 cache 路径；捕获的 source
 和 overlay 副本会在执行后删除。
 
 内置 `surge` app 预设会把 `local-proxies.conf`、`local-proxy-groups.conf`、`local-rules.conf` 和可选的订阅生成文件安装到 Surge Profiles 目录。设置 `[env]` 中的 `SURGE_PROFILE` 后，`shine app artifact apply surge` 使用内置 Bun artifact 幂等修补活动配置文件的 `[Proxy]`、`[Proxy Group]` 与 `[Rule]` `#!include` 行。Overlay 只需覆盖自己的策略文件，无需提供构建脚本。

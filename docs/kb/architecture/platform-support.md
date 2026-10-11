@@ -52,11 +52,19 @@ the repository at the assessment date, not every possible external preset.
 | SSH to a POSIX remote | Full | Full | Full as local initiator | Requires a compatible Shine on the POSIX remote |
 | SSH to a Windows remote | Partial | Partial | Partial | Safely injects selected environment values through PowerShell |
 | SSH transfer and on-demand secret broker | Full for POSIX remote | Full for POSIX remote | No Windows-remote mode | Windows remote mode has no compatible transfer/control channel |
-| `serve start` foreground server | Full | Full | Full | Shared Tokio loopback server |
-| `serve install/status/uninstall` | Full | Full | Full | Uses launchd, a systemd user unit, and a current-user scheduled task respectively |
 | Secure Enclave/Touch ID age identity | Full | Not applicable | Missing by design | Windows Hello integration was deferred to an external age plugin in ADR 0032 |
 
 ## System preset differences
+
+The HTTP server and service installation commands are removed (ADR 0107). `shine clear serve`
+only removes legacy launchd, systemd user, or current-user Task Scheduler registrations. Its
+process contracts and failure handling are tested with simulated hosts. On 2026-10-11, manual
+macOS validation confirmed the legacy-service reminder on `shine list` and successful
+`shine clear serve` cleanup; a subsequent read-only check confirmed the old launchd plist was
+absent. Native Linux/Windows service-manager cleanup remains unverified.
+Maintenance checks use inline registration inspection and a detached, read-only native service
+probe. Actual CLI background survival, later-call reminders and invalidation are tested on macOS
+with a PTY and fake service managers; native Linux/Windows smoke behavior remains unverified.
 
 ### Common coverage
 
@@ -123,13 +131,6 @@ The closed matrix criteria are:
 
 Windows managed shim/profile tests now execute on Windows. Real-terminal-only macOS behavior and
 external-system smoke coverage remain documented follow-ups rather than matrix blockers.
-
-### Persistent HTTP service integration
-
-`serve install/status/uninstall` uses launchd on macOS, `systemctl --user` on Linux, and a
-least-privilege, current-user Task Scheduler entry on Windows. Every registration starts the shared
-foreground server with an explicit `--config-dir`, so custom Shine state remains attached after the
-installing shell exits. See ADR 0035.
 
 ### P2: Windows remote SSH is intentionally feature-reduced
 
@@ -210,11 +211,10 @@ For a change that claims support on one or more of these platforms:
 | Shell launchers and Windows shims | [`cli/src/bin_links.rs`](../../../cli/src/bin_links.rs) |
 | Shell and PowerShell profile locations | [`cli/src/shells/mod.rs`](../../../cli/src/shells/mod.rs), [`cli/src/shells/profile.rs`](../../../cli/src/shells/profile.rs) |
 | System preset manifests | [`presets/sys/macos/shine.toml`](../../../presets/sys/macos/shine.toml), [`presets/sys/ubuntu/shine.toml`](../../../presets/sys/ubuntu/shine.toml), [`presets/sys/windows/shine.toml`](../../../presets/sys/windows/shine.toml) |
-| Package provider routing | [`cli/src/sys/bootstrap.rs`](../../../cli/src/sys/bootstrap.rs) |
+| Package provider routing | [`core/src/runtime/sys_bootstrap.rs`](../../../core/src/runtime/sys_bootstrap.rs) |
 | Cross-platform split DNS | [`core/src/runtime/sys.rs`](../../../core/src/runtime/sys.rs) |
 | Terminal theme resolution | [`cli/src/theme/mod.rs`](../../../cli/src/theme/mod.rs) |
 | SSH platform boundary | [`cli/src/ssh/mod.rs`](../../../cli/src/ssh/mod.rs), [`docs/manual/guides/ssh-transfer.md`](../../manual/guides/ssh-transfer.md) |
-| HTTP service platform boundary | [`cli/src/serve.rs`](../../../cli/src/serve.rs) |
 | Test workflow | [`.github/workflows/test.yml`](../../../.github/workflows/test.yml) |
 | Release asset matrix | [`.github/workflows/package-assets.yml`](../../../.github/workflows/package-assets.yml) |
 | Windows Hello decision | [`decisions/0032-defer-windows-hello-to-external-age-plugin.md`](../decisions/0032-defer-windows-hello-to-external-age-plugin.md) |
@@ -222,6 +222,7 @@ For a change that claims support on one or more of these platforms:
 ## Assessment verification record
 
 The 2026-08-30 assessment verified the checked-in native Ubuntu/macOS/Windows nextest matrix and
-the three persistent-service implementations from repository code and workflows. No new end-to-end
+the then-existing persistent-service implementations from repository code and workflows. ADR 0107
+later removed the HTTP service. No new end-to-end
 bootstrap, package-provider, DNS, terminal, service-manager, or remote-SSH smoke run was performed
 as part of this documentation refresh.

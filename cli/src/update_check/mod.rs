@@ -154,8 +154,8 @@ fn skip_background_update_check(command: &Commands) -> bool {
         Commands::Update(..)
             | Commands::Preset { .. }
             | Commands::State { .. }
+            | Commands::Clear { .. }
             | Commands::Self_ { .. }
-            | Commands::Serve { .. }
             | Commands::Env { .. }
             | Commands::Run(..)
     ) || matches!(command, Commands::Upgrade(cmd) if cmd.pull)

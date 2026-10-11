@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use super::{
-    AppCommands, EnvCommands, LocalCommands, PresetCommands, SelfCommands, ServeCommands,
+    AppCommands, ClearCommands, EnvCommands, LocalCommands, PresetCommands, SelfCommands,
     ShellCommands, StateCommands, SysCommands, TaskCommands, TaskRunCommand, ThemeCommands,
     TrustCommands,
 };
@@ -14,7 +14,7 @@ use super::{
 #[command(name = "shine")]
 #[command(version = version::display(), about, long_about = None)]
 #[command(
-    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>[/<command>], or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, trust, state, self, serve, completions, theme, and local are advanced tools."
+    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>[/<command>], or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, trust, state, clear, self, completions, theme, and local are advanced tools."
 )]
 pub struct Cli {
     #[arg(long, global = true)]
@@ -26,6 +26,13 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    #[command(name = "__maintenance-worker", hide = true)]
+    MaintenanceWorker {
+        #[arg(long)]
+        scope: String,
+        #[arg(long)]
+        ticket: uuid::Uuid,
+    },
     #[command(name = "__shell-launch", hide = true)]
     ShellLaunch {
         #[arg(value_name = "TARGET")]
@@ -135,15 +142,15 @@ pub enum Commands {
         #[command(subcommand)]
         command: SelfCommands,
     },
-    /// Serve shine-managed HTTP resources from ~/.shine/http
-    Serve {
-        #[command(subcommand)]
-        command: ServeCommands,
-    },
     /// Manage preset variables and workspace command environments
     Env {
         #[command(subcommand)]
         command: EnvCommands,
+    },
+    /// Clean up a specific resource
+    Clear {
+        #[command(subcommand)]
+        command: ClearCommands,
     },
     /// Manage system bootstrap and configuration for the current OS
     Sys {

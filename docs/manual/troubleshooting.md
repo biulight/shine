@@ -136,23 +136,6 @@ System-profile merging matches managed blocks by content and does not repeatedly
 because CRLF and LF differ. If an older version left conflict markers, resolve them manually before
 rerunning `shine sys bootstrap --dry-run` or the relevant `upgrade`.
 
-## A resource is unavailable through the local HTTP service
-
-Check the service and URL:
-
-```bash
-shine serve status
-shine serve url app/surge/custom-rules.sgmodule
-```
-
-`shine serve install` uses launchd on macOS, a systemd user unit on Linux, and a current-user
-scheduled task on Windows. The service publishes only files under `~/.shine/http/` (or the active
-`--config-dir`). If a resource is missing, first run the relevant
-`shine app artifact apply <APP_ID>`.
-
-Do not put sensitive files under `~/.shine/http/`. The service binds to `127.0.0.1` but has no
-additional authentication.
-
 ## A saved task behaves differently from the original command
 
 `shine task` does not invoke a shell; it starts the saved argument array directly. Commands that use
@@ -191,6 +174,13 @@ shine local upload ./local.log /tmp/local.log --dry-run
 
 Existing files are not overwritten by default. Add `--force` only after confirming the target. For
 an existing directory target, `--force` means merge into the directory.
+
+## Maintenance reminders are missing
+
+For manual-maintenance reminders, run `shine state check`. Native service checks normally finish
+in the background and appear on a later interactive invocation; redirected or automated commands
+skip automatic maintenance checks. If an inspection cannot complete, check access to the current
+user's service manager and retry. To remove an old HTTP service, run `shine clear serve`.
 
 ## Automatic update checks fail
 

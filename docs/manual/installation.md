@@ -76,4 +76,30 @@ destination. Shine cannot currently elevate to replace the running binary itself
 is in a protected directory; install and run it from a user-writable location instead. On Windows,
 installing or upgrading in a protected location requires a terminal with the necessary permissions.
 
+## Retire an older local HTTP service
+
+The Next version removes HTTP serving and the `SHINE_APP_HTTP_DIR` script variable. Use local
+files for Surge and Clash Verge rules; application artifacts can keep persistent output in
+`SHINE_STATE_DIR` or `SHINE_CACHE_DIR`.
+
+If you installed the old background service, remove it after upgrading to Next:
+
+```bash
+shine clear serve
+```
+
+`shine clear serve` stops the old service and removes its user service registration. The entire
+`shine serve` command is removed. Cleanup works even if the old Shine configuration can no longer
+be loaded, and does not need the old binary or its `--config-dir`. Run it as the user who installed the service;
+repeating it after successful removal is safe. Service-manager failures are reported so you can
+correct them and retry.
+
+Normal interactive commands remind you when they detect a retained service. To check immediately,
+run `shine state check`; it only reports maintenance actions and works with unreadable configuration.
+
+Before upgrading, the old binary's `shine serve uninstall` can also remove the service.
+
+Upgrading does not remove existing files under the old runtime directory's `http/`. Keep any files
+you still need and update application references before deleting them.
+
 Next: [Complete your first preset installation](./quick-start.md).

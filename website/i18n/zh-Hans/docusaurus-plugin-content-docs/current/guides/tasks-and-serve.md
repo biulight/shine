@@ -1,11 +1,11 @@
 ---
-title: 任务与本地服务
+title: 任务与应用构建产物
 sidebar_position: 6
 ---
 
-# 任务与本地服务
+# 任务与应用构建产物
 
-本页说明如何保存个人快捷命令，以及把 app 预设生成的资源通过本机 HTTP 地址提供给其它应用读取。
+本页说明如何保存个人快捷命令，以及运行 app 的 artifact 脚本。
 
 ## 保存常用命令
 
@@ -63,7 +63,6 @@ shine app artifact apply surge
 | `SHINE_APP_DIR` | 本次执行的临时 app 快照目录，包含生效的基础文件和 overlay 文件 |
 | `SHINE_APP_SOURCE_DIR` | 与 `SHINE_APP_DIR` 相同的生效源文件快照目录 |
 | `SHINE_APP_OVERLAY_DIR` | 本次快照中生效的 overlay 文件副本；没有 overlay 时显式设为空值，覆盖继承的同名变量 |
-| `SHINE_APP_HTTP_DIR` | 该 app 可发布资源目录，位于 `~/.shine/http/app/<APP_ID>/` |
 | `SHINE_CONFIG_DIR` | 当前 Shine 运行时目录 |
 | `SHINE_CACHE_DIR` | 当前 app 的缓存目录 |
 | `SHINE_STATE_DIR` | 当前 app 的状态目录 |
@@ -74,35 +73,5 @@ GPG、age 或 Touch ID 提示。
 
 App generator、script hook 和 artifact（含 teardown）都从本次捕获的类别快照执行，
 相对路径引用的辅助文件也来自该快照。捕获后的来源修改不会改变本次执行的代码。
-这些目录在执行结束后清理；需要保留的输出应写入 `SHINE_STATE_DIR`、`SHINE_CACHE_DIR`
-或 `SHINE_APP_HTTP_DIR`，不要修改执行快照。脚本仍以当前进程权限运行，并未被沙箱隔离。
-
-## 启动本地 HTTP 服务
-
-需要让其它本机应用读取 `~/.shine/http/` 下的资源时，先启动服务：
-
-```bash
-shine serve start
-```
-
-默认监听 `127.0.0.1:6174`。安装当前平台的用户级后台服务或任务：
-
-```bash
-shine serve install
-shine serve status
-shine serve uninstall
-```
-
-Shine 在 macOS 使用 launchd，在 Linux 使用 systemd user unit，在 Windows 使用当前用户、受限权限的计划任务；Windows 登录时启动，Linux 和 macOS 则启用对应用户服务。所有模式都只绑定 `127.0.0.1`，并保留当前的 `--config-dir`。
-
-为已生成的资源打印 URL：
-
-```bash
-shine serve url app/surge/custom-rules.sgmodule
-shine serve url app/surge/custom-rules.sgmodule --port 6180
-```
-
-生成的 URL 会对路径段中的空格、Unicode 字符以及 `#`、`?` 等保留字符进行百分号编码。
-已编码的输入会先规范化；字面量 `%` 请使用 `%25` 表示。
-
-不要把令牌、私钥、cookies 或其它敏感内容写入 `~/.shine/http/`。服务没有额外认证；在共享机器上，本机其它用户也可能访问这个端口读取可发布目录中的文件。
+这些目录在执行结束后清理；需要保留的输出应写入 `SHINE_STATE_DIR` 或 `SHINE_CACHE_DIR`，
+不要修改执行快照。脚本仍以当前进程权限运行，并未被沙箱隔离。

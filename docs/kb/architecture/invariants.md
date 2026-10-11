@@ -199,7 +199,7 @@ bugs. Check this list before changing the modules named in each entry.
   and the source/overlay path variables refer only to effective captured bytes.
   Without a captured overlay, explicitly inject an empty
   `SHINE_APP_OVERLAY_DIR` to override both inherited and caller-injected paths. Cleanup removes only
-  that invocation's tree, including on spawn failure; persistent output uses the state/cache/HTTP
+  that invocation's tree, including on spawn failure; persistent output uses the state/cache
   contract. Planners declare snapshot creation and removal. Unisolated code can still deliberately
   access other host paths; this is source consistency, not a sandbox (ADR 0092).
   External and overlay helper executable flags are captured with the bytes and restored in both
@@ -722,9 +722,14 @@ bugs. Check this list before changing the modules named in each entry.
   behavior shared by build and teardown; do not duplicate it in an overlay.
   Missing, unmatched, or nested legacy proxy-group markers fail before any write; an unterminated
   block must never turn the remaining user content into deletion material.
-- **Local HTTP resources share one loopback server.** Files that need stable local URLs live under
-  `<shine_dir>/http/` and are served by `shine serve start`; `shine serve install` registers one
-  global user service for that server. Do not add per-app HTTP daemons, ports, or launchd jobs.
+- **App persistent output uses state and cache directories.** Artifact Plans and execution create
+  the per-category state/cache directories; the fixed App environment exposes those paths without
+  an HTTP publishing directory. Legacy published files and native service registrations are not
+  automatically removed. See ADR 0107.
+- **Legacy HTTP service cleanup stays reachable after upgrades.** `shine clear serve` routes before
+  configuration initialization and release checks; it only stops/removes the fixed legacy user
+  service, preserves published files, and reports service-manager errors. Repeated cleanup is safe.
+  Bare `clear` requires a target; `state migrate` keeps its versioned migration semantics.
 
 ## Personal tasks
 
@@ -940,26 +945,6 @@ bugs. Check this list before changing the modules named in each entry.
   those exact values inside the standard bracketed-paste wrapper; arbitrary ANSI/control-decorated
   input remains a rejection.
 
-## Local HTTP server
-
-- **Resource URL output encodes normalized path segments.** Keep decoding and traversal checks
-  shared with request handling, then encode reserved bytes again and join components with `/`.
-  A filename's `#`, `?`, percent sign, or Unicode must survive a generated URL round-trip.
-- **`serve::handle_start`/`handle_install` have no authentication of their own.** Binding
-  loopback-only (`127.0.0.1`) keeps the server off the network, but it does not stop other local
-  OS user accounts on a shared/multi-user machine from connecting and reading any file under
-  `serve::http_root()` (`~/.shine/http/`), bypassing the filesystem permissions that would
-  otherwise keep them out of this user's home directory. Preset authors must never route secrets
-  or other sensitive content through a `dest` that resolves under `~/.shine/http`.
-- **Persistent serve registrations are per-user and preserve the selected Shine directory.**
-  launchd, systemd, and Windows Task Scheduler entries must run without administrator privileges
-  and pass the resolved `shine_dir` back through `--config-dir`; background startup cannot depend on
-  the installing shell retaining `SHINE_CONFIG_DIR` or its current directory.
-- **launchd log paths must stay under the user's own `shine_dir`, never a shared path like
-  `/tmp`.** `serve::launchd_log_dir` writes to `shine_dir/run/http/serve.{out,err}.log`, kept out
-  of `http_root()` itself so log contents are never servable over HTTP. Two OS user accounts each
-  running `shine serve install` would otherwise collide on the same fixed `/tmp/<label>.log` path.
-
 ## Missing App sources
 
 - **App installation ownership survives source removal.** Installed categories remain visible
@@ -972,6 +957,27 @@ bugs. Check this list before changing the modules named in each entry.
   backups in place. Unavailable source code cannot supply teardown.
 
 ## Update check
+
+- **Maintenance advisories are independent of release and safety gates.** Four check frequencies
+  (every invocation, minute, hour, day) are separate from execution cost and per-action reminder
+  cooldown. Only ordinary terminal-stderr invocations run automatic maintenance; help, completion,
+  automation/authoring, theme, migration, cleanup, and recovery routes stay outside it. Explicit
+  `state check` is config-independent and synchronous. Required patch upgrades keep their existing
+  `update_check::maybe_notify` policy and must never be silently converted to eventual checks.
+- **Maintenance output forms a distinct stderr block.** Findings and explicit incomplete-check
+  warnings share bold yellow emphasis using stderr color support (including `NO_COLOR`). Append
+  one blank line after a nonempty block, never after an empty or cooldown-suppressed result.
+- **Heavy advisory checks outlive the calling CLI without inheriting its terminal.** The detached
+  worker has null stdio, performs only registered read-only probes, and writes bounded typed cache
+  results. Normal invocations only display results present at their start. User/config/native scope,
+  build and rule revision isolate caches; OS locks, pending tickets, leases, timeouts and failure
+  backoff bound duplicate work. Cache/worker failures cannot fail ordinary commands.
+- **Cleanup invalidates in-flight maintenance results.** `clear serve` advances the cache generation
+  and clears its action state in the selected config scope. A worker may publish only when both its
+  generation and per-rule ticket/revision still match. Never hold a state lock during native probes
+  or unlink an OS lock file while another process may hold it. A superseded explicit `state check`
+  reports a retry warning and exits nonzero without a completion summary or stale cache writes;
+  automatic advisories silently discard superseded results. See ADR 0108.
 
 - **A failed or rate-limited version check must never fail the user's command** (`main.rs`,
   commits `605fdd8`, `f033a25`). Network errors are tolerated; rate-limit cooldowns are cached.

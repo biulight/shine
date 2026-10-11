@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-11 — Superseded explicit checks must not report successful inspection
+
+- **Symptom**: overlapping `state check` calls, or cleanup during a check, made the older call
+  report zero required actions and zero incomplete checks, even after detecting a legacy service.
+- **Cause**: the generation guard returned an empty successful report for both automatic and
+  explicit inspection; the explicit route treated discarded results as a completed clean check.
+- **Fix**: preserve supersession in the report, print a retry warning and return a nonzero exit
+  without a completion summary. Real-process regressions cover both overlapping checks and
+  cleanup, and verify the obsolete call cannot overwrite the newer cache.
+- **Rule**: discarding obsolete observations is safe for optional reminders; explicit inspection
+  must distinguish superseded work from a completed check that found nothing.
+
 ## 2026-10-10 — Shell receipt formats must agree across manifests and Action IR
 
 - **Symptom**: Windows Shell install, upgrade and uninstall setup failed Action validation for
@@ -1289,6 +1301,9 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 
 ## 2026-08-27 — Background services must pin the resolved Shine directory
 
+Historical context: the HTTP service was later removed by ADR 0107; the general persistence rule
+below still applies to any future background process.
+
 - **Symptom**: a service installed while using `--config-dir` or `SHINE_CONFIG_DIR` could later
   serve the default `~/.shine/http/` tree instead of the selected tree.
 - **Root cause**: the service manager starts Shine outside the installing shell and does not retain
@@ -1789,6 +1804,9 @@ measured, not inferred.
   as flags, and connection/transport options sourced only from local, trusted state.
 
 ## 2026-07-11 — Surge's `external-resource update` never covers URL-based Modules
+
+Historical context: ADR 0107 later removed the HTTP service. Current built-in presets install
+local rule files beside the profile rather than into the old publishing directory.
 
 - **Symptom**: after `shine upgrade` correctly rewrote the installed `custom-rules.sgmodule`
   (served via `shine serve` at `~/.shine/http/app/surge/`), Surge kept applying the old rules —

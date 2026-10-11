@@ -149,6 +149,38 @@ mod tests {
     use super::*;
     use crate::runtime::*;
 
+    #[test]
+    fn app_contract_keeps_state_and_cache_without_http_output() {
+        let root = std::env::temp_dir().join("shine-app-contract");
+        let context = RuntimeContext::isolated(
+            root.join("home"),
+            root.join("state"),
+            root.join("presets"),
+            root.join("bin"),
+            RuntimePlatform::current(),
+        );
+        let runtime = CoreRuntime::new(
+            InMemoryHost::new(),
+            context,
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        );
+        let env = runtime.fixed_app_contract_env("demo", &root.join("snapshot"));
+        assert!(!env.contains_key("SHINE_APP_HTTP_DIR"));
+        assert_eq!(
+            env["SHINE_STATE_DIR"],
+            root.join("state/state/app/demo").display().to_string()
+        );
+        assert_eq!(
+            env["SHINE_CACHE_DIR"],
+            runtime
+                .context()
+                .cache_dir
+                .join("shine/app/demo")
+                .display()
+                .to_string()
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn app_without_overlay_overrides_the_inherited_overlay_path() {
@@ -412,6 +444,7 @@ generator = { script = "scripts/generate.sh", env = ["ENABLE", "ENABLE=SHINE_APP
                 b"reviewed"
             );
         }
+        assert!(!root.join("state/http").exists());
         assert_eq!(
             std::fs::read_dir(root.join("state/runtime/app/demo"))
                 .unwrap()

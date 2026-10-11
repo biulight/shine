@@ -119,7 +119,7 @@ third-party tool versions; see [system initialization](./guides/system-init.md) 
    [environment variables and secrets](./guides/environment.md),
    [system initialization](./guides/system-init.md),
    [terminal theme synchronization](./guides/terminal-theme-sync.md),
-   [tasks and the local service](./guides/tasks-and-serve.md), or
+   [tasks and application artifacts](./guides/tasks-and-serve.md), or
    [SSH sessions, secret brokering, and file transfer](./guides/ssh-transfer.md).
 
 If something is already failing, go directly to [Troubleshooting](./troubleshooting.md). Open the

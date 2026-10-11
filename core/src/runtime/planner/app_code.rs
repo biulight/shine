@@ -200,15 +200,6 @@ pub(super) async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
     .await?;
     for (label, directory) in [
         (
-            "http-dir",
-            runtime
-                .context()
-                .shine_dir
-                .join("http")
-                .join("app")
-                .join(&category.name),
-        ),
-        (
             "cache-dir",
             runtime
                 .context()

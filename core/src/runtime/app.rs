@@ -3035,11 +3035,6 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         let logical = format!("app/{}/{script}", request.category);
         for directory in [
             self.context
-                .shine_dir
-                .join("http")
-                .join("app")
-                .join(&request.category),
-            self.context
                 .cache_dir
                 .join("shine")
                 .join("app")
@@ -3213,17 +3208,10 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             .join("state")
             .join("app")
             .join(category);
-        let http_dir = self
-            .context
-            .shine_dir
-            .join("http")
-            .join("app")
-            .join(category);
         for (key, value) in [
             ("SHINE_APP_ID", category.to_string()),
             ("SHINE_APP_DIR", app_dir.display().to_string()),
             ("SHINE_APP_SOURCE_DIR", source_dir.display().to_string()),
-            ("SHINE_APP_HTTP_DIR", http_dir.display().to_string()),
             (
                 "SHINE_CONFIG_DIR",
                 self.context.shine_dir.display().to_string(),
