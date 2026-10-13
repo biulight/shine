@@ -16,7 +16,7 @@ mod exec;
 mod gpg;
 pub(crate) mod hybrid;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -90,6 +90,109 @@ pub async fn encrypt_secret(plaintext: &[u8], recipients: &EncryptRecipients) ->
             Ok(format!("{AGE_TAG_PREFIX}{encoded}"))
         }
     }
+}
+
+/// Binary file API. Unlike environment values, empty and non-UTF-8 inputs are valid.
+pub async fn encrypt_bytes(plaintext: &[u8], recipients: &EncryptRecipients) -> Result<String> {
+    match recipients {
+        EncryptRecipients::Gpg(recipients) => gpg::encrypt_bytes(plaintext, recipients).await,
+        EncryptRecipients::Age(recipients) => Ok(format!(
+            "age:{}",
+            age::encrypt_bytes(plaintext, recipients).await?
+        )),
+        EncryptRecipients::Hybrid(recipients) => hybrid::encrypt(plaintext, recipients).await,
+    }
+}
+
+pub async fn decrypt_bytes(
+    ciphertext: &str,
+    config: &crate::config::Config,
+    limit: usize,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    let (backend, payload) = parse_tagged_ciphertext(ciphertext);
+    let identities = config.resolved_age_identities();
+    let bytes = match backend {
+        BackendKind::Gpg => gpg::decrypt_bytes(payload, limit).await?,
+        BackendKind::Age => age::decrypt_bytes(payload, &identities, limit).await?,
+        BackendKind::Hybrid => {
+            hybrid::decrypt_bytes(
+                payload,
+                &identities,
+                config.hybrid_decrypt_backend.as_deref(),
+            )
+            .await?
+        }
+    };
+    anyhow::ensure!(bytes.len() <= limit, "secret output exceeds size limit");
+    Ok(bytes)
+}
+
+/// Structural validation only; does not assert author authenticity or decrypt.
+pub(crate) fn validate_file_ciphertext(ciphertext: &str) -> Result<()> {
+    use base64::Engine;
+    let (backend, payload) = parse_tagged_ciphertext(ciphertext);
+    if backend == BackendKind::Hybrid {
+        return hybrid::validate(payload);
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(payload.trim())
+        .context("invalid file ciphertext encoding")?;
+    anyhow::ensure!(!decoded.is_empty(), "empty file ciphertext");
+    if backend == BackendKind::Age {
+        anyhow::ensure!(
+            decoded.starts_with(b"age-encryption.org/v1\n"),
+            "invalid age file ciphertext"
+        );
+    } else {
+        validate_gpg_file(&decoded)?;
+    }
+    Ok(())
+}
+
+fn validate_gpg_file(bytes: &[u8]) -> Result<()> {
+    anyhow::ensure!(
+        bytes.len() >= 3 && bytes[0] & 0x80 != 0,
+        "invalid GPG file ciphertext"
+    );
+    let new = bytes[0] & 0x40 != 0;
+    let tag = if new {
+        bytes[0] & 0x3f
+    } else {
+        (bytes[0] >> 2) & 0x0f
+    };
+    anyhow::ensure!(
+        matches!(tag, 1 | 3),
+        "GPG file must begin with an encrypted session-key packet"
+    );
+    let (offset, length) = if new {
+        match bytes[1] {
+            n @ 0..=191 => (2, n as usize),
+            n @ 192..=223 => (3, ((n as usize - 192) << 8) + bytes[2] as usize + 192),
+            255 if bytes.len() >= 6 => (6, u32::from_be_bytes(bytes[2..6].try_into()?) as usize),
+            _ => bail!("invalid GPG session-key packet length"),
+        }
+    } else {
+        let count = match bytes[0] & 3 {
+            0 => 1,
+            1 => 2,
+            2 => 4,
+            _ => bail!("invalid GPG session-key packet length"),
+        };
+        anyhow::ensure!(bytes.len() > 1 + count, "truncated GPG session-key packet");
+        let length = bytes[1..1 + count]
+            .iter()
+            .fold(0usize, |length, byte| (length << 8) | *byte as usize);
+        (1 + count, length)
+    };
+    anyhow::ensure!(
+        length >= 10 && length < bytes.len().saturating_sub(offset),
+        "truncated GPG file ciphertext"
+    );
+    anyhow::ensure!(
+        matches!(bytes[offset], 3..=6) && bytes[offset + length] & 0x80 != 0,
+        "invalid GPG file packets"
+    );
+    Ok(())
 }
 
 /// Check the age client before starting tagged phone pairing.

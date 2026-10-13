@@ -292,3 +292,7 @@ SSH broker 不接受远端个人配置。全局 `secret_backend` 仍只接受 `g
 
 Hybrid 编译缓存使用最终选定的单后端及工作区对应收件人名单。配置变化会重新判定缓存
 有效性，不会自动切换到另一后端。详见[环境指南](../guides/environment.md)。
+
+## Workspace 文件组
+
+Workspace version 3 增加 `file_groups.<名称>.files` 数组，每项要求 `source`（密文）和 `target`（明文）。组必须非空，组名仅含字母、数字、短横线和下划线。路径支持 `{mode}`，解析基准为 workspace 所在目录。声明了文件组时可省略 `env.files`。Version 2 不接受文件组。加密复用 `[env.encryption]`，没有组级或环境级策略。详见[临时机密文件](../guides/environment.md#workspace-secret-files)。

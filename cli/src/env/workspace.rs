@@ -1,3 +1,4 @@
+pub mod file_groups;
 mod local_cache;
 
 use super::broker::{SourceSnapshot, WorkspaceSnapshot};
@@ -385,6 +386,8 @@ pub struct Workspace {
     #[serde(default = "workspace_format_version")]
     version: u32,
     pub env: WorkspaceEnv,
+    #[serde(default)]
+    file_groups: BTreeMap<String, file_groups::FileGroup>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -393,6 +396,7 @@ pub struct WorkspaceEnv {
     default_mode: Option<String>,
     #[serde(default)]
     modes: Vec<String>,
+    #[serde(default)]
     files: Vec<String>,
     #[serde(default)]
     override_process_env: bool,
@@ -639,58 +643,7 @@ pub async fn handle_run(
         find_workspace_optional(workspace_arg).await?
     };
     let (values, override_process_env) = if let Some(workspace_path) = workspace_path {
-        let local_config = local_cache::load_config(config, &workspace_path).await?;
-        let config = &local_config;
-        let workspace_bytes = tokio::fs::read_to_string(&workspace_path).await?;
-        let workspace = parse_workspace(&workspace_path, &workspace_bytes)?;
-        let mode = mode_arg
-            .or(workspace.env.default_mode.as_deref())
-            .context("environment mode is required; pass --mode or set env.default_mode")?;
-        validate_mode(mode)?;
-        let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
-        let captured = capture_sources(&sources).await?;
-        let input_hash = snapshot_input_hash(&workspace_path, &workspace_bytes, mode, &captured);
-        let hybrid = involves_hybrid(&workspace.env.encryption, &captured)?;
-        let values = if hybrid {
-            local_cache::compile(
-                config,
-                &workspace_path,
-                mode,
-                &input_hash,
-                &workspace.env.encryption,
-                &captured,
-            )
-            .await?
-        } else {
-            let encryption =
-                resolve_seal_encryption(None, &[], Some(&workspace.env.encryption), config)?;
-            let cache_path = cache_path(&workspace_path, mode)?;
-            match read_valid_cache(&cache_path, mode, &input_hash, config).await {
-                Ok(Some(values)) => values,
-                Ok(None) => {
-                    let values = compile_captured_sources(&captured, config).await?;
-                    if let Some(encryption) = &encryption
-                        && let Err(error) = write_cache(
-                            &cache_path,
-                            &workspace_path,
-                            mode,
-                            &input_hash,
-                            &values,
-                            encryption,
-                        )
-                        .await
-                    {
-                        eprintln!("Warning: could not update environment cache: {error:#}");
-                    }
-                    values
-                }
-                Err(error) => {
-                    eprintln!("Warning: ignoring unreadable environment cache: {error:#}");
-                    compile_captured_sources(&captured, config).await?
-                }
-            }
-        };
-        (values, workspace.env.override_process_env)
+        load_run_values(config, &workspace_path, mode_arg, false).await?
     } else {
         if !no_workspace && explicit.is_empty() {
             bail!("shine.workspace.toml was not found; pass --workspace or --no-workspace");
@@ -702,6 +655,81 @@ pub async fn handle_run(
     };
 
     run_command(command, &values, override_process_env, &explicit).await
+}
+
+async fn load_run_values(
+    config: &Config,
+    workspace_path: &Path,
+    mode_arg: Option<&str>,
+    allow_file_only: bool,
+) -> Result<(BTreeMap<String, String>, bool)> {
+    let local_config = local_cache::load_config(config, workspace_path).await?;
+    let config = &local_config;
+    load_run_values_effective(config, workspace_path, mode_arg, allow_file_only).await
+}
+
+async fn load_run_values_effective(
+    config: &Config,
+    workspace_path: &Path,
+    mode_arg: Option<&str>,
+    allow_file_only: bool,
+) -> Result<(BTreeMap<String, String>, bool)> {
+    let workspace_bytes = tokio::fs::read_to_string(workspace_path).await?;
+    let workspace = parse_workspace(workspace_path, &workspace_bytes)?;
+    let mode = mode_arg
+        .or(workspace.env.default_mode.as_deref())
+        .context("environment mode is required; pass --mode or set env.default_mode")?;
+    validate_mode(mode)?;
+    if workspace.env.files.is_empty() {
+        if allow_file_only {
+            return Ok((BTreeMap::new(), workspace.env.override_process_env));
+        }
+        bail!("file-only workspace requires --file-group");
+    }
+    let sources = resolve_sources(workspace_path, &workspace.env.files, mode)?;
+    let captured = capture_sources(&sources).await?;
+    let input_hash = snapshot_input_hash(workspace_path, &workspace_bytes, mode, &captured);
+    let hybrid = involves_hybrid(&workspace.env.encryption, &captured)?;
+    let values = if hybrid {
+        local_cache::compile(
+            config,
+            workspace_path,
+            mode,
+            &input_hash,
+            &workspace.env.encryption,
+            &captured,
+        )
+        .await?
+    } else {
+        let encryption =
+            resolve_seal_encryption(None, &[], Some(&workspace.env.encryption), config)?;
+        let cache_path = cache_path(workspace_path, mode)?;
+        match read_valid_cache(&cache_path, mode, &input_hash, config).await {
+            Ok(Some(values)) => values,
+            Ok(None) => {
+                let values = compile_captured_sources(&captured, config).await?;
+                if let Some(encryption) = &encryption
+                    && let Err(error) = write_cache(
+                        &cache_path,
+                        workspace_path,
+                        mode,
+                        &input_hash,
+                        &values,
+                        encryption,
+                    )
+                    .await
+                {
+                    eprintln!("Warning: could not update environment cache: {error:#}");
+                }
+                values
+            }
+            Err(error) => {
+                eprintln!("Warning: ignoring unreadable environment cache: {error:#}");
+                compile_captured_sources(&captured, config).await?
+            }
+        }
+    };
+    Ok((values, workspace.env.override_process_env))
 }
 
 fn broker_command_argv(command: &[OsString]) -> Result<Vec<String>> {
@@ -778,7 +806,7 @@ fn parse_workspace(path: &Path, contents: &str) -> Result<Workspace> {
             path.display()
         );
     }
-    if workspace.version != WORKSPACE_FORMAT_VERSION {
+    if !matches!(workspace.version, 2 | 3) {
         bail!(
             "unsupported workspace version {} in {}",
             workspace.version,
@@ -791,8 +819,21 @@ fn parse_workspace(path: &Path, contents: &str) -> Result<Workspace> {
             path.display()
         );
     }
-    if workspace.env.files.is_empty() {
-        bail!("env.files must contain at least one source path");
+    if workspace.version == 2 && !workspace.file_groups.is_empty() {
+        bail!("file_groups requires workspace version 3");
+    }
+    if workspace.env.files.is_empty()
+        && (workspace.version == 2 || workspace.file_groups.is_empty())
+    {
+        bail!(
+            "env.files must contain at least one source path unless version 3 defines file_groups"
+        );
+    }
+    for (name, group) in &workspace.file_groups {
+        validate_mode(name).context("invalid file group name")?;
+        if group.files.is_empty() {
+            bail!("file group {name} must contain files");
+        }
     }
     if workspace
         .env

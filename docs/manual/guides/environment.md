@@ -796,3 +796,84 @@ not edit during sealing: editors ignoring the lock can race in the final compari
 to replacement interval. Failed sealing may leave pending plaintext entries; Shine
 does not claim they were cleared. `.shine-seal.lock` files may remain, contain no
 secrets, and must not be deleted while a seal is active.
+
+## Temporary secret files {#workspace-secret-files}
+
+Use workspace version 3 to keep signing keystores, password files, and service credentials encrypted
+in Git. A file group is a named collection of mappings, not a directory. Each mapping declares a
+ciphertext `source` and a plaintext `target`; one group may span several directories, and repeatable
+`--file-group` selects multiple groups. Application code reads ordinary files and does not need a
+Shine API. Only the wrapped build workflow requires the Shine CLI.
+
+Replace the recipient placeholder with a real public recipient. Identities stay outside the repository:
+
+```toml
+version = 3
+
+[env]
+default_mode = "staging"
+modes = ["staging", "production"]
+
+[env.encryption]
+backend = "age"
+age_recipients = ["<actual age recipient>"]
+
+[[file_groups.android-signing.files]]
+source = ".secrets/{mode}/release.jks.enc"
+target = ".android-signing/release.jks"
+
+[[file_groups.android-signing.files]]
+source = ".secrets/{mode}/signing.properties.enc"
+target = ".android-signing/signing.properties"
+
+[[file_groups.service-account.files]]
+source = ".secrets/{mode}/service-account.json.enc"
+target = "app/.credentials/service-account.json"
+```
+
+Both paths are relative to the workspace directory and support `{mode}`. `--mode` overrides
+`env.default_mode`; the selected mode must be declared in `env.modes` or `env.default_mode`.
+Missing files fail without falling back to another environment. All modes use the same mapping
+list. Version 2 workspaces remain supported; older clients reject version 3. A version 3 workspace
+with file groups may omit `env.files`; such a workspace requires `--file-group` for `env run`.
+
+Ignore all plaintext targets before use in a Git repository, for example `.android-signing/` and
+`app/.credentials/`. Tracked or non-ignored targets are rejected; Shine does not edit `.gitignore`.
+Use the following commands after preparing the plaintext files:
+
+```bash
+shine env secret seal --mode production --file-group android-signing --file-group service-account --dry-run
+shine env secret seal --mode production --file-group android-signing --file-group service-account --remove-plaintext
+shine env run --mode production --file-group android-signing --file-group service-account -- pnpm android:build
+```
+
+`seal --file-group` reads `target` and creates or updates `source`. It reuses existing GPG, age,
+and hybrid policies, including CLI overrides and hybrid recipient restrictions. By default it retains
+plaintext. `--remove-plaintext` decrypts and compares every written ciphertext before starting
+plaintext deletion, so it needs a usable identity and may prompt for authorization. Verification or
+cancellation before deletion retains all original plaintext. Multi-file writes and deletion are not
+one transaction; failures report completed and remaining files. There is no ciphertext-only
+recipient rotation workflow in this first version.
+
+`env run --file-group` decrypts all selected files before preparing targets, starts the command
+only after every target is ready, and cleans up its files on success, failure, or controlled
+interruption. Existing targets are never overwritten. Replaced targets are retained and reported.
+New Unix files use `0600` and directories use `0700`; Windows requires a filesystem supporting
+private current-user ACLs. Cleanup failure returns an error; a failed child retains its exit code.
+The wrapper supervises its process group on Unix and a Job Object on Windows. Do not start detached
+background tasks that outlive the wrapped command; remaining scoped descendants are terminated.
+
+`--dry-run` inspects configuration and metadata only: it does not read plaintext, decrypt, write
+files, or execute the command. It cannot verify ciphertext integrity or private-key availability.
+`--file-group` conflicts with `seal <FILE>`, `--no-workspace`, and `--secret-broker` as applicable.
+Plain `seal` and `env run` do not implicitly select file groups.
+
+Paths must stay inside the workspace; absolute paths, traversal, symbolic links/reparse points,
+hard links, and overlapping mappings are rejected. Case aliases are conservatively rejected across
+platforms. Each plaintext file is limited to 16 MiB, with 64 MiB per invocation. Encoded ciphertext is limited to 32 MiB per file and 128 MiB per invocation. File ciphertext uses
+Shine's existing tagged storage encoding, not a native `.age` or `.gpg` file.
+
+The child and other processes with sufficient local permissions can read the temporary plaintext.
+Force-killing Shine or losing power can leave files behind: inspect existing targets manually before
+retrying. Removing files is not secure erasure. Builds never automatically encrypt modified targets
+back into the repository. Removing a recipient does not revoke access to ciphertext in Git history.

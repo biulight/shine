@@ -1701,6 +1701,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "uuid",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

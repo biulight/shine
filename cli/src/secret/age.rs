@@ -91,6 +91,46 @@ async fn decrypt_base64_age(
     .await
 }
 
+pub(super) async fn encrypt_bytes(plaintext: &[u8], recipients: &[String]) -> Result<String> {
+    preflight_recipients(recipients).await?;
+    let mut command = Command::new("age");
+    for recipient in recipients {
+        command.arg("-r").arg(recipient.trim());
+    }
+    let child = command
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let bytes = super::exec::write_stdin_and_read_bytes(child, plaintext, 24 * 1024 * 1024).await?;
+    anyhow::ensure!(!bytes.is_empty(), "empty age ciphertext");
+    Ok(encode_base64_single_line(&bytes))
+}
+
+pub(super) async fn decrypt_bytes(
+    encoded: &str,
+    identities: &[PathBuf],
+    limit: usize,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    preflight_identities(identities).await?;
+    let file = TempFile::new("shine-age-file").await?;
+    decode_base64_to_file(encoded, file.path()).await?;
+    let mut command = Command::new("age");
+    command.arg("-d");
+    for identity in identities {
+        command.arg("-i").arg(identity);
+    }
+    let child = command
+        .arg(file.path())
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    super::exec::read_bytes_output(child, limit).await
+}
+
 pub(super) async fn preflight_identities(identities: &[PathBuf]) -> Result<()> {
     if identities.is_empty() {
         bail!("no age identities configured");

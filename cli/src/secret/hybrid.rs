@@ -238,6 +238,17 @@ pub async fn decrypt(
     identities: &[PathBuf],
     preference: Option<&str>,
 ) -> Result<String> {
+    let plaintext = decrypt_bytes(encoded, identities, preference).await?;
+    Ok(std::str::from_utf8(&plaintext)
+        .context("decrypted hybrid secret is not valid UTF-8")?
+        .to_owned())
+}
+
+pub(super) async fn decrypt_bytes(
+    encoded: &str,
+    identities: &[PathBuf],
+    preference: Option<&str>,
+) -> Result<Zeroizing<Vec<u8>>> {
     let envelope = Envelope::parse(encoded)?;
     let selected = select(identities, preference).await?;
     let wrapped = Zeroizing::new(match selected {
@@ -265,10 +276,7 @@ pub async fn decrypt(
         material.len() == 56 && &material[..24] == envelope.nonce(),
         "hybrid key context mismatch"
     );
-    let plaintext = envelope.open(&material[24..])?;
-    Ok(std::str::from_utf8(&plaintext)
-        .context("decrypted hybrid secret is not valid UTF-8")?
-        .to_owned())
+    envelope.open(&material[24..])
 }
 
 #[cfg(test)]
@@ -468,6 +476,22 @@ mod interoperability {
             std::fs::write(&source, "[plain]\nPLAIN = 'public'\n[secret]\nTOKEN = 'workspace secret'\n").unwrap();
             let mut config = crate::config::Config::new_for_test(&path);
             config.age_identity = Some(identity.to_string_lossy().into_owned());
+            config.hybrid_decrypt_backend = Some("age".into());
+            for policy in [
+                super::super::EncryptRecipients::Gpg(vec![allowed.clone()]),
+                super::super::EncryptRecipients::Age(vec![public.clone()]),
+                super::super::EncryptRecipients::Hybrid(recipients.clone()),
+            ] {
+                for bytes in [&b"\0\xff\r\n"[..], &b""[..]] {
+                    let encoded = super::super::encrypt_bytes(bytes, &policy).await.unwrap();
+                    super::super::validate_file_ciphertext(&encoded).unwrap();
+                    for backend in ["gpg", "age"] {
+                        config.hybrid_decrypt_backend = Some(backend.into());
+                        let decoded = super::super::decrypt_bytes(&encoded, &config, 1024).await.unwrap();
+                        assert_eq!(&decoded[..], bytes);
+                    }
+                }
+            }
             config.hybrid_decrypt_backend = Some("age".into());
             crate::env::workspace::handle_seal(&config, Some(&workspace), None, None, &[]).await.unwrap();
             let snapshot = crate::env::workspace::snapshot_for_broker(Some(&workspace), "test").await.unwrap();

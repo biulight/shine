@@ -58,6 +58,43 @@ pub async fn encrypt_gpg_secret_to_base64(
     Ok(encode_base64_single_line(&encrypted))
 }
 
+pub(super) async fn encrypt_bytes(plaintext: &[u8], recipients: &[String]) -> Result<String> {
+    let recipients = validate_recipients(recipients)?;
+    ensure_command("gpg")?;
+    let mut command = Command::new("gpg");
+    command.args(["--encrypt", "--output", "-"]);
+    for recipient in recipients {
+        command.arg("-r").arg(recipient);
+    }
+    let child = command
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let bytes = super::exec::write_stdin_and_read_bytes(child, plaintext, 24 * 1024 * 1024).await?;
+    anyhow::ensure!(!bytes.is_empty(), "empty GPG ciphertext");
+    Ok(encode_base64_single_line(&bytes))
+}
+
+pub(super) async fn decrypt_bytes(
+    encoded: &str,
+    limit: usize,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    ensure_command("gpg")?;
+    let file = TempFile::new("shine-gpg-file").await?;
+    decode_base64_to_file(encoded, file.path()).await?;
+    let child = Command::new("gpg")
+        .args(["--no-options", "--decrypt", "--output", "-"])
+        .arg(file.path())
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    super::exec::read_bytes_output(child, limit).await
+}
+
 fn validate_recipients(recipients: &[String]) -> Result<Vec<&str>> {
     if recipients.is_empty() {
         bail!("recipients is empty");

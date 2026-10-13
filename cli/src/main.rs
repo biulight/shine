@@ -584,6 +584,9 @@ async fn run_command(cli: Cli) -> Result<()> {
             }
             EnvCommands::Get { key } => env::commands::handle_get(&config, &key).await,
             EnvCommands::Run(cmd) => {
+                if !cmd.file_groups.is_empty() {
+                    return env::workspace::file_groups::handle_run(&config, &cmd).await;
+                }
                 env::workspace::handle_run(
                     &config,
                     cmd.workspace.as_deref(),
@@ -740,6 +743,9 @@ async fn run_command(cli: Cli) -> Result<()> {
                     .await
                 }
                 EnvSecretSubcommand::Seal(cmd) => {
+                    if !cmd.file_groups.is_empty() {
+                        return env::workspace::file_groups::handle_seal(&config, &cmd).await;
+                    }
                     env::workspace::handle_seal(
                         &config,
                         cmd.workspace.as_deref(),

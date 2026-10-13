@@ -708,3 +708,74 @@ hybrid_decrypt_backend = "age"
 硬件批准期间编辑将终止当前文件；此前完成的文件保留，剩余文件不再处理。封存期间请勿
 编辑：不遵守锁的编辑器可能在最后复核到替换之间产生竞态。失败后明文待封存项可能仍在，
 Shine 不会声称已清除。`.shine-seal.lock` 锁文件可能保留，不含秘密；封存仍在进行时不要删除。
+
+## 临时机密文件 {#workspace-secret-files}
+
+使用 workspace version 3，可将签名 keystore、密码文件和服务凭据加密后保存在 Git 中。
+文件组是命名的映射集合，不是目录。每条映射包含密文 `source` 和明文 `target`；一个组可覆盖
+多个目录，重复使用 `--file-group` 可选择多个组。应用代码读取普通文件，不需要 Shine API；
+使用自动解密的构建入口才需要安装 Shine CLI。
+
+将接收者占位符替换为实际公钥，解密身份保存在仓库外：
+
+```toml
+version = 3
+
+[env]
+default_mode = "staging"
+modes = ["staging", "production"]
+
+[env.encryption]
+backend = "age"
+age_recipients = ["<actual age recipient>"]
+
+[[file_groups.android-signing.files]]
+source = ".secrets/{mode}/release.jks.enc"
+target = ".android-signing/release.jks"
+
+[[file_groups.android-signing.files]]
+source = ".secrets/{mode}/signing.properties.enc"
+target = ".android-signing/signing.properties"
+
+[[file_groups.service-account.files]]
+source = ".secrets/{mode}/service-account.json.enc"
+target = "app/.credentials/service-account.json"
+```
+
+两个路径均相对 workspace 所在目录解析，并支持 `{mode}`。`--mode` 优先于
+`env.default_mode`；所选环境必须属于 `env.modes` 或 `env.default_mode`。缺失文件时失败，
+不回退到其他环境。所有环境使用相同映射清单。Version 2 workspace 仍受支持，旧客户端会拒绝
+version 3。Version 3 配置了文件组时可省略 `env.files`；此类 workspace 的 `env run` 必须选择文件组。
+
+在 Git 仓库使用前，先忽略所有明文目标，例如 `.android-signing/` 和 `app/.credentials/`。
+已跟踪或未被忽略的目标会被拒绝；Shine 不修改 `.gitignore`。准备好明文后执行：
+
+```bash
+shine env secret seal --mode production --file-group android-signing --file-group service-account --dry-run
+shine env secret seal --mode production --file-group android-signing --file-group service-account --remove-plaintext
+shine env run --mode production --file-group android-signing --file-group service-account -- pnpm android:build
+```
+
+`seal --file-group` 读取 `target` 并创建或更新 `source`，复用现有 GPG、age 和 hybrid 策略，
+包括 CLI 覆盖与 hybrid 收件人约束。默认保留明文。`--remove-plaintext` 会先解密并逐字节验证
+全部写入的密文，再开始删除明文，因此需要可用身份，并可能触发授权。删除前验证失败或取消时，
+保留全部原始明文。多文件写入和删除不是整体事务；失败会报告已完成项及剩余项。
+首版不提供仅从密文更新收件人的专用流程。
+
+`env run --file-group` 先解密全部选中文件，再准备目标；全部目标就绪后才启动命令，
+在成功、失败或受控中断后清理本次文件。已有目标不会被覆盖；被替换的目标会被保留并报告。
+Unix 新建明文文件为 `0600`、目录为 `0700`；Windows 要求文件系统支持当前用户私有 ACL。
+清理失败返回错误，子命令失败时保留其退出码。包装器在 Unix 管理进程组，在 Windows 使用
+Job Object。不要启动需要在被包装命令结束后继续运行的脱离后台任务；剩余受管子进程会被终止。
+
+`--dry-run` 只检查配置和元数据，不读取明文、不解密、不写文件、不启动命令，也无法验证密文
+完整性或私钥可用性。`--file-group` 分别与 `seal <FILE>`、`--no-workspace` 和
+`--secret-broker` 互斥。普通 `seal` 和 `env run` 不会隐式选择文件组。
+
+路径必须位于 workspace 内；拒绝绝对路径、父目录穿越、符号链接／重解析点、硬链接和映射重叠。
+各平台均保守拒绝仅大小写不同的路径别名。单个明文文件上限为 16 MiB，单次总量上限为 64 MiB。
+编码后的密文单文件上限为 32 MiB、单次总量上限为 128 MiB。文件密文使用 Shine 现有带标签的存储编码，不是原生 `.age` 或 `.gpg` 文件。
+
+子命令及拥有相应本机权限的其他进程可以读取临时明文。强制杀死 Shine 或断电可能留下文件：
+重试前应人工检查已有目标。删除文件不代表安全擦除。构建不会自动把改动后的目标重新加密回仓库。
+删除收件人也无法撤销其对 Git 历史密文的访问能力。

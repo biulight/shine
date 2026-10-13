@@ -332,3 +332,7 @@ still accepts only `gpg` or `age`.
 Hybrid compilation caches use the final selected backend and its workspace
 recipient list. Configuration changes re-evaluate cache validity without switching
 to another backend. See the [environment guide](../guides/environment.md).
+
+## Workspace file groups
+
+Workspace version 3 adds the `file_groups.<name>.files` array. Each entry requires ciphertext `source` and plaintext `target`. Groups must be nonempty; names contain only letters, digits, hyphens, and underscores. Paths support `{mode}` and resolve relative to the workspace directory. `env.files` may be omitted when groups are present. Version 2 does not accept file groups. Encryption reuses `[env.encryption]`, without group-specific or environment-specific policies. See [temporary secret files](../guides/environment.md#workspace-secret-files).

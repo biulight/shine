@@ -24,6 +24,62 @@ pub(crate) fn encode_base64_single_line(input: &[u8]) -> String {
     BASE64.encode(input)
 }
 
+/// Read credential subprocess output without retaining unbounded data or diagnostics.
+pub(crate) async fn read_bytes_output(
+    mut child: tokio::process::Child,
+    limit: usize,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    use tokio::io::AsyncReadExt;
+    let stdout = child.stdout.take().context("opening secret output")?;
+    let stderr = child.stderr.take();
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    let result = tokio::try_join!(
+        async {
+            stdout
+                .take((limit + 1) as u64)
+                .read_to_end(&mut bytes)
+                .await?;
+            anyhow::ensure!(bytes.len() <= limit, "secret output exceeds size limit");
+            Ok::<_, anyhow::Error>(())
+        },
+        async {
+            if let Some(mut stderr) = stderr {
+                tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+    );
+    if let Err(error) = result {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(error);
+    }
+    anyhow::ensure!(
+        child.wait().await?.success(),
+        "secret operation failed or was cancelled"
+    );
+    Ok(bytes)
+}
+
+pub(crate) async fn write_stdin_and_read_bytes(
+    mut child: tokio::process::Child,
+    input: &[u8],
+    limit: usize,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    use tokio::io::AsyncWriteExt;
+    let mut stdin = child.stdin.take().context("opening secret input")?;
+    let (written, output) = tokio::join!(
+        async {
+            let result = stdin.write_all(input).await;
+            drop(stdin);
+            result
+        },
+        read_bytes_output(child, limit)
+    );
+    written.context("writing secret input")?;
+    output
+}
+
 pub(crate) async fn write_stdin_and_wait(
     mut child: tokio::process::Child,
     input: &[u8],

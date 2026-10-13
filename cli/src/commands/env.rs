@@ -286,7 +286,7 @@ pub enum EnvSecretSubcommand {
     },
     /// Encrypt stdin and print ciphertext (GPG by default, or age with --backend age)
     Encrypt(EnvEncryptCommand),
-    /// Seal pending secrets in workspace environment files
+    /// Seal workspace environment secrets or explicitly selected binary file groups
     Seal(EnvSealCommand),
     /// Manage age identities used to decrypt age-backed secrets
     Identity(EnvIdentityCommand),
@@ -318,6 +318,18 @@ pub struct EnvSealCommand {
     /// Workspace definition (defaults to the nearest shine.workspace.toml)
     #[arg(long, value_name = "FILE")]
     pub workspace: Option<PathBuf>,
+    /// Named workspace file group (repeatable); seals target plaintext into source ciphertext
+    #[arg(long = "file-group", conflicts_with = "file")]
+    pub file_groups: Vec<String>,
+    /// File-group environment (defaults to env.default_mode)
+    #[arg(long, requires = "file_groups")]
+    pub mode: Option<String>,
+    /// Verify all written ciphertext before removing the mapped plaintext files
+    #[arg(long, requires = "file_groups")]
+    pub remove_plaintext: bool,
+    /// Preview file mappings without reading plaintext or invoking encryption
+    #[arg(long, requires = "file_groups")]
+    pub dry_run: bool,
     /// Secret backend: "gpg", "age", or workspace-only "hybrid"
     #[arg(long)]
     pub backend: Option<String>,
@@ -438,6 +450,12 @@ pub struct EnvRunCommand {
         requires = "no_workspace"
     )]
     pub secret: Vec<String>,
+    /// Temporarily decrypt a named workspace file group (repeatable)
+    #[arg(long = "file-group", conflicts_with_all = ["no_workspace", "secret_broker"])]
+    pub file_groups: Vec<String>,
+    /// Preview file mappings without decryption or command execution
+    #[arg(long, requires = "file_groups")]
+    pub dry_run: bool,
     /// Command and arguments to run
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<OsString>,

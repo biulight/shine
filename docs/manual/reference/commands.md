@@ -277,7 +277,7 @@ shine env set <KEY> <VALUE> [--global|--project|--overlay] [--env-file]
 shine env get <KEY>
 shine env explain <KEY> [--reveal]
 shine env delete <KEY> [--global|--project|--overlay] [--env-file]
-shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
+shine env run [--workspace <FILE>] [--mode <MODE>] [--file-group <NAME>]... [--dry-run] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
 shine env proxy install <COMMAND> --with <KEY[=ALIAS]>... [--project]
@@ -289,6 +289,7 @@ shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>
 shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
+shine env secret seal --file-group <NAME>... [--workspace <FILE>] [--mode <MODE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]... [--remove-plaintext] [--dry-run]
 shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PATH>] [--force]
 shine env secret identity init --phone [--recipient-type <tag|phone>] [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
 shine env secret identity list
@@ -405,3 +406,5 @@ shine self upgrade [--channel <stable|preview>]
 
 `stable` follows released versions. `preview` follows the replaceable preview build. See
 [Installation and upgrades](../installation.md).
+
+See [temporary secret files](../guides/environment.md#workspace-secret-files) for file-group configuration, sealing, execution, and cleanup boundaries.

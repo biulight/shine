@@ -836,6 +836,18 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Workspace file groups are explicit binary release.** Version 3 mappings require repeatable
+  `--file-group` selection. Capture all ciphertext before decryption and decrypt all selected files
+  before target creation. Reject links, hard-link aliases, path/case overlaps and pre-existing run
+  targets; Git plaintext targets must be ignored and untracked. Keep targets inside the workspace.
+  Create plaintext privately before bytes are written (Unix 0600/0700, Windows protected current-user
+  ACLs), hold shared path locks, and recheck captured inputs before writes/deletion. Cleanup uses
+  open-handle file identities, retains replaced files, and runs before child exit propagation.
+  `--remove-plaintext` verifies every written ciphertext before any deletion. Dry-run reads only
+  configuration/metadata, never plaintext or password tools. No build-driven resealing or file broker
+  release is implicit. Interrupted preparation drops staging guards; scoped commands supervise
+  descendants. Abrupt termination can leave targets, which subsequent runs must refuse (ADR 0110).
+
 - **Dotenv import is private before writing pending plaintext.** Generated workspace and source
   files use `atomic_write_private`, including forced replacements and unmarked imported values.
 - **Forced identity generation preserves the old identity until validation succeeds.** Generate

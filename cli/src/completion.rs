@@ -110,6 +110,20 @@ pub fn command() -> clap::Command {
                 cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
             })
         })
+        .mut_subcommand("env", |cmd| {
+            cmd.mut_subcommand("run", |cmd| {
+                cmd.mut_arg("file_groups", |arg| {
+                    arg.add(ArgValueCandidates::new(file_group_candidates))
+                })
+            })
+            .mut_subcommand("secret", |cmd| {
+                cmd.mut_subcommand("seal", |cmd| {
+                    cmd.mut_arg("file_groups", |arg| {
+                        arg.add(ArgValueCandidates::new(file_group_candidates))
+                    })
+                })
+            })
+        })
         .mut_subcommand("task", |cmd| {
             cmd.mut_subcommand("run", |cmd| {
                 cmd.mut_arg("name", |arg| arg.index(1).add(task_names.clone()))
@@ -131,6 +145,31 @@ pub fn command() -> clap::Command {
             cmd.mut_arg("name", |arg| arg.index(1).add(task_names))
                 .mut_arg("extra", |arg| arg.index(2))
         })
+}
+
+fn file_group_candidates() -> Vec<CompletionCandidate> {
+    let Ok(cwd) = std::env::current_dir() else {
+        return Vec::new();
+    };
+    for root in cwd.ancestors() {
+        let path = root.join("shine.workspace.toml");
+        if !path.exists() {
+            continue;
+        }
+        let groups = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+            .and_then(|value| {
+                value
+                    .get("file_groups")
+                    .and_then(toml::Value::as_table)
+                    .cloned()
+            });
+        return groups
+            .map(|groups| groups.keys().map(CompletionCandidate::new).collect())
+            .unwrap_or_default();
+    }
+    Vec::new()
 }
 
 fn preset_copy_candidates() -> Vec<CompletionCandidate> {

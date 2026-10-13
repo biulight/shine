@@ -4,6 +4,21 @@ End-to-end flows that span multiple modules and are not visible in any single fi
 ownership and the per-command routing table, see [`module-map.md`](module-map.md) — this file only
 records the cross-module sequences and their gotchas.
 
+## Workspace secret file groups
+
+Version 3 workspace + explicit groups + mode → root-constrained mappings → metadata/Git preflight
+→ shared path locks → captured workspace and file bytes → existing tagged binary crypto.
+Sealing prepares all ciphertext, rechecks snapshots and writes sources atomically per file;
+optional plaintext removal rereads/decrypts all written sources and verifies snapshots before
+deletion starts. There is no multi-file transaction or automatic build writeback.
+
+Run decrypts all selected sources, compiles ordinary workspace env when present, rechecks inputs,
+and creates private absent targets with an ownership guard. It supervises the child process group
+or Windows Job Object, cleans owned files by handle identity and owned empty directories, drops locks
+and captured inputs, then propagates the child status. Preparation cancellation drops guards.
+Existing/replaced targets are never automatically adopted. Metadata-only dry-run stops before
+password tools and writes. See [ADR 0110](../decisions/0110-workspace-secret-file-groups.md).
+
 ## Pure security Plan assessment
 
 `shine-core::plan` defines the Phase 3 approval contract used by protected mutation.

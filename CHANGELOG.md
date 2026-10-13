@@ -5,6 +5,16 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## Unreleased
+
+### Features
+
+- Add workspace version 3 secret file groups with binary-safe GPG, age, and hybrid sealing.
+  Select repeatable `--file-group` mappings and `--mode` to encrypt files for Git or temporarily
+  restore them around `env run`. Verified `--remove-plaintext`, metadata-only `--dry-run`, private
+  creation, conflict locks, and ownership-aware cleanup protect signing and build credentials.
+  Version 2 workspaces remain supported. Native Linux/Windows and hardware behavior need validation.
+
 ## [2.4.0] — 2026-10-11
 
 ### Breaking Changes
