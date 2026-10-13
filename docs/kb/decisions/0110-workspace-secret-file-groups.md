@@ -1,6 +1,6 @@
 # 0110 — Explicit workspace secret file groups use scoped plaintext ownership
 
-- **Status**: accepted; native Linux/Windows and hardware validation pending
+- **Status**: accepted; native Linux/macOS/Windows regression CI passed; hardware validation pending
 - **Evidence**: `cli/src/env/workspace/file_groups.rs`, `tests/workspace_secret_files.rs`,
   [PRD](../../workspace-secret-files-prd.md)
 
@@ -36,3 +36,10 @@ Shine, and authorized children/local users can read plaintext. Abrupt terminatio
 subsequent runs refuse existing targets without automatically claiming or deleting them. Cleanup
 is not secure erasure. No new plaintext cache, broker release protocol, crypto scheme, SOPS dependency,
 or recipient revocation guarantee is introduced.
+
+## Validation
+
+Native Linux, macOS and Windows regression suites, quality/security audit and Rust 1.88 checks
+passed for `5da8168` on 2026-10-13 ([CI](https://github.com/biulight/shine/actions/runs/38350246715)).
+Hardware authorization and real Android signing remain unverified; automated platform regression
+does not establish those acceptance results.

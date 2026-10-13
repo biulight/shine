@@ -1,6 +1,6 @@
 # Workspace 机密文件组 PRD
 
-**状态：软件实现完成，本机软件验收通过；Linux／Windows 原生、硬件及真实 Android 签名待验收，尚未发布。** 日期：2026-10-12。
+**状态：软件实现完成，Linux／macOS／Windows 原生自动回归通过；硬件及真实 Android 签名待验收，尚未发布。** 日期：2026-10-12；验证更新：2026-10-13。
 
 本文为内部需求，不发布到公共网站。设计记录见
 [ADR 0110](kb/decisions/0110-workspace-secret-file-groups.md)。
@@ -152,6 +152,9 @@ shine env run --mode production --file-group android-signing --file-group servic
 - Rust Clippy、格式、依赖策略、typos、中英内容一致性、网站类型检查与双语生产构建通过。
 - Windows 原生平台模块通过独立交叉编译与 Clippy。完整 Windows 交叉构建受本机缺少 Windows C SDK 阻断；
   独立模块检查不代表整个程序或 Windows 运行时验收。
+- 2026-10-13：修复 Windows 同名导入、重复封存的旧密文句柄冲突和测试就绪文件竞态，
+  并将 quinn-proto 升级至 0.11.18。`5da8168` 的 Linux／macOS／Windows 原生测试、质量与安全审计
+  及 Rust 1.88 检查均通过（[CI](https://github.com/biulight/shine/actions/runs/38350246715)）。
 - 沙箱内 sccache、测试 gpg-agent 与 Unix socket 受权限限制；清空编译包装器，并通过自动审批在沙箱外
   运行隔离密码互操作和全量回归后通过。依赖策略检查保留现有重复版本和未使用许可证许可警告。
-- 未操作实际项目签名密钥，未执行真实 Android 签名，未声明 Linux／Windows 原生或硬件行为已验证。
+- 未操作实际项目签名密钥，未执行真实 Android 签名；原生平台结论限于自动回归覆盖，硬件授权仍未验证。
