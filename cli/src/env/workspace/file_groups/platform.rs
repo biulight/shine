@@ -38,7 +38,11 @@ pub(super) async fn prepare<T>(future: impl std::future::Future<Output = Result<
 #[path = "platform/windows.rs"]
 mod windows;
 #[cfg(windows)]
-pub(super) use windows::*;
+pub(super) use windows::{
+    Identity, command_status, create_private, directory_identity, identity, is_link,
+    lock_directory, lock_file, open_directory, open_read, private_directory, publish_new,
+    sync_cipher_parents,
+};
 
 #[cfg(unix)]
 #[derive(Clone, Copy, PartialEq, Eq)]

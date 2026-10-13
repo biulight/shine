@@ -1,5 +1,24 @@
 # Lessons Learned
 
+## 2026-10-13 — Readiness files must publish complete payloads atomically
+
+- **Symptom**: the local full suite intermittently parsed an empty PID in the live Bun foreground
+  interrupt test, aborting the commit hook before the remaining tests ran.
+- **Cause**: the probe created its readiness file before writing the PID; existence alone did not
+  prove the payload was complete.
+- **Fix**: write the PID to a sibling pending file and rename it to the readiness path.
+- **Rule**: file-based readiness protocols publish complete data atomically before observers act.
+
+## 2026-10-13 — Platform facade glob imports can collide with parent helpers
+
+- **Symptom**: Windows CI rejected file-group command execution with ambiguous `command_status`,
+  although Unix tests and an isolated Windows platform compile check passed.
+- **Cause**: the facade imported the ordinary env helper through `super::*` and re-exported the
+  Windows scoped helper through another glob. The isolated check omitted the parent helper.
+- **Fix**: explicitly re-export the Windows platform API, including its scoped `command_status`.
+- **Rule**: cross-platform compile probes must preserve caller and parent name resolution;
+  checking only the platform implementation cannot establish that the application compiles.
+
 ## 2026-10-11 — Runtime path assertions must compare path components
 
 - **Symptom**: Windows CI failed the simulated macOS legacy-service cleanup and fixed App
