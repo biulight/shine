@@ -255,7 +255,7 @@ async fn seal_inner(config: &Config, command: &EnvSealCommand) -> Result<()> {
                 &selected.root,
                 source,
                 encrypted[index].as_bytes(),
-                previous[index].as_ref(),
+                previous[index].take(),
             )
             .await
         }

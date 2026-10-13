@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-13 — Windows ciphertext replacement must release the old snapshot handle
+
+- **Symptom**: native Windows file-group tests compiled, but repeated sealing failed with access
+  denied when atomically replacing existing ciphertext.
+- **Cause**: the old ciphertext snapshot kept its read handle open across `MoveFileExW` replacement.
+  Sharing deletion did not permit replacing that open destination.
+- **Fix**: consume the old ciphertext snapshot after its final identity/content check, immediately
+  before durable atomic replacement. Keep plaintext ownership handles through verification/cleanup.
+- **Rule**: retain snapshot handles through validation, but release consumed destination handles
+  before Windows atomic replacement; never unlink the destination to work around sharing errors.
+
 ## 2026-10-13 — Readiness files must publish complete payloads atomically
 
 - **Symptom**: the local full suite intermittently parsed an empty PID in the live Bun foreground

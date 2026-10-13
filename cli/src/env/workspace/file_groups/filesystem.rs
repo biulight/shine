@@ -339,7 +339,7 @@ pub(super) async fn write_cipher(
     root: &Path,
     path: &Path,
     bytes: &[u8],
-    previous: Option<&CapturedFile>,
+    previous: Option<CapturedFile>,
 ) -> Result<()> {
     let mut parents = Materialized::new(root);
     parents.parents(path)?;
@@ -353,8 +353,13 @@ pub(super) async fn write_cipher(
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        verify_optional(root, path, previous, MAX_CIPHER)?;
-        if previous.is_some() {
+        verify_optional(root, path, previous.as_ref(), MAX_CIPHER)?;
+        let replacing = previous.is_some();
+        // MoveFileExW cannot replace an open destination, even when its snapshot handle
+        // shares deletion. Consume that handle only after the final snapshot check.
+        // Plaintext ownership handles remain open until verification and cleanup finish.
+        drop(previous);
+        if replacing {
             crate::persist::finalize_temp(&temp, path).await?;
         } else {
             platform::publish_new(&temp, path)?;

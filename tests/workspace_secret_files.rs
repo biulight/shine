@@ -166,6 +166,8 @@ fn file_groups_seal_and_run_binary_empty_multiple_modes_and_exit_codes() {
     let f = Fixture::new();
     good(f.seal(&[]));
     assert!(f.root.join(".signing/key").exists());
+    // Updating existing ciphertext must also work while snapshots protect the inputs.
+    good(f.seal(&[]));
     good(f.seal(&["--mode", "prod"]));
     assert!(f.root.join(".secrets/prod/key.enc").exists());
     f.prepare();
