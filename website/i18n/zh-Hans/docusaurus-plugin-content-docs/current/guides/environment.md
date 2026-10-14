@@ -748,7 +748,9 @@ target = "app/.credentials/service-account.json"
 version 3。Version 3 配置了文件组时可省略 `env.files`；此类 workspace 的 `env run` 必须选择文件组。
 
 在 Git 仓库使用前，先忽略所有明文目标，例如 `.android-signing/` 和 `app/.credentials/`。
-已跟踪或未被忽略的目标会被拒绝；Shine 不修改 `.gitignore`。准备好明文后执行：
+已跟踪或未被忽略的目标会被拒绝；Shine 不修改 `.gitignore`。
+检查以每个目标所属的仓库为准，包括嵌套仓库。Git 检查失败会在释放明文前终止操作。
+准备好明文后执行：
 
 ```bash
 shine env secret seal --mode production --file-group android-signing --file-group service-account --dry-run
@@ -764,6 +766,7 @@ shine env run --mode production --file-group android-signing --file-group servic
 
 `env run --file-group` 先解密全部选中文件，再准备目标；全部目标就绪后才启动命令，
 在成功、失败或受控中断后清理本次文件。已有目标不会被覆盖；被替换的目标会被保留并报告。
+实际执行时，映射预览写入 stderr，子命令的 stdout 保持逐字节原样；dry-run 预览仍写入 stdout。
 Unix 新建明文文件为 `0600`、目录为 `0700`；Windows 要求文件系统支持当前用户私有 ACL。
 清理失败返回错误，子命令失败时保留其退出码。包装器在 Unix 管理进程组，在 Windows 使用
 Job Object。不要启动需要在被包装命令结束后继续运行的脱离后台任务；剩余受管子进程会被终止。

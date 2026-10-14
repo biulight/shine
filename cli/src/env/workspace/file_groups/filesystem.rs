@@ -145,10 +145,25 @@ pub(super) fn verify_optional(
 }
 
 pub(super) fn check_git(root: &Path, target: &Path) -> Result<()> {
+    // Targets may belong to a nested repository, and their parents may not exist yet.
+    check_path(root, target)?;
+    let mut directory = target.parent().context("plaintext target has no parent")?;
+    while !directory.try_exists()? {
+        directory = directory.parent().context("no existing plaintext parent")?;
+    }
+    let mut repository_marker = false;
+    for ancestor in directory.ancestors() {
+        match fs::symlink_metadata(ancestor.join(".git")) {
+            Ok(_) => repository_marker = true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error).context("cannot inspect Git repository marker"),
+        }
+    }
     let git = || {
         let mut cmd = Command::new("git");
-        cmd.current_dir(root)
-            .args(["--no-optional-locks", "-c", "core.fsmonitor=false"]);
+        cmd.current_dir(directory)
+            .args(["--no-optional-locks", "-c", "core.fsmonitor=false"])
+            .env("LC_ALL", "C");
         for (key, _) in
             std::env::vars_os().filter(|(key, _)| key.to_string_lossy().starts_with("GIT_"))
         {
@@ -158,21 +173,24 @@ pub(super) fn check_git(root: &Path, target: &Path) -> Result<()> {
     };
     let discovery = git().args(["rev-parse", "--is-inside-work-tree"]).output();
     let in_git = match discovery {
-        Ok(output) if output.status.success() => output.stdout == b"true\n",
-        Ok(output) if output.status.code() == Some(128) => false,
-        Ok(_) => bail!("cannot inspect Git repository"),
-        Err(error)
-            if error.kind() == std::io::ErrorKind::NotFound
-                && !root.ancestors().any(|p| p.join(".git").exists()) =>
+        Ok(output) if output.status.success() && output.stdout == b"true\n" => true,
+        // Exit 128 alone is ambiguous (bad config, unsafe ownership, broken worktree, etc.).
+        Ok(output)
+            if !repository_marker
+                && output.status.code() == Some(128)
+                && String::from_utf8_lossy(&output.stderr).trim()
+                    == "fatal: not a git repository (or any of the parent directories): .git" =>
         {
             false
         }
+        Ok(_) => bail!("cannot inspect Git repository"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !repository_marker => false,
         Err(error) => return Err(error).context("Git is required to verify plaintext exclusions"),
     };
     if !in_git {
         return Ok(());
     }
-    let relative = target.strip_prefix(root)?;
+    let relative = target.strip_prefix(directory)?;
     let tracked = git()
         .arg("--literal-pathspecs")
         .args(["ls-files", "--error-unmatch", "--"])

@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-15 — Secret file Git checks follow targets and fail closed
+
+- **Symptom**: file-group runs released plaintext into tracked nested-repository paths or when
+  Git discovery failed; mapping previews also contaminated wrapped command stdout.
+- **Cause**: Git ran only from the workspace root, every exit 128 meant "no repository", and
+  execution reused stdout previews.
+- **Fix**: inspect from the target's closest existing parent, distinguish confirmed absence from
+  failed inspection, and send execution previews to stderr while retaining dry-run stdout.
+- **Rule**: safety checks follow each destination's repository; ambiguous errors block release.
+  Wrappers preserve child stdout byte-for-byte. Regression tests cover nested and outer repositories,
+  missing parents, tracked absent targets, malformed Git configuration, and binary stdout.
+
 ## 2026-10-13 — Windows ciphertext replacement must release the old snapshot handle
 
 - **Symptom**: native Windows file-group tests compiled, but repeated sealing failed with access

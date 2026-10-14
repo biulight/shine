@@ -26,6 +26,9 @@ detached background tasks are outside the supported workflow.
 Paths remain inside the workspace; links, hard-link aliases, case aliases, overlaps, tracked or
 non-ignored Git plaintext targets fail closed. Git inspection disables fsmonitor and ambient Git
 redirection. Persistent per-user, path-hashed OS locks coordinate seal/run across config directories.
+Git checks start at each target's closest existing parent, honor nested repository policy, and
+reject ambiguous discovery failures. Execution previews use stderr to preserve child stdout;
+dry-run previews remain on stdout.
 Final snapshot checks protect cooperating processes; hostile final-interval filesystem races are
 outside the portable guarantee. Each plaintext is bounded to 16 MiB, with 64 MiB per invocation.
 

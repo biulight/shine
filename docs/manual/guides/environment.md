@@ -839,6 +839,8 @@ with file groups may omit `env.files`; such a workspace requires `--file-group` 
 
 Ignore all plaintext targets before use in a Git repository, for example `.android-signing/` and
 `app/.credentials/`. Tracked or non-ignored targets are rejected; Shine does not edit `.gitignore`.
+Checks use each target's own repository, including nested repositories. Git inspection failures
+stop the operation before plaintext is released.
 Use the following commands after preparing the plaintext files:
 
 ```bash
@@ -858,6 +860,8 @@ recipient rotation workflow in this first version.
 `env run --file-group` decrypts all selected files before preparing targets, starts the command
 only after every target is ready, and cleans up its files on success, failure, or controlled
 interruption. Existing targets are never overwritten. Replaced targets are retained and reported.
+During execution, mapping previews go to stderr so the command's stdout remains byte-exact.
+Dry-run previews remain on stdout.
 New Unix files use `0600` and directories use `0700`; Windows requires a filesystem supporting
 private current-user ACLs. Cleanup failure returns an error; a failed child retains its exit code.
 The wrapper supervises its process group on Unix and a Job Object on Windows. Do not start detached

@@ -34,6 +34,7 @@ fn main() {
  }
  match args[0].to_str().unwrap() {
   "check" => { assert_eq!(fs::read(".signing/key").unwrap(), [0,255,10,13,128]); assert!(fs::read("other/password").unwrap().is_empty()); }
+  "output" => { std::io::stdout().write_all(&[0,255,10,13,128]).unwrap(); }
   "replace" => { fs::remove_file(".signing/key").unwrap(); fs::write(".signing/key","replacement").unwrap(); }
   "wait" => {
    let child=Command::new(env::current_exe().unwrap()).arg("descendant").stdin(std::process::Stdio::null()).spawn().unwrap();
@@ -358,6 +359,107 @@ fn file_groups_require_git_ignored_untracked_plaintext() {
             .unwrap(),
     );
     error(f.seal(&[]), "is tracked");
+}
+
+fn fixture_git(root: &std::path::Path, args: &[&str]) {
+    let mut command = Command::new("git");
+    command.current_dir(root).args(args);
+    for (key, _) in std::env::vars_os().filter(|(key, _)| key.to_string_lossy().starts_with("GIT_"))
+    {
+        command.env_remove(key);
+    }
+    good(command.output().unwrap());
+}
+
+#[test]
+fn file_groups_check_nested_git_targets_even_outside_a_parent_repository() {
+    let f = Fixture::new();
+    f.prepare();
+    // The signing target's parent is absent: discover from its closest existing ancestor.
+    fs::create_dir(f.root.join("other")).unwrap();
+    fixture_git(&f.root.join("other"), &["init"]);
+    let log = f.root.join("backend-log");
+    error(
+        f.run("check")
+            .env("PROBE_BACKEND_LOG", &log)
+            .output()
+            .unwrap(),
+        "must be ignored",
+    );
+    assert!(!log.exists());
+    assert!(!f.root.join(".signing/key").exists());
+    fs::write(f.root.join("other/.gitignore"), "password\n").unwrap();
+    good(f.run("check").output().unwrap());
+    // An outer ignore rule must not hide the nested repository's own policy.
+    fixture_git(&f.root, &["init"]);
+    fs::write(f.root.join(".gitignore"), ".signing/\nother/\n").unwrap();
+    fs::remove_file(f.root.join("other/.gitignore")).unwrap();
+    error(f.run("check").output().unwrap(), "must be ignored");
+    fs::write(f.root.join("other/.gitignore"), "password\n").unwrap();
+    good(f.run("check").output().unwrap());
+    fs::write(f.root.join("other/password"), "tracked fixture").unwrap();
+    fixture_git(&f.root.join("other"), &["add", "--force", "password"]);
+    fs::remove_file(f.root.join("other/password")).unwrap();
+    error(f.run("check").output().unwrap(), "is tracked");
+    assert!(!f.root.join("other/password").exists());
+    // Sealing must also reject a non-ignored target in the nested repository.
+    fs::write(f.root.join("other/password"), []).unwrap();
+    error(f.seal(&[]), "is tracked");
+}
+
+#[test]
+fn file_groups_stop_on_git_discovery_errors_before_decrypting() {
+    let f = Fixture::new();
+    f.prepare();
+    fixture_git(&f.root, &["init"]);
+    fs::write(f.root.join(".git/config"), "[broken\n").unwrap();
+    let log = f.root.join("backend-log");
+    error(
+        f.run("check")
+            .env("PROBE_BACKEND_LOG", &log)
+            .output()
+            .unwrap(),
+        "cannot inspect Git repository",
+    );
+    assert!(!log.exists());
+    assert!(!f.root.join(".signing/key").exists());
+    assert!(!f.root.join("other/password").exists());
+    fs::create_dir(f.root.join(".signing")).unwrap();
+    fs::create_dir(f.root.join("other")).unwrap();
+    fs::write(f.root.join(".signing/key"), [0, 255, 10, 13, 128]).unwrap();
+    fs::write(f.root.join("other/password"), []).unwrap();
+    error(f.seal(&[]), "cannot inspect Git repository");
+    assert_eq!(
+        fs::read(f.root.join(".signing/key")).unwrap(),
+        [0, 255, 10, 13, 128]
+    );
+}
+
+#[test]
+fn file_groups_preserve_exact_child_stdout_and_keep_preview_on_stderr() {
+    let f = Fixture::new();
+    f.prepare();
+    let output = f.run("output").output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, [0, 255, 10, 13, 128]);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Would decrypt temporarily"));
+    assert!(!f.root.join(".signing/key").exists());
+    let preview = f
+        .command()
+        .args([
+            "env",
+            "run",
+            "--file-group",
+            "signing",
+            "--dry-run",
+            "--",
+            "nonexistent-command",
+        ])
+        .output()
+        .unwrap();
+    assert!(preview.status.success());
+    assert!(String::from_utf8_lossy(&preview.stdout).contains("Would decrypt temporarily"));
+    assert!(!String::from_utf8_lossy(&preview.stderr).contains("Would decrypt temporarily"));
 }
 
 #[cfg(unix)]

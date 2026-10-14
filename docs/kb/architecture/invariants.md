@@ -839,7 +839,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **Workspace file groups are explicit binary release.** Version 3 mappings require repeatable
   `--file-group` selection. Capture all ciphertext before decryption and decrypt all selected files
   before target creation. Reject links, hard-link aliases, path/case overlaps and pre-existing run
-  targets; Git plaintext targets must be ignored and untracked. Keep targets inside the workspace.
+  targets; Git plaintext targets must be ignored and untracked in their own repository, including
+  nested repositories. Git discovery errors fail closed; exit 128 alone never proves absence.
+  Run previews use stderr, preserving exact child stdout; dry-run previews use stdout.
+  Keep targets inside the workspace.
   Create plaintext privately before bytes are written (Unix 0600/0700, Windows protected current-user
   ACLs), hold shared path locks, and recheck captured inputs before writes/deletion. Cleanup uses
   open-handle file identities, retains replaced files, and runs before child exit propagation.

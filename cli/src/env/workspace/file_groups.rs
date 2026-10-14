@@ -148,15 +148,25 @@ impl Selection {
         Ok(())
     }
 
-    fn preview(&self, sealing: bool) {
-        println!("File groups for mode {} (metadata only)", self.mode);
+    fn preview(&self, sealing: bool, stderr: bool) {
+        let emit = |line: String| {
+            if stderr {
+                eprintln!("{line}");
+            } else {
+                println!("{line}");
+            }
+        };
+        emit(format!(
+            "File groups for mode {} (metadata only)",
+            self.mode
+        ));
         for (source, target) in &self.mappings {
             let (from, to) = if sealing {
                 (target, source)
             } else {
                 (source, target)
             };
-            println!(
+            emit(format!(
                 "Would {} {} -> {}",
                 if sealing {
                     "seal"
@@ -165,7 +175,7 @@ impl Selection {
                 },
                 from.display(),
                 to.display()
-            );
+            ));
         }
     }
 }
@@ -182,7 +192,7 @@ async fn seal_inner(config: &Config, command: &EnvSealCommand) -> Result<()> {
         &command.file_groups,
     )
     .await?;
-    selected.preview(true);
+    selected.preview(true, false);
     selected.preflight(true)?;
     if command.dry_run {
         return Ok(());
@@ -325,7 +335,7 @@ pub async fn handle_run(config: &Config, command: &EnvRunCommand) -> Result<()> 
         &command.file_groups,
     )
     .await?;
-    selected.preview(false);
+    selected.preview(false, !command.dry_run);
     selected.preflight(false)?;
     if command.dry_run {
         return Ok(());
