@@ -215,6 +215,15 @@ pub(in super::super) fn open_read(path: &Path) -> Result<File> {
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?)
 }
+pub(in super::super) fn path_identity(path: &Path) -> Result<Identity> {
+    // A metadata-only handle avoids requesting plaintext read permission.
+    let file = OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    identity(&file)
+}
 pub(in super::super) fn open_directory(path: &Path) -> Result<File> {
     Ok(OpenOptions::new()
         .read(true)

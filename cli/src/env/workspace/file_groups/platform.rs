@@ -40,8 +40,8 @@ mod windows;
 #[cfg(windows)]
 pub(super) use windows::{
     Identity, command_status, create_private, directory_identity, identity, is_link,
-    lock_directory, lock_file, open_directory, open_read, private_directory, publish_new,
-    sync_cipher_parents,
+    lock_directory, lock_file, open_directory, open_read, path_identity, private_directory,
+    publish_new, sync_cipher_parents,
 };
 
 #[cfg(unix)]
@@ -62,13 +62,23 @@ pub(super) fn directory_identity(file: &File) -> Result<Identity> {
 
 #[cfg(unix)]
 pub(super) fn identity(file: &File) -> Result<Identity> {
+    metadata_identity(&file.metadata()?)
+}
+
+#[cfg(unix)]
+fn metadata_identity(m: &Metadata) -> Result<Identity> {
     use std::os::unix::fs::MetadataExt;
-    let m = file.metadata()?;
     ensure!(
         m.is_file() && m.nlink() == 1,
         "mapped file must be regular with exactly one hard link"
     );
-    directory_identity(file)
+    Ok(Identity(m.dev(), m.ino()))
+}
+
+/// Observe identity without requiring plaintext read access; never follow links.
+#[cfg(unix)]
+pub(super) fn path_identity(path: &Path) -> Result<Identity> {
+    metadata_identity(&fs::symlink_metadata(path)?)
 }
 
 #[cfg(unix)]

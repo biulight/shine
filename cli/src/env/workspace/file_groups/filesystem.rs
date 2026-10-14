@@ -46,8 +46,7 @@ pub(super) fn check_path(root: &Path, path: &Path) -> Result<()> {
                         "mapped path is not a regular file: {}",
                         current.display()
                     );
-                    let file = platform::open_read(&current)?;
-                    platform::identity(&file)?;
+                    platform::path_identity(&current)?;
                 } else {
                     ensure!(
                         metadata.is_dir(),
@@ -309,9 +308,8 @@ impl Materialized {
         for owned in self.files.drain(..).rev() {
             let remove = (|| {
                 check_path(&self.root, &owned.path)?;
-                let current = platform::open_read(&owned.path)?;
                 ensure!(
-                    platform::identity(&current)? == owned.identity
+                    platform::path_identity(&owned.path)? == owned.identity
                         && platform::identity(&owned.file)? == owned.identity,
                     "plaintext target was replaced"
                 );

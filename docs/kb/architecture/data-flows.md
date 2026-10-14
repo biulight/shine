@@ -17,7 +17,12 @@ and creates private absent targets with an ownership guard. It supervises the ch
 or Windows Job Object, cleans owned files by handle identity and owned empty directories, drops locks
 and captured inputs, then propagates the child status. Preparation cancellation drops guards.
 Existing/replaced targets are never automatically adopted. Metadata-only dry-run stops before
-password tools and writes. See [ADR 0110](../decisions/0110-workspace-secret-file-groups.md).
+password tools and writes. Cleanup compares metadata-only path identity with the held ownership
+handle, so Unix read-permission changes do not strand an unchanged owned file. Binary age decrypt
+inherits stderr only for required phone QR or explicitly requested phone messages; ordinary captured
+diagnostics are discarded. Binary encryption owns the child through concurrent pipe I/O and wait,
+terminating and reaping on pipe failure or output overflow.
+See [ADR 0110](../decisions/0110-workspace-secret-file-groups.md).
 
 ## Pure security Plan assessment
 

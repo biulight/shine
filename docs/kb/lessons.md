@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-15 — Binary secret files retain cleanup and interactive process contracts
+
+- **Symptom**: a child `chmod 000` stranded owned plaintext; binary age decrypt discarded phone QR
+  prompts; binary seal waited for a backend that closed stdin but remained alive.
+- **Cause**: cleanup reopened plaintext for reading, binary decrypt always drained stderr, and
+  `join!` waited for output even after an input-write error.
+- **Fix**: inspect path identity without plaintext read access while checking held ownership;
+  reuse phone-interaction policy; retain the encryption child through `try_join!` and kill/reap on
+  I/O failure or overflow. Tests cover unreadable owned/replaced files and child status, visible/quiet
+  phone prompts with binary stdout, large simultaneous pipe I/O, closed stdin and bounded output.
+- **Rule**: byte-oriented crypto must preserve the interaction, ownership and subprocess cleanup
+  contracts of its callers; file metadata observation is separate from content-read permission.
+
 ## 2026-10-15 — Secret file Git checks follow targets and fail closed
 
 - **Symptom**: file-group runs released plaintext into tracked nested-repository paths or when

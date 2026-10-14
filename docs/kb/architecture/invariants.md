@@ -846,6 +846,11 @@ bugs. Check this list before changing the modules named in each entry.
   Create plaintext privately before bytes are written (Unix 0600/0700, Windows protected current-user
   ACLs), hold shared path locks, and recheck captured inputs before writes/deletion. Cleanup uses
   open-handle file identities, retains replaced files, and runs before child exit propagation.
+  Path identity inspection does not request plaintext read access; Unix child permission changes
+  must not prevent removal of an unchanged owned file. Links, hard-link aliases and replacements
+  remain protected. Binary age release retains required phone QR/opted-in interaction while
+  keeping captured ordinary backend diagnostics hidden. Binary encryption pipe failures and output
+  overflow terminate and reap the backend before returning.
   `--remove-plaintext` verifies every written ciphertext before any deletion. Dry-run reads only
   configuration/metadata, never plaintext or password tools. No build-driven resealing or file broker
   release is implicit. Interrupted preparation drops staging guards; scoped commands supervise

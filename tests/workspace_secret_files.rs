@@ -17,6 +17,14 @@ const PROBE: &str = r#"
 use std::{env,fs,io::{Read,Write},process::Command,time::Duration};
 fn main() {
  let args:Vec<_>=env::args_os().skip(1).collect();
+ if env::current_exe().unwrap().file_stem().unwrap()=="age" {
+  if args.iter().any(|a| a=="--version") { println!("1.3.0"); return; }
+  eprintln!("phone-authorization-prompt");
+  if env::var_os("PROBE_FAIL_DECRYPT").is_some() { std::process::exit(2); }
+  if args.last().unwrap().to_string_lossy().contains("password") { return; }
+  std::io::stdout().write_all(&[0,255,10,13,128]).unwrap();
+  return;
+ }
  if env::current_exe().unwrap().file_stem().unwrap()=="gpg" {
   if let Some(log)=env::var_os("PROBE_BACKEND_LOG") { fs::write(log,"called").unwrap(); }
   if let Some(path)=env::var_os("PROBE_MUTATE") { fs::OpenOptions::new().append(true).open(path).unwrap().write_all(b"\n# changed\n").unwrap(); }
@@ -36,6 +44,10 @@ fn main() {
   "check" => { assert_eq!(fs::read(".signing/key").unwrap(), [0,255,10,13,128]); assert!(fs::read("other/password").unwrap().is_empty()); }
   "output" => { std::io::stdout().write_all(&[0,255,10,13,128]).unwrap(); }
   "replace" => { fs::remove_file(".signing/key").unwrap(); fs::write(".signing/key","replacement").unwrap(); }
+  #[cfg(unix)]
+  "unreadable" => { use std::os::unix::fs::PermissionsExt; fs::set_permissions(".signing/key", fs::Permissions::from_mode(0)).unwrap(); }
+  #[cfg(unix)]
+  "replace-unreadable" => { use std::os::unix::fs::PermissionsExt; fs::remove_file(".signing/key").unwrap(); fs::write(".signing/key","replacement").unwrap(); fs::set_permissions(".signing/key", fs::Permissions::from_mode(0)).unwrap(); }
   "wait" => {
    let child=Command::new(env::current_exe().unwrap()).arg("descendant").stdin(std::process::Stdio::null()).spawn().unwrap();
    fs::write("ready",child.id().to_string()).unwrap();
@@ -71,6 +83,8 @@ static PROBE_BINARY: LazyLock<Probe> = LazyLock::new(|| {
         String::from_utf8_lossy(&output.stderr)
     );
     fs::copy(dir.join(exe("probe")), dir.join(exe("gpg"))).unwrap();
+    fs::copy(dir.join(exe("probe")), dir.join(exe("age"))).unwrap();
+    fs::copy(dir.join(exe("probe")), dir.join(exe("age-plugin-phone"))).unwrap();
     Probe(dir)
 });
 fn exe(name: &str) -> String {
@@ -160,6 +174,99 @@ fn error(output: Output, expected: &str) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn file_groups_clean_unreadable_owned_plaintext_before_propagating_child_status() {
+    for code in [0, 42] {
+        let f = Fixture::new();
+        f.prepare();
+        let output = f
+            .run("unreadable")
+            .env("PROBE_EXIT", code.to_string())
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!f.root.join(".signing/key").exists());
+        assert!(!f.root.join(".signing").exists());
+        assert!(!f.root.join("other").exists());
+    }
+    // Permission-independent inspection must still preserve a substituted file.
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    f.prepare();
+    error(
+        f.run("replace-unreadable").output().unwrap(),
+        "plaintext target was replaced",
+    );
+    let path = f.root.join(".signing/key");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(fs::read(path).unwrap(), b"replacement");
+}
+
+#[test]
+fn file_groups_age_keeps_phone_authorization_interactive_and_stdout_binary() {
+    use base64::Engine;
+    let f = Fixture::new();
+    f.prepare();
+    let identity = f.root.join("identity.txt");
+    fs::write(&identity, "AGE-PLUGIN-PHONE-1EXAMPLE\n").unwrap();
+    let mut config: toml::Table = toml::from_str("schema_version=2").unwrap();
+    config.insert(
+        "age_identity".into(),
+        identity.to_string_lossy().as_ref().into(),
+    );
+    fs::write(
+        f.root.join("state/config.toml"),
+        toml::to_string(&config).unwrap(),
+    )
+    .unwrap();
+    let cipher = format!(
+        "age:{}",
+        base64::engine::general_purpose::STANDARD.encode(b"age-encryption.org/v1\nfixture")
+    );
+    for name in ["key", "password"] {
+        fs::write(f.root.join(format!(".secrets/test/{name}.enc")), &cipher).unwrap();
+    }
+    for (transport, messages, visible) in [
+        ("qr", "0", true),
+        ("adb", "0", false),
+        ("adb", "true", true),
+        ("auto", "0", !cfg!(windows)),
+    ] {
+        let output = f
+            .run("output")
+            .env("AGE_PLUGIN_PHONE_TRANSPORT", transport)
+            .env("AGE_PLUGIN_PHONE_MESSAGES", messages)
+            .output()
+            .unwrap();
+        assert_eq!(output.stdout, [0, 255, 10, 13, 128]);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).contains("phone-authorization-prompt"),
+            visible,
+            "transport={transport}, messages={messages}"
+        );
+        good(output);
+        assert!(!f.root.join(".signing").exists());
+    }
+    // Ordinary backend diagnostics remain suppressed, including on failure.
+    fs::write(&identity, "AGE-SECRET-KEY-EXAMPLE\n").unwrap();
+    let output = f
+        .run("output")
+        .env("AGE_PLUGIN_PHONE_TRANSPORT", "qr")
+        .env("PROBE_FAIL_DECRYPT", "1")
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("phone-authorization-prompt"));
+    assert!(output.stdout.is_empty());
+    error(output, "file decryption failed");
+    assert!(!f.root.join(".signing").exists());
 }
 
 #[test]
