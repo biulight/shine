@@ -1,0 +1,104 @@
+---
+title: 安装与升级
+sidebar_position: 2
+---
+
+# 安装与升级
+
+Shine 支持 macOS、Linux 和 Windows。官方安装脚本从 GitHub Releases 下载当前平台的二进制文件。
+
+## macOS 与 Linux
+
+```bash
+curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
+```
+
+默认安装到 `~/.local/bin/shine`，安装脚本不会修改 shell 配置。确认 `~/.local/bin` 已在 `PATH` 中，然后验证：
+
+```bash
+shine --version
+```
+
+如需指定位置或版本：
+
+```bash
+SHINE_INSTALL_DIR=/custom/bin sh install.sh
+SHINE_VERSION=2.5.0 sh install.sh
+```
+
+## Windows PowerShell
+
+```powershell
+irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
+```
+
+默认安装到 `%LOCALAPPDATA%\Programs\shine\shine.exe`，不会修改用户 `PATH`。如需指定位置或版本：
+
+```powershell
+$env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
+$env:SHINE_VERSION = "2.5.0"; .\install.ps1
+```
+
+## 从源码安装
+
+已安装 Rust **1.88 或更高版本**时，可从 crates.io 安装：
+
+```bash
+cargo install shine-cli
+```
+
+若在 Shine 源码仓库中构建，运行 `cargo build --release`；二进制文件位于
+`target/release/shine`。
+
+## 升级 Shine
+
+安装后可由 Shine 下载稳定版或 preview 版：
+
+```bash
+shine self upgrade
+shine self upgrade --channel stable
+shine self upgrade --channel preview
+```
+
+`preview` 是持续滚动的预发布通道，不参与日常自动更新检查。运行 `shine update` 可以同时检查已安装配置和稳定版程序更新。
+
+稳定版通过 `latest` 和 stable 通道提供。从既有 1.x 安装升级前，请先阅读
+[从 Shine 1.x 升级](./guides/upgrade-to-2.md)了解兼容性变化。
+
+Shine 2.5 新增[临时机密文件](./guides/environment.md#workspace-secret-files)，可为构建过程提供凭据。
+既有 version 2 工作区继续受支持。采用 workspace version 3 前，请将所有读取它的客户端升级到
+Shine 2.5 或更高版本；旧客户端会拒绝新格式。Windows 上新建环境代理必须使用不含可执行文件
+扩展名的名称（例如 `gh`，而非 `gh.exe`）；已安装的带后缀代理仍可卸载。
+
+从 2.3.x 或更早版本升级时，请先阅读[环境分层的升级与回退步骤](./guides/environment.md#env-分层变更的人工升级与回退)。
+2.4.0 调整了同名变量的层级优先级，并用显式目标选项替代环境写入的 `--force`。
+请保留私有备份，并在重要项目中运行 `shine env explain KEY` 检查实际来源。
+
+`shine self install --dest <PATH>` 按当前目录解析相对路径，并记录绝对目标路径，因此之后从任何目录升级时都会同步同一份已安装副本。
+
+在 Unix 系统上，如果 `shine self install` 要把二进制文件复制到当前用户不可写的位置，Shine 会交互式请求授权，并通过 `sudo` 完成安装。`shine self upgrade` 成功后同步另一个已记录的安装目标时，也会采用相同方式。不过，如果当前运行的 Shine 本身位于受保护目录，Shine 暂时无法自动提权替换该二进制文件；请改为安装并运行用户可写位置中的 Shine。Windows 在受保护位置安装或升级时，仍需使用具备相应权限的终端。
+
+## 清理旧版本的本地 HTTP 服务
+
+2.4.0 版本移除了 HTTP 服务能力和脚本变量 `SHINE_APP_HTTP_DIR`。Surge 和 Clash Verge 规则可使用
+本地文件；应用 artifact 的持久输出可写入 `SHINE_STATE_DIR` 或 `SHINE_CACHE_DIR`。
+
+如果曾安装旧版后台服务，升级到 2.4.0 后可执行以下命令清理：
+
+```bash
+shine clear serve
+```
+
+`shine clear serve` 会停止旧服务并删除其用户服务注册；整个 `shine serve` 命令已移除。
+即使旧版 Shine 配置无法加载，清理命令仍可运行，无需找回旧二进制或指定原来的 `--config-dir`。
+请以安装服务的用户运行；成功卸载后重复执行也是安全的。系统服务管理器报错时，命令会报告
+失败，便于修复原因后重试。
+
+普通交互命令发现遗留服务后会提醒你处理。也可执行 `shine state check` 立即检查；
+此命令只报告维护事项，即使配置无法读取也可运行。
+
+升级前，也可使用旧二进制的 `shine serve uninstall` 移除服务。
+
+升级不会删除旧运行时目录 `http/` 下的文件。请保留仍需使用的文件，并先更新应用中的引用再删除。
+
+下一步：[完成第一次预设安装](./quick-start.md)。

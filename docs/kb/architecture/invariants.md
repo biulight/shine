@@ -135,7 +135,9 @@ bugs. Check this list before changing the modules named in each entry.
   symlinks, private key candidates, private HOME paths, and executable files not referenced by a
   typed path-bearing metadata field block packing with stable codes that never echo suspected
   content or paths. Descriptions, labels, arguments, and other incidental strings never declare an
-  executable payload.
+  executable payload. Without `--force`, publication must atomically reject any existing output
+  entry, including one created by a concurrent writer; an existence check before replacement is
+  insufficient. Force keeps atomic replacement semantics.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, captured executable intent, and each
   file's embedded, external, or overlay origin. It must not include physical source roots: relocating unchanged source is not a
@@ -597,6 +599,10 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Shell profile editing
 
+- **Declarative PATH integrations are literal and idempotent.** Repeated profile loading must not
+  duplicate existing entries. Reuse each path expression's own quoting in membership patterns,
+  including `$HOME` values containing whitespace, quotes or shell pattern characters.
+
 - **Sentinel blocks are the only thing shine writes to user shell configs**
   (`# >>> shine >>>` … `# <<< shine <<<`, Core Shell profile handling; sys uses per-phase sentinels
   like `# >>> shine <os> sys pre >>>`). Both delegate to the shared primitives in
@@ -637,6 +643,10 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Config files
 
+- **Self-install persists the path it actually writes.** Resolve `--dest` relative to the invocation
+  cwd before installation and save the absolute path. Config-relative interpretation on reload must
+  not redirect later upgrade synchronization to another binary.
+
 - **Trust store mutations serialize the entire read/modify/write cycle.** Grant and revoke acquire
   the persistent `trust.lock` OS lock before reading grants and retain it through private atomic
   persistence. Human review happens before locking; only the reviewed code identities are granted.
@@ -674,11 +684,17 @@ bugs. Check this list before changing the modules named in each entry.
   `shine.env.toml` writes use `atomic_write_private`: Unix temporary files start as `0600` before
   any content is written, and replacement cannot widen an existing private file's permissions.
   Env proxy rule install, toggle, and removal use the same private writer.
+- **Windows proxy installs use names without executable suffixes.** Reject `.exe`, `.com`, `.bat`,
+  `.cmd`, and `.ps1` case-insensitively before discovery or writes; never publish a POSIX script
+  as a native executable. Legacy suffixed installations remain removable through uninstall.
 - **Env proxy installation checks every launcher before writing any.** Windows extensionless,
   `.cmd`, and `.ps1` destinations all require absence or a regular Shine-owned proxy file.
   Foreign files, directories, and symlinks (including dangling links) remain untouched.
   Uninstall checks the complete launcher set before changing any launcher, rule, or receipt;
-  ownership conflicts preserve all three. Installation rejects `shine` and `shine.exe`, ignoring
+  ownership conflicts preserve all three. Install/uninstall share `proxy-lifecycle.lock`, acquired
+  before the target configuration lock and all state reads, including project-scoped installs.
+  Uninstall compares captured launcher bytes/modes again before mutation and each removal, preserving
+  changed or newly appeared files. Installation rejects `shine` and `shine.exe`, ignoring
   case, because proxy launchers invoke Shine through PATH and would otherwise recurse.
 - **Proxy launchers bind their installation's runtime directory.** All platform launchers pass
   an absolute `--config-dir`; a caller's environment cannot silently select another trust/env store.
@@ -691,7 +707,17 @@ bugs. Check this list before changing the modules named in each entry.
   including directory aliases, while preserving executable names such as `cargo` for dispatch.
 - **Managed overlay synchronization uses the configured source.** Fetch from the current URL and
   explicit branch or remote HEAD before updating origin/resetting; failed fetches preserve the last
-  checkout and origin even during relink.
+  checkout and origin even during relink. Before fetch and destructive synchronization, require a
+  non-linked standalone checkout whose canonical worktree and Git metadata roots are exactly the
+  managed directory and its `.git` directory. Repository-selecting environment variables cannot
+  redirect Git operations. After a successful fetch/reset, clean untracked and ignored files and
+  nested repositories only inside that verified disposable mirror, including when HEAD is unchanged.
+- **Managed Git overlay configuration is global-only.** Project config does not load Git overlay
+  keys, and all projects share `<shine_dir>/overlay`. Reject `overlay link --git` with an active
+  project before saving or synchronizing; route through read-only config loading before runtime
+  initialization or advisory work so refusal cannot initialize global state. Project-specific
+  overlays use manual directory links;
+  inherited global Git overlays remain readable and pullable from projects.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and
   [`data-flows.md`](data-flows.md#config-discovery) must agree.
@@ -763,6 +789,11 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Embedded presets
 
+- **Preset copy/export writes replace entries inside a resolved output root.** Reject nested
+  symlinks, Windows junctions/reparse points, and special output entries before staging and
+  publication. Set final permissions on a complete synced staging file before publishing it.
+  Force replaces a regular file's entry without changing other hard-link names; non-force
+  publication must atomically preserve any concurrent winner, not rely on an existence check.
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
 - **The generated built-in platform capability blocks must use runtime selector semantics.**
@@ -836,8 +867,38 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Workspace file groups are explicit binary release.** Version 3 mappings require repeatable
+  `--file-group` selection. Capture all ciphertext before decryption and decrypt all selected files
+  before target creation. Reject links, hard-link aliases, path/case overlaps and pre-existing run
+  targets; workspace-definition overlap, mapping overlap and path locks use the same Unicode
+  canonical-decomposition and case-folded path keys, including paths that do not exist yet.
+  Git plaintext targets must be ignored and untracked in their own repository, including
+  nested repositories. Compare the complete repository index using the same case/Unicode path
+  keys, including deleted working files and aliases in parent directory names. Git discovery errors
+  fail closed; exit 128 alone never proves absence.
+  Run previews use stderr, preserving exact child stdout; dry-run previews use stdout.
+  Keep targets inside the workspace.
+  Create plaintext privately before bytes are written (Unix 0600/0700, Windows protected current-user
+  ACLs), hold shared path locks, and recheck captured inputs before writes/deletion. Cleanup uses
+  open-handle file identities, retains replaced files, and runs before child exit propagation.
+  After path-boundary checks pass, an absent target is already cleaned, including when the child
+  removed its parent directory; absence must not change the child status or skip other mappings.
+  A dangling replacement link is not absence. Permission and other inspection failures remain errors.
+  Path identity inspection does not request plaintext read access; Unix child permission changes
+  must not prevent removal of an unchanged owned file. Links, hard-link aliases and replacements
+  remain protected. Binary age release retains required phone QR/opted-in interaction while
+  keeping captured ordinary backend diagnostics hidden. Binary encryption pipe failures and output
+  overflow terminate and reap the backend before returning.
+  `--remove-plaintext` verifies every written ciphertext before any deletion. Dry-run reads only
+  configuration/metadata, never plaintext or password tools. No build-driven resealing or file broker
+  release is implicit. Interrupted preparation drops staging guards; scoped commands supervise
+  descendants. Abrupt termination can leave targets, which subsequent runs must refuse (ADR 0110).
+
 - **Dotenv import is private before writing pending plaintext.** Generated workspace and source
-  files use `atomic_write_private`, including forced replacements and unmarked imported values.
+  files use private staging, including forced replacements and unmarked imported values. Without
+  force, preflight checks directory entries (including dangling links), and final publication uses
+  `atomic_write_private_new` so a concurrent writer cannot be overwritten. Force explicitly selects
+  `atomic_write_private` replacement. This remains per-file publication, not a multi-file transaction.
 - **Forced identity generation preserves the old identity until validation succeeds.** Generate
   into an absent path inside a same-directory private staging directory, restrict the file to 0600
   on Unix, extract its recipient, then use synced replacement. Never delete the old key before
@@ -893,10 +954,21 @@ bugs. Check this list before changing the modules named in each entry.
   secret-winning keys unless `--include-secrets` is present, never mixes in the caller's process
   environment, and never prints exported values in its status or dry-run output. On Unix, an
   export containing secrets must be created privately (`0600`) before plaintext bytes are written;
-  chmod after a wider temporary-file write is not sufficient.
+  chmod after a wider temporary-file write is not sufficient. Without `--force`, publish through
+  Core no-clobber finalization after preparing the complete temporary file, preserving concurrent
+  winners and every existing destination entry, including dangling links. Only `--force` selects
+  atomic replacement. Private staging applies equally to new publication and forced replacement.
 
 ## SSH transfer
 
+- **SSH session resources are owned from the first setup step.** Listener binding, context
+  persistence, spawn/wait failures and cancellation must release the listener and session
+  directory. Stop and await the accept loop before draining connection tasks; finish cleanup
+  before propagating the SSH exit status, including `process::exit` paths.
+- **IPv6 transfer destinations remain one address.** Bracket IPv6 literals, including user and
+  zone-qualified forms, in SCP operands. Select SCP for literal IPv6 destinations because the
+  macOS system rsync parser splits even bracketed literals at the first colon. Retain the SCP
+  fallback notice, overwrite warning and metadata-only dry-run contract.
 - **`ssh::agent` must not trust wire-supplied fields beyond the session token.** Transfer/Status
   tokens travel to the remote host as plain argv/environ and may leak there. Validate remote specs
   at consumption, place them only after argv's option separator, and use tilde-only expansion for
@@ -917,6 +989,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **Rsync flags must work with the system implementation.** Availability via `--version` does not
   imply support for modern GNU options. Use per-file `--progress`, supported by macOS's rsync
   2.6.9-compatible implementation, rather than `--info=progress2`.
+- **Rsync remote paths cross a shell boundary.** Escape whitespace and shell-active syntax while
+  retaining `*`, `?`, and bracket glob patterns. Pin `RSYNC_OLD_ARGS=1` and `RSYNC_PROTECT_ARGS=0`
+  on the transfer child so new rsync does not double-escape and older versions do not enable
+  protocol argument protection from ambient settings. SCP retains its own operand handling.
 
 ## SSH secret broker
 

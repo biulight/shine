@@ -20,9 +20,18 @@ no manual `presets_overlay_dir` is configured), shine owns the checkout at `<shi
 (so it follows `SHINE_CONFIG_DIR`). `shine preset pull` clones it `--depth 1` on first use, then
 **force-mirrors** it to the configured URL and branch on every subsequent run: fetch depth 1
 directly from that URL (remote `HEAD` when no branch is specified), update `origin` after a successful
-fetch, then `git reset --hard FETCH_HEAD`. This also handles relinking an existing mirror. `shine preset overlay link --git <url>` writes the
+fetch, then `git reset --hard FETCH_HEAD` and `git clean -ffdx`. Before fetch and destructive
+synchronization, require a standalone, non-linked checkout with worktree and metadata roots exactly
+at the managed directory and its `.git` directory; inherited repository selectors cannot redirect
+Git. Cleaning includes untracked/ignored files and nested repositories even for an unchanged HEAD.
+This also handles relinking an existing mirror. `shine preset overlay link --git <url>` writes the
 config and clones immediately; a manual `overlay link <path>` and a Git URL are mutually exclusive
 (setting one clears the other).
+
+Git source keys are global-only: `overlay link --git` must reject an active project before config
+saving or mirror synchronization. Project loaders do not accept these keys, and the shared
+`<shine_dir>/overlay` is not a project-specific mirror. For a project overlay, clone separately and
+link the local directory; projects may still consume and pull the inherited global Git overlay.
 
 Force-mirror (not fast-forward) was chosen deliberately: the managed checkout is a read-only mirror
 of an overlay maintained elsewhere, so it should always equal the remote — even when the maintainer

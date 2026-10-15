@@ -32,7 +32,9 @@ fn main() {
         let mut input = String::new(); std::io::stdin().read_line(&mut input).unwrap(); println!("input={}", input.trim());
     }
     if let Some(ready) = env::var_os("PROBE_READY") {
-        fs::write(ready, std::process::id().to_string()).unwrap();
+        let pending = std::path::PathBuf::from(&ready).with_extension("pending");
+        fs::write(&pending, std::process::id().to_string()).unwrap();
+        fs::rename(pending, ready).unwrap();
         loop { std::thread::sleep(std::time::Duration::from_secs(1)); }
     }
     #[cfg(unix)] if env::var("PROBE_SIGNAL").is_ok() {

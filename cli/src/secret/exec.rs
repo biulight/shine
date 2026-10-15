@@ -24,6 +24,92 @@ pub(crate) fn encode_base64_single_line(input: &[u8]) -> String {
     BASE64.encode(input)
 }
 
+/// Read credential subprocess output without retaining unbounded data or diagnostics.
+pub(crate) async fn read_bytes_output(
+    mut child: tokio::process::Child,
+    limit: usize,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    use tokio::io::AsyncReadExt;
+    let stdout = child.stdout.take().context("opening secret output")?;
+    let stderr = child.stderr.take();
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    let result = tokio::try_join!(
+        async {
+            stdout
+                .take((limit + 1) as u64)
+                .read_to_end(&mut bytes)
+                .await?;
+            anyhow::ensure!(bytes.len() <= limit, "secret output exceeds size limit");
+            Ok::<_, anyhow::Error>(())
+        },
+        async {
+            if let Some(mut stderr) = stderr {
+                tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+    );
+    if let Err(error) = result {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(error);
+    }
+    anyhow::ensure!(
+        child.wait().await?.success(),
+        "secret operation failed or was cancelled"
+    );
+    Ok(bytes)
+}
+
+pub(crate) async fn write_stdin_and_read_bytes(
+    mut child: tokio::process::Child,
+    input: &[u8],
+    limit: usize,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stdin = child.stdin.take().context("opening secret input")?;
+    let stdout = child.stdout.take().context("opening secret output")?;
+    let stderr = child.stderr.take();
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    // Retain the child here so any pipe failure can terminate and reap it.
+    let result = tokio::try_join!(
+        async move {
+            stdin
+                .write_all(input)
+                .await
+                .context("writing secret input")?;
+            drop(stdin);
+            Ok::<_, anyhow::Error>(())
+        },
+        async {
+            stdout
+                .take((limit + 1) as u64)
+                .read_to_end(&mut bytes)
+                .await?;
+            anyhow::ensure!(bytes.len() <= limit, "secret output exceeds size limit");
+            Ok::<_, anyhow::Error>(())
+        },
+        async {
+            if let Some(mut stderr) = stderr {
+                tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        },
+        async { Ok::<_, anyhow::Error>(child.wait().await?) }
+    );
+    match result {
+        Ok(((), (), (), status)) => {
+            anyhow::ensure!(status.success(), "secret operation failed or was cancelled");
+            Ok(bytes)
+        }
+        Err(error) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            Err(error)
+        }
+    }
+}
+
 pub(crate) async fn write_stdin_and_wait(
     mut child: tokio::process::Child,
     input: &[u8],
@@ -145,6 +231,83 @@ impl Drop for TempFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn binary_encryption_drains_output_while_writing_large_input() {
+        let child = tokio::process::Command::new("sh")
+            .args(["-c", "dd if=/dev/zero bs=16384 count=64 >&2; cat"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let input: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            write_stdin_and_read_bytes(child, &input, 2 * 1024 * 1024),
+        )
+        .await
+        .expect("binary encryption pipe deadlock")
+        .unwrap();
+        assert_eq!(*output, input);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn binary_encryption_output_limit_kills_and_reaps_child() {
+        let child = tokio::process::Command::new("sh")
+            .args(["-c", "printf 12345; exec sleep 30"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            write_stdin_and_read_bytes(child, b"", 4),
+        )
+        .await
+        .expect("output overflow must not wait for backend exit");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "secret output exceeds size limit"
+        );
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn binary_encryption_input_failure_kills_and_reaps_child() {
+        let child = tokio::process::Command::new("sh")
+            .args(["-c", "exec 0<&-; exec sleep 30"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            write_stdin_and_read_bytes(child, &vec![b'x'; 1024 * 1024], 2 * 1024 * 1024),
+        )
+        .await
+        .expect("stdin failure must not wait for backend exit");
+        assert!(result.is_err());
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
 
     #[cfg(unix)]
     #[tokio::test]

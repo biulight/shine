@@ -345,8 +345,14 @@ async fn handle_transfer(
 
     // Pick the tool: honor --scp, else prefer rsync but fall back to scp when
     // rsync is missing locally, when it can't be reached on the remote, or when
-    // the ssh options can't be handed to rsync safely.
+    // the destination is an IPv6 literal, or the ssh options can't be handed
+    // to rsync safely. macOS system rsync splits even bracketed IPv6 operands.
     let (mut tool, mut fell_back, mut note) = choose_tool(req.use_scp, rsync_available().await);
+    if tool == Tool::Rsync && ipv6_destination(&ctx.host).is_some() {
+        tool = Tool::Scp;
+        fell_back = true;
+        note = Some("using scp for IPv6 compatibility with system rsync".to_string());
+    }
     if tool == Tool::Rsync && rsync_rsh(ctx).is_err() {
         tool = Tool::Scp;
         fell_back = true;
@@ -491,6 +497,23 @@ pub(crate) struct TransferPlan {
 pub(crate) struct TransferCommand {
     pub program: String,
     pub args: Vec<String>,
+    tool: Tool,
+}
+
+impl TransferCommand {
+    fn process(&self) -> tokio::process::Command {
+        let mut process = tokio::process::Command::new(&self.program);
+        process.args(&self.args);
+        if self.tool == Tool::Rsync {
+            // We escape the remote shell operand ourselves for compatibility with
+            // macOS rsync. Newer rsync must not escape it a second time. Older
+            // versions ignore OLD_ARGS; PROTECT_ARGS also pins their behavior.
+            process
+                .env("RSYNC_OLD_ARGS", "1")
+                .env("RSYNC_PROTECT_ARGS", "0");
+        }
+        process
+    }
 }
 
 /// Builds the rsync/scp argv (the pure, unit-tested seam). Never lets wire input
@@ -504,7 +527,12 @@ pub(crate) fn build_transfer_argv(
     if plan.remote_spec.contains(['\0', '\n', '\r']) {
         bail!("remote path contains an illegal control character");
     }
-    let remote_operand = format!("{}:{}", ctx.host, plan.remote_spec);
+    let remote_spec = if tool == Tool::Rsync {
+        escape_rsync_remote_spec(&plan.remote_spec)
+    } else {
+        plan.remote_spec.clone()
+    };
+    let remote_operand = format!("{}:{remote_spec}", transfer_host(&ctx.host));
     let local_operands: Vec<String> = plan
         .local_paths
         .iter()
@@ -559,7 +587,64 @@ pub(crate) fn build_transfer_argv(
     Ok(TransferCommand {
         program: resolve_tool_binary(tool),
         args,
+        tool,
     })
+}
+
+fn ipv6_destination(host: &str) -> Option<(Option<&str>, &str)> {
+    let (user, address) = match host.rsplit_once('@') {
+        Some((user, address)) => (Some(user), address),
+        None => (None, host),
+    };
+    let address = address
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(address);
+    let literal = address
+        .split_once('%')
+        .map_or(address, |(literal, _)| literal);
+    literal.parse::<std::net::Ipv6Addr>().ok()?;
+    Some((user, address))
+}
+
+fn transfer_host(host: &str) -> String {
+    match ipv6_destination(host) {
+        Some((Some(user), address)) => format!("{user}@[{address}]"),
+        Some((None, address)) => format!("[{address}]"),
+        None => host.to_string(),
+    }
+}
+
+/// Preserve remote glob expansion while keeping whitespace and shell syntax in
+/// the path literal. A local argv separator does not protect the remote shell.
+fn escape_rsync_remote_spec(spec: &str) -> String {
+    let mut escaped = String::with_capacity(spec.len());
+    for ch in spec.chars() {
+        if !(ch.is_ascii_alphanumeric()
+            || matches!(
+                ch,
+                '/' | '.'
+                    | '_'
+                    | '-'
+                    | ':'
+                    | '@'
+                    | '+'
+                    | ','
+                    | '%'
+                    | '='
+                    | '*'
+                    | '?'
+                    | '['
+                    | ']'
+                    | '!'
+                    | '^'
+            ))
+        {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 /// Renders one resolved local path as a safe operand: absolute paths (the
@@ -741,7 +826,7 @@ fn describe_transfer(
     remote_spec: &str,
     local_paths: &[PathBuf],
 ) -> String {
-    let remote = format!("{}:{}", ctx.host, remote_spec);
+    let remote = format!("{}:{}", transfer_host(&ctx.host), remote_spec);
     let local = local_paths
         .iter()
         .map(|p| p.display().to_string())
@@ -781,9 +866,8 @@ impl Drop for TransferChild {
 
 /// Spawns an argv-only transfer and monitors its control connection through exit.
 async fn spawn_and_relay(stream: &mut impl DuplexStream, command: TransferCommand) -> Result<i32> {
-    let mut process = tokio::process::Command::new(&command.program);
+    let mut process = command.process();
     process
-        .args(&command.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -905,6 +989,7 @@ mod tests {
                     TransferCommand {
                         program: script.display().to_string(),
                         args: vec![],
+                        tool: Tool::Scp,
                     },
                 )
                 .await
@@ -963,6 +1048,243 @@ mod tests {
             force,
             dry_run: false,
         }
+    }
+
+    #[test]
+    fn scp_ipv6_operands_keep_the_complete_address_and_remote_path() {
+        for (host, expected) in [
+            ("2001:db8::1", "[2001:db8::1]:/remote/file"),
+            ("alice@2001:db8::1", "alice@[2001:db8::1]:/remote/file"),
+            ("alice@[2001:db8::1]", "alice@[2001:db8::1]:/remote/file"),
+            ("alice@fe80::1%en0", "alice@[fe80::1%en0]:/remote/file"),
+        ] {
+            let ctx = ctx_with(host, vec![], None);
+            for direction in [Direction::Download, Direction::Upload] {
+                let request = plan(direction, "/remote/file", &["/local/file"], true);
+                let command = build_transfer_argv(Tool::Scp, &ctx, &request).unwrap();
+                let separator = command.args.iter().position(|arg| arg == "--").unwrap();
+                let remote = if direction == Direction::Download {
+                    separator + 1
+                } else {
+                    separator + 2
+                };
+                assert_eq!(command.args[remote], expected);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // Shared process environment, per test_support.
+    async fn ipv6_transfer_falls_back_to_scp_and_dry_run_never_spawns_a_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let _env = crate::test_support::env_lock();
+        let root = crate::test_support::make_temp_dir("shine-ipv6-tool").await;
+        let stub = root.join("rsync");
+        let copied = root.join("copied");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nprintf copied > '{}'\n",
+                copied.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        unsafe { std::env::set_var("SHINE_TEST_RSYNC", &stub) };
+        let (mut server, mut client) = tokio::io::duplex(4096);
+        let context = ctx_with("alice@2001:db8::1", vec![], None);
+        handle_transfer(
+            &mut server,
+            &context,
+            TransferRequest {
+                direction: Direction::Download,
+                remote_spec: "/remote/file".to_string(),
+                local_spec: None,
+                force: false,
+                dry_run: true,
+                use_scp: false,
+            },
+        )
+        .await
+        .unwrap();
+        unsafe { std::env::remove_var("SHINE_TEST_RSYNC") };
+        let starting: ServerMessage = protocol::read_message(&mut client).await.unwrap();
+        assert!(matches!(
+            starting,
+            ServerMessage::Starting {
+                tool: Tool::Scp,
+                fell_back: true,
+                note: Some(_)
+            }
+        ));
+        let preview: ServerMessage = protocol::read_message(&mut client).await.unwrap();
+        assert!(
+            matches!(preview, ServerMessage::Log { chunk, .. } if chunk.contains("alice@[2001:db8::1]:/remote/file"))
+        );
+        assert!(matches!(
+            protocol::read_message::<_, ServerMessage>(&mut client)
+                .await
+                .unwrap(),
+            ServerMessage::Done { code: 0 }
+        ));
+        assert!(!copied.exists());
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn system_scp_passes_ipv6_address_intact_to_ssh() {
+        use std::os::unix::fs::PermissionsExt;
+        let scp = Path::new("/usr/bin/scp");
+        if !scp.is_file() {
+            eprintln!("system scp unavailable; skipping native parser check");
+            return;
+        }
+        let root = crate::test_support::make_temp_dir("shine-scp-ipv6").await;
+        let stub = root.join("ssh");
+        let captured = root.join("argv");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SHINE_TEST_CAPTURE_ARGV\"\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for host in ["2001:db8::1", "alice@2001:db8::1", "alice@fe80::1%en0"] {
+            let ctx = ctx_with(host, vec![], None);
+            let request = plan(
+                Direction::Download,
+                "/remote/file",
+                &[root.to_str().unwrap()],
+                true,
+            );
+            let mut command = build_transfer_argv(Tool::Scp, &ctx, &request).unwrap();
+            command.program = scp.display().to_string();
+            let separator = command.args.iter().position(|arg| arg == "--").unwrap();
+            command.args.splice(
+                separator..separator,
+                ["-S".to_string(), stub.display().to_string()],
+            );
+            let output = command
+                .process()
+                .env("SHINE_TEST_CAPTURE_ARGV", &captured)
+                .stdin(Stdio::null())
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                !output.status.success(),
+                "the local SSH substitute must fail"
+            );
+            let argv = std::fs::read_to_string(&captured).unwrap();
+            let address = host.rsplit_once('@').map_or(host, |(_, address)| address);
+            assert!(argv.lines().any(|arg| arg == address), "{host}: {argv}");
+            if host.starts_with("alice@") {
+                assert!(argv.lines().any(|arg| arg == "alice"), "{argv}");
+            }
+        }
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[test]
+    fn rsync_remote_paths_preserve_spaces_and_globs_without_shell_evaluation() {
+        let ctx = ctx_with("dev", vec![], None);
+        let request = plan(
+            Direction::Download,
+            "/logs with space/a'\";$HOME/$(id)/*.log",
+            &["/local"],
+            false,
+        );
+        let command = build_transfer_argv(Tool::Rsync, &ctx, &request).unwrap();
+        let separator = command.args.iter().position(|arg| arg == "--").unwrap();
+        assert_eq!(
+            command.args[separator + 1],
+            "dev:/logs\\ with\\ space/a\\'\\\"\\;\\$HOME/\\$\\(id\\)/*.log"
+        );
+        let process = command.process();
+        let env: BTreeMap<_, _> = process.as_std().get_envs().collect();
+        assert_eq!(
+            env[std::ffi::OsStr::new("RSYNC_OLD_ARGS")],
+            Some(std::ffi::OsStr::new("1"))
+        );
+        assert_eq!(
+            env[std::ffi::OsStr::new("RSYNC_PROTECT_ARGS")],
+            Some(std::ffi::OsStr::new("0"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn system_rsync_transfers_remote_spaces_metacharacters_and_globs() {
+        use std::os::unix::fs::PermissionsExt;
+        let rsync = Path::new("/usr/bin/rsync");
+        if !rsync.is_file() {
+            eprintln!("system rsync unavailable; skipping native transfer check");
+            return;
+        }
+        let dir = crate::test_support::make_temp_dir("shine-rsync-remote-paths").await;
+        let remote = dir.join("remote files");
+        let local = dir.join("local files");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
+        let literal = "literal $HOME;$(printf injected)'\".txt";
+        std::fs::write(remote.join(literal), b"literal contents").unwrap();
+        for name in ["report a1.log", "report b2.log", "report c3.log"] {
+            std::fs::write(remote.join(name), name).unwrap();
+        }
+        // Model SSH's remote-shell command boundary, but execute the peer rsync
+        // locally. No SSH server, credentials, or external host is involved.
+        let ssh = dir.join("ssh");
+        std::fs::write(&ssh, "#!/bin/sh\nshift\nexec /bin/sh -c \"$*\"\n").unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let ctx = ctx_with("fixture", vec![], None);
+        for pattern in [literal, "report [!c]?.log"] {
+            let request = plan(
+                Direction::Download,
+                remote.join(pattern).to_str().unwrap(),
+                &[local.to_str().unwrap()],
+                false,
+            );
+            let mut command = build_transfer_argv(Tool::Rsync, &ctx, &request).unwrap();
+            command.program = rsync.display().to_string();
+            let output = command
+                .process()
+                .env("RSYNC_RSH", &ssh)
+                .output()
+                .await
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        }
+        assert_eq!(
+            std::fs::read(local.join(literal)).unwrap(),
+            b"literal contents"
+        );
+        assert!(local.join("report a1.log").is_file());
+        assert!(local.join("report b2.log").is_file());
+        assert!(!local.join("report c3.log").exists());
+
+        let destination = dir.join("upload destination 'quoted';$HOME");
+        std::fs::create_dir(&destination).unwrap();
+        let request = plan(
+            Direction::Upload,
+            destination.to_str().unwrap(),
+            &[local.join(literal).to_str().unwrap()],
+            true,
+        );
+        let mut command = build_transfer_argv(Tool::Rsync, &ctx, &request).unwrap();
+        command.program = rsync.display().to_string();
+        let output = command
+            .process()
+            .env("RSYNC_RSH", &ssh)
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            std::fs::read(destination.join(literal)).unwrap(),
+            b"literal contents"
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]

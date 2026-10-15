@@ -107,6 +107,9 @@ shine sys profile disable mise
 shine sys profile enable mise
 ```
 
+声明式 PATH 集成只会添加尚不存在的目录；重复加载生成的 profile 不会追加相同条目，
+包含空格或 shell 模式字符的路径也按字面值匹配。
+
 这些命令只修改 Shine 自己生成的 profile 内容。disable 不卸载软件；enable 会先执行 item 声明的
 检测，缺失时提示先 bootstrap。执行变更前会显示并重新校验绑定快照的安全 Plan；自动化调用
 必须添加 `--yes`，`--dry-run` 仍是独立预览。`shine upgrade` 不再隐式修改或重新组合 profile

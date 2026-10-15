@@ -8,6 +8,30 @@ use tokio::process::Command;
 use crate::colors;
 use crate::config::Config;
 
+// Keep authentication/transport settings, but never let inherited repository
+// selectors redirect commands away from the explicitly selected checkout.
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_PREFIX",
+        "GIT_NAMESPACE",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct PullTarget {
     label: &'static str,
@@ -91,7 +115,7 @@ fn configured_targets(config: &Config) -> Vec<PullTarget> {
 }
 
 async fn repository_root(path: &Path) -> Result<Option<PathBuf>> {
-    let output = Command::new("git")
+    let output = git_command()
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(path)
         .output()
@@ -186,7 +210,7 @@ impl PullSummary {
 
 async fn pull_ff_only(root: &Path, verbose: bool) -> Result<PullSummary> {
     let before = head_short(root).await?;
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command
         .args(["pull", "--ff-only"])
         .current_dir(root)
@@ -282,7 +306,7 @@ fn print_pull_summary(label: &str, summary: &PullSummary) {
 }
 
 async fn git_output(root: &Path, args: &[&str]) -> Result<std::process::Output> {
-    Command::new("git")
+    git_command()
         .args(args)
         .current_dir(root)
         .output()
@@ -304,11 +328,45 @@ pub(crate) async fn sync_managed_overlay(
     dir: &Path,
     verbose: bool,
 ) -> Result<()> {
-    if dir.exists() {
-        mirror_managed_overlay(url, branch, dir, verbose).await
-    } else {
-        clone_managed_overlay(url, branch, dir, verbose).await
+    match tokio::fs::symlink_metadata(dir).await {
+        Ok(_) => mirror_managed_overlay(url, branch, dir, verbose).await,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            clone_managed_overlay(url, branch, dir, verbose).await
+        }
+        Err(error) => Err(error).context("inspecting managed overlay directory"),
     }
+}
+
+async fn ensure_managed_checkout(dir: &Path) -> Result<()> {
+    // A worktree's .git file can reference another repository. Only a standalone,
+    // non-linked checkout is disposable; an ordinary directory can discover its
+    // parent's repository, and a symlink can point at unrelated user files.
+    for path in [dir.to_path_buf(), dir.join(".git")] {
+        let metadata = tokio::fs::symlink_metadata(&path)
+            .await
+            .context("managed overlay must be a standalone Git checkout")?;
+        if !metadata.is_dir() {
+            bail!("managed overlay must be a standalone Git checkout without linked directories");
+        }
+    }
+    let expected = tokio::fs::canonicalize(dir).await?;
+    let root = repository_root(dir)
+        .await?
+        .context("managed overlay is not a Git checkout")?;
+    let git_dir = git_output(dir, &["rev-parse", "--absolute-git-dir"]).await?;
+    if !git_dir.status.success()
+        || tokio::fs::canonicalize(root).await? != expected
+        || tokio::fs::canonicalize(
+            String::from_utf8(git_dir.stdout)
+                .context("Git returned a non-UTF-8 metadata path")?
+                .trim(),
+        )
+        .await?
+            != expected.join(".git")
+    {
+        bail!("managed overlay Git repository escapes its directory");
+    }
+    Ok(())
 }
 
 async fn clone_managed_overlay(
@@ -363,6 +421,7 @@ async fn mirror_managed_overlay(
     dir: &Path,
     verbose: bool,
 ) -> Result<()> {
+    ensure_managed_checkout(dir).await?;
     // The configured source is authoritative, even after relinking an existing
     // checkout. HEAD follows the remote default rather than an old local branch.
     let branch = branch.unwrap_or("HEAD");
@@ -378,6 +437,7 @@ async fn mirror_managed_overlay(
     )
     .await
     .with_context(|| format!("failed to fetch managed overlay from {url}"))?;
+    ensure_managed_checkout(dir).await?;
     run_git(
         dir,
         &["remote", "set-url", "origin", url],
@@ -386,6 +446,9 @@ async fn mirror_managed_overlay(
     )
     .await?;
     run_git(dir, &["reset", "--hard", "FETCH_HEAD"], verbose, "reset").await?;
+    // This verified standalone checkout is a disposable mirror. Include ignored
+    // files and nested repositories so stale local overrides cannot remain active.
+    run_git(dir, &["clean", "-ffdx"], verbose, "clean").await?;
 
     let after = head_short(dir).await?;
     let shortstat = if before == after {
@@ -423,7 +486,7 @@ fn temp_clone_path(dir: &Path) -> Result<PathBuf> {
 /// Run a git command, inheriting stdin and (when verbose) stdout/stderr, and
 /// bail with captured output on a non-zero exit.
 async fn run_git(cwd: &Path, args: &[&str], verbose: bool, action: &str) -> Result<()> {
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command.args(args).current_dir(cwd).stdin(Stdio::inherit());
     let failure_detail = if verbose {
         let status = command
@@ -632,6 +695,180 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn managed_overlay_rejects_parent_repository_without_mutation() {
+        let root = temp_dir("parent-boundary");
+        let parent = root.join("project");
+        let remote = root.join("remote");
+        init_repo(&parent);
+        init_repo(&remote);
+        git(&parent, &["remote", "add", "origin", "unchanged-origin"]);
+        let dir = parent.join("state/overlay");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(parent.join("preset.txt"), "user changes\n").unwrap();
+        std::fs::write(dir.join("local.txt"), "preserve\n").unwrap();
+        let before = head_short(&parent).await.unwrap();
+        let error = sync_managed_overlay(remote.to_str().unwrap(), None, &dir, false)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("standalone Git checkout"));
+        assert_eq!(head_short(&parent).await.unwrap(), before);
+        assert_eq!(read_text(parent.join("preset.txt")), "user changes\n");
+        assert_eq!(read_text(dir.join("local.txt")), "preserve\n");
+        assert_eq!(
+            git_output(&parent, &["remote", "get-url", "origin"])
+                .await
+                .unwrap()
+                .stdout,
+            b"unchanged-origin\n"
+        );
+        assert!(!parent.join(".git/FETCH_HEAD").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn managed_overlay_ignores_inherited_repository_environment() {
+        const CHILD: &str = "SHINE_TEST_OVERLAY_GIT_ENV";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = PathBuf::from(root);
+            sync_managed_overlay(
+                root.join("remote").to_str().unwrap(),
+                None,
+                &root.join("overlay"),
+                false,
+            )
+            .await
+            .unwrap();
+            return;
+        }
+        let root = temp_dir("inherited-git");
+        let remote = root.join("remote");
+        let unrelated = root.join("unrelated");
+        init_repo(&remote);
+        init_repo(&unrelated);
+        let dir = root.join("overlay");
+        sync_managed_overlay(remote.to_str().unwrap(), None, &dir, false)
+            .await
+            .unwrap();
+        let before = head_short(&unrelated).await.unwrap();
+        std::fs::write(unrelated.join("preset.txt"), "unrelated user changes\n").unwrap();
+        std::fs::write(remote.join("preset.txt"), "remote update\n").unwrap();
+        git(&remote, &["commit", "-am", "update"]);
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git_pull::tests::managed_overlay_ignores_inherited_repository_environment",
+            ])
+            .env(CHILD, &root)
+            .env("GIT_DIR", unrelated.join(".git"))
+            .env("GIT_WORK_TREE", &unrelated)
+            .env("GIT_INDEX_FILE", unrelated.join(".git/index"))
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "core.worktree")
+            .env("GIT_CONFIG_VALUE_0", &unrelated)
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(read_text(dir.join("preset.txt")), "remote update\n");
+        assert_eq!(
+            read_text(unrelated.join("preset.txt")),
+            "unrelated user changes\n"
+        );
+        assert_eq!(head_short(&unrelated).await.unwrap(), before);
+        assert!(!unrelated.join(".git/FETCH_HEAD").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_overlay_rejects_linked_checkout_and_metadata() {
+        use std::os::unix::fs::symlink;
+        let root = temp_dir("linked-checkout");
+        let remote = root.join("remote");
+        let user = root.join("user");
+        init_repo(&remote);
+        init_repo(&user);
+        let dir = root.join("overlay");
+        symlink(&user, &dir).unwrap();
+        assert!(
+            sync_managed_overlay(remote.to_str().unwrap(), None, &dir, false)
+                .await
+                .is_err()
+        );
+        std::fs::remove_file(&dir).unwrap();
+        std::fs::create_dir(&dir).unwrap();
+        symlink(user.join(".git"), dir.join(".git")).unwrap();
+        assert!(
+            sync_managed_overlay(remote.to_str().unwrap(), None, &dir, false)
+                .await
+                .is_err()
+        );
+        std::fs::remove_file(dir.join(".git")).unwrap();
+        std::fs::write(
+            dir.join(".git"),
+            format!("gitdir: {}\n", user.join(".git").display()),
+        )
+        .unwrap();
+        assert!(
+            sync_managed_overlay(remote.to_str().unwrap(), None, &dir, false)
+                .await
+                .is_err()
+        );
+        assert_eq!(read_text(user.join("preset.txt")), "one\n");
+        assert!(!user.join(".git/FETCH_HEAD").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn managed_overlay_cleans_untracked_ignored_and_nested_overrides_only_after_fetch() {
+        let root = temp_dir("stale-overrides");
+        let remote = root.join("remote");
+        init_repo(&remote);
+        std::fs::write(remote.join(".gitignore"), "ignored/\n").unwrap();
+        git(&remote, &["add", ".gitignore"]);
+        git(&remote, &["commit", "-m", "ignore generated files"]);
+        let dir = root.join("overlay");
+        sync_managed_overlay(remote.to_str().unwrap(), None, &dir, false)
+            .await
+            .unwrap();
+        std::fs::write(dir.join("shine.env.toml"), "STALE = 'active'\n").unwrap();
+        std::fs::create_dir(dir.join("ignored")).unwrap();
+        std::fs::write(dir.join("ignored/secret.txt"), "local\n").unwrap();
+        init_repo(&dir.join("app/stale"));
+        std::fs::write(dir.join("preset.txt"), "local edits\n").unwrap();
+        let origin = git_output(&dir, &["remote", "get-url", "origin"])
+            .await
+            .unwrap()
+            .stdout;
+        assert!(
+            sync_managed_overlay(root.join("missing").to_str().unwrap(), None, &dir, false)
+                .await
+                .is_err()
+        );
+        assert!(dir.join("shine.env.toml").exists());
+        assert!(dir.join("ignored/secret.txt").exists());
+        assert!(dir.join("app/stale/.git").exists());
+        assert_eq!(read_text(dir.join("preset.txt")), "local edits\n");
+        assert_eq!(
+            git_output(&dir, &["remote", "get-url", "origin"])
+                .await
+                .unwrap()
+                .stdout,
+            origin
+        );
+        // Even an unchanged remote HEAD must remove stale effective inputs.
+        sync_managed_overlay(remote.to_str().unwrap(), None, &dir, false)
+            .await
+            .unwrap();
+        assert!(!dir.join("shine.env.toml").exists());
+        assert!(!dir.join("ignored").exists());
+        assert!(!dir.join("app").exists());
+        assert_eq!(read_text(dir.join("preset.txt")), "one\n");
+        assert_eq!(read_text(remote.join("preset.txt")), "one\n");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

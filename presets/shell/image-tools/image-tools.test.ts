@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -81,7 +81,7 @@ describe("input discovery and output planning", () => {
     expect(expanded.ignored).toBe(2);
   });
 
-  test("derives safe names and rejects flattened output collisions", () => {
+  test("derives safe names and rejects flattened output collisions", async () => {
     const output = resolve("output");
     const first = join(resolve("one"), "photo.jpg");
     const second = join(resolve("two"), "photo.jpg");
@@ -93,12 +93,12 @@ describe("input discovery and output planning", () => {
     expect(outputPathFor(join(resolve("one"), "photo.jpeg"), options)).toBe(
       join(output, "photo.compressed.jpg"),
     );
-    const plan = planImageTasks([first, second], options);
+    const plan = await planImageTasks([first, second], options);
     expect(plan.tasks).toEqual([]);
     expect(plan.failures).toHaveLength(2);
   });
 
-  test("never maps one converted image over another input", () => {
+  test("never maps one converted image over another input", async () => {
     const directory = resolve("images");
     const webp = join(directory, "photo.webp");
     const jpeg = join(directory, "photo.jpg");
@@ -107,7 +107,7 @@ describe("input discovery and output planning", () => {
       ["--format", "jpg", webp, jpeg],
       {},
     );
-    const plan = planImageTasks([webp, jpeg], options);
+    const plan = await planImageTasks([webp, jpeg], options);
     expect(plan.tasks).toEqual([]);
     expect(plan.failures).toHaveLength(2);
     expect(plan.failures.every((failure) => failure.message.includes("multiple inputs map")))
@@ -116,6 +116,74 @@ describe("input discovery and output planning", () => {
 });
 
 describe("image processing", () => {
+  test("keeps same-format skips for case-aliased source names", async () => {
+    const directory = await temporaryDirectory();
+    const input = join(directory, "photo.JPG");
+    const original = await new Bun.Image(PNG_1X1).jpeg().bytes();
+    await writeFile(input, original);
+    expect(await runImageTool("convert", ["--format", "jpg", "--force", input])).toBe(0);
+    expect(await readFile(input)).toEqual(Buffer.from(original));
+  });
+
+  test("rejects an aliased in-place conversion when the extension mislabels the format", async () => {
+    const directory = await temporaryDirectory();
+    const input = join(directory, "photo.JPG");
+    await writeFile(input, PNG_1X1);
+    expect(await runImageTool("convert", ["--format", "jpg", "--force", input])).toBe(1);
+    expect(await readFile(input)).toEqual(Buffer.from(PNG_1X1));
+  });
+
+  test("preserves every input when a forced conversion targets a case alias", async () => {
+    const directory = await temporaryDirectory();
+    const input = join(directory, "photo.png");
+    const other = join(directory, "PHOTO.JPG");
+    const original = await new Bun.Image(PNG_1X1).jpeg({ quality: 95 }).bytes();
+    await writeFile(input, PNG_1X1);
+    await writeFile(other, original);
+    expect(await runImageTool("convert", ["--format", "jpg", "--quality", "10", "--force", input, other])).toBe(1);
+    expect(await readFile(input)).toEqual(Buffer.from(PNG_1X1));
+    expect(await readFile(other)).toEqual(Buffer.from(original));
+  });
+
+  test("rejects Unicode-equivalent output names before writing either image", async () => {
+    const directory = await temporaryDirectory();
+    const first = join(directory, "unicode-\u00e9.png");
+    const second = join(directory, "unicode-e\u0301.webp");
+    await writeFile(first, PNG_1X1);
+    const webp = await new Bun.Image(PNG_1X1).webp().bytes();
+    await writeFile(second, webp);
+    expect(await runImageTool("convert", ["--format", "jpg", "--force", first, second])).toBe(1);
+    expect(await Bun.file(join(directory, "unicode-\u00e9.jpg")).exists()).toBe(false);
+    expect(await Bun.file(join(directory, "unicode-e\u0301.jpg")).exists()).toBe(false);
+  });
+
+  test("preserves inputs when output reaches a hard-link alias", async () => {
+    const directory = await temporaryDirectory();
+    const input = join(directory, "photo.png");
+    const other = join(directory, "original.jpg");
+    const original = await new Bun.Image(PNG_1X1).jpeg({ quality: 95 }).bytes();
+    await writeFile(input, PNG_1X1);
+    await writeFile(other, original);
+    await link(other, join(directory, "photo.jpg"));
+    expect(await runImageTool("convert", ["--format", "jpg", "--force", input, other])).toBe(1);
+    expect(await readFile(join(directory, "photo.jpg"))).toEqual(Buffer.from(original));
+    expect(await readFile(other)).toEqual(Buffer.from(original));
+  });
+
+  test.skipIf(process.platform === "win32")("rejects outputs through a directory alias of an input", async () => {
+    const directory = await temporaryDirectory();
+    const alias = `${directory}-alias`;
+    temporaryDirectories.push(alias);
+    await symlink(directory, alias);
+    const input = join(directory, "photo.png");
+    const other = join(directory, "photo.jpg");
+    const original = await new Bun.Image(PNG_1X1).jpeg({ quality: 95 }).bytes();
+    await writeFile(input, PNG_1X1);
+    await writeFile(other, original);
+    expect(await runImageTool("convert", ["--format", "jpg", "--output-dir", alias, "--force", input, other])).toBe(1);
+    expect(await readFile(other)).toEqual(Buffer.from(original));
+  });
+
   test("converts an image and refuses to replace it without --force", async () => {
     const directory = await temporaryDirectory();
     const output = join(directory, "out");

@@ -4,6 +4,33 @@ End-to-end flows that span multiple modules and are not visible in any single fi
 ownership and the per-command routing table, see [`module-map.md`](module-map.md) — this file only
 records the cross-module sequences and their gotchas.
 
+## Workspace secret file groups
+
+Version 3 workspace + explicit groups + mode → root-constrained mappings → metadata/Git preflight
+→ shared path locks → captured workspace and file bytes → existing tagged binary crypto.
+Overlap checks and lock hashes share Unicode canonical-decomposition and case-folded path keys;
+this includes the workspace definition and absent mapping paths.
+Git preflight reads the complete repository index as NUL-delimited paths and compares the same
+case/Unicode keys against the repository-relative target, even from a nested working directory
+or when the tracked working file has been deleted.
+Sealing prepares all ciphertext, rechecks snapshots and writes sources atomically per file;
+optional plaintext removal rereads/decrypts all written sources and verifies snapshots before
+deletion starts. There is no multi-file transaction or automatic build writeback.
+
+Run decrypts all selected sources, compiles ordinary workspace env when present, rechecks inputs,
+and creates private absent targets with an ownership guard. It supervises the child process group
+or Windows Job Object, cleans owned files by handle identity and owned empty directories, drops locks
+and captured inputs, then propagates the child status. Preparation cancellation drops guards.
+Existing/replaced targets are never automatically adopted. Metadata-only dry-run stops before
+password tools and writes. Cleanup compares metadata-only path identity with the held ownership
+handle, so Unix read-permission changes do not strand an unchanged owned file. A child-deleted
+target is already cleaned after boundary checks; continue cleaning other mappings and retain the
+child status. Replacement files/directories/links and non-absence errors still fail cleanup. Binary age decrypt
+inherits stderr only for required phone QR or explicitly requested phone messages; ordinary captured
+diagnostics are discarded. Binary encryption owns the child through concurrent pipe I/O and wait,
+terminating and reaping on pipe failure or output overflow.
+See [ADR 0110](../decisions/0110-workspace-secret-file-groups.md).
+
 ## Pure security Plan assessment
 
 `shine-core::plan` defines the Phase 3 approval contract used by protected mutation.
@@ -74,6 +101,11 @@ and replace diagnostic-string routing without turning Plan steps into executable
 methods share exact approval/IR/permission validation and retain action-specific live-state checks.
 Recovery planning dispatches read-only action assessments after receipt-conflict checks; approved
 recovery re-plans under the lock and dispatches rollback handlers in reverse action order (ADR 0104).
+CLI approval orchestration lives in `cli/src/lifecycle_plan.rs`; its `render.rs` child only projects
+reviewed Plans into terminal lines. App upgrade phases share one mutable receipt/report state; Shell
+transaction orchestration retains locks and durability boundaries while dispatching resource-specific
+preparation and recovery handlers (ADR 0111). These extractions do not change Plan fingerprints.
+
 After approval, the CLI upgrade report applies the same relevance rule to unchanged App and Sys
 outcomes; `--verbose --full-plan` restores their individual rows (ADR 0098). The structured
 lifecycle result still includes every selected item.
@@ -300,6 +332,14 @@ live Clap preset subcommands → generated long help
     → versioned deterministic reference JSON or compact text index
 ```
 
+## Preset copy and export
+
+The CLI resolves the selected output root, walks each nested parent without accepting links or
+Windows reparse points, and rejects linked/special destination entries. It writes and syncs a
+same-directory staging file with final permissions, rechecks the path, then uses Core persistence
+to replace an entry or publish without replacement. A concurrent non-force winner is skipped.
+Forced replacement does not modify another name pointing at the old inode.
+
 ## Preset pack
 
 Packing validates one immutable category snapshot, then separately walks the physical category with
@@ -308,7 +348,10 @@ Core sorts logical files, excludes the author-only fixture, builds the versioned
 and encodes fixed-metadata tar.gz bytes. The CLI resolves the category and output parent through
 symlinks and parent components, rejects output inside the category, and performs the requested
 atomic output write at the resolved parent. Missing output directories are created only after this
-check; a final output symlink is replaced as a directory entry and requires `--force`.
+check. Without `--force`, Core persistence publishes the synced temporary file without replacement
+(Unix hard-link publication, Windows write-through move without the replacement flag), so concurrent
+writers cannot overwrite the winner. Existing entries report `output_exists`, including dangling
+symlinks; `--force` retains atomic directory-entry replacement.
 
 ```text
 category → immutable validation → physical policy scan
@@ -498,6 +541,10 @@ The Core flow is:
    or child output, environment values, or secret values.
 
 ## App uninstall
+
+Top-level explicit `app/` and `shell/` uninstall targets dispatch directly to their lifecycle
+handlers. Bare names resolve through Core inventory, including receipt-only targets; ambiguity
+requires an explicit namespace. Source availability never substitutes for uninstall ownership.
 
 Reverse of install, driven entirely by the manifest — never by re-scanning presets:
 
@@ -871,6 +918,18 @@ injection. The default path parses only `[plain]` values and does not decrypt pa
 secret declaration removes any earlier plain value with the same key. `--include-secrets` switches
 to the normal sealed-source compiler, then writes the standalone plaintext result through an atomic
 owner-only file on Unix. Export never edits or removes the workspace definition or source files.
+An early `symlink_metadata` check diagnoses existing output entries. Final publication without
+`--force` uses `atomic_write_new` or `atomic_write_private_new`, which stages and syncs content
+before Core's `finalize_temp_new` atomically rejects any existing destination. A competing writer
+during decryption cannot be overwritten. Force uses the corresponding replacing writer; failed
+publication cleans its staging file, and secret bytes are private from the first write on Unix.
+Serialization uses literal double, single, or backtick quotes with an absent delimiter, never
+JSON-style escaping. Double quotes are used only without literal backslashes or double quotes.
+Dollar signs, CR, NUL, and values without a safe delimiter fail before output publication because
+Node and Bun dotenv readers cannot preserve them with the same escaping rules. Import likewise
+rejects dollar syntax, including bare `$NAME`; unquoted hashes start comments. Import recognizes
+single-line backtick delimiters before comment parsing and preserves their literal content;
+unterminated/multiline quotes and non-comment trailing content fail before publication.
 
 ## Sys bootstrap (`shine sys bootstrap`)
 
@@ -951,7 +1010,7 @@ No advisory worker applies changes, executes Presets, or decides trust/approval/
    `rate_limited_until_unix_secs` timestamp (per auth mode) is cached and later checks short-circuit
    until it passes.
 3. Otherwise fetches the latest release from GitHub and stores it in the cache.
-4. Version-check failures are tolerated in `update_check::maybe_notify` (called from `main.rs`) —
+4. Version-check failures are tolerated in `update_check::maybe_notify` (called from `cli/src/dispatch/mod.rs`) —
    a failed check must never break the primary command the user actually ran.
 
 `shine self upgrade --channel preview` targets the moving `preview` tag instead of the latest
@@ -974,10 +1033,20 @@ fast-forward loop, by `git_pull::sync_managed_overlay` against `<shine_dir>/over
 it clones `--depth 1` via a temp sibling dir + atomic rename (a failed clone never leaves a
 half-populated overlay). On subsequent runs it **force-mirrors**: fetch depth 1 from the configured
 URL and branch (remote `HEAD` when omitted), update `origin` only after fetch succeeds, then
-`git reset --hard FETCH_HEAD`, so the checkout always equals the remote tip even
-across rebases/force-pushes, discarding local edits (the managed overlay is read-only by design).
+`git reset --hard FETCH_HEAD` and `git clean -ffdx`, so the checkout equals the remote tip even
+across rebases/force-pushes, discarding tracked edits, untracked/ignored files and nested repositories
+(the managed overlay is read-only by design). Before fetch and again before reset/clean, verify that
+the managed directory and its `.git` entry are ordinary directories and that Git's canonical
+worktree/metadata roots match them exactly. Reject parent-repository discovery, linked checkouts
+and worktree metadata files. Git subprocesses remove inherited repository selectors while retaining
+transport/authentication settings.
 The fetch runs before the reset, so an unreachable remote leaves the previous checkout intact and
 usable. `shine preset overlay link --git <url>` writes the config and clones immediately;
+the command is global-only and rejects an active project before either effect because project
+configuration does not load Git source keys and the mirror is shared. The CLI routes Git links
+through read-only loading before initialization/advisories, including when global state is absent.
+Manual path linking remains
+available per project. Inherited global mirrors can still be inspected and pulled within projects.
 `configured_targets` deliberately excludes the managed dir from the fast-forward path. See
 [ADR 0010](../decisions/0010-git-managed-overlay.md).
 
@@ -1032,6 +1101,11 @@ spawned child process, whose exit status is propagated by Shine.
 
 ## Transparent environment proxies
 
+Install/uninstall acquire the config-scope `proxy-lifecycle.lock`, then the target configuration
+lock before reading shared launcher/manifest state. Project installs use the same lifecycle lock
+as global installs and uninstall. Uninstall captures the complete launcher set, rechecks it before
+rule mutation and each removal, and preserves changed or newly appeared paths with an error.
+
 Installation prepares all launcher bytes, captures regular-file preimages (including Unix modes),
 and parses the exact captured configuration/manifest before writing. Each write rechecks its
 preimage; reported failures roll back touched files in reverse order. Rollback accepts only this
@@ -1057,6 +1131,12 @@ Transfer control connections monitor peer closure concurrently with child output
 Failure terminates and reaps the local transfer child, and cancellation drops a child guard. Unix
 children have a dedicated process group so cleanup also terminates descendants. Already-copied
 files remain the transfer tool's responsibility; Shine does not roll them back.
+
+POSIX-remote SSH session resources have an ownership guard before listener setup. On an SSH
+spawn/wait result, the handler stops and awaits the accept loop, drains transfers, and drops the
+session directory before returning an error or propagating the exit status. Setup failures also
+drop the guard. Literal IPv6 destinations select SCP, whose bracketed operand preserves the full
+address and optional user/zone; this avoids the macOS system rsync parser's first-colon split.
 
 ## SSH environment forwarding
 

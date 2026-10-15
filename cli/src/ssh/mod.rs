@@ -185,6 +185,54 @@ const VALUE_OPTION_LETTERS: &[char] = &[
     'W', 'w',
 ];
 
+/// Owns session resources from the first setup step, including early errors.
+struct SshSession {
+    directory: PathBuf,
+    listener_task: Option<tokio::task::JoinHandle<()>>,
+    connections: agent::ConnectionTasks,
+}
+
+impl SshSession {
+    async fn create(directory: PathBuf) -> Result<Self> {
+        tokio::fs::create_dir_all(directory.parent().context("SSH session has no parent")?).await?;
+        // Establish exclusive ownership before arming cleanup, even if a
+        // pre-existing entry happens to use the generated session identifier.
+        tokio::fs::create_dir(&directory).await?;
+        Ok(Self {
+            directory,
+            listener_task: None,
+            connections: agent::new_connection_tasks(),
+        })
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(listener) = self.listener_task.take() {
+            listener.abort();
+            let _ = listener.await;
+        }
+        agent::drain_connection_tasks(&self.connections, CONNECTION_DRAIN_GRACE_PERIOD).await;
+    }
+}
+
+impl Drop for SshSession {
+    fn drop(&mut self) {
+        if let Some(listener) = &self.listener_task {
+            listener.abort();
+        }
+        if let Ok(mut connections) = self.connections.try_lock() {
+            connections.abort_all();
+        }
+        if let Err(error) = std::fs::remove_dir_all(&self.directory)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!(
+                "Warning: could not clean SSH session {}: {error}",
+                self.directory.display()
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // Top-level handler mirrors the independently meaningful CLI switches.
 pub async fn handle_ssh(
     config: &Config,
@@ -252,7 +300,7 @@ pub async fn handle_ssh(
     .await?;
 
     let session_dir = config.shine_dir().join("run").join("ssh").join(&session_id);
-    tokio::fs::create_dir_all(&session_dir)
+    let mut session = SshSession::create(session_dir.clone())
         .await
         .with_context(|| format!("creating {}", session_dir.display()))?;
     // The remote host is always assumed Linux/macOS (see module docs), so
@@ -280,13 +328,12 @@ pub async fn handle_ssh(
     });
     context.save(&session_dir).await?;
 
-    let connection_tasks = agent::new_connection_tasks();
-    let agent_handle = tokio::spawn(listener.serve(
+    session.listener_task = Some(tokio::spawn(listener.serve(
         token.clone(),
         context.clone(),
         broker_session.clone(),
-        connection_tasks.clone(),
-    ));
+        session.connections.clone(),
+    )));
 
     // Query the *local* terminal — same-host, sub-millisecond round trip,
     // no fragmentation risk unlike a remote OSC query (PRD §2.2/§6.1) — so
@@ -317,16 +364,15 @@ pub async fn handle_ssh(
     // Ctrl-C no longer kills us before we get a chance to clean up. The ssh
     // child is in the same foreground process group and receives SIGINT
     // independently; we still await its exit so we don't race it.
-    let status = run_ssh_with_ctrl_c_broker(&mut cmd, broker_session.as_deref()).await?;
+    let status = run_ssh_with_ctrl_c_broker(&mut cmd, broker_session.as_deref()).await;
 
     // Stop accepting new connections, then give any still-running transfer
     // a bounded chance to notice the tunnel is gone and run its own
     // cleanup before we remove the session directory out from under it.
-    agent_handle.abort();
-    agent::drain_connection_tasks(&connection_tasks, CONNECTION_DRAIN_GRACE_PERIOD).await;
-    let _ = tokio::fs::remove_dir_all(&session_dir).await;
+    session.shutdown().await;
+    drop(session);
 
-    finish_ssh_status(status)
+    finish_ssh_status(status?)
 }
 
 async fn run_ssh_with_ctrl_c_broker(
@@ -728,6 +774,16 @@ fn single_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn session_creation_preserves_an_existing_directory() {
+        let directory = crate::test_support::make_temp_dir("shine-session-collision").await;
+        let keep = directory.join("keep");
+        tokio::fs::write(&keep, b"user contents").await.unwrap();
+        assert!(SshSession::create(directory.clone()).await.is_err());
+        assert_eq!(tokio::fs::read(keep).await.unwrap(), b"user contents");
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
 
     #[test]
     fn plain_host_with_no_options_or_command() {

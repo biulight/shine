@@ -1,5 +1,232 @@
 # Lessons Learned
 
+## 2026-10-15 — Consumed temporary credentials are already cleaned
+
+- **Symptom**: a child consumed and deleted its mapped credential, exited zero, and left no file,
+  but `env run --file-group` returned one because cleanup treated `NotFound` as a failure.
+- **Fix**: check root/ancestor/link boundaries first, then accept an absent target as cleaned.
+  Retain identity checks for existing entries and report all non-absence errors; a dangling
+  replacement link remains a conflict. Continue other mappings and empty-directory cleanup.
+- **Coverage**: real CLI children remove only a file or its parent and exit zero/nonzero;
+  directory and dangling-link replacements remain protected, alongside existing replacement
+  file and unreadable-plaintext regressions.
+
+## 2026-10-15 — Quote PATH patterns once and keep Windows proxy filenames executable
+
+- **Symptoms**: repeated Sys profile loading duplicated literal PATH entries; proxy installation
+  accepted `gh.exe` and published a POSIX script as a Windows native executable.
+- **Causes**: PATH membership embedded an already-quoted expression inside double quotes; proxy
+  installation reused generic command-name validation without reserving executable suffixes.
+- **Fixes**: use the quoted expression directly in the case pattern. Windows install rejects
+  `.exe`/`.com`/`.bat`/`.cmd`/`.ps1` names before discovery or writes, while legacy uninstall stays
+  available. Ordinary dotted names and Unix executable filenames retain their existing behavior.
+- **Coverage**: execute repeated PATH integrations in Bash/Zsh with literal special characters,
+  test Windows rejection without state writes, and exercise the real CLI on Windows.
+
+## 2026-10-15 — Windows CLI fixtures need complete profile directories
+
+- **Symptom**: process-level App tests failed before planning with
+  `resolving platform runtime directories` on Windows.
+- **Cause**: the fixture redirected `USERPROFILE` to an isolated home without its AppData
+  directories, so Windows known-folder discovery could not construct `BaseDirs`.
+- **Fix**: create isolated Roaming/Local directories and set both `APPDATA` and `LOCALAPPDATA`
+  alongside `HOME` and `USERPROFILE`; exercise the unchanged real CLI on all platforms.
+  Shell ambiguity fixtures must also use the current platform's script extension (`.ps1` on
+  Windows, `.sh` on Unix), or the platform filter removes the intended competing target.
+
+## 2026-10-15 — CI subprocesses need concrete runtime paths
+
+- **Symptom**: Linux dotenv conformance failed with `No version is set for shim: bun` after
+  entering a temporary fixture directory; the uninstall regression itself passed.
+- **Cause**: the Rust matrix installed only Rust, and inherited a Bun mise shim that could
+  resolve a version in the repository but not in the fixture.
+- **Fix**: install pinned Rust and Bun in every matrix job and run nextest through `mise exec`
+  so its child processes inherit concrete tool paths across working-directory changes.
+
+## 2026-10-15 — Uninstall routing must retain receipt-only targets
+
+- **Symptom**: top-level `uninstall app/<category>` rejected removed sources although
+  `app uninstall <category>` could still restore backups from installation receipts.
+- **Cause**: install and uninstall shared a source-only category resolver.
+- **Fix**: explicit uninstall namespaces dispatch directly; bare names use Core inventory
+  including receipts and retain App/Shell ambiguity checks. Ownership and approval remain
+  enforced by the existing lifecycle handlers.
+- **Coverage**: CLI tests remove installed App sources and verify preview, consent, modified-file
+  protection, ambiguity, backup restoration, and receipt removal through both target forms.
+
+## 2026-10-15 — Dotenv backticks must be parsed before comments
+
+- **Symptom**: importing `TOKEN=` followed by a backtick-quoted `hello#world` succeeded but
+  stored an opening backtick and `hello`, changing the value read by Bun.
+- **Cause**: only single and double quotes were recognized, so backtick values entered the
+  unquoted hash-comment branch, which also accepted missing closing delimiters.
+- **Fix**: parse single-line backtick quotes with the shared closing/trailing-content checks
+  before comment stripping; retain the dollar-syntax rejection.
+- **Coverage**: real CLI imports preserve hashes, both quote types, backslashes, empty values,
+  and whitespace; invalid, multiline, or interpolated values publish no files in normal/dry-run.
+
+## 2026-10-15 — Dotenv conversion and installed paths need consumer round trips
+
+- **Symptoms**: exported quotes/backslashes changed under Node/Bun dotenv readers; `$NAME`
+  imports retained interpolation literally; relative self-install destinations moved on config reload.
+- **Causes**: JSON-style escapes are not portable dotenv syntax, checking only `${` misses other
+  dollar handling, and installation and config loading use different relative-path bases.
+- **Fixes**: emit literal quoted dotenv values, reject dollar/CR/NUL or unavailable delimiters before
+  publication, reject dollar syntax on import, and store absolute self-install destinations.
+  Unquoted hashes start dotenv comments.
+- **Coverage**: real CLI exports round-trip through Node and Bun; rejected imports publish no files;
+  rejected exports preserve absent/existing outputs even with force. Self-install reloads from a
+  different cwd and syncs a replacement into the original installation.
+
+## 2026-10-15 — Git index aliases and import publication need final identity checks
+
+- **Symptoms**: file-group release accepted a case alias of a tracked deleted path, allowing
+  `git add -u` in the child to stage plaintext; dotenv import replaced dangling destinations and
+  competing imports could both report success without `--force`.
+- **Causes**: literal Git pathspecs compare index spelling rather than filesystem identity;
+  `exists()` follows dangling links, and an early existence check cannot enforce no-overwrite
+  during final atomic replacement.
+- **Fixes**: compare all NUL-delimited repository index paths with shared Unicode/case keys,
+  resolving the target from Git's repository prefix; inspect import directory entries and select
+  private no-clobber publication unless force explicitly requests replacement.
+- **Coverage**: real CLI run/dry-run/seal reject tracked file and parent case aliases plus both
+  Unicode forms before crypto; import tests preserve dangling entries and absent outputs, retain
+  force behavior/private modes, and require one concurrent winner without staging leftovers.
+
+## 2026-10-15 — Configuration scope and export publication must match their final effect
+
+- **Symptoms**: project `overlay link --git` reported success but the next invocation ignored the
+  source; dotenv exports without `--force` overwrote files created during decryption, and two
+  competing exports both succeeded.
+- **Causes**: the handler saved keys that project loading never reads and synchronized a shared
+  global mirror; export used an early `exists()` check followed by unconditional replacement.
+- **Fixes**: route Git links before runtime initialization, reject project scope before saving or
+  syncing, retain manual project links, and
+  publish ordinary/private exports with Core no-clobber writers unless force is explicit.
+  Diagnose existing entries with `symlink_metadata`, including dangling links.
+- **Coverage**: real CLI project rejection leaves uninitialized global state absent and preserves
+  both configs and absent/existing mirrors;
+  global links survive fresh-process info/pull; delayed backend barriers expose late-created and
+  concurrent destinations. Tests check exact winning bytes, private permissions and staging cleanup.
+- **Rule**: writes must target a layer that reads the setting, and no-overwrite guarantees belong
+  in the final atomic publication rather than the preflight check.
+
+## 2026-10-15 — Copy targets, session failures and IPv6 need native boundary checks
+
+- **Symptoms**: preset copy/export followed output links outside the chosen tree and truncated
+  other hard-link names; failed SSH setup/spawn left context/socket files; IPv6 transfers treated
+  an address suffix as a remote path.
+- **Causes**: `exists()` follows links and direct writes mutate shared inodes; `?` returned before
+  session cleanup; rsync/scp parse `host:path` independently of SSH's destination parser.
+- **Fixes**: reject linked/special nested output entries, stage permissions/content before atomic
+  replacement or no-clobber publication; own session resources before setup and clean before
+  propagating status; bracket IPv6 SCP operands and select SCP for system rsync compatibility.
+- **Coverage**: link/dangling-link/parent and hard-link preservation, concurrent publication,
+  executable modes, Windows junction rejection, real CLI setup/spawn/nonzero-exit cleanup,
+  IPv6 user/zone operands, fallback dry-run, and the native SCP parser with a local SSH substitute.
+- **Rule**: validate the filesystem entry rather than its referent, acquire cleanup ownership
+  before fallible setup, and test the actual downstream parser rather than argv shape alone.
+
+## 2026-10-15 — File aliases and no-clobber publication need filesystem-aware checks
+
+- **Symptoms**: Unicode-equivalent workspace names bypassed file-group overlap checks and could
+  be deleted by `seal --remove-plaintext`; forced image conversion replaced another case-aliased
+  input; concurrent non-force packs both reported success for one output.
+- **Causes**: lowercasing alone did not normalize Unicode; image planning compared lexical paths
+  without resolving parent aliases or file identities; pack checked existence before an atomic
+  replacement that still allowed overwriting.
+- **Fixes**: normalize Unicode before/after lowercasing for shared file-group overlap/lock keys;
+  preflight image outputs against normalized resolved paths and input device/inode identities;
+  publish non-force bundles atomically without replacement and retain `output_exists` diagnostics.
+- **Coverage**: both Unicode forms and source/target workspace aliases reject before crypto or
+  deletion; image tests preserve original bytes for case, Unicode, directory and hard-link aliases;
+  concurrent persistence/pack tests require one winner, exact winning bytes and no staging leftovers.
+
+## 2026-10-15 — Case aliases, delayed ownership checks, and remote-shell paths need boundary tests
+
+- **Symptoms**: `seal --remove-plaintext` deleted a case-aliased workspace definition; proxy
+  uninstall removed a replacement made while it waited for the config lock; macOS rsync split
+  remote filenames containing spaces into multiple operands.
+- **Causes**: workspace overlap used case-sensitive paths unlike mapping overlap; uninstall
+  observed ownership before locking and deleted without rechecking; local argv boundaries do not
+  survive rsync's remote-shell command construction.
+- **Fixes**: compare workspace and mapping identities with the same case-folded keys; serialize
+  proxy lifecycle reads/effects before target config locking and recheck each launcher before
+  removal; escape rsync shell syntax while preserving globs and pin old argument mode to avoid
+  double escaping in modern rsync.
+- **Coverage**: case-alias sealing and dry-run reject before backend invocation/deletion; blocked
+  uninstall preserves replacements and state; per-removal checks preserve changed/new files;
+  project installs share lifecycle locking; real system rsync copies spaces, punctuation and
+  glob selections through a local SSH substitute in both directions.
+
+## 2026-10-15 — Disposable Git mirrors need exact repository boundaries and complete cleanup
+
+- **Symptom**: linking a managed overlay over an ordinary directory inside another checkout reset
+  the parent repository; successful pulls also left untracked `shine.env.toml` overrides active.
+- **Root cause**: Git discovers ancestor repositories and honors inherited repository selectors;
+  `reset --hard` restores tracked paths but does not remove untracked or ignored inputs.
+- **Fix**: validate standalone non-linked worktree/metadata roots before fetch and reset, remove
+  inherited repository selectors, and clean untracked/ignored files and nested repositories only
+  after a successful fetch. Regressions cover parent preservation, inherited Git environment,
+  linked checkout/metadata rejection, unchanged-HEAD cleanup, and failed-fetch preservation.
+- **Rule**: disposal authority must bind the exact repository root before destructive Git commands;
+  mirroring must reconcile every effective input, not just the tracked commit.
+
+## 2026-10-15 — Binary secret files retain cleanup and interactive process contracts
+
+- **Symptom**: a child `chmod 000` stranded owned plaintext; binary age decrypt discarded phone QR
+  prompts; binary seal waited for a backend that closed stdin but remained alive.
+- **Cause**: cleanup reopened plaintext for reading, binary decrypt always drained stderr, and
+  `join!` waited for output even after an input-write error.
+- **Fix**: inspect path identity without plaintext read access while checking held ownership;
+  reuse phone-interaction policy; retain the encryption child through `try_join!` and kill/reap on
+  I/O failure or overflow. Tests cover unreadable owned/replaced files and child status, visible/quiet
+  phone prompts with binary stdout, large simultaneous pipe I/O, closed stdin and bounded output.
+- **Rule**: byte-oriented crypto must preserve the interaction, ownership and subprocess cleanup
+  contracts of its callers; file metadata observation is separate from content-read permission.
+
+## 2026-10-15 — Secret file Git checks follow targets and fail closed
+
+- **Symptom**: file-group runs released plaintext into tracked nested-repository paths or when
+  Git discovery failed; mapping previews also contaminated wrapped command stdout.
+- **Cause**: Git ran only from the workspace root, every exit 128 meant "no repository", and
+  execution reused stdout previews.
+- **Fix**: inspect from the target's closest existing parent, distinguish confirmed absence from
+  failed inspection, and send execution previews to stderr while retaining dry-run stdout.
+- **Rule**: safety checks follow each destination's repository; ambiguous errors block release.
+  Wrappers preserve child stdout byte-for-byte. Regression tests cover nested and outer repositories,
+  missing parents, tracked absent targets, malformed Git configuration, and binary stdout.
+
+## 2026-10-13 — Windows ciphertext replacement must release the old snapshot handle
+
+- **Symptom**: native Windows file-group tests compiled, but repeated sealing failed with access
+  denied when atomically replacing existing ciphertext.
+- **Cause**: the old ciphertext snapshot kept its read handle open across `MoveFileExW` replacement.
+  Sharing deletion did not permit replacing that open destination.
+- **Fix**: consume the old ciphertext snapshot after its final identity/content check, immediately
+  before durable atomic replacement. Keep plaintext ownership handles through verification/cleanup.
+- **Rule**: retain snapshot handles through validation, but release consumed destination handles
+  before Windows atomic replacement; never unlink the destination to work around sharing errors.
+
+## 2026-10-13 — Readiness files must publish complete payloads atomically
+
+- **Symptom**: the local full suite intermittently parsed an empty PID in the live Bun foreground
+  interrupt test, aborting the commit hook before the remaining tests ran.
+- **Cause**: the probe created its readiness file before writing the PID; existence alone did not
+  prove the payload was complete.
+- **Fix**: write the PID to a sibling pending file and rename it to the readiness path.
+- **Rule**: file-based readiness protocols publish complete data atomically before observers act.
+
+## 2026-10-13 — Platform facade glob imports can collide with parent helpers
+
+- **Symptom**: Windows CI rejected file-group command execution with ambiguous `command_status`,
+  although Unix tests and an isolated Windows platform compile check passed.
+- **Cause**: the facade imported the ordinary env helper through `super::*` and re-exported the
+  Windows scoped helper through another glob. The isolated check omitted the parent helper.
+- **Fix**: explicitly re-export the Windows platform API, including its scoped `command_status`.
+- **Rule**: cross-platform compile probes must preserve caller and parent name resolution;
+  checking only the platform implementation cannot establish that the application compiles.
+
 ## 2026-10-11 — Runtime path assertions must compare path components
 
 - **Symptom**: Windows CI failed the simulated macOS legacy-service cleanup and fixed App

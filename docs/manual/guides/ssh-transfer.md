@@ -15,11 +15,13 @@ for local value management.
 ```bash
 shine ssh user@example.com
 shine ssh -p 2222 user@example.com
+shine ssh user@2001:db8::1
 shine ssh user@example.com uname -a
 ```
 
 Shine forwards the supplied SSH arguments to the system `ssh`. In a remote shell it sets variables
 needed by the session; transfer commands must run inside that shell.
+If session setup or starting SSH fails, Shine automatically cleans up the incomplete session.
 
 Default `posix` mode requires a macOS or Linux remote capable of running a compatible version of
 `shine local`. Windows can initiate such a session as the local host. For a Windows remote, use
@@ -249,9 +251,21 @@ The remote side resolves the source; the local side resolves the destination. Wi
 the item is placed in the local directory from which `shine ssh` started, using the source name.
 
 The local side starts system `rsync` or `scp`, preferring rsync and falling back to scp. Both ends need
-SSH, and directory transfer requires a common tool. Existing files are not overwritten by default;
-for an existing directory, `--force` merges into it. Use `--scp` to skip rsync probing.
+SSH, and directory transfer requires a common tool. Rsync skips existing files unless `--force`
+is supplied; for an existing directory, `--force` merges into it. Use `--scp` to skip rsync probing.
+IPv6 literal SSH destinations use SCP for compatibility with system rsync. SCP may overwrite existing
+files even without `--force`, and Shine prints a warning. Its `--dry-run` shows resolved paths without
+copying files.
 Rsync progress uses the per-file `--progress` option, compatible with the system rsync on macOS.
+With rsync, quote paths containing spaces and wildcard patterns in the command you enter:
+
+```bash
+shine local download './build output/*.log'
+shine local upload './release notes.txt' '/tmp/release files'
+```
+
+Spaces and shell punctuation remain part of the remote path; `*`, `?`, and bracket patterns still
+select matching remote files.
 When reconnecting through SCP, Shine translates SSH port, user, and control-socket options,
 preserves connection settings such as identity files and jump hosts, and omits terminal and
 forwarding flags from the original session.

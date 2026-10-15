@@ -1,8 +1,11 @@
+pub mod file_groups;
 mod local_cache;
 
 use super::broker::{SourceSnapshot, WorkspaceSnapshot};
 use crate::commands::EnvWorkspaceExportFormat;
-use crate::persist::{atomic_write, atomic_write_private};
+use crate::persist::{
+    atomic_write, atomic_write_new, atomic_write_private, atomic_write_private_new,
+};
 use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{config::Config, secret};
 use anyhow::{Context, Result, bail};
@@ -62,11 +65,15 @@ pub async fn handle_export(
     let workspace = load_workspace(&workspace_path).await?;
     let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
     let output = absolute_from_current(output)?;
-    if output.exists() && !force {
-        bail!(
-            "{} already exists; rerun with --force to replace it",
-            output.display()
-        );
+    if !force {
+        match tokio::fs::symlink_metadata(&output).await {
+            Ok(_) => bail!(
+                "{} already exists; rerun with --force to replace it",
+                output.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("inspecting export destination"),
+        }
     }
 
     let mut values = compile_export_sources(&sources, config, include_secrets && !dry_run).await?;
@@ -89,16 +96,29 @@ pub async fn handle_export(
         }
         contents.zeroize();
     } else {
-        let write_result = if include_secrets {
-            atomic_write_private(&output, contents.as_bytes()).await
-        } else {
-            atomic_write(&output, contents.as_bytes()).await
+        let write_result = match (force, include_secrets) {
+            (false, true) => atomic_write_private_new(&output, contents.as_bytes()).await,
+            (false, false) => atomic_write_new(&output, contents.as_bytes()).await,
+            (true, true) => atomic_write_private(&output, contents.as_bytes()).await,
+            (true, false) => atomic_write(&output, contents.as_bytes()).await,
         };
         for value in values.values_mut() {
             value.zeroize();
         }
         contents.zeroize();
-        write_result?;
+        if let Err(error) = write_result {
+            if !force
+                && error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
+            {
+                bail!(
+                    "{} already exists; rerun with --force to replace it",
+                    output.display()
+                );
+            }
+            return Err(error);
+        }
         println!(
             "Exported {} variables for mode {mode} to {}{}",
             values.len(),
@@ -122,19 +142,28 @@ fn render_dotenv(values: &BTreeMap<String, String>) -> Result<String> {
         if value.contains('\0') {
             bail!("{key} contains a NUL byte and cannot be represented in dotenv format");
         }
+        // Dotenv readers disagree on escapes and expand dollars even inside quotes
+        // (notably Bun/Vite). Fail before publication instead of changing a value.
+        if value.contains(['$', '\r']) {
+            bail!(
+                "{key} contains a dollar sign or carriage return that cannot be exported portably to dotenv; use `shine env run` for this value"
+            );
+        }
+        let quote = if !value.contains(['"', '\\']) {
+            '"'
+        } else if !value.contains('\'') {
+            '\''
+        } else if !value.contains('`') {
+            '`'
+        } else {
+            bail!("{key} has no safe dotenv quote delimiter; use `shine env run` for this value");
+        };
         rendered.push_str(key);
         rendered.push('=');
-        rendered.push('"');
-        for ch in value.chars() {
-            match ch {
-                '\\' => rendered.push_str("\\\\"),
-                '"' => rendered.push_str("\\\""),
-                '\n' => rendered.push_str("\\n"),
-                '\r' => rendered.push_str("\\r"),
-                _ => rendered.push(ch),
-            }
-        }
-        rendered.push_str("\"\n");
+        rendered.push(quote);
+        rendered.push_str(value);
+        rendered.push(quote);
+        rendered.push('\n');
     }
     Ok(rendered)
 }
@@ -178,11 +207,15 @@ async fn init_from_dotenv_at(
     let workspace = root.join(WORKSPACE_FILE);
     planned.push((workspace, render_workspace(&modes)));
     for (path, _) in &planned {
-        if path.exists() && !force {
-            bail!(
-                "{} already exists; rerun with --force to replace generated files",
-                path.display()
-            );
+        if !force {
+            match tokio::fs::symlink_metadata(path).await {
+                Ok(_) => bail!(
+                    "{} already exists; rerun with --force to replace generated files",
+                    path.display()
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("inspecting import destination"),
+            }
         }
     }
 
@@ -191,7 +224,24 @@ async fn init_from_dotenv_at(
         if dry_run {
             println!("Would create {display}");
         } else {
-            atomic_write_private(path, contents.as_bytes()).await?;
+            let result = if force {
+                atomic_write_private(path, contents.as_bytes()).await
+            } else {
+                atomic_write_private_new(path, contents.as_bytes()).await
+            };
+            if let Err(error) = result {
+                if !force
+                    && error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
+                {
+                    bail!(
+                        "{} already exists; rerun with --force to replace generated files",
+                        path.display()
+                    );
+                }
+                return Err(error);
+            }
             println!("Created {display}");
         }
     }
@@ -354,15 +404,17 @@ fn parse_dotenv_value(path: &Path, line: usize, raw: &str) -> Result<String> {
             );
         }
         value
+    } else if let Some(value) = raw.strip_prefix('`') {
+        parse_quoted_dotenv_value(value, '`', "backtick")?
     } else {
-        raw.split_once(" #")
+        raw.split_once('#')
             .map(|(value, _)| value)
             .unwrap_or(raw)
             .trim_end()
     };
-    if value.contains("${") {
+    if value.contains('$') {
         bail!(
-            "{}:{line} uses dotenv interpolation; resolve it before importing",
+            "{}:{line} uses dotenv interpolation or dollar syntax; resolve it before importing",
             path.display()
         );
     }
@@ -385,6 +437,8 @@ pub struct Workspace {
     #[serde(default = "workspace_format_version")]
     version: u32,
     pub env: WorkspaceEnv,
+    #[serde(default)]
+    file_groups: BTreeMap<String, file_groups::FileGroup>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -393,6 +447,7 @@ pub struct WorkspaceEnv {
     default_mode: Option<String>,
     #[serde(default)]
     modes: Vec<String>,
+    #[serde(default)]
     files: Vec<String>,
     #[serde(default)]
     override_process_env: bool,
@@ -639,58 +694,7 @@ pub async fn handle_run(
         find_workspace_optional(workspace_arg).await?
     };
     let (values, override_process_env) = if let Some(workspace_path) = workspace_path {
-        let local_config = local_cache::load_config(config, &workspace_path).await?;
-        let config = &local_config;
-        let workspace_bytes = tokio::fs::read_to_string(&workspace_path).await?;
-        let workspace = parse_workspace(&workspace_path, &workspace_bytes)?;
-        let mode = mode_arg
-            .or(workspace.env.default_mode.as_deref())
-            .context("environment mode is required; pass --mode or set env.default_mode")?;
-        validate_mode(mode)?;
-        let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
-        let captured = capture_sources(&sources).await?;
-        let input_hash = snapshot_input_hash(&workspace_path, &workspace_bytes, mode, &captured);
-        let hybrid = involves_hybrid(&workspace.env.encryption, &captured)?;
-        let values = if hybrid {
-            local_cache::compile(
-                config,
-                &workspace_path,
-                mode,
-                &input_hash,
-                &workspace.env.encryption,
-                &captured,
-            )
-            .await?
-        } else {
-            let encryption =
-                resolve_seal_encryption(None, &[], Some(&workspace.env.encryption), config)?;
-            let cache_path = cache_path(&workspace_path, mode)?;
-            match read_valid_cache(&cache_path, mode, &input_hash, config).await {
-                Ok(Some(values)) => values,
-                Ok(None) => {
-                    let values = compile_captured_sources(&captured, config).await?;
-                    if let Some(encryption) = &encryption
-                        && let Err(error) = write_cache(
-                            &cache_path,
-                            &workspace_path,
-                            mode,
-                            &input_hash,
-                            &values,
-                            encryption,
-                        )
-                        .await
-                    {
-                        eprintln!("Warning: could not update environment cache: {error:#}");
-                    }
-                    values
-                }
-                Err(error) => {
-                    eprintln!("Warning: ignoring unreadable environment cache: {error:#}");
-                    compile_captured_sources(&captured, config).await?
-                }
-            }
-        };
-        (values, workspace.env.override_process_env)
+        load_run_values(config, &workspace_path, mode_arg, false).await?
     } else {
         if !no_workspace && explicit.is_empty() {
             bail!("shine.workspace.toml was not found; pass --workspace or --no-workspace");
@@ -702,6 +706,81 @@ pub async fn handle_run(
     };
 
     run_command(command, &values, override_process_env, &explicit).await
+}
+
+async fn load_run_values(
+    config: &Config,
+    workspace_path: &Path,
+    mode_arg: Option<&str>,
+    allow_file_only: bool,
+) -> Result<(BTreeMap<String, String>, bool)> {
+    let local_config = local_cache::load_config(config, workspace_path).await?;
+    let config = &local_config;
+    load_run_values_effective(config, workspace_path, mode_arg, allow_file_only).await
+}
+
+async fn load_run_values_effective(
+    config: &Config,
+    workspace_path: &Path,
+    mode_arg: Option<&str>,
+    allow_file_only: bool,
+) -> Result<(BTreeMap<String, String>, bool)> {
+    let workspace_bytes = tokio::fs::read_to_string(workspace_path).await?;
+    let workspace = parse_workspace(workspace_path, &workspace_bytes)?;
+    let mode = mode_arg
+        .or(workspace.env.default_mode.as_deref())
+        .context("environment mode is required; pass --mode or set env.default_mode")?;
+    validate_mode(mode)?;
+    if workspace.env.files.is_empty() {
+        if allow_file_only {
+            return Ok((BTreeMap::new(), workspace.env.override_process_env));
+        }
+        bail!("file-only workspace requires --file-group");
+    }
+    let sources = resolve_sources(workspace_path, &workspace.env.files, mode)?;
+    let captured = capture_sources(&sources).await?;
+    let input_hash = snapshot_input_hash(workspace_path, &workspace_bytes, mode, &captured);
+    let hybrid = involves_hybrid(&workspace.env.encryption, &captured)?;
+    let values = if hybrid {
+        local_cache::compile(
+            config,
+            workspace_path,
+            mode,
+            &input_hash,
+            &workspace.env.encryption,
+            &captured,
+        )
+        .await?
+    } else {
+        let encryption =
+            resolve_seal_encryption(None, &[], Some(&workspace.env.encryption), config)?;
+        let cache_path = cache_path(workspace_path, mode)?;
+        match read_valid_cache(&cache_path, mode, &input_hash, config).await {
+            Ok(Some(values)) => values,
+            Ok(None) => {
+                let values = compile_captured_sources(&captured, config).await?;
+                if let Some(encryption) = &encryption
+                    && let Err(error) = write_cache(
+                        &cache_path,
+                        workspace_path,
+                        mode,
+                        &input_hash,
+                        &values,
+                        encryption,
+                    )
+                    .await
+                {
+                    eprintln!("Warning: could not update environment cache: {error:#}");
+                }
+                values
+            }
+            Err(error) => {
+                eprintln!("Warning: ignoring unreadable environment cache: {error:#}");
+                compile_captured_sources(&captured, config).await?
+            }
+        }
+    };
+    Ok((values, workspace.env.override_process_env))
 }
 
 fn broker_command_argv(command: &[OsString]) -> Result<Vec<String>> {
@@ -778,7 +857,7 @@ fn parse_workspace(path: &Path, contents: &str) -> Result<Workspace> {
             path.display()
         );
     }
-    if workspace.version != WORKSPACE_FORMAT_VERSION {
+    if !matches!(workspace.version, 2 | 3) {
         bail!(
             "unsupported workspace version {} in {}",
             workspace.version,
@@ -791,8 +870,21 @@ fn parse_workspace(path: &Path, contents: &str) -> Result<Workspace> {
             path.display()
         );
     }
-    if workspace.env.files.is_empty() {
-        bail!("env.files must contain at least one source path");
+    if workspace.version == 2 && !workspace.file_groups.is_empty() {
+        bail!("file_groups requires workspace version 3");
+    }
+    if workspace.env.files.is_empty()
+        && (workspace.version == 2 || workspace.file_groups.is_empty())
+    {
+        bail!(
+            "env.files must contain at least one source path unless version 3 defines file_groups"
+        );
+    }
+    for (name, group) in &workspace.file_groups {
+        validate_mode(name).context("invalid file group name")?;
+        if group.files.is_empty() {
+            bail!("file group {name} must contain files");
+        }
     }
     if workspace
         .env
@@ -1697,12 +1789,31 @@ mod tests {
 
     #[test]
     fn dotenv_import_rejects_interpolation() {
-        let error = parse_dotenv(Path::new(".env"), "VITE_URL=${BASE_URL}/api\n").unwrap_err();
-        assert!(error.to_string().contains("dotenv interpolation"));
+        for value in [
+            "${BASE_URL}/api",
+            "$BASE_URL/api",
+            "'$BASE_URL/api'",
+            "\"$BASE_URL/api\"",
+        ] {
+            let error =
+                parse_dotenv(Path::new(".env"), &format!("VITE_URL={value}\n")).unwrap_err();
+            assert!(error.to_string().contains("dotenv interpolation"));
+        }
     }
 
     #[test]
-    fn dotenv_export_is_stable_and_escapes_multiline_values() {
+    fn dotenv_import_comments_start_at_unquoted_hashes() {
+        let values = parse_dotenv(
+            Path::new(".env"),
+            "UNQUOTED=abc#comment\nQUOTED='abc#value'\n",
+        )
+        .unwrap();
+        assert_eq!(values["UNQUOTED"], "abc");
+        assert_eq!(values["QUOTED"], "abc#value");
+    }
+
+    #[test]
+    fn dotenv_export_is_stable_and_preserves_literal_multiline_values() {
         let rendered = render_dotenv(&BTreeMap::from([
             ("ALPHA".to_owned(), "plain".to_owned()),
             (
@@ -1714,8 +1825,26 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "ALPHA=\"plain\"\nCOMPLEX=\"quote\\\" slash\\\\ first\\nsecond\"\n"
+            "ALPHA=\"plain\"\nCOMPLEX='quote\" slash\\ first\nsecond'\n"
         );
+    }
+
+    #[test]
+    fn dotenv_export_rejects_values_without_a_portable_literal_representation() {
+        for value in [
+            "$BASE/api",
+            "cost $5",
+            "before\rafter",
+            "all '\"` delimiters",
+        ] {
+            let error =
+                render_dotenv(&BTreeMap::from([("TOKEN".into(), value.into())])).unwrap_err();
+            assert!(error.to_string().contains("TOKEN"));
+            assert!(
+                !error.to_string().contains(value),
+                "must not disclose the value"
+            );
+        }
     }
 
     #[test]
@@ -1821,6 +1950,74 @@ mod tests {
                 .is_err()
         );
         tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dotenv_init_preserves_dangling_destinations_without_force() {
+        for name in [".env.shine.toml", WORKSPACE_FILE] {
+            let dir = crate::test_support::make_temp_dir("shine-dotenv-linked").await;
+            tokio::fs::write(dir.join(".env"), "TOKEN=pending-secret\n")
+                .await
+                .unwrap();
+            let output = dir.join(name);
+            std::os::unix::fs::symlink("absent-original", &output).unwrap();
+            for dry_run in [false, true] {
+                let error = init_from_dotenv_at(&dir, &[], &[], false, dry_run)
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("already exists"));
+                assert_eq!(
+                    std::fs::read_link(&output).unwrap(),
+                    Path::new("absent-original")
+                );
+                assert!(!dir.join("absent-original").exists());
+                if name == WORKSPACE_FILE {
+                    assert!(!dir.join(".env.shine.toml").exists());
+                } else {
+                    assert!(!dir.join(WORKSPACE_FILE).exists());
+                }
+            }
+            init_from_dotenv_at(&dir, &[], &[], true, false)
+                .await
+                .unwrap();
+            assert!(std::fs::symlink_metadata(&output).unwrap().is_file());
+            assert!(!dir.join("absent-original").exists());
+            tokio::fs::remove_dir_all(dir).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn dotenv_init_concurrent_publication_has_one_winner() {
+        let dir = crate::test_support::make_temp_dir("shine-dotenv-concurrent").await;
+        tokio::fs::write(dir.join(".env"), "TOKEN=pending-secret\n")
+            .await
+            .unwrap();
+        let (first, second) = tokio::join!(
+            init_from_dotenv_at(&dir, &[], &[], false, false),
+            init_from_dotenv_at(&dir, &[], &[], false, false),
+        );
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        let error = first.err().or_else(|| second.err()).unwrap();
+        assert!(error.to_string().contains("already exists"));
+        let source = tokio::fs::read_to_string(dir.join(".env.shine.toml"))
+            .await
+            .unwrap();
+        assert!(source.contains("pending-secret"));
+        let workspace = tokio::fs::read_to_string(dir.join(WORKSPACE_FILE))
+            .await
+            .unwrap();
+        parse_workspace(&dir.join(WORKSPACE_FILE), &workspace).unwrap();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            assert!(
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".shine-write-")
+            );
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[cfg(unix)]

@@ -39,6 +39,9 @@ its own.
 - **Default rsync, `--scp` to force scp.** When rsync is unavailable (locally,
   or — probed cheaply over the control master — on the remote) shine
   **auto-falls back to scp and prints a notice**.
+  Literal IPv6 destinations also use SCP: macOS system rsync splits even bracketed IPv6 operands.
+  SCP receives a bracketed address, preserving an optional user and zone identifier. The ordinary
+  SCP overwrite warning and metadata-only dry-run semantics still apply.
 - **ControlMaster reuse.** At `shine ssh` time shine injects
   `-o ControlMaster=auto -o ControlPath=<session_dir>/ctl.sock -o
   ControlPersist=60` (unless the user set their own multiplexing). The rsync/scp
@@ -48,7 +51,10 @@ its own.
 - **Wildcards.** Remote-owned globs are expanded by rsync/scp's remote shell
   (the remote spec is anchored to the remote cwd with metacharacters preserved,
   never canonicalized); local-owned (upload-source) globs are expanded with the
-  `glob` crate.
+  `glob` crate. Rsync operands escape whitespace and shell-active characters but
+  retain `*`, `?`, and bracket patterns. The rsync child pins `RSYNC_OLD_ARGS=1`
+  and `RSYNC_PROTECT_ARGS=0`, keeping one escaping contract across the macOS
+  system implementation and new rsync's automatic argument protection.
 - **Session context** (`host`, `ssh_options`, `local_dir`, `control_path`) is
   captured from `split_ssh_args`/cwd and held as an in-memory `Arc`, also
   persisted to `<session_dir>/context.toml` for diagnostics.

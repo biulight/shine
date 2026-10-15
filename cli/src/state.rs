@@ -258,8 +258,8 @@ async fn migrate_workspace_gpg_recipient(path: &Path) -> Result<bool> {
             .get("version")
             .and_then(toml_edit::Item::as_integer)
             .unwrap_or(1);
-        if version > 2 {
-            bail!("workspace version {version} is newer than this shine supports (2)");
+        if version > 3 {
+            bail!("workspace version {version} is newer than this shine supports (3)");
         }
         let mut changed = false;
         let encryption = document["env"]["encryption"].as_table_mut();

@@ -103,6 +103,8 @@ The returned hash identifies the bundle. `shine.test.toml` remains author-only a
 A pack-policy failure must be fixed in the source; `--force` only replaces the output file and never
 bypasses validation or policy. The output directory is checked after resolving symbolic links and
 parent components (`..`); it must remain outside the category, even with `--force`.
+Without `--force`, an output created by another process during packing is preserved and the command
+fails with `output_exists`.
 
 ## Migrate a 1.x source
 
@@ -312,6 +314,8 @@ PNG, and WebP children only; it never recurses. Without `--output-dir`, output s
 source as `photo.compressed.jpg`, `photo.resized.jpg`, or the selected conversion extension. An
 output directory flattens the selected inputs, so duplicate target names fail explicitly. Existing
 files also fail unless `--force` is present, and source images are never modified in place.
+Conflicts include case and Unicode-equivalent names, directory aliases, and outputs that refer to
+an input through a hard link. `--force` does not permit replacing an input image.
 
 Batch processing continues after an individual failure and returns a nonzero status if any item
 failed. The first 20 failures appear in the terminal. If there are more, the complete list is also
@@ -341,19 +345,31 @@ other presets continue to use the base source.
 
 Shine can manage a local mirror of a read-only overlay repository used by multiple devices:
 
+Git-managed overlays are global settings. Run the following commands outside any Shine project:
+neither the current directory nor its ancestors may contain a `shine.config.toml`.
+Inside a Shine project, `overlay link --git` is rejected before
+changing the configuration or mirror. For a project-specific overlay, clone the repository yourself
+and use `shine preset overlay link <PATH>` from the project instead.
+
 ```bash
 shine preset overlay link --git https://example.com/team/shine-overlay.git --branch main
 shine preset pull
 shine preset overlay info
 ```
 
-The first `shine preset pull` shallow-clones the repository under `~/.shine/overlay/`. Later pulls
+The link command shallow-clones the repository under `~/.shine/overlay/`. Later pulls
 mirror that directory to the latest state of the remote branch. It is a disposable cache: the next
 pull discards local edits. Make changes and push them in an upstream checkout, then synchronize each
 device with `shine preset pull`, `shine update --pull`, or `shine upgrade --pull`.
 Relinking with a different Git URL switches the existing mirror to that repository. Without
 `--branch`, each sync follows the configured remote's default branch. A failed fetch preserves
 the previous checkout.
+
+The managed overlay must be a standalone Git checkout at that directory. Shine refuses ordinary
+directories, linked checkouts, and linked Git metadata without changing their contents. Move an
+unexpected directory aside before retrying. After a successful fetch, synchronization discards
+tracked edits, untracked and ignored files, and nested repositories in the managed mirror, even
+when the remote commit is unchanged. Keep local customizations in a manually linked overlay instead.
 
 To customize one built-in category, copy it at the overlay root instead of exporting everything. For
 example, copy Surge before editing its local proxy, group, and rule files:
@@ -375,6 +391,10 @@ steps.
 shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
+
+Both `preset copy` and `preset export` reject linked or special output files and linked
+subdirectories, including with `--force`. Choose an ordinary directory tree for the output.
+Without `--force`, existing regular files are preserved even when another copy runs concurrently.
 
 After linking an external directory, `install`, `list`, and `update` read from it. Command output
 identifies the active preset source.

@@ -90,6 +90,8 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 返回的 hash 用于标识 bundle。`shine.test.toml` 只供作者使用，不会进入 bundle。Pack policy 失败
 必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。输出目录会在解析
 符号链接和父目录组件（`..`）后检查；即使使用 `--force`，也必须位于类别目录外。
+未使用 `--force` 时，如果其他进程在打包期间创建了输出文件，Shine 会保留该文件并以
+`output_exists` 失败。
 
 ## 迁移 1.x 来源
 
@@ -277,6 +279,8 @@ shine shell uninstall image-tools/img-compress --dry-run
 `--output-dir` 时，结果保存在来源旁边，名称形如 `photo.compressed.jpg`、
 `photo.resized.jpg` 或所选转换格式的扩展名。指定输出目录后，所有结果平铺到该目录；重复目标名会
 明确失败。已有目标也会失败，只有 `--force` 才允许替换；来源图片永远不会被原地修改。
+冲突检查涵盖仅大小写或 Unicode 规范化形式不同的名称、目录别名，以及通过硬链接指向输入的
+输出文件。`--force` 也不允许替换输入图片。
 
 批处理遇到单项失败后会继续，并在存在任意失败时返回非零状态。前 20 条失败会显示在终端；超过
 20 条时，完整列表还会写入 `--output-dir` 下唯一命名的 `image-tools-errors-*.log`，未指定输出目录
@@ -303,15 +307,25 @@ shine preset overlay unlink
 
 要让多台设备使用同一个只读 overlay 仓库，可由 Shine 管理其本地镜像：
 
+Git 托管 overlay 属于全局配置。请在不受任何 `shine.config.toml` 管理的目录中运行以下命令。
+在 Shine 项目中执行 `overlay link --git` 会被拒绝，配置和镜像不会被更改。
+如果需要项目专属 overlay，请自行克隆仓库，再在项目中使用 `shine preset overlay link <PATH>`
+关联本地目录。
+
 ```bash
 shine preset overlay link --git https://example.com/team/shine-overlay.git --branch main
 shine preset pull
 shine preset overlay info
 ```
 
-首次 `shine preset pull` 会在 `~/.shine/overlay/` 浅克隆仓库；以后会把该目录镜像到远端分支的最新状态。此目录是缓存，任何本地修改都会在下次拉取时丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
+关联命令会在 `~/.shine/overlay/` 浅克隆仓库；以后会把该目录镜像到远端分支的最新状态。此目录是缓存，任何本地修改都会在下次拉取时丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
 
 使用不同的 Git URL 重新链接时，现有镜像会切换到该仓库。未指定 `--branch` 时，每次同步都跟随所配置远端的默认分支。拉取失败会保留之前的 checkout。
+
+托管 overlay 必须是该目录内的独立 Git checkout。Shine 会拒绝普通目录、链接的 checkout 和链接的
+Git 元数据，并保留其内容；遇到意外占用的目录时，请先将其移到别处，再重试。fetch 成功后，同步会
+丢弃托管镜像中的已跟踪修改、未跟踪和被忽略的文件，以及嵌套仓库，即使远端 commit 没有变化。
+需要保留本地定制时，请使用手动关联的 overlay。
 
 如果只想定制一个内置类别，可在 overlay 根目录复制该预设，无需导出整套内容。例如，Surge 的本地代理、策略组和规则文件应从内置预设复制后再修改：
 
@@ -328,6 +342,10 @@ shine preset copy app/surge
 shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
+
+`preset copy` 和 `preset export` 都会拒绝作为输出的链接、特殊文件及链接子目录，即使指定
+`--force` 也不例外。请选择普通目录树作为输出位置。未指定 `--force` 时，已有普通文件会保留，
+同时运行多个复制命令也不会覆盖其它命令已写入的文件。
 
 配置外部目录后，`install`、`list` 和 `update` 都从该目录读取。命令输出会显示当前激活的预设来源。
 

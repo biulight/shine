@@ -6,7 +6,7 @@
 ## Decision
 
 Publish only the latest stable documentation within each major, plus the current `Next` manual.
-The retained stable versions are currently 2.4 and 1.8. A new minor release replaces the previous
+The v2.5.0 release preparation retains 2.5 and 1.8 snapshots. A new minor release replaces the previous
 same-major snapshot; a patch release refreshes its major.minor snapshot without creating another
 version entry. Stable content must describe the released product, while unreleased changes remain
 in `Next`.

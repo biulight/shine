@@ -518,6 +518,10 @@ async fn extract_matching(
     target_dir: &Path,
     overwrite: bool,
 ) -> Result<ExtractReport> {
+    fs::create_dir_all(target_dir).await?;
+    // An explicitly selected root may be an alias, but nested paths must stay
+    // inside this resolved root without following links or Windows junctions.
+    let root = fs::canonicalize(target_dir).await?;
     let mut report = ExtractReport {
         created: Vec::new(),
         skipped: Vec::new(),
@@ -535,48 +539,166 @@ async fn extract_matching(
             continue;
         }
 
-        let dest = target_dir.join(relative);
+        let dest = root.join(relative);
+        let reported_dest = target_dir.join(relative);
 
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("creating directory: {parent:?}"))?;
-        }
-
-        if dest.exists() && !overwrite {
-            report.skipped.push(dest);
+        prepare_extraction_parents(&root, &dest).await?;
+        let previous = extraction_file_metadata(&dest).await?;
+        if previous.is_some() && !overwrite {
+            report.skipped.push(reported_dest);
             continue;
         }
 
         let file = read(relative).with_context(|| format!("preset asset missing: {relative}"))?;
 
-        let existed = dest.exists();
-
-        fs::write(&dest, &file)
-            .await
-            .with_context(|| format!("writing preset: {dest:?}"))?;
-
-        #[cfg(unix)]
-        if relative.ends_with(".sh") {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&dest)
-                .await
-                .with_context(|| format!("reading metadata: {dest:?}"))?
-                .permissions();
-            perms.set_mode(perms.mode() | 0o111);
-            fs::set_permissions(&dest, perms)
-                .await
-                .with_context(|| format!("setting permissions: {dest:?}"))?;
+        if !write_extracted_file(
+            &root,
+            &dest,
+            &file,
+            previous.as_ref(),
+            overwrite,
+            relative.ends_with(".sh"),
+        )
+        .await?
+        {
+            report.skipped.push(reported_dest);
+            continue;
         }
 
-        if existed {
-            report.overwritten.push(dest);
+        if previous.is_some() {
+            report.overwritten.push(reported_dest);
         } else {
-            report.created.push(dest);
+            report.created.push(reported_dest);
         }
     }
 
     Ok(report)
+}
+
+fn is_extraction_link(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+async fn prepare_extraction_parents(root: &Path, dest: &Path) -> Result<()> {
+    let mut current = root.to_path_buf();
+    let root_metadata = fs::symlink_metadata(root).await?;
+    if !root_metadata.is_dir() || is_extraction_link(&root_metadata) {
+        bail!(
+            "preset output root must remain a regular directory: {}",
+            root.display()
+        );
+    }
+    let parent = dest.parent().context("preset output has no parent")?;
+    for component in parent.strip_prefix(root)?.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            bail!("invalid preset output component");
+        }
+        current.push(component);
+        match fs::create_dir(&current).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("creating {}", current.display()));
+            }
+        }
+        let metadata = fs::symlink_metadata(&current).await?;
+        if !metadata.is_dir() || is_extraction_link(&metadata) {
+            bail!(
+                "preset output parent must not be a link or special file: {}",
+                current.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn extraction_file_metadata(path: &Path) -> Result<Option<std::fs::Metadata>> {
+    match fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.is_file() && !is_extraction_link(&metadata) => Ok(Some(metadata)),
+        Ok(_) => bail!(
+            "preset output must be a regular file, not a link or special file: {}",
+            path.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("checking {}", path.display())),
+    }
+}
+
+struct ExtractionTemp(PathBuf);
+
+impl Drop for ExtractionTemp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+async fn write_extracted_file(
+    root: &Path,
+    dest: &Path,
+    bytes: &[u8],
+    previous: Option<&std::fs::Metadata>,
+    overwrite: bool,
+    executable: bool,
+) -> Result<bool> {
+    use tokio::io::AsyncWriteExt;
+    prepare_extraction_parents(root, dest).await?;
+    let temp_path = dest.with_file_name(format!(".shine-extract-{}", uuid::Uuid::new_v4()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .await?;
+    let temp = ExtractionTemp(temp_path);
+    let permissions = previous
+        .map(std::fs::Metadata::permissions)
+        .unwrap_or(file.metadata().await?.permissions());
+    #[cfg(unix)]
+    let permissions = if executable {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = permissions;
+        permissions.set_mode(permissions.mode() | 0o111);
+        permissions
+    } else {
+        permissions
+    };
+    #[cfg(not(unix))]
+    let _ = executable;
+    file.set_permissions(permissions).await?;
+    file.write_all(bytes).await?;
+    file.sync_all().await?;
+    drop(file);
+    // Recheck after staging; publication replaces the directory entry instead
+    // of following a leaf symlink or modifying another name of a hard link.
+    prepare_extraction_parents(root, dest).await?;
+    let current = extraction_file_metadata(dest).await?;
+    if !overwrite && current.is_some() {
+        return Ok(false);
+    }
+    let result = if overwrite {
+        crate::persist::finalize_temp(&temp.0, dest).await
+    } else {
+        crate::persist::finalize_temp_new(&temp.0, dest).await
+    };
+    match result {
+        Ok(()) => Ok(true),
+        Err(error)
+            if !overwrite
+                && error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error).with_context(|| format!("writing preset: {}", dest.display())),
+    }
 }
 
 #[cfg(test)]
@@ -602,6 +724,160 @@ mod tests {
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-presets").await
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn extraction_rejects_linked_files_and_parents_without_touching_referents() {
+        use std::os::unix::fs::symlink;
+        for (parent_link, dangling, force) in [
+            (false, false, true),
+            (false, true, false),
+            (true, false, false),
+            (true, false, true),
+        ] {
+            let root = make_temp_dir().await;
+            let target = root.join("output");
+            let outside = root.join("outside");
+            fs::create_dir_all(target.join("app/demo")).await.unwrap();
+            fs::create_dir_all(&outside).await.unwrap();
+            let victim = outside.join("config");
+            if !dangling {
+                fs::write(&victim, b"user contents").await.unwrap();
+            }
+            if parent_link {
+                fs::remove_dir(target.join("app/demo")).await.unwrap();
+                symlink(&outside, target.join("app/demo")).unwrap();
+            } else {
+                symlink(&victim, target.join("app/demo/config")).unwrap();
+            }
+            let result = extract_matching(
+                ["app/demo/config".to_string()],
+                |_| true,
+                |_| Some(b"preset contents".to_vec()),
+                &target,
+                force,
+            )
+            .await;
+            assert!(result.is_err(), "linked extraction was accepted");
+            if dangling {
+                assert!(!victim.exists());
+            } else {
+                assert_eq!(fs::read(&victim).await.unwrap(), b"user contents");
+            }
+            fs::remove_dir_all(root).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn forced_extraction_replaces_hard_links_without_modifying_other_names() {
+        let root = make_temp_dir().await;
+        let target = root.join("output");
+        fs::create_dir_all(&target).await.unwrap();
+        let outside = root.join("outside");
+        fs::write(&outside, b"user contents").await.unwrap();
+        fs::hard_link(&outside, target.join("config"))
+            .await
+            .unwrap();
+        extract_matching(
+            ["config".to_string()],
+            |_| true,
+            |_| Some(b"preset contents".to_vec()),
+            &target,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(fs::read(&outside).await.unwrap(), b"user contents");
+        assert_eq!(
+            fs::read(target.join("config")).await.unwrap(),
+            b"preset contents"
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_nonforce_extraction_publishes_one_complete_file() {
+        let root = make_temp_dir().await;
+        let first = vec![b'a'; 64 * 1024];
+        let second = vec![b'b'; 64 * 1024];
+        let extract = |contents: Vec<u8>| {
+            extract_matching(
+                ["config".to_string()],
+                |_| true,
+                move |_| Some(contents.clone()),
+                &root,
+                false,
+            )
+        };
+        let (a, b) = tokio::join!(extract(first.clone()), extract(second.clone()));
+        let a = a.unwrap();
+        let b = b.unwrap();
+        assert_eq!(a.created.len() + b.created.len(), 1);
+        assert_eq!(a.skipped.len() + b.skipped.len(), 1);
+        let contents = fs::read(root.join("config")).await.unwrap();
+        assert!(contents == first || contents == second);
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn extraction_preserves_regular_file_modes_and_publishes_executable_scripts() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = make_temp_dir().await;
+        for (name, original, expected) in [("config", 0o640, 0o640), ("tool.sh", 0o600, 0o711)] {
+            let dest = root.join(name);
+            fs::write(&dest, b"old").await.unwrap();
+            fs::set_permissions(&dest, std::fs::Permissions::from_mode(original))
+                .await
+                .unwrap();
+            extract_matching(
+                [name.to_string()],
+                |_| true,
+                |_| Some(b"new".to_vec()),
+                &root,
+                true,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                fs::metadata(&dest).await.unwrap().permissions().mode() & 0o777,
+                expected
+            );
+            assert_eq!(fs::read(dest).await.unwrap(), b"new");
+        }
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn extraction_rejects_windows_junction_parents() {
+        let root = make_temp_dir().await;
+        let target = root.join("output");
+        let outside = root.join("outside");
+        fs::create_dir_all(&target).await.unwrap();
+        fs::create_dir_all(&outside).await.unwrap();
+        let link = target.join("linked");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let result = extract_matching(
+            ["linked/config".to_string()],
+            |_| true,
+            |_| Some(b"preset".to_vec()),
+            &target,
+            true,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(!outside.join("config").exists());
+        fs::remove_dir(link).await.unwrap();
+        fs::remove_dir_all(root).await.unwrap();
     }
 
     #[test]

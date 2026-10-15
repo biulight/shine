@@ -534,9 +534,13 @@ are skipped when locating the real command. Proxy rule changes also retain owner
 permissions on Unix.
 On Unix, target discovery also skips files without execute permission and follows executable
 symlinks without changing the command's invocation name.
+On Windows, pass a command name without an executable extension: use `gh`, not `gh.exe`.
+Installation rejects `.exe`, `.com`, `.bat`, `.cmd`, and `.ps1` suffixes, ignoring case. Previously
+installed suffixed names can still be removed with `shine env proxy uninstall <COMMAND>`.
 Shine refuses to proxy `shine` or `shine.exe` (case-insensitive) to prevent recursive launcher calls.
 Uninstall checks every launcher before changing rules or receipts; an ownership conflict leaves
 the launcher set and configuration unchanged.
+If a launcher changes while uninstall is running, Shine preserves the changed file and reports an error.
 
 Installation validates the rule file, manifest, and complete launcher set before writing. If a
 write fails, Shine attempts to restore previous file contents and Unix permissions and removes new
@@ -599,7 +603,8 @@ shine env workspace init --from-dotenv
 
 The command reads `.env`, `.env.local`, `.env.<mode>`, and `.env.<mode>.local`, discovers modes, and
 preserves that precedence. Source dotenv files are unchanged. Existing targets are not overwritten
-unless you add `--force`. Import selected modes with repeatable `--mode`:
+unless you add `--force`, including dangling symbolic links and files created by a concurrent
+import. Import selected modes with repeatable `--mode`:
 
 ```bash
 shine env workspace init --from-dotenv --mode development --mode production
@@ -615,8 +620,12 @@ shine env workspace init --from-dotenv --secret DATABASE_URL
 shine env secret seal
 ```
 
-To preserve dotenv semantics, files containing interpolation such as `${BASE_URL}` or escaped
-double-quoted values are rejected. Resolve them to final values before importing. The generated file
+To preserve dotenv semantics, values containing `$` (including `$BASE_URL` and `${BASE_URL}`) or
+escaped double-quoted content are rejected, even inside quotes. Resolve interpolation before
+importing; keep literal dollar signs in a manually authored Shine source instead. Single-line
+backtick-quoted values preserve literal hashes, quotes, backslashes, and whitespace. Multiline
+quoted values are rejected. An unquoted `#`
+starts a comment; quote values that contain a literal `#`. The generated file
 includes a documented empty `[secret]` table even when no `--secret` is selected.
 
 ## Export a workspace to dotenv
@@ -647,14 +656,21 @@ shine env workspace export \
 ```
 
 This writes plaintext secrets. On Unix, a secret-bearing output is created with owner-only `0600`
-permissions; keep it out of version control on every platform. Existing outputs are rejected unless
-you add `--force`, and `--dry-run` reports the mode, destination, and variable count without printing
-values or writing the file.
+permissions; keep it out of version control on every platform. Without `--force`, existing outputs
+(including dangling symbolic links) are preserved, even if they appear while the export is waiting
+for decryption. Concurrent exports to the same destination allow only one to succeed. Add `--force`
+to replace an existing output. `--dry-run` reports the mode, destination, and variable count without
+printing values or writing the file.
 
 The exported file has no Shine metadata or runtime dependency. To leave Shine env, export and test
 each required mode, add secret-bearing outputs to `.gitignore`, remove `shine env run` wrappers, and
 only then archive or delete `shine.workspace.toml` and its `*.shine.toml` sources yourself. Export
 never deletes those source files.
+
+Export preserves literal backslashes, quotes, and newlines using dotenv quoting. Values containing
+`$`, carriage returns, NUL bytes, or no safe quote delimiter are rejected before writing or replacing
+the output. For those values, continue using `shine env run`, or prepare an output specifically for
+your target tool. Always test the exported file with that tool before switching over.
 
 ## Use layered project environments
 
@@ -796,3 +812,98 @@ not edit during sealing: editors ignoring the lock can race in the final compari
 to replacement interval. Failed sealing may leave pending plaintext entries; Shine
 does not claim they were cleared. `.shine-seal.lock` files may remain, contain no
 secrets, and must not be deleted while a seal is active.
+
+## Temporary secret files {#workspace-secret-files}
+
+Use workspace version 3 to keep signing keystores, password files, and service credentials encrypted
+in Git. A file group is a named collection of mappings, not a directory. Each mapping declares a
+ciphertext `source` and a plaintext `target`; one group may span several directories, and repeatable
+`--file-group` selects multiple groups. Application code reads ordinary files and does not need a
+Shine API. Only the wrapped build workflow requires the Shine CLI.
+
+Replace the recipient placeholder with a real public recipient. Identities stay outside the repository:
+
+```toml
+version = 3
+
+[env]
+default_mode = "staging"
+modes = ["staging", "production"]
+
+[env.encryption]
+backend = "age"
+age_recipients = ["<actual age recipient>"]
+
+[[file_groups.android-signing.files]]
+source = ".secrets/{mode}/release.jks.enc"
+target = ".android-signing/release.jks"
+
+[[file_groups.android-signing.files]]
+source = ".secrets/{mode}/signing.properties.enc"
+target = ".android-signing/signing.properties"
+
+[[file_groups.service-account.files]]
+source = ".secrets/{mode}/service-account.json.enc"
+target = "app/.credentials/service-account.json"
+```
+
+Both paths are relative to the workspace directory and support `{mode}`. `--mode` overrides
+`env.default_mode`; the selected mode must be declared in `env.modes` or `env.default_mode`.
+Missing files fail without falling back to another environment. All modes use the same mapping
+list. Version 2 workspaces remain supported; older clients reject version 3. A version 3 workspace
+with file groups may omit `env.files`; such a workspace requires `--file-group` for `env run`.
+
+Ignore all plaintext targets before use in a Git repository, for example `.android-signing/` and
+`app/.credentials/`. Tracked or non-ignored targets are rejected, including case or Unicode
+aliases of tracked paths whose working files are missing. Shine does not edit `.gitignore`.
+Checks use each target's own repository, including nested repositories. Git inspection failures
+stop the operation before plaintext is released.
+Use the following commands after preparing the plaintext files:
+
+```bash
+shine env secret seal --mode production --file-group android-signing --file-group service-account --dry-run
+shine env secret seal --mode production --file-group android-signing --file-group service-account --remove-plaintext
+shine env run --mode production --file-group android-signing --file-group service-account -- pnpm android:build
+```
+
+`seal --file-group` reads `target` and creates or updates `source`. It reuses existing GPG, age,
+and hybrid policies, including CLI overrides and hybrid recipient restrictions. By default it retains
+plaintext. `--remove-plaintext` decrypts and compares every written ciphertext before starting
+plaintext deletion, so it needs a usable identity and may prompt for authorization. Verification or
+cancellation before deletion retains all original plaintext. Multi-file writes and deletion are not
+one transaction; failures report completed and remaining files. There is no ciphertext-only
+recipient rotation workflow in this first version.
+
+`env run --file-group` decrypts all selected files before preparing targets, starts the command
+only after every target is ready, and cleans up its files on success, failure, or controlled
+interruption. Existing targets are never overwritten. Replaced targets are retained and reported.
+If the child deletes a target or its parent directory, that target is already cleaned; Shine still
+cleans the remaining mappings and preserves the child's exit status. Replacement files, directories,
+and dangling links remain protected and reported.
+On Unix, cleanup can still remove an unchanged owned file after the child removes its read
+permission; it never restores permissions or deletes a replacement to make cleanup succeed.
+Phone-backed age decryption preserves QR authorization and explicitly enabled terminal messages;
+ordinary captured backend diagnostics remain hidden.
+During execution, mapping previews go to stderr so the command's stdout remains byte-exact.
+Dry-run previews remain on stdout.
+New Unix files use `0600` and directories use `0700`; Windows requires a filesystem supporting
+private current-user ACLs. Cleanup failure returns an error; a failed child retains its exit code.
+The wrapper supervises its process group on Unix and a Job Object on Windows. Do not start detached
+background tasks that outlive the wrapped command; remaining scoped descendants are terminated.
+
+`--dry-run` inspects configuration and metadata only: it does not read plaintext, decrypt, write
+files, or execute the command. It cannot verify ciphertext integrity or private-key availability.
+`--file-group` conflicts with `seal <FILE>`, `--no-workspace`, and `--secret-broker` as applicable.
+Plain `seal` and `env run` do not implicitly select file groups.
+
+Paths must stay inside the workspace; absolute paths, traversal, symbolic links/reparse points,
+hard links, and overlapping mappings are rejected. Mappings cannot overlap the workspace definition,
+including names that differ only in case or Unicode normalization. These aliases are conservatively
+rejected across platforms.
+Each plaintext file is limited to 16 MiB, with 64 MiB per invocation. Encoded ciphertext is limited to 32 MiB per file and 128 MiB per invocation. File ciphertext uses
+Shine's existing tagged storage encoding, not a native `.age` or `.gpg` file.
+
+The child and other processes with sufficient local permissions can read the temporary plaintext.
+Force-killing Shine or losing power can leave files behind: inspect existing targets manually before
+retrying. Removing files is not secure erasure. Builds never automatically encrypt modified targets
+back into the repository. Removing a recipient does not revoke access to ciphertext in Git history.

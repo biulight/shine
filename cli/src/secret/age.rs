@@ -61,10 +61,7 @@ async fn decrypt_base64_age(
     }
     let identity_plugins = inspect_identity_plugins(identities).await?;
     let quiet_phone_progress = identity_plugins.required.contains(&"age-plugin-phone")
-        && !phone_terminal_output_requested(
-            std::env::var_os("AGE_PLUGIN_PHONE_TRANSPORT").as_deref(),
-            std::env::var_os("AGE_PLUGIN_PHONE_MESSAGES").as_deref(),
-        );
+        && !phone_terminal_output_enabled(&identity_plugins);
     let multiple_phone_identities = identity_plugins.phone_identity_count > 1;
 
     preflight_age().await?;
@@ -91,15 +88,64 @@ async fn decrypt_base64_age(
     .await
 }
 
+pub(super) async fn encrypt_bytes(plaintext: &[u8], recipients: &[String]) -> Result<String> {
+    preflight_recipients(recipients).await?;
+    let mut command = Command::new("age");
+    for recipient in recipients {
+        command.arg("-r").arg(recipient.trim());
+    }
+    let child = command
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let bytes = super::exec::write_stdin_and_read_bytes(child, plaintext, 24 * 1024 * 1024).await?;
+    anyhow::ensure!(!bytes.is_empty(), "empty age ciphertext");
+    Ok(encode_base64_single_line(&bytes))
+}
+
+pub(super) async fn decrypt_bytes(
+    encoded: &str,
+    identities: &[PathBuf],
+    limit: usize,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    let identity_plugins = preflight_identity_inspection(identities).await?;
+    let file = TempFile::new("shine-age-file").await?;
+    decode_base64_to_file(encoded, file.path()).await?;
+    let mut command = Command::new("age");
+    command.arg("-d");
+    for identity in identities {
+        command.arg("-i").arg(identity);
+    }
+    let child = command
+        .arg(file.path())
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::piped())
+        .stderr(if phone_terminal_output_enabled(&identity_plugins) {
+            std::process::Stdio::inherit()
+        } else {
+            std::process::Stdio::piped()
+        })
+        .spawn()?;
+    super::exec::read_bytes_output(child, limit).await
+}
+
 pub(super) async fn preflight_identities(identities: &[PathBuf]) -> Result<()> {
+    preflight_identity_inspection(identities).await.map(|_| ())
+}
+
+async fn preflight_identity_inspection(identities: &[PathBuf]) -> Result<IdentityPluginInspection> {
     if identities.is_empty() {
         bail!("no age identities configured");
     }
     preflight_age().await?;
-    for plugin in required_identity_plugins(identities).await? {
+    let inspection = inspect_identity_plugins(identities).await?;
+    for plugin in &inspection.required {
         ensure_identity_plugin(plugin)?;
     }
-    Ok(())
+    Ok(inspection)
 }
 
 pub(super) async fn preflight_recipients(recipients: &[String]) -> Result<()> {
@@ -219,8 +265,12 @@ fn validate_recipients(recipients: &[String]) -> Result<Vec<&str>> {
     Ok(cleaned)
 }
 
-async fn required_identity_plugins(identities: &[PathBuf]) -> Result<Vec<&'static str>> {
-    Ok(inspect_identity_plugins(identities).await?.required)
+fn phone_terminal_output_enabled(inspection: &IdentityPluginInspection) -> bool {
+    inspection.required.contains(&"age-plugin-phone")
+        && phone_terminal_output_requested(
+            std::env::var_os("AGE_PLUGIN_PHONE_TRANSPORT").as_deref(),
+            std::env::var_os("AGE_PLUGIN_PHONE_MESSAGES").as_deref(),
+        )
 }
 
 #[derive(Debug, PartialEq, Eq)]
