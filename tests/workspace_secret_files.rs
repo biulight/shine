@@ -43,6 +43,11 @@ fn main() {
  match args[0].to_str().unwrap() {
   "check" => { assert_eq!(fs::read(".signing/key").unwrap(), [0,255,10,13,128]); assert!(fs::read("other/password").unwrap().is_empty()); }
   "output" => { std::io::stdout().write_all(&[0,255,10,13,128]).unwrap(); }
+  "remove" => { fs::remove_file(".signing/key").unwrap(); }
+  "remove-parent" => { fs::remove_dir_all(".signing").unwrap(); }
+  "replace-directory" => { fs::remove_file(".signing/key").unwrap(); fs::create_dir(".signing/key").unwrap(); }
+  #[cfg(unix)]
+  "replace-dangling-link" => { fs::remove_file(".signing/key").unwrap(); std::os::unix::fs::symlink("missing", ".signing/key").unwrap(); }
   "replace" => { fs::remove_file(".signing/key").unwrap(); fs::write(".signing/key","replacement").unwrap(); }
   #[cfg(unix)]
   "unreadable" => { use std::os::unix::fs::PermissionsExt; fs::set_permissions(".signing/key", fs::Permissions::from_mode(0)).unwrap(); }
@@ -388,6 +393,56 @@ fn file_groups_verification_and_decryption_failures_preserve_plaintext() {
         "file decryption failed",
     );
     assert!(!f.root.join(".signing").exists());
+}
+
+#[test]
+fn file_groups_accept_targets_removed_by_child_and_keep_exit_status() {
+    for mode in ["remove", "remove-parent"] {
+        for code in [0, 42] {
+            let f = Fixture::new();
+            f.prepare();
+            let output = f
+                .run(mode)
+                .env("PROBE_EXIT", code.to_string())
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(code),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("cleanup failed"));
+            assert!(!f.root.join(".signing").exists());
+            // A child-removed target must not prevent cleanup of another mapping.
+            assert!(!f.root.join("other").exists());
+        }
+    }
+}
+
+#[test]
+fn file_groups_preserve_replacement_directories_during_cleanup() {
+    let f = Fixture::new();
+    f.prepare();
+    error(f.run("replace-directory").output().unwrap(), "cleanup");
+    assert!(f.root.join(".signing/key").is_dir());
+    assert!(!f.root.join("other").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn file_groups_preserve_dangling_replacement_links_during_cleanup() {
+    let f = Fixture::new();
+    f.prepare();
+    error(f.run("replace-dangling-link").output().unwrap(), "cleanup");
+    assert!(
+        fs::symlink_metadata(f.root.join(".signing/key"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!f.root.join(".signing/missing").exists());
+    assert!(!f.root.join("other").exists());
 }
 
 #[test]

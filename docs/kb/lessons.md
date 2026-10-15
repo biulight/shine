@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-15 — Consumed temporary credentials are already cleaned
+
+- **Symptom**: a child consumed and deleted its mapped credential, exited zero, and left no file,
+  but `env run --file-group` returned one because cleanup treated `NotFound` as a failure.
+- **Fix**: check root/ancestor/link boundaries first, then accept an absent target as cleaned.
+  Retain identity checks for existing entries and report all non-absence errors; a dangling
+  replacement link remains a conflict. Continue other mappings and empty-directory cleanup.
+- **Coverage**: real CLI children remove only a file or its parent and exit zero/nonzero;
+  directory and dangling-link replacements remain protected, alongside existing replacement
+  file and unreadable-plaintext regressions.
+
 ## 2026-10-15 — Quote PATH patterns once and keep Windows proxy filenames executable
 
 - **Symptoms**: repeated Sys profile loading duplicated literal PATH entries; proxy installation

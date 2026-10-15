@@ -329,12 +329,28 @@ impl Materialized {
         for owned in self.files.drain(..).rev() {
             let remove = (|| {
                 check_path(&self.root, &owned.path)?;
+                let current = match platform::path_identity(&owned.path) {
+                    Ok(identity) => identity,
+                    // A child may consume its credential file (and its parent).
+                    // Check boundaries first so dangling replacement links still fail.
+                    Err(error)
+                        if error
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+                    {
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error),
+                };
                 ensure!(
-                    platform::path_identity(&owned.path)? == owned.identity
-                        && platform::identity(&owned.file)? == owned.identity,
+                    current == owned.identity && platform::identity(&owned.file)? == owned.identity,
                     "plaintext target was replaced"
                 );
-                fs::remove_file(&owned.path)?;
+                match fs::remove_file(&owned.path) {
+                    Ok(()) => (),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                    Err(error) => return Err(error.into()),
+                }
                 Ok::<_, anyhow::Error>(())
             })();
             if let Err(error) = remove {

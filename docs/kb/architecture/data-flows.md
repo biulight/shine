@@ -23,7 +23,9 @@ or Windows Job Object, cleans owned files by handle identity and owned empty dir
 and captured inputs, then propagates the child status. Preparation cancellation drops guards.
 Existing/replaced targets are never automatically adopted. Metadata-only dry-run stops before
 password tools and writes. Cleanup compares metadata-only path identity with the held ownership
-handle, so Unix read-permission changes do not strand an unchanged owned file. Binary age decrypt
+handle, so Unix read-permission changes do not strand an unchanged owned file. A child-deleted
+target is already cleaned after boundary checks; continue cleaning other mappings and retain the
+child status. Replacement files/directories/links and non-absence errors still fail cleanup. Binary age decrypt
 inherits stderr only for required phone QR or explicitly requested phone messages; ordinary captured
 diagnostics are discarded. Binary encryption owns the child through concurrent pipe I/O and wait,
 terminating and reaping on pipe failure or output overflow.

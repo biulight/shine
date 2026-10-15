@@ -877,6 +877,9 @@ recipient rotation workflow in this first version.
 `env run --file-group` decrypts all selected files before preparing targets, starts the command
 only after every target is ready, and cleans up its files on success, failure, or controlled
 interruption. Existing targets are never overwritten. Replaced targets are retained and reported.
+If the child deletes a target or its parent directory, that target is already cleaned; Shine still
+cleans the remaining mappings and preserves the child's exit status. Replacement files, directories,
+and dangling links remain protected and reported.
 On Unix, cleanup can still remove an unchanged owned file after the child removes its read
 permission; it never restores permissions or deletes a replacement to make cleanup succeed.
 Phone-backed age decryption preserves QR authorization and explicitly enabled terminal messages;
