@@ -646,3 +646,36 @@ async fn changed_source_or_permissions_in_fresh_capture_invalidates_approval() {
         assert_observation_only(&host, since);
     }
 }
+
+#[tokio::test]
+async fn prevalidated_approval_is_rechecked_before_apply() {
+    let host = InMemoryHost::new();
+    let trusted = service(host.clone()).into_trusted();
+    let approved = trusted
+        .review(ReviewRequest::App(app_plan_request()))
+        .await
+        .unwrap()
+        .approve_after_human_confirmation()
+        .unwrap();
+    trusted.validate_approved(&approved).await.unwrap();
+    host.put_file(
+        home_dir().join(".config/available/config.toml"),
+        b"changed after validation".to_vec(),
+    );
+    let since = host.operations().len();
+    let mut events = Vec::new();
+    let error = trusted
+        .apply(
+            approved,
+            ExecutionOptions::default(),
+            &mut NullObserver,
+            &mut Human,
+            &mut events,
+        )
+        .await
+        .err()
+        .expect("apply must revalidate a previously validated approval");
+    assert_eq!(error.diagnostic().code, "frontend_approval_stale");
+    assert!(events.is_empty());
+    assert_observation_only(&host, since);
+}

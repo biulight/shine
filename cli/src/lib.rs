@@ -8,6 +8,7 @@ pub mod commands;
 pub mod completion;
 pub mod config;
 pub(crate) mod core_runtime;
+pub mod dispatch;
 pub mod env;
 pub mod git_pull;
 pub mod home;

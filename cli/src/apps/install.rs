@@ -214,7 +214,12 @@ async fn handle_install_with_reporter(
                         )));
                 }
             }
-            _ => skipped += 1,
+            AppFileAction::Removed
+            | AppFileAction::Restored
+            | AppFileAction::ForceRemoved
+            | AppFileAction::ForceRestored
+            | AppFileAction::Missing
+            | AppFileAction::PreviewRemove => skipped += 1,
         }
     }
     let summary_parts = report::install_summary_parts(installed, backed_up, skipped);

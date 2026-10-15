@@ -99,6 +99,11 @@ and replace diagnostic-string routing without turning Plan steps into executable
 methods share exact approval/IR/permission validation and retain action-specific live-state checks.
 Recovery planning dispatches read-only action assessments after receipt-conflict checks; approved
 recovery re-plans under the lock and dispatches rollback handlers in reverse action order (ADR 0104).
+CLI approval orchestration lives in `cli/src/lifecycle_plan.rs`; its `render.rs` child only projects
+reviewed Plans into terminal lines. App upgrade phases share one mutable receipt/report state; Shell
+transaction orchestration retains locks and durability boundaries while dispatching resource-specific
+preparation and recovery handlers (ADR 0111). These extractions do not change Plan fingerprints.
+
 After approval, the CLI upgrade report applies the same relevance rule to unchanged App and Sys
 outcomes; `--verbose --full-plan` restores their individual rows (ADR 0098). The structured
 lifecycle result still includes every selected item.
@@ -999,7 +1004,7 @@ No advisory worker applies changes, executes Presets, or decides trust/approval/
    `rate_limited_until_unix_secs` timestamp (per auth mode) is cached and later checks short-circuit
    until it passes.
 3. Otherwise fetches the latest release from GitHub and stores it in the cache.
-4. Version-check failures are tolerated in `update_check::maybe_notify` (called from `main.rs`) —
+4. Version-check failures are tolerated in `update_check::maybe_notify` (called from `cli/src/dispatch/mod.rs`) —
    a failed check must never break the primary command the user actually ran.
 
 `shine self upgrade --channel preview` targets the moving `preview` tag instead of the latest

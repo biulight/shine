@@ -102,7 +102,14 @@ pub async fn handle_refresh_approved(
                 print_install_error(&label, &anyhow::anyhow!(file.error.unwrap_or_default()));
                 failed += 1;
             }
-            _ => unchanged += 1,
+            AppFileAction::PreviewInstall
+            | AppFileAction::GeneratorPreserved
+            | AppFileAction::Removed
+            | AppFileAction::Restored
+            | AppFileAction::ForceRemoved
+            | AppFileAction::ForceRestored
+            | AppFileAction::Missing
+            | AppFileAction::PreviewRemove => unchanged += 1,
         }
     }
 

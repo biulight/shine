@@ -11,8 +11,8 @@ A phase 1–3 reorganization (commits `dad2821`…`740be5f`) split the code into
 
 ## Decision
 
-`cli/` builds a library crate `cli` containing all logic, plus a thin `main.rs` bin root that does
-`run()` dispatch and the `init` handler. Clap arg types live in the lib (`commands/cli.rs`) because
+`cli/` builds a library crate `cli` containing all logic, plus a thin `main.rs` bin root that owns
+process setup and delegates `run()` dispatch to the CLI library. Clap arg types live in the lib (`commands/cli.rs`) because
 `completion.rs` needs them.
 
 A later pass (commit `7f7e739`) moved the last two handler groups out of `main.rs` proper:
@@ -28,3 +28,10 @@ pattern `presets_commands.rs` and `self_install.rs` already used.
   `test_support::env_lock()` are compiled unconditionally into the lib on purpose — do not
   "fix" this by gating them.
 - Integration-style tests can exercise the lib directly without spawning the binary.
+
+## 2026-10-15 follow-up
+
+[ADR 0111](0111-lifecycle-phase-and-cli-dispatch-refactoring.md) moves command dispatch and parser
+regressions into `cli/src/dispatch/`. The binary retains early completion, argument parsing,
+pre-runtime configuration selection and Tokio setup. Initialization-free commands remain separate
+from configured dispatch so moving handlers cannot silently initialize state.
