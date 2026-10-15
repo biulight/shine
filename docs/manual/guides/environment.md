@@ -879,7 +879,8 @@ Plain `seal` and `env run` do not implicitly select file groups.
 
 Paths must stay inside the workspace; absolute paths, traversal, symbolic links/reparse points,
 hard links, and overlapping mappings are rejected. Mappings cannot overlap the workspace definition,
-including names that differ only in case. Case aliases are conservatively rejected across platforms.
+including names that differ only in case or Unicode normalization. These aliases are conservatively
+rejected across platforms.
 Each plaintext file is limited to 16 MiB, with 64 MiB per invocation. Encoded ciphertext is limited to 32 MiB per file and 128 MiB per invocation. File ciphertext uses
 Shine's existing tagged storage encoding, not a native `.age` or `.gpg` file.
 

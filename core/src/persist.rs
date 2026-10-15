@@ -36,6 +36,25 @@ pub async fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     finalize_temp(&temp, path).await
 }
 
+/// Durably publishes a complete new file without replacing any existing entry.
+/// Concurrent writers cannot both succeed, including through path aliases.
+pub async fn atomic_write_new(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    tokio::fs::create_dir_all(parent)
+        .await
+        .with_context(|| format!("creating {}", parent.display()))?;
+    let temp = parent.join(format!(".shine-write-{}", uuid::Uuid::new_v4()));
+    if let Err(error) = write_temp(&temp, contents, None).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(error);
+    }
+    if let Err(error) = replace_synced(&temp, path, false).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(error).with_context(|| format!("publishing {}", path.display()));
+    }
+    Ok(())
+}
+
 /// Durably writes a private file with owner-only permissions on Unix.
 ///
 /// The temporary file receives the restrictive mode before any content is
@@ -116,7 +135,7 @@ async fn write_temp(
 /// On failure, only `temp` is removed. A synchronization error after replacement
 /// is reported even though the new destination may already be visible.
 pub async fn finalize_temp(temp: &Path, dest: &Path) -> Result<()> {
-    if let Err(error) = replace_synced(temp, dest).await {
+    if let Err(error) = replace_synced(temp, dest, true).await {
         let _ = tokio::fs::remove_file(temp).await;
         return Err(error).with_context(|| format!("replacing {}", dest.display()));
     }
@@ -124,13 +143,19 @@ pub async fn finalize_temp(temp: &Path, dest: &Path) -> Result<()> {
 }
 
 // Keep blocking filesystem synchronization off the async runtime workers.
-async fn replace_synced(temp: &Path, dest: &Path) -> std::io::Result<()> {
+async fn replace_synced(temp: &Path, dest: &Path, replace_existing: bool) -> std::io::Result<()> {
     let temp = temp.to_path_buf();
     let dest = dest.to_path_buf();
     tokio::task::spawn_blocking(move || {
         #[cfg(unix)]
         {
-            std::fs::rename(&temp, &dest)?;
+            if replace_existing {
+                std::fs::rename(&temp, &dest)?;
+            } else {
+                // Linking is atomic and fails if any destination entry exists.
+                std::fs::hard_link(&temp, &dest)?;
+                std::fs::remove_file(&temp)?;
+            }
             let parent = dest
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
@@ -178,16 +203,15 @@ async fn replace_synced(temp: &Path, dest: &Path) -> std::io::Result<()> {
             let new = encode(&std::fs::canonicalize(parent)?.join(name))?;
             const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
             const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+            let flags = MOVEFILE_WRITE_THROUGH
+                | if replace_existing {
+                    MOVEFILE_REPLACE_EXISTING
+                } else {
+                    0
+                };
             // Never unlink the destination; request completion of the move on disk.
             // SAFETY: both buffers are NUL-terminated and live for this call.
-            if unsafe {
-                MoveFileExW(
-                    existing.as_ptr(),
-                    new.as_ptr(),
-                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-                )
-            } == 0
-            {
+            if unsafe { MoveFileExW(existing.as_ptr(), new.as_ptr(), flags) } == 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -228,6 +252,33 @@ pub async fn save_toml_atomic<T: serde::Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn atomic_write_new_never_replaces_a_concurrent_or_existing_file() {
+        let root = std::env::temp_dir().join(format!("shine-new-write-{}", uuid::Uuid::new_v4()));
+        let path = root.join("nested/output");
+        let (first, second) = tokio::join!(
+            atomic_write_new(&path, b"first"),
+            atomic_write_new(&path, b"second"),
+        );
+        let (expected, error) = match (first, second) {
+            (Ok(()), Err(error)) => (b"first".as_slice(), error),
+            (Err(error), Ok(())) => (b"second".as_slice(), error),
+            result => panic!("exactly one publication must succeed: {result:?}"),
+        };
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
+        assert!(atomic_write_new(&path, b"replacement").await.is_err());
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
 
     async fn make_temp_dir(label: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("{label}-{}", uuid::Uuid::new_v4()));

@@ -1,5 +1,20 @@
 # Lessons Learned
 
+## 2026-10-15 — File aliases and no-clobber publication need filesystem-aware checks
+
+- **Symptoms**: Unicode-equivalent workspace names bypassed file-group overlap checks and could
+  be deleted by `seal --remove-plaintext`; forced image conversion replaced another case-aliased
+  input; concurrent non-force packs both reported success for one output.
+- **Causes**: lowercasing alone did not normalize Unicode; image planning compared lexical paths
+  without resolving parent aliases or file identities; pack checked existence before an atomic
+  replacement that still allowed overwriting.
+- **Fixes**: normalize Unicode before/after lowercasing for shared file-group overlap/lock keys;
+  preflight image outputs against normalized resolved paths and input device/inode identities;
+  publish non-force bundles atomically without replacement and retain `output_exists` diagnostics.
+- **Coverage**: both Unicode forms and source/target workspace aliases reject before crypto or
+  deletion; image tests preserve original bytes for case, Unicode, directory and hard-link aliases;
+  concurrent persistence/pack tests require one winner, exact winning bytes and no staging leftovers.
+
 ## 2026-10-15 — Case aliases, delayed ownership checks, and remote-shell paths need boundary tests
 
 - **Symptoms**: `seal --remove-plaintext` deleted a case-aliased workspace definition; proxy

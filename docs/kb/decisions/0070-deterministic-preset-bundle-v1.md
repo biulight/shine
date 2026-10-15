@@ -31,6 +31,9 @@ Packing scans the physical category as well as the immutable snapshot. It reject
 executable/shebang file not referenced by metadata. Diagnostics are stable codes and never echo the
 suspected secret or private path. Output inside the source category is rejected; replacing another
 output requires explicit `--force`.
+The non-force path atomically publishes without replacement; it never relies on a prior existence
+check. A concurrent winner or any existing final entry, including a dangling symlink, is preserved
+and reported as `output_exists`.
 
 Bundle v1 is unsigned. Signature, author identity, revocation, registry upload, and remote dependency
 resolution remain Phase 9 work and must wrap these exact deterministic bytes rather than changing

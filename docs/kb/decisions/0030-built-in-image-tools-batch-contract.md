@@ -25,6 +25,10 @@ Outputs are derived beside each source or flattened into an explicit `--output-d
 never equal the input name. Existing destinations fail unless `--force` is present, output
 collisions are rejected, and encoded bytes are completed before a same-directory temporary file is
 promoted to the destination.
+Before processing, resolve existing path ancestors and compare canonically decomposed, lowercased
+output keys across the whole batch. Compare existing output device/inode identities against every
+input as well. Case/Unicode aliases, aliased output directories and hard links cannot authorize
+overwriting an input, even with `--force`.
 
 Batch processing continues after per-file failures and returns nonzero when any occur. Up to twenty
 failures are printed in full. Larger failure sets print the first twenty and write every diagnostic

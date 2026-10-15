@@ -103,6 +103,8 @@ The returned hash identifies the bundle. `shine.test.toml` remains author-only a
 A pack-policy failure must be fixed in the source; `--force` only replaces the output file and never
 bypasses validation or policy. The output directory is checked after resolving symbolic links and
 parent components (`..`); it must remain outside the category, even with `--force`.
+Without `--force`, an output created by another process during packing is preserved and the command
+fails with `output_exists`.
 
 ## Migrate a 1.x source
 
@@ -312,6 +314,8 @@ PNG, and WebP children only; it never recurses. Without `--output-dir`, output s
 source as `photo.compressed.jpg`, `photo.resized.jpg`, or the selected conversion extension. An
 output directory flattens the selected inputs, so duplicate target names fail explicitly. Existing
 files also fail unless `--force` is present, and source images are never modified in place.
+Conflicts include case and Unicode-equivalent names, directory aliases, and outputs that refer to
+an input through a hard link. `--force` does not permit replacing an input image.
 
 Batch processing continues after an individual failure and returns a nonzero status if any item
 failed. The first 20 failures appear in the terminal. If there are more, the complete list is also

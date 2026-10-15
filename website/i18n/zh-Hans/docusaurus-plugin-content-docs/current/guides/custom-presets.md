@@ -90,6 +90,8 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 返回的 hash 用于标识 bundle。`shine.test.toml` 只供作者使用，不会进入 bundle。Pack policy 失败
 必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。输出目录会在解析
 符号链接和父目录组件（`..`）后检查；即使使用 `--force`，也必须位于类别目录外。
+未使用 `--force` 时，如果其他进程在打包期间创建了输出文件，Shine 会保留该文件并以
+`output_exists` 失败。
 
 ## 迁移 1.x 来源
 
@@ -277,6 +279,8 @@ shine shell uninstall image-tools/img-compress --dry-run
 `--output-dir` 时，结果保存在来源旁边，名称形如 `photo.compressed.jpg`、
 `photo.resized.jpg` 或所选转换格式的扩展名。指定输出目录后，所有结果平铺到该目录；重复目标名会
 明确失败。已有目标也会失败，只有 `--force` 才允许替换；来源图片永远不会被原地修改。
+冲突检查涵盖仅大小写或 Unicode 规范化形式不同的名称、目录别名，以及通过硬链接指向输入的
+输出文件。`--force` 也不允许替换输入图片。
 
 批处理遇到单项失败后会继续，并在存在任意失败时返回非零状态。前 20 条失败会显示在终端；超过
 20 条时，完整列表还会写入 `--output-dir` 下唯一命名的 `image-tools-errors-*.log`，未指定输出目录

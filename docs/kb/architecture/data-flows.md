@@ -8,6 +8,8 @@ records the cross-module sequences and their gotchas.
 
 Version 3 workspace + explicit groups + mode → root-constrained mappings → metadata/Git preflight
 → shared path locks → captured workspace and file bytes → existing tagged binary crypto.
+Overlap checks and lock hashes share Unicode canonical-decomposition and case-folded path keys;
+this includes the workspace definition and absent mapping paths.
 Sealing prepares all ciphertext, rechecks snapshots and writes sources atomically per file;
 optional plaintext removal rereads/decrypts all written sources and verifies snapshots before
 deletion starts. There is no multi-file transaction or automatic build writeback.
@@ -328,7 +330,10 @@ Core sorts logical files, excludes the author-only fixture, builds the versioned
 and encodes fixed-metadata tar.gz bytes. The CLI resolves the category and output parent through
 symlinks and parent components, rejects output inside the category, and performs the requested
 atomic output write at the resolved parent. Missing output directories are created only after this
-check; a final output symlink is replaced as a directory entry and requires `--force`.
+check. Without `--force`, Core persistence publishes the synced temporary file without replacement
+(Unix hard-link publication, Windows write-through move without the replacement flag), so concurrent
+writers cannot overwrite the winner. Existing entries report `output_exists`, including dangling
+symlinks; `--force` retains atomic directory-entry replacement.
 
 ```text
 category → immutable validation → physical policy scan

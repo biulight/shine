@@ -1,6 +1,7 @@
 //! Native private creation, durable object identities, and scoped command supervision.
 use super::*;
 use std::fs::{File, Metadata, OpenOptions};
+use unicode_normalization::UnicodeNormalization;
 
 /// Install handlers before the first password operation. Cancellation drops staging
 /// guards before returning; command execution has its own process-tree supervision.
@@ -159,10 +160,14 @@ pub(super) fn lock_file(path: &Path) -> Result<File> {
 }
 
 pub(super) fn path_key(path: &Path) -> Vec<u8> {
-    // Conservatively reject case aliases on every platform, including case-insensitive APFS.
+    // Normalize before and after case conversion so canonically equivalent
+    // APFS names share both overlap checks and path locks on every platform.
     path.to_string_lossy()
         .replace('\\', "/")
-        .to_lowercase()
+        .nfd()
+        .flat_map(char::to_lowercase)
+        .nfd()
+        .collect::<String>()
         .into_bytes()
 }
 
@@ -280,5 +285,22 @@ impl Drop for Foreground {
         if let Some(pid) = self.0 {
             Self::set(pid);
         }
+    }
+}
+
+#[cfg(test)]
+mod path_key_tests {
+    use super::*;
+
+    #[test]
+    fn unicode_and_case_aliases_share_overlap_and_lock_keys() {
+        assert_eq!(
+            path_key(Path::new("root/CAF\u{c9}/key")),
+            path_key(Path::new("root/cafe\u{301}/key")),
+        );
+        assert_ne!(
+            path_key(Path::new("root/cafe/key")),
+            path_key(Path::new("root/caf\u{e9}/key")),
+        );
     }
 }

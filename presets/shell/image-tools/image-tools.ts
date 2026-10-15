@@ -4,7 +4,9 @@ import {
   lstat,
   mkdir,
   readdir,
+  realpath,
   rename,
+  stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -224,24 +226,72 @@ export function outputPathFor(input: string, options: ImageToolOptions): string 
   }
 }
 
-export function planImageTasks(
+function portablePathKey(path: string): string {
+  return resolve(path).normalize("NFD").toLowerCase().normalize("NFD");
+}
+
+async function resolvedImagePath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (!isErrorCode(error, "ENOENT") || dirname(path) === path) throw error;
+    return join(await resolvedImagePath(dirname(path)), basename(path));
+  }
+}
+
+async function imagePathIdentity(path: string): Promise<{ key: string; object?: string }> {
+  const resolved = await resolvedImagePath(resolve(path));
+  try {
+    const metadata = await stat(resolved, { bigint: true });
+    return { key: portablePathKey(resolved), object: `${metadata.dev}:${metadata.ino}` };
+  } catch (error) {
+    if (!isErrorCode(error, "ENOENT")) throw error;
+    return { key: portablePathKey(resolved) };
+  }
+}
+
+function sameImagePath(
+  first: Awaited<ReturnType<typeof imagePathIdentity>>,
+  second: Awaited<ReturnType<typeof imagePathIdentity>>,
+): boolean {
+  return first.key === second.key ||
+    (first.object !== undefined && first.object === second.object);
+}
+
+export async function planImageTasks(
   files: readonly string[],
   options: ImageToolOptions,
-): { tasks: ImageTask[]; failures: ImageFailure[] } {
+): Promise<{ tasks: ImageTask[]; failures: ImageFailure[] }> {
+  // Resolve existing parents as well as names: an output directory may alias an
+  // input directory, and an existing output may be a hard-link alias of an input.
+  const sourceIdentities = await Promise.all(files.map(imagePathIdentity));
+  const sourceByInput = new Map(files.map((input, index) => [input, sourceIdentities[index]!]));
+  const sourcePaths = new Set(sourceIdentities.map((identity) => identity.key));
+  const sourceObjects = new Set(
+    sourceIdentities.flatMap((identity) => identity.object ? [identity.object] : []),
+  );
+  const outputIdentities = new Map<ImageTask, Awaited<ReturnType<typeof imagePathIdentity>>>();
   const byOutput = new Map<string, ImageTask[]>();
   for (const input of files) {
     const task = { input, output: outputPathFor(input, options) };
-    const bucket = byOutput.get(task.output) ?? [];
+    const identity = await imagePathIdentity(task.output);
+    outputIdentities.set(task, identity);
+    const bucket = byOutput.get(identity.key) ?? [];
     bucket.push(task);
-    byOutput.set(task.output, bucket);
+    byOutput.set(identity.key, bucket);
   }
   const tasks: ImageTask[] = [];
   const failures: ImageFailure[] = [];
-  const sourcePaths = new Set(files.map((file) => resolve(file)));
-  for (const [output, candidates] of byOutput) {
+  for (const candidates of byOutput.values()) {
+    const output = candidates[0]!.output;
     if (candidates.length === 1) {
       const candidate = candidates[0]!;
-      if (sourcePaths.has(resolve(output)) && resolve(output) !== resolve(candidate.input)) {
+      const identity = outputIdentities.get(candidate)!;
+      if (
+        (sourcePaths.has(identity.key) ||
+          (identity.object !== undefined && sourceObjects.has(identity.object))) &&
+        !sameImagePath(identity, sourceByInput.get(candidate.input)!)
+      ) {
         failures.push({
           input: candidate.input,
           message: `output would replace another input: ${output}`,
@@ -340,7 +390,10 @@ async function processTask(
   if (options.operation === "convert" && sourceFormat === options.format) {
     return "skipped";
   }
-  if (resolve(task.input) === resolve(task.output)) {
+  const [inputIdentity, outputIdentity] = await Promise.all([
+    imagePathIdentity(task.input), imagePathIdentity(task.output),
+  ]);
+  if (sameImagePath(inputIdentity, outputIdentity)) {
     throw new Error("output would replace the input file");
   }
 
@@ -425,7 +478,7 @@ export async function runImageTool(
     }
 
     const expanded = await expandImageInputs(options.inputs);
-    const planned = planImageTasks(expanded.files, options);
+    const planned = await planImageTasks(expanded.files, options);
     const failures = [...expanded.failures, ...planned.failures];
     let written = 0;
     let skipped = expanded.ignored;

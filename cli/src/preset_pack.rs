@@ -31,15 +31,22 @@ pub async fn handle_pack(
                 invalidate(&mut artifact.report, "output_inside_category");
             }
             Ok((_, resolved)) => {
-                // Rename replaces the final path entry rather than following its symlink.
-                // Count even a dangling final symlink as an existing output.
-                if resolved.symlink_metadata().is_ok() && !force {
-                    invalidate(&mut artifact.report, "output_exists");
-                } else if shine_core::persist::atomic_write(&resolved, &artifact.bytes)
-                    .await
-                    .is_err()
-                {
-                    invalidate(&mut artifact.report, "output_write_failed");
+                let result = if force {
+                    shine_core::persist::atomic_write(&resolved, &artifact.bytes).await
+                } else {
+                    shine_core::persist::atomic_write_new(&resolved, &artifact.bytes).await
+                };
+                if let Err(error) = result {
+                    let code = if !force
+                        && error
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
+                    {
+                        "output_exists"
+                    } else {
+                        "output_write_failed"
+                    };
+                    invalidate(&mut artifact.report, code);
                 }
             }
             Err(_) => invalidate(&mut artifact.report, "output_write_failed"),
@@ -142,6 +149,45 @@ mod tests {
         std::fs::write(category.join("shine.toml"), "dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.txt'\n").unwrap();
         std::fs::write(category.join("config.txt"), "demo").unwrap();
         (root, category)
+    }
+
+    #[tokio::test]
+    async fn concurrent_pack_without_force_preserves_the_winning_bundle() {
+        let (root, first) = category_fixture();
+        let second = root.join("app/other");
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::copy(first.join("shine.toml"), second.join("shine.toml")).unwrap();
+        std::fs::write(second.join("config.txt"), "other content").unwrap();
+        let mut expected = Vec::new();
+        for category in [&first, &second] {
+            let artifact = shine_core::runtime::pack_preset_path(
+                &shine_core::runtime::RealHost,
+                &root,
+                category,
+            )
+            .await;
+            assert!(artifact.report.valid);
+            expected.push(artifact.bytes);
+        }
+        for index in 0..4 {
+            let output = root.join(format!("bundle-{index}.tar.gz"));
+            let (a, b) = tokio::join!(
+                handle_pack(&first, &output, false, PresetReportFormat::Json),
+                handle_pack(&second, &output, false, PresetReportFormat::Json),
+            );
+            let successes = [a.unwrap(), b.unwrap()];
+            assert_eq!(successes.iter().filter(|&&ok| ok).count(), 1);
+            let winner = usize::from(successes[1]);
+            assert_eq!(std::fs::read(&output).unwrap(), expected[winner]);
+        }
+        assert!(std::fs::read_dir(&root).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".shine-write-")
+        }));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

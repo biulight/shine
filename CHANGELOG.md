@@ -15,6 +15,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   creation, conflict locks, and ownership-aware cleanup protect signing and build credentials.
   Version 2 workspaces remain supported. Native Linux/Windows and hardware behavior need validation.
 
+### Fixes
+
+- Reject Unicode-equivalent workspace file-group paths before encryption or plaintext removal.
+- Preserve image inputs when forced batch outputs collide through case, Unicode, directory, or
+  hard-link aliases.
+- Prevent concurrent `preset pack` commands from replacing an output without `--force`.
+
 ## [2.4.0] — 2026-10-11
 
 ### Breaking Changes

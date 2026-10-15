@@ -135,7 +135,9 @@ bugs. Check this list before changing the modules named in each entry.
   symlinks, private key candidates, private HOME paths, and executable files not referenced by a
   typed path-bearing metadata field block packing with stable codes that never echo suspected
   content or paths. Descriptions, labels, arguments, and other incidental strings never declare an
-  executable payload.
+  executable payload. Without `--force`, publication must atomically reject any existing output
+  entry, including one created by a concurrent writer; an existence check before replacement is
+  insufficient. Force keeps atomic replacement semantics.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, captured executable intent, and each
   file's embedded, external, or overlay origin. It must not include physical source roots: relocating unchanged source is not a
@@ -846,7 +848,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **Workspace file groups are explicit binary release.** Version 3 mappings require repeatable
   `--file-group` selection. Capture all ciphertext before decryption and decrypt all selected files
   before target creation. Reject links, hard-link aliases, path/case overlaps and pre-existing run
-  targets; workspace-definition overlap uses the same case-folded path keys as mapping overlap.
+  targets; workspace-definition overlap, mapping overlap and path locks use the same Unicode
+  canonical-decomposition and case-folded path keys, including paths that do not exist yet.
   Git plaintext targets must be ignored and untracked in their own repository, including
   nested repositories. Git discovery errors fail closed; exit 128 alone never proves absence.
   Run previews use stderr, preserving exact child stdout; dry-run previews use stdout.
