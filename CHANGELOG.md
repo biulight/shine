@@ -17,6 +17,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Fixes
 
+- Preserve single-line backtick-quoted dotenv values during workspace import and reject malformed
+  backtick quotes before writing generated files.
 - Reject Git overlay linking inside Shine projects before changing configuration or the shared
   mirror; use a local overlay path for project-specific customization.
 - Preserve existing dotenv export outputs without `--force`, including files created during

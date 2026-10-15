@@ -404,6 +404,8 @@ fn parse_dotenv_value(path: &Path, line: usize, raw: &str) -> Result<String> {
             );
         }
         value
+    } else if let Some(value) = raw.strip_prefix('`') {
+        parse_quoted_dotenv_value(value, '`', "backtick")?
     } else {
         raw.split_once('#')
             .map(|(value, _)| value)

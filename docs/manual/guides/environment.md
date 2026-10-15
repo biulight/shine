@@ -619,7 +619,9 @@ shine env secret seal
 
 To preserve dotenv semantics, values containing `$` (including `$BASE_URL` and `${BASE_URL}`) or
 escaped double-quoted content are rejected, even inside quotes. Resolve interpolation before
-importing; keep literal dollar signs in a manually authored Shine source instead. An unquoted `#`
+importing; keep literal dollar signs in a manually authored Shine source instead. Single-line
+backtick-quoted values preserve literal hashes, quotes, backslashes, and whitespace. Multiline
+quoted values are rejected. An unquoted `#`
 starts a comment; quote values that contain a literal `#`. The generated file
 includes a documented empty `[secret]` table even when no `--secret` is selected.
 

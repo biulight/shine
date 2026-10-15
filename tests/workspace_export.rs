@@ -235,6 +235,67 @@ fn unrepresentable_export_values_fail_before_creating_or_replacing_output() {
 }
 
 #[test]
+fn dotenv_import_preserves_backtick_quoted_values() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.0.join("shine.workspace.toml")).unwrap();
+    let dotenv = "TOKEN=`hello#world`\nQUOTES=`it's \"quoted\"` # comment\nPATH_VALUE=`C:\\new\\tools`\nEMPTY=``\nSPACES=`  keep  `\n";
+    fs::write(fixture.0.join(".env"), dotenv).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_shine"))
+        .current_dir(&fixture.0)
+        .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
+        .env_remove("SHINE_PRESETS")
+        .args(["env", "workspace", "init", "--from-dotenv", "--mode", "dev"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let source: toml::Value =
+        toml::from_str(&fs::read_to_string(fixture.0.join(".env.shine.toml")).unwrap()).unwrap();
+    for (key, expected) in [
+        ("TOKEN", "hello#world"),
+        ("QUOTES", "it's \"quoted\""),
+        ("PATH_VALUE", r"C:\new\tools"),
+        ("EMPTY", ""),
+        ("SPACES", "  keep  "),
+    ] {
+        assert_eq!(source["plain"][key].as_str(), Some(expected), "{key}");
+    }
+    assert_eq!(fs::read_to_string(fixture.0.join(".env")).unwrap(), dotenv);
+}
+
+#[test]
+fn dotenv_import_rejects_invalid_backtick_values_before_publication() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.0.join("shine.workspace.toml")).unwrap();
+    for value in [
+        "`unterminated",
+        "`closed` trailing",
+        "`$BASE/api`",
+        "`first\nsecond`",
+    ] {
+        fs::write(
+            fixture.0.join(".env"),
+            format!("VALID=first\nTOKEN={value}\n"),
+        )
+        .unwrap();
+        for dry_run in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+            command
+                .current_dir(&fixture.0)
+                .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
+                .env_remove("SHINE_PRESETS")
+                .args(["env", "workspace", "init", "--from-dotenv", "--mode", "dev"]);
+            if dry_run {
+                command.arg("--dry-run");
+            }
+            let output = command.output().unwrap();
+            assert!(!output.status.success(), "{value}: {output:?}");
+            assert!(!fixture.0.join("shine.workspace.toml").exists());
+            assert!(!fixture.0.join(".env.shine.toml").exists());
+        }
+    }
+}
+
+#[test]
 fn dotenv_import_rejects_bare_variable_references_without_publishing_files() {
     let fixture = Fixture::new();
     fs::remove_file(fixture.0.join("shine.workspace.toml")).unwrap();

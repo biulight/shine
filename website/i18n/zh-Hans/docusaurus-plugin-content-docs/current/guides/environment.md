@@ -552,7 +552,7 @@ shine env workspace init --from-dotenv --secret DATABASE_URL
 shine env secret seal
 ```
 
-为避免改变 dotenv 语义，含 `$`（包括 `$BASE_URL` 和 `${BASE_URL}`）或带转义的双引号内容的值会被拒绝，即使它们位于引号内。先解析插值再导入；需要字面量美元符号时，请手动编写 Shine 环境源。未加引号的 `#` 表示注释开始；值本身含 `#` 时请加引号。即使没有选择 `--secret`，生成文件仍会保留带说明的空 `[secret]` 表。
+为避免改变 dotenv 语义，含 `$`（包括 `$BASE_URL` 和 `${BASE_URL}`）或带转义的双引号内容的值会被拒绝，即使它们位于引号内。先解析插值再导入；需要字面量美元符号时，请手动编写 Shine 环境源。单行反引号值会保留其中的 `#`、引号、反斜杠和空白；跨行引号值会被拒绝。未加引号的 `#` 表示注释开始；值本身含 `#` 时请加引号。即使没有选择 `--secret`，生成文件仍会保留带说明的空 `[secret]` 表。
 
 ## 将 workspace 导出为 dotenv
 

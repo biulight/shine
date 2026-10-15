@@ -916,7 +916,9 @@ Serialization uses literal double, single, or backtick quotes with an absent del
 JSON-style escaping. Double quotes are used only without literal backslashes or double quotes.
 Dollar signs, CR, NUL, and values without a safe delimiter fail before output publication because
 Node and Bun dotenv readers cannot preserve them with the same escaping rules. Import likewise
-rejects dollar syntax, including bare `$NAME`; unquoted hashes start comments.
+rejects dollar syntax, including bare `$NAME`; unquoted hashes start comments. Import recognizes
+single-line backtick delimiters before comment parsing and preserves their literal content;
+unterminated/multiline quotes and non-comment trailing content fail before publication.
 
 ## Sys bootstrap (`shine sys bootstrap`)
 

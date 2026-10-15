@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-15 — Dotenv backticks must be parsed before comments
+
+- **Symptom**: importing `TOKEN=` followed by a backtick-quoted `hello#world` succeeded but
+  stored an opening backtick and `hello`, changing the value read by Bun.
+- **Cause**: only single and double quotes were recognized, so backtick values entered the
+  unquoted hash-comment branch, which also accepted missing closing delimiters.
+- **Fix**: parse single-line backtick quotes with the shared closing/trailing-content checks
+  before comment stripping; retain the dollar-syntax rejection.
+- **Coverage**: real CLI imports preserve hashes, both quote types, backslashes, empty values,
+  and whitespace; invalid, multiline, or interpolated values publish no files in normal/dry-run.
+
 ## 2026-10-15 — Dotenv conversion and installed paths need consumer round trips
 
 - **Symptoms**: exported quotes/backslashes changed under Node/Bun dotenv readers; `$NAME`
