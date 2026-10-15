@@ -70,6 +70,23 @@ pub async fn atomic_write_private(path: &Path, contents: &[u8]) -> Result<()> {
     finalize_temp(&temp, path).await
 }
 
+/// Durably publishes a private file without replacing any existing entry.
+/// The temporary file is private before writing, and publication preserves its mode.
+pub async fn atomic_write_private_new(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    tokio::fs::create_dir_all(parent)
+        .await
+        .with_context(|| format!("creating {}", parent.display()))?;
+    let temp = parent.join(format!(".shine-write-{}", uuid::Uuid::new_v4()));
+
+    if let Err(error) = write_private_temp(&temp, contents).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(error);
+    }
+
+    finalize_temp_new(&temp, path).await
+}
+
 #[cfg(unix)]
 async fn write_private_temp(temp: &Path, contents: &[u8]) -> Result<()> {
     let mut file = tokio::fs::OpenOptions::new()
@@ -259,6 +276,57 @@ pub async fn save_toml_atomic<T: serde::Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn atomic_write_private_new_preserves_the_concurrent_winner_and_cleans_staging() {
+        let root = make_temp_dir("shine-private-new").await;
+        let path = root.join("nested/secret.env");
+        let (first, second) = tokio::join!(
+            atomic_write_private_new(&path, b"first secret"),
+            atomic_write_private_new(&path, b"second secret"),
+        );
+        let (expected, error) = match (first, second) {
+            (Ok(()), Err(error)) => (b"first secret".as_slice(), error),
+            (Err(error), Ok(())) => (b"second secret".as_slice(), error),
+            result => panic!("exactly one private publication must succeed: {result:?}"),
+        };
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                tokio::fs::metadata(&path)
+                    .await
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        assert!(
+            atomic_write_private_new(&path, b"replacement")
+                .await
+                .is_err()
+        );
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+        // Publication failure for a directory also removes only the staged file.
+        assert!(
+            atomic_write_private_new(path.parent().unwrap(), b"secret")
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
 
     #[tokio::test]
     async fn atomic_write_new_never_replaces_a_concurrent_or_existing_file() {

@@ -17,6 +17,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Fixes
 
+- Reject Git overlay linking inside Shine projects before changing configuration or the shared
+  mirror; use a local overlay path for project-specific customization.
+- Preserve existing dotenv export outputs without `--force`, including files created during
+  decryption and concurrent exports; secret-bearing outputs retain private Unix permissions.
 - Protect `preset copy` and `preset export` from linked output files or subdirectories; forced
   writes preserve other hard-link names and concurrent non-force copies preserve the winner.
 - Clean up incomplete SSH sessions when listener setup or starting the SSH process fails.

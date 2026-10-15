@@ -28,6 +28,11 @@ This also handles relinking an existing mirror. `shine preset overlay link --git
 config and clones immediately; a manual `overlay link <path>` and a Git URL are mutually exclusive
 (setting one clears the other).
 
+Git source keys are global-only: `overlay link --git` must reject an active project before config
+saving or mirror synchronization. Project loaders do not accept these keys, and the shared
+`<shine_dir>/overlay` is not a project-specific mirror. For a project overlay, clone separately and
+link the local directory; projects may still consume and pull the inherited global Git overlay.
+
 Force-mirror (not fast-forward) was chosen deliberately: the managed checkout is a read-only mirror
 of an overlay maintained elsewhere, so it should always equal the remote — even when the maintainer
 rebases, amends, or force-pushes — with no merge conflicts to resolve on consumer devices. This

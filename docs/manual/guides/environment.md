@@ -648,9 +648,11 @@ shine env workspace export \
 ```
 
 This writes plaintext secrets. On Unix, a secret-bearing output is created with owner-only `0600`
-permissions; keep it out of version control on every platform. Existing outputs are rejected unless
-you add `--force`, and `--dry-run` reports the mode, destination, and variable count without printing
-values or writing the file.
+permissions; keep it out of version control on every platform. Without `--force`, existing outputs
+(including dangling symbolic links) are preserved, even if they appear while the export is waiting
+for decryption. Concurrent exports to the same destination allow only one to succeed. Add `--force`
+to replace an existing output. `--dry-run` reports the mode, destination, and variable count without
+printing values or writing the file.
 
 The exported file has no Shine metadata or runtime dependency. To leave Shine env, export and test
 each required mode, add secret-bearing outputs to `.gitignore`, remove `shine env run` wrappers, and

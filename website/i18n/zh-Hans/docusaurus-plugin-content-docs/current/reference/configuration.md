@@ -170,8 +170,10 @@ Native/source 命令及 snapshot 命令保留现有启动方式。
 
 Overlay 在选定的基础预设来源上按相同相对路径覆盖文件，不替代整棵目录。手动关联的
 `presets_overlay_dir` 与 `presets_overlay_git` 互斥；使用 `shine preset overlay link` 可避免同时配置。
-Git 管理的 overlay 只有在首次 `shine preset pull` 克隆成功后才生效，本地检出会在后续拉取时
-强制镜像到远端状态，因此不要直接修改 `~/.shine/overlay/`。
+`presets_overlay_git` 和 `presets_overlay_git_branch` 仅用于全局 `config.toml`；
+请在 Shine 项目之外运行 `overlay link --git`。项目可使用 `presets_overlay_dir` 关联本地 overlay。
+关联命令克隆成功后，Git overlay 即可生效；手动填写配置时，则需先成功执行 `shine preset pull`。
+本地检出会在后续拉取时强制镜像到远端状态，因此不要直接修改 `~/.shine/overlay/`。
 
 ## Env 值覆盖顺序
 

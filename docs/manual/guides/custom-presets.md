@@ -345,13 +345,19 @@ other presets continue to use the base source.
 
 Shine can manage a local mirror of a read-only overlay repository used by multiple devices:
 
+Git-managed overlays are global settings. Run the following commands outside any Shine project:
+neither the current directory nor its ancestors may contain a `shine.config.toml`.
+Inside a Shine project, `overlay link --git` is rejected before
+changing the configuration or mirror. For a project-specific overlay, clone the repository yourself
+and use `shine preset overlay link <PATH>` from the project instead.
+
 ```bash
 shine preset overlay link --git https://example.com/team/shine-overlay.git --branch main
 shine preset pull
 shine preset overlay info
 ```
 
-The first `shine preset pull` shallow-clones the repository under `~/.shine/overlay/`. Later pulls
+The link command shallow-clones the repository under `~/.shine/overlay/`. Later pulls
 mirror that directory to the latest state of the remote branch. It is a disposable cache: the next
 pull discards local edits. Make changes and push them in an upstream checkout, then synchronize each
 device with `shine preset pull`, `shine update --pull`, or `shine upgrade --pull`.

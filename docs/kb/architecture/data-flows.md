@@ -904,6 +904,11 @@ injection. The default path parses only `[plain]` values and does not decrypt pa
 secret declaration removes any earlier plain value with the same key. `--include-secrets` switches
 to the normal sealed-source compiler, then writes the standalone plaintext result through an atomic
 owner-only file on Unix. Export never edits or removes the workspace definition or source files.
+An early `symlink_metadata` check diagnoses existing output entries. Final publication without
+`--force` uses `atomic_write_new` or `atomic_write_private_new`, which stages and syncs content
+before Core's `finalize_temp_new` atomically rejects any existing destination. A competing writer
+during decryption cannot be overwritten. Force uses the corresponding replacing writer; failed
+publication cleans its staging file, and secret bytes are private from the first write on Unix.
 
 ## Sys bootstrap (`shine sys bootstrap`)
 
@@ -1016,6 +1021,11 @@ and worktree metadata files. Git subprocesses remove inherited repository select
 transport/authentication settings.
 The fetch runs before the reset, so an unreachable remote leaves the previous checkout intact and
 usable. `shine preset overlay link --git <url>` writes the config and clones immediately;
+the command is global-only and rejects an active project before either effect because project
+configuration does not load Git source keys and the mirror is shared. The CLI routes Git links
+through read-only loading before initialization/advisories, including when global state is absent.
+Manual path linking remains
+available per project. Inherited global mirrors can still be inspected and pulled within projects.
 `configured_targets` deliberately excludes the managed dir from the fast-forward path. See
 [ADR 0010](../decisions/0010-git-managed-overlay.md).
 

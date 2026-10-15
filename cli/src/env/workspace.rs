@@ -3,7 +3,9 @@ mod local_cache;
 
 use super::broker::{SourceSnapshot, WorkspaceSnapshot};
 use crate::commands::EnvWorkspaceExportFormat;
-use crate::persist::{atomic_write, atomic_write_private};
+use crate::persist::{
+    atomic_write, atomic_write_new, atomic_write_private, atomic_write_private_new,
+};
 use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{config::Config, secret};
 use anyhow::{Context, Result, bail};
@@ -63,11 +65,15 @@ pub async fn handle_export(
     let workspace = load_workspace(&workspace_path).await?;
     let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
     let output = absolute_from_current(output)?;
-    if output.exists() && !force {
-        bail!(
-            "{} already exists; rerun with --force to replace it",
-            output.display()
-        );
+    if !force {
+        match tokio::fs::symlink_metadata(&output).await {
+            Ok(_) => bail!(
+                "{} already exists; rerun with --force to replace it",
+                output.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("inspecting export destination"),
+        }
     }
 
     let mut values = compile_export_sources(&sources, config, include_secrets && !dry_run).await?;
@@ -90,16 +96,29 @@ pub async fn handle_export(
         }
         contents.zeroize();
     } else {
-        let write_result = if include_secrets {
-            atomic_write_private(&output, contents.as_bytes()).await
-        } else {
-            atomic_write(&output, contents.as_bytes()).await
+        let write_result = match (force, include_secrets) {
+            (false, true) => atomic_write_private_new(&output, contents.as_bytes()).await,
+            (false, false) => atomic_write_new(&output, contents.as_bytes()).await,
+            (true, true) => atomic_write_private(&output, contents.as_bytes()).await,
+            (true, false) => atomic_write(&output, contents.as_bytes()).await,
         };
         for value in values.values_mut() {
             value.zeroize();
         }
         contents.zeroize();
-        write_result?;
+        if let Err(error) = write_result {
+            if !force
+                && error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
+            {
+                bail!(
+                    "{} already exists; rerun with --force to replace it",
+                    output.display()
+                );
+            }
+            return Err(error);
+        }
         println!(
             "Exported {} variables for mode {mode} to {}{}",
             values.len(),

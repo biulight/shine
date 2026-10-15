@@ -577,7 +577,10 @@ shine env workspace export \
   --include-secrets
 ```
 
-这会把 secret 以明文写入文件。在 Unix 上，含 secret 的新输出文件权限为仅所有者可读写的 `0600`；无论使用什么平台，都应将它排除在版本控制之外。目标已存在时命令默认拒绝覆盖，确认后才添加 `--force`；`--dry-run` 只报告 mode、目标路径和变量数量，不显示值，也不写文件。
+这会把 secret 以明文写入文件。在 Unix 上，含 secret 的新输出文件权限为仅所有者可读写的 `0600`；无论使用什么平台，都应将它排除在版本控制之外。
+未指定 `--force` 时，已有目标（包括悬空符号链接）会被保留，即使它是在等待解密期间出现的。
+多个导出同时写入同一目标时，只允许一个成功。确认需要替换已有输出后，再添加 `--force`。
+`--dry-run` 只报告 mode、目标路径和变量数量，不显示值，也不写文件。
 
 导出文件不含 Shine 元数据，也不依赖 Shine 运行。若要停用 Shine env，请逐个导出并验证所需 mode，将含 secret 的输出加入 `.gitignore`，移除 `shine env run` 包装，最后再自行归档或删除 `shine.workspace.toml` 与对应的 `*.shine.toml` 环境源。导出命令不会删除这些源文件。
 

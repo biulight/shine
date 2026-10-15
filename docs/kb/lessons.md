@@ -1,5 +1,23 @@
 # Lessons Learned
 
+## 2026-10-15 — Configuration scope and export publication must match their final effect
+
+- **Symptoms**: project `overlay link --git` reported success but the next invocation ignored the
+  source; dotenv exports without `--force` overwrote files created during decryption, and two
+  competing exports both succeeded.
+- **Causes**: the handler saved keys that project loading never reads and synchronized a shared
+  global mirror; export used an early `exists()` check followed by unconditional replacement.
+- **Fixes**: route Git links before runtime initialization, reject project scope before saving or
+  syncing, retain manual project links, and
+  publish ordinary/private exports with Core no-clobber writers unless force is explicit.
+  Diagnose existing entries with `symlink_metadata`, including dangling links.
+- **Coverage**: real CLI project rejection leaves uninitialized global state absent and preserves
+  both configs and absent/existing mirrors;
+  global links survive fresh-process info/pull; delayed backend barriers expose late-created and
+  concurrent destinations. Tests check exact winning bytes, private permissions and staging cleanup.
+- **Rule**: writes must target a layer that reads the setting, and no-overwrite guarantees belong
+  in the final atomic publication rather than the preflight check.
+
 ## 2026-10-15 — Copy targets, session failures and IPv6 need native boundary checks
 
 - **Symptoms**: preset copy/export followed output links outside the chosen tree and truncated

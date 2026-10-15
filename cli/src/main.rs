@@ -231,6 +231,19 @@ async fn run_command(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
+    // Git overlay scope must be checked before runtime initialization can write config.
+    if let Commands::Preset {
+        command:
+            PresetCommands::Overlay {
+                command: OverlayCommands::Link(command),
+            },
+    } = &cli.command
+        && command.git.is_some()
+    {
+        let config = Box::pin(Config::load_read_only()).await?;
+        return Box::pin(handle_overlay_link(&config, command.clone())).await;
+    }
+
     // Pure env inspection and directed writes must not initialize state, run
     // advisory workers, sync overlays, or add output to `env get`.
     if let Commands::Env { command } = &cli.command {

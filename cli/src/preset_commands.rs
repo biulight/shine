@@ -286,6 +286,11 @@ async fn handle_overlay_link_git(
     url: String,
     branch: Option<String>,
 ) -> Result<()> {
+    if config.is_project_config() {
+        bail!(
+            "Git-managed overlays are global-only; run `shine preset overlay link --git <URL>` outside any Shine project. For a project-specific overlay, use `shine preset overlay link <PATH>`"
+        );
+    }
     let url = url.trim().to_string();
     if url.is_empty() {
         bail!("overlay Git URL must not be empty");

@@ -701,6 +701,12 @@ bugs. Check this list before changing the modules named in each entry.
   managed directory and its `.git` directory. Repository-selecting environment variables cannot
   redirect Git operations. After a successful fetch/reset, clean untracked and ignored files and
   nested repositories only inside that verified disposable mirror, including when HEAD is unchanged.
+- **Managed Git overlay configuration is global-only.** Project config does not load Git overlay
+  keys, and all projects share `<shine_dir>/overlay`. Reject `overlay link --git` with an active
+  project before saving or synchronizing; route through read-only config loading before runtime
+  initialization or advisory work so refusal cannot initialize global state. Project-specific
+  overlays use manual directory links;
+  inherited global Git overlays remain readable and pullable from projects.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and
   [`data-flows.md`](data-flows.md#config-discovery) must agree.
@@ -929,7 +935,10 @@ bugs. Check this list before changing the modules named in each entry.
   secret-winning keys unless `--include-secrets` is present, never mixes in the caller's process
   environment, and never prints exported values in its status or dry-run output. On Unix, an
   export containing secrets must be created privately (`0600`) before plaintext bytes are written;
-  chmod after a wider temporary-file write is not sufficient.
+  chmod after a wider temporary-file write is not sufficient. Without `--force`, publish through
+  Core no-clobber finalization after preparing the complete temporary file, preserving concurrent
+  winners and every existing destination entry, including dangling links. Only `--force` selects
+  atomic replacement. Private staging applies equally to new publication and forced replacement.
 
 ## SSH transfer
 

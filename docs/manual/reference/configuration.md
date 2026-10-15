@@ -196,9 +196,12 @@ raw Live commands, native/source commands and snapshot commands keep their exist
 
 An overlay replaces files at matching relative paths over the chosen base instead of replacing the
 whole tree. `presets_overlay_dir` and `presets_overlay_git` are mutually exclusive; use
-`shine preset overlay link` to configure them safely. A Git overlay becomes active after the first
-successful `shine preset pull`. Later pulls forcibly mirror its checkout, so never edit
-`~/.shine/overlay/` directly.
+`shine preset overlay link` to configure them safely. `presets_overlay_git` and
+`presets_overlay_git_branch` are global-only keys in `config.toml`; run `overlay link --git`
+outside any Shine project. Projects can use `presets_overlay_dir` for a local overlay.
+A Git overlay becomes active after the link command clones it, or after a successful
+`shine preset pull` when configured manually. Later pulls forcibly mirror its checkout, so never
+edit `~/.shine/overlay/` directly.
 
 ## Environment value precedence
 
