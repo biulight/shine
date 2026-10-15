@@ -24,7 +24,9 @@ Notes:
   so it never becomes the "latest" release that `shine update` resolves.
 - The Ubuntu quality job in `test.yml` installs `cargo-llvm-cov`/llvm-tools; coverage tooling is
   available there. Rust tests run separately on all three supported OS families with `fail-fast`
-  disabled so one platform failure does not hide the others.
+  disabled so one platform failure does not hide the others. Each matrix job installs the pinned
+  Rust and Bun versions and invokes nextest through `mise exec`, so subprocesses launched from
+  temporary directories inherit concrete runtime paths instead of context-dependent mise shims.
 
 ## Documentation server deployment
 

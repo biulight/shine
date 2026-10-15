@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-10-15 — CI subprocesses need concrete runtime paths
+
+- **Symptom**: Linux dotenv conformance failed with `No version is set for shim: bun` after
+  entering a temporary fixture directory; the uninstall regression itself passed.
+- **Cause**: the Rust matrix installed only Rust, and inherited a Bun mise shim that could
+  resolve a version in the repository but not in the fixture.
+- **Fix**: install pinned Rust and Bun in every matrix job and run nextest through `mise exec`
+  so its child processes inherit concrete tool paths across working-directory changes.
+
 ## 2026-10-15 — Uninstall routing must retain receipt-only targets
 
 - **Symptom**: top-level `uninstall app/<category>` rejected removed sources although

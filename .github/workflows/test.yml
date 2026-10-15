@@ -64,15 +64,15 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
-      - name: Install Rust with mise
+      - name: Install Rust and Bun with mise
         uses: jdx/mise-action@v4
         with:
           version: 2026.7.7
-          install_args: rust
+          install_args: rust bun
       - name: Install Rust target
         run: mise exec -- rustup target add ${{ matrix.target }}
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
       - name: Execute rust tests
-        run: cargo nextest run --workspace --all-features --target ${{ matrix.target }} --no-fail-fast
+        run: mise exec -- cargo nextest run --workspace --all-features --target ${{ matrix.target }} --no-fail-fast
