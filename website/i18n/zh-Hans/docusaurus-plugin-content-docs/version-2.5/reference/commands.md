@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 2.4.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
+本页适用于 Shine 2.5.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
 请阅读对应指南；本页只提供便于查找的命令索引。
 
 ## 目标名称
@@ -118,6 +118,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 
 先使用 `shine app uninstall <OLD_CATEGORY> --dry-run`，再使用
 `shine app uninstall <OLD_CATEGORY>`，即可在 Preset 不可用时按原安装记录卸载。
+顶层命令 `shine uninstall app/<OLD_CATEGORY>` 同样支持这种清理。裸分类名称也会考虑来源已丢失的
+已安装目标；名称冲突时，请使用 `app/` 或 `shell/` 前缀。
 卸载只选择该类别的安装记录，不会认领其他类别在同一目标路径的记录。
 复制安装会移除未修改的受管内容，并恢复仍存在的已记录备份；JSON 合并安装只移除安装记录
 拥有的键，保留无关键。用户修改过的受管内容及其记录默认保留，只有显式 `--force` 才可覆盖。
@@ -225,7 +227,7 @@ shine env set <KEY> <VALUE> [--global|--project|--overlay] [--env-file]
 shine env get <KEY>
 shine env explain <KEY> [--reveal]
 shine env delete <KEY> [--global|--project|--overlay] [--env-file]
-shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
+shine env run [--workspace <FILE>] [--mode <MODE>] [--file-group <NAME>]... [--dry-run] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
 shine env proxy install <COMMAND> --with <KEY[=ALIAS]>... [--project]
@@ -237,6 +239,7 @@ shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>
 shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
+shine env secret seal --file-group <NAME>... [--workspace <FILE>] [--mode <MODE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]... [--remove-plaintext] [--dry-run]
 shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PATH>] [--force]
 shine env secret identity init --phone [--recipient-type <tag|phone>] [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
 shine env secret identity list
@@ -345,3 +348,5 @@ shine self upgrade [--channel <stable|preview>]
 
 `stable` 跟随正式发布，`preview` 跟随会被持续替换的预览构建。参见
 [安装与升级](../installation.md)。
+
+文件组的配置、封存、临时执行和清理边界见[临时机密文件](../guides/environment.md#workspace-secret-files)。

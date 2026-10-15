@@ -14,10 +14,12 @@ sidebar_position: 6
 ```bash
 shine ssh user@example.com
 shine ssh -p 2222 user@example.com
+shine ssh user@2001:db8::1
 shine ssh user@example.com uname -a
 ```
 
 `shine ssh` 会把你提供的 SSH 参数传给系统 `ssh`。进入远端 shell 后，Shine 会设置本次会话需要的环境变量；传输命令必须在这个远端 shell 中运行。
+会话初始化或启动 SSH 失败时，Shine 会自动清理未完成的会话。
 
 默认的 `posix` 模式要求远端是 macOS 或 Linux，并能运行同版本兼容的 `shine local`。
 Windows 可以作为本机端发起这种传输会话。Windows 作为远端时需改用下文的
@@ -216,9 +218,19 @@ shine local download ./dist ./dist-copy
 
 `download` 的来源路径由远端解析，目标路径由本机解析。未指定目标时，Shine 会把文件或目录放到本机启动 `shine ssh` 时所在目录，并沿用来源名称。
 
-Shine 会在本机端重新发起系统 `rsync` 或 `scp` 传输；优先使用 `rsync`，不可用时回退到 `scp`。两端都需要可用的 `ssh`，目录传输还需要两端具有同一种可用工具（优先 `rsync`，否则 `scp`）。目标文件已存在时默认拒绝覆盖；目录已存在时加 `--force` 表示合并写入。
+Shine 会在本机端重新发起系统 `rsync` 或 `scp` 传输；优先使用 `rsync`，不可用时回退到 `scp`。两端都需要可用的 `ssh`，目录传输还需要两端具有同一种可用工具（优先 `rsync`，否则 `scp`）。Rsync 默认跳过已有文件，指定 `--force` 才会覆盖；目录已存在时加 `--force` 表示合并写入。
 需要跳过 `rsync` 探测并强制使用 `scp` 时，添加 `--scp`。
+SSH 目标直接使用 IPv6 地址时，为兼容系统 rsync，传输会使用 SCP。SCP 即使未指定 `--force`
+也可能覆盖已有文件，Shine 会显示警告；其 `--dry-run` 只显示解析后的路径，不复制文件。
 Rsync 使用逐文件显示进度的 `--progress` 选项，兼容 macOS 自带的系统 rsync。
+使用 rsync 时，在输入的命令中为含空格的路径和通配模式加引号：
+
+```bash
+shine local download './build output/*.log'
+shine local upload './release notes.txt' '/tmp/release files'
+```
+
+空格和 shell 标点会保留为远端路径的一部分；`*`、`?` 和方括号模式仍可匹配远端文件。
 使用 SCP 重连时，Shine 会转换 SSH 的端口、用户名和控制 socket 选项，保留身份文件、跳板主机等
 连接设置，并跳过原会话的终端和端口转发选项。
 

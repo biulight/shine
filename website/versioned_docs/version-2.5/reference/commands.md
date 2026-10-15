@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 2.4.0. Run `shine <COMMAND> --help` for every option supported by the
+This page reflects Shine 2.5.0. Run `shine <COMMAND> --help` for every option supported by the
 installed version. The task guides explain complete workflows; this page is a compact command index.
 
 ## Targets
@@ -159,6 +159,8 @@ Upgrade preserves these resources by default.
 
 Use `shine app uninstall <OLD_CATEGORY> --dry-run`, then `shine app uninstall <OLD_CATEGORY>`
 to uninstall using the original installation receipt even when the Preset is unavailable.
+The top-level `shine uninstall app/<OLD_CATEGORY>` supports the same recovery. A bare category
+also considers installed targets whose sources are missing; use `app/` or `shell/` when names conflict.
 Uninstall selects that category's receipts, not another category sharing its destination.
 For copy installs, unchanged managed content is removed and an existing recorded backup is
 restored. JSON merge installs remove only receipt-owned keys and preserve unrelated keys.
@@ -277,7 +279,7 @@ shine env set <KEY> <VALUE> [--global|--project|--overlay] [--env-file]
 shine env get <KEY>
 shine env explain <KEY> [--reveal]
 shine env delete <KEY> [--global|--project|--overlay] [--env-file]
-shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
+shine env run [--workspace <FILE>] [--mode <MODE>] [--file-group <NAME>]... [--dry-run] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
 shine env proxy install <COMMAND> --with <KEY[=ALIAS]>... [--project]
@@ -289,6 +291,7 @@ shine env secret encrypt [--backend <gpg|age>] [-r <RECIPIENT>]... [--from <KEY>
 shine env secret decrypt <KEY>
 shine env secret export <KEY> [--as <ALIAS>]
 shine env secret seal [FILE] [--workspace <FILE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]...
+shine env secret seal --file-group <NAME>... [--workspace <FILE>] [--mode <MODE>] [--backend <gpg|age|hybrid>] [-r <RECIPIENT>]... [--remove-plaintext] [--dry-run]
 shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PATH>] [--force]
 shine env secret identity init --phone [--recipient-type <tag|phone>] [--label <LABEL>] [--transport <auto|adb|qr>] [--adb-serial <SERIAL>]
 shine env secret identity list
@@ -405,3 +408,5 @@ shine self upgrade [--channel <stable|preview>]
 
 `stable` follows released versions. `preview` follows the replaceable preview build. See
 [Installation and upgrades](../installation.md).
+
+See [temporary secret files](../guides/environment.md#workspace-secret-files) for file-group configuration, sealing, execution, and cleanup boundaries.

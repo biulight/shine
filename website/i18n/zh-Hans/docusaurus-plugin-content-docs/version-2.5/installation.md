@@ -23,7 +23,7 @@ shine --version
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.4.0 sh install.sh
+SHINE_VERSION=2.5.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -36,7 +36,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.4.0"; .\install.ps1
+$env:SHINE_VERSION = "2.5.0"; .\install.ps1
 ```
 
 ## 从源码安装
@@ -62,12 +62,19 @@ shine self upgrade --channel preview
 
 `preview` 是持续滚动的预发布通道，不参与日常自动更新检查。运行 `shine update` 可以同时检查已安装配置和稳定版程序更新。
 
-Shine 2.4.0 已进入 `latest` 和 stable 通道。从既有 1.x 安装升级前，请先阅读
+稳定版通过 `latest` 和 stable 通道提供。从既有 1.x 安装升级前，请先阅读
 [从 Shine 1.x 升级](./guides/upgrade-to-2.md)了解兼容性变化。
+
+Shine 2.5 新增[临时机密文件](./guides/environment.md#workspace-secret-files)，可为构建过程提供凭据。
+既有 version 2 工作区继续受支持。采用 workspace version 3 前，请将所有读取它的客户端升级到
+Shine 2.5 或更高版本；旧客户端会拒绝新格式。Windows 上新建环境代理必须使用不含可执行文件
+扩展名的名称（例如 `gh`，而非 `gh.exe`）；已安装的带后缀代理仍可卸载。
 
 从 2.3.x 或更早版本升级时，请先阅读[环境分层的升级与回退步骤](./guides/environment.md#env-分层变更的人工升级与回退)。
 2.4.0 调整了同名变量的层级优先级，并用显式目标选项替代环境写入的 `--force`。
 请保留私有备份，并在重要项目中运行 `shine env explain KEY` 检查实际来源。
+
+`shine self install --dest <PATH>` 按当前目录解析相对路径，并记录绝对目标路径，因此之后从任何目录升级时都会同步同一份已安装副本。
 
 在 Unix 系统上，如果 `shine self install` 要把二进制文件复制到当前用户不可写的位置，Shine 会交互式请求授权，并通过 `sudo` 完成安装。`shine self upgrade` 成功后同步另一个已记录的安装目标时，也会采用相同方式。不过，如果当前运行的 Shine 本身位于受保护目录，Shine 暂时无法自动提权替换该二进制文件；请改为安装并运行用户可写位置中的 Shine。Windows 在受保护位置安装或升级时，仍需使用具备相应权限的终端。
 

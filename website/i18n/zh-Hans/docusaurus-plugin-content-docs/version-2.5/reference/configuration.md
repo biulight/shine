@@ -170,8 +170,10 @@ Native/source 命令及 snapshot 命令保留现有启动方式。
 
 Overlay 在选定的基础预设来源上按相同相对路径覆盖文件，不替代整棵目录。手动关联的
 `presets_overlay_dir` 与 `presets_overlay_git` 互斥；使用 `shine preset overlay link` 可避免同时配置。
-Git 管理的 overlay 只有在首次 `shine preset pull` 克隆成功后才生效，本地检出会在后续拉取时
-强制镜像到远端状态，因此不要直接修改 `~/.shine/overlay/`。
+`presets_overlay_git` 和 `presets_overlay_git_branch` 仅用于全局 `config.toml`；
+请在 Shine 项目之外运行 `overlay link --git`。项目可使用 `presets_overlay_dir` 关联本地 overlay。
+关联命令克隆成功后，Git overlay 即可生效；手动填写配置时，则需先成功执行 `shine preset pull`。
+本地检出会在后续拉取时强制镜像到远端状态，因此不要直接修改 `~/.shine/overlay/`。
 
 ## Env 值覆盖顺序
 
@@ -292,3 +294,7 @@ SSH broker 不接受远端个人配置。全局 `secret_backend` 仍只接受 `g
 
 Hybrid 编译缓存使用最终选定的单后端及工作区对应收件人名单。配置变化会重新判定缓存
 有效性，不会自动切换到另一后端。详见[环境指南](../guides/environment.md)。
+
+## Workspace 文件组
+
+Workspace version 3 增加 `file_groups.<名称>.files` 数组，每项要求 `source`（密文）和 `target`（明文）。组必须非空，组名仅含字母、数字、短横线和下划线。路径支持 `{mode}`，解析基准为 workspace 所在目录。声明了文件组时可省略 `env.files`。Version 2 不接受文件组。加密复用 `[env.encryption]`，没有组级或环境级策略。详见[临时机密文件](../guides/environment.md#workspace-secret-files)。

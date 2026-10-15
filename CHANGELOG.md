@@ -5,7 +5,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
-## Unreleased
+## [2.5.0] — 2026-10-16
 
 ### Features
 
@@ -13,24 +13,45 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   Select repeatable `--file-group` mappings and `--mode` to encrypt files for Git or temporarily
   restore them around `env run`. Verified `--remove-plaintext`, metadata-only `--dry-run`, private
   creation, conflict locks, and ownership-aware cleanup protect signing and build credentials.
-  Version 2 workspaces remain supported. Native Linux/Windows and hardware behavior need validation.
+  Version 2 workspaces remain supported; upgrade all clients before adopting version 3, which older
+  clients reject. Hardware authorization and real Android signing remain unverified.
 
 ### Fixes
 
-- Preserve single-line backtick-quoted dotenv values during workspace import and reject malformed
-  backtick quotes before writing generated files.
+- Preserve literal hashes, quotes, backslashes, and whitespace in single-line backtick-quoted
+  dotenv imports. Reject malformed or multiline quotes and unsupported interpolation before writing.
+  Create imported files privately and preserve existing outputs, dangling links, and concurrent writes
+  unless `--force` is supplied.
+- Remember absolute `self install --dest` paths so upgrades synchronize the same installation
+  even when invoked from another directory.
+- Resolve top-level App and Shell uninstall targets from installation receipts when their Preset
+  sources are missing; report ambiguous bare names and accept explicit `app/` or `shell/` prefixes.
+- Avoid duplicate PATH entries when reloading generated Sys profiles, including paths with spaces
+  or shell pattern characters.
+- Reject executable suffixes in new Windows environment-proxy names; existing suffixed proxies
+  can still be uninstalled. Preserve launchers changed concurrently during uninstall.
 - Reject Git overlay linking inside Shine projects before changing configuration or the shared
   mirror; use a local overlay path for project-specific customization.
+- Refuse unmanaged or linked Git overlay checkouts and metadata. Successful synchronization removes
+  stale untracked and ignored overrides, including nested repositories; failed fetches retain the
+  previous checkout.
 - Preserve existing dotenv export outputs without `--force`, including files created during
   decryption and concurrent exports; secret-bearing outputs retain private Unix permissions.
 - Protect `preset copy` and `preset export` from linked output files or subdirectories; forced
   writes preserve other hard-link names and concurrent non-force copies preserve the winner.
 - Clean up incomplete SSH sessions when listener setup or starting the SSH process fails.
 - Preserve IPv6 literal addresses in file transfers, using SCP for system rsync compatibility.
-- Reject Unicode-equivalent workspace file-group paths before encryption or plaintext removal.
+- Preserve remote paths containing spaces or shell punctuation while retaining rsync wildcard matching.
+- Reject case and Unicode aliases in workspace file-group mappings and tracked Git targets,
+  including missing working files and nested repositories. Keep wrapped command stdout unchanged.
+- Clean up unchanged temporary credentials even after the child removes read permission. Treat
+  targets already removed by the child as cleaned, continue other cleanup, and retain its exit status.
+- Preserve phone QR authorization during binary age decryption and terminate encryption backends
+  after pipe failures or excessive output.
 - Preserve image inputs when forced batch outputs collide through case, Unicode, directory, or
   hard-link aliases.
 - Prevent concurrent `preset pack` commands from replacing an output without `--force`.
+- Update rustls to address security advisories.
 
 ## [2.4.0] — 2026-10-11
 

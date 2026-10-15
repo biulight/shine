@@ -25,7 +25,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.4.0 sh install.sh
+SHINE_VERSION=2.5.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -39,7 +39,7 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.4.0"; .\install.ps1
+$env:SHINE_VERSION = "2.5.0"; .\install.ps1
 ```
 
 ## Install from source
@@ -66,8 +66,14 @@ shine self upgrade --channel preview
 `preview` is a continuously updated prerelease channel and is not included in routine automatic
 update checks. `shine update` checks both installed configuration and stable Shine releases.
 
-Shine 2.4.0 is available through `latest` and the stable channel. Before upgrading an existing 1.x
-installation, read [Upgrade from Shine 1.x](./guides/upgrade-to-2.md) for the compatibility changes.
+Stable releases are available through `latest` and the stable channel. Before upgrading an existing
+1.x installation, read [Upgrade from Shine 1.x](./guides/upgrade-to-2.md) for the compatibility changes.
+
+Shine 2.5 adds [temporary secret files](./guides/environment.md#workspace-secret-files) for build
+credentials. Existing version 2 workspaces remain supported. Before adopting workspace version 3,
+upgrade every client that reads it to Shine 2.5 or later; older clients reject the new format.
+On Windows, new environment proxies require names without executable extensions (for example,
+`gh` rather than `gh.exe`); existing suffixed proxies can still be uninstalled.
 
 When upgrading from 2.3.x or earlier, review the
 [environment-layer migration and rollback steps](./guides/environment.md#manual-upgrade-and-rollback-for-env-layering).
