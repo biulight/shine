@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-15 — Uninstall routing must retain receipt-only targets
+
+- **Symptom**: top-level `uninstall app/<category>` rejected removed sources although
+  `app uninstall <category>` could still restore backups from installation receipts.
+- **Cause**: install and uninstall shared a source-only category resolver.
+- **Fix**: explicit uninstall namespaces dispatch directly; bare names use Core inventory
+  including receipts and retain App/Shell ambiguity checks. Ownership and approval remain
+  enforced by the existing lifecycle handlers.
+- **Coverage**: CLI tests remove installed App sources and verify preview, consent, modified-file
+  protection, ambiguity, backup restoration, and receipt removal through both target forms.
+
 ## 2026-10-15 — Dotenv backticks must be parsed before comments
 
 - **Symptom**: importing `TOKEN=` followed by a backtick-quoted `hello#world` succeeded but

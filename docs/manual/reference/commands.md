@@ -159,6 +159,8 @@ Upgrade preserves these resources by default.
 
 Use `shine app uninstall <OLD_CATEGORY> --dry-run`, then `shine app uninstall <OLD_CATEGORY>`
 to uninstall using the original installation receipt even when the Preset is unavailable.
+The top-level `shine uninstall app/<OLD_CATEGORY>` supports the same recovery. A bare category
+also considers installed targets whose sources are missing; use `app/` or `shell/` when names conflict.
 Uninstall selects that category's receipts, not another category sharing its destination.
 For copy installs, unchanged managed content is removed and an existing recorded backup is
 restored. JSON merge installs remove only receipt-owned keys and preserve unrelated keys.

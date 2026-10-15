@@ -99,3 +99,72 @@ fn app_mutation_requires_consent_and_preserves_modified_files() {
         b"user edit"
     );
 }
+
+#[test]
+fn top_level_uninstall_uses_receipts_after_app_source_removal() {
+    for target in ["app/retired", "retired"] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        let preset = state.join("presets/app/retired");
+        let destination = fixture.0.join("destination");
+        fs::create_dir_all(&preset).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("config.txt"), "original").unwrap();
+        fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+        let dest = toml::Value::String(destination.to_string_lossy().into_owned()).to_string();
+        fs::write(preset.join("shine.toml"), format!("metadata_schema_version = 2\ndest = {dest}\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.txt'\n")).unwrap();
+        fs::write(preset.join("config.txt"), "managed").unwrap();
+        let run = |args: &[&str]| {
+            fixture
+                .command()
+                .env("SHINE_PRESETS", state.join("presets"))
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        let installed = run(&["install", "app/retired", "--yes"]);
+        assert!(installed.status.success(), "{installed:?}");
+        fs::remove_dir_all(&preset).unwrap();
+        let receipt = fs::read(state.join("app-manifest.toml")).unwrap();
+        let preview = run(&["uninstall", target, "--dry-run"]);
+        assert!(preview.status.success(), "{preview:?}");
+        assert_eq!(
+            fs::read(destination.join("config.txt")).unwrap(),
+            b"managed"
+        );
+        assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+        let unapproved = run(&["uninstall", target]);
+        assert!(!unapproved.status.success(), "{unapproved:?}");
+        assert!(String::from_utf8_lossy(&unapproved.stderr).contains("approval requires"));
+        fs::write(destination.join("config.txt"), "user edit").unwrap();
+        let protected = run(&["uninstall", target, "--yes"]);
+        assert!(!protected.status.success(), "{protected:?}");
+        assert_eq!(
+            fs::read(destination.join("config.txt")).unwrap(),
+            b"user edit"
+        );
+        assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+        // A same-name Shell source makes the shorthand ambiguous even though
+        // the App source is gone. Explicit App selection must still work.
+        let shell = state.join("presets/shell/retired");
+        fs::create_dir_all(&shell).unwrap();
+        fs::write(shell.join("shine.toml"), "[[files]]\nsource = 'tool.sh'\ntarget = 'tool'\n[files.permissions]\nschema_version = 1\n").unwrap();
+        fs::write(shell.join("tool.sh"), "#!/bin/sh\n").unwrap();
+        let ambiguous = run(&["uninstall", "retired", "--yes", "--force"]);
+        assert!(!ambiguous.status.success(), "{ambiguous:?}");
+        assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("ambiguous"));
+        assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+        if target == "retired" {
+            fs::remove_dir_all(&shell).unwrap();
+        }
+        let removed = run(&["uninstall", target, "--yes", "--force"]);
+        assert!(removed.status.success(), "{removed:?}");
+        assert_eq!(
+            fs::read(destination.join("config.txt")).unwrap(),
+            b"original"
+        );
+        let manifest: shine_core::install::AppManifest =
+            toml::from_str(&fs::read_to_string(state.join("app-manifest.toml")).unwrap()).unwrap();
+        assert!(manifest.entries.is_empty());
+    }
+}

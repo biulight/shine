@@ -118,6 +118,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 
 先使用 `shine app uninstall <OLD_CATEGORY> --dry-run`，再使用
 `shine app uninstall <OLD_CATEGORY>`，即可在 Preset 不可用时按原安装记录卸载。
+顶层命令 `shine uninstall app/<OLD_CATEGORY>` 同样支持这种清理。裸分类名称也会考虑来源已丢失的
+已安装目标；名称冲突时，请使用 `app/` 或 `shell/` 前缀。
 卸载只选择该类别的安装记录，不会认领其他类别在同一目标路径的记录。
 复制安装会移除未修改的受管内容，并恢复仍存在的已记录备份；JSON 合并安装只移除安装记录
 拥有的键，保留无关键。用户修改过的受管内容及其记录默认保留，只有显式 `--force` 才可覆盖。

@@ -540,6 +540,10 @@ The Core flow is:
 
 ## App uninstall
 
+Top-level explicit `app/` and `shell/` uninstall targets dispatch directly to their lifecycle
+handlers. Bare names resolve through Core inventory, including receipt-only targets; ambiguity
+requires an explicit namespace. Source availability never substitutes for uninstall ownership.
+
 Reverse of install, driven entirely by the manifest — never by re-scanning presets:
 
 1. Look up the `AppEntry` by dest in `~/.shine/app-manifest.toml`.

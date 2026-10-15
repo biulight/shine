@@ -87,20 +87,13 @@ pub async fn handle_uninstall_shim_approved(
     yes: bool,
 ) -> Result<()> {
     let (explicit_kind, category) = parse_preset_target(target)?;
-    if explicit_kind == Some(PresetKind::Shell) && category.contains('/') {
-        if force {
-            bail!("`--force` applies only to app presets");
-        }
-        return Box::pin(shells::handle_uninstall_approved(
-            config,
-            Some(category),
-            purge,
-            dry_run,
-            yes,
-        ))
-        .await;
-    }
-    match resolve_shim_target(config, explicit_kind, category).await? {
+    // Explicit namespaces select a handler, even after the source disappears.
+    // Bare names must include receipt-only targets when checking ambiguity.
+    let resolution = match explicit_kind {
+        Some(kind) => ShimResolution::Found(kind),
+        None => resolve_uninstall_category(config, category).await?,
+    };
+    match resolution {
         ShimResolution::Found(PresetKind::Shell) => {
             if force {
                 bail!("`--force` applies only to app presets");
@@ -222,6 +215,29 @@ async fn resolve_shim_category(config: &Config, category: &str) -> Result<ShimRe
     };
 
     Ok(classify_shim_resolution(shell_matches > 0, app_matches > 0))
+}
+
+async fn resolve_uninstall_category(config: &Config, category: &str) -> Result<ShimResolution> {
+    use shine_core::frontend::{CapabilityKindV1, FrontendServiceError, InventoryRequest};
+
+    let frontend = crate::core_runtime::frontend_from_config(config).await?;
+    let apps = frontend
+        .inventory(InventoryRequest::for_kind(CapabilityKindV1::App))
+        .await
+        .map_err(FrontendServiceError::into_source)?;
+    let shells = frontend
+        .inventory(InventoryRequest::for_kind(CapabilityKindV1::Shell))
+        .await
+        .map_err(FrontendServiceError::into_source)?;
+    let app_target = format!("app/{category}");
+    let shell_prefix = format!("shell/{category}/");
+    Ok(classify_shim_resolution(
+        shells
+            .items
+            .iter()
+            .any(|item| item.target.starts_with(&shell_prefix)),
+        apps.items.iter().any(|item| item.target == app_target),
+    ))
 }
 
 fn classify_shim_resolution(shell_matches: bool, app_matches: bool) -> ShimResolution {
