@@ -386,6 +386,10 @@ shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
 
+Both `preset copy` and `preset export` reject linked or special output files and linked
+subdirectories, including with `--force`. Choose an ordinary directory tree for the output.
+Without `--force`, existing regular files are preserved even when another copy runs concurrently.
+
 After linking an external directory, `install`, `list`, and `update` read from it. Command output
 identifies the active preset source.
 

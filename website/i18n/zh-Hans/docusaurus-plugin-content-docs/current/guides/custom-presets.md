@@ -338,6 +338,10 @@ shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
 
+`preset copy` 和 `preset export` 都会拒绝作为输出的链接、特殊文件及链接子目录，即使指定
+`--force` 也不例外。请选择普通目录树作为输出位置。未指定 `--force` 时，已有普通文件会保留，
+同时运行多个复制命令也不会覆盖其它命令已写入的文件。
+
 配置外部目录后，`install`、`list` 和 `update` 都从该目录读取。命令输出会显示当前激活的预设来源。
 
 ### 选择外部 Shell 的部署方式

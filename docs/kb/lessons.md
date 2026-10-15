@@ -1,5 +1,21 @@
 # Lessons Learned
 
+## 2026-10-15 — Copy targets, session failures and IPv6 need native boundary checks
+
+- **Symptoms**: preset copy/export followed output links outside the chosen tree and truncated
+  other hard-link names; failed SSH setup/spawn left context/socket files; IPv6 transfers treated
+  an address suffix as a remote path.
+- **Causes**: `exists()` follows links and direct writes mutate shared inodes; `?` returned before
+  session cleanup; rsync/scp parse `host:path` independently of SSH's destination parser.
+- **Fixes**: reject linked/special nested output entries, stage permissions/content before atomic
+  replacement or no-clobber publication; own session resources before setup and clean before
+  propagating status; bracket IPv6 SCP operands and select SCP for system rsync compatibility.
+- **Coverage**: link/dangling-link/parent and hard-link preservation, concurrent publication,
+  executable modes, Windows junction rejection, real CLI setup/spawn/nonzero-exit cleanup,
+  IPv6 user/zone operands, fallback dry-run, and the native SCP parser with a local SSH substitute.
+- **Rule**: validate the filesystem entry rather than its referent, acquire cleanup ownership
+  before fallible setup, and test the actual downstream parser rather than argv shape alone.
+
 ## 2026-10-15 — File aliases and no-clobber publication need filesystem-aware checks
 
 - **Symptoms**: Unicode-equivalent workspace names bypassed file-group overlap checks and could

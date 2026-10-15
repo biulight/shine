@@ -39,6 +39,9 @@ its own.
 - **Default rsync, `--scp` to force scp.** When rsync is unavailable (locally,
   or — probed cheaply over the control master — on the remote) shine
   **auto-falls back to scp and prints a notice**.
+  Literal IPv6 destinations also use SCP: macOS system rsync splits even bracketed IPv6 operands.
+  SCP receives a bracketed address, preserving an optional user and zone identifier. The ordinary
+  SCP overwrite warning and metadata-only dry-run semantics still apply.
 - **ControlMaster reuse.** At `shine ssh` time shine injects
   `-o ControlMaster=auto -o ControlPath=<session_dir>/ctl.sock -o
   ControlPersist=60` (unless the user set their own multiplexing). The rsync/scp

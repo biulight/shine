@@ -48,11 +48,7 @@ pub async fn atomic_write_new(path: &Path, contents: &[u8]) -> Result<()> {
         let _ = tokio::fs::remove_file(&temp).await;
         return Err(error);
     }
-    if let Err(error) = replace_synced(&temp, path, false).await {
-        let _ = tokio::fs::remove_file(&temp).await;
-        return Err(error).with_context(|| format!("publishing {}", path.display()));
-    }
-    Ok(())
+    finalize_temp_new(&temp, path).await
 }
 
 /// Durably writes a private file with owner-only permissions on Unix.
@@ -138,6 +134,17 @@ pub async fn finalize_temp(temp: &Path, dest: &Path) -> Result<()> {
     if let Err(error) = replace_synced(temp, dest, true).await {
         let _ = tokio::fs::remove_file(temp).await;
         return Err(error).with_context(|| format!("replacing {}", dest.display()));
+    }
+    Ok(())
+}
+
+/// Publishes a caller-prepared temporary file without replacing any existing entry.
+/// The caller can set final permissions before publication. On failure, only the
+/// temporary file is removed, including when another writer wins the destination.
+pub async fn finalize_temp_new(temp: &Path, dest: &Path) -> Result<()> {
+    if let Err(error) = replace_synced(temp, dest, false).await {
+        let _ = tokio::fs::remove_file(temp).await;
+        return Err(error).with_context(|| format!("publishing {}", dest.display()));
     }
     Ok(())
 }

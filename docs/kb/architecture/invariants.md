@@ -772,6 +772,11 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Embedded presets
 
+- **Preset copy/export writes replace entries inside a resolved output root.** Reject nested
+  symlinks, Windows junctions/reparse points, and special output entries before staging and
+  publication. Set final permissions on a complete synced staging file before publishing it.
+  Force replaces a regular file's entry without changing other hard-link names; non-force
+  publication must atomically preserve any concurrent winner, not rely on an existence check.
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
 - **The generated built-in platform capability blocks must use runtime selector semantics.**
@@ -928,6 +933,14 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## SSH transfer
 
+- **SSH session resources are owned from the first setup step.** Listener binding, context
+  persistence, spawn/wait failures and cancellation must release the listener and session
+  directory. Stop and await the accept loop before draining connection tasks; finish cleanup
+  before propagating the SSH exit status, including `process::exit` paths.
+- **IPv6 transfer destinations remain one address.** Bracket IPv6 literals, including user and
+  zone-qualified forms, in SCP operands. Select SCP for literal IPv6 destinations because the
+  macOS system rsync parser splits even bracketed literals at the first colon. Retain the SCP
+  fallback notice, overwrite warning and metadata-only dry-run contract.
 - **`ssh::agent` must not trust wire-supplied fields beyond the session token.** Transfer/Status
   tokens travel to the remote host as plain argv/environ and may leak there. Validate remote specs
   at consumption, place them only after argv's option separator, and use tilde-only expansion for

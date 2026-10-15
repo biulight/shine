@@ -322,6 +322,14 @@ live Clap preset subcommands → generated long help
     → versioned deterministic reference JSON or compact text index
 ```
 
+## Preset copy and export
+
+The CLI resolves the selected output root, walks each nested parent without accepting links or
+Windows reparse points, and rejects linked/special destination entries. It writes and syncs a
+same-directory staging file with final permissions, rechecks the path, then uses Core persistence
+to replace an entry or publish without replacement. A concurrent non-force winner is skipped.
+Forced replacement does not modify another name pointing at the old inode.
+
 ## Preset pack
 
 Packing validates one immutable category snapshot, then separately walks the physical category with
@@ -1092,6 +1100,12 @@ Transfer control connections monitor peer closure concurrently with child output
 Failure terminates and reaps the local transfer child, and cancellation drops a child guard. Unix
 children have a dedicated process group so cleanup also terminates descendants. Already-copied
 files remain the transfer tool's responsibility; Shine does not roll them back.
+
+POSIX-remote SSH session resources have an ownership guard before listener setup. On an SSH
+spawn/wait result, the handler stops and awaits the accept loop, drains transfers, and drops the
+session directory before returning an error or propagating the exit status. Setup failures also
+drop the guard. Literal IPv6 destinations select SCP, whose bracketed operand preserves the full
+address and optional user/zone; this avoids the macOS system rsync parser's first-colon split.
 
 ## SSH environment forwarding
 

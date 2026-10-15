@@ -17,6 +17,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Fixes
 
+- Protect `preset copy` and `preset export` from linked output files or subdirectories; forced
+  writes preserve other hard-link names and concurrent non-force copies preserve the winner.
+- Clean up incomplete SSH sessions when listener setup or starting the SSH process fails.
+- Preserve IPv6 literal addresses in file transfers, using SCP for system rsync compatibility.
 - Reject Unicode-equivalent workspace file-group paths before encryption or plaintext removal.
 - Preserve image inputs when forced batch outputs collide through case, Unicode, directory, or
   hard-link aliases.
