@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-10-15 — Windows CLI fixtures need complete profile directories
+
+- **Symptom**: process-level App tests failed before planning with
+  `resolving platform runtime directories` on Windows.
+- **Cause**: the fixture redirected `USERPROFILE` to an isolated home without its AppData
+  directories, so Windows known-folder discovery could not construct `BaseDirs`.
+- **Fix**: create isolated Roaming/Local directories and set both `APPDATA` and `LOCALAPPDATA`
+  alongside `HOME` and `USERPROFILE`; exercise the unchanged real CLI on all platforms.
+
 ## 2026-10-15 — CI subprocesses need concrete runtime paths
 
 - **Symptom**: Linux dotenv conformance failed with `No version is set for shim: bun` after

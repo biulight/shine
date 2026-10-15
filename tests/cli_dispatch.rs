@@ -9,7 +9,9 @@ struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!("shine-dispatch-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(root.join("home")).unwrap();
+        for path in ["home", "home/AppData/Roaming", "home/AppData/Local"] {
+            fs::create_dir_all(root.join(path)).unwrap();
+        }
         Self(root)
     }
     fn command(&self) -> Command {
@@ -18,6 +20,8 @@ impl Fixture {
             .current_dir(&self.0)
             .env("HOME", self.0.join("home"))
             .env("USERPROFILE", self.0.join("home"))
+            .env("APPDATA", self.0.join("home/AppData/Roaming"))
+            .env("LOCALAPPDATA", self.0.join("home/AppData/Local"))
             .env("SHINE_CONFIG_DIR", self.0.join("state"))
             .env_remove("SHINE_PRESETS")
             .stdin(Stdio::null());
