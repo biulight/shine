@@ -1,5 +1,20 @@
 # Lessons Learned
 
+## 2026-10-15 — Git index aliases and import publication need final identity checks
+
+- **Symptoms**: file-group release accepted a case alias of a tracked deleted path, allowing
+  `git add -u` in the child to stage plaintext; dotenv import replaced dangling destinations and
+  competing imports could both report success without `--force`.
+- **Causes**: literal Git pathspecs compare index spelling rather than filesystem identity;
+  `exists()` follows dangling links, and an early existence check cannot enforce no-overwrite
+  during final atomic replacement.
+- **Fixes**: compare all NUL-delimited repository index paths with shared Unicode/case keys,
+  resolving the target from Git's repository prefix; inspect import directory entries and select
+  private no-clobber publication unless force explicitly requests replacement.
+- **Coverage**: real CLI run/dry-run/seal reject tracked file and parent case aliases plus both
+  Unicode forms before crypto; import tests preserve dangling entries and absent outputs, retain
+  force behavior/private modes, and require one concurrent winner without staging leftovers.
+
 ## 2026-10-15 — Configuration scope and export publication must match their final effect
 
 - **Symptoms**: project `overlay link --git` reported success but the next invocation ignored the

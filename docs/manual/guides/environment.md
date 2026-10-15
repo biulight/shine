@@ -600,7 +600,8 @@ shine env workspace init --from-dotenv
 
 The command reads `.env`, `.env.local`, `.env.<mode>`, and `.env.<mode>.local`, discovers modes, and
 preserves that precedence. Source dotenv files are unchanged. Existing targets are not overwritten
-unless you add `--force`. Import selected modes with repeatable `--mode`:
+unless you add `--force`, including dangling symbolic links and files created by a concurrent
+import. Import selected modes with repeatable `--mode`:
 
 ```bash
 shine env workspace init --from-dotenv --mode development --mode production
@@ -841,7 +842,8 @@ list. Version 2 workspaces remain supported; older clients reject version 3. A v
 with file groups may omit `env.files`; such a workspace requires `--file-group` for `env run`.
 
 Ignore all plaintext targets before use in a Git repository, for example `.android-signing/` and
-`app/.credentials/`. Tracked or non-ignored targets are rejected; Shine does not edit `.gitignore`.
+`app/.credentials/`. Tracked or non-ignored targets are rejected, including case or Unicode
+aliases of tracked paths whose working files are missing. Shine does not edit `.gitignore`.
 Checks use each target's own repository, including nested repositories. Git inspection failures
 stop the operation before plaintext is released.
 Use the following commands after preparing the plaintext files:

@@ -862,7 +862,9 @@ bugs. Check this list before changing the modules named in each entry.
   targets; workspace-definition overlap, mapping overlap and path locks use the same Unicode
   canonical-decomposition and case-folded path keys, including paths that do not exist yet.
   Git plaintext targets must be ignored and untracked in their own repository, including
-  nested repositories. Git discovery errors fail closed; exit 128 alone never proves absence.
+  nested repositories. Compare the complete repository index using the same case/Unicode path
+  keys, including deleted working files and aliases in parent directory names. Git discovery errors
+  fail closed; exit 128 alone never proves absence.
   Run previews use stderr, preserving exact child stdout; dry-run previews use stdout.
   Keep targets inside the workspace.
   Create plaintext privately before bytes are written (Unix 0600/0700, Windows protected current-user
@@ -879,7 +881,10 @@ bugs. Check this list before changing the modules named in each entry.
   descendants. Abrupt termination can leave targets, which subsequent runs must refuse (ADR 0110).
 
 - **Dotenv import is private before writing pending plaintext.** Generated workspace and source
-  files use `atomic_write_private`, including forced replacements and unmarked imported values.
+  files use private staging, including forced replacements and unmarked imported values. Without
+  force, preflight checks directory entries (including dangling links), and final publication uses
+  `atomic_write_private_new` so a concurrent writer cannot be overwritten. Force explicitly selects
+  `atomic_write_private` replacement. This remains per-file publication, not a multi-file transaction.
 - **Forced identity generation preserves the old identity until validation succeeds.** Generate
   into an absent path inside a same-directory private staging directory, restrict the file to 0600
   on Unix, extract its recipient, then use synced replacement. Never delete the old key before

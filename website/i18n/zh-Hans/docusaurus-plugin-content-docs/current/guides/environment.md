@@ -537,7 +537,7 @@ shine env workspace init --from-dotenv --dry-run
 shine env workspace init --from-dotenv
 ```
 
-它读取 `.env`、`.env.local`、`.env.<mode>` 与 `.env.<mode>.local`，自动发现 mode，并保持该覆盖顺序。原 dotenv 文件不会被修改；生成目标已存在时命令会拒绝覆盖，确认后才添加 `--force`。只导入指定 mode 时可重复使用 `--mode`：
+它读取 `.env`、`.env.local`、`.env.<mode>` 与 `.env.<mode>.local`，自动发现 mode，并保持该覆盖顺序。原 dotenv 文件不会被修改；生成目标已存在时命令会拒绝覆盖，包括悬空符号链接和并发导入创建的文件，确认后才添加 `--force`。只导入指定 mode 时可重复使用 `--mode`：
 
 ```bash
 shine env workspace init --from-dotenv --mode development --mode production
@@ -752,7 +752,8 @@ target = "app/.credentials/service-account.json"
 version 3。Version 3 配置了文件组时可省略 `env.files`；此类 workspace 的 `env run` 必须选择文件组。
 
 在 Git 仓库使用前，先忽略所有明文目标，例如 `.android-signing/` 和 `app/.credentials/`。
-已跟踪或未被忽略的目标会被拒绝；Shine 不修改 `.gitignore`。
+已跟踪或未被忽略的目标会被拒绝，包括工作区文件已缺失的已跟踪路径的大小写或 Unicode 等价名称。
+Shine 不修改 `.gitignore`。
 检查以每个目标所属的仓库为准，包括嵌套仓库。Git 检查失败会在释放明文前终止操作。
 准备好明文后执行：
 

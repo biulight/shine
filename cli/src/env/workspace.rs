@@ -198,11 +198,15 @@ async fn init_from_dotenv_at(
     let workspace = root.join(WORKSPACE_FILE);
     planned.push((workspace, render_workspace(&modes)));
     for (path, _) in &planned {
-        if path.exists() && !force {
-            bail!(
-                "{} already exists; rerun with --force to replace generated files",
-                path.display()
-            );
+        if !force {
+            match tokio::fs::symlink_metadata(path).await {
+                Ok(_) => bail!(
+                    "{} already exists; rerun with --force to replace generated files",
+                    path.display()
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("inspecting import destination"),
+            }
         }
     }
 
@@ -211,7 +215,24 @@ async fn init_from_dotenv_at(
         if dry_run {
             println!("Would create {display}");
         } else {
-            atomic_write_private(path, contents.as_bytes()).await?;
+            let result = if force {
+                atomic_write_private(path, contents.as_bytes()).await
+            } else {
+                atomic_write_private_new(path, contents.as_bytes()).await
+            };
+            if let Err(error) = result {
+                if !force
+                    && error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
+                {
+                    bail!(
+                        "{} already exists; rerun with --force to replace generated files",
+                        path.display()
+                    );
+                }
+                return Err(error);
+            }
             println!("Created {display}");
         }
     }
@@ -1881,6 +1902,74 @@ mod tests {
                 .is_err()
         );
         tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dotenv_init_preserves_dangling_destinations_without_force() {
+        for name in [".env.shine.toml", WORKSPACE_FILE] {
+            let dir = crate::test_support::make_temp_dir("shine-dotenv-linked").await;
+            tokio::fs::write(dir.join(".env"), "TOKEN=pending-secret\n")
+                .await
+                .unwrap();
+            let output = dir.join(name);
+            std::os::unix::fs::symlink("absent-original", &output).unwrap();
+            for dry_run in [false, true] {
+                let error = init_from_dotenv_at(&dir, &[], &[], false, dry_run)
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("already exists"));
+                assert_eq!(
+                    std::fs::read_link(&output).unwrap(),
+                    Path::new("absent-original")
+                );
+                assert!(!dir.join("absent-original").exists());
+                if name == WORKSPACE_FILE {
+                    assert!(!dir.join(".env.shine.toml").exists());
+                } else {
+                    assert!(!dir.join(WORKSPACE_FILE).exists());
+                }
+            }
+            init_from_dotenv_at(&dir, &[], &[], true, false)
+                .await
+                .unwrap();
+            assert!(std::fs::symlink_metadata(&output).unwrap().is_file());
+            assert!(!dir.join("absent-original").exists());
+            tokio::fs::remove_dir_all(dir).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn dotenv_init_concurrent_publication_has_one_winner() {
+        let dir = crate::test_support::make_temp_dir("shine-dotenv-concurrent").await;
+        tokio::fs::write(dir.join(".env"), "TOKEN=pending-secret\n")
+            .await
+            .unwrap();
+        let (first, second) = tokio::join!(
+            init_from_dotenv_at(&dir, &[], &[], false, false),
+            init_from_dotenv_at(&dir, &[], &[], false, false),
+        );
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        let error = first.err().or_else(|| second.err()).unwrap();
+        assert!(error.to_string().contains("already exists"));
+        let source = tokio::fs::read_to_string(dir.join(".env.shine.toml"))
+            .await
+            .unwrap();
+        assert!(source.contains("pending-secret"));
+        let workspace = tokio::fs::read_to_string(dir.join(WORKSPACE_FILE))
+            .await
+            .unwrap();
+        parse_workspace(&dir.join(WORKSPACE_FILE), &workspace).unwrap();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            assert!(
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".shine-write-")
+            );
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[cfg(unix)]

@@ -558,6 +558,58 @@ fn fixture_git(root: &std::path::Path, args: &[&str]) {
 }
 
 #[test]
+fn file_groups_reject_tracked_case_and_unicode_aliases_before_decryption() {
+    for (tracked, target) in [
+        (".signing/KEY", ".signing/key"),
+        (".SIGNING/key", ".signing/key"),
+        (".signing/k\u{e9}y", ".signing/ke\u{301}y"),
+        (".signing/ke\u{301}y", ".signing/k\u{e9}y"),
+    ] {
+        let f = Fixture::new();
+        f.prepare();
+        fixture_git(&f.root, &["init"]);
+        // Keep the exact Unicode spelling in the index on macOS too.
+        fixture_git(&f.root, &["config", "core.precomposeunicode", "false"]);
+        fs::write(f.root.join(".gitignore"), ".signing/\nother/\n").unwrap();
+        fs::create_dir_all(f.root.join(tracked).parent().unwrap()).unwrap();
+        fs::write(f.root.join(tracked), b"tracked fixture").unwrap();
+        fixture_git(&f.root, &["add", "--force", "--", tracked]);
+        fs::remove_file(f.root.join(tracked)).unwrap();
+        // Existing parents exercise Git commands launched below the repository root.
+        fs::create_dir_all(f.root.join(target).parent().unwrap()).unwrap();
+        let workspace = f.root.join("shine.workspace.toml");
+        fs::write(
+            &workspace,
+            fs::read_to_string(&workspace)
+                .unwrap()
+                .replace("target='.signing/key'", &format!("target='{target}'")),
+        )
+        .unwrap();
+        let log = f.root.join("backend-log");
+        for dry_run in [false, true] {
+            let mut command = f.command();
+            command.args(["env", "run", "--file-group", "signing"]);
+            if dry_run {
+                command.arg("--dry-run");
+            }
+            error(
+                command
+                    .args(["--", "unused-command"])
+                    .env("PROBE_BACKEND_LOG", &log)
+                    .output()
+                    .unwrap(),
+                "is tracked",
+            );
+            assert!(!log.exists());
+            assert!(!f.root.join(target).exists());
+        }
+        fs::write(f.root.join(target), b"pending plaintext").unwrap();
+        error(f.seal(&[]), "is tracked");
+        assert_eq!(fs::read(f.root.join(target)).unwrap(), b"pending plaintext");
+    }
+}
+
+#[test]
 fn file_groups_check_nested_git_targets_even_outside_a_parent_repository() {
     let f = Fixture::new();
     f.prepare();

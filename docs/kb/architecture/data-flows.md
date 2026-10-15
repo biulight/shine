@@ -10,6 +10,9 @@ Version 3 workspace + explicit groups + mode → root-constrained mappings → m
 → shared path locks → captured workspace and file bytes → existing tagged binary crypto.
 Overlap checks and lock hashes share Unicode canonical-decomposition and case-folded path keys;
 this includes the workspace definition and absent mapping paths.
+Git preflight reads the complete repository index as NUL-delimited paths and compares the same
+case/Unicode keys against the repository-relative target, even from a nested working directory
+or when the tracked working file has been deleted.
 Sealing prepares all ciphertext, rechecks snapshots and writes sources atomically per file;
 optional plaintext removal rereads/decrypts all written sources and verifies snapshots before
 deletion starts. There is no multi-file transaction or automatic build writeback.

@@ -190,13 +190,34 @@ pub(super) fn check_git(root: &Path, target: &Path) -> Result<()> {
         return Ok(());
     }
     let relative = target.strip_prefix(directory)?;
-    let tracked = git()
-        .arg("--literal-pathspecs")
-        .args(["ls-files", "--error-unmatch", "--"])
-        .arg(relative)
-        .output()?;
+    let prefix = git().args(["rev-parse", "--show-prefix"]).output()?;
     ensure!(
-        tracked.status.code() == Some(1),
+        prefix.status.success(),
+        "cannot inspect Git repository prefix"
+    );
+    let prefix = std::str::from_utf8(&prefix.stdout)
+        .context("invalid Git repository prefix")?
+        .strip_suffix('\n')
+        .context("invalid Git repository prefix")?;
+    let target_key = platform::path_key(&Path::new(prefix).join(relative));
+    // A literal pathspec misses case/Unicode aliases, especially when the tracked
+    // working file is absent. Enumerate the entire index, not only the current
+    // directory: even a parent directory can have a different index spelling.
+    let tracked = git()
+        .args(["ls-files", "--full-name", "-z", "--", ":/"])
+        .output()?;
+    ensure!(tracked.status.success(), "cannot inspect Git index");
+    let mut is_tracked = false;
+    for path in tracked
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        let path = std::str::from_utf8(path).context("invalid Git index path")?;
+        is_tracked |= platform::path_key(Path::new(path)) == target_key;
+    }
+    ensure!(
+        !is_tracked,
         "plaintext target is tracked or Git inspection failed: {}",
         target.display()
     );
