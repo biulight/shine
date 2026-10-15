@@ -142,19 +142,28 @@ fn render_dotenv(values: &BTreeMap<String, String>) -> Result<String> {
         if value.contains('\0') {
             bail!("{key} contains a NUL byte and cannot be represented in dotenv format");
         }
+        // Dotenv readers disagree on escapes and expand dollars even inside quotes
+        // (notably Bun/Vite). Fail before publication instead of changing a value.
+        if value.contains(['$', '\r']) {
+            bail!(
+                "{key} contains a dollar sign or carriage return that cannot be exported portably to dotenv; use `shine env run` for this value"
+            );
+        }
+        let quote = if !value.contains(['"', '\\']) {
+            '"'
+        } else if !value.contains('\'') {
+            '\''
+        } else if !value.contains('`') {
+            '`'
+        } else {
+            bail!("{key} has no safe dotenv quote delimiter; use `shine env run` for this value");
+        };
         rendered.push_str(key);
         rendered.push('=');
-        rendered.push('"');
-        for ch in value.chars() {
-            match ch {
-                '\\' => rendered.push_str("\\\\"),
-                '"' => rendered.push_str("\\\""),
-                '\n' => rendered.push_str("\\n"),
-                '\r' => rendered.push_str("\\r"),
-                _ => rendered.push(ch),
-            }
-        }
-        rendered.push_str("\"\n");
+        rendered.push(quote);
+        rendered.push_str(value);
+        rendered.push(quote);
+        rendered.push('\n');
     }
     Ok(rendered)
 }
@@ -396,14 +405,14 @@ fn parse_dotenv_value(path: &Path, line: usize, raw: &str) -> Result<String> {
         }
         value
     } else {
-        raw.split_once(" #")
+        raw.split_once('#')
             .map(|(value, _)| value)
             .unwrap_or(raw)
             .trim_end()
     };
-    if value.contains("${") {
+    if value.contains('$') {
         bail!(
-            "{}:{line} uses dotenv interpolation; resolve it before importing",
+            "{}:{line} uses dotenv interpolation or dollar syntax; resolve it before importing",
             path.display()
         );
     }
@@ -1778,12 +1787,31 @@ mod tests {
 
     #[test]
     fn dotenv_import_rejects_interpolation() {
-        let error = parse_dotenv(Path::new(".env"), "VITE_URL=${BASE_URL}/api\n").unwrap_err();
-        assert!(error.to_string().contains("dotenv interpolation"));
+        for value in [
+            "${BASE_URL}/api",
+            "$BASE_URL/api",
+            "'$BASE_URL/api'",
+            "\"$BASE_URL/api\"",
+        ] {
+            let error =
+                parse_dotenv(Path::new(".env"), &format!("VITE_URL={value}\n")).unwrap_err();
+            assert!(error.to_string().contains("dotenv interpolation"));
+        }
     }
 
     #[test]
-    fn dotenv_export_is_stable_and_escapes_multiline_values() {
+    fn dotenv_import_comments_start_at_unquoted_hashes() {
+        let values = parse_dotenv(
+            Path::new(".env"),
+            "UNQUOTED=abc#comment\nQUOTED='abc#value'\n",
+        )
+        .unwrap();
+        assert_eq!(values["UNQUOTED"], "abc");
+        assert_eq!(values["QUOTED"], "abc#value");
+    }
+
+    #[test]
+    fn dotenv_export_is_stable_and_preserves_literal_multiline_values() {
         let rendered = render_dotenv(&BTreeMap::from([
             ("ALPHA".to_owned(), "plain".to_owned()),
             (
@@ -1795,8 +1823,26 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "ALPHA=\"plain\"\nCOMPLEX=\"quote\\\" slash\\\\ first\\nsecond\"\n"
+            "ALPHA=\"plain\"\nCOMPLEX='quote\" slash\\ first\nsecond'\n"
         );
+    }
+
+    #[test]
+    fn dotenv_export_rejects_values_without_a_portable_literal_representation() {
+        for value in [
+            "$BASE/api",
+            "cost $5",
+            "before\rafter",
+            "all '\"` delimiters",
+        ] {
+            let error =
+                render_dotenv(&BTreeMap::from([("TOKEN".into(), value.into())])).unwrap_err();
+            assert!(error.to_string().contains("TOKEN"));
+            assert!(
+                !error.to_string().contains(value),
+                "must not disclose the value"
+            );
+        }
     }
 
     #[test]

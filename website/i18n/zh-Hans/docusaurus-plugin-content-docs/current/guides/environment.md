@@ -552,7 +552,7 @@ shine env workspace init --from-dotenv --secret DATABASE_URL
 shine env secret seal
 ```
 
-为避免改变 dotenv 语义，包含插值（例如 `${BASE_URL}`）或带转义的双引号值的文件会被拒绝；先将它们解析为最终值后再导入。即使没有选择 `--secret`，生成文件仍会保留带说明的空 `[secret]` 表。
+为避免改变 dotenv 语义，含 `$`（包括 `$BASE_URL` 和 `${BASE_URL}`）或带转义的双引号内容的值会被拒绝，即使它们位于引号内。先解析插值再导入；需要字面量美元符号时，请手动编写 Shine 环境源。未加引号的 `#` 表示注释开始；值本身含 `#` 时请加引号。即使没有选择 `--secret`，生成文件仍会保留带说明的空 `[secret]` 表。
 
 ## 将 workspace 导出为 dotenv
 
@@ -583,6 +583,8 @@ shine env workspace export \
 `--dry-run` 只报告 mode、目标路径和变量数量，不显示值，也不写文件。
 
 导出文件不含 Shine 元数据，也不依赖 Shine 运行。若要停用 Shine env，请逐个导出并验证所需 mode，将含 secret 的输出加入 `.gitignore`，移除 `shine env run` 包装，最后再自行归档或删除 `shine.workspace.toml` 与对应的 `*.shine.toml` 环境源。导出命令不会删除这些源文件。
+
+导出使用 dotenv 引号保留反斜杠、引号和换行原值。含 `$`、回车、NUL 字节或无法安全引用的值会在写入或替换输出前被拒绝。遇到这些值时，请继续使用 `shine env run`，或为目标工具单独准备输出文件。切换前务必用该工具验证导出结果。
 
 ## 使用分层项目环境
 

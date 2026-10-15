@@ -74,6 +74,9 @@ When upgrading from 2.3.x or earlier, review the
 Version 2.4.0 changes which layer wins when keys overlap and replaces env write `--force` with explicit
 target options. Keep private backups and check important projects with `shine env explain KEY`.
 
+`shine self install --dest <PATH>` resolves a relative path from the current directory and remembers
+the absolute destination, so later upgrades sync the same installed copy from any directory.
+
 On Unix, if `shine self install` copies the binary to a location the current user cannot modify,
 Shine interactively requests authorization and completes the installation through `sudo`. After a
 successful `shine self upgrade`, the same behavior applies when syncing a separate recorded install

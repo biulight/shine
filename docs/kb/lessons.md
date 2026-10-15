@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-15 — Dotenv conversion and installed paths need consumer round trips
+
+- **Symptoms**: exported quotes/backslashes changed under Node/Bun dotenv readers; `$NAME`
+  imports retained interpolation literally; relative self-install destinations moved on config reload.
+- **Causes**: JSON-style escapes are not portable dotenv syntax, checking only `${` misses other
+  dollar handling, and installation and config loading use different relative-path bases.
+- **Fixes**: emit literal quoted dotenv values, reject dollar/CR/NUL or unavailable delimiters before
+  publication, reject dollar syntax on import, and store absolute self-install destinations.
+  Unquoted hashes start dotenv comments.
+- **Coverage**: real CLI exports round-trip through Node and Bun; rejected imports publish no files;
+  rejected exports preserve absent/existing outputs even with force. Self-install reloads from a
+  different cwd and syncs a replacement into the original installation.
+
 ## 2026-10-15 — Git index aliases and import publication need final identity checks
 
 - **Symptoms**: file-group release accepted a case alias of a tracked deleted path, allowing

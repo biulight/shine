@@ -639,6 +639,10 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Config files
 
+- **Self-install persists the path it actually writes.** Resolve `--dest` relative to the invocation
+  cwd before installation and save the absolute path. Config-relative interpretation on reload must
+  not redirect later upgrade synchronization to another binary.
+
 - **Trust store mutations serialize the entire read/modify/write cycle.** Grant and revoke acquire
   the persistent `trust.lock` OS lock before reading grants and retain it through private atomic
   persistence. Human review happens before locking; only the reviewed code identities are granted.

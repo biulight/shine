@@ -617,8 +617,10 @@ shine env workspace init --from-dotenv --secret DATABASE_URL
 shine env secret seal
 ```
 
-To preserve dotenv semantics, files containing interpolation such as `${BASE_URL}` or escaped
-double-quoted values are rejected. Resolve them to final values before importing. The generated file
+To preserve dotenv semantics, values containing `$` (including `$BASE_URL` and `${BASE_URL}`) or
+escaped double-quoted content are rejected, even inside quotes. Resolve interpolation before
+importing; keep literal dollar signs in a manually authored Shine source instead. An unquoted `#`
+starts a comment; quote values that contain a literal `#`. The generated file
 includes a documented empty `[secret]` table even when no `--secret` is selected.
 
 ## Export a workspace to dotenv
@@ -659,6 +661,11 @@ The exported file has no Shine metadata or runtime dependency. To leave Shine en
 each required mode, add secret-bearing outputs to `.gitignore`, remove `shine env run` wrappers, and
 only then archive or delete `shine.workspace.toml` and its `*.shine.toml` sources yourself. Export
 never deletes those source files.
+
+Export preserves literal backslashes, quotes, and newlines using dotenv quoting. Values containing
+`$`, carriage returns, NUL bytes, or no safe quote delimiter are rejected before writing or replacing
+the output. For those values, continue using `shine env run`, or prepare an output specifically for
+your target tool. Always test the exported file with that tool before switching over.
 
 ## Use layered project environments
 

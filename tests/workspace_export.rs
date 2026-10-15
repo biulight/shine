@@ -154,6 +154,116 @@ fn assert_export_ok(output: &Output) {
 }
 
 #[test]
+fn exported_values_round_trip_through_node_and_bun_dotenv_readers() {
+    let fixture = Fixture::new();
+    let values = std::collections::BTreeMap::from([
+        ("PLAIN", "plain"),
+        ("WINDOWS_PATH", r"C:\new\tools\bin"),
+        ("DOUBLE_QUOTE", "say \"hello\""),
+        ("SINGLE_QUOTE", "it's fine"),
+        ("BOTH_QUOTES", "it's \"fine\" with a \\path"),
+        ("MULTILINE", "first\nsecond"),
+        ("BACKTICK", "a `tick` and a \"quote\""),
+        ("EMPTY", ""),
+        ("WHITESPACE", "  # keep these spaces  "),
+    ]);
+    let source = toml::to_string(&serde_json::json!({"version": 1, "plain": values})).unwrap();
+    fs::write(fixture.0.join("source.toml"), source).unwrap();
+    assert_export_ok(&fixture.command().output().unwrap());
+    let keys = serde_json::to_string(&values.keys().collect::<Vec<_>>()).unwrap();
+    let scripts = [
+        (
+            "node",
+            vec![
+                "-e".to_owned(),
+                format!(
+                    "const v = require('node:util').parseEnv(require('node:fs').readFileSync('output.env','utf8')); console.log(JSON.stringify(Object.fromEntries({keys}.map(k=>[k,v[k]]))))"
+                ),
+            ],
+        ),
+        (
+            "bun",
+            vec![
+                "--env-file=output.env".to_owned(),
+                "-e".to_owned(),
+                format!(
+                    "console.log(JSON.stringify(Object.fromEntries({keys}.map(k=>[k,process.env[k]]))))"
+                ),
+            ],
+        ),
+    ];
+    for (reader, args) in scripts {
+        if Command::new(reader).arg("--version").output().is_err() {
+            eprintln!("skipping {reader} dotenv conformance: runtime is unavailable");
+            continue;
+        }
+        let mut command = Command::new(reader);
+        command.current_dir(&fixture.0).args(args);
+        for key in values.keys() {
+            command.env_remove(key);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{reader}: {output:?}");
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(parsed, serde_json::to_value(&values).unwrap(), "{reader}");
+    }
+}
+
+#[test]
+fn unrepresentable_export_values_fail_before_creating_or_replacing_output() {
+    let fixture = Fixture::new();
+    for value in [
+        "$BASE/api",
+        "cost $5",
+        "before\rafter",
+        "all '\"` delimiters",
+    ] {
+        let source =
+            toml::to_string(&serde_json::json!({"version": 1, "plain": {"TOKEN": value}})).unwrap();
+        fs::write(fixture.0.join("source.toml"), source).unwrap();
+        let output = fixture.command().output().unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(!fixture.0.join("output.env").exists());
+        fs::write(fixture.0.join("output.env"), b"original").unwrap();
+        let output = fixture.command().arg("--force").output().unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(value));
+        assert_eq!(fixture.output(), b"original");
+        fixture.assert_no_staging();
+        fs::remove_file(fixture.0.join("output.env")).unwrap();
+    }
+}
+
+#[test]
+fn dotenv_import_rejects_bare_variable_references_without_publishing_files() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.0.join("shine.workspace.toml")).unwrap();
+    for value in ["$BASE/api", "\"$BASE/api\"", "'$BASE/api'", "${BASE}/api"] {
+        fs::write(
+            fixture.0.join(".env"),
+            format!("BASE=prefix\nURL={value}\n"),
+        )
+        .unwrap();
+        for dry_run in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+            command
+                .current_dir(&fixture.0)
+                .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
+                .env_remove("SHINE_PRESETS")
+                .args(["env", "workspace", "init", "--from-dotenv", "--mode", "dev"]);
+            if dry_run {
+                command.arg("--dry-run");
+            }
+            let output = command.output().unwrap();
+            assert!(!output.status.success(), "{output:?}");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("dotenv interpolation"));
+            assert!(!fixture.0.join("shine.workspace.toml").exists());
+            assert!(!fixture.0.join(".env.shine.toml").exists());
+        }
+    }
+}
+
+#[test]
 fn export_preserves_a_destination_created_while_decrypting() {
     let fixture = Fixture::new();
     let mut child = fixture.start("late", false);

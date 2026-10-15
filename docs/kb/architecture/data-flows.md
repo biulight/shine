@@ -912,6 +912,11 @@ An early `symlink_metadata` check diagnoses existing output entries. Final publi
 before Core's `finalize_temp_new` atomically rejects any existing destination. A competing writer
 during decryption cannot be overwritten. Force uses the corresponding replacing writer; failed
 publication cleans its staging file, and secret bytes are private from the first write on Unix.
+Serialization uses literal double, single, or backtick quotes with an absent delimiter, never
+JSON-style escaping. Double quotes are used only without literal backslashes or double quotes.
+Dollar signs, CR, NUL, and values without a safe delimiter fail before output publication because
+Node and Bun dotenv readers cannot preserve them with the same escaping rules. Import likewise
+rejects dollar syntax, including bare `$NAME`; unquoted hashes start comments.
 
 ## Sys bootstrap (`shine sys bootstrap`)
 
