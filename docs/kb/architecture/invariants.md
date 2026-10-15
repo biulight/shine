@@ -599,6 +599,10 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Shell profile editing
 
+- **Declarative PATH integrations are literal and idempotent.** Repeated profile loading must not
+  duplicate existing entries. Reuse each path expression's own quoting in membership patterns,
+  including `$HOME` values containing whitespace, quotes or shell pattern characters.
+
 - **Sentinel blocks are the only thing shine writes to user shell configs**
   (`# >>> shine >>>` … `# <<< shine <<<`, Core Shell profile handling; sys uses per-phase sentinels
   like `# >>> shine <os> sys pre >>>`). Both delegate to the shared primitives in
@@ -680,6 +684,9 @@ bugs. Check this list before changing the modules named in each entry.
   `shine.env.toml` writes use `atomic_write_private`: Unix temporary files start as `0600` before
   any content is written, and replacement cannot widen an existing private file's permissions.
   Env proxy rule install, toggle, and removal use the same private writer.
+- **Windows proxy installs use names without executable suffixes.** Reject `.exe`, `.com`, `.bat`,
+  `.cmd`, and `.ps1` case-insensitively before discovery or writes; never publish a POSIX script
+  as a native executable. Legacy suffixed installations remain removable through uninstall.
 - **Env proxy installation checks every launcher before writing any.** Windows extensionless,
   `.cmd`, and `.ps1` destinations all require absence or a regular Shine-owned proxy file.
   Foreign files, directories, and symlinks (including dangling links) remain untouched.

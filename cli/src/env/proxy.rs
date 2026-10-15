@@ -24,6 +24,7 @@ pub async fn install(config: &Config, command: &str, with: &[String], project: b
     if command.eq_ignore_ascii_case("shine") || command.eq_ignore_ascii_case("shine.exe") {
         bail!("cannot proxy Shine itself: the launcher would recursively invoke itself");
     }
+    validate_install_command(command, cfg!(windows))?;
     parse_env_specs(with)?;
     if project && !config.is_project_config() {
         bail!("--project requires a shine.config.toml in the current directory or an ancestor");
@@ -237,6 +238,21 @@ fn validate_command(command: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_install_command(command: &str, windows: bool) -> Result<()> {
+    validate_command(command)?;
+    if windows
+        && let Some((name, extension)) = command.rsplit_once('.')
+        && ["exe", "com", "bat", "cmd", "ps1"]
+            .iter()
+            .any(|ext| extension.eq_ignore_ascii_case(ext))
+    {
+        bail!(
+            "Windows proxy command must omit executable extensions; use `{name}` instead of `{command}`"
+        );
+    }
+    Ok(())
+}
+
 fn find_target(command: &str, shine_bin: &Path) -> Result<PathBuf> {
     let paths = std::env::var_os("PATH").context("PATH is not set")?;
     find_target_in_paths(command, shine_bin, std::env::split_paths(&paths))
@@ -411,6 +427,7 @@ async fn install_proxy_files(
     rule_path: &Path,
     windows: bool,
 ) -> Result<()> {
+    validate_install_command(command, windows)?;
     let _lifecycle_guard = lock_proxy_lifecycle(config).await?;
     let _config_guard = crate::config::env_write::lock_target(rule_path).await?;
     let mut files = prepare_shims(
@@ -873,6 +890,46 @@ mod tests {
         assert!(validate_command("tool-name").is_ok());
         assert!(validate_command("../gh").is_err());
         assert!(validate_command("a/b").is_err());
+    }
+
+    #[tokio::test]
+    async fn windows_proxy_rejects_executable_names_before_writing_state() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-extension").await;
+        let config = Config::new_for_test(&dir);
+        for name in [
+            "gh.exe", "gh.EXE", "tool.com", "tool.bat", "tool.cmd", "tool.ps1",
+        ] {
+            let error = install_proxy_files(
+                &config,
+                name,
+                &["TOKEN".into()],
+                &dir.join("target.exe"),
+                &dir.join("config.toml"),
+                true,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("must omit executable extensions")
+            );
+            // Legacy names remain accepted for uninstall so users can remove old shims.
+            assert!(validate_command(name).is_ok());
+        }
+        assert!(validate_install_command("gh", true).is_ok());
+        assert!(validate_install_command("tool.v2", true).is_ok());
+        assert!(validate_install_command("gh.exe", false).is_ok());
+        assert!(
+            tokio::fs::read_dir(&dir)
+                .await
+                .unwrap()
+                .next_entry()
+                .await
+                .unwrap()
+                .is_none()
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]

@@ -160,7 +160,7 @@ fn render_posix(integration: &SysShellIntegration, shell: SysShellKind) -> Resul
     if let Some(path) = &integration.path {
         let expr = posix_path_expr(path)?;
         return Ok(format!(
-            "case \":$PATH:\" in\n  *\":{expr}:\"*) ;;\n  *) export PATH={expr}:\"$PATH\" ;;\nesac\n"
+            "case \":$PATH:\" in\n  *:{expr}:*) ;;\n  *) export PATH={expr}:\"$PATH\" ;;\nesac\n"
         ));
     }
     if !integration.env.is_empty() {
@@ -343,6 +343,68 @@ mod tests {
         let rendered = guard_body(rendered, Some("mise"), SysShellKind::Zsh);
         assert!(rendered.contains("command -v 'mise'"));
         assert!(rendered.contains("eval \"$('mise' 'activate' 'zsh')\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_integrations_are_literal_and_idempotent_in_posix_shells() {
+        use std::process::Command;
+
+        for shell in ["bash", "zsh"] {
+            let Some(executable) =
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                    .map(|dir| dir.join(shell))
+                    .find(|path| path.is_file())
+            else {
+                continue;
+            };
+            let executable = std::fs::canonicalize(executable).unwrap();
+            match Command::new(shell).arg("--version").output() {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                result => assert!(result.unwrap().status.success()),
+            }
+            for path in ["/opt/tool/bin", "/opt/tool a'b[1]*?/bin", "$HOME/.tool/bin"] {
+                let home = "/tmp/profile home[1]*?'\"";
+                let target = path.replace("$HOME", home);
+                let mut integration = integration();
+                integration.eval_argv.clear();
+                integration.path = Some(path.into());
+                let kind = if shell == "bash" {
+                    SysShellKind::Bash
+                } else {
+                    SysShellKind::Zsh
+                };
+                let rendered = render_posix(&integration, kind).unwrap();
+                for initial in [
+                    "/usr/bin:/bin".to_owned(),
+                    format!("{target}:/usr/bin"),
+                    format!("/usr/bin:{target}:/bin"),
+                    format!("/usr/bin:{target}"),
+                ] {
+                    let expected = if initial.split(':').any(|entry| entry == target) {
+                        initial.clone()
+                    } else {
+                        format!("{target}:{initial}")
+                    };
+                    let output = Command::new(&executable)
+                        .args([
+                            "-f",
+                            "-c",
+                            &format!("{rendered}\n{rendered}\nprintf '%s' \"$PATH\""),
+                        ])
+                        .env("HOME", home)
+                        .env("PATH", &initial)
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success(), "{shell}: {output:?}");
+                    assert_eq!(
+                        String::from_utf8(output.stdout).unwrap(),
+                        expected,
+                        "{shell}: {path}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

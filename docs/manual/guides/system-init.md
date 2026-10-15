@@ -128,6 +128,9 @@ shine sys profile disable mise
 shine sys profile enable mise
 ```
 
+Declared PATH integrations add a directory only when it is absent; reloading the generated profile
+does not add duplicate entries, including paths containing spaces or shell pattern characters.
+
 These commands modify only Shine-owned generated profile content. Disabling does not uninstall the
 software. Enabling first verifies the item's declared detection and asks you to bootstrap it when it
 is missing. A mutating run displays and freshly validates a snapshot-bound security Plan;

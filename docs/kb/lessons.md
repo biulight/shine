@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-15 — Quote PATH patterns once and keep Windows proxy filenames executable
+
+- **Symptoms**: repeated Sys profile loading duplicated literal PATH entries; proxy installation
+  accepted `gh.exe` and published a POSIX script as a Windows native executable.
+- **Causes**: PATH membership embedded an already-quoted expression inside double quotes; proxy
+  installation reused generic command-name validation without reserving executable suffixes.
+- **Fixes**: use the quoted expression directly in the case pattern. Windows install rejects
+  `.exe`/`.com`/`.bat`/`.cmd`/`.ps1` names before discovery or writes, while legacy uninstall stays
+  available. Ordinary dotted names and Unix executable filenames retain their existing behavior.
+- **Coverage**: execute repeated PATH integrations in Bash/Zsh with literal special characters,
+  test Windows rejection without state writes, and exercise the real CLI on Windows.
+
 ## 2026-10-15 — Windows CLI fixtures need complete profile directories
 
 - **Symptom**: process-level App tests failed before planning with

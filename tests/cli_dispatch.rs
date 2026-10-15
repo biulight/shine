@@ -173,3 +173,31 @@ fn top_level_uninstall_uses_receipts_after_app_source_removal() {
         assert!(manifest.entries.is_empty());
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn proxy_executable_suffixes_reject_before_target_lookup_or_state_writes() {
+    let fixture = Fixture::new();
+    for name in [
+        "missing.exe",
+        "missing.EXE",
+        "missing.com",
+        "missing.bat",
+        "missing.cmd",
+        "missing.ps1",
+    ] {
+        let output = fixture
+            .command()
+            .args(["env", "proxy", "install", name, "--with", "TOKEN"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("must omit executable extensions"),
+            "{output:?}"
+        );
+        assert!(stderr.contains("use `missing`"), "{output:?}");
+        assert!(!fixture.0.join("state").exists());
+    }
+}
