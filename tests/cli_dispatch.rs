@@ -152,8 +152,9 @@ fn top_level_uninstall_uses_receipts_after_app_source_removal() {
         // the App source is gone. Explicit App selection must still work.
         let shell = state.join("presets/shell/retired");
         fs::create_dir_all(&shell).unwrap();
-        fs::write(shell.join("shine.toml"), "[[files]]\nsource = 'tool.sh'\ntarget = 'tool'\n[files.permissions]\nschema_version = 1\n").unwrap();
-        fs::write(shell.join("tool.sh"), "#!/bin/sh\n").unwrap();
+        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+        fs::write(shell.join("shine.toml"), format!("[[files]]\nsource = '{script}'\ntarget = 'tool'\n[files.permissions]\nschema_version = 1\n")).unwrap();
+        fs::write(shell.join(script), "# fixture; never executed\n").unwrap();
         let ambiguous = run(&["uninstall", "retired", "--yes", "--force"]);
         assert!(!ambiguous.status.success(), "{ambiguous:?}");
         assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("ambiguous"));

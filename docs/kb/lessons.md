@@ -8,6 +8,8 @@
   directories, so Windows known-folder discovery could not construct `BaseDirs`.
 - **Fix**: create isolated Roaming/Local directories and set both `APPDATA` and `LOCALAPPDATA`
   alongside `HOME` and `USERPROFILE`; exercise the unchanged real CLI on all platforms.
+  Shell ambiguity fixtures must also use the current platform's script extension (`.ps1` on
+  Windows, `.sh` on Unix), or the platform filter removes the intended competing target.
 
 ## 2026-10-15 — CI subprocesses need concrete runtime paths
 
