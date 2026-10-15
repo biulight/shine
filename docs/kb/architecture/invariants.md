@@ -691,7 +691,11 @@ bugs. Check this list before changing the modules named in each entry.
   including directory aliases, while preserving executable names such as `cargo` for dispatch.
 - **Managed overlay synchronization uses the configured source.** Fetch from the current URL and
   explicit branch or remote HEAD before updating origin/resetting; failed fetches preserve the last
-  checkout and origin even during relink.
+  checkout and origin even during relink. Before fetch and destructive synchronization, require a
+  non-linked standalone checkout whose canonical worktree and Git metadata roots are exactly the
+  managed directory and its `.git` directory. Repository-selecting environment variables cannot
+  redirect Git operations. After a successful fetch/reset, clean untracked and ignored files and
+  nested repositories only inside that verified disposable mirror, including when HEAD is unchanged.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and
   [`data-flows.md`](data-flows.md#config-discovery) must agree.

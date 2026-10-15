@@ -355,6 +355,12 @@ Relinking with a different Git URL switches the existing mirror to that reposito
 `--branch`, each sync follows the configured remote's default branch. A failed fetch preserves
 the previous checkout.
 
+The managed overlay must be a standalone Git checkout at that directory. Shine refuses ordinary
+directories, linked checkouts, and linked Git metadata without changing their contents. Move an
+unexpected directory aside before retrying. After a successful fetch, synchronization discards
+tracked edits, untracked and ignored files, and nested repositories in the managed mirror, even
+when the remote commit is unchanged. Keep local customizations in a manually linked overlay instead.
+
 To customize one built-in category, copy it at the overlay root instead of exporting everything. For
 example, copy Surge before editing its local proxy, group, and rule files:
 

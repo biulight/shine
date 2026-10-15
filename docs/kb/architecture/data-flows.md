@@ -994,8 +994,13 @@ fast-forward loop, by `git_pull::sync_managed_overlay` against `<shine_dir>/over
 it clones `--depth 1` via a temp sibling dir + atomic rename (a failed clone never leaves a
 half-populated overlay). On subsequent runs it **force-mirrors**: fetch depth 1 from the configured
 URL and branch (remote `HEAD` when omitted), update `origin` only after fetch succeeds, then
-`git reset --hard FETCH_HEAD`, so the checkout always equals the remote tip even
-across rebases/force-pushes, discarding local edits (the managed overlay is read-only by design).
+`git reset --hard FETCH_HEAD` and `git clean -ffdx`, so the checkout equals the remote tip even
+across rebases/force-pushes, discarding tracked edits, untracked/ignored files and nested repositories
+(the managed overlay is read-only by design). Before fetch and again before reset/clean, verify that
+the managed directory and its `.git` entry are ordinary directories and that Git's canonical
+worktree/metadata roots match them exactly. Reject parent-repository discovery, linked checkouts
+and worktree metadata files. Git subprocesses remove inherited repository selectors while retaining
+transport/authentication settings.
 The fetch runs before the reset, so an unreachable remote leaves the previous checkout intact and
 usable. `shine preset overlay link --git <url>` writes the config and clones immediately;
 `configured_targets` deliberately excludes the managed dir from the fast-forward path. See

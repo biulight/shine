@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-15 — Disposable Git mirrors need exact repository boundaries and complete cleanup
+
+- **Symptom**: linking a managed overlay over an ordinary directory inside another checkout reset
+  the parent repository; successful pulls also left untracked `shine.env.toml` overrides active.
+- **Root cause**: Git discovers ancestor repositories and honors inherited repository selectors;
+  `reset --hard` restores tracked paths but does not remove untracked or ignored inputs.
+- **Fix**: validate standalone non-linked worktree/metadata roots before fetch and reset, remove
+  inherited repository selectors, and clean untracked/ignored files and nested repositories only
+  after a successful fetch. Regressions cover parent preservation, inherited Git environment,
+  linked checkout/metadata rejection, unchanged-HEAD cleanup, and failed-fetch preservation.
+- **Rule**: disposal authority must bind the exact repository root before destructive Git commands;
+  mirroring must reconcile every effective input, not just the tracked commit.
+
 ## 2026-10-15 — Binary secret files retain cleanup and interactive process contracts
 
 - **Symptom**: a child `chmod 000` stranded owned plaintext; binary age decrypt discarded phone QR
