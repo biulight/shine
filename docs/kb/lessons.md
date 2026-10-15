@@ -1,5 +1,22 @@
 # Lessons Learned
 
+## 2026-10-15 — Case aliases, delayed ownership checks, and remote-shell paths need boundary tests
+
+- **Symptoms**: `seal --remove-plaintext` deleted a case-aliased workspace definition; proxy
+  uninstall removed a replacement made while it waited for the config lock; macOS rsync split
+  remote filenames containing spaces into multiple operands.
+- **Causes**: workspace overlap used case-sensitive paths unlike mapping overlap; uninstall
+  observed ownership before locking and deleted without rechecking; local argv boundaries do not
+  survive rsync's remote-shell command construction.
+- **Fixes**: compare workspace and mapping identities with the same case-folded keys; serialize
+  proxy lifecycle reads/effects before target config locking and recheck each launcher before
+  removal; escape rsync shell syntax while preserving globs and pin old argument mode to avoid
+  double escaping in modern rsync.
+- **Coverage**: case-alias sealing and dry-run reject before backend invocation/deletion; blocked
+  uninstall preserves replacements and state; per-removal checks preserve changed/new files;
+  project installs share lifecycle locking; real system rsync copies spaces, punctuation and
+  glob selections through a local SSH substitute in both directions.
+
 ## 2026-10-15 — Disposable Git mirrors need exact repository boundaries and complete cleanup
 
 - **Symptom**: linking a managed overlay over an ordinary directory inside another checkout reset

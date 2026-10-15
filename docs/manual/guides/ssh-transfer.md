@@ -252,6 +252,15 @@ The local side starts system `rsync` or `scp`, preferring rsync and falling back
 SSH, and directory transfer requires a common tool. Existing files are not overwritten by default;
 for an existing directory, `--force` merges into it. Use `--scp` to skip rsync probing.
 Rsync progress uses the per-file `--progress` option, compatible with the system rsync on macOS.
+With rsync, quote paths containing spaces and wildcard patterns in the command you enter:
+
+```bash
+shine local download './build output/*.log'
+shine local upload './release notes.txt' '/tmp/release files'
+```
+
+Spaces and shell punctuation remain part of the remote path; `*`, `?`, and bracket patterns still
+select matching remote files.
 When reconnecting through SCP, Shine translates SSH port, user, and control-socket options,
 preserves connection settings such as identity files and jump hosts, and omits terminal and
 forwarding flags from the original session.

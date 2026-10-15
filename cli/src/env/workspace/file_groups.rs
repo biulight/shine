@@ -76,22 +76,24 @@ impl Selection {
                 mappings.push((source, target));
             }
         }
+        let workspace_key = PathBuf::from(
+            String::from_utf8_lossy(&platform::path_key(&workspace_path)).into_owned(),
+        );
         let paths = mappings
             .iter()
             .flat_map(|(s, t)| [s, t])
+            .map(|path| {
+                PathBuf::from(String::from_utf8_lossy(&platform::path_key(path)).into_owned())
+            })
             .collect::<Vec<_>>();
         for (i, a) in paths.iter().enumerate() {
             ensure!(
-                !a.starts_with(&workspace_path) && !workspace_path.starts_with(a),
+                !a.starts_with(&workspace_key) && !workspace_key.starts_with(a),
                 "mapping overlaps workspace file"
             );
             for b in &paths[i + 1..] {
-                let a_key =
-                    PathBuf::from(String::from_utf8_lossy(&platform::path_key(a)).into_owned());
-                let b_key =
-                    PathBuf::from(String::from_utf8_lossy(&platform::path_key(b)).into_owned());
                 ensure!(
-                    !a_key.starts_with(&b_key) && !b_key.starts_with(&a_key),
+                    !a.starts_with(b) && !b.starts_with(a),
                     "file-group mappings overlap: {} and {}",
                     a.display(),
                     b.display()

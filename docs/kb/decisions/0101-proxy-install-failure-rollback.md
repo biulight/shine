@@ -20,6 +20,13 @@ order, including a replacement that became visible before synchronization failed
 bytes and modes or remove a newly created file only if the current state still matches this
 installation's expected content/mode states. Preserve concurrent edits and report rollback failure.
 
+Install and uninstall share a config-scope `proxy-lifecycle.lock`, acquired before the target
+configuration lock and shared-state reads. This includes project installs, whose launcher and
+manifest remain global. Uninstall captures all launcher preimages after locking, rechecks the set
+before rule changes, and verifies each preimage again before deletion. Changed/new paths are
+preserved and reported. This does not promise an atomic compare-and-delete against noncooperating
+writers in the final filesystem interval.
+
 ## Consequences
 
 - Malformed or conflicting state fails before writing any installation file.

@@ -109,7 +109,11 @@ pub async fn uninstall(config: &Config, command: &str) -> Result<()> {
 }
 
 async fn uninstall_for_platform(config: &Config, command: &str, windows: bool) -> Result<()> {
+    let _lifecycle_guard = lock_proxy_lifecycle(config).await?;
     let path = config.shine_dir().join("config.toml");
+    // Acquire every cooperating lock before observing ownership. In particular,
+    // waiting for the configuration writer must not stale the launcher preflight.
+    let _config_guard = crate::config::env_write::lock_target(&path).await?;
     let mut manifest = load_manifest(config.shine_dir()).await?;
     let mut launchers = vec![config.bin_dir().join(command)];
     if windows {
@@ -120,31 +124,59 @@ async fn uninstall_for_platform(config: &Config, command: &str, windows: bool) -
     let mut owned = Vec::new();
     // Inspect every member before changing rules, receipts, or another launcher.
     for launcher in launchers {
-        let metadata = match tokio::fs::symlink_metadata(&launcher).await {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error).context("inspecting env proxy destination"),
-        };
-        if !metadata.is_file()
-            || !tokio::fs::read_to_string(&launcher)
-                .await
-                .with_context(|| format!("reading {}", launcher.display()))?
-                .contains(MARKER)
+        let snapshot = capture_file(&launcher).await?;
+        if snapshot
+            .as_ref()
+            .is_some_and(|snapshot| !String::from_utf8_lossy(&snapshot.bytes).contains(MARKER))
         {
             bail!(
                 "refusing to remove {}: it is not a shine env proxy",
                 launcher.display()
             );
         }
-        owned.push(launcher);
+        owned.push((launcher, snapshot));
     }
-    remove_rule(&path, command).await?;
-    for launcher in owned {
-        tokio::fs::remove_file(launcher).await?;
+    for (launcher, snapshot) in &owned {
+        verify_uninstall_launcher(launcher, snapshot.as_ref()).await?;
+    }
+    mutate_rules_locked(&path, |rules| {
+        rules.retain(|rule| rule.command != command);
+        Ok(())
+    })
+    .await?;
+    for (launcher, snapshot) in owned {
+        remove_uninstall_launcher(&launcher, snapshot.as_ref()).await?;
     }
     manifest.entries.remove(command);
     save_manifest(config.shine_dir(), &manifest).await?;
     println!("removed transparent proxy {command}");
+    Ok(())
+}
+
+async fn lock_proxy_lifecycle(
+    config: &Config,
+) -> Result<shine_core::runtime::PrivilegedOperationGuard> {
+    use shine_core::runtime::{FileSystemHost, RealHost};
+    RealHost
+        .acquire_operation_lock(&config.shine_dir().join("proxy-lifecycle.lock"))
+        .await
+}
+
+async fn verify_uninstall_launcher(path: &Path, snapshot: Option<&FileSnapshot>) -> Result<()> {
+    if capture_file(path).await?.as_ref() != snapshot {
+        bail!(
+            "proxy launcher changed during uninstall; preserving {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+async fn remove_uninstall_launcher(path: &Path, snapshot: Option<&FileSnapshot>) -> Result<()> {
+    verify_uninstall_launcher(path, snapshot).await?;
+    if snapshot.is_some() {
+        tokio::fs::remove_file(path).await?;
+    }
     Ok(())
 }
 
@@ -379,6 +411,7 @@ async fn install_proxy_files(
     rule_path: &Path,
     windows: bool,
 ) -> Result<()> {
+    let _lifecycle_guard = lock_proxy_lifecycle(config).await?;
     let _config_guard = crate::config::env_write::lock_target(rule_path).await?;
     let mut files = prepare_shims(
         config.bin_dir(),
@@ -557,6 +590,7 @@ async fn upsert_rule(path: &Path, rule: EnvProxyRule) -> Result<()> {
     })
     .await
 }
+#[cfg(test)]
 async fn remove_rule(path: &Path, command: &str) -> Result<()> {
     mutate_rules(path, |rules| {
         rules.retain(|r| r.command != command);
@@ -569,6 +603,13 @@ async fn mutate_rules(
     change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
 ) -> Result<()> {
     let _guard = crate::config::env_write::lock_target(path).await?;
+    mutate_rules_locked(path, change).await
+}
+
+async fn mutate_rules_locked(
+    path: &Path,
+    change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
+) -> Result<()> {
     let input = crate::config::ConfigInput::capture(path).await?;
     let text = input.contents.unwrap_or_default();
     let contents = render_rules(&text, change)?;
@@ -945,6 +986,107 @@ mod tests {
                     .contains_key("demo")
             );
         }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn proxy_project_install_and_uninstall_share_lifecycle_lock_and_receipts() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-lifecycle").await;
+        let config = uninstall_fixture(&dir).await;
+        let project = dir.join("project/shine.config.toml");
+        tokio::fs::create_dir_all(project.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&project, "schema_version = 2\n")
+            .await
+            .unwrap();
+        let guard = lock_proxy_lifecycle(&config).await.unwrap();
+        let target = dir.join("real-other");
+        let with = vec!["TOKEN".to_string()];
+        let mut install = Box::pin(install_proxy_files(
+            &config, "other", &with, &target, &project, true,
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut install)
+                .await
+                .is_err()
+        );
+        assert!(!config.bin_dir().join("other").exists());
+        assert!(
+            !load_manifest(&dir)
+                .await
+                .unwrap()
+                .entries
+                .contains_key("other")
+        );
+        drop(guard);
+        install.await.unwrap();
+        uninstall_for_platform(&config, "demo", true).await.unwrap();
+        let manifest = load_manifest(&dir).await.unwrap();
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries["other"], target);
+        assert!(config.bin_dir().join("other.cmd").exists());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn proxy_uninstall_rechecks_launchers_before_each_removal() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-uninstall-recheck").await;
+        let config = uninstall_fixture(&dir).await;
+        let path = config.bin_dir().join("demo.cmd");
+        let snapshot = capture_file(&path).await.unwrap();
+        tokio::fs::remove_file(&path).await.unwrap();
+        tokio::fs::write(&path, b"replacement after preflight")
+            .await
+            .unwrap();
+        assert!(
+            remove_uninstall_launcher(&path, snapshot.as_ref())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            tokio::fs::read(&path).await.unwrap(),
+            b"replacement after preflight"
+        );
+        let absent = config.bin_dir().join("new-launcher");
+        tokio::fs::write(&absent, b"new file after preflight")
+            .await
+            .unwrap();
+        assert!(remove_uninstall_launcher(&absent, None).await.is_err());
+        assert!(absent.is_file());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn proxy_uninstall_preserves_replacement_while_waiting_for_config_lock() {
+        let dir = crate::test_support::make_temp_dir("shine-proxy-uninstall-race").await;
+        let config = uninstall_fixture(&dir).await;
+        let before = tokio::fs::read(config.config_path()).await.unwrap();
+        let receipt = tokio::fs::read(manifest_path(&dir)).await.unwrap();
+        let guard = crate::config::env_write::lock_target(config.config_path())
+            .await
+            .unwrap();
+        let mut uninstall = Box::pin(uninstall_for_platform(&config, "demo", true));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(250), &mut uninstall)
+                .await
+                .is_err()
+        );
+        let replaced = config.bin_dir().join("demo.ps1");
+        tokio::fs::remove_file(&replaced).await.unwrap();
+        tokio::fs::write(&replaced, b"independently installed replacement")
+            .await
+            .unwrap();
+        drop(guard);
+        assert!(uninstall.await.is_err());
+        assert_eq!(
+            tokio::fs::read(&replaced).await.unwrap(),
+            b"independently installed replacement"
+        );
+        assert_eq!(tokio::fs::read(config.config_path()).await.unwrap(), before);
+        assert_eq!(tokio::fs::read(manifest_path(&dir)).await.unwrap(), receipt);
+        assert!(config.bin_dir().join("demo").exists());
+        assert!(config.bin_dir().join("demo.cmd").exists());
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 

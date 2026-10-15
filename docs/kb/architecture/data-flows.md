@@ -1057,6 +1057,11 @@ spawned child process, whose exit status is propagated by Shine.
 
 ## Transparent environment proxies
 
+Install/uninstall acquire the config-scope `proxy-lifecycle.lock`, then the target configuration
+lock before reading shared launcher/manifest state. Project installs use the same lifecycle lock
+as global installs and uninstall. Uninstall captures the complete launcher set, rechecks it before
+rule mutation and each removal, and preserves changed or newly appeared paths with an error.
+
 Installation prepares all launcher bytes, captures regular-file preimages (including Unix modes),
 and parses the exact captured configuration/manifest before writing. Each write rechecks its
 preimage; reported failures roll back touched files in reverse order. Rollback accepts only this

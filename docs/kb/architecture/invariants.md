@@ -678,7 +678,10 @@ bugs. Check this list before changing the modules named in each entry.
   `.cmd`, and `.ps1` destinations all require absence or a regular Shine-owned proxy file.
   Foreign files, directories, and symlinks (including dangling links) remain untouched.
   Uninstall checks the complete launcher set before changing any launcher, rule, or receipt;
-  ownership conflicts preserve all three. Installation rejects `shine` and `shine.exe`, ignoring
+  ownership conflicts preserve all three. Install/uninstall share `proxy-lifecycle.lock`, acquired
+  before the target configuration lock and all state reads, including project-scoped installs.
+  Uninstall compares captured launcher bytes/modes again before mutation and each removal, preserving
+  changed or newly appeared files. Installation rejects `shine` and `shine.exe`, ignoring
   case, because proxy launchers invoke Shine through PATH and would otherwise recurse.
 - **Proxy launchers bind their installation's runtime directory.** All platform launchers pass
   an absolute `--config-dir`; a caller's environment cannot silently select another trust/env store.
@@ -843,7 +846,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **Workspace file groups are explicit binary release.** Version 3 mappings require repeatable
   `--file-group` selection. Capture all ciphertext before decryption and decrypt all selected files
   before target creation. Reject links, hard-link aliases, path/case overlaps and pre-existing run
-  targets; Git plaintext targets must be ignored and untracked in their own repository, including
+  targets; workspace-definition overlap uses the same case-folded path keys as mapping overlap.
+  Git plaintext targets must be ignored and untracked in their own repository, including
   nested repositories. Git discovery errors fail closed; exit 128 alone never proves absence.
   Run previews use stderr, preserving exact child stdout; dry-run previews use stdout.
   Keep targets inside the workspace.
@@ -941,6 +945,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **Rsync flags must work with the system implementation.** Availability via `--version` does not
   imply support for modern GNU options. Use per-file `--progress`, supported by macOS's rsync
   2.6.9-compatible implementation, rather than `--info=progress2`.
+- **Rsync remote paths cross a shell boundary.** Escape whitespace and shell-active syntax while
+  retaining `*`, `?`, and bracket glob patterns. Pin `RSYNC_OLD_ARGS=1` and `RSYNC_PROTECT_ARGS=0`
+  on the transfer child so new rsync does not double-escape and older versions do not enable
+  protocol argument protection from ambient settings. SCP retains its own operand handling.
 
 ## SSH secret broker
 

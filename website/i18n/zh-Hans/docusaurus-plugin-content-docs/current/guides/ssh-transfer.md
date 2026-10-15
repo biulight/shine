@@ -219,6 +219,14 @@ shine local download ./dist ./dist-copy
 Shine 会在本机端重新发起系统 `rsync` 或 `scp` 传输；优先使用 `rsync`，不可用时回退到 `scp`。两端都需要可用的 `ssh`，目录传输还需要两端具有同一种可用工具（优先 `rsync`，否则 `scp`）。目标文件已存在时默认拒绝覆盖；目录已存在时加 `--force` 表示合并写入。
 需要跳过 `rsync` 探测并强制使用 `scp` 时，添加 `--scp`。
 Rsync 使用逐文件显示进度的 `--progress` 选项，兼容 macOS 自带的系统 rsync。
+使用 rsync 时，在输入的命令中为含空格的路径和通配模式加引号：
+
+```bash
+shine local download './build output/*.log'
+shine local upload './release notes.txt' '/tmp/release files'
+```
+
+空格和 shell 标点会保留为远端路径的一部分；`*`、`?` 和方括号模式仍可匹配远端文件。
 使用 SCP 重连时，Shine 会转换 SSH 的端口、用户名和控制 socket 选项，保留身份文件、跳板主机等
 连接设置，并跳过原会话的终端和端口转发选项。
 

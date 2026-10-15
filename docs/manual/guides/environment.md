@@ -537,6 +537,7 @@ symlinks without changing the command's invocation name.
 Shine refuses to proxy `shine` or `shine.exe` (case-insensitive) to prevent recursive launcher calls.
 Uninstall checks every launcher before changing rules or receipts; an ownership conflict leaves
 the launcher set and configuration unchanged.
+If a launcher changes while uninstall is running, Shine preserves the changed file and reports an error.
 
 Installation validates the rule file, manifest, and complete launcher set before writing. If a
 write fails, Shine attempts to restore previous file contents and Unix permissions and removes new
@@ -877,8 +878,9 @@ files, or execute the command. It cannot verify ciphertext integrity or private-
 Plain `seal` and `env run` do not implicitly select file groups.
 
 Paths must stay inside the workspace; absolute paths, traversal, symbolic links/reparse points,
-hard links, and overlapping mappings are rejected. Case aliases are conservatively rejected across
-platforms. Each plaintext file is limited to 16 MiB, with 64 MiB per invocation. Encoded ciphertext is limited to 32 MiB per file and 128 MiB per invocation. File ciphertext uses
+hard links, and overlapping mappings are rejected. Mappings cannot overlap the workspace definition,
+including names that differ only in case. Case aliases are conservatively rejected across platforms.
+Each plaintext file is limited to 16 MiB, with 64 MiB per invocation. Encoded ciphertext is limited to 32 MiB per file and 128 MiB per invocation. File ciphertext uses
 Shine's existing tagged storage encoding, not a native `.age` or `.gpg` file.
 
 The child and other processes with sufficient local permissions can read the temporary plaintext.

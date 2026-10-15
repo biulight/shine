@@ -408,6 +408,42 @@ fn file_groups_refuse_existing_targets_and_preserve_replacements() {
 }
 
 #[test]
+fn file_groups_reject_workspace_case_aliases_before_backend_or_deletion() {
+    for (from, to) in [
+        ("target='.signing/key'", "target='SHINE.WORKSPACE.TOML'"),
+        (
+            "source='.secrets/{mode}/key.enc'",
+            "source='SHINE.WORKSPACE.TOML'",
+        ),
+    ] {
+        let f = Fixture::new();
+        let path = f.root.join("shine.workspace.toml");
+        let contents = fs::read_to_string(&path).unwrap().replace(from, to);
+        fs::write(&path, &contents).unwrap();
+        let log = f.root.join("backend-called");
+        for dry_run in [false, true] {
+            let mut cmd = f.command();
+            cmd.args([
+                "env",
+                "secret",
+                "seal",
+                "--file-group",
+                "signing",
+                "--remove-plaintext",
+            ])
+            .env("PROBE_BACKEND_LOG", &log);
+            if dry_run {
+                cmd.arg("--dry-run");
+            }
+            error(cmd.output().unwrap(), "mapping overlaps workspace file");
+            assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+            assert!(!log.exists());
+            assert!(!f.root.join(".secrets").exists());
+        }
+    }
+}
+
+#[test]
 fn file_groups_reject_unsafe_paths_modes_versions_and_missing_groups() {
     for (from, to, expected) in [
         ("target='.signing/key'", "target='../outside'", "relative"),
