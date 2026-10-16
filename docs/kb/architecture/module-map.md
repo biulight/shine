@@ -207,7 +207,7 @@ logic.
 | `cli/src/config/env_layer.rs` | Env value parsing, removed-file diagnosis and override persistence |
 | `cli/src/config/env_resolution.rs` | Raw six-layer env resolution, input snapshots and independent value/description provenance |
 | `cli/src/config/env_write.rs` | Explicit write targets, preflight, snapshot checks and shared per-target config locks |
-| `cli/src/presets.rs` | Embedded extraction, active asset reads, category enumeration |
+| `cli/src/presets.rs` | Pristine embedded assets plus explicit `PresetAssetReader` overlay enumeration/reads/extraction; shared safe output publication |
 | `cli/src/preset_commands.rs` | Preset copy/export/link/unlink/overlay commands |
 | `cli/src/preset_meta.rs` | Test-only Core capability-report renderer for public manual parity |
 | `cli/src/preset_validation.rs` | Core validation report text/JSON rendering and exit mapping |

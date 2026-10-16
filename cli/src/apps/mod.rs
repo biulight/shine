@@ -146,7 +146,8 @@ async fn materialize_static_file_content(
             .with_context(|| format!("reading {}", path.display()))?
     } else {
         let key = format!("app/{}/{}", cat.name, file.source_rel.display());
-        crate::presets::read_asset_bytes(&key)
+        crate::presets::PresetAssetReader::new(config.active_presets_overlay_dir())
+            .read_asset_bytes(&key)
             .with_context(|| format!("embedded source not found: {key}"))?
     };
 

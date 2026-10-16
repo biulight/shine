@@ -1156,6 +1156,20 @@ Post-save reload reports effective provenance and value change separately from s
 saving state that the file is already saved. External editors/Git are not transactionally locked.
 See [ADR 0109](../decisions/0109-env-baseline-and-directed-writes.md).
 
+## CLI preset asset reads and export
+
+Config loading resolves overlay roots on its own `Config` instance without registering global
+asset state. Env catalog reads and `preset export` construct `PresetAssetReader` with that
+instance's `active_presets_overlay_dir()`. The reader merges sorted embedded/overlay paths and
+reads matching overlay files first, retaining embedded fallback for absent/unreadable overlay
+files. Manual roots retain precedence; managed roots become active only when the checkout exists.
+The env catalog's full-external mode still uses `Config::preset_path` and never borrows a missing
+catalog from the binary. Export still selects embedded assets plus overlay, even with a full
+external source; it does not export that external tree. `preset copy` and Core bootstrap use the
+pristine embedded APIs. All extraction retains the same output-root, link, permission and atomic
+publication checks. These CLI readers are live views; Core lifecycle execution continues to use
+host-captured immutable snapshots. See [ADR 0119](../decisions/0119-explicit-preset-asset-readers.md).
+
 ## Dynamic shell completion
 
 `main.rs` calls `completion::complete_from_env` before Clap parsing, Tokio startup, config
@@ -1165,6 +1179,9 @@ and saved tasks. Candidate callbacks use `config::discover_runtime_paths_read_on
 global/project preset and overlay inheritance synchronously without creating `~/.shine`, then read
 only the small preset metadata or runtime manifest needed for the active argument. Parse or I/O
 failures are tolerated and never break the user's shell.
+Embedded candidate enumeration/metadata reads use pristine APIs, then union candidates from the
+explicitly discovered overlay. Loading another `Config` in the same process cannot change those
+sources. Sys candidates retain baseline IDs even when an overlay replaces the matching manifest.
 
 ## Environment command runner
 

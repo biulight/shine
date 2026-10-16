@@ -810,6 +810,10 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Embedded presets
 
+- **CLI asset source selection is instance-scoped.** `PresetAssetReader` borrows the selected
+  overlay root from the consuming `Config`; enumeration and reads use that same root. Config
+  loading must not register an overlay in process-global state. Pristine copy/bootstrap APIs
+  remain embedded-only, and lifecycle execution still consumes Core's captured immutable snapshot.
 - **Preset copy/export writes replace entries inside a resolved output root.** Reject nested
   symlinks, Windows junctions/reparse points, and special output entries before staging and
   publication. Set final permissions on a complete synced staging file before publishing it.

@@ -198,7 +198,6 @@ impl Config {
             config.initialize_runtime().await?;
         }
         config.resolve_env_layers().await?;
-        crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
 
         let loaded = config.serialize_effective_table()?;
         config.save_state = Some(ConfigSaveState { original, loaded });
@@ -320,7 +319,6 @@ impl Config {
             if let Some(path) = config.self_install_dest.as_deref() {
                 config.self_install_dest = Some(resolve_config_presets_path(path, &config_dir));
             }
-            crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
             // Recovery/settings-only loaders also preserve raw unrelated fields.
             config.save_state = Some(ConfigSaveState {
                 original: toml::from_str(contents)?,
@@ -340,7 +338,6 @@ impl Config {
                 config_inputs: vec![global_input],
                 ..Config::default()
             };
-            crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
             Ok((config, false))
         }
     }

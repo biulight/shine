@@ -521,11 +521,11 @@ fn sys_item_names() -> BTreeSet<String> {
         return names;
     }
 
-    for path in crate::presets::asset_paths("sys") {
+    for path in crate::presets::embedded_asset_paths("sys") {
         if !path.ends_with("/shine.toml") {
             continue;
         }
-        if let Some(bytes) = crate::presets::read_asset_bytes(&path) {
+        if let Some(bytes) = crate::presets::read_embedded_asset_bytes(&path) {
             collect_toml_sys_item_names(&bytes, &mut names);
         }
     }
@@ -627,7 +627,7 @@ fn fs_category_names(root: &Path) -> Option<BTreeSet<String>> {
 
 fn embedded_category_names(kind: &str) -> BTreeSet<String> {
     let prefix = format!("{kind}/");
-    crate::presets::asset_paths(kind)
+    crate::presets::embedded_asset_paths(kind)
         .into_iter()
         .filter_map(|path| {
             let rest = path.strip_prefix(&prefix)?;
@@ -797,6 +797,63 @@ mod tests {
 
         assert!(shell.contains("proxy"), "shell candidates: {shell:?}");
         assert!(shell.contains("personal"), "shell candidates: {shell:?}");
+    }
+
+    #[tokio::test]
+    async fn completion_uses_discovered_overlay_after_loading_another_config() {
+        let _guard = env_lock();
+        let home = temp_dir("completion-config-isolation");
+        let overlay = home.join("active-overlay");
+        let other = home.join("other-config");
+        let other_overlay = home.join("other-overlay");
+        std::fs::create_dir_all(home.join(".shine")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        for (dir, id) in [(&overlay, "active-item"), (&other_overlay, "other-item")] {
+            std::fs::create_dir_all(dir.join("sys/macos")).unwrap();
+            std::fs::create_dir_all(dir.join(format!("shell/{id}"))).unwrap();
+            std::fs::write(
+                dir.join("sys/macos/shine.toml"),
+                format!("[[items]]\nid = \"{id}\"\nlabel = \"test\"\n"),
+            )
+            .unwrap();
+        }
+        for (config_dir, overlay_dir) in [
+            (home.join(".shine"), &overlay),
+            (other.clone(), &other_overlay),
+        ] {
+            std::fs::write(
+                config_dir.join("config.toml"),
+                format!(
+                    "presets_overlay_dir = \"{}\"\n",
+                    overlay_dir.to_string_lossy().replace('\\', "\\\\")
+                ),
+            )
+            .unwrap();
+        }
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::set_var("SHINE_CONFIG_DIR", &other);
+            std::env::remove_var("SHINE_PRESETS");
+        }
+        std::env::set_current_dir(&home).unwrap();
+        let unrelated = crate::config::Config::load_read_only().await.unwrap();
+        assert_eq!(
+            unrelated.active_presets_overlay_dir(),
+            Some(other_overlay.as_path())
+        );
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        let shell = category_names("shell");
+        assert!(shell.contains("proxy"));
+        assert!(shell.contains("active-item"));
+        assert!(!shell.contains("other-item"));
+        let sys = sys_item_names();
+        assert!(sys.contains("active-item"));
+        assert!(!sys.contains("other-item"));
+        // Completion unions baseline IDs with overlay IDs, even for an overridden manifest.
+        assert!(sys.contains("split-dns"));
+        assert!(!other.join("presets").exists());
+        std::env::set_current_dir(home.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

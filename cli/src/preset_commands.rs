@@ -74,7 +74,9 @@ pub async fn handle_preset_export(
 
     println!("Exporting built-in presets to {} ...", target.display());
 
-    let report = presets::extract_all(&target, force).await?;
+    let report = presets::PresetAssetReader::new(config.active_presets_overlay_dir())
+        .extract_all(&target, force)
+        .await?;
 
     let created = report.created.len();
     let overwritten = report.overwritten.len();
@@ -397,6 +399,64 @@ mod tests {
 
     fn config_in(dir: &std::path::Path) -> Config {
         crate::test_support::test_config(dir)
+    }
+
+    #[tokio::test]
+    async fn export_uses_its_config_overlay_and_retains_collision_and_builtin_copy_policy() {
+        let root = make_temp_dir().await;
+        let key = "app/clash-verge/merge.yaml";
+        let overlay = root.join("overlay");
+        fs::create_dir_all(overlay.join("app/clash-verge"))
+            .await
+            .unwrap();
+        fs::write(overlay.join(key), b"overlay marker")
+            .await
+            .unwrap();
+        fs::write(overlay.join("overlay-only.txt"), b"overlay addition")
+            .await
+            .unwrap();
+        let mut config = config_in(&root).with_presets_overlay_dir_override(Some(overlay));
+        // Export still means embedded bundle + overlay, even in full external mode.
+        config.is_external_presets = true;
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::write(config.presets_dir().join("external-only.txt"), b"external")
+            .await
+            .unwrap();
+        let builtin = config_in(&root.join("builtin"));
+        let out = root.join("export");
+        let out_builtin = root.join("export-builtin");
+        let (a, b) = tokio::join!(
+            handle_preset_export(&config, Some(out.clone()), false),
+            handle_preset_export(&builtin, Some(out_builtin.clone()), false),
+        );
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(fs::read(out.join(key)).await.unwrap(), b"overlay marker");
+        assert!(out.join("overlay-only.txt").is_file());
+        assert!(!out.join("external-only.txt").exists());
+        assert_eq!(
+            fs::read(out_builtin.join(key)).await.unwrap(),
+            presets::read_embedded_asset_bytes(key).unwrap()
+        );
+        assert!(!out_builtin.join("overlay-only.txt").exists());
+        fs::write(out.join(key), b"user content").await.unwrap();
+        handle_preset_export(&config, Some(out.clone()), false)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(out.join(key)).await.unwrap(), b"user content");
+        handle_preset_export(&config, Some(out.clone()), true)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(out.join(key)).await.unwrap(), b"overlay marker");
+        let pristine = root.join("pristine");
+        copy_embedded_preset("app/clash-verge", &pristine, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read(pristine.join(key)).await.unwrap(),
+            presets::read_embedded_asset_bytes(key).unwrap()
+        );
+        fs::remove_dir_all(root).await.unwrap();
     }
 
     #[test]
