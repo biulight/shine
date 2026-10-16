@@ -381,6 +381,13 @@ bugs. Check this list before changing the modules named in each entry.
   correspondence with independently appended vectors or positional truncating iteration. Pairing
   does not replace Action validation, permission checks, journal-before-effect ordering, per-action
   progress saves or fresh recovery approval (ADR 0117).
+- **App factory extraction preserves per-resource admission.** The observation-only factory validates
+  approval before Host reads, then tries JSON relocation, Copy relocation, JSON merge and Copy in
+  that order. Relocation requires its exact typed Update step; ordinary Create/Update matching keeps
+  its existing target/resource/action rule. Generators remain excluded, non-admitted files emit no
+  action, and upgrade stale-prune actions follow active-file actions. Private construction inputs are
+  local to that factory call and never replace fresh planning, executor authority or rollback checks
+  (ADR 0121).
 - **The executable Action IR is not the security Plan.** `PlanV1` remains a payload-free review and
   approval contract. `ActionIrV1` is created for execution only after planning and may carry resolved
   effect paths and content hashes, but never managed bytes, environment values, secret plaintext, or

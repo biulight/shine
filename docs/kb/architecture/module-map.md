@@ -38,7 +38,11 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/planner/shell_removal/` | Observation-only legacy/receipt launcher, rendered-file, purge/cache and snapshot removal phases in the original order |
 | `core/src/runtime/planner/tests.rs`, `planner/tests/` | Shared in-memory fixtures and domain/contract-grouped planning, transaction, recovery and frontend regressions |
 | `core/src/runtime/planner/{sys_managed_plan,sys_specialized,sys_support}.rs` | Managed Sys, bootstrap and profile planning with shared Sys observation helpers |
-| `core/src/runtime/planner/{approved,app_actions,app_remove_actions}.rs` | Fresh-plan approval gates and typed App Action IR construction |
+| `core/src/runtime/planner/approved.rs` | Lifecycle locks, fresh-plan approval revalidation and approved domain entry points |
+| `core/src/runtime/planner/app_actions.rs` | Approved App factory routing, per-file inputs, exact step matching and ordered Action IR wrapping |
+| `core/src/runtime/planner/app_actions/{copy,json_merge,file_relocation,json_relocation}.rs` | Observation-only resource admission/rechecks and payload-free static Action construction |
+| `core/src/runtime/planner/app_remove_actions.rs` | Existing receipt-driven uninstall and stale-prune Action construction |
+| `core/src/runtime/planner/tests/app_action_factory.rs` | Mixed resource order/identity/permission, Preserve/generator exclusion, typed relocation and late-state factory regressions |
 | `core/src/runtime/planner/{observations,inputs,permissions,code_boundaries}.rs` | State/input capture, permissions, typed code-boundary assembly and Plan finalization |
 | `core/src/runtime/app_change.rs` | Shared static App relocation eligibility used by Plan and Action IR construction |
 | `core/src/runtime/action_executor.rs` | App journal/result/recovery models; `action_executor/` owns typed apply, commit, receipt and recovery phases |

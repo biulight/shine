@@ -33,10 +33,8 @@ use super::{
 };
 use crate::action::{
     ActionIrV1, DeclarativeActionV1, ForcedManagedFileBackupV1, ForcedManagedFileRemoveSpecV1,
-    ManagedFileRelocationBackupV1, ManagedFileRelocationSpecV1, ManagedFileRemoveSpecV1,
-    ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1, ManagedJsonMergeSpecV1,
-    ManagedJsonRelocationSpecV1, ManagedJsonRemoveSpecV1, managed_file_rollback_path,
-    shell_snapshot_rollback_path, shell_snapshot_stage_path,
+    ManagedFileRemoveSpecV1, ManagedFileRemoveWithBackupSpecV1, ManagedJsonRemoveSpecV1,
+    managed_file_rollback_path, shell_snapshot_rollback_path, shell_snapshot_stage_path,
 };
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::transforms::MissingTemplateVariables;

@@ -626,6 +626,18 @@ retained files from receipt cleanup and offers no force override.
 
 ## Declarative App action and recovery
 
+`planner/app_actions.rs` remains the approved factory entry. It validates approval before reading
+Host state, resolves each static file from the captured snapshot and initial manifest, then dispatches
+in the existing order to private JSON relocation, Copy relocation, JSON merge or Copy handlers.
+A per-file input owns desired bytes only in memory and carries the same request/Plan/manifest/file
+references; handlers retain their source/destination/backup/rollback observation order, skip rules
+and diagnostics. One common wrapper retains Action/operation IDs and file ordering. Ordinary Create/
+Update step matching remains target/resource/action based; relocation additionally requires its typed
+step kind. Uninstall and appended upgrade stale-prune still use `app_remove_actions.rs`, including
+its existing manifest reloads. All factory handlers accept only `FileSystemObservationHost`; no
+factory input grants execution authority. See
+[ADR 0121](../decisions/0121-resource-specific-app-action-factories.md).
+
 Approved App install routes two deliberately narrow creation cases through the Roadmap Phase 4
 executor: a static Copy whose manifest receipt is absent and whose destination is either absent or
 an unowned regular file with an absent fixed backup path. Approved install and upgrade also route
