@@ -391,6 +391,12 @@ bugs. Check this list before changing the modules named in each entry.
   App commit converts to an App-only borrowed view and explicitly dispatches every supported
   variant, including creation with no rollback cleanup. Journal removal follows every resource's
   receipt/live-state checks and successful cleanup (ADR 0116).
+- **Shell phases share an exhaustive borrowed Action view.** Journal admission rejects non-Shell
+  kinds before resource effects. Receipt-marker eligibility, commit preflight/cleanup and recovery
+  projection/dispatch explicitly handle every supported Shell variant. Creation/update use matching
+  launcher receipts without positive markers; other Shell variants retain their marker boundary.
+  All commit preflights precede any rollback cleanup, and a cleanup failure retains the journal.
+  Domain recovery handlers and fresh approval checks remain authoritative (ADR 0118).
 - **Recovery is an explicit, freshly approved operation.** Ordinary planning, status, install,
   upgrade, and uninstall must not mutate an interrupted journal implicitly. `app-recovery` binds the
   exact journal bytes and current destination observation, validates its approval again under the

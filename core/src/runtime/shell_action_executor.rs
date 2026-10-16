@@ -1,9 +1,11 @@
+mod action;
 mod apply;
 mod commit;
 mod journal_io;
 mod receipts;
 mod recovery_apply;
 mod recovery_plan;
+use action::ShellAction;
 use journal_io::*;
 use receipts::*;
 
@@ -255,23 +257,8 @@ impl ShellOperationJournalV1 {
         {
             bail!("unsupported action or approval schema in Shell operation journal");
         }
-        if self.action_ir.actions.iter().any(|action| {
-            !matches!(
-                action.kind,
-                ActionKindV1::CreateShellLauncher { .. }
-                    | ActionKindV1::UpdateShellLauncher { .. }
-                    | ActionKindV1::RemoveShellLauncher { .. }
-                    | ActionKindV1::RemoveLegacyShellLauncher { .. }
-                    | ActionKindV1::ReplaceShellSnapshot { .. }
-                    | ActionKindV1::ReplaceShellCache { .. }
-                    | ActionKindV1::RemoveShellCache { .. }
-                    | ActionKindV1::RemoveShellSnapshot { .. }
-                    | ActionKindV1::ReconcileShellProfile { .. }
-                    | ActionKindV1::ReplaceShellRenderedFile { .. }
-                    | ActionKindV1::RemoveShellRenderedFile { .. }
-            )
-        }) {
-            bail!("Shell operation journal contains an unsupported action");
+        for action in &self.action_ir.actions {
+            ShellAction::from_kind(&action.kind)?;
         }
         if self.applied.iter().collect::<BTreeSet<_>>().len() != self.applied.len()
             || self.applied.iter().any(|action_id| {
@@ -290,18 +277,8 @@ impl ShellOperationJournalV1 {
                 !self.applied.contains(action_id)
                     || !self.action_ir.actions.iter().any(|action| {
                         &action.action_id == action_id
-                            && matches!(
-                                action.kind,
-                                ActionKindV1::RemoveShellLauncher { .. }
-                                    | ActionKindV1::RemoveLegacyShellLauncher { .. }
-                                    | ActionKindV1::ReplaceShellSnapshot { .. }
-                                    | ActionKindV1::ReplaceShellCache { .. }
-                                    | ActionKindV1::RemoveShellCache { .. }
-                                    | ActionKindV1::RemoveShellSnapshot { .. }
-                                    | ActionKindV1::ReconcileShellProfile { .. }
-                                    | ActionKindV1::ReplaceShellRenderedFile { .. }
-                                    | ActionKindV1::RemoveShellRenderedFile { .. }
-                            )
+                            && ShellAction::from_kind(&action.kind)
+                                .is_ok_and(|kind| kind.requires_receipt_commit_marker())
                     })
             })
         {

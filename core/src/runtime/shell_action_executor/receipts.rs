@@ -15,17 +15,6 @@ pub(super) fn matching_shell_receipt(
     }
 }
 
-pub(super) fn shell_shared_receipt_transitions(
-    kind: &ActionKindV1,
-) -> Option<&[ShellReceiptTransitionV1]> {
-    match kind {
-        ActionKindV1::ReplaceShellSnapshot { receipts, .. }
-        | ActionKindV1::ReplaceShellCache { receipts, .. }
-        | ActionKindV1::ReplaceShellRenderedFile { receipts, .. } => Some(receipts),
-        _ => None,
-    }
-}
-
 pub(super) fn shell_receipts_match_previous(
     manifest: &ShellManifest,
     transitions: &[ShellReceiptTransitionV1],

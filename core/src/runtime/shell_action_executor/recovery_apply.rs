@@ -24,10 +24,10 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         let mut rolled_back_actions = Vec::new();
         let mut restored_shared_receipts = BTreeSet::new();
         for action in &journal.action_ir.actions {
-            match &action.kind {
-                ActionKindV1::RemoveShellRenderedFile { receipts, .. }
-                | ActionKindV1::RemoveShellCache { receipts, .. }
-                | ActionKindV1::RemoveShellSnapshot { receipts, .. } => {
+            match ShellAction::from_kind(&action.kind)? {
+                ShellAction::RemoveShellRenderedFile { receipts, .. }
+                | ShellAction::RemoveShellCache { receipts, .. }
+                | ShellAction::RemoveShellSnapshot { receipts, .. } => {
                     if journal.receipt_committed.contains(&action.action_id) {
                         if !shell_removal_receipts_match_missing(&manifest, receipts) {
                             bail!(
@@ -44,7 +44,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         );
                     }
                 }
-                ActionKindV1::ReconcileShellProfile {
+                ShellAction::ReconcileShellProfile {
                     receipt_transitions,
                     receipt_removals,
                     legacy_targets,
@@ -78,10 +78,13 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         bail!("Shell profile receipts changed after recovery approval");
                     }
                 }
-                _ => {
-                    let Some(receipts) = shell_shared_receipt_transitions(&action.kind) else {
-                        continue;
-                    };
+                ShellAction::CreateShellLauncher { .. }
+                | ShellAction::UpdateShellLauncher { .. }
+                | ShellAction::RemoveShellLauncher { .. }
+                | ShellAction::RemoveLegacyShellLauncher { .. } => {}
+                ShellAction::ReplaceShellSnapshot { receipts, .. }
+                | ShellAction::ReplaceShellCache { receipts, .. }
+                | ShellAction::ReplaceShellRenderedFile { receipts, .. } => {
                     if journal.receipt_committed.contains(&action.action_id) {
                         if !shell_receipts_match_desired(&manifest, receipts) {
                             bail!("Shell shared-resource receipts changed after recovery approval");
@@ -107,52 +110,51 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 journal: &journal,
                 restored_shared_receipts: &restored_shared_receipts,
             };
-            let changed = match &action.kind {
-                ActionKindV1::CreateShellLauncher { .. } => {
+            let changed = match ShellAction::from_kind(&action.kind)? {
+                ShellAction::CreateShellLauncher { .. } => {
                     self.recover_create_shell_launcher(action, &mut recovery)
                         .await?
                 }
-                ActionKindV1::UpdateShellLauncher { .. } => {
+                ShellAction::UpdateShellLauncher { .. } => {
                     self.recover_update_shell_launcher(action, &mut recovery)
                         .await?
                 }
-                ActionKindV1::RemoveShellLauncher { .. } => {
+                ShellAction::RemoveShellLauncher { .. } => {
                     self.recover_remove_shell_launcher(action, &mut recovery)
                         .await?
                 }
-                ActionKindV1::RemoveLegacyShellLauncher { .. } => {
+                ShellAction::RemoveLegacyShellLauncher { .. } => {
                     self.recover_remove_legacy_shell_launcher(action, &mut recovery)
                         .await?
                 }
-                ActionKindV1::ReplaceShellSnapshot { .. } => {
+                ShellAction::ReplaceShellSnapshot { .. } => {
                     self.recover_replace_shell_snapshot(action, &mut recovery)
                         .await?
                 }
-                ActionKindV1::ReplaceShellCache { .. } => {
+                ShellAction::ReplaceShellCache { .. } => {
                     self.recover_replace_shell_cache(action, &mut recovery)
                         .await?
                 }
-                ActionKindV1::RemoveShellCache { .. } => {
+                ShellAction::RemoveShellCache { .. } => {
                     self.recover_remove_shell_cache(action, &mut recovery)
                         .await?
                 }
-                ActionKindV1::RemoveShellSnapshot { .. } => {
+                ShellAction::RemoveShellSnapshot { .. } => {
                     self.recover_remove_shell_snapshot(action, &mut recovery)
                         .await?
                 }
-                ActionKindV1::ReconcileShellProfile { .. } => {
+                ShellAction::ReconcileShellProfile { .. } => {
                     self.recover_reconcile_shell_profile(action, &mut recovery)
                         .await?
                 }
-                ActionKindV1::ReplaceShellRenderedFile { .. } => {
+                ShellAction::ReplaceShellRenderedFile { .. } => {
                     self.recover_replace_shell_rendered_file(action, &mut recovery)
                         .await?
                 }
-                ActionKindV1::RemoveShellRenderedFile { .. } => {
+                ShellAction::RemoveShellRenderedFile { .. } => {
                     self.recover_remove_shell_rendered_file(action, &mut recovery)
                         .await?
                 }
-                _ => unreachable!("validated Shell journal action kind"),
             };
             if changed {
                 rolled_back_actions.push(action.action_id.clone());

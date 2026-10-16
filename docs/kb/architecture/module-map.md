@@ -48,7 +48,9 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/action_executor/recovery_{plan,apply}_{file,json,relocation,removal}.rs` | Action-specific read-only recovery review and mutation handlers; rollback semantics remain domain-owned |
 | `core/src/runtime/action_executor/{receipts,recovery_assessment,file_ops,journal_io}.rs` | Ownership predicates, exact live-state assessments, privileged path dispatch and durable journal IO |
 | `core/src/runtime/shell_action_executor.rs` | Shell transaction contracts and shared resource observations |
+| `core/src/runtime/shell_action_executor/action.rs` | Exhaustive borrowed Shell-only Action conversion and receipt-marker eligibility shared by journal validation, commit and recovery dispatch |
 | `core/src/runtime/shell_action_executor/{apply,commit,journal_io,receipts}.rs` | Paired Action/payload preparation and application, receipt-gated commit and durable journal IO; `apply/prepare.rs` revalidates each resource before journal publication |
+| `core/src/runtime/shell_action_executor/commit/tests.rs` | Mixed-resource commit preflight/cleanup, retry, marker eligibility and foreign-domain journal boundary regressions |
 | `core/src/runtime/shell_action_executor/{recovery_plan,recovery_apply}.rs` | Recovery orchestration; `recovery_plan/` owns observation-only resource assessments, and `recovery_apply/resources.rs` owns reverse-dispatched rollback handlers |
 | `core/src/runtime/sys_action_executor.rs` | Phase 4 managed Sys file, split-DNS, and explicit profile-sentinel actions; Sys receipt transition journal, exact rollback cleanup, and explicit recovery Plan/apply |
 | `core/src/runtime/sys_action_executor/{action,resources,file_ops,split_dns,profile,observations,journal_io}.rs` | Borrowed Sys-only action view, exhaustive resource dispatch, domain rollback rules, captured recovery observations and durable journal IO |

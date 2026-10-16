@@ -434,6 +434,13 @@ Transaction preparation retains each journal Action and its execution payload in
 permissions, publishes the journal, then executes the same records with the existing per-action
 progress saves. Payload bytes stay in memory; journal and recovery schemas are unchanged (ADR 0117).
 
+Journal admission, marker eligibility, commit and recovery dispatch share a private borrowed
+`ShellAction` view with exhaustive domain conversion. Commit checks all live resources and receipts
+before starting ordered rollback cleanup, then removes the journal only after every cleanup succeeds.
+Recovery retains forward receipt projection and reverse resource dispatch through the existing
+handlers. Launcher creation/update still commit from matching receipts without positive markers;
+other Shell actions keep their explicit markers. No persisted schema or Plan changes (ADR 0118).
+
 Command install filters metadata before transforms and launcher creation, then upserts only the
 selected manifest target. Category install retains the existing replace-category reconciliation.
 For embedded sources, Core derives one payload-free `ReplaceShellCache` action per selected category
