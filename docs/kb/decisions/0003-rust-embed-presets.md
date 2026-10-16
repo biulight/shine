@@ -10,13 +10,16 @@ separate files would require an installer, a download step, or a fixed filesyste
 
 ## Decision
 
-Everything under `presets/` is compiled into the binary with rust-embed and extracted to the
-runtime presets dir on demand (`presets::extract_prefix`). `cli/build.rs` registers
+Everything under `presets/` is compiled into the binary with rust-embed. Core captures those bytes
+for host-backed runtime materialization; CLI asset extraction uses
+`PresetAssetReader::extract_prefix` with an explicit source selection
+([ADR 0119](0119-explicit-preset-asset-readers.md)). `cli/build.rs` registers
 `cargo:rerun-if-changed=presets` so editing a preset triggers re-embedding.
 
 External presets remain possible: `SHINE_PRESETS` / `presets_dir` point at a directory, and
 `presets_overlay_dir` merges user files over embedded ones (commit `3f7ac41`). Embedded content
-is always the fallback when an external file is missing (commit `5606438`).
+remains the fallback for missing overlay assets (commit `5606438`); a full-external presets root
+is authoritative for runtime capture.
 
 ## Consequences
 

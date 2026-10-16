@@ -316,8 +316,10 @@ bugs. Check this list before changing the modules named in each entry.
   successful mutation writes Shell v2 or App/Sys v1, and an unsupported future version fails first. The inner Sys
   receipt `version` is independent of `sys-manifest.toml`'s schema version.
 
-- **Uninstall never touches user files.** `presets::remove_prefix` removes only embedded-asset
-  files; `bin_links::unlink_managed` removes only symlinks pointing into the managed presets dir,
+- **Removal must use domain ownership checks.** `PresetAssetReader::remove_prefix` enumerates
+  embedded plus explicitly selected overlay asset paths; it is currently used only by tests and
+  does not validate content ownership or authorize lifecycle removal. `bin_links::unlink_managed`
+  removes only symlinks pointing into the managed presets dir,
   plus **regular files that carry the native `# shine-managed`/`REM shine-managed` marker and a
   matching `# shine-target:`/`REM shine-target:` under the managed root** (Windows `.ps1`/`.cmd`
   shims and Unix `runtime = "bun"` launcher scripts); app

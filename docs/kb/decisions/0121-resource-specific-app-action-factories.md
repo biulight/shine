@@ -36,3 +36,7 @@ and generated exclusions, Copy relocation modes/backup/admin/env identities, JSO
 keys, stale-prune ordering, typed relocation intent, occupied late destinations/rollback paths and
 approval rejection before observations. Existing transaction/recovery tests retain per-resource
 interruption, receipt, ownership, fresh approval and privilege coverage.
+
+`runtime/tests/refactoring_contracts.rs` covers approved static updates alongside failed automatic
+generators for install and upgrade: static receipts advance independently, generated content and
+receipts remain last-known-good, diagnostics redact process output, and stale approval cannot replay.

@@ -28,6 +28,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, scoped operation-lock, process, privileged, and system mutation ports |
 | `core/src/runtime/operation_lock.rs` | Persistent OS file locks and configuration-scoped App/Shell/Sys lifecycle serialization |
 | `core/src/runtime/tests/` | Test-only runtime harness and regressions spanning domain modules; `lifecycle_concurrency.rs` covers receipt preservation and approval revalidation under contention |
+| `core/src/runtime/tests/refactoring_contracts.rs` | Cross-module App static/generator receipt preservation and Shell read-only interruption/recovery/retry contracts |
 | `core/src/runtime/process_scope.rs` | Isolated-process cancellation guard and scoped Unix foreground-terminal handoff |
 | `core/src/runtime/review_path.rs` | Shared root-aware path identity encoding for planners and App/Shell/Sys action executors |
 | `core/src/runtime/planner.rs` | Pure Plan request types and shared observation/permission accumulators; domain methods live in `planner/` |
@@ -107,7 +108,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/colors.rs` | Terminal color helpers |
 | `cli/src/output.rs` | Shared command output mode and rendering support |
 | `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
-| `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap and Frontend Service construction |
+| `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap and Frontend Service construction; tests cover live overlay readers versus captured snapshots and review authority |
 | `cli/src/lifecycle_plan.rs` | Default-No/non-TTY approval policy, input identities, and batch prevalidation; `lifecycle_plan/render.rs` owns pure terminal Plan projection |
 | `cli/src/lifecycle_plan/classification.rs` | Terminal-only typed grouping of unchanged Plan steps, routine notices and conservative unknown-diagnostic fallback |
 | `cli/src/platform.rs` | Platform classification shared across command domains |

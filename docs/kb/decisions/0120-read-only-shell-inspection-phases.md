@@ -35,3 +35,7 @@ receipt-only conflicts and preservation, Live trust versus launcher conflict/mis
 missing rendered output versus launcher repair, exact source read errors and snapshot observation
 failure remaining an update. Existing CLI/frontend/planner/lifecycle regressions continue to cover
 projection, platform launcher sets, retained missing siblings and approval boundaries.
+
+`runtime/tests/refactoring_contracts.rs` additionally checks inspection while a Shell journal is
+pending, explicit approved recovery, and a freshly approved retry. Inspection neither changes the
+journal nor mutates resources, and recovery restores the earlier receipt/content before retry.

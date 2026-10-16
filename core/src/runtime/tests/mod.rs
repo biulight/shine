@@ -2,4 +2,5 @@
 
 mod harness;
 mod lifecycle_concurrency;
+mod refactoring_contracts;
 mod shell_inspection;

@@ -32,3 +32,7 @@ Regressions cover independent readers and concurrent extraction, per-Config env 
 managed/manual precedence, concurrent command-level export with collision policy, pristine copy,
 and completion after unrelated config loading. Existing extraction and runtime tests continue to
 cover destination links, hard links, concurrent publication and lifecycle safety boundaries.
+
+The CLI assembly regression in `cli/src/core_runtime.rs` also checks two independent overlays, live
+reader updates versus frozen Core bytes/env, fresh capture invalidating earlier approval, and no
+state or destination initialization during capture/planning.

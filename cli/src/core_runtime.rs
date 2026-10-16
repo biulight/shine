@@ -176,6 +176,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_overlay_readers_do_not_change_captured_runtime_or_review_authority() {
+        use crate::presets::PresetAssetReader;
+        use shine_core::lifecycle::LifecycleOperation;
+        use shine_core::plan::{PlanApprovalError, PlanApprovalV1};
+        use shine_core::runtime::AppPlanRequest;
+
+        let root =
+            std::env::temp_dir().join(format!("shine-overlay-runtime-{}", uuid::Uuid::new_v4()));
+        let source = "app/cross-review/config.txt";
+        let mut configs = Vec::new();
+        for label in ["a", "b"] {
+            let mut config = Config::new_for_test(&root.join(label));
+            let overlay = root.join(format!("overlay-{label}"));
+            let category = overlay.join("app/cross-review");
+            std::fs::create_dir_all(&category).unwrap();
+            std::fs::write(category.join("shine.toml"),
+                "metadata_schema_version = 2\ndest = '~/.config/cross-review'\n[permissions]\nschema_version = 1\nenvironment = [{ name = 'VALUE', sensitivity = 'plain' }]\n[[files]]\nsource = 'config.txt'\ntransforms = ['template']\n").unwrap();
+            std::fs::write(category.join("config.txt"), format!("{label} @@VALUE@@")).unwrap();
+            config.presets_overlay_dir_override = Some(overlay);
+            config.env.insert("VALUE".into(), label.into());
+            configs.push(config);
+        }
+        let captured_a = from_config(&configs[0]).await.unwrap();
+        let captured_b = from_config(&configs[1]).await.unwrap();
+        let reader_a = PresetAssetReader::new(configs[0].active_presets_overlay_dir());
+        let reader_b = PresetAssetReader::new(configs[1].active_presets_overlay_dir());
+        assert_eq!(reader_a.read_asset_bytes(source).unwrap(), b"a @@VALUE@@");
+        assert_eq!(reader_b.read_asset_bytes(source).unwrap(), b"b @@VALUE@@");
+        assert_eq!(captured_a.presets().get(source).unwrap(), b"a @@VALUE@@");
+        assert_eq!(captured_b.presets().get(source).unwrap(), b"b @@VALUE@@");
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("cross-review".into()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let reviewed = captured_a.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&reviewed).unwrap();
+        std::fs::write(
+            configs[0]
+                .active_presets_overlay_dir()
+                .unwrap()
+                .join(source),
+            b"changed @@VALUE@@",
+        )
+        .unwrap();
+        assert_eq!(
+            reader_a.read_asset_bytes(source).unwrap(),
+            b"changed @@VALUE@@"
+        );
+        assert_eq!(reader_b.read_asset_bytes(source).unwrap(), b"b @@VALUE@@");
+        let fresh_a = from_config(&configs[0]).await.unwrap();
+        configs[0].env.insert("VALUE".into(), "later".into());
+        assert_eq!(captured_a.context().env["VALUE"], "a");
+        assert_eq!(captured_b.context().env["VALUE"], "b");
+        assert_eq!(fresh_a.context().env["VALUE"], "a");
+        assert_eq!(captured_a.presets().get(source).unwrap(), b"a @@VALUE@@");
+        assert_eq!(fresh_a.presets().get(source).unwrap(), b"changed @@VALUE@@");
+        assert!(
+            approval
+                .validate(&captured_a.plan_apps(request.clone()).await.unwrap())
+                .is_ok()
+        );
+        assert_eq!(
+            approval.validate(&fresh_a.plan_apps(request).await.unwrap()),
+            Err(PlanApprovalError::PlanChanged)
+        );
+        for config in &configs {
+            assert!(
+                !config.shine_dir().exists(),
+                "capture and planning must not initialize state"
+            );
+            assert!(!config.home_dir.join(".config/cross-review").exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn bootstrap_proxy_override_is_bound_to_review_without_mutating_config_env() {
         let runtime = from_embedded_presets_for_platform(RuntimePlatform::Linux);
         let env = runtime.context().env.clone();
