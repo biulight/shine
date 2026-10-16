@@ -874,6 +874,26 @@ cancellation before deletion retains all original plaintext. Multi-file writes a
 one transaction; failures report completed and remaining files. There is no ciphertext-only
 recipient rotation workflow in this first version.
 
+To keep decrypted files for ordinary tools without wrapping each command in Shine, export the
+selected groups to their configured `target` paths:
+
+```bash
+shine env workspace export --format files --mode production --file-group android-signing --file-group service-account --dry-run
+shine env workspace export --format files --mode production --file-group android-signing --file-group service-account
+```
+
+`--mode` is required. This exports only the selected groups; it does not export environment variables.
+All files must decrypt successfully before target creation starts. Existing targets are always
+rejected, including during concurrent writes; inspect and move them before retrying. There is no
+`--force`, `--output`, or `--include-secrets` option for the `files` format. Workspace and ciphertext
+files remain unchanged. The same path, Git exclusion, size, and private-permission requirements apply.
+
+Successful exports remain on disk until you manage or remove them yourself. `env run --file-group`
+will refuse these existing targets and will not clean them up. If export fails or is interrupted,
+Shine attempts to remove files and empty directories created by that export, preserves replacements,
+and reports cleanup failures and possible leftovers. Multi-file export is not an atomic transaction;
+force-killing Shine or losing power can leave files behind. Do not commit the plaintext.
+
 `env run --file-group` decrypts all selected files before preparing targets, starts the command
 only after every target is ready, and cleans up its files on success, failure, or controlled
 interruption. Existing targets are never overwritten. Replaced targets are retained and reported.

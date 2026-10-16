@@ -116,6 +116,13 @@ pub fn command() -> clap::Command {
                     arg.add(ArgValueCandidates::new(file_group_candidates))
                 })
             })
+            .mut_subcommand("workspace", |cmd| {
+                cmd.mut_subcommand("export", |cmd| {
+                    cmd.mut_arg("file_groups", |arg| {
+                        arg.add(ArgValueCandidates::new(file_group_candidates))
+                    })
+                })
+            })
             .mut_subcommand("secret", |cmd| {
                 cmd.mut_subcommand("seal", |cmd| {
                     cmd.mut_arg("file_groups", |arg| {

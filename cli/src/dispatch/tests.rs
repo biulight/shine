@@ -1100,7 +1100,7 @@ fn cli_accepts_workspace_dotenv_export() {
             })
         } if cmd.format == commands::EnvWorkspaceExportFormat::Dotenv
             && cmd.mode == "production"
-            && cmd.output == std::path::Path::new(".env.production.local")
+            && cmd.output.as_deref() == Some(std::path::Path::new(".env.production.local"))
             && cmd.include_secrets
             && cmd.dry_run
     ));

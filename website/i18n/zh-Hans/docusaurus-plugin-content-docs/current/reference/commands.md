@@ -230,6 +230,7 @@ shine env delete <KEY> [--global|--project|--overlay] [--env-file]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--file-group <NAME>]... [--dry-run] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
+shine env workspace export --format files [--workspace <FILE>] --mode <MODE> --file-group <NAME>... [--dry-run]
 shine env proxy install <COMMAND> --with <KEY[=ALIAS]>... [--project]
 shine env proxy list
 shine env proxy uninstall <COMMAND>
@@ -349,4 +350,4 @@ shine self upgrade [--channel <stable|preview>]
 `stable` 跟随正式发布，`preview` 跟随会被持续替换的预览构建。参见
 [安装与升级](../installation.md)。
 
-文件组的配置、封存、临时执行和清理边界见[临时机密文件](../guides/environment.md#workspace-secret-files)。
+文件组的配置、封存、持久导出、临时执行和清理边界见[临时机密文件](../guides/environment.md#workspace-secret-files)。

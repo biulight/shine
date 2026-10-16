@@ -29,6 +29,14 @@ child status. Replacement files/directories/links and non-absence errors still f
 inherits stderr only for required phone QR or explicitly requested phone messages; ordinary captured
 diagnostics are discarded. Binary encryption owns the child through concurrent pipe I/O and wait,
 terminating and reaping on pipe failure or output overflow.
+Persistent export uses the same selection, preflight, shared locks and captured binary decryption,
+without compiling env sources or launching a child. After all decryption and snapshot checks succeed,
+exclusive private creation writes/syncs each absent target under an owned-object rollback guard.
+Yield between writes so controlled cancellation drops the guard. Recheck inputs throughout writes
+and target identities before relinquishing cleanup responsibility. Success retains files/directories;
+errors attempt rollback and report possible residue without deleting replacements. Existing targets
+remain a conflict for later export/run. There is no cross-file transaction or crash recovery.
+See [ADR 0112](../decisions/0112-persistent-workspace-secret-file-export.md).
 See [ADR 0110](../decisions/0110-workspace-secret-file-groups.md).
 
 ## Pure security Plan assessment

@@ -220,8 +220,8 @@ Config discovery priority is documented as a behavioral contract in
 | `cli/src/env/commands.rs` | Env CRUD and secret command handlers |
 | `cli/src/env/live_bun.rs` | Receipt-prepared Bun execution, declared env injection, and direct-child Unix signal relay |
 | `cli/src/env/workspace.rs` | Workspace env sources, export, seal, and child execution |
-| `cli/src/env/workspace/file_groups.rs` | Version 3 binary file selection, seal/verification, and scoped release orchestration |
-| `cli/src/env/workspace/file_groups/filesystem.rs` | Root-constrained paths, snapshots, Git exclusions, shared locks, and owned-file cleanup |
+| `cli/src/env/workspace/file_groups.rs` | Version 3 binary file selection, seal/verification, persistent export, and scoped release orchestration |
+| `cli/src/env/workspace/file_groups/filesystem.rs` | Root-constrained paths, snapshots, Git exclusions, shared locks, owned-file cleanup and persistence |
 | `cli/src/env/workspace/file_groups/platform.rs` | Native private creation, file identity, cancellation, and Unix/Windows command supervision |
 | `cli/src/env/catalog.rs` | Known variable metadata |
 | `cli/src/env/identity.rs` | age identity generation and recipient inspection |

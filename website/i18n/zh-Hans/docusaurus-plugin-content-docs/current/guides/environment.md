@@ -774,6 +774,24 @@ shine env run --mode production --file-group android-signing --file-group servic
 保留全部原始明文。多文件写入和删除不是整体事务；失败会报告已完成项及剩余项。
 首版不提供仅从密文更新收件人的专用流程。
 
+如果希望长期保留解密后的普通文件，让工具直接使用而无需每次通过 Shine 启动，可将选中文件组
+导出到配置中的 `target`：
+
+```bash
+shine env workspace export --format files --mode production --file-group android-signing --file-group service-account --dry-run
+shine env workspace export --format files --mode production --file-group android-signing --file-group service-account
+```
+
+`--mode` 必填。此操作只导出选中的文件组，不导出环境变量。全部文件解密成功后才开始创建目标。
+已有目标一律拒绝覆盖，包括并发写入时出现的目标；重试前应先检查并移走这些文件。
+`files` 格式不接受 `--force`、`--output` 或 `--include-secrets`。Workspace 配置和密文保持不变，
+路径、Git 忽略、大小限制和私有权限要求与临时解密相同。
+
+成功导出的文件会持续保留，由你管理或删除。`env run --file-group` 会拒绝这些已有目标，
+不会接管或清理它们。导出失败或受控中断时，Shine 尝试移除本次创建的文件和空目录，保留被替换
+的对象，并报告清理失败及可能残留。多文件导出不是原子事务；强制杀死 Shine 或断电仍可能留下
+文件。不要将明文提交到 Git。
+
 `env run --file-group` 先解密全部选中文件，再准备目标；全部目标就绪后才启动命令，
 在成功、失败或受控中断后清理本次文件。已有目标不会被覆盖；被替换的目标会被保留并报告。
 如果子命令已删除目标文件或其父目录，该目标视为已完成清理；Shine 仍会清理其余映射，

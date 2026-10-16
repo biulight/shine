@@ -324,6 +324,22 @@ impl Materialized {
         owned.file.sync_all()?;
         Ok(())
     }
+    /// Transfer the completed files and directories to the caller; Drop no longer removes them.
+    pub fn persist(&mut self) -> Result<()> {
+        for owned in &self.files {
+            check_path(&self.root, &owned.path)?;
+            ensure!(
+                platform::path_identity(&owned.path)? == owned.identity
+                    && platform::identity(&owned.file)? == owned.identity,
+                "plaintext target was replaced before export completed: {}",
+                owned.path.display()
+            );
+        }
+        self.files.clear();
+        self.directories.clear();
+        Ok(())
+    }
+
     pub fn cleanup(&mut self) -> Result<()> {
         let mut errors = Vec::new();
         for owned in self.files.drain(..).rev() {

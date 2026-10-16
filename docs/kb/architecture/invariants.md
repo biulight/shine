@@ -950,7 +950,17 @@ bugs. Check this list before changing the modules named in each entry.
   local input; broker requests cannot supply them (ADR 0085).
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
   prefix, breaks every secret encrypted before the change.
-- **Workspace export decrypts only on explicit request.** `shine env workspace export` omits
+- **Persistent file export transfers ownership only after complete preparation and writes.**
+  `workspace export --format files` selects explicit version 3 groups and mode, never env sources.
+  Share seal/run locks, capture all ciphertext before decryption, decrypt everything before creating
+  targets, and recheck workspace/source snapshots before and throughout writes. Final exclusive
+  creation rejects concurrent destinations; existing targets are never adopted or overwritten.
+  Private files are synced before completion; all existing file-group path/Git/size constraints apply.
+  Keep the owned-object cleanup guard armed across writes and cancellation, and disarm it only after
+  final input and output identity checks. Failure removes only newly owned files/empty directories,
+  retains replacements, and reports cleanup errors. Success leaves user-managed plaintext that run
+  must still reject. This is not a multi-file transaction or crash-recovery mechanism (ADR 0112).
+- **Dotenv export decrypts only on explicit request.** `shine env workspace export --format dotenv` omits
   secret-winning keys unless `--include-secrets` is present, never mixes in the caller's process
   environment, and never prints exported values in its status or dry-run output. On Unix, an
   export containing secrets must be created privately (`0600`) before plaintext bytes are written;

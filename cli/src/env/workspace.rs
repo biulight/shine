@@ -56,6 +56,9 @@ pub async fn handle_export(
     force: bool,
     dry_run: bool,
 ) -> Result<()> {
+    if format != EnvWorkspaceExportFormat::Dotenv {
+        bail!("files export requires the file-group handler");
+    }
     validate_mode(mode)?;
     let workspace_path = find_workspace_optional(workspace_arg)
         .await?
@@ -77,9 +80,7 @@ pub async fn handle_export(
     }
 
     let mut values = compile_export_sources(&sources, config, include_secrets && !dry_run).await?;
-    let mut contents = match format {
-        EnvWorkspaceExportFormat::Dotenv => render_dotenv(&values)?,
-    };
+    let mut contents = render_dotenv(&values)?;
     if dry_run {
         println!(
             "Would export {} variables for mode {mode} to {}{}",

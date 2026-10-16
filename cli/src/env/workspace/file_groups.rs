@@ -3,7 +3,7 @@ mod filesystem;
 mod platform;
 
 use super::*;
-use crate::commands::{EnvRunCommand, EnvSealCommand};
+use crate::commands::{EnvRunCommand, EnvSealCommand, EnvWorkspaceExportCommand};
 use anyhow::ensure;
 use filesystem::{CapturedFile, Materialized, PathLocks, check_git, check_path};
 use std::fs;
@@ -150,7 +150,7 @@ impl Selection {
         Ok(())
     }
 
-    fn preview(&self, sealing: bool, stderr: bool) {
+    fn preview(&self, sealing: bool, stderr: bool, exporting: bool) {
         let emit = |line: String| {
             if stderr {
                 eprintln!("{line}");
@@ -172,6 +172,8 @@ impl Selection {
                 "Would {} {} -> {}",
                 if sealing {
                     "seal"
+                } else if exporting {
+                    "export plaintext"
                 } else {
                     "decrypt temporarily"
                 },
@@ -194,7 +196,7 @@ async fn seal_inner(config: &Config, command: &EnvSealCommand) -> Result<()> {
         &command.file_groups,
     )
     .await?;
-    selected.preview(true, false);
+    selected.preview(true, false, false);
     selected.preflight(true)?;
     if command.dry_run {
         return Ok(());
@@ -330,6 +332,83 @@ async fn seal_inner(config: &Config, command: &EnvSealCommand) -> Result<()> {
     Ok(())
 }
 
+/// Explicitly persist selected plaintext; never compile environment sources or launch a child.
+pub async fn handle_export(config: &Config, command: &EnvWorkspaceExportCommand) -> Result<()> {
+    let selected = Selection::load(
+        command.workspace.as_deref(),
+        Some(&command.mode),
+        &command.file_groups,
+    )
+    .await?;
+    selected.preflight(false)?;
+    if command.dry_run {
+        selected.preview(false, false, true);
+        return Ok(());
+    }
+    selected.preview(false, true, true);
+    platform::prepare(export_inner(config, &selected)).await
+}
+
+async fn export_inner(config: &Config, selected: &Selection) -> Result<()> {
+    let _locks = PathLocks::acquire(&selected.root, &selected.workspace_path, &selected.mappings)?;
+    selected.preflight(false)?;
+    let mut config = local_cache::load_config(config, &selected.workspace_path).await?;
+    let (captured, plain) = decrypt_files(&mut config, selected).await?;
+    selected.preflight(false)?;
+    for file in &captured {
+        file.verify(&selected.root)?;
+    }
+    persist_export(selected, &captured, &plain).await?;
+    for (_, target) in &selected.mappings {
+        println!("Exported {}", target.display());
+    }
+    println!(
+        "Exported {} files for mode {}",
+        selected.mappings.len(),
+        selected.mode
+    );
+    eprintln!(
+        "Warning: exported plaintext files remain on disk; manage or remove them yourself. Do not commit them."
+    );
+    Ok(())
+}
+
+/// Keep rollback armed until every target has been written and all captured inputs rechecked.
+async fn persist_export(
+    selected: &Selection,
+    captured: &[CapturedFile],
+    plain: &[Zeroizing<Vec<u8>>],
+) -> Result<()> {
+    let mut materialized = Materialized::new(&selected.root);
+    let result = async {
+        for ((_, target), bytes) in selected.mappings.iter().zip(plain) {
+            selected.verify()?;
+            for file in captured {
+                file.verify(&selected.root)?;
+            }
+            materialized.create(target, bytes)?;
+            platform::sync_cipher_parents(&selected.root, target)?;
+            // Permit controlled cancellation to drop the ownership guard between file writes.
+            tokio::task::yield_now().await;
+        }
+        selected.verify()?;
+        for file in captured {
+            file.verify(&selected.root)?;
+        }
+        materialized.persist()
+    }
+    .await;
+    if let Err(error) = result {
+        if let Err(cleanup) = materialized.cleanup() {
+            return Err(error.context(format!(
+                "export failed; plaintext may remain because cleanup failed: {cleanup:#}"
+            )));
+        }
+        return Err(error.context("export failed; files created by this export were removed"));
+    }
+    Ok(())
+}
+
 pub async fn handle_run(config: &Config, command: &EnvRunCommand) -> Result<()> {
     let selected = Selection::load(
         command.workspace.as_deref(),
@@ -337,7 +416,7 @@ pub async fn handle_run(config: &Config, command: &EnvRunCommand) -> Result<()> 
         &command.file_groups,
     )
     .await?;
-    selected.preview(false, !command.dry_run);
+    selected.preview(false, !command.dry_run, false);
     selected.preflight(false)?;
     if command.dry_run {
         return Ok(());
@@ -404,6 +483,44 @@ async fn prepare_run(
     let _locks = PathLocks::acquire(&selected.root, &selected.workspace_path, &selected.mappings)?;
     selected.preflight(false)?;
     let mut config = local_cache::load_config(config, &selected.workspace_path).await?;
+    let (captured, plain) = decrypt_files(&mut config, selected).await?;
+    let (values, override_process_env) = load_run_values_effective(
+        &config,
+        &selected.workspace_path,
+        Some(&selected.mode),
+        true,
+    )
+    .await?;
+    let explicit = resolve_explicit_values(&config, &command.with).await?;
+    selected.verify()?;
+    for file in &captured {
+        file.verify(&selected.root)?;
+    }
+    let mut materialized = Materialized::new(&selected.root);
+    for ((_, target), bytes) in selected.mappings.iter().zip(&plain) {
+        materialized.create(target, bytes)?;
+    }
+    Ok(Ready {
+        _locks,
+        _captured: captured,
+        materialized,
+        values,
+        explicit,
+        override_env: override_process_env,
+    })
+}
+
+fn validate_cipher(bytes: &[u8]) -> Result<&str> {
+    let text = std::str::from_utf8(bytes).context("file ciphertext must be encoded text")?;
+    secret::validate_file_ciphertext(text)?;
+    Ok(text)
+}
+
+/// Capture every ciphertext before invoking any backend; retain zeroizing buffers through publication.
+async fn decrypt_files(
+    config: &mut Config,
+    selected: &Selection,
+) -> Result<(Vec<CapturedFile>, Vec<Zeroizing<Vec<u8>>>)> {
     let mut captured = Vec::new();
     let mut cipher_total = 0;
     for (source, _) in &selected.mappings {
@@ -437,7 +554,7 @@ async fn prepare_run(
     for file in &captured {
         let decoded = secret::decrypt_bytes(
             validate_cipher(&file.bytes)?,
-            &config,
+            config,
             MAX_FILE.min(MAX_TOTAL - total),
         )
         .await
@@ -446,34 +563,103 @@ async fn prepare_run(
         ensure!(total <= MAX_TOTAL, "selected plaintext exceeds 64 MiB");
         plain.push(decoded);
     }
-    let (values, override_process_env) = load_run_values_effective(
-        &config,
-        &selected.workspace_path,
-        Some(&selected.mode),
-        true,
-    )
-    .await?;
-    let explicit = resolve_explicit_values(&config, &command.with).await?;
-    selected.verify()?;
-    for file in &captured {
-        file.verify(&selected.root)?;
-    }
-    let mut materialized = Materialized::new(&selected.root);
-    for ((_, target), bytes) in selected.mappings.iter().zip(&plain) {
-        materialized.create(target, bytes)?;
-    }
-    Ok(Ready {
-        _locks,
-        _captured: captured,
-        materialized,
-        values,
-        explicit,
-        override_env: override_process_env,
-    })
+    Ok((captured, plain))
 }
 
-fn validate_cipher(bytes: &[u8]) -> Result<&str> {
-    let text = std::str::from_utf8(bytes).context("file ciphertext must be encoded text")?;
-    secret::validate_file_ciphertext(text)?;
-    Ok(text)
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    use std::{
+        future::Future,
+        task::{Context, Waker},
+    };
+
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    impl Fixture {
+        async fn new() -> (Self, Selection, Vec<CapturedFile>, Vec<Zeroizing<Vec<u8>>>) {
+            let root = std::env::temp_dir()
+                .join(format!("shine-export-rollback-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(root.join("existing")).unwrap();
+            let path = root.join("shine.workspace.toml");
+            fs::write(&path, "version=3\n[env]\ndefault_mode='test'\n[[file_groups.signing.files]]\nsource='one.enc'\ntarget='new/one'\n[[file_groups.signing.files]]\nsource='two.enc'\ntarget='existing/two'\n").unwrap();
+            fs::write(root.join("one.enc"), "one").unwrap();
+            fs::write(root.join("two.enc"), "two").unwrap();
+            let selected = Selection::load(Some(&path), Some("test"), &["signing".into()])
+                .await
+                .unwrap();
+            let captured = selected
+                .mappings
+                .iter()
+                .map(|(source, _)| CapturedFile::read(&selected.root, source, MAX_CIPHER).unwrap())
+                .collect();
+            let plain = vec![Zeroizing::new(vec![0, 255]), Zeroizing::new(Vec::new())];
+            (Self(root), selected, captured, plain)
+        }
+    }
+
+    #[tokio::test]
+    async fn file_export_late_write_failure_rolls_back_only_owned_files() {
+        let (f, selected, captured, plain) = Fixture::new().await;
+        let mut future = Box::pin(persist_export(&selected, &captured, &plain));
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert!(f.0.join("new/one").exists());
+        // Inject a competing writer after the first target is completely written.
+        fs::write(f.0.join("existing/two"), "winner").unwrap();
+        let error = future.await.unwrap_err();
+        assert!(format!("{error:#}").contains("files created by this export were removed"));
+        assert!(!f.0.join("new").exists());
+        assert_eq!(fs::read(f.0.join("existing/two")).unwrap(), b"winner");
+        assert!(f.0.join("existing").is_dir());
+    }
+
+    #[tokio::test]
+    async fn file_export_cancelled_write_future_rolls_back_owned_files() {
+        let (f, selected, captured, plain) = Fixture::new().await;
+        let mut future = Box::pin(persist_export(&selected, &captured, &plain));
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert!(f.0.join("new/one").exists());
+        drop(future);
+        assert!(!f.0.join("new").exists());
+        assert!(f.0.join("existing").is_dir());
+        assert!(!f.0.join("existing/two").exists());
+    }
+
+    #[tokio::test]
+    async fn file_export_rollback_retains_replacements_and_reports_residue() {
+        let (f, selected, captured, plain) = Fixture::new().await;
+        let mut future = Box::pin(persist_export(&selected, &captured, &plain));
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        fs::remove_file(f.0.join("new/one")).unwrap();
+        fs::write(f.0.join("new/one"), "replacement").unwrap();
+        fs::write(f.0.join("existing/two"), "winner").unwrap();
+        let error = future.await.unwrap_err();
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains("plaintext may remain")
+                && diagnostic.contains("plaintext target was replaced"),
+            "{diagnostic}"
+        );
+        assert_eq!(fs::read(f.0.join("new/one")).unwrap(), b"replacement");
+        assert_eq!(fs::read(f.0.join("existing/two")).unwrap(), b"winner");
+    }
 }

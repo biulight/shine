@@ -48,3 +48,6 @@ Native Linux, macOS and Windows regression suites, quality/security audit and Ru
 passed for `5da8168` on 2026-10-13 ([CI](https://github.com/biulight/shine/actions/runs/38350246715)).
 Hardware authorization and real Android signing remain unverified; automated platform regression
 does not establish those acceptance results.
+
+Persistent in-place export is defined in [ADR 0112](0112-persistent-workspace-secret-file-export.md).
+It retains user-managed plaintext while preserving run's refusal to adopt existing targets.

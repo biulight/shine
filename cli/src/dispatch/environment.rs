@@ -1,5 +1,7 @@
 //! Env command dispatch.
 use super::*;
+use crate::commands::EnvWorkspaceExportFormat;
+use anyhow::Context;
 
 pub(super) async fn dispatch(config: &Config, command: EnvCommands) -> Result<()> {
     match command {
@@ -42,12 +44,17 @@ pub(super) async fn dispatch(config: &Config, command: EnvCommands) -> Result<()
                 .await
             }
             EnvWorkspaceSubcommand::Export(cmd) => {
+                if cmd.format == EnvWorkspaceExportFormat::Files {
+                    return env::workspace::file_groups::handle_export(config, &cmd).await;
+                }
                 env::workspace::handle_export(
                     config,
                     cmd.format,
                     cmd.workspace.as_deref(),
                     &cmd.mode,
-                    &cmd.output,
+                    cmd.output
+                        .as_deref()
+                        .context("dotenv export requires --output")?,
                     cmd.include_secrets,
                     cmd.force,
                     cmd.dry_run,
