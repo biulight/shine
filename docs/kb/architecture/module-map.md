@@ -48,14 +48,15 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/action_executor/recovery_{plan,apply}_{file,json,relocation,removal}.rs` | Action-specific read-only recovery review and mutation handlers; rollback semantics remain domain-owned |
 | `core/src/runtime/action_executor/{receipts,recovery_assessment,file_ops,journal_io}.rs` | Ownership predicates, exact live-state assessments, privileged path dispatch and durable journal IO |
 | `core/src/runtime/shell_action_executor.rs` | Shell transaction contracts and shared resource observations |
-| `core/src/runtime/shell_action_executor/{apply,commit,journal_io,receipts}.rs` | Prepared resource application, receipt-gated commit and durable journal IO; `apply/prepare.rs` revalidates each resource before journal publication |
+| `core/src/runtime/shell_action_executor/{apply,commit,journal_io,receipts}.rs` | Paired Action/payload preparation and application, receipt-gated commit and durable journal IO; `apply/prepare.rs` revalidates each resource before journal publication |
 | `core/src/runtime/shell_action_executor/{recovery_plan,recovery_apply}.rs` | Recovery orchestration; `recovery_plan/` owns observation-only resource assessments, and `recovery_apply/resources.rs` owns reverse-dispatched rollback handlers |
 | `core/src/runtime/sys_action_executor.rs` | Phase 4 managed Sys file, split-DNS, and explicit profile-sentinel actions; Sys receipt transition journal, exact rollback cleanup, and explicit recovery Plan/apply |
 | `core/src/runtime/sys_action_executor/{action,resources,file_ops,split_dns,profile,observations,journal_io}.rs` | Borrowed Sys-only action view, exhaustive resource dispatch, domain rollback rules, captured recovery observations and durable journal IO |
 | `core/src/runtime/trust.rs` | Derivation of App/Shell/Sys external-code requirements from immutable logical code inputs, resolved defaults, and declared permissions |
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence plus target-local and current-Preset batch `shine trust` workflows |
 | `core/src/runtime/app_script.rs` | Per-invocation captured App script/helper materialization, fixed execution paths, and cleanup |
-| `core/src/runtime/app.rs` | App assessment/install/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `core/src/runtime/app.rs` | App assessment with typed content/generator states, install/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `core/src/runtime/app/assessment_tests.rs` | Consumer regressions for generator assessment, inspection priority, approved lifecycle reports and last-known-good receipts |
 | `core/src/runtime/app/outcome.rs` | Internal typed App file outcomes projected into the existing local report fields |
 | `core/src/runtime/app/lifecycle/{install,remove}.rs` | App preparation, per-file apply/receipt commit and finalization; caller retains lifecycle lock and exact approval |
 | `core/src/runtime/app/upgrade.rs` | Upgrade preparation, installed-file convergence, stale pruning, additions, receipt finalization and hooks under the existing lifecycle lock |

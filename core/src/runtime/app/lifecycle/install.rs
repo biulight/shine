@@ -218,34 +218,37 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
             );
             return Ok(());
         }
-        if let Some(generator_error) = assessment.generator_error {
-            report.lifecycle.push(
-                LifecycleOutcomeV1::new(
-                    &target,
-                    Some(source.display().to_string()),
-                    LifecycleStatus::Preserved,
-                    [LifecycleEffect::ManagedResourcePreserved],
-                )
-                .with_diagnostic_code("app_generator_unavailable"),
-            );
-            report.files.push(
-                AppFileReportContext {
-                    category: assessment.category.name,
-                    source,
-                    destination: assessment.destination,
-                    transforms: assessment.file.transforms,
-                    backup: None,
-                    uninstall_strategy: None,
-                    restart_hint: assessment.file.restart_hint,
-                }
-                .finish(AppFileOutcome::GeneratorPreserved(generator_error)),
-            );
-            return Ok(());
-        }
-        let content = assessment
-            .content
-            .as_deref()
-            .context("App assessment did not contain install content")?;
+        let content = match &assessment.content {
+            AppContentAssessment::Ready(content) => content.as_slice(),
+            AppContentAssessment::NotEvaluated => {
+                bail!("App assessment did not contain install content")
+            }
+            AppContentAssessment::TrustRequired { error }
+            | AppContentAssessment::EvaluationFailed { error } => {
+                report.lifecycle.push(
+                    LifecycleOutcomeV1::new(
+                        &target,
+                        Some(source.display().to_string()),
+                        LifecycleStatus::Preserved,
+                        [LifecycleEffect::ManagedResourcePreserved],
+                    )
+                    .with_diagnostic_code("app_generator_unavailable"),
+                );
+                report.files.push(
+                    AppFileReportContext {
+                        category: assessment.category.name,
+                        source,
+                        destination: assessment.destination,
+                        transforms: assessment.file.transforms,
+                        backup: None,
+                        uninstall_strategy: None,
+                        restart_hint: assessment.file.restart_hint,
+                    }
+                    .finish(AppFileOutcome::GeneratorPreserved(error.clone())),
+                );
+                return Ok(());
+            }
+        };
         let previous = manifest.find_by_dest(&assessment.destination).cloned();
         let resource = source.display().to_string();
         let action_index = approved.as_ref().and_then(|approved| {

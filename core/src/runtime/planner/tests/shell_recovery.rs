@@ -1,5 +1,167 @@
 //! Shell recovery regressions.
 use super::*;
+use crate::action::ActionKindV1;
+use crate::runtime::SHELL_OPERATION_JOURNAL_FILE;
+
+#[tokio::test]
+async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_prefix() {
+    #[derive(serde::Deserialize)]
+    struct Journal {
+        action_ir: ActionIrV1,
+        applied: Vec<String>,
+    }
+
+    // Interrupt the progress save after cache, rendered output, profile, or launcher apply.
+    // The failed save leaves the last mutation ahead of its durable applied marker.
+    for recorded_actions in 0..4 {
+        let runtime = runtime(transformed_shell_snapshot(
+            b"#!/bin/sh\necho paired-payload\n",
+        ));
+        let user_profile = runtime.context().shell_config_paths[0].clone();
+        runtime
+            .host()
+            .put_file(&user_profile, b"# user-owned profile\n".to_vec());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal_path = runtime
+            .context()
+            .shine_dir
+            .join(SHELL_OPERATION_JOURNAL_FILE);
+        runtime
+            .host()
+            .fail_write_after(&journal_path, recorded_actions + 1);
+        assert!(
+            runtime
+                .install_shells_approved(request.clone(), &approval)
+                .await
+                .is_err()
+        );
+
+        let bytes = runtime.host().read(&journal_path).await.unwrap();
+        let journal: Journal = toml::from_slice(&bytes).unwrap();
+        let actions = &journal.action_ir.actions;
+        assert_eq!(actions.len(), 4);
+        assert!(matches!(
+            actions[0].kind,
+            ActionKindV1::ReplaceShellCache { .. }
+        ));
+        assert!(matches!(
+            actions[1].kind,
+            ActionKindV1::ReplaceShellRenderedFile { .. }
+        ));
+        let ActionKindV1::ReconcileShellProfile {
+            files: profile_files,
+            ..
+        } = &actions[2].kind
+        else {
+            panic!("profile must follow its cache and rendered output");
+        };
+        let ActionKindV1::CreateShellLauncher { resources, .. } = &actions[3].kind else {
+            panic!("launcher must follow shared resource preparation");
+        };
+        assert_eq!(
+            journal.applied,
+            actions[..recorded_actions]
+                .iter()
+                .map(|action| action.action_id.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains("paired-payload"));
+
+        let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        assert_eq!(
+            runtime.host().read(&source).await.unwrap(),
+            b"#!/bin/sh\necho paired-payload\n"
+        );
+        assert_eq!(
+            runtime.host().metadata(&rendered).await.is_ok(),
+            recorded_actions >= 1
+        );
+        for resource in resources {
+            assert_eq!(
+                runtime
+                    .host()
+                    .metadata(resource.destination())
+                    .await
+                    .is_ok(),
+                recorded_actions >= 3
+            );
+        }
+        let operations = runtime.host().operations();
+        let first_journal = operations
+            .iter()
+            .position(|op| matches!(op, HostOperation::Write(path) if path == &journal_path))
+            .unwrap();
+        let first_payload = operations
+            .iter()
+            .position(|op| matches!(op, HostOperation::Write(path) if path == &source))
+            .unwrap();
+        assert!(first_journal < first_payload);
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready(), "{recovery:?}");
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        for path in [&source, &rendered, &journal_path] {
+            assert!(runtime.host().metadata(path).await.is_err());
+        }
+        for resource in resources {
+            assert!(
+                runtime
+                    .host()
+                    .metadata(resource.destination())
+                    .await
+                    .is_err()
+            );
+        }
+        for file in profile_files {
+            if file.destination == user_profile {
+                assert!(file.previous.is_some());
+                assert_eq!(
+                    runtime.host().read(&file.destination).await.unwrap(),
+                    b"# user-owned profile\n"
+                );
+            } else {
+                assert!(file.previous.is_none());
+                assert!(runtime.host().metadata(&file.destination).await.is_err());
+            }
+        }
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+
+        let retry = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&retry).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho paired-payload\n"
+        );
+        assert!(runtime.host().metadata(&journal_path).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_some()
+        );
+    }
+}
 
 #[tokio::test]
 async fn embedded_shell_cache_receipt_failure_removes_created_files_on_recovery() {

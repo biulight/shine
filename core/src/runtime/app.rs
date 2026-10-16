@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod assessment_tests;
 mod lifecycle;
 mod outcome;
 mod upgrade;
@@ -268,9 +270,49 @@ struct AssessedAppFile {
     category: AppCategory,
     file: AppFile,
     destination: PathBuf,
-    content: Option<Vec<u8>>,
-    generator_error: Option<String>,
-    generator_diagnostic: Option<&'static str>,
+    content: AppContentAssessment,
+}
+
+#[derive(Clone, Debug)]
+enum AppContentAssessment {
+    Ready(Vec<u8>),
+    NotEvaluated,
+    TrustRequired { error: String },
+    EvaluationFailed { error: String },
+}
+
+impl AppContentAssessment {
+    fn bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Ready(bytes) => Some(bytes),
+            Self::NotEvaluated | Self::TrustRequired { .. } | Self::EvaluationFailed { .. } => None,
+        }
+    }
+
+    fn error(&self) -> Option<&str> {
+        match self {
+            Self::TrustRequired { error } | Self::EvaluationFailed { error } => Some(error),
+            Self::Ready(_) | Self::NotEvaluated => None,
+        }
+    }
+
+    fn diagnostic(&self) -> Option<&'static str> {
+        match self {
+            Self::Ready(_) => None,
+            Self::NotEvaluated => Some("app_generator_not_evaluated"),
+            Self::TrustRequired { .. } => Some("app_generator_trust_required"),
+            Self::EvaluationFailed { .. } => Some("app_generator_evaluation_failed"),
+        }
+    }
+
+    fn generator_status(&self) -> Option<InspectionFileStatus> {
+        match self {
+            Self::Ready(_) => None,
+            Self::NotEvaluated => Some(InspectionFileStatus::GeneratorNotEvaluated),
+            Self::TrustRequired { .. } => Some(InspectionFileStatus::GeneratorTrustRequired),
+            Self::EvaluationFailed { .. } => Some(InspectionFileStatus::GeneratorEvaluationFailed),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -291,14 +333,6 @@ struct ApprovedAppUninstall<'a> {
     plan: &'a PlanV1,
     approval: &'a PlanApprovalV1,
     action_irs: Vec<ActionIrV1>,
-}
-
-fn generator_inspection_status(diagnostic: Option<&'static str>) -> InspectionFileStatus {
-    match diagnostic {
-        Some("app_generator_trust_required") => InspectionFileStatus::GeneratorTrustRequired,
-        Some("app_generator_evaluation_failed") => InspectionFileStatus::GeneratorEvaluationFailed,
-        _ => InspectionFileStatus::GeneratorNotEvaluated,
-    }
 }
 
 impl AppLifecycleReport {
@@ -693,19 +727,17 @@ where
                     .as_deref()
                     .map(|bytes| installed_app_hash(&assessment.file, bytes))
                     .transpose()?;
-                match current_hash {
-                    None => InspectionFileStatus::Missing,
-                    Some(None) => InspectionFileStatus::Partial,
-                    Some(Some(hash)) if hash != entry.content_hash => {
+                match (current_hash, assessment.content.generator_status()) {
+                    (None, _) => InspectionFileStatus::Missing,
+                    (Some(None), _) => InspectionFileStatus::Partial,
+                    (Some(Some(hash)), _) if hash != entry.content_hash => {
                         InspectionFileStatus::UserModified
                     }
-                    Some(Some(_)) if assessment.generator_diagnostic.is_some() => {
-                        generator_inspection_status(assessment.generator_diagnostic)
-                    }
-                    Some(Some(_)) => {
+                    (Some(Some(_)), Some(status)) => status,
+                    (Some(Some(_)), None) => {
                         let desired = assessment
                             .content
-                            .as_deref()
+                            .bytes()
                             .map(|content| desired_app_hash(&assessment.file, content))
                             .transpose()?;
                         if desired.is_some_and(|hash| hash != entry.content_hash) {
@@ -717,8 +749,8 @@ where
                     }
                 }
             } else if let Some(entry) = source_entry.as_ref() {
-                if assessment.generator_diagnostic.is_some() {
-                    generator_inspection_status(assessment.generator_diagnostic)
+                if let Some(status) = assessment.content.generator_status() {
+                    status
                 } else if manual_generator && !options.run_generators {
                     let current_hash = current_content
                         .as_deref()
@@ -739,7 +771,7 @@ where
                     });
                     if assessment
                         .content
-                        .as_deref()
+                        .bytes()
                         .map(|content| desired_app_hash(&assessment.file, content))
                         .transpose()?
                         .is_some_and(|hash| hash != entry.content_hash)
@@ -749,12 +781,12 @@ where
                     InspectionFileStatus::UpdateAvail
                 }
             } else if installed_categories.contains(&assessment.category.name)
-                && assessment.generator_diagnostic.is_some()
+                && let Some(status) = assessment.content.generator_status()
             {
-                generator_inspection_status(assessment.generator_diagnostic)
+                status
             } else if installed_categories.contains(&assessment.category.name)
                 && (!manual_generator || options.run_generators)
-                && assessment.content.is_some()
+                && assessment.content.bytes().is_some()
             {
                 changes.push(InspectionChange::NewFile {
                     destination: assessment.destination.clone(),
@@ -763,18 +795,18 @@ where
             } else {
                 InspectionFileStatus::NotInstalled
             };
-            let desired_content = assessment.content.clone();
+            let content = assessment.content;
             files.push(AppFileInspection {
                 category: assessment.category,
                 file: assessment.file,
                 destination: Some(assessment.destination),
                 status,
                 manifest_entry: entry,
-                desired_content,
+                desired_content: content.bytes().map(<[u8]>::to_vec),
                 current_content,
                 changes,
-                assessment_error: assessment.generator_error,
-                assessment_diagnostic: assessment.generator_diagnostic,
+                assessment_error: content.error().map(str::to_owned),
+                assessment_diagnostic: content.diagnostic(),
             });
         }
         Ok(files)
@@ -796,16 +828,12 @@ where
                         category: category.clone(),
                         file: file.clone(),
                         destination,
-                        content: None,
-                        generator_error: None,
-                        generator_diagnostic: Some("app_generator_not_evaluated"),
+                        content: AppContentAssessment::NotEvaluated,
                     });
                     continue;
                 } else if options.dry_run || file.generator.is_none() {
-                    Some(
-                        self.app_source_bytes(category.name.as_str(), file)?
-                            .to_vec(),
-                    )
+                    self.app_source_bytes(category.name.as_str(), file)?
+                        .to_vec()
                 } else {
                     if options.preserve_generator_errors
                         && let Err(error) =
@@ -815,9 +843,9 @@ where
                             category: category.clone(),
                             file: file.clone(),
                             destination,
-                            content: None,
-                            generator_error: Some(format!("{error:#}")),
-                            generator_diagnostic: Some("app_generator_trust_required"),
+                            content: AppContentAssessment::TrustRequired {
+                                error: format!("{error:#}"),
+                            },
                         });
                         continue;
                     }
@@ -833,8 +861,8 @@ where
                         )
                         .await
                     {
-                        Ok(Some(bytes)) => Some(bytes),
-                        Ok(None) => Some(self.app_source_bytes(&category.name, file)?.to_vec()),
+                        Ok(Some(bytes)) => bytes,
+                        Ok(None) => self.app_source_bytes(&category.name, file)?.to_vec(),
                         Err(error)
                             if options.preserve_generator_errors
                                 || (manifest.find_by_dest(&destination).is_some()
@@ -844,34 +872,25 @@ where
                                 category: category.clone(),
                                 file: file.clone(),
                                 destination,
-                                content: None,
-                                generator_error: Some(format!("{error:#}")),
-                                generator_diagnostic: Some("app_generator_evaluation_failed"),
+                                content: AppContentAssessment::EvaluationFailed {
+                                    error: format!("{error:#}"),
+                                },
                             });
                             continue;
                         }
                         Err(error) => return Err(error),
                     }
                 };
-                let content = raw
-                    .map(|bytes| {
-                        crate::install::transforms::apply(
-                            &file.transforms,
-                            &bytes,
-                            &self.context.env,
-                        )
+                let content =
+                    crate::install::transforms::apply(&file.transforms, &raw, &self.context.env)
                         .with_context(|| {
                             format!("transform failed: {}", file.transforms.join(", "))
-                        })
-                    })
-                    .transpose()?;
+                        })?;
                 assessed.push(AssessedAppFile {
                     category: category.clone(),
                     file: file.clone(),
                     destination,
-                    content,
-                    generator_error: None,
-                    generator_diagnostic: None,
+                    content: AppContentAssessment::Ready(content),
                 });
             }
         }
@@ -2126,7 +2145,7 @@ mod lifecycle_tests {
         CoreRuntime::new(InMemoryHost::new(), context, presets)
     }
 
-    struct Interaction;
+    pub(super) struct Interaction;
     impl RuntimeInteraction for Interaction {
         fn confirm(&mut self, _code: &'static str, default: bool) -> Result<bool> {
             Ok(default)

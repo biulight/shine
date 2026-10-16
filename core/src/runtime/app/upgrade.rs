@@ -297,27 +297,28 @@ where
             );
             return Ok(());
         }
-        if let Some(error) = assessment.generator_error.clone() {
-            report.failed += 1;
-            report.lifecycle.push(
-                LifecycleOutcomeV1::new(
-                    format!("app/{category_name}"),
-                    Some(file_rel.to_string()),
-                    LifecycleStatus::Failed,
-                    [LifecycleEffect::ManagedResourcePreserved],
-                )
-                .with_diagnostic_code("app_generator_unavailable"),
-            );
-            report.files.push(app_upgrade_file_report(
-                &assessment,
-                AppFileOutcome::GeneratorFailed(error),
-            ));
-            return Ok(());
-        }
-        let content = assessment
-            .content
-            .as_deref()
-            .context("missing App upgrade content")?;
+        let content = match &assessment.content {
+            AppContentAssessment::Ready(content) => content.as_slice(),
+            AppContentAssessment::NotEvaluated => bail!("missing App upgrade content"),
+            AppContentAssessment::TrustRequired { error }
+            | AppContentAssessment::EvaluationFailed { error } => {
+                report.failed += 1;
+                report.lifecycle.push(
+                    LifecycleOutcomeV1::new(
+                        format!("app/{category_name}"),
+                        Some(file_rel.to_string()),
+                        LifecycleStatus::Failed,
+                        [LifecycleEffect::ManagedResourcePreserved],
+                    )
+                    .with_diagnostic_code("app_generator_unavailable"),
+                );
+                report.files.push(app_upgrade_file_report(
+                    &assessment,
+                    AppFileOutcome::GeneratorFailed(error.clone()),
+                ));
+                return Ok(());
+            }
+        };
         let desired_hash = desired_app_hash(&assessment.file, content)?;
         let desired_destination = assessment.destination.clone();
         let relocated = desired_destination != entry.destination;
@@ -581,7 +582,7 @@ where
                 );
                 continue;
             }
-            let Some(content) = assessment.content.as_deref() else {
+            let Some(content) = assessment.content.bytes() else {
                 report.failed += 1;
                 continue;
             };

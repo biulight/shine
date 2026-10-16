@@ -5,6 +5,11 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **App content assessment has one explicit state.** Ready transformed bytes, not evaluated,
+  trust required and evaluation failed are mutually exclusive internal variants. Public inspection
+  DTOs retain their fields and diagnostic codes; missing/partial/user-modified states take
+  precedence for directly installed files. Generator failure preserves last-known-good content and
+  receipts, with the existing install-preserved and upgrade-failed report semantics (ADR 0117).
 - **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
   from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
   `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery
@@ -371,6 +376,11 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Declarative actions and recovery
 
+- **Shell preparation pairs each Action with its execution payload.** One ordered in-memory step
+  owns both; journal Action IR is a payload-free projection of that same sequence. Never rebuild
+  correspondence with independently appended vectors or positional truncating iteration. Pairing
+  does not replace Action validation, permission checks, journal-before-effect ordering, per-action
+  progress saves or fresh recovery approval (ADR 0117).
 - **The executable Action IR is not the security Plan.** `PlanV1` remains a payload-free review and
   approval contract. `ActionIrV1` is created for execution only after planning and may carry resolved
   effect paths and content hashes, but never managed bytes, environment values, secret plaintext, or

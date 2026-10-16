@@ -429,6 +429,11 @@ built at the original Bun-policy assessment point. Native PowerShell and live Bu
 identities both participate in receipt current-ness, so a refreshed native launcher converges on
 subsequent upgrade review (ADR 0116).
 
+Transaction preparation retains each journal Action and its execution payload in one ordered
+`PreparedShellStep`. Apply projects the Action IR from those records, validates it and its exact
+permissions, publishes the journal, then executes the same records with the existing per-action
+progress saves. Payload bytes stay in memory; journal and recovery schemas are unchanged (ADR 0117).
+
 Command install filters metadata before transforms and launcher creation, then upserts only the
 selected manifest target. Category install retains the existing replace-category reconciliation.
 For embedded sources, Core derives one payload-free `ReplaceShellCache` action per selected category
@@ -535,6 +540,12 @@ CLI supplies resolved config plus `rust-embed` bytes. Shared runtime bootstrap d
 external/overlay tree through `FileSystemHost`, constructs the immutable snapshot, and submits the
 request; the CLI renders typed events/reports. There is no frontend-specific directory walker,
 prepared-file path, or CLI fallback executor.
+
+App content assessment uses private variants for ready transformed bytes, not evaluated, trust
+required and evaluation failed. Inspection projects these into its existing content/error/diagnostic
+fields and typed statuses; missing, partial and user-modified installed-file states retain precedence.
+Install preserves a last-known-good file after generator failure, while upgrade reports it as failed;
+both retain its receipt and keep generator detail in the existing local error channel (ADR 0117).
 
 Approved App mutations first acquire the configuration-scoped lifecycle lock, then replan and
 validate the original approval against current state. The guard spans generators, hooks, file
