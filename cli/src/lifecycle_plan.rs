@@ -1,3 +1,8 @@
+mod classification;
+use classification::{
+    is_routine_cache_maintenance, is_stale_app_preservation, quiet_uninstall_step,
+    upgrade_step_has_review_content,
+};
 mod render;
 use render::*;
 pub(crate) use render::{permission_group, permission_name, styled_action_name};
@@ -1149,6 +1154,36 @@ mod tests {
         for permission in plan.permissions.required.iter() {
             assert!(full.contains(&permission_name(permission)));
         }
+        assert_eq!(plan.fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
+    fn cache_diagnostics_remain_visible_without_changing_reviewed_plan() {
+        let mut plan = filesystem_summary_fixture();
+        plan.operation = shine_core::plan::PlanOperationV1::Upgrade;
+        plan.steps = vec![
+            PlanStepV1::new("shell/demo", Some("preset-cache"), PlanActionV1::Update)
+                .with_diagnostic_code("shell_cache_replace_transaction")
+                .with_diagnostic_code("future_cache_warning"),
+            PlanStepV1::new(
+                "app/demo",
+                Some("preset-cache:config"),
+                PlanActionV1::Preserve,
+            )
+            .with_diagnostic_code("app_stale_source_preserved")
+            .with_diagnostic_code("future_preservation_warning"),
+            PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Blocked)
+                .with_diagnostic_code("shell_managed_launcher_update_transaction"),
+        ];
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
+        let compact = render_compact_steps(&plan).join("\n");
+        assert!(compact.contains("future_cache_warning"));
+        assert!(compact.contains("future_preservation_warning"));
+        assert!(compact.contains("shell_managed_launcher_update_transaction"));
+        assert!(!is_routine_cache_maintenance(&plan.steps[0]));
+        assert!(!is_stale_app_preservation(&plan.steps[1]));
+        assert_eq!(serde_json::to_value(&plan).unwrap(), before);
         assert_eq!(plan.fingerprint().unwrap(), fingerprint);
     }
 

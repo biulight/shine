@@ -310,9 +310,7 @@ where
             );
             report.files.push(app_upgrade_file_report(
                 &assessment,
-                LifecycleStatus::Failed,
-                AppFileAction::GeneratorPreserved,
-                Some(error),
+                AppFileOutcome::GeneratorFailed(error),
             ));
             return Ok(());
         }
@@ -356,9 +354,7 @@ where
             ));
             report.files.push(app_upgrade_file_report(
                 &assessment,
-                LifecycleStatus::Preserved,
-                AppFileAction::UserModified,
-                None,
+                AppFileOutcome::UserModified,
             ));
             return Ok(());
         }
@@ -375,9 +371,7 @@ where
             ));
             report.files.push(app_upgrade_file_report(
                 &assessment,
-                LifecycleStatus::Unchanged,
-                AppFileAction::Unchanged,
-                None,
+                AppFileOutcome::Unchanged,
             ));
             return Ok(());
         }
@@ -475,9 +469,7 @@ where
                 );
                 report.files.push(app_upgrade_file_report(
                     &assessment,
-                    LifecycleStatus::Failed,
-                    AppFileAction::Failed,
-                    Some(format!("{error:#}")),
+                    AppFileOutcome::Failed(format!("{error:#}")),
                 ));
                 return Ok(());
             }
@@ -546,9 +538,7 @@ where
         ));
         report.files.push(app_upgrade_file_report(
             &assessment,
-            LifecycleStatus::Changed,
-            AppFileAction::Installed,
-            None,
+            AppFileOutcome::Installed,
         ));
         Ok(())
     }
@@ -624,9 +614,7 @@ where
                     ));
                     report.files.push(app_upgrade_file_report(
                         &assessment,
-                        LifecycleStatus::Changed,
-                        AppFileAction::Installed,
-                        None,
+                        AppFileOutcome::Installed,
                     ));
                 }
                 Ok(InstallOutcome::AlreadyManaged | InstallOutcome::DryRun) => {
@@ -645,9 +633,7 @@ where
                     );
                     report.files.push(app_upgrade_file_report(
                         &assessment,
-                        LifecycleStatus::Failed,
-                        AppFileAction::Failed,
-                        Some(format!("{error:#}")),
+                        AppFileOutcome::Failed(format!("{error:#}")),
                     ));
                 }
             }
@@ -739,42 +725,39 @@ where
         } else {
             self.uninstall_app_entry(&entry, false, false).await?
         };
-        let (status, effects, remove, action) = match outcome {
+        let (effects, remove, file_outcome) = match outcome {
             UninstallOutcome::Removed => (
-                LifecycleStatus::Changed,
                 vec![
                     LifecycleEffect::ResourceRemoved,
                     LifecycleEffect::ReceiptRemoved,
                 ],
                 true,
-                AppFileAction::Removed,
+                AppFileOutcome::Removed,
             ),
             UninstallOutcome::RestoredBackup { .. } => (
-                LifecycleStatus::Changed,
                 vec![
                     LifecycleEffect::BackupRestored,
                     LifecycleEffect::ReceiptRemoved,
                 ],
                 true,
-                AppFileAction::Restored,
+                AppFileOutcome::Restored,
             ),
             UninstallOutcome::NotFound => (
-                LifecycleStatus::Changed,
                 vec![LifecycleEffect::ReceiptRemoved],
                 true,
-                AppFileAction::Missing,
+                AppFileOutcome::Missing,
             ),
             UninstallOutcome::UserModified => (
-                LifecycleStatus::Preserved,
                 vec![LifecycleEffect::UserResourcePreserved],
                 false,
-                AppFileAction::UserModified,
+                AppFileOutcome::UserModified,
             ),
             UninstallOutcome::ForceRemoved | UninstallOutcome::ForceRestoredBackup { .. } => {
                 unreachable!()
             }
             UninstallOutcome::DryRun => unreachable!(),
         };
+        let status = file_outcome.status();
         if remove {
             manifest.remove_by_dest(&entry.destination);
             if let Some(execution) = journal_execution {
@@ -792,19 +775,18 @@ where
             status,
             effects,
         ));
-        report.files.push(AppFileLifecycleReport {
-            category: category_name.to_string(),
-            source: PathBuf::from(file_rel),
-            destination: entry.destination,
-            transforms: Vec::new(),
-            backup: entry.backup,
-            uninstall_strategy: None,
-            restart_hint: None,
-            generator_error: None,
-            error: None,
-            status,
-            action,
-        });
+        report.files.push(
+            AppFileReportContext {
+                category: category_name.to_string(),
+                source: PathBuf::from(file_rel),
+                destination: entry.destination,
+                transforms: Vec::new(),
+                backup: entry.backup,
+                uninstall_strategy: None,
+                restart_hint: None,
+            }
+            .finish(file_outcome),
+        );
         Ok(())
     }
 }

@@ -114,6 +114,22 @@ reviewed Plans into terminal lines. App upgrade phases share one mutable receipt
 transaction orchestration retains locks and durability boundaries while dispatching resource-specific
 preparation and recovery handlers (ADR 0111). These extractions do not change Plan fingerprints.
 
+App ownership preflight now returns captured per-file facts or a typed stop decision before the
+generated/static planning phases. Shell convergence visits category cache, shared snapshot and
+affected siblings before per-command assessment. The same accumulators retain observation and
+step ordering; these facts do not survive into approved execution. App install/removal coordinators
+retain the existing preparation effects, per-file receipt commits and finalization order, projecting
+typed outcomes into unchanged local reports. Sys journal coordination dispatches through a borrowed
+Sys-only action view to resource helpers. CLI `lifecycle_plan/classification.rs` centralizes terminal
+grouping over the unchanged Plan, with unknown diagnostics remaining visible (ADR 0115).
+
+App multi-file execution commits each resource's matching receipt before proceeding. A later receipt
+failure retains that action's journal for explicit recovery while earlier committed resources remain
+committed. Replaying the lifecycle approval cannot resume or recover the interrupted operation;
+recovery and the remaining lifecycle work each require their own fresh review. The outer lifecycle
+lock is acquired before approval revalidation, so state changed while waiting rejects approval before
+preparation can reconcile caches or evaluate generators.
+
 After approval, the CLI upgrade report applies the same relevance rule to unchanged App and Sys
 outcomes; `--verbose --full-plan` restores their individual rows (ADR 0098). The structured
 lifecycle result still includes every selected item.
@@ -827,7 +843,7 @@ flow for an app preset's `[artifact].script`:
 3. Creates (idempotently, before spawning) `SHINE_STATE_DIR` (`<shine_dir>/state/app/<name>`)
    and `SHINE_CACHE_DIR` (the OS cache dir via
    the `directories` crate — `<os-cache>/shine/app/<name>`, the same crate/pattern
-   `env/workspace.rs::cache_path` already uses for its own per-project cache).
+   `env/workspace/cache.rs::cache_path` already uses for its own per-project cache).
 4. Injects only `[artifact].env` mappings whose sources are listed by the category's
    `[permissions].environment`, using the current stored values without decryption, plus fixed
    `SHINE_APP_*` contract variables. The fixed variables win on collisions. Planning fingerprints
@@ -925,6 +941,13 @@ bootstrap scripts are likewise outside managed Sys recovery and retain their exp
 unsupported-rollback classification.
 
 ## Workspace environment export
+
+The workspace facade routes dotenv import/export to `workspace/dotenv.rs`, sealing to
+`workspace/sealing.rs`, local execution to `workspace/run.rs`, and immutable broker requests to
+`workspace/broker_snapshot.rs`. Model validation, full source compilation and encrypted cache IO
+have separate modules. The local hybrid preference/cache path remains local-only; broker capture
+and release never load personal preferences. Shared `sources.rs` and `SensitiveValues` continue to
+own precedence and plaintext lifetimes (ADR 0115).
 
 `shine env workspace export --format dotenv` resolves one explicit mode through the same ordered
 source paths as `env run`, but deliberately excludes inherited process variables and `--with`

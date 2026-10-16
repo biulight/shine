@@ -1,18 +1,9 @@
 //! Pure terminal projection of reviewed Plans; never creates approval.
 
+use super::classification::{
+    is_app_cache_resource, is_manual_refresh_notice, is_routine_transaction_notice,
+};
 use super::*;
-
-pub(super) fn quiet_uninstall_step(step: &shine_core::plan::PlanStepV1) -> bool {
-    step.action == PlanActionV1::None
-        && (step.diagnostic_codes.is_empty()
-            || (step.resource.as_deref() == Some("preset-cache")
-                && step.diagnostic_codes.iter().all(|code| {
-                    matches!(
-                        code.as_str(),
-                        "app_preset_cache_remove" | "shell_cache_remove_transaction"
-                    )
-                })))
-}
 
 pub(super) fn compact_protected_uninstall(plan: &PlanV1) -> bool {
     plan.operation == shine_core::plan::PlanOperationV1::Uninstall
@@ -147,29 +138,6 @@ pub(super) fn upgrade_plan_has_review_content(plan: &PlanV1) -> bool {
         || !plan.code_boundaries.is_empty()
 }
 
-pub(super) fn upgrade_step_has_review_content(step: &shine_core::plan::PlanStepV1) -> bool {
-    step.action != PlanActionV1::None
-        || step
-            .diagnostic_codes
-            .iter()
-            .any(|code| code != "app_manual_refresh_required")
-}
-
-pub(super) fn is_routine_cache_maintenance(step: &shine_core::plan::PlanStepV1) -> bool {
-    matches!(step.action, PlanActionV1::Create | PlanActionV1::Update)
-        && match step.resource.as_deref() {
-            Some("preset-cache") => {
-                step.target.starts_with("shell/")
-                    && step.diagnostic_codes.len() == 1
-                    && step.diagnostic_codes[0] == "shell_cache_replace_transaction"
-            }
-            Some(resource) if resource.starts_with("preset-cache:") => {
-                step.target.starts_with("app/") && step.diagnostic_codes.is_empty()
-            }
-            _ => false,
-        }
-}
-
 pub(super) fn stale_app_source_guidance(
     step: &shine_core::plan::PlanStepV1,
     indent: &str,
@@ -182,13 +150,6 @@ pub(super) fn stale_app_source_guidance(
         format!("{indent}Preset source missing; installed content and receipt retained."),
         format!("{indent}Preview uninstall: shine app uninstall {category} --dry-run"),
     ]
-}
-
-pub(super) fn is_stale_app_preservation(step: &shine_core::plan::PlanStepV1) -> bool {
-    step.target.starts_with("app/")
-        && step.action == PlanActionV1::Preserve
-        && step.diagnostic_codes.len() == 1
-        && step.diagnostic_codes[0] == "app_stale_source_preserved"
 }
 
 // Move a whole App scope only when Core's exact provenance proves that all its
@@ -267,21 +228,13 @@ pub(super) fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
             index += 1;
             continue;
         }
-        if step.diagnostic_codes.is_empty()
-            && step
-                .resource
-                .as_deref()
-                .is_some_and(|resource| resource.starts_with("preset-cache:"))
-        {
+        if step.diagnostic_codes.is_empty() && is_app_cache_resource(step.resource.as_deref()) {
             let start = index;
             while index < plan.steps.len()
                 && plan.steps[index].target == step.target
                 && !(upgrade && is_routine_cache_maintenance(&plan.steps[index]))
                 && plan.steps[index].diagnostic_codes.is_empty()
-                && plan.steps[index]
-                    .resource
-                    .as_deref()
-                    .is_some_and(|resource| resource.starts_with("preset-cache:"))
+                && is_app_cache_resource(plan.steps[index].resource.as_deref())
             {
                 index += 1;
             }
@@ -317,7 +270,7 @@ pub(super) fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
             && step
                 .diagnostic_codes
                 .iter()
-                .all(|code| code == "app_manual_refresh_required")
+                .all(|code| is_manual_refresh_notice(code))
         {
             continue;
         }
@@ -337,13 +290,7 @@ pub(super) fn render_compact_steps(plan: &PlanV1) -> Vec<String> {
             .iter()
             .filter(|code| {
                 matches!(step.action, PlanActionV1::Blocked | PlanActionV1::Preserve)
-                    || !matches!(
-                        code.as_str(),
-                        "shell_snapshot_replace_transaction"
-                            | "shell_managed_launcher_update_transaction"
-                            | "shell_profile_reconcile_transaction"
-                            | "app_hook_execution"
-                    )
+                    || !is_routine_transaction_notice(code)
             })
             .cloned()
             .collect::<Vec<_>>();

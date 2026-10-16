@@ -31,7 +31,10 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/review_path.rs` | Shared root-aware path identity encoding for planners and App/Shell/Sys action executors |
 | `core/src/runtime/planner.rs` | Pure Plan request types and shared observation/permission accumulators; domain methods live in `planner/` |
 | `core/src/runtime/planner/{app_plan,app_convergence,app_file_plan,app_stale_plan,app_specialized,app_code}.rs` | App lifecycle orchestration, per-file convergence, stale receipt assessment, refresh/artifacts and triggered code |
+| `core/src/runtime/planner/app_file_plan/{generated,static_file}.rs` | Generated/static permission and step projection after the shared ownership preflight; captured facts remain local to one planning call |
 | `core/src/runtime/planner/{shell_plan,shell_removal,shell_convergence,shell_profile}.rs` | Shell orchestration and separate removal, convergence and profile assessment phases |
+| `core/src/runtime/planner/shell_convergence/{cache,snapshot,command}.rs` | Ordered category-cache, shared-snapshot/sibling-code and per-command convergence assessment |
+| `core/src/runtime/planner/tests.rs`, `planner/tests/` | Shared in-memory fixtures and domain/contract-grouped planning, transaction, recovery and frontend regressions |
 | `core/src/runtime/planner/{sys_managed_plan,sys_specialized,sys_support}.rs` | Managed Sys, bootstrap and profile planning with shared Sys observation helpers |
 | `core/src/runtime/planner/{approved,app_actions,app_remove_actions}.rs` | Fresh-plan approval gates and typed App Action IR construction |
 | `core/src/runtime/planner/{observations,inputs,permissions,code_boundaries}.rs` | State/input capture, permissions, typed code-boundary assembly and Plan finalization |
@@ -45,10 +48,13 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/shell_action_executor/{apply,commit,journal_io,receipts}.rs` | Prepared resource application, receipt-gated commit and durable journal IO; `apply/prepare.rs` revalidates each resource before journal publication |
 | `core/src/runtime/shell_action_executor/{recovery_plan,recovery_apply}.rs` | Recovery orchestration; `recovery_plan/` owns observation-only resource assessments, and `recovery_apply/resources.rs` owns reverse-dispatched rollback handlers |
 | `core/src/runtime/sys_action_executor.rs` | Phase 4 managed Sys file, split-DNS, and explicit profile-sentinel actions; Sys receipt transition journal, exact rollback cleanup, and explicit recovery Plan/apply |
+| `core/src/runtime/sys_action_executor/{action,resources,file_ops,split_dns,profile,observations,journal_io}.rs` | Borrowed Sys-only action view, exhaustive resource dispatch, domain rollback rules, captured recovery observations and durable journal IO |
 | `core/src/runtime/trust.rs` | Derivation of App/Shell/Sys external-code requirements from immutable logical code inputs, resolved defaults, and declared permissions |
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence plus target-local and current-Preset batch `shine trust` workflows |
 | `core/src/runtime/app_script.rs` | Per-invocation captured App script/helper materialization, fixed execution paths, and cleanup |
 | `core/src/runtime/app.rs` | App assessment/install/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `core/src/runtime/app/outcome.rs` | Internal typed App file outcomes projected into the existing local report fields |
+| `core/src/runtime/app/lifecycle/{install,remove}.rs` | App preparation, per-file apply/receipt commit and finalization; caller retains lifecycle lock and exact approval |
 | `core/src/runtime/app/upgrade.rs` | Upgrade preparation, installed-file convergence, stale pruning, additions, receipt finalization and hooks under the existing lifecycle lock |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
 | `core/src/runtime/shell.rs` | Shell assessment, lifecycle entry points, live render, launcher, cache, profile, and manifest helpers |
@@ -89,6 +95,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
 | `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap and Frontend Service construction |
 | `cli/src/lifecycle_plan.rs` | Default-No/non-TTY approval policy, input identities, and batch prevalidation; `lifecycle_plan/render.rs` owns pure terminal Plan projection |
+| `cli/src/lifecycle_plan/classification.rs` | Terminal-only typed grouping of unchanged Plan steps, routine notices and conservative unknown-diagnostic fallback |
 | `cli/src/platform.rs` | Platform classification shared across command domains |
 | `cli/src/privilege.rs` | Cross-platform administrator/elevation orchestration |
 | `cli/src/proc.rs` | Small domain-neutral subprocess helpers |
@@ -221,7 +228,11 @@ Config discovery priority is documented as a behavioral contract in
 | `cli/src/env/mod.rs` | `[env]` configuration and substitution core |
 | `cli/src/env/commands.rs` | Env CRUD and secret command handlers |
 | `cli/src/env/live_bun.rs` | Receipt-prepared Bun execution, declared env injection, and direct-child Unix signal relay |
-| `cli/src/env/workspace.rs` | Workspace env sources, export, seal, and child execution |
+| `cli/src/env/workspace.rs` | Stable workspace handler facade, discovery and shared path/source resolution |
+| `cli/src/env/workspace/{model,dotenv}.rs` | Workspace/source/cache DTOs and validation; dotenv import/export, portable quoting and private/no-clobber publication |
+| `cli/src/env/workspace/{sealing,compilation,cache}.rs` | Snapshot-bound sealing, complete source compilation/decryption and encrypted default-backend cache IO |
+| `cli/src/env/workspace/{broker_snapshot,run}.rs` | Immutable broker capture/release and local child environment/execution orchestration |
+| `cli/src/env/workspace/{tests,hybrid_snapshot_tests}.rs` | Existing workspace/source, dotenv, plaintext-lifetime and hybrid snapshot regressions |
 | `cli/src/env/workspace/sources.rs` | Pure ordered plain/secret declaration precedence shared by local compilation, export and broker release |
 | `cli/src/env/workspace/values.rs` | Owned environment maps with redacted diagnostics and cleanup on replacement, error and cancellation |
 | `cli/src/env/workspace/file_groups.rs` | Version 3 binary file selection, seal/verification, persistent export, and scoped release orchestration |
