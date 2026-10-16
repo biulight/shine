@@ -2,3 +2,4 @@
 
 mod harness;
 mod lifecycle_concurrency;
+mod shell_inspection;

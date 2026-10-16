@@ -63,7 +63,9 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/app/lifecycle/{install,remove}.rs` | App preparation, per-file apply/receipt commit and finalization; caller retains lifecycle lock and exact approval |
 | `core/src/runtime/app/upgrade.rs` | Upgrade preparation, installed-file convergence, stale pruning, additions, receipt finalization and hooks under the existing lifecycle lock |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
-| `core/src/runtime/shell.rs` | Shell assessment, lifecycle entry points, live render, launcher, cache, profile, and manifest helpers |
+| `core/src/runtime/shell.rs` | Shell models/metadata, lifecycle entry points, live render, launcher, cache, profile, and manifest helpers |
+| `core/src/runtime/shell/inspect.rs` | Observation-only Shell inspection orchestration, per-command evidence, pure changes/status projection and receipt-only records |
+| `core/src/runtime/tests/shell_inspection.rs` | Read-only consumer regressions for Shell status/change ordering, missing presets, trust/conflicts and observation failures |
 | `core/src/runtime/shell/delivery.rs` | Pure captured-input source layout and desired delivery shared by inspection, planning, launcher preparation and receipt construction |
 | `core/src/runtime/shell/lifecycle.rs`, `shell/lifecycle/{deploy,remove,report}.rs` | Typed Shell deployment/removal phases and pure lifecycle reporting; preparation retains legacy effects |
 | `core/src/action/shell_receipt.rs` | Shared internal receipt delivery validation for manifest reconstruction, Action IR and recovery; persisted DTOs remain unchanged |

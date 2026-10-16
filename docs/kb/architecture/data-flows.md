@@ -175,6 +175,15 @@ paths. Plans declare the create/remove effects before execution (ADR 0092).
 ## Shell availability and ownership inspection
 
 Shell inspection joins the effective platform-selected Preset commands with manifest-only targets.
+`shell/inspect.rs` owns the read-only flow: load categories/manifest once, compare each category
+snapshot once, observe each command in the existing order, then project changes/status without Host
+access. A private target binds captured category/file, matching receipt and category snapshot state;
+private observations retain desired delivery and source/launcher evidence for that assessment only.
+Available rows stay in category/command order; receipt-only rows follow in manifest order. Preserve
+snapshot comparison errors as non-current, source read error contexts, status priority and diagnostic
+wording. Inspection and snapshot comparison accept only `FileSystemObservationHost`; they acquire no
+operation lock or approval and execute no Preset code. See
+[ADR 0120](../decisions/0120-read-only-shell-inspection-phases.md).
 Receipt-only records are inspection data and never enter execution as reconstructed metadata.
 The planner and inspection share the observation-only launcher probe with category, overlay, and
 receipt roots. CLI update separates conflicts/missing Presets from pending updates; detailed views

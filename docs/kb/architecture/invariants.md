@@ -873,6 +873,11 @@ bugs. Check this list before changing the modules named in each entry.
 - **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
   files, manifest entries, and managed launchers, including legacy launchers pointing into the
   external tree. The external presets and overlay directories remain untouched.
+- **Shell inspection cannot acquire execution capabilities.** `inspect_shells` and its snapshot
+  comparison require only `FileSystemObservationHost`. Per-command observation preserves Host read
+  and error order; the subsequent change/status projection has no Host access. Keep conflict ahead
+  of uninstalled/trust/update/missing-rendered/live/current status, retain change order and clear
+  changes for uninstalled commands. Receipt-only rows remain inspection data, not execution metadata.
 - **Shell inspection and planning use the same launcher ownership probe.** Both recognize
   category-scoped managed roots, the active overlay, and recorded source/rendered paths, including
   the platform's complete launcher resource set. Receipt-only commands remain visible as missing
