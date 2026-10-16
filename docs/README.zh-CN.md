@@ -64,11 +64,19 @@ Windows PowerShell：
 irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
-已经安装 Rust 1.88 或更高版本时：
+已安装 [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 时：
+
+```bash
+cargo binstall shine-cli
+```
+
+已安装 Rust 1.88 或更高版本时，可从 crates.io 编译安装：
 
 ```bash
 cargo install shine-cli
 ```
+
+支持的预编译平台及安装选项见[安装与升级](https://biulight.github.io/shine/zh-Hans/next/installation)。
 
 开发、测试、规划与发布流程以仓库根目录的 [`README.md`](../README.md)、[`AGENTS.md`](../AGENTS.md)、
 [`docs/PLAN.md`](PLAN.md) 和 [`docs/kb/`](kb/) 为准。

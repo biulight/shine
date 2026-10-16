@@ -42,6 +42,30 @@ $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
 $env:SHINE_VERSION = "2.5.0"; .\install.ps1
 ```
 
+## Install with cargo-binstall
+
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed, download a prebuilt
+Shine binary from the official GitHub Releases:
+
+```bash
+cargo binstall shine-cli
+shine --version
+```
+
+The package is named `shine-cli`; the installed command is `shine`. The default destination is
+`$CARGO_HOME/bin` (usually `~/.cargo/bin`); make sure it is in `PATH`.
+
+Official binaries cover x86_64 and aarch64 on macOS, Linux with glibc, and Windows (MSVC builds).
+Linux musl binaries are not provided. If no suitable binary is found, cargo-binstall may try a
+third-party binary or compile from source. To require an official prebuilt binary, use:
+
+```bash
+cargo binstall shine-cli --strategies crate-meta-data
+```
+
+Run `cargo binstall shine-cli` again to upgrade through cargo-binstall. The moving `preview`
+channel is available through `shine self upgrade --channel preview` instead.
+
 ## Install from source
 
 With **Rust 1.88 or later** installed, you can install from crates.io:

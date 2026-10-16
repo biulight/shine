@@ -39,6 +39,30 @@ $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
 $env:SHINE_VERSION = "2.5.0"; .\install.ps1
 ```
 
+## 使用 cargo-binstall 安装
+
+已安装 [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 时，可从官方 GitHub Releases
+下载预编译的 Shine 二进制文件：
+
+```bash
+cargo binstall shine-cli
+shine --version
+```
+
+包名是 `shine-cli`，安装后的命令是 `shine`。默认安装到 `$CARGO_HOME/bin`
+（通常为 `~/.cargo/bin`），请确认该目录已加入 `PATH`。
+
+官方二进制文件覆盖 macOS、使用 glibc 的 Linux 和 Windows（MSVC 构建），均提供 x86_64 和
+aarch64 两种架构。暂不提供 Linux musl 二进制文件。找不到适用的二进制文件时，cargo-binstall
+可能尝试第三方二进制文件或从源码编译。如需限定为官方预编译二进制文件，使用：
+
+```bash
+cargo binstall shine-cli --strategies crate-meta-data
+```
+
+再次运行 `cargo binstall shine-cli` 可通过 cargo-binstall 升级。滚动的 `preview` 通道请使用
+`shine self upgrade --channel preview`。
+
 ## 从源码安装
 
 已安装 Rust **1.88 或更高版本**时，可从 crates.io 安装：

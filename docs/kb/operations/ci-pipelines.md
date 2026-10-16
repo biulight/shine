@@ -7,7 +7,7 @@ All workflows live in `.github/workflows/`.
 | `test.yml` | `workflow_call` only (reused by the others) | Ubuntu runs Bun checks, fmt, `cargo check --all`, clippy `-D warnings`, and `cargo audit`; a blocking Ubuntu x86_64 / macOS arm64 / Windows x86_64 matrix runs `cargo nextest run --workspace --all-features` natively |
 | `msrv.yml` | reusable by releases; push/PR to `release` or `main`, manual | `cargo check --locked --workspace` with Rust 1.88; release asset building and crate publishing wait for it |
 | `ci.yml` | push to `release`; PRs to `release`/`main` | calls `test.yml` |
-| `release.yml` | push of a `v*` tag | test + MSRV → `package-assets.yml` builds per-platform tarballs and crates.io publish → GitHub Release with git-cliff-generated notes + `install.sh`/`install.ps1` → `open-main-pr` job opens (or reuses) the `release` → `main` sync PR; RC notes are tag-to-tag increments, while stable notes cover the previous stable release through the new stable tag |
+| `release.yml` | push of a `v*` tag | test + MSRV → per-platform tarballs and crates.io publish → GitHub Release → six-target cargo-binstall verification → stable `release` → `main` sync PR; RC notes are tag-to-tag increments, while stable notes cover the previous stable release through the new stable tag |
 | `preview.yml` | daily cron (00:00 UTC) + manual dispatch | if there are new commits since the `preview` tag: test → build assets → force-move `preview` tag → delete and re-publish the `Preview` prerelease |
 | `package-assets.yml` | `workflow_call` | builds the release tarballs consumed by `release.yml`/`preview.yml` |
 | `docs.yml` | documentation changes pushed to `release`, matching PRs, or manual dispatch | type-checks, checks documentation version retention and resource consistency (including regression tests), checks locale parity, and builds the documentation; non-PR runs deploy to GitHub Pages and, when enabled, the configured documentation server |
@@ -15,6 +15,12 @@ All workflows live in `.github/workflows/`.
 
 Notes:
 
+- `verify-binstall` uses cargo-binstall 1.12.7 and the exact tagged version from crates.io, with
+  `--strategies crate-meta-data` so third-party binaries and source compilation cannot hide a broken
+  official download. All six targets download/extract in dry-run mode; Linux x86_64, macOS arm64,
+  and Windows x86_64 also install under the runner's temporary directory and check `shine --version`.
+  The other targets are download checks only. The job runs after publication, so a failure does not
+  roll back published crates or assets; it fails the workflow and blocks the stable sync PR.
 - The `open-main-pr` job is `continue-on-error`; if repo settings forbid Actions from creating
   PRs, it logs a warning with a manual compare URL instead of failing the release.
 - Stable release-note range selection ignores prerelease tags as section boundaries, consolidates

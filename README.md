@@ -74,11 +74,20 @@ Windows PowerShell:
 irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
-From crates.io with Rust 1.88 or later:
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):
+
+```bash
+cargo binstall shine-cli
+```
+
+From source on crates.io with Rust 1.88 or later:
 
 ```bash
 cargo install shine-cli
 ```
+
+See [installation and upgrades](https://biulight.github.io/shine/next/installation) for supported
+prebuilt targets and installation options.
 
 ## Development
 
