@@ -40,6 +40,7 @@ mod session_context;
 #[cfg(unix)]
 mod remote_client;
 
+use crate::env::RESERVED_REMOTE_ENV;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -421,13 +422,6 @@ fn finish_ssh_status(status: std::process::ExitStatus) -> Result<()> {
     #[cfg(not(unix))]
     std::process::exit(1);
 }
-
-const RESERVED_REMOTE_ENV: &[&str] = &[
-    "SHINE_SSH_SESSION",
-    "SHINE_SSH_TOKEN",
-    "SHINE_SSH_REMOTE_SOCK",
-    "SHINE_TERMINAL_THEME",
-];
 
 /// Resolves only explicitly selected config values. Plaintext selection is
 /// deliberately exact: unlike `shine env run --with`, it never falls through

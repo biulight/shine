@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-10-17 — Desired launcher delivery must have one definition
+
+- **Cause**: Shell inspection and receipts understood native-cmd-v2, but planning's independent
+  current-state comparison accepted only live-bun-v2 or an absent format.
+- **Fix**: share captured-input layout, LinkSpec and receipt comparison through desired delivery;
+  keep each caller's original observation and Bun-policy assessment order.
+- **Rule**: share desired-state definitions, not pre-approval observations. Cover install → inspect
+  → repeated upgrade convergence, including native Windows launcher migration (ADR 0116).
+
 ## 2026-10-16 — Zeroizing a buffer does not redact parser errors
 
 - **Symptom**: malformed decrypted ordinary env-cache TOML appeared verbatim in the unreadable-cache

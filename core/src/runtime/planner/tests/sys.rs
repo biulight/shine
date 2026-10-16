@@ -910,3 +910,287 @@ servers_env = 'PRIVATE_DNS_SERVERS'
     }));
     assert_ne!(current.inputs.state, conflicted.inputs.state);
 }
+
+#[tokio::test]
+async fn managed_sys_batch_receipt_failure_recovers_only_the_uncommitted_item() {
+    let snapshot = |bytes: &[u8]| {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'a'
+label = 'A'
+mode = 'managed'
+driver = 'managed-file'
+permissions = { schema_version = 1 }
+[items.config]
+source = 'a.txt'
+target = '~/.config/a.txt'
+[[items]]
+id = 'b'
+label = 'B'
+mode = 'managed'
+driver = 'managed-file'
+permissions = { schema_version = 1 }
+[items.config]
+source = 'b.txt'
+target = '~/.config/b.txt'
+"#
+                .to_vec(),
+            )
+            .file("sys/test/a.txt", bytes.to_vec())
+            .file("sys/test/b.txt", bytes.to_vec())
+            .build()
+    };
+    let original = runtime(snapshot(b"old"));
+    for target in ["a", "b"] {
+        let request = SysManagedPlanRequest {
+            operation: LifecycleOperation::Install,
+            os_id: "test".into(),
+            target: Some(target.into()),
+            input_versions: PlanningInputVersions::default(),
+        };
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_managed_sys(request.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .run_managed_sys_approved(
+                request,
+                &approval,
+                &mut Interaction,
+                &mut crate::runtime::NullObserver,
+            )
+            .await
+            .unwrap();
+    }
+    let mut manifest = SysRunManifest::load(original.host(), &original.context().shine_dir)
+        .await
+        .unwrap();
+    for entry in &mut manifest.entries {
+        entry.profile_enabled = true;
+    }
+    manifest
+        .save(original.host(), &original.context().shine_dir)
+        .await
+        .unwrap();
+    let runtime = CoreRuntime::new(
+        original.host().clone(),
+        original.context().clone(),
+        snapshot(b"new"),
+    );
+    let request = SysManagedPlanRequest {
+        operation: LifecycleOperation::Upgrade,
+        os_id: "test".into(),
+        target: None,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let approval = PlanApprovalV1::for_reviewed_plan(
+        &runtime.plan_managed_sys(request.clone()).await.unwrap(),
+    )
+    .unwrap();
+    runtime
+        .host()
+        .fail_write_after(runtime.context().shine_dir.join("sys-manifest.toml"), 1);
+    assert!(
+        runtime
+            .run_managed_sys_approved(
+                request.clone(),
+                &approval,
+                &mut Interaction,
+                &mut crate::runtime::NullObserver
+            )
+            .await
+            .is_err()
+    );
+    let a = runtime.context().home_dir.join(".config/a.txt");
+    let b = runtime.context().home_dir.join(".config/b.txt");
+    assert_eq!(runtime.host().read(&a).await.unwrap(), b"new");
+    assert_eq!(runtime.host().read(&b).await.unwrap(), b"new");
+    let after_failure = SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    let recovery = runtime.plan_sys_operation_recovery().await.unwrap();
+    assert!(recovery.is_ready(), "{recovery:?}");
+    runtime
+        .recover_sys_operation_approved(&PlanApprovalV1::for_reviewed_plan(&recovery).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(runtime.host().read(&a).await.unwrap(), b"new");
+    assert_eq!(runtime.host().read(&b).await.unwrap(), b"old");
+    assert_eq!(
+        SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap(),
+        after_failure
+    );
+    assert!(
+        runtime
+            .run_managed_sys_approved(
+                request.clone(),
+                &approval,
+                &mut Interaction,
+                &mut crate::runtime::NullObserver
+            )
+            .await
+            .is_err()
+    );
+    let fresh = PlanApprovalV1::for_reviewed_plan(
+        &runtime.plan_managed_sys(request.clone()).await.unwrap(),
+    )
+    .unwrap();
+    runtime
+        .run_managed_sys_approved(
+            request,
+            &fresh,
+            &mut Interaction,
+            &mut crate::runtime::NullObserver,
+        )
+        .await
+        .unwrap();
+    assert_eq!(runtime.host().read(&a).await.unwrap(), b"new");
+    assert_eq!(runtime.host().read(&b).await.unwrap(), b"new");
+}
+
+#[tokio::test]
+async fn managed_sys_preview_and_admin_refusal_preserve_current_and_receipt_only_resources() {
+    struct DenyAdmin {
+        calls: usize,
+    }
+    impl RuntimeInteraction for DenyAdmin {
+        fn confirm(&mut self, _: &'static str, default: bool) -> Result<bool> {
+            Ok(default)
+        }
+        fn authorize_admin<'a>(
+            &'a mut self,
+            item_count: usize,
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+            assert_eq!(item_count, 1);
+            self.calls += 1;
+            Box::pin(async { Ok(false) })
+        }
+        fn select_many(
+            &mut self,
+            _: &'static str,
+            _: &[String],
+            defaults: &[String],
+        ) -> Result<Vec<String>> {
+            Ok(defaults.to_vec())
+        }
+    }
+    for preset_present in [true, false] {
+        let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
+        if preset_present {
+            builder = builder
+                .file(
+                    "sys/test/shine.toml",
+                    br#"version = 2
+[[items]]
+id = 'managed'
+label = 'Managed'
+mode = 'managed'
+driver = 'managed-file'
+requires_admin = true
+permissions = { schema_version = 1, administrator = true }
+[items.config]
+source = 'managed.txt'
+target = '~/.config/managed.txt'
+"#
+                    .to_vec(),
+                )
+                .file("sys/test/managed.txt", b"managed".to_vec());
+        }
+        let runtime = runtime(builder.build());
+        let destination = runtime.context().home_dir.join(".config/managed.txt");
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        let manifest = SysRunManifest {
+            schema_version: crate::runtime::SYS_MANIFEST_SCHEMA_VERSION,
+            entries: vec![SysRunEntry {
+                os_id: "test".into(),
+                item_id: "managed".into(),
+                label: "Managed".into(),
+                status: crate::runtime::SysItemStatus::Installed,
+                detail: String::new(),
+                updated_at: "1".into(),
+                managed: true,
+                profile_enabled: true,
+                receipt: Some(SystemReceipt::ManagedFile(
+                    crate::runtime::ManagedFileReceipt {
+                        version: crate::runtime::RECEIPT_VERSION,
+                        destination: destination.clone(),
+                        backup: None,
+                        content_hash: crate::install::hash_content(b"managed"),
+                        privileged: true,
+                        restart_hint: None,
+                    },
+                )),
+            }],
+        };
+        manifest
+            .save(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let mut interaction = DenyAdmin { calls: 0 };
+        let since = runtime.host().operations().len();
+        let preview = runtime
+            .preview_managed_sys(
+                SysManagedRequest {
+                    os_id: "test".into(),
+                    target: Some("managed".into()),
+                    action: SysManagedAction::Remove,
+                    dry_run: true,
+                    operation: LifecycleOperation::Uninstall,
+                },
+                &mut interaction,
+                &mut crate::runtime::NullObserver,
+            )
+            .await
+            .unwrap();
+        assert_eq!(interaction.calls, 0);
+        assert_eq!(
+            preview.lifecycle.outcomes[0].status,
+            crate::lifecycle::LifecycleStatus::Previewed
+        );
+        let request = SysManagedPlanRequest {
+            os_id: "test".into(),
+            target: Some("managed".into()),
+            operation: LifecycleOperation::Uninstall,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let report = runtime
+            .run_managed_sys_approved(
+                request,
+                &approval,
+                &mut interaction,
+                &mut crate::runtime::NullObserver,
+            )
+            .await
+            .unwrap();
+        assert_eq!(interaction.calls, 1);
+        assert_eq!(report.summary.failed, 1);
+        assert_eq!(
+            report.lifecycle.outcomes[0].diagnostic_codes,
+            ["sys_admin_not_authorized"]
+        );
+        assert!(
+            runtime.host().operations()[since..]
+                .iter()
+                .all(|operation| matches!(
+                    operation,
+                    HostOperation::Read(_) | HostOperation::AcquireOperationLock(_)
+                )),
+            "{:?}",
+            &runtime.host().operations()[since..]
+        );
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+        assert_eq!(
+            SysRunManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap(),
+            manifest
+        );
+    }
+}

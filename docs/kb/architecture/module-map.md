@@ -16,7 +16,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/` | Reusable `shine-core` package with no CLI/Tauri dependency |
 | `core/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
-| `core/src/action.rs` | Versioned executable Action IR, typed permission derivation, opaque provenance, and rollback classification |
+| `core/src/action.rs` | Versioned executable Action IR, constructors, opaque provenance and rollback DTOs |
+| `core/src/action/contracts.rs`, `action/contracts/` | Exhaustive resource-family routing and domain validation/permission rules; incompatible input fails closed |
 | `core/src/frontend.rs` | Versioned redacted Frontend Service contracts and inventory; `frontend/inspection.rs` owns inspection/status projection and local details; `frontend/review.rs` dispatches pure Plan review |
 | `core/src/frontend/{operations,events}.rs` | Safe journal-state/recovery projection and explicit progress-event redaction; domain executors retain journal parsing and recovery decisions |
 | `core/src/frontend/{bootstrap,read_only,trusted}.rs` | Shared source capture, restricted safe report facade, human review and one-shot approval, exact validation and lifecycle/recovery dispatch; `conformance.rs` checks adapter equivalence |
@@ -33,7 +34,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/planner/{app_plan,app_convergence,app_file_plan,app_stale_plan,app_specialized,app_code}.rs` | App lifecycle orchestration, per-file convergence, stale receipt assessment, refresh/artifacts and triggered code |
 | `core/src/runtime/planner/app_file_plan/{generated,static_file}.rs` | Generated/static permission and step projection after the shared ownership preflight; captured facts remain local to one planning call |
 | `core/src/runtime/planner/{shell_plan,shell_removal,shell_convergence,shell_profile}.rs` | Shell orchestration and separate removal, convergence and profile assessment phases |
-| `core/src/runtime/planner/shell_convergence/{cache,snapshot,command}.rs` | Ordered category-cache, shared-snapshot/sibling-code and per-command convergence assessment |
+| `core/src/runtime/planner/shell_convergence/{cache,snapshot,command}.rs` | Ordered category-cache, shared-snapshot/sibling-code and per-command convergence assessment; `command/rendered.rs` assesses rendered output before launchers |
+| `core/src/runtime/planner/shell_removal/` | Observation-only legacy/receipt launcher, rendered-file, purge/cache and snapshot removal phases in the original order |
 | `core/src/runtime/planner/tests.rs`, `planner/tests/` | Shared in-memory fixtures and domain/contract-grouped planning, transaction, recovery and frontend regressions |
 | `core/src/runtime/planner/{sys_managed_plan,sys_specialized,sys_support}.rs` | Managed Sys, bootstrap and profile planning with shared Sys observation helpers |
 | `core/src/runtime/planner/{approved,app_actions,app_remove_actions}.rs` | Fresh-plan approval gates and typed App Action IR construction |
@@ -41,6 +43,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/app_change.rs` | Shared static App relocation eligibility used by Plan and Action IR construction |
 | `core/src/runtime/action_executor.rs` | App journal/result/recovery models; `action_executor/` owns typed apply, commit, receipt and recovery phases |
 | `core/src/runtime/action_executor/{authority,file_apply,relocation_apply,json_apply,removal_apply,commit}.rs` | Shared exact approval/IR/permission gate and resource-specific transactions with receipt-gated commit |
+| `core/src/runtime/action_executor/commit/{action,files,json}.rs` | Borrowed App-only commit view, exhaustive dispatch and resource-specific rollback cleanup |
 | `core/src/runtime/action_executor/{inspection,recovery_plan,recovery_apply}.rs` | Journal inspection, receipt-conflict recovery orchestration and approved reverse-order rollback dispatch |
 | `core/src/runtime/action_executor/recovery_{plan,apply}_{file,json,relocation,removal}.rs` | Action-specific read-only recovery review and mutation handlers; rollback semantics remain domain-owned |
 | `core/src/runtime/action_executor/{receipts,recovery_assessment,file_ops,journal_io}.rs` | Ownership predicates, exact live-state assessments, privileged path dispatch and durable journal IO |
@@ -58,9 +61,11 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/app/upgrade.rs` | Upgrade preparation, installed-file convergence, stale pruning, additions, receipt finalization and hooks under the existing lifecycle lock |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
 | `core/src/runtime/shell.rs` | Shell assessment, lifecycle entry points, live render, launcher, cache, profile, and manifest helpers |
+| `core/src/runtime/shell/delivery.rs` | Pure captured-input source layout and desired delivery shared by inspection, planning, launcher preparation and receipt construction |
 | `core/src/runtime/shell/lifecycle.rs`, `shell/lifecycle/{deploy,remove,report}.rs` | Typed Shell deployment/removal phases and pure lifecycle reporting; preparation retains legacy effects |
 | `core/src/action/shell_receipt.rs` | Shared internal receipt delivery validation for manifest reconstruction, Action IR and recovery; persisted DTOs remain unchanged |
-| `core/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS transactional orchestration, and run-manifest persistence |
+| `core/src/runtime/sys.rs` | Managed Sys models, receipt assessment, managed-file/split-DNS primitives and run-manifest persistence |
+| `core/src/runtime/sys/{lifecycle,transaction}.rs`, `sys/lifecycle/` | Current-item/receipt-only selection, preflight, resource execution, result persistence and fresh transaction preparation; approved facade retains the lifecycle lock |
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
 | `core/src/runtime/sys_profile/` | Sys profile composition, three-way reconciliation, phase sentinels, BOM and CRLF behavior |
 | `core/src/runtime/validation.rs` | Host-backed preset discovery from a captured cwd, V1 diagnostics, and App/Shell/Sys schema validation |
@@ -235,14 +240,14 @@ Config discovery priority is documented as a behavioral contract in
 | `cli/src/env/workspace/{tests,hybrid_snapshot_tests}.rs` | Existing workspace/source, dotenv, plaintext-lifetime and hybrid snapshot regressions |
 | `cli/src/env/workspace/sources.rs` | Pure ordered plain/secret declaration precedence shared by local compilation, export and broker release |
 | `cli/src/env/workspace/values.rs` | Owned environment maps with redacted diagnostics and cleanup on replacement, error and cancellation |
-| `cli/src/env/workspace/file_groups.rs` | Version 3 binary file selection, seal/verification, persistent export, and scoped release orchestration |
+| `cli/src/env/workspace/file_groups.rs` | Version 3 binary selection, seal/verification, export and scoped release; typed operations and preview streams preserve preflight and output contracts |
 | `cli/src/env/workspace/file_groups/filesystem.rs` | Root-constrained paths, snapshots, Git exclusions, shared locks, owned-file cleanup and persistence |
 | `cli/src/env/workspace/file_groups/platform.rs` | Native private creation, file identity, cancellation, and Unix/Windows command supervision |
 | `cli/src/env/catalog.rs` | Known variable metadata |
 | `cli/src/env/identity.rs` | age identity generation and recipient inspection |
 | `cli/src/env/upgrade.rs` | Reapply env templates to installed content |
 | `cli/src/env/proxy.rs` | Transparent command proxy rules and execution |
-| `cli/src/env/broker.rs` | Secret-broker workspace snapshots and local policy store |
+| `cli/src/env/broker.rs`, `env/broker/{model,policy,store,commands}.rs` | Stable broker facade/DTOs, pure exact policy matching, private locked persistence and CLI commands; `env/mod.rs` owns reserved SSH keys |
 | `cli/src/secret/mod.rs` | Backend-independent tagged ciphertext router |
 | `cli/src/env/workspace/local_cache.rs` | Personal workspace hybrid preference and encrypted per-backend compilation cache; excluded from broker snapshots |
 | `cli/src/secret/hybrid.rs` | Versioned authenticated GPG/age envelope and local selection |

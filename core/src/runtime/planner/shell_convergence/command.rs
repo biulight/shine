@@ -1,5 +1,7 @@
 //! Per-command convergence after shared category resources have been assessed.
+mod rendered;
 use super::*;
+use rendered::{RenderedCommandState, ShellCommandSource};
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
     pub(super) async fn plan_shell_command(
         &self,
@@ -9,12 +11,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         manifest: &ShellManifest,
         planning: &mut ShellPlanning,
     ) -> Result<()> {
-        let ShellPlanning {
-            state,
-            permissions,
-            steps,
-            typed_launcher_transaction,
-        } = planning;
+        let state = &mut planning.state;
 
         let canonical = format!("shell/{}/{}", category.name, file.command_name);
         let entry = manifest.find(&canonical);
@@ -52,166 +49,43 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             .presets()
             .get(&logical_source)
             .context("missing Shell source")?;
-        let effective_transforms = if !file.transforms.is_empty() {
-            file.transforms.clone()
-        } else if has_template_annotation(desired_source) {
-            vec!["template".to_string()]
-        } else {
-            Vec::new()
-        };
-        let effective = if effective_transforms.is_empty() {
-            source.clone()
-        } else {
-            rendered.clone()
-        };
+        let layout = self.shell_source_layout(&category.name, file, desired_source);
+        let effective_transforms = &layout.transforms;
         state.public(
             format!("desired:{logical_source}"),
             sha256_hex(desired_source),
         )?;
         capture_path_state(self.host(), state, format!("source:{canonical}"), &source).await?;
-        let mut rendered_current = true;
-        if !effective_transforms.is_empty() {
-            let desired_rendered = match crate::install::apply_transforms(
-                &effective_transforms,
-                desired_source,
-                &self.context().env,
-            ) {
-                Ok(rendered) => rendered,
-                Err(error) if error.is::<MissingTemplateVariables>() => {
-                    // Missing inputs are a legitimate blocker, not a broken Plan.
-                    // Never project the transform's raw error or variable names.
-                    steps.push(
-                        PlanStepV1::new(&canonical, Some("rendered-output"), PlanActionV1::Blocked)
-                            .with_diagnostic_code("shell_template_inputs_missing"),
-                    );
-                    permissions.merge(file_permissions);
-                    return Ok(());
-                }
-                Err(error) => return Err(error),
-            };
-            let desired_mode = self
-                .host()
-                .metadata(&source)
-                .await
-                .ok()
-                .and_then(|metadata| metadata.unix_mode)
-                .or_else(|| cfg!(unix).then_some(0o755));
-            let rendered_conflict = match self.host().metadata(&rendered).await {
-                Ok(metadata) if metadata.kind == FileKind::File => {
-                    let current = self
-                        .host()
-                        .read(&rendered)
-                        .await
-                        .map_err(|error| error.into_anyhow("reading Shell rendered output"))?;
-                    rendered_current =
-                        current == desired_rendered && metadata.unix_mode == desired_mode;
-                    false
-                }
-                Ok(_) => {
-                    rendered_current = false;
-                    true
-                }
-                Err(error) if error.is_not_found() => {
-                    rendered_current = false;
-                    false
-                }
-                Err(error) if error.is_not_directory() => {
-                    return Err(error.into_anyhow("creating rendered script directory"));
-                }
-                Err(error) => {
-                    return Err(error.into_anyhow("inspecting Shell rendered output"));
-                }
-            };
-            if !rendered_current {
-                let rollback = managed_file_rollback_path(&rendered);
-                capture_path_state(
-                    self.host(),
-                    state,
-                    format!("rendered:{canonical}"),
-                    &rendered,
-                )
-                .await?;
-                capture_path_state(
-                    self.host(),
-                    state,
-                    format!("rendered-rollback:{canonical}"),
-                    &rollback,
-                )
-                .await?;
-                let rollback_occupied = path_exists(self.host(), &rollback).await?;
-                if !rendered_conflict && !rollback_occupied {
-                    *typed_launcher_transaction = true;
-                    for (access, path) in [
-                        (FilesystemAccessV1::Write, &rendered),
-                        (FilesystemAccessV1::Remove, &rendered),
-                        (FilesystemAccessV1::Write, &rollback),
-                        (FilesystemAccessV1::Remove, &rollback),
-                    ] {
-                        file_permissions.implicit_for(
-                            PermissionV1::Filesystem {
-                                access,
-                                path: review_path(self.context(), path),
-                            },
-                            if path == rollback.as_path() {
-                                FilesystemPurposeV1::Recovery
-                            } else {
-                                FilesystemPurposeV1::Installation
-                            },
-                            &canonical,
-                        );
-                    }
-                }
-                steps.push(
-                    PlanStepV1::new(
-                        &canonical,
-                        Some("rendered-output"),
-                        if rendered_conflict || rollback_occupied {
-                            PlanActionV1::Blocked
-                        } else if path_exists(self.host(), &rendered).await? {
-                            PlanActionV1::Update
-                        } else {
-                            PlanActionV1::Create
-                        },
-                    )
-                    .with_diagnostic_code(if rendered_conflict {
-                        "shell_rendered_destination_conflict"
-                    } else if rollback_occupied {
-                        "shell_rendered_rollback_occupied"
-                    } else {
-                        "shell_rendered_replace_transaction"
-                    }),
-                );
+        let rendered_current = match self
+            .plan_shell_command_rendered(
+                ShellCommandSource {
+                    canonical: &canonical,
+                    source: &source,
+                    rendered: &rendered,
+                    transforms: effective_transforms,
+                    bytes: desired_source,
+                },
+                planning,
+                &mut file_permissions,
+            )
+            .await?
+        {
+            RenderedCommandState::Current => true,
+            RenderedCommandState::Outdated => false,
+            RenderedCommandState::Blocked => {
+                planning.permissions.merge(file_permissions);
+                return Ok(());
             }
-        }
-        let bun = self.shell_bun_runtime_spec(&category.name, file)?;
-        let env = file
-            .env
-            .iter()
-            .map(crate::env::EnvVarSpec::to_with_arg)
-            .collect::<Vec<_>>();
-        let render_target = (self.context().is_external_presets
-            && self.context().external_shell_mode == ExternalShellMode::Live
-            && !effective_transforms.is_empty())
-        .then(|| canonical.clone());
-        let desired_spec = LinkSpec {
-            native_cmd_literal_path: crate::runtime::launcher::uses_native_cmd_literal_path(
-                file.runtime,
-                &effective,
-            ),
-            live_launch_config: self.live_bun_launcher_config(
-                file.runtime,
-                !effective_transforms.is_empty(),
-                file.needs_source,
-            ),
-
-            source: effective.clone(),
-            link_name: file.command_name.clone().into(),
-            runtime: file.runtime,
-            bun_dependencies: bun.dependency_mode,
-            env: env.clone(),
-            render_target: render_target.clone(),
         };
-        let desired_resources = prepare_launcher_resources(&self.context().bin_dir, &desired_spec);
+        let ShellPlanning {
+            state,
+            permissions,
+            steps,
+            typed_launcher_transaction,
+        } = planning;
+        let delivery = self.desired_shell_delivery(&category.name, file, layout)?;
+        let desired_spec = &delivery.spec;
+        let desired_resources = prepare_launcher_resources(&self.context().bin_dir, desired_spec);
         let mut all_launcher_resources_absent = true;
         for (index, resource) in desired_resources.iter().enumerate() {
             capture_path_state(
@@ -249,27 +123,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 }
             }
         };
-        let expected_runtime = match file.runtime {
-            LinkRuntime::Native => "native",
-            LinkRuntime::Bun => "bun",
-        };
-        let manifest_current = entry.is_some_and(|entry| {
-            entry.mode == self.context().external_shell_mode
-                && entry.source_path == source
-                && entry.runtime == expected_runtime
-                && entry.bun_dependencies
-                    == bun.dependency_mode.as_manifest_value().map(str::to_string)
-                && entry.dependency_hash == bun.dependency_hash
-                && entry.transforms == effective_transforms
-                && entry.env == env
-                && entry.needs_source == file.needs_source
-                && entry.launcher_config_dir == desired_spec.live_launch_config
-                && entry.launcher_format.as_deref()
-                    == desired_spec
-                        .live_launch_config
-                        .as_ref()
-                        .map(|_| crate::runtime::shell::LIVE_BUN_LAUNCHER_FORMAT)
-        });
+        let manifest_current = entry.is_some_and(|entry| delivery.receipt_is_current(entry));
         let current = link_current && source_current && rendered_current && manifest_current;
         let mut action = if exists && !managed && !request.force {
             PlanActionV1::Blocked
@@ -405,7 +259,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     &canonical,
                 );
             }
-            if !effective_transforms.is_empty() {
+            if !delivery.layout.transforms.is_empty() {
                 add_shell_typed_permissions(
                     self.context(),
                     &mut file_permissions,

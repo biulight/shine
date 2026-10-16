@@ -1,4 +1,6 @@
+mod delivery;
 mod lifecycle;
+use delivery::{ShellSourceLayout, source_transforms};
 
 use super::launcher::{
     prepare_launcher_resources, prepared_launcher_resource_is_exact,
@@ -457,30 +459,20 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 .unwrap_or(false);
             for file in &category.files {
                 let desired_path = self.desired_shell_source_path(&category.name, &file.source_rel);
-                let source_path =
-                    self.shell_deployment_source_path(&category.name, &file.source_rel);
-                let rendered_path = self.shell_rendered_path(&category.name, &file.source_rel);
                 let logical_source = format!(
                     "shell/{}/{}",
                     category.name,
                     shell_logical_path(&file.source_rel)
                 );
-                let effective_transforms = if !file.transforms.is_empty() {
-                    file.transforms.clone()
-                } else if self
-                    .presets()
-                    .get(&logical_source)
-                    .is_some_and(has_template_annotation)
-                {
-                    vec!["template".to_string()]
-                } else {
-                    Vec::new()
-                };
-                let effective_source = if effective_transforms.is_empty() {
-                    source_path.clone()
-                } else {
-                    rendered_path.clone()
-                };
+                let layout = self.shell_source_layout(
+                    &category.name,
+                    file,
+                    self.presets().get(&logical_source).unwrap_or_default(),
+                );
+                let source_path = layout.source.clone();
+                let rendered_path = layout.rendered.clone();
+                let effective_transforms = layout.transforms.clone();
+                let effective_source = layout.effective_source().to_path_buf();
                 let desired_content = self
                     .presets()
                     .get(&logical_source)
@@ -512,34 +504,15 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 } else {
                     None
                 };
-                let bun = self.shell_bun_runtime_spec(&category.name, file)?;
-                let runtime_env = file
-                    .env
-                    .iter()
-                    .map(crate::env::EnvVarSpec::to_with_arg)
-                    .collect::<Vec<_>>();
-                let render_target = (self.context().is_external_presets
-                    && self.context().external_shell_mode == ExternalShellMode::Live
-                    && !effective_transforms.is_empty())
-                .then(|| format!("shell/{}/{}", category.name, file.command_name));
-                let live_launch_config = self.live_bun_launcher_config(
-                    file.runtime,
-                    !effective_transforms.is_empty(),
-                    file.needs_source,
-                );
-                let link_current = if let Some(config) = &live_launch_config {
-                    let spec = LinkSpec {
-                        source: effective_source.clone(),
-                        link_name: file.command_name.clone().into(),
-                        runtime: file.runtime,
-                        bun_dependencies: bun.dependency_mode,
-                        env: runtime_env.clone(),
-                        render_target: render_target.clone(),
-                        native_cmd_literal_path: false,
-                        live_launch_config: Some(config.clone()),
-                    };
+                let delivery = self.desired_shell_delivery(&category.name, file, layout)?;
+                let bun = delivery.bun;
+                let runtime_env = &delivery.spec.env;
+                let render_target = &delivery.spec.render_target;
+                let live_launch_config = &delivery.spec.live_launch_config;
+                let link_current = if live_launch_config.is_some() {
+                    let spec = &delivery.spec;
                     let mut exact = true;
-                    for resource in prepare_launcher_resources(&self.context().bin_dir, &spec) {
+                    for resource in prepare_launcher_resources(&self.context().bin_dir, spec) {
                         exact &=
                             prepared_launcher_resource_is_exact(self.host(), &resource).await?;
                     }
@@ -551,7 +524,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         &effective_source,
                         file.runtime,
                         bun.dependency_mode,
-                        &runtime_env,
+                        runtime_env,
                         render_target.as_deref(),
                     )
                     .await?
@@ -593,27 +566,9 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     LinkRuntime::Native => "native",
                     LinkRuntime::Bun => "bun",
                 };
-                let desired_launcher_format = if live_launch_config.is_some() {
-                    Some(LIVE_BUN_LAUNCHER_FORMAT)
-                } else if uses_native_cmd_literal_path(file.runtime, &effective_source) {
-                    Some(NATIVE_CMD_LAUNCHER_FORMAT)
-                } else {
-                    None
-                };
+                let desired_launcher_format = delivery.launcher_format();
                 let manifest_current = (!self.context().is_external_presets && entry.is_none())
-                    || entry.is_some_and(|entry| {
-                        entry.mode == self.context().external_shell_mode
-                            && entry.source_path == source_path
-                            && entry.runtime == expected_runtime
-                            && entry.bun_dependencies
-                                == bun.dependency_mode.as_manifest_value().map(str::to_string)
-                            && entry.dependency_hash == bun.dependency_hash
-                            && entry.transforms == effective_transforms
-                            && entry.env == runtime_env
-                            && entry.needs_source == file.needs_source
-                            && entry.launcher_config_dir == live_launch_config
-                            && entry.launcher_format.as_deref() == desired_launcher_format
-                    });
+                    || entry.is_some_and(|entry| delivery.receipt_is_current(entry));
                 if let Some(entry) = entry {
                     push_inspection_change(
                         &mut changes,
@@ -690,7 +645,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         &mut changes,
                         "env",
                         inspection_list(&entry.env),
-                        inspection_list(&runtime_env),
+                        inspection_list(runtime_env),
                     );
                     push_inspection_change(
                         &mut changes,
@@ -1099,45 +1054,17 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         let mut specs = Vec::new();
         for category in categories {
             for file in &category.files {
-                let source = self.shell_deployment_source_path(&category.name, &file.source_rel);
                 let logical = format!(
                     "shell/{}/{}",
                     category.name,
                     shell_logical_path(&file.source_rel)
                 );
-                let annotated = self
-                    .presets()
-                    .get(&logical)
-                    .is_some_and(has_template_annotation);
-                let transforms = !file.transforms.is_empty() || annotated;
-                let effective = if transforms {
-                    self.shell_rendered_path(&category.name, &file.source_rel)
-                } else {
-                    source
-                };
-                let bun = self.shell_bun_runtime_spec(&category.name, file)?;
-                specs.push(LinkSpec {
-                    native_cmd_literal_path: uses_native_cmd_literal_path(file.runtime, &effective),
-                    live_launch_config: self.live_bun_launcher_config(
-                        file.runtime,
-                        transforms,
-                        file.needs_source,
-                    ),
-
-                    source: effective,
-                    link_name: OsString::from(&file.command_name),
-                    runtime: file.runtime,
-                    bun_dependencies: bun.dependency_mode,
-                    env: file
-                        .env
-                        .iter()
-                        .map(crate::env::EnvVarSpec::to_with_arg)
-                        .collect(),
-                    render_target: (self.context().is_external_presets
-                        && self.context().external_shell_mode == ExternalShellMode::Live
-                        && transforms)
-                        .then(|| format!("shell/{}/{}", category.name, file.command_name)),
-                });
+                let bytes = self.presets().get(&logical).unwrap_or_default();
+                let layout = self.shell_source_layout(&category.name, file, bytes);
+                specs.push(
+                    self.desired_shell_delivery(&category.name, file, layout)?
+                        .spec,
+                );
             }
         }
         Ok(specs)
@@ -1647,13 +1574,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             .presets()
             .get(&logical)
             .context("missing desired Shell source")?;
-        let transforms = if !file.transforms.is_empty() {
-            file.transforms.clone()
-        } else if has_template_annotation(bytes) {
-            vec!["template".to_string()]
-        } else {
-            Vec::new()
-        };
+        let transforms = source_transforms(file, bytes);
         self.shell_manifest_entry_for_content(category, file, source_path, transforms, bytes)
     }
 
@@ -1665,49 +1586,18 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         transforms: Vec<String>,
         bytes: &[u8],
     ) -> Result<ShellManifestEntry> {
-        let rendered_path = self.shell_rendered_path(&category.name, &file.source_rel);
-        let env = file
-            .env
-            .iter()
-            .map(crate::env::EnvVarSpec::to_with_arg)
-            .collect::<Vec<_>>();
-        let bun = self.shell_bun_runtime_spec(&category.name, file)?;
-        Ok(ShellManifestEntry {
-            launcher_format: self
-                .live_bun_launcher_config(file.runtime, !transforms.is_empty(), file.needs_source)
-                .map(|_| LIVE_BUN_LAUNCHER_FORMAT.to_string())
-                .or_else(|| {
-                    uses_native_cmd_literal_path(file.runtime, &source_path)
-                        .then(|| NATIVE_CMD_LAUNCHER_FORMAT.to_string())
-                }),
-            launcher_config_dir: self.live_bun_launcher_config(
-                file.runtime,
-                !transforms.is_empty(),
-                file.needs_source,
-            ),
-
-            category: category.name.clone(),
-            command: file.command_name.clone(),
-            mode: if self.context().is_external_presets {
-                self.context().external_shell_mode
-            } else {
-                ExternalShellMode::Snapshot
-            },
-            source_path,
-            rendered_path,
-            runtime: if file.runtime == LinkRuntime::Bun {
-                "bun"
-            } else {
-                "native"
-            }
-            .to_string(),
-            bun_dependencies: bun.dependency_mode.as_manifest_value().map(str::to_string),
-            dependency_hash: bun.dependency_hash,
+        let layout = ShellSourceLayout {
+            source: source_path,
+            rendered: self.shell_rendered_path(&category.name, &file.source_rel),
             transforms,
-            env,
-            needs_source: file.needs_source,
-            content_hash: crate::install::hash_content(bytes),
-        })
+        };
+        let delivery = self.desired_shell_delivery(&category.name, file, layout)?;
+        let mode = if self.context().is_external_presets {
+            self.context().external_shell_mode
+        } else {
+            ExternalShellMode::Snapshot
+        };
+        Ok(delivery.into_receipt(&category.name, &file.command_name, mode, bytes))
     }
 
     pub async fn render_live_shell(&self, target: &str) -> Result<()>
@@ -2974,6 +2864,29 @@ content_hash = 1
         assert_eq!(
             manifest.entries[0].launcher_format.as_deref(),
             Some(NATIVE_CMD_LAUNCHER_FORMAT)
+        );
+        // The newly written native-cmd-v2 receipt must converge on the next review.
+        let current = runtime
+            .plan_shells(super::super::ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo/run".into()),
+                force: false,
+                purge: false,
+                input_versions: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            current
+                .steps
+                .iter()
+                .find(|step| step.target == "shell/demo/run" && step.resource.is_none())
+                .is_some_and(|step| step.action == crate::plan::PlanActionV1::None),
+            "{current:?}"
+        );
+        assert_eq!(
+            runtime.inspect_shells().await.unwrap()[0].status,
+            InspectionFileStatus::UpToDate
         );
         let request = super::super::ShellPlanRequest {
             operation: LifecycleOperation::Uninstall,

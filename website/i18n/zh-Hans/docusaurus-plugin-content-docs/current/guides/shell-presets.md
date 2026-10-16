@@ -51,7 +51,7 @@ shine install shell/proxy --replace-managed
 
 在 Windows 上，从 CMD 启动原生 PowerShell 命令时，脚本路径中的单引号会被原样保留
 （例如用户名目录 `O'Connor`）。运行 `shine upgrade shell/<CATEGORY>` 更新已有启动器；
-原有安装记录仍可用于恢复。
+原有安装记录仍可用于恢复。更新完成后，后续升级审阅会将未发生变化的启动器识别为最新状态。
 
 ## 安装、升级或卸载中断后怎么办 {#恢复中断的-shell-事务}
 

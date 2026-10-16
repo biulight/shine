@@ -775,3 +775,127 @@ async fn targeted_shell_uninstall_preserves_shared_category_state_and_updates_pr
             && step.action == PlanActionV1::Remove
     }));
 }
+
+#[tokio::test]
+async fn installed_shell_delivery_agrees_with_inspection_and_repeated_planning() {
+    for (external, mode) in [
+        (false, ExternalShellMode::Snapshot),
+        (true, ExternalShellMode::Snapshot),
+        (true, ExternalShellMode::Live),
+    ] {
+        for (bun, transformed) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut context = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build())
+                .context()
+                .clone();
+            context.is_external_presets = external;
+            context.external_shell_mode = mode;
+            context.env.insert("VALUE".into(), "rendered".into());
+            let source = if bun { "demo.ts" } else { "demo.sh" };
+            let metadata = format!(
+                "[[files]]\nsource = '{source}'\ntarget = 'demo'\n{}{}[files.permissions]\nschema_version = 1\n",
+                if bun { "runtime = 'bun'\n" } else { "" },
+                if transformed {
+                    "transforms = ['template']\n"
+                } else {
+                    ""
+                }
+            );
+            let snapshot = PresetSnapshot::builder(if external {
+                PresetSourceKind::External
+            } else {
+                PresetSourceKind::Embedded
+            })
+            .base_root(context.presets_dir.clone())
+            .file("shell/demo/shine.toml", metadata.into_bytes())
+            .file(
+                format!("shell/demo/{source}"),
+                if transformed {
+                    b"echo @@VALUE@@\n".to_vec()
+                } else {
+                    b"echo demo\n".to_vec()
+                },
+            )
+            .build();
+            let mut runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
+            if external {
+                for (logical, bytes) in runtime.presets().files() {
+                    runtime
+                        .host()
+                        .put_file(runtime.context().presets_dir.join(logical), bytes.clone());
+                }
+                let requirements = runtime.external_code_requirements("preset").await.unwrap();
+                runtime.context_mut_for_test().trust_grants = requirements
+                    .requirements
+                    .iter()
+                    .map(|requirement| {
+                        if mode == ExternalShellMode::Live {
+                            crate::trust::TrustGrantV1::for_development_requirement(requirement)
+                                .unwrap()
+                        } else {
+                            crate::trust::TrustGrantV1::for_reviewed_requirement(requirement)
+                        }
+                    })
+                    .collect();
+            }
+            let request = shell_install_request();
+            let plan = runtime.plan_shells(request.clone()).await.unwrap();
+            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+            runtime
+                .install_shells_approved(request.clone(), &approval)
+                .await
+                .unwrap();
+            let manifest_before = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap();
+            let entry = manifest_before.find("shell/demo/demo").unwrap();
+            assert_eq!(entry.mode, mode);
+            assert_eq!(
+                entry.launcher_format.as_deref(),
+                if external && mode == ExternalShellMode::Live && bun && transformed {
+                    Some(crate::runtime::shell::LIVE_BUN_LAUNCHER_FORMAT)
+                } else {
+                    None
+                }
+            );
+            let inspection = runtime.inspect_shells().await.unwrap();
+            assert_eq!(
+                inspection[0].status,
+                crate::runtime::InspectionFileStatus::UpToDate,
+                "external={external}, mode={mode:?}, bun={bun}, transformed={transformed}"
+            );
+            let request = ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                ..request
+            };
+            let current = runtime.plan_shells(request.clone()).await.unwrap();
+            assert!(
+                current
+                    .steps
+                    .iter()
+                    .find(|step| step.target == "shell/demo/demo" && step.resource.is_none())
+                    .is_some_and(|step| step.action == PlanActionV1::None),
+                "{current:?}"
+            );
+            assert!(
+                !current
+                    .steps
+                    .iter()
+                    .any(|step| step.target == "shell/demo/demo"
+                        && step.resource.as_deref() == Some("rendered-output")
+                        && step.action != PlanActionV1::None),
+                "{current:?}"
+            );
+            let approval = PlanApprovalV1::for_reviewed_plan(&current).unwrap();
+            runtime
+                .upgrade_shells_approved(request, &approval)
+                .await
+                .unwrap();
+            assert_eq!(
+                ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                    .await
+                    .unwrap(),
+                manifest_before
+            );
+        }
+    }
+}

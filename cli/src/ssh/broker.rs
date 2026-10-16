@@ -1,6 +1,7 @@
 //! Local, session-scoped SSH secret broker authorization and decryption.
 
 use crate::config::Config;
+use crate::env::RESERVED_REMOTE_ENV;
 use crate::env::broker::{self, PolicyStore, WorkspaceSnapshot};
 use crate::env::{EnvConfig, parse_env_specs, secret_key};
 use crate::secret;
@@ -10,12 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-const RESERVED_TARGETS: &[&str] = &[
-    "SHINE_SSH_SESSION",
-    "SHINE_SSH_TOKEN",
-    "SHINE_SSH_REMOTE_SOCK",
-    "SHINE_TERMINAL_THEME",
-];
 const MAX_BROKER_REQUESTS_PER_SESSION: usize = 1024;
 
 #[derive(Clone)]
@@ -96,7 +91,7 @@ impl BrokerSession {
                     spec.source
                 );
             }
-            if RESERVED_TARGETS.contains(&spec.target.as_str()) {
+            if RESERVED_REMOTE_ENV.contains(&spec.target.as_str()) {
                 bail!("cannot override shine-managed SSH variable {}", spec.target);
             }
             let storage_key = secret_key(&spec.source);

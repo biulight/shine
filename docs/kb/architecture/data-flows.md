@@ -423,6 +423,12 @@ The split retains the original action, manifest, commit-marker and cleanup order
 reconstruction, Action IR validation and recovery conversion share the borrowed delivery rules in
 `action/shell_receipt`; persisted receipt fields and schema versions remain unchanged (ADR 0114).
 
+Inspection, planning, launcher preparation and manifest construction share pure source layout and
+`DesiredShellDelivery` facts. No Host observation is retained across human approval. Delivery is
+built at the original Bun-policy assessment point. Native PowerShell and live Bun launcher format
+identities both participate in receipt current-ness, so a refreshed native launcher converges on
+subsequent upgrade review (ADR 0116).
+
 Command install filters metadata before transforms and launcher creation, then upserts only the
 selected manifest target. Category install retains the existing replace-category reconciliation.
 For embedded sources, Core derives one payload-free `ReplaceShellCache` action per selected category
@@ -920,6 +926,11 @@ before fresh approval validation, retaining it through shared manifest persisten
 Standalone managed-file mutations and profile synchronization use the same lock. The privileged
 transaction lock is acquired afterward; a manifest change while waiting invalidates an approval
 that observes it (ADR 0106).
+
+`sys/lifecycle` selects current preset items or a distinct receipt-only removal, then performs input
+and administrator preflight, resource execution, and outcome persistence. Batch items retain their
+original order; a later failure leaves earlier committed resources intact. Transaction preparation
+uses fresh observations under the approved facade's existing lifecycle lock (ADR 0116).
 
 Managed-file and split-DNS apply/update/uninstall first derive typed actions and an exact previous
 and desired `SysRunEntry`. Core writes `sys-operation-journal.toml` before the first resource

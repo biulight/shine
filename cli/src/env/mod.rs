@@ -13,6 +13,14 @@ pub use shine_core::env::EnvVarSpec;
 pub(crate) use shine_core::env::{parse_env_specs, validate_env_key};
 use std::collections::BTreeMap;
 
+/// Reserved transport variables shared by forwarding, direct release and policy validation.
+pub(crate) const RESERVED_REMOTE_ENV: &[&str] = &[
+    "SHINE_SSH_SESSION",
+    "SHINE_SSH_TOKEN",
+    "SHINE_SSH_REMOTE_SOCK",
+    "SHINE_TERMINAL_THEME",
+];
+
 /// User-editable environment variables stored in `config.toml` under `[env]`.
 ///
 /// Values are substituted into preset files that opt in via the `template`

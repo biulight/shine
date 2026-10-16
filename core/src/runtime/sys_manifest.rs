@@ -489,6 +489,36 @@ fn config_string(config: &toml::Table, key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v2_manifest_rejects_duplicate_items_and_invalid_profiles() {
+        let item = "[[items]]\nid = 'tool'\nlabel = 'Tool'\ndetect = { kind = 'path', path = '~/tool' }\ninstall = { kind = 'script', path = 'tool.sh' }\n";
+        let valid = format!(
+            "version = 2\ndefault_profile = 'recommended'\n{item}\n[profiles.recommended]\nitems = ['tool']\n"
+        );
+        assert_eq!(parse_sys_manifest(&valid).unwrap().items.len(), 1);
+        for (content, expected) in [
+            (
+                format!("version = 2\n{item}\n{item}"),
+                "duplicate sys bootstrap item id",
+            ),
+            (
+                valid.replace("items = ['tool']", "items = ['missing']"),
+                "unknown item `missing`",
+            ),
+            (
+                format!("version = 2\ndefault_profile = 'missing'\n{item}"),
+                "default profile `missing`",
+            ),
+        ] {
+            assert!(
+                parse_sys_manifest(&content)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected)
+            );
+        }
+    }
     use crate::plan::{OpaqueCodeScopeV1, PermissionV1};
     use crate::runtime::{
         FileSystemObservationHost, HostOperation, InMemoryHost, PresetSnapshot, PresetSourceKind,

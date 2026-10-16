@@ -26,6 +26,43 @@ pub(super) struct Mapping {
     target: String,
 }
 
+#[derive(Clone, Copy)]
+enum FileGroupOperation {
+    Seal,
+    Run,
+    Export,
+}
+
+impl FileGroupOperation {
+    fn input<'a>(self, source: &'a Path, target: &'a Path) -> (&'a Path, usize) {
+        match self {
+            Self::Seal => (target, MAX_FILE),
+            Self::Run | Self::Export => (source, MAX_CIPHER),
+        }
+    }
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Seal => "seal",
+            Self::Run => "decrypt temporarily",
+            Self::Export => "export plaintext",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PreviewOutput {
+    Stdout,
+    Stderr,
+}
+impl PreviewOutput {
+    fn emit(self, line: String) {
+        match self {
+            Self::Stdout => println!("{line}"),
+            Self::Stderr => eprintln!("{line}"),
+        }
+    }
+}
+
 struct Selection {
     workspace_path: PathBuf,
     workspace_bytes: String,
@@ -124,22 +161,24 @@ impl Selection {
         Ok(())
     }
 
-    fn preflight(&self, sealing: bool) -> Result<()> {
+    fn preflight(&self, operation: FileGroupOperation) -> Result<()> {
         self.verify()?;
         for (source, target) in &self.mappings {
-            let required = if sealing { target } else { source };
+            let (required, limit) = operation.input(source, target);
             ensure!(
                 required.is_file(),
                 "required file missing: {}",
                 required.display()
             );
-            let limit = if sealing { MAX_FILE } else { MAX_CIPHER };
             ensure!(
                 fs::metadata(required)?.len() <= limit as u64,
                 "file exceeds size limit: {}",
                 required.display()
             );
-            if !sealing {
+            if matches!(
+                operation,
+                FileGroupOperation::Run | FileGroupOperation::Export
+            ) {
                 ensure!(
                     !target.try_exists()?,
                     "plaintext target already exists; inspect it before retrying: {}",
@@ -150,33 +189,19 @@ impl Selection {
         Ok(())
     }
 
-    fn preview(&self, sealing: bool, stderr: bool, exporting: bool) {
-        let emit = |line: String| {
-            if stderr {
-                eprintln!("{line}");
-            } else {
-                println!("{line}");
-            }
-        };
-        emit(format!(
+    fn preview(&self, operation: FileGroupOperation, output: PreviewOutput) {
+        output.emit(format!(
             "File groups for mode {} (metadata only)",
             self.mode
         ));
         for (source, target) in &self.mappings {
-            let (from, to) = if sealing {
-                (target, source)
-            } else {
-                (source, target)
+            let (from, to) = match operation {
+                FileGroupOperation::Seal => (target, source),
+                FileGroupOperation::Run | FileGroupOperation::Export => (source, target),
             };
-            emit(format!(
+            output.emit(format!(
                 "Would {} {} -> {}",
-                if sealing {
-                    "seal"
-                } else if exporting {
-                    "export plaintext"
-                } else {
-                    "decrypt temporarily"
-                },
+                operation.verb(),
                 from.display(),
                 to.display()
             ));
@@ -196,13 +221,13 @@ async fn seal_inner(config: &Config, command: &EnvSealCommand) -> Result<()> {
         &command.file_groups,
     )
     .await?;
-    selected.preview(true, false, false);
-    selected.preflight(true)?;
+    selected.preview(FileGroupOperation::Seal, PreviewOutput::Stdout);
+    selected.preflight(FileGroupOperation::Seal)?;
     if command.dry_run {
         return Ok(());
     }
     let _locks = PathLocks::acquire(&selected.root, &selected.workspace_path, &selected.mappings)?;
-    selected.preflight(true)?;
+    selected.preflight(FileGroupOperation::Seal)?;
     let mut config = local_cache::load_config(config, &selected.workspace_path).await?;
     let mut recipients = resolve_seal_encryption(
         command.backend.as_deref(),
@@ -340,21 +365,21 @@ pub async fn handle_export(config: &Config, command: &EnvWorkspaceExportCommand)
         &command.file_groups,
     )
     .await?;
-    selected.preflight(false)?;
+    selected.preflight(FileGroupOperation::Export)?;
     if command.dry_run {
-        selected.preview(false, false, true);
+        selected.preview(FileGroupOperation::Export, PreviewOutput::Stdout);
         return Ok(());
     }
-    selected.preview(false, true, true);
+    selected.preview(FileGroupOperation::Export, PreviewOutput::Stderr);
     platform::prepare(export_inner(config, &selected)).await
 }
 
 async fn export_inner(config: &Config, selected: &Selection) -> Result<()> {
     let _locks = PathLocks::acquire(&selected.root, &selected.workspace_path, &selected.mappings)?;
-    selected.preflight(false)?;
+    selected.preflight(FileGroupOperation::Export)?;
     let mut config = local_cache::load_config(config, &selected.workspace_path).await?;
     let (captured, plain) = decrypt_files(&mut config, selected).await?;
-    selected.preflight(false)?;
+    selected.preflight(FileGroupOperation::Export)?;
     for file in &captured {
         file.verify(&selected.root)?;
     }
@@ -416,8 +441,15 @@ pub async fn handle_run(config: &Config, command: &EnvRunCommand) -> Result<()> 
         &command.file_groups,
     )
     .await?;
-    selected.preview(false, !command.dry_run, false);
-    selected.preflight(false)?;
+    selected.preview(
+        FileGroupOperation::Run,
+        if command.dry_run {
+            PreviewOutput::Stdout
+        } else {
+            PreviewOutput::Stderr
+        },
+    );
+    selected.preflight(FileGroupOperation::Run)?;
     if command.dry_run {
         return Ok(());
     }
@@ -475,7 +507,7 @@ async fn prepare_run(
     selected: &Selection,
 ) -> Result<Ready> {
     let _locks = PathLocks::acquire(&selected.root, &selected.workspace_path, &selected.mappings)?;
-    selected.preflight(false)?;
+    selected.preflight(FileGroupOperation::Run)?;
     let mut config = local_cache::load_config(config, &selected.workspace_path).await?;
     let (captured, plain) = decrypt_files(&mut config, selected).await?;
     let (values, override_process_env) = load_run_values_effective(

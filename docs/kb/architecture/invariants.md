@@ -376,6 +376,11 @@ bugs. Check this list before changing the modules named in each entry.
   effect paths and content hashes, but never managed bytes, environment values, secret plaintext, or
   raw argv. Do not embed the Action IR in `PlanV1` or reinterpret semantic Plan steps as executable
   instructions.
+- **Resource contract routing is exhaustive and fail-closed.** Action DTOs retain their schemas;
+  private resource handlers must reject incompatible kinds or mark permissions uncomputable.
+  App commit converts to an App-only borrowed view and explicitly dispatches every supported
+  variant, including creation with no rollback cleanup. Journal removal follows every resource's
+  receipt/live-state checks and successful cleanup (ADR 0116).
 - **Recovery is an explicit, freshly approved operation.** Ordinary planning, status, install,
   upgrade, and uninstall must not mutate an interrupted journal implicitly. `app-recovery` binds the
   exact journal bytes and current destination observation, validates its approval again under the
