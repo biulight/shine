@@ -1,3 +1,8 @@
+mod prepared;
+pub(crate) use prepared::{
+    PreparedAppUpgrade, PreparedShellUpgrade, PreparedSysManaged, PreparedSysUpgrade,
+    prepare_upgrade_plans,
+};
 mod classification;
 use classification::{
     is_routine_cache_maintenance, is_stale_app_preservation, quiet_uninstall_step,
@@ -134,13 +139,14 @@ impl LifecyclePlanRequest {
 
 #[derive(Debug)]
 pub(crate) struct ReviewedLifecyclePlan {
-    pub(crate) request: LifecyclePlanRequest,
-    pub(crate) approved: shine_core::frontend::ApprovedOperation,
+    request: LifecyclePlanRequest,
+    approved: shine_core::frontend::ApprovedOperation,
 }
 
-pub(crate) struct PreparedLifecyclePlan {
-    pub(crate) reviewed: ReviewedLifecyclePlan,
-    pub(crate) runtime: CoreRuntime<RealHost>,
+impl ReviewedLifecyclePlan {
+    pub(crate) fn permissions(&self) -> &shine_core::plan::PermissionSetV1 {
+        self.approved.permissions()
+    }
 }
 
 pub(crate) async fn review_plans(
@@ -614,18 +620,6 @@ async fn active_config_digest(config: &Config) -> Result<String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("missing".to_string()),
         Err(error) => Err(error.into()),
     }
-}
-
-pub(crate) async fn prepare_plans(
-    config: &Config,
-    reviewed: Vec<ReviewedLifecyclePlan>,
-) -> Result<Vec<PreparedLifecyclePlan>> {
-    let mut prepared = Vec::with_capacity(reviewed.len());
-    for reviewed in reviewed {
-        let runtime = prepare_runtime(config, &reviewed).await?;
-        prepared.push(PreparedLifecyclePlan { reviewed, runtime });
-    }
-    Ok(prepared)
 }
 
 fn planning_input_versions(config: &Config) -> PlanningInputVersions {

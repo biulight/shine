@@ -94,8 +94,14 @@ capture current source/state → regenerate Plan → match approved fingerprint 
 App, Shell, managed Sys install/upgrade/uninstall, exact Sys bootstrap, App refresh/artifact, and
 Sys profile enable/disable route through this flow. Untargeted `shine upgrade` plans all three
 lifecycles, displays only scopes needing review by default, confirms once when there are actions,
-and prevalidates all three before protected mutation starts. `upgrade --verbose` expands relevant
-scopes, while `upgrade --verbose --full-plan` displays every planned scope and step. Compact
+and prevalidates all three before protected mutation starts. `lifecycle_plan/prepared.rs` first
+checks the complete Shell/App/managed-Sys upgrade batch shape, then captures and validates each
+runtime in that same order. Named one-shot domain handoffs replace positional vector extraction;
+adapters consume them and receive their domain's typed Core report. The shared managed-Sys adapter
+still accepts its existing install/remove paths through a separate managed-Sys handoff. Neither
+handoff construction nor prevalidation replaces Core's fresh apply-time Plan/permission gate
+([ADR 0123](../decisions/0123-typed-upgrade-handoffs-and-launcher-tests.md)).
+`upgrade --verbose` expands relevant scopes, while `upgrade --verbose --full-plan` displays every planned scope and step. Compact
 review combines known routine App/Shell cache writes into one internal maintenance summary;
 verbose review retains their category/file steps. Permissions, code boundaries, preservation,
 blockers, and unknown diagnostics remain visible (ADR 0099). Ready cache-only App scopes move

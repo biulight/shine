@@ -1,8 +1,8 @@
 # 0031 — External Bun presets may use locked runtime dependencies
 
 - **Status**: accepted
-- **Evidence**: `cli/src/bun_runtime.rs`, `cli/src/bin_links.rs`, `cli/src/apps/build.rs`,
-  `cli/src/apps/generator.rs`
+- **Evidence**: `cli/src/bun_runtime.rs`, `core/src/runtime/launcher.rs`, `cli/src/apps/build.rs`,
+  `core/src/runtime/app.rs` (generator/artifact runners)
 
 ## Context
 

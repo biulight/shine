@@ -68,6 +68,12 @@ bugs. Check this list before changing the modules named in each entry.
   preview contract. Specialized operations use `sys-bootstrap`, `app-refresh`,
   `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
   lifecycle Plans or `LifecycleResultV1` operations.
+- **CLI upgrade handoffs preserve domain and approval ownership.** Reviewed request/approval pairs
+  stay private to lifecycle planning. Aggregate upgrade validates exactly one Shell, App and managed
+  Sys Upgrade request in the established order before any runtime preparation; every preparation
+  succeeds before any domain executes. Prepared handoffs are consumed, not cloned or reconstructed
+  by adapters. These internal types do not authorize mutation: existing Core locks, fresh Plan and
+  exact permission checks still run at apply time (ADR 0123).
 - **Filesystem summaries are Core-attributed review data.** Optional `filesystem_review` groups
   bind exact permissions and their typed purpose/target into the Plan fingerprint. CLI summaries
   never infer ownership from path prefixes or suffixes, never remove required permissions, and
@@ -318,18 +324,17 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **Removal must use domain ownership checks.** `PresetAssetReader::remove_prefix` enumerates
   embedded plus explicitly selected overlay asset paths; it is currently used only by tests and
-  does not validate content ownership or authorize lifecycle removal. `bin_links::unlink_managed`
-  removes only symlinks pointing into the managed presets dir,
+  does not validate content ownership or authorize lifecycle removal.
+  `launcher::unlink_managed_command_with_host` removes only symlinks pointing into the managed presets dir,
   plus **regular files that carry the native `# shine-managed`/`REM shine-managed` marker and a
   matching `# shine-target:`/`REM shine-target:` under the managed root** (Windows `.ps1`/`.cmd`
   shims and Unix `runtime = "bun"` launcher scripts); app
   uninstall is driven by `~/.shine/app-manifest.toml` entries only.
 - **Bun launchers are marked regular files, identified only by content, never by name.** A Unix
   `runtime = "bun"` command is a generated executable script (not a symlink); ownership and
-  current-ness (`bin_links::launcher_target`/`unix_launcher_status`, mirrored by
-  `windows_shim_status`) key on the platform-native managed marker + target path under the managed
-  root. An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user
-  conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
+  current-ness use production `launcher` Host probes and deterministic prepared resources, with
+  the platform-native managed marker + target path under the managed root as ownership evidence.
+  An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
   format change re-detects installed launchers as stale on upgrade; changing it is a format bump.
   Legacy content embeds the ordered `env` specs and Bun dependency policy. The `live-bun-v2`
   template reads those from its installed receipt; exact receipt comparisons still refresh both

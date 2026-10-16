@@ -15,7 +15,6 @@ pub async fn handle_recover_approved(config: &Config, yes: bool) -> Result<()> {
     .next()
     .expect("one reviewed App recovery Plan");
     if reviewed
-        .approved
         .permissions()
         .contains(&PermissionV1::Administrator)
         && !crate::privilege::ensure_admin(1).await?

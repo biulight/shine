@@ -72,7 +72,7 @@ pub(crate) async fn handle_upgrade_installed_with_output_with_result_prepared(
     config: &Config,
     prune_stale: bool,
     verbose: bool,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedAppUpgrade,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
     let mut renderer = TerminalRenderer::stdio_with_separator(sep);
@@ -154,13 +154,13 @@ async fn handle_upgrade_installed_target_with_reporter(
     .into_iter()
     .next()
     .expect("one reviewed App Plan");
-    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    let prepared = crate::lifecycle_plan::PreparedAppUpgrade::prepare(config, reviewed).await?;
     handle_upgrade_installed_target_with_prepared_reporter(
         config,
         category_filter,
         prune_stale,
         verbose,
-        crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime },
+        prepared,
         reporter,
     )
     .await
@@ -171,33 +171,28 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
     _category_filter: Option<&str>,
     _prune_stale: bool,
     verbose: bool,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedAppUpgrade,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
-    let crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime } = prepared;
     let mut observer = UpgradeObserver::default();
     let mut interaction = TerminalInteraction;
-    let artifact_categories = runtime
+    let artifact_categories = prepared
+        .runtime()
         .app_categories(None)?
         .into_iter()
         .filter(|category| category.artifact.is_some())
         .map(|category| category.name)
         .collect::<BTreeSet<_>>();
-    let core = match crate::lifecycle_plan::execute_reviewed(
-        config,
-        runtime,
-        reviewed,
-        shine_core::frontend::ExecutionOptions {
-            show_hook_success: verbose,
-        },
-        &mut observer,
-        &mut interaction,
-    )
-    .await?
-    {
-        shine_core::frontend::OperationDetails::AppUpgrade(report) => *report,
-        _ => unreachable!("reviewed operation result type"),
-    };
+    let core = prepared
+        .execute(
+            config,
+            shine_core::frontend::ExecutionOptions {
+                show_hook_success: verbose,
+            },
+            &mut observer,
+            &mut interaction,
+        )
+        .await?;
 
     let show_unchanged = verbose && crate::presentation::full_upgrade_plan();
     let mut started = false;

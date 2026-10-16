@@ -269,16 +269,13 @@ pub async fn handle_config_upgrade(
         verbose,
     )
     .await?;
-    let mut prepared = crate::lifecycle_plan::prepare_plans(config, reviewed).await?;
-    let shell_prepared = prepared.remove(0);
-    let app_prepared = prepared.remove(0);
-    let sys_prepared = prepared.remove(0);
+    let prepared = crate::lifecycle_plan::prepare_upgrade_plans(config, reviewed).await?;
 
     let (shell_report, shell_lifecycle) =
         Box::pin(shells::handle_upgrade_installed_with_result_prepared(
             config,
             verbose,
-            shell_prepared,
+            prepared.shell,
             &mut sep,
         ))
         .await?;
@@ -287,7 +284,7 @@ pub async fn handle_config_upgrade(
             config,
             prune_stale,
             verbose,
-            app_prepared,
+            prepared.app,
             &mut sep,
         ),
     )
@@ -295,7 +292,7 @@ pub async fn handle_config_upgrade(
     let (sys_report, _sys_lifecycle) = Box::pin(sys::handle_upgrade_managed_with_result_prepared(
         config,
         verbose,
-        sys_prepared,
+        prepared.sys,
         &mut sep,
     ))
     .await?;

@@ -148,7 +148,7 @@ pub(crate) async fn handle_upgrade_managed_with_result_approved(
 pub(crate) async fn handle_upgrade_managed_with_result_prepared(
     config: &Config,
     verbose: bool,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedSysUpgrade,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
     let os_id = detect_os_id().await?;
@@ -164,7 +164,7 @@ pub(crate) async fn handle_upgrade_managed_with_result_prepared(
             yes: true,
             output_mode: ManagedOutputMode::Upgrade { verbose },
         },
-        prepared,
+        prepared.into_managed(),
         &mut renderer,
         &mut interaction,
     )
@@ -371,14 +371,9 @@ async fn run_managed_for_os_with_reporter(
         .into_iter()
         .next()
         .expect("one reviewed Sys Plan");
-        let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
-        return run_managed_for_os_with_prepared_reporter(
-            request,
-            crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime },
-            reporter,
-            interaction,
-        )
-        .await;
+        let prepared = crate::lifecycle_plan::PreparedSysManaged::prepare(config, reviewed).await?;
+        return run_managed_for_os_with_prepared_reporter(request, prepared, reporter, interaction)
+            .await;
     }
 
     let runtime = crate::core_runtime::from_config(config).await?;
@@ -411,7 +406,7 @@ async fn run_managed_for_os_with_reporter(
 
 async fn run_managed_for_os_with_prepared_reporter(
     request: ManagedRunRequest<'_>,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedSysManaged,
     reporter: &mut dyn LifecycleReporter,
     interaction: &mut TerminalInteraction,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
@@ -422,7 +417,6 @@ async fn run_managed_for_os_with_prepared_reporter(
         output_mode,
         ..
     } = request;
-    let crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime } = prepared;
     let mut observer = ManagedObserver {
         reporter,
         action,
@@ -430,19 +424,14 @@ async fn run_managed_for_os_with_prepared_reporter(
         started: false,
         show_item_progress: output_mode.show_all_outcomes(),
     };
-    let core = match crate::lifecycle_plan::execute_reviewed(
-        config,
-        runtime,
-        reviewed,
-        shine_core::frontend::ExecutionOptions::default(),
-        &mut observer,
-        interaction,
-    )
-    .await?
-    {
-        shine_core::frontend::OperationDetails::SysManaged(report) => *report,
-        _ => unreachable!("reviewed operation result type"),
-    };
+    let core = prepared
+        .execute(
+            config,
+            shine_core::frontend::ExecutionOptions::default(),
+            &mut observer,
+            interaction,
+        )
+        .await?;
     finish_managed_report(core, output_mode, &mut observer)
 }
 

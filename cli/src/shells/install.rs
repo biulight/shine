@@ -290,7 +290,7 @@ pub(crate) async fn handle_upgrade_installed_with_result_approved(
 pub(crate) async fn handle_upgrade_installed_with_result_prepared(
     config: &Config,
     verbose: bool,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedShellUpgrade,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
     let mut renderer = TerminalRenderer::stdio_with_separator(sep);
@@ -382,12 +382,12 @@ async fn handle_upgrade_installed_target_with_reporter(
     .into_iter()
     .next()
     .expect("one reviewed Shell Plan");
-    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    let prepared = crate::lifecycle_plan::PreparedShellUpgrade::prepare(config, reviewed).await?;
     handle_upgrade_installed_target_with_prepared_reporter(
         config,
         category_filter,
         verbose,
-        crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime },
+        prepared,
         reporter,
     )
     .await
@@ -397,23 +397,17 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
     config: &Config,
     category_filter: Option<&str>,
     verbose: bool,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedShellUpgrade,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
-    let crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime } = prepared;
-    let core = match crate::lifecycle_plan::execute_reviewed(
-        config,
-        runtime,
-        reviewed,
-        shine_core::frontend::ExecutionOptions::default(),
-        &mut shine_core::runtime::NullObserver,
-        &mut crate::presentation::TerminalInteraction,
-    )
-    .await?
-    {
-        shine_core::frontend::OperationDetails::ShellUpgrade(report) => *report,
-        _ => unreachable!("reviewed operation result type"),
-    };
+    let core = prepared
+        .execute(
+            config,
+            shine_core::frontend::ExecutionOptions::default(),
+            &mut shine_core::runtime::NullObserver,
+            &mut crate::presentation::TerminalInteraction,
+        )
+        .await?;
     if core.runs.is_empty() {
         if verbose {
             reporter.emit(PresentationEvent::stdout(style_dim(

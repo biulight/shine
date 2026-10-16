@@ -26,6 +26,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
 | `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, scoped operation-lock, process, privileged, and system mutation ports |
+| `core/src/runtime/launcher.rs` | Host-backed launcher preparation, exact comparison, installation and ownership probes; deterministic Unix and Windows delivery templates |
+| `core/src/runtime/launcher/tests.rs` | Launcher consumer regressions against production Host APIs and prepared transaction resources; no parallel test-only filesystem implementation |
 | `core/src/runtime/operation_lock.rs` | Persistent OS file locks and configuration-scoped App/Shell/Sys lifecycle serialization |
 | `core/src/runtime/tests/` | Test-only runtime harness and regressions spanning domain modules; `lifecycle_concurrency.rs` covers receipt preservation and approval revalidation under contention |
 | `core/src/runtime/tests/refactoring_contracts.rs` | Cross-module App static/generator receipt preservation and Shell read-only interruption/recovery/retry contracts |
@@ -110,6 +112,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
 | `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap and Frontend Service construction; tests cover live overlay readers versus captured snapshots and review authority |
 | `cli/src/lifecycle_plan.rs` | Default-No/non-TTY approval policy, input identities, and batch prevalidation; `lifecycle_plan/render.rs` owns pure terminal Plan projection |
+| `cli/src/lifecycle_plan/prepared.rs` | Private reviewed-request handoffs, named three-domain upgrade prevalidation and consuming typed report execution; Core retains fresh approval checks |
+| `cli/src/lifecycle_plan/prepared/tests.rs` | Batch shape/domain rejection before capture, all-domain prevalidation before execution and apply-time revalidation regressions |
 | `cli/src/lifecycle_plan/classification.rs` | Terminal-only typed grouping of unchanged Plan steps, routine notices and conservative unknown-diagnostic fallback |
 | `cli/src/platform.rs` | Platform classification shared across command domains |
 | `cli/src/privilege.rs` | Cross-platform administrator/elevation orchestration |

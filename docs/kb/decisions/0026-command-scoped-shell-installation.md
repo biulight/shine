@@ -2,7 +2,7 @@
 
 - **Status**: accepted
 - **Evidence**: `cli/src/shells/{metadata,install,uninstall,deployment}.rs`,
-  `cli/src/{shim,status,bin_links,completion}.rs`
+  `cli/src/{shim,status,completion}.rs`, `core/src/runtime/launcher.rs`
 
 ## Context
 

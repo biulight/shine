@@ -1,7 +1,7 @@
 # 0023 — External shell presets default to snapshots with explicit live mode
 
 - **Status**: accepted
-- **Evidence**: `cli/src/shells/deployment.rs`, `cli/src/bin_links.rs`,
+- **Evidence**: `cli/src/shells/deployment.rs`, `core/src/runtime/launcher.rs`,
   `external_shell_mode` in `config.toml`
 
 ## Context
