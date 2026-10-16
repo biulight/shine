@@ -7647,6 +7647,106 @@ async fn foreign_shell_launcher_blocks_without_mutation() {
 }
 
 #[tokio::test]
+async fn partial_shell_removal_recovery_retains_sibling_receipt_cache_and_profile() {
+    if !RuntimePlatform::current().is_unix() {
+        return;
+    }
+    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+        .file(
+            "shell/demo/shine.toml",
+            b"[[files]]\nsource = 'one.sh'\ntarget = 'one'\nneeds_source = true\n[files.permissions]\nschema_version = 1\n[[files]]\nsource = 'two.sh'\ntarget = 'two'\nneeds_source = true\n[files.permissions]\nschema_version = 1\n".to_vec(),
+        )
+        .file("shell/demo/one.sh", b"one() { :; }\n".to_vec())
+        .file("shell/demo/two.sh", b"two() { :; }\n".to_vec())
+        .build();
+    let runtime = runtime(snapshot);
+    let mut install = shell_install_request();
+    install.target = Some("demo".into());
+    let plan = runtime.plan_shells(install.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    runtime
+        .install_shells_approved(install, &approval)
+        .await
+        .unwrap();
+
+    let shine_dir = &runtime.context().shine_dir;
+    let manifest_path = shine_dir.join("shell-manifest.toml");
+    let before = runtime.host().read(&manifest_path).await.unwrap();
+    let profile = super::super::managed_shell_profile_path(shine_dir, runtime.context().shell);
+    let profile_before = runtime.host().read(&profile).await.unwrap();
+    let one = command_path_for_name(&runtime.context().bin_dir, "one".as_ref());
+    let two = command_path_for_name(&runtime.context().bin_dir, "two".as_ref());
+    let two_before = runtime.host().read(&two).await.unwrap();
+    let cached_two = runtime.context().presets_dir.join("shell/demo/two.sh");
+    let cache_before = runtime.host().read(&cached_two).await.unwrap();
+    let mut remove = shell_uninstall_request();
+    remove.target = Some("demo/one".into());
+    remove.purge = true;
+    let plan = runtime.plan_shells(remove.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    runtime.host().fail_write_after(&manifest_path, 0);
+    assert!(
+        runtime
+            .uninstall_shells_approved(remove.clone(), &approval)
+            .await
+            .is_err()
+    );
+    assert!(runtime.host().metadata(&one).await.is_err());
+    assert_eq!(runtime.host().read(&two).await.unwrap(), two_before);
+    assert_eq!(
+        runtime.host().read(&cached_two).await.unwrap(),
+        cache_before
+    );
+    let interrupted_profile =
+        String::from_utf8(runtime.host().read(&profile).await.unwrap()).unwrap();
+    assert!(interrupted_profile.contains("two()"));
+    assert!(!interrupted_profile.contains("one()"));
+
+    let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+    runtime
+        .recover_shell_operation_approved(&approval)
+        .await
+        .unwrap();
+    assert!(runtime.host().metadata(&one).await.is_ok());
+    assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), before);
+    assert_eq!(runtime.host().read(&profile).await.unwrap(), profile_before);
+
+    let plan = runtime.plan_shells(remove.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    let report = runtime
+        .uninstall_shells_approved(remove, &approval)
+        .await
+        .unwrap();
+    assert!(!report.links.removed.is_empty());
+    let manifest = ShellManifest::load(runtime.host(), shine_dir)
+        .await
+        .unwrap();
+    assert!(manifest.find("shell/demo/one").is_none());
+    assert!(manifest.find("shell/demo/two").is_some());
+    assert!(runtime.host().metadata(&one).await.is_err());
+    assert_eq!(runtime.host().read(&two).await.unwrap(), two_before);
+    assert_eq!(
+        runtime.host().read(&cached_two).await.unwrap(),
+        cache_before
+    );
+    assert_eq!(
+        runtime.installed_shell_source_commands(None).await.unwrap(),
+        ["two"]
+    );
+    let profile_after = String::from_utf8(runtime.host().read(&profile).await.unwrap()).unwrap();
+    assert!(profile_after.contains("two()"));
+    assert!(!profile_after.contains("one()"));
+    assert!(
+        runtime
+            .host()
+            .metadata(&shine_dir.join(super::super::SHELL_OPERATION_JOURNAL_FILE))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn targeted_shell_uninstall_preserves_shared_category_state_and_updates_profile() {
     if !RuntimePlatform::current().is_unix() {
         return;

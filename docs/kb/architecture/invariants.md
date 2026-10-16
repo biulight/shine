@@ -867,6 +867,15 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Owned workspace plaintext follows scope lifetime.** Compiled and explicit environment maps
+  wipe values on replacement and drop; consuming iteration retains the guard for unconsumed
+  entries. Dotenv serialization and decrypted cache buffers use zeroizing owners, including error
+  and cancellation paths. Decrypted-payload parse errors must omit source snippets and parser
+  chains that retain plaintext. Drop owned maps before child exit propagation, since `process::exit`
+  bypasses destructors. Existing broker map APIs explicitly transfer successful result ownership.
+  Shared source precedence must not skip validation/decryption of shadowed sources or reduce
+  complete declared-secret sets bound to broker policy (ADR 0114).
+
 - **Workspace file groups are explicit binary release.** Version 3 mappings require repeatable
   `--file-group` selection. Capture all ciphertext before decryption and decrypt all selected files
   before target creation. Reject links, hard-link aliases, path/case overlaps and pre-existing run

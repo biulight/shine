@@ -429,9 +429,6 @@ pub async fn handle_run(config: &Config, command: &EnvRunCommand) -> Result<()> 
         &ready.explicit,
     )
     .await;
-    for value in ready.values.values_mut().chain(ready.explicit.values_mut()) {
-        value.zeroize();
-    }
     let cleanup = ready
         .materialized
         .cleanup()
@@ -459,8 +456,8 @@ struct Ready {
     _locks: PathLocks,
     _captured: Vec<CapturedFile>,
     materialized: Materialized,
-    values: BTreeMap<String, String>,
-    explicit: BTreeMap<String, String>,
+    values: SensitiveValues,
+    explicit: SensitiveValues,
     override_env: bool,
 }
 
@@ -468,9 +465,6 @@ impl Drop for Ready {
     fn drop(&mut self) {
         if let Err(error) = self.materialized.cleanup() {
             eprintln!("File-group cleanup failed: {error:#}");
-        }
-        for value in self.values.values_mut().chain(self.explicit.values_mut()) {
-            value.zeroize();
         }
     }
 }

@@ -6,6 +6,8 @@
 //! content identities, but never managed file bytes, environment values,
 //! secret plaintext, or raw command arguments.
 
+pub(crate) mod shell_receipt;
+
 use crate::plan::{FilesystemAccessV1, PermissionSetV1, PermissionV1};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -1973,34 +1975,27 @@ pub struct ShellLauncherReceiptV1 {
 }
 
 impl ShellLauncherReceiptV1 {
+    pub(crate) fn validated_configuration(
+        &self,
+    ) -> anyhow::Result<shell_receipt::ValidatedShellConfiguration<'_>> {
+        shell_receipt::ShellReceiptConfiguration {
+            format: self.launcher_format.as_deref(),
+            config_dir: self.launcher_config_dir.as_deref(),
+            mode: &self.mode,
+            runtime: &self.runtime,
+            source: &self.source_path,
+            transforms: &self.transforms,
+            needs_source: self.needs_source,
+            dependencies: self.bun_dependencies.as_deref(),
+        }
+        .validate()
+    }
     fn is_valid(&self) -> bool {
-        let format_valid = match (&self.launcher_format, &self.launcher_config_dir) {
-            (None, None) => true,
-            (Some(format), None) => {
-                format == "native-cmd-v2"
-                    && self.runtime == "native"
-                    && self.source_path.extension() == Some(std::ffi::OsStr::new("ps1"))
-            }
-            (Some(format), Some(root)) => {
-                format == "live-bun-v2"
-                    && root.is_absolute()
-                    && !root
-                        .components()
-                        .any(|part| part == std::path::Component::ParentDir)
-                    && self.mode == "live"
-                    && self.runtime == "bun"
-                    && !self.transforms.is_empty()
-                    && !self.needs_source
-            }
-            _ => false,
-        };
-        format_valid
+        self.validated_configuration().is_ok()
             && !self.category.is_empty()
             && !self.command.is_empty()
-            && matches!(self.mode.as_str(), "snapshot" | "live")
             && !self.source_path.as_os_str().is_empty()
             && !self.rendered_path.as_os_str().is_empty()
-            && matches!(self.runtime.as_str(), "native" | "bun")
             && !self.category.chars().any(char::is_control)
             && !self.command.chars().any(char::is_control)
     }

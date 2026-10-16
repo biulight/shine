@@ -94,7 +94,7 @@ pub(super) async fn compile(
     input_hash: &str,
     policy: &Encryption,
     sources: &CapturedSources,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<SensitiveValues> {
     // Reject malformed hybrid sources before selection or any cache decryption.
     if !validate_sources(sources)? {
         return compile_captured_sources(sources, config).await;
@@ -140,7 +140,7 @@ async fn read_cache(
     context: &str,
     selected: BackendKind,
     config: &Config,
-) -> Result<Option<BTreeMap<String, String>>> {
+) -> Result<Option<SensitiveValues>> {
     let contents = match tokio::fs::read_to_string(path).await {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -165,7 +165,7 @@ async fn read_cache(
     decode_payload(&plaintext, context).map(Some)
 }
 
-fn decode_payload(plaintext: &str, context: &str) -> Result<BTreeMap<String, String>> {
+fn decode_payload(plaintext: &str, context: &str) -> Result<SensitiveValues> {
     let mut payload: Payload = toml::from_str(plaintext)
         .map_err(|_| anyhow::anyhow!("invalid encrypted environment cache payload"))?;
     if payload.version != VERSION
@@ -188,7 +188,7 @@ async fn write_local_cache(
         context: context.into(),
         payload: SecretPayload {
             version: SECRET_PAYLOAD_VERSION,
-            values: values.clone(),
+            values: values.clone().into(),
         },
     })?);
     let data = secret::encrypt_local_cache(plaintext.as_bytes(), encryption).await?;
@@ -301,7 +301,7 @@ mod tests {
             context: context.clone(),
             payload: SecretPayload {
                 version: SECRET_PAYLOAD_VERSION,
-                values: BTreeMap::from([("TOKEN".into(), "value".into())]),
+                values: BTreeMap::from([("TOKEN".into(), "value".into())]).into(),
             },
         })
         .unwrap();

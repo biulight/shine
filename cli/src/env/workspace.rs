@@ -1,5 +1,9 @@
 pub mod file_groups;
 mod local_cache;
+mod sources;
+mod values;
+use sources::{Binding, effective_bindings};
+pub(super) use values::SensitiveValues;
 
 use super::broker::{SourceSnapshot, WorkspaceSnapshot};
 use crate::commands::EnvWorkspaceExportFormat;
@@ -79,8 +83,8 @@ pub async fn handle_export(
         }
     }
 
-    let mut values = compile_export_sources(&sources, config, include_secrets && !dry_run).await?;
-    let mut contents = render_dotenv(&values)?;
+    let values = compile_export_sources(&sources, config, include_secrets && !dry_run).await?;
+    let contents = render_dotenv(&values)?;
     if dry_run {
         println!(
             "Would export {} variables for mode {mode} to {}{}",
@@ -92,10 +96,6 @@ pub async fn handle_export(
                 ""
             }
         );
-        for value in values.values_mut() {
-            value.zeroize();
-        }
-        contents.zeroize();
     } else {
         let write_result = match (force, include_secrets) {
             (false, true) => atomic_write_private_new(&output, contents.as_bytes()).await,
@@ -103,10 +103,6 @@ pub async fn handle_export(
             (true, true) => atomic_write_private(&output, contents.as_bytes()).await,
             (true, false) => atomic_write(&output, contents.as_bytes()).await,
         };
-        for value in values.values_mut() {
-            value.zeroize();
-        }
-        contents.zeroize();
         if let Err(error) = write_result {
             if !force
                 && error
@@ -137,8 +133,8 @@ pub async fn handle_export(
     Ok(())
 }
 
-fn render_dotenv(values: &BTreeMap<String, String>) -> Result<String> {
-    let mut rendered = String::new();
+fn render_dotenv(values: &BTreeMap<String, String>) -> Result<Zeroizing<String>> {
+    let mut rendered = Zeroizing::new(String::new());
     for (key, value) in values {
         if value.contains('\0') {
             bail!("{key} contains a NUL byte and cannot be represented in dotenv format");
@@ -473,18 +469,27 @@ struct SourceFile {
     #[serde(default = "env_source_format_version")]
     version: u32,
     #[serde(default)]
-    plain: BTreeMap<String, String>,
+    plain: SensitiveValues,
     #[serde(default)]
     secret: BTreeMap<String, SecretState>,
     #[serde(default)]
     payload: PayloadField,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(untagged)]
 enum SecretState {
     Sealed(bool),
     Plain(String),
+}
+
+impl std::fmt::Debug for SecretState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sealed(sealed) => f.debug_tuple("Sealed").field(sealed).finish(),
+            Self::Plain(_) => f.write_str("Plain([redacted])"),
+        }
+    }
 }
 
 impl Drop for SecretState {
@@ -504,15 +509,7 @@ struct PayloadField {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct SecretPayload {
     version: u32,
-    values: BTreeMap<String, String>,
-}
-
-impl Drop for SecretPayload {
-    fn drop(&mut self) {
-        for value in self.values.values_mut() {
-            value.zeroize();
-        }
-    }
+    values: SensitiveValues,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -667,9 +664,9 @@ pub async fn handle_run(
                 bail!("--no-workspace --secret-broker requires at least one --secret");
             }
             let values = crate::ssh::request_direct_secrets(broker_secrets, &argv).await?;
-            return run_broker_command(
+            return run_command(
                 command,
-                BTreeMap::new(),
+                SensitiveValues::default(),
                 false,
                 merge_explicit(explicit, values)?,
             )
@@ -684,7 +681,7 @@ pub async fn handle_run(
         let snapshot = snapshot_for_broker(workspace_arg, mode).await?;
         let secrets = crate::ssh::request_workspace_secrets(snapshot.clone(), &argv).await?;
         let values = merge_broker_values(&snapshot, secrets)?;
-        return run_broker_command(command, values, snapshot.override_process_env, explicit).await;
+        return run_command(command, values, snapshot.override_process_env, explicit).await;
     }
     // `--no-workspace` disables discovery entirely: only explicit `--with` values
     // and the inherited process environment reach the command. Generated Bun
@@ -703,10 +700,10 @@ pub async fn handle_run(
         if mode_arg.is_some() {
             bail!("--mode requires a shine.workspace.toml");
         }
-        (BTreeMap::new(), false)
+        (SensitiveValues::default(), false)
     };
 
-    run_command(command, &values, override_process_env, &explicit).await
+    run_command(command, values, override_process_env, explicit).await
 }
 
 async fn load_run_values(
@@ -714,7 +711,7 @@ async fn load_run_values(
     workspace_path: &Path,
     mode_arg: Option<&str>,
     allow_file_only: bool,
-) -> Result<(BTreeMap<String, String>, bool)> {
+) -> Result<(SensitiveValues, bool)> {
     let local_config = local_cache::load_config(config, workspace_path).await?;
     let config = &local_config;
     load_run_values_effective(config, workspace_path, mode_arg, allow_file_only).await
@@ -725,7 +722,7 @@ async fn load_run_values_effective(
     workspace_path: &Path,
     mode_arg: Option<&str>,
     allow_file_only: bool,
-) -> Result<(BTreeMap<String, String>, bool)> {
+) -> Result<(SensitiveValues, bool)> {
     let workspace_bytes = tokio::fs::read_to_string(workspace_path).await?;
     let workspace = parse_workspace(workspace_path, &workspace_bytes)?;
     let mode = mode_arg
@@ -734,7 +731,10 @@ async fn load_run_values_effective(
     validate_mode(mode)?;
     if workspace.env.files.is_empty() {
         if allow_file_only {
-            return Ok((BTreeMap::new(), workspace.env.override_process_env));
+            return Ok((
+                SensitiveValues::default(),
+                workspace.env.override_process_env,
+            ));
         }
         bail!("file-only workspace requires --file-group");
     }
@@ -796,13 +796,15 @@ fn broker_command_argv(command: &[OsString]) -> Result<Vec<String>> {
 }
 
 fn merge_explicit(
-    mut explicit: BTreeMap<String, String>,
+    mut explicit: SensitiveValues,
     broker: BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>> {
-    for (key, value) in broker {
-        if explicit.insert(key.clone(), value).is_some() {
+) -> Result<SensitiveValues> {
+    for (key, mut value) in SensitiveValues::from(broker) {
+        if explicit.contains_key(&key) {
+            value.zeroize();
             bail!("broker target {key} conflicts with an explicit --with target");
         }
+        explicit.insert(key, value);
     }
     Ok(explicit)
 }
@@ -810,11 +812,11 @@ fn merge_explicit(
 pub(super) async fn resolve_explicit_values(
     config: &Config,
     specs: &[String],
-) -> Result<BTreeMap<String, String>> {
+) -> Result<SensitiveValues> {
     let parsed = super::parse_env_specs(specs)?;
 
     let env = super::EnvConfig::from_config(config);
-    let mut values = BTreeMap::new();
+    let mut values = SensitiveValues::default();
     for spec in parsed {
         let value = match super::resolve_stored_value(&env, &spec.source)? {
             super::StoredValue::Secret {
@@ -1124,45 +1126,33 @@ pub(crate) fn declared_secrets_from_source(path: &str, contents: &str) -> Result
     Ok(keys)
 }
 
+fn parse_broker_sources(snapshot: &WorkspaceSnapshot) -> Result<Vec<SourceFile>> {
+    snapshot
+        .sources
+        .iter()
+        .map(|source| parse_source(Path::new(&source.path), &source.contents))
+        .collect()
+}
+
 pub fn plain_values_from_broker_snapshot(
     snapshot: &WorkspaceSnapshot,
 ) -> Result<BTreeMap<String, String>> {
-    let mut values = BTreeMap::new();
-    for source in &snapshot.sources {
-        let parsed = parse_source(Path::new(&source.path), &source.contents)?;
-        for key in parsed.secret.keys() {
-            values.remove(key);
-        }
-        values.extend(parsed.plain);
-    }
-    Ok(values)
-}
-
-/// Keep the winning source index for each secret without decrypting any payload.
-fn broker_secret_sources(snapshot: &WorkspaceSnapshot) -> Result<BTreeMap<String, usize>> {
-    let mut sources = BTreeMap::new();
-    for (index, source) in snapshot.sources.iter().enumerate() {
-        let parsed = parse_source(Path::new(&source.path), &source.contents)?;
-        for key in parsed.plain.keys() {
-            sources.remove(key);
-        }
-        for key in parsed.secret.keys() {
-            sources.insert(key.clone(), index);
-        }
-    }
-    Ok(sources)
+    let sources = parse_broker_sources(snapshot)?;
+    let bindings = effective_bindings(&sources);
+    Ok(sources::plain_values(&sources, &bindings).into_map())
 }
 
 fn merge_broker_values(
     snapshot: &WorkspaceSnapshot,
     secrets: BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>> {
-    let mut values = plain_values_from_broker_snapshot(snapshot)?;
-    let sources = broker_secret_sources(snapshot)?;
-    // Older brokers may return a declared secret shadowed by a later plain value.
-    // Snapshot precedence still determines the remote child's effective values.
+) -> Result<SensitiveValues> {
+    let secrets = SensitiveValues::from(secrets);
+    let sources = parse_broker_sources(snapshot)?;
+    let bindings = effective_bindings(&sources);
+    let mut values = sources::plain_values(&sources, &bindings);
+    // Older brokers can return a secret shadowed by later plain data.
     for (key, mut value) in secrets {
-        if sources.contains_key(&key) {
+        if matches!(bindings.get(&key), Some(Binding::Secret(_))) {
             values.insert(key, value);
         } else {
             value.zeroize();
@@ -1177,33 +1167,29 @@ pub async fn decrypt_broker_snapshot(
     release: &[String],
 ) -> Result<BTreeMap<String, String>> {
     let release = release.iter().cloned().collect::<BTreeSet<_>>();
-    let declared = snapshot
-        .sources
+    let parsed_sources = parse_broker_sources(snapshot)?;
+    let declared = parsed_sources
         .iter()
-        .map(|source| declared_secrets_from_source(&source.path, &source.contents))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
+        .flat_map(|source| source.secret.keys().cloned())
         .collect::<BTreeSet<_>>();
     if !release.is_subset(&declared) {
         bail!("broker release contains an undeclared secret key");
     }
-    let sources = broker_secret_sources(snapshot)?;
+    let bindings = effective_bindings(&parsed_sources);
     let expected_release = release
         .iter()
-        .filter(|key| sources.contains_key(*key))
+        .filter(|key| matches!(bindings.get(*key), Some(Binding::Secret(_))))
         .cloned()
         .collect::<BTreeSet<_>>();
-    let mut values = BTreeMap::new();
-    for (index, source) in snapshot.sources.iter().enumerate() {
+    let mut values = SensitiveValues::default();
+    for (index, (source, parsed)) in snapshot.sources.iter().zip(&parsed_sources).enumerate() {
         let path = Path::new(&source.path);
-        let parsed = parse_source(path, &source.contents)?;
         for (key, state) in &parsed.secret {
             if !matches!(state, SecretState::Sealed(true)) {
                 bail!("{key} in {} is not sealed", source.path);
             }
         }
-        let secrets = decrypt_source_payload(path, &parsed, config).await?;
+        let secrets = decrypt_source_payload(path, parsed, config).await?;
         let expected = parsed.secret.keys().cloned().collect::<BTreeSet<_>>();
         let actual = secrets.keys().cloned().collect::<BTreeSet<_>>();
         if expected != actual {
@@ -1213,7 +1199,7 @@ pub async fn decrypt_broker_snapshot(
             );
         }
         for (key, mut value) in secrets {
-            if release.contains(&key) && sources.get(&key) == Some(&index) {
+            if release.contains(&key) && bindings.get(&key) == Some(&Binding::Secret(index)) {
                 values.insert(key, value);
             } else {
                 value.zeroize();
@@ -1223,7 +1209,7 @@ pub async fn decrypt_broker_snapshot(
     if values.keys().cloned().collect::<BTreeSet<_>>() != expected_release {
         bail!("broker response does not contain every released secret key");
     }
-    Ok(values)
+    Ok(values.into_map())
 }
 
 #[cfg(test)]
@@ -1252,7 +1238,7 @@ async fn prepare_sealed_file(
     };
     let mut new_values = SecretPayload {
         version: SECRET_PAYLOAD_VERSION,
-        values: BTreeMap::new(),
+        values: SensitiveValues::default(),
     };
 
     for (key, state) in &source.secret {
@@ -1424,9 +1410,9 @@ async fn decrypt_source_payload(
     path: &Path,
     source: &SourceFile,
     config: &Config,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<SensitiveValues> {
     if source.payload.data.trim().is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(SensitiveValues::default());
     }
     let plaintext = Zeroizing::new(
         secret::decrypt_with_config(&source.payload.data, config)
@@ -1441,68 +1427,17 @@ async fn decrypt_source_payload(
     Ok(std::mem::take(&mut payload.values))
 }
 
-async fn load_sealed_source(path: &Path, config: &Config) -> Result<BTreeMap<String, String>> {
-    let contents = tokio::fs::read_to_string(path)
-        .await
-        .with_context(|| format!("reading {}", path.display()))?;
-    load_sealed_contents(path, &contents, config).await
-}
-
-async fn load_sealed_contents(
-    path: &Path,
-    contents: &str,
-    config: &Config,
-) -> Result<BTreeMap<String, String>> {
-    let source = parse_source(path, contents)?;
-    for (key, state) in &source.secret {
-        if !matches!(state, SecretState::Sealed(true)) {
-            bail!(
-                "{key} in {} is not sealed; run `shine env secret seal`",
-                path.display()
-            );
-        }
-    }
-    let secrets = decrypt_source_payload(path, &source, config).await?;
-    let expected: BTreeSet<_> = source.secret.keys().cloned().collect();
-    let actual: BTreeSet<_> = secrets.keys().cloned().collect();
-    if expected != actual {
-        bail!(
-            "secret key list does not match encrypted payload in {}",
-            path.display()
-        );
-    }
-    let mut values = source.plain;
-    values.extend(secrets);
-    Ok(values)
-}
-
-async fn compile_sources(sources: &[PathBuf], config: &Config) -> Result<BTreeMap<String, String>> {
-    let mut merged = BTreeMap::new();
-    let mut loaded = 0usize;
-    for path in sources {
-        if !path.is_file() {
-            continue;
-        }
-        merged.extend(load_sealed_source(path, config).await?);
-        loaded += 1;
-    }
-    if loaded == 0 {
-        bail!("none of the configured environment source files exist");
-    }
-    Ok(merged)
+#[cfg(test)]
+async fn compile_sources(sources: &[PathBuf], config: &Config) -> Result<SensitiveValues> {
+    compile_export_sources(sources, config, true).await
 }
 
 async fn compile_export_sources(
     sources: &[PathBuf],
     config: &Config,
     include_secrets: bool,
-) -> Result<BTreeMap<String, String>> {
-    if include_secrets {
-        return compile_sources(sources, config).await;
-    }
-
-    let mut merged = BTreeMap::new();
-    let mut loaded = 0usize;
+) -> Result<SensitiveValues> {
+    let mut captured = Vec::new();
     for path in sources {
         if !path.is_file() {
             continue;
@@ -1510,19 +1445,64 @@ async fn compile_export_sources(
         let contents = tokio::fs::read_to_string(path)
             .await
             .with_context(|| format!("reading {}", path.display()))?;
-        let source = parse_source(path, &contents)?;
-        for key in source.secret.keys() {
-            // A later secret declaration shadows an earlier plain value even
-            // when secrets are intentionally omitted from the export.
-            merged.remove(key);
-        }
-        merged.extend(source.plain);
-        loaded += 1;
+        captured.push((path.clone(), Some(Zeroizing::new(contents))));
     }
-    if loaded == 0 {
+    compile_source_layers(&captured, config, include_secrets).await
+}
+
+async fn compile_source_layers(
+    sources: &CapturedSources,
+    config: &Config,
+    include_secrets: bool,
+) -> Result<SensitiveValues> {
+    let mut parsed = Vec::new();
+    for (path, contents) in sources {
+        if let Some(contents) = contents {
+            parsed.push((path, parse_source(path, contents)?));
+        }
+    }
+    if parsed.is_empty() {
         bail!("none of the configured environment source files exist");
     }
-    Ok(merged)
+    let bindings = effective_bindings(parsed.iter().map(|(_, source)| source));
+    let mut values = SensitiveValues::default();
+    for (index, (path, source)) in parsed.into_iter().enumerate() {
+        // Preserve validation/decryption of every source, including shadowed sources.
+        if include_secrets {
+            for (key, state) in &source.secret {
+                if !matches!(state, SecretState::Sealed(true)) {
+                    bail!(
+                        "{key} in {} is not sealed; run `shine env secret seal`",
+                        path.display()
+                    );
+                }
+            }
+            let secrets = decrypt_source_payload(path, &source, config).await?;
+            if source.secret.keys().collect::<BTreeSet<_>>()
+                != secrets.keys().collect::<BTreeSet<_>>()
+            {
+                bail!(
+                    "secret key list does not match encrypted payload in {}",
+                    path.display()
+                );
+            }
+            for (key, mut value) in secrets {
+                if bindings.get(&key) == Some(&Binding::Secret(index)) {
+                    values.insert(key, value);
+                } else {
+                    value.zeroize();
+                }
+            }
+        }
+        for (key, mut value) in source.plain {
+            if bindings.get(&key) == Some(&Binding::Plain(index)) {
+                values.insert(key, value);
+            } else {
+                value.zeroize();
+            }
+        }
+    }
+    Ok(values)
 }
 
 type CapturedSources = Vec<(PathBuf, Option<Zeroizing<String>>)>;
@@ -1559,19 +1539,8 @@ fn involves_hybrid(policy: &Encryption, sources: &CapturedSources) -> Result<boo
 async fn compile_captured_sources(
     sources: &CapturedSources,
     config: &Config,
-) -> Result<BTreeMap<String, String>> {
-    let mut values = BTreeMap::new();
-    let mut loaded = false;
-    for (path, contents) in sources {
-        if let Some(contents) = contents {
-            values.extend(load_sealed_contents(path, contents, config).await?);
-            loaded = true;
-        }
-    }
-    if !loaded {
-        bail!("none of the configured environment source files exist");
-    }
-    Ok(values)
+) -> Result<SensitiveValues> {
+    compile_source_layers(sources, config, true).await
 }
 
 fn snapshot_input_hash(
@@ -1620,7 +1589,7 @@ async fn read_valid_cache(
     mode: &str,
     input_hash: &str,
     config: &Config,
-) -> Result<Option<BTreeMap<String, String>>> {
+) -> Result<Option<SensitiveValues>> {
     let contents = match tokio::fs::read_to_string(path).await {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1634,8 +1603,9 @@ async fn read_valid_cache(
     if cache.version != CACHE_FORMAT_VERSION || cached.input_hash != input_hash {
         return Ok(None);
     }
-    let plaintext = secret::decrypt_with_config(&cached.data, config).await?;
-    let mut payload: SecretPayload = toml::from_str(&plaintext)?;
+    let plaintext = Zeroizing::new(secret::decrypt_with_config(&cached.data, config).await?);
+    let mut payload: SecretPayload = toml::from_str(&plaintext)
+        .map_err(|_| anyhow::anyhow!("invalid encrypted environment cache payload"))?;
     let keys: Vec<_> = payload.values.keys().cloned().collect();
     if payload.version != SECRET_PAYLOAD_VERSION || keys != cached.keys {
         bail!("compiled environment cache failed integrity validation");
@@ -1651,10 +1621,10 @@ async fn write_cache(
     values: &BTreeMap<String, String>,
     recipients: &EncryptRecipients,
 ) -> Result<()> {
-    let plaintext = toml::to_string(&SecretPayload {
+    let plaintext = Zeroizing::new(toml::to_string(&SecretPayload {
         version: SECRET_PAYLOAD_VERSION,
-        values: values.clone(),
-    })?;
+        values: values.clone().into(),
+    })?);
     let data = secret::encrypt_secret(plaintext.as_bytes(), recipients).await?;
     let mut modes = BTreeMap::new();
     modes.insert(
@@ -1685,24 +1655,13 @@ async fn write_cache(
 
 async fn run_command(
     command: &[OsString],
-    values: &BTreeMap<String, String>,
+    values: SensitiveValues,
     override_process_env: bool,
-    explicit: &BTreeMap<String, String>,
-) -> Result<()> {
-    let status = command_status(command, values, override_process_env, explicit).await?;
-    finish_command_status(status)
-}
-
-async fn run_broker_command(
-    command: &[OsString],
-    mut values: BTreeMap<String, String>,
-    override_process_env: bool,
-    mut explicit: BTreeMap<String, String>,
+    explicit: SensitiveValues,
 ) -> Result<()> {
     let status = command_status(command, &values, override_process_env, &explicit).await;
-    for value in values.values_mut().chain(explicit.values_mut()) {
-        value.zeroize();
-    }
+    drop(values);
+    drop(explicit);
     finish_command_status(status?)
 }
 
@@ -1768,6 +1727,205 @@ fn absolute_from_current(path: &Path) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn malformed_decrypted_cache_diagnostics_do_not_expose_plaintext() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::test_support::env_lock();
+        let root =
+            std::env::temp_dir().join(format!("shine-cache-diagnostics-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let gpg = root.join("gpg");
+        std::fs::write(
+            &gpg,
+            "#!/bin/sh\nfor arg in \"$@\"; do file=\"$arg\"; done\n/bin/cat \"$file\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&gpg, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // SAFETY: the shared guard holds process state until every backend has exited.
+        unsafe { std::env::set_var("PATH", &root) };
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        executor.block_on(async {
+            let config = Config::new_for_test(&root);
+            let path = root.join("cache.toml");
+            for plaintext in [
+                "version = 1\n[values]\nTOKEN = \"CACHE_PLAINTEXT_SENTINEL\" unexpected\n",
+                "version = 1\n[values]\nTOKEN = [\"CACHE_PLAINTEXT_SENTINEL\"]\n",
+            ] {
+                let cache = CacheFile {
+                    version: CACHE_FORMAT_VERSION,
+                    project_root: root.to_string_lossy().into_owned(),
+                    modes: BTreeMap::from([(
+                        "test".into(),
+                        CachedMode {
+                            input_hash: "matching".into(),
+                            keys: vec!["TOKEN".into()],
+                            data: STANDARD.encode(plaintext),
+                        },
+                    )]),
+                };
+                tokio::fs::write(&path, toml::to_string(&cache).unwrap())
+                    .await
+                    .unwrap();
+                let error = read_valid_cache(&path, "test", "matching", &config)
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    "invalid encrypted environment cache payload"
+                );
+                let diagnostic = format!("{error:#}\n{error:?}");
+                assert!(
+                    !diagnostic.contains("CACHE_PLAINTEXT_SENTINEL"),
+                    "{diagnostic}"
+                );
+            }
+        });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn export_errors_wipe_owned_values_before_returning_without_publication() {
+        let root = crate::test_support::make_temp_dir("shine-export-raii").await;
+        let workspace = root.join(WORKSPACE_FILE);
+        let source = root.join("values.toml");
+        let output = root.join("output.env");
+        tokio::fs::write(&workspace, "version = 2\n[env]\nfiles = ['values.toml']\n")
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&root);
+        for render_error in [true, false] {
+            let value = if render_error { "$unsafe" } else { "safe" };
+            tokio::fs::write(
+                &source,
+                format!("[plain]\nRAII_FIRST = 'sensitive'\nRAII_LAST = '{value}'\n"),
+            )
+            .await
+            .unwrap();
+            if !render_error {
+                tokio::fs::create_dir(&output).await.unwrap();
+            }
+            values::take_wipe_events();
+            let error = handle_export(
+                &config,
+                EnvWorkspaceExportFormat::Dotenv,
+                Some(&workspace),
+                "test",
+                &output,
+                false,
+                !render_error,
+                false,
+            )
+            .await
+            .unwrap_err();
+            assert!(!format!("{error:#}").contains("sensitive"));
+            assert!(
+                values::take_wipe_events()
+                    .iter()
+                    .any(|keys| keys == &["RAII_FIRST", "RAII_LAST"])
+            );
+            if render_error {
+                assert!(!output.exists());
+            } else {
+                assert!(output.is_dir());
+            }
+        }
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn command_spawn_and_broker_merge_errors_wipe_owned_values() {
+        let root = crate::test_support::make_temp_dir("shine-spawn-raii").await;
+        let owned = SensitiveValues::from(BTreeMap::from([("RAII_ENV".into(), "secret".into())]));
+        let explicit =
+            SensitiveValues::from(BTreeMap::from([("RAII_EXPLICIT".into(), "secret".into())]));
+        values::take_wipe_events();
+        let error = run_command(
+            &[root.join("absent-command").into_os_string()],
+            owned,
+            true,
+            explicit,
+        )
+        .await
+        .unwrap_err();
+        assert!(!format!("{error:#}").contains("secret"));
+        let wiped = values::take_wipe_events();
+        assert!(wiped.contains(&vec!["RAII_ENV".into()]));
+        assert!(wiped.contains(&vec!["RAII_EXPLICIT".into()]));
+
+        let explicit =
+            SensitiveValues::from(BTreeMap::from([("COLLISION".into(), "secret".into())]));
+        let response = BTreeMap::from([
+            ("COLLISION".into(), "conflicting-secret".into()),
+            ("UNCONSUMED".into(), "remaining-secret".into()),
+        ]);
+        assert!(merge_explicit(explicit, response).is_err());
+        let wiped = values::take_wipe_events();
+        assert!(wiped.contains(&vec!["COLLISION".into()]));
+        assert!(wiped.contains(&vec!["UNCONSUMED".into()]));
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_compiled_values_cleans_the_owned_environment() {
+        let root = crate::test_support::make_temp_dir("shine-cancel-raii").await;
+        let source = root.join("values.toml");
+        tokio::fs::write(&source, "[plain]\nRAII_CANCEL = 'sensitive'\n")
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&root);
+        let (ready, wait) = tokio::sync::oneshot::channel();
+        let mut pending = Box::pin(async {
+            let values = compile_export_sources(&[source], &config, false)
+                .await
+                .unwrap();
+            ready.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(values);
+        });
+        tokio::select! { _ = &mut pending => panic!("operation unexpectedly completed"), _ = wait => {} }
+        values::take_wipe_events();
+        drop(pending);
+        assert_eq!(
+            values::take_wipe_events(),
+            [vec!["RAII_CANCEL".to_string()]]
+        );
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_shadowed_pending_secret_still_blocks_local_execution_but_not_plain_export() {
+        let root = crate::test_support::make_temp_dir("shine-source-order").await;
+        let config = Config::new_for_test(&root);
+        let captured = vec![
+            (
+                root.join("base.toml"),
+                Some(Zeroizing::new("[secret]\nTOKEN = 'pending'\n".into())),
+            ),
+            (root.join("local.toml"), None),
+            (
+                root.join("last.toml"),
+                Some(Zeroizing::new("[plain]\nTOKEN = 'public'\n".into())),
+            ),
+        ];
+        let error = compile_captured_sources(&captured, &config)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("is not sealed"));
+        let plain = compile_source_layers(&captured, &config, false)
+            .await
+            .unwrap();
+        assert_eq!(plain["TOKEN"], "public");
+        let source =
+            parse_source(Path::new("base.toml"), "[secret]\nTOKEN = 'do-not-log-me'").unwrap();
+        assert!(!format!("{source:?}").contains("do-not-log-me"));
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
     #[test]
     fn dotenv_import_parses_common_frontend_entries() {
         let values = parse_dotenv(
@@ -1825,7 +1983,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            rendered,
+            rendered.as_str(),
             "ALPHA=\"plain\"\nCOMPLEX='quote\" slash\\ first\nsecond'\n"
         );
     }
@@ -2498,9 +2656,9 @@ mod tests {
                 OsString::from("-c"),
                 OsString::from("test \"$SHINE_RUN_TEST\" = injected"),
             ],
-            &values,
+            values.into(),
             true,
-            &BTreeMap::new(),
+            SensitiveValues::default(),
         )
         .await
         .unwrap();
@@ -2632,9 +2790,9 @@ mod tests {
                 OsString::from("-c"),
                 OsString::from("test \"$SHINE_RUN_OVERRIDE_TEST\" = explicit"),
             ],
-            &workspace,
+            workspace.into(),
             false,
-            &explicit,
+            explicit.into(),
         )
         .await
         .unwrap();

@@ -653,6 +653,7 @@ shine env run --mode production -- bun run build
 策略和源均为单后端且配置了可用 recipient 时，`env run` 会在系统缓存目录按 mode
 使用所选后端保存加密缓存。
 workspace、源文件内容或文件顺序变化后缓存会自动重建；无需手工编译或删除缓存。
+缓存解密后的内容格式损坏时，警告不会回显缓存值；Shine 会从工作区源文件重新编译。
 
 个人覆盖文件应加入 `.gitignore`：
 

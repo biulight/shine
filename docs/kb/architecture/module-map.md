@@ -51,7 +51,9 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/app.rs` | App assessment/install/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
 | `core/src/runtime/app/upgrade.rs` | Upgrade preparation, installed-file convergence, stale pruning, additions, receipt finalization and hooks under the existing lifecycle lock |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
-| `core/src/runtime/shell.rs` | Complete Shell assessment/install/upgrade/uninstall/live render, launcher, cache, profile, and manifest orchestration |
+| `core/src/runtime/shell.rs` | Shell assessment, lifecycle entry points, live render, launcher, cache, profile, and manifest helpers |
+| `core/src/runtime/shell/lifecycle.rs`, `shell/lifecycle/{deploy,remove,report}.rs` | Typed Shell deployment/removal phases and pure lifecycle reporting; preparation retains legacy effects |
+| `core/src/action/shell_receipt.rs` | Shared internal receipt delivery validation for manifest reconstruction, Action IR and recovery; persisted DTOs remain unchanged |
 | `core/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS transactional orchestration, and run-manifest persistence |
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
 | `core/src/runtime/sys_profile/` | Sys profile composition, three-way reconciliation, phase sentinels, BOM and CRLF behavior |
@@ -220,6 +222,8 @@ Config discovery priority is documented as a behavioral contract in
 | `cli/src/env/commands.rs` | Env CRUD and secret command handlers |
 | `cli/src/env/live_bun.rs` | Receipt-prepared Bun execution, declared env injection, and direct-child Unix signal relay |
 | `cli/src/env/workspace.rs` | Workspace env sources, export, seal, and child execution |
+| `cli/src/env/workspace/sources.rs` | Pure ordered plain/secret declaration precedence shared by local compilation, export and broker release |
+| `cli/src/env/workspace/values.rs` | Owned environment maps with redacted diagnostics and cleanup on replacement, error and cancellation |
 | `cli/src/env/workspace/file_groups.rs` | Version 3 binary file selection, seal/verification, persistent export, and scoped release orchestration |
 | `cli/src/env/workspace/file_groups/filesystem.rs` | Root-constrained paths, snapshots, Git exclusions, shared locks, owned-file cleanup and persistence |
 | `cli/src/env/workspace/file_groups/platform.rs` | Native private creation, file identity, cancellation, and Unix/Windows command supervision |

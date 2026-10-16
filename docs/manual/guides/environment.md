@@ -736,6 +736,8 @@ precedence.
 For single-backend policy and sources, usable recipients let `env run` store an encrypted,
 mode-specific cache with the selected backend in the system cache directory. It rebuilds automatically when workspace content, source content, or file
 order changes.
+If the decrypted cache is malformed, Shine warns without showing cached values and rebuilds
+from the workspace sources.
 
 Ignore personal overrides:
 

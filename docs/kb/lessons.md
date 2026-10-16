@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-16 — Zeroizing a buffer does not redact parser errors
+
+- **Symptom**: malformed decrypted ordinary env-cache TOML appeared verbatim in the unreadable-cache
+  warning, including the value on the failing line.
+- **Cause**: `read_valid_cache` propagated the TOML error, which retains a source snippet, after
+  wrapping the input in `Zeroizing`. Source payload and hybrid-cache parsing already redacted it.
+- **Fix**: return a generic cache-payload diagnostic without attaching the parser error. Regression
+  tests exercise both syntax and value-type failures through a controlled decryption backend.
+- **Rule**: audit diagnostics alongside plaintext owners; error objects can retain their own copies.
+
 ## 2026-10-16 — Mise selection must survive nested Bun package scripts
 
 - **Symptom**: `mise exec -- bun run check:ts` selected Bun 1.3.14 at entry, but nested scripts

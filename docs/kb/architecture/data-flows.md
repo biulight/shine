@@ -401,6 +401,12 @@ Plan and retains it through receipt persistence and cleanup. Recovery, completio
 rendering use the same lock; any privileged transaction lock is acquired afterward. Standalone
 receipt updates also lock, while internal updates reuse the outer guard (ADR 0106).
 
+`shell/lifecycle` carries selected targets through typed preparation and application states, then
+produces pure reports. Preparation preserves legacy filesystem effects; it is not a read-only Plan.
+The split retains the original action, manifest, commit-marker and cleanup order. Manifest launcher
+reconstruction, Action IR validation and recovery conversion share the borrowed delivery rules in
+`action/shell_receipt`; persisted receipt fields and schema versions remain unchanged (ADR 0114).
+
 Command install filters metadata before transforms and launcher creation, then upserts only the
 selected manifest target. Category install retains the existing replace-category reconciliation.
 For embedded sources, Core derives one payload-free `ReplaceShellCache` action per selected category
@@ -926,6 +932,11 @@ injection. The default path parses only `[plain]` values and does not decrypt pa
 secret declaration removes any earlier plain value with the same key. `--include-secrets` switches
 to the normal sealed-source compiler, then writes the standalone plaintext result through an atomic
 owner-only file on Unix. Export never edits or removes the workspace definition or source files.
+Local run, export and broker release share a pure resolver of the winning declaration and source
+index. The sealed compiler still validates/decrypts every source, including shadowed declarations.
+Compiled/explicit maps own their cleanup through `SensitiveValues`; serialized dotenv and decrypted
+cache plaintext use `Zeroizing`. Errors and cancelled consumers drop the same guards. Child execution
+drops its owned maps before propagating a nonzero process status (ADR 0114).
 An early `symlink_metadata` check diagnoses existing output entries. Final publication without
 `--force` uses `atomic_write_new` or `atomic_write_private_new`, which stages and syncs content
 before Core's `finalize_temp_new` atomically rejects any existing destination. A competing writer
@@ -1193,6 +1204,9 @@ Both sides preserve source order across plain and secret declarations: later pla
 earlier secret response, later secret removes an earlier plain value even if unreleased, and only
 the winning approved secret source contributes a returned value. The policy still binds complete
 source hashes and declared-secret lists, including shadowed declarations.
+The shared declaration resolver never filters that policy input. Broker release validates every
+captured source and payload before returning approved winners; the existing public map return is
+an explicit transfer of plaintext ownership to the broker caller.
 
 `shine ssh --secret-broker-inspect` displays one remote description without decrypting or writing.
 `--secret-broker-enroll --trust-remote-metadata` may create a local policy after local confirmation
