@@ -87,7 +87,7 @@ impl BrokerSession {
         } else {
             BrokerMode::Serve
         };
-        let env = EnvConfig::load_or_init(config).await?;
+        let env = EnvConfig::from_config(config);
         let mut direct = Vec::new();
         for spec in parse_env_specs(allow_secret)? {
             if spec.source.ends_with("_SECRET") {

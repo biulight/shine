@@ -548,12 +548,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shine-info-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let config = Config::new_for_test(&dir);
-        let mut runtime = crate::core_runtime::from_config(&config).await.unwrap();
-        runtime.context_mut_for_cli().env = crate::env::EnvConfig::load_or_init(&config)
-            .await
-            .unwrap()
-            .as_map()
-            .clone();
+        let runtime = crate::core_runtime::from_config(&config).await.unwrap();
         let selected_source = runtime
             .inspect_shells()
             .await

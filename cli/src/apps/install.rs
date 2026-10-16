@@ -1,7 +1,6 @@
 use super::metadata;
 use super::report;
 use crate::config::Config;
-use crate::env::EnvConfig;
 use crate::presentation::{
     LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
@@ -87,13 +86,11 @@ async fn handle_install_with_reporter(
         .into_iter()
         .next()
     };
-    let mut runtime = if let Some(reviewed) = &reviewed {
+    let runtime = if let Some(reviewed) = &reviewed {
         crate::lifecycle_plan::prepare_runtime(config, reviewed).await?
     } else {
         crate::core_runtime::from_config(config).await?
     };
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
     let categories = runtime.app_categories(category)?;
     let total_available = categories.iter().map(|value| value.files.len()).sum();
     reporter.emit(PresentationEvent::stdout(report::app_configs_summary_text(
@@ -432,8 +429,6 @@ mod tests {
             "manifest should be empty after uninstall"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -667,8 +662,6 @@ mod tests {
             "re-install must not duplicate manifest entries"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -939,8 +932,6 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         let destination = resolve_install_destination(vim, vimrc, &config).unwrap();
         assert_eq!(destination, dir.join(".vim").join("vimrc"));
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -986,8 +977,6 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
                 .join("themes/light_iTerm2 Solarized Light")
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1043,8 +1032,6 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         assert!(dark_theme.contains("cursor-color = #73fa91"));
         assert!(dark_theme.contains("background-image = /tmp/shine-dark-wallpaper.png"));
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }

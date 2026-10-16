@@ -463,7 +463,7 @@ permissions = { schema_version = 1 }
             .build();
     let (mut runtime, host) = observation_runtime(snapshot);
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .proxy_env
         .insert("HTTPS_PROXY".to_string(), "private-proxy-value".to_string());
     let mut request = bootstrap_request();
@@ -840,7 +840,7 @@ async fn app_script_hook_is_bound_into_the_parent_plan() {
             .build();
     let mut runtime = runtime(snapshot);
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("TOKEN".to_string(), "secret-looking-value".to_string());
     seed_static_copy_app(&runtime, b"managed", None).await;
@@ -979,7 +979,7 @@ async fn missing_permission_and_secret_identity_fail_closed() {
             .build();
     let mut runtime = runtime(snapshot);
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("TOKEN".to_string(), "plaintext".to_string());
     let plan = runtime
@@ -1023,7 +1023,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
         .build();
     let mut runtime = runtime(snapshot);
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("TOKEN".to_string(), "top-secret-value".to_string());
     let mut request = AppPlanRequest {
@@ -2549,7 +2549,7 @@ generator = { script = 'gen.sh', env = ['ENABLE'], when_env = 'ENABLE', auto = t
         .build();
     let mut runtime = runtime(snapshot);
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("ENABLE".into(), "1".into());
     let previous = runtime
@@ -3470,7 +3470,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
         .build();
     let mut runtime = runtime(snapshot);
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("SOURCE".to_string(), "available".to_string());
     let destination = runtime
@@ -3785,7 +3785,7 @@ generator = {{ script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 
     }
     let mut runtime = runtime(builder.build());
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("SOURCE".into(), "value".into());
     // Only one category has been invoked before; these observations differ.
@@ -3851,7 +3851,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
             .build();
     let mut runtime = runtime(snapshot);
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("SOURCE".to_string(), "sensitive-source-value".to_string());
     let destination = runtime
@@ -3968,7 +3968,7 @@ source = 'config.toml'
         .unwrap();
     assert!(optional.is_ready());
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("TOKEN".to_string(), "top-secret-value".to_string());
     let mut versions = PlanningInputVersions::default();
@@ -4126,7 +4126,7 @@ path = '$HOME/.tool/bin'
         )
         .build();
     let mut runtime = runtime(snapshot);
-    runtime.context_mut_for_cli().shell = super::super::ShellType::Bash;
+    runtime.context_mut_for_test().shell = super::super::ShellType::Bash;
     let profile = runtime.context().home_dir.join(".bashrc");
     runtime.host().put_file(
         runtime.context().home_dir.join(".tool-present"),
@@ -4336,7 +4336,7 @@ async fn filesystem_review_tracks_typed_shell_transactions_without_widening_perm
         .build();
     let mut runtime = external_shell_runtime(snapshot);
     let profile = runtime.context().home_dir.join(".zshrc");
-    runtime.context_mut_for_cli().shell_config_paths = vec![profile];
+    runtime.context_mut_for_test().shell_config_paths = vec![profile];
     let plan = runtime.plan_shells(shell_install_request()).await.unwrap();
     assert!(plan.is_ready());
     let purpose = |path: &str| {
@@ -4484,8 +4484,8 @@ fn shell_install_request() -> ShellPlanRequest {
 #[tokio::test]
 async fn missing_shell_template_inputs_block_approval_without_mutation() {
     let mut missing = runtime(transformed_shell_snapshot(b"@@PRIVATE_INPUT@@"));
-    missing.context_mut_for_cli().platform = RuntimePlatform::Linux;
-    missing.context_mut_for_cli().shell = super::super::ShellType::Zsh;
+    missing.context_mut_for_test().platform = RuntimePlatform::Linux;
+    missing.context_mut_for_test().shell = super::super::ShellType::Zsh;
     let plan = missing.plan_shells(shell_install_request()).await.unwrap();
     assert!(!plan.is_ready());
     assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_err());
@@ -4506,8 +4506,8 @@ async fn missing_shell_template_inputs_block_approval_without_mutation() {
 
     // Other rendering errors must not be mistaken for absent input.
     let mut invalid = runtime(transformed_shell_snapshot(&[0xff]));
-    invalid.context_mut_for_cli().platform = RuntimePlatform::Linux;
-    invalid.context_mut_for_cli().shell = super::super::ShellType::Zsh;
+    invalid.context_mut_for_test().platform = RuntimePlatform::Linux;
+    invalid.context_mut_for_test().shell = super::super::ShellType::Zsh;
     assert!(invalid.plan_shells(shell_install_request()).await.is_err());
 }
 
@@ -4534,8 +4534,8 @@ async fn shell_plan_and_cache_exclude_inactive_platform_sources() {
             )
             .build();
     let mut runtime = runtime(snapshot);
-    runtime.context_mut_for_cli().platform = RuntimePlatform::Linux;
-    runtime.context_mut_for_cli().shell = super::super::ShellType::Zsh;
+    runtime.context_mut_for_test().platform = RuntimePlatform::Linux;
+    runtime.context_mut_for_test().shell = super::super::ShellType::Zsh;
     let request = shell_install_request();
 
     let plan = runtime.plan_shells(request.clone()).await.unwrap();
@@ -4559,8 +4559,8 @@ async fn shell_plan_and_cache_exclude_inactive_platform_sources() {
     assert!(runtime.host().read(&cache.join("helper.txt")).await.is_ok());
     assert!(runtime.host().read(&cache.join("demo.ps1")).await.is_err());
 
-    runtime.context_mut_for_cli().platform = RuntimePlatform::Windows;
-    runtime.context_mut_for_cli().shell = super::super::ShellType::Bash;
+    runtime.context_mut_for_test().platform = RuntimePlatform::Windows;
+    runtime.context_mut_for_test().shell = super::super::ShellType::Bash;
     let categories = runtime.shell_categories(Some("demo")).unwrap();
     assert_eq!(categories.len(), 1);
     assert!(categories[0].files.is_empty());
@@ -4879,7 +4879,7 @@ fn trust_current_external_shell(runtime: &mut CoreRuntime<InMemoryHost>) {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    runtime.context_mut_for_cli().trust_grants = requirements
+    runtime.context_mut_for_test().trust_grants = requirements
         .iter()
         .map(crate::trust::TrustGrantV1::for_reviewed_requirement)
         .collect();
@@ -4897,7 +4897,7 @@ async fn external_shell_requires_current_target_local_trust() {
             .file("shell/demo/demo.sh", b"#!/bin/sh\n".to_vec())
             .build();
     let mut runtime = external_shell_runtime(snapshot);
-    runtime.context_mut_for_cli().trust_grants.clear();
+    runtime.context_mut_for_test().trust_grants.clear();
     let request = shell_install_request();
 
     let blocked = runtime.plan_shells(request.clone()).await.unwrap();
@@ -4925,7 +4925,7 @@ async fn live_external_shell_requires_development_trust() {
         .file("shell/demo/demo.sh", b"#!/bin/sh\n".to_vec())
         .build();
     let mut runtime = external_shell_runtime(snapshot);
-    runtime.context_mut_for_cli().external_shell_mode = ExternalShellMode::Live;
+    runtime.context_mut_for_test().external_shell_mode = ExternalShellMode::Live;
     let request = shell_install_request();
 
     let blocked = runtime.plan_shells(request.clone()).await.unwrap();
@@ -4940,7 +4940,7 @@ async fn live_external_shell_requires_development_trust() {
         .await
         .unwrap()
         .requirements;
-    runtime.context_mut_for_cli().trust_grants = requirements
+    runtime.context_mut_for_test().trust_grants = requirements
         .iter()
         .map(|requirement| {
             crate::trust::TrustGrantV1::for_development_requirement(requirement).unwrap()
@@ -5023,10 +5023,10 @@ async fn shared_snapshot_change_requires_trust_for_installed_siblings() {
         .requirements
         .remove(0);
     changed
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .trust_grants
         .retain(|grant| grant.target != "shell/demo/a");
-    changed.context_mut_for_cli().trust_grants.push(
+    changed.context_mut_for_test().trust_grants.push(
         crate::trust::TrustGrantV1::for_reviewed_requirement(&a_requirement),
     );
 
@@ -5054,7 +5054,7 @@ async fn shared_snapshot_change_requires_trust_for_installed_siblings() {
         .unwrap()
         .requirements
         .remove(0);
-    changed.context_mut_for_cli().trust_grants.push(
+    changed.context_mut_for_test().trust_grants.push(
         crate::trust::TrustGrantV1::for_reviewed_requirement(&b_requirement),
     );
     let ready = changed
@@ -5879,7 +5879,7 @@ async fn relocated_bun_shell_runtime() -> (CoreRuntime<InMemoryHost>, ShellPlanR
     };
     let mut original = runtime(snapshot(PresetSourceKind::Embedded));
     original
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("IMAGE_QUALITY".into(), "80".into());
     let mut request = shell_install_request();
@@ -7879,11 +7879,11 @@ servers_env = 'PRIVATE_DNS_SERVERS'
             .build();
     let mut runtime = runtime(snapshot);
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("PRIVATE_DNS_DOMAIN".to_string(), "corp.test".to_string());
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.53".to_string());
     let request = SysManagedPlanRequest {
@@ -7980,7 +7980,7 @@ target = '$HOME/.config/managed.txt'
     );
 
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("TOKEN".to_string(), "plain-value".to_string());
     let ready = runtime.plan_managed_sys(request).await.unwrap();
@@ -8016,11 +8016,11 @@ servers_env = 'PRIVATE_DNS_SERVERS'
             .build();
     let mut runtime = runtime(snapshot);
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("PRIVATE_DNS_DOMAIN".to_string(), "corp.test".to_string());
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.53".to_string());
     let receipt = split_dns_receipt(&super::super::SplitDnsDomainRequest {
@@ -8073,7 +8073,7 @@ servers_env = 'PRIVATE_DNS_SERVERS'
     assert!(!current.author_capabilities.is_empty());
 
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("PRIVATE_DNS_SERVERS".into(), "10.0.0.54".into());
     let update = runtime.plan_managed_sys(request.clone()).await.unwrap();
@@ -8101,7 +8101,7 @@ servers_env = 'PRIVATE_DNS_SERVERS'
         update.fingerprint().unwrap()
     );
     runtime
-        .context_mut_for_cli()
+        .context_mut_for_test()
         .env
         .insert("PRIVATE_DNS_SERVERS".into(), "10.0.0.53".into());
 

@@ -1078,6 +1078,11 @@ unrelated saves; historical entries remain explicit. Global and sparse project s
 against raw active-file definitions, including explicit equal-value pending edits.
 
 Env list/get/explain and directed writes load without runtime initialization or advisory workers.
+Runtime assembly copies the already resolved `Config.env` exactly once. Read adapters use
+`EnvConfig::from_config` synchronously; they do not reload or initialize env configuration after
+capture. Core exposes no general mutable Context to CLI adapters. Sys bootstrap may supply an
+explicit proxy map with the consuming `with_proxy_env` assembly method; review and fresh approval
+validation bind those inputs as before (ADR 0113).
 Write options choose scope and file independently of the current source. Preflight protects
 implicit shadowed writes and rejects managed mirrors/retired force, then captures target and all
 configuration inputs. Encryption runs outside locks. Commit acquires the canonical target-parent

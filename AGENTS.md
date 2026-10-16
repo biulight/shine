@@ -67,7 +67,7 @@ cargo fmt --check
 cargo clippy --workspace --target-dir target --all-targets --all-features --tests --benches -- -D warnings
 cargo deny check bans licenses sources
 typos
-bun run check:ts                                      # typecheck + preset tests
+bun run --bun check:ts                                # typecheck + preset tests
 ```
 
 For public manual or website changes, run in `website/`:

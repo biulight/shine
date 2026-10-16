@@ -850,11 +850,20 @@ fn execution_result(
     windows_admin_hint: bool,
 ) -> Result<ExecutionResult> {
     match output {
-        Err(error) if error.to_string().contains("timed out") => Ok(ExecutionResult {
-            success: false,
-            failure_detail: format!("{prefix}: timed out after 30 minutes"),
-            logs: Vec::new(),
-        }),
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut) =>
+        {
+            Ok(ExecutionResult {
+                success: false,
+                failure_detail: format!(
+                    "{prefix}: timed out after {} minutes",
+                    BOOTSTRAP_TIMEOUT.as_secs() / 60
+                ),
+                logs: Vec::new(),
+            })
+        }
         Err(error) => Err(error).context("running sys bootstrap installer"),
         Ok(output) => {
             let success = output.exit_code == Some(0);
@@ -914,5 +923,91 @@ fn sys_outcome(
         status,
         detail,
         logs,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{
+        InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext, RuntimePlatform,
+    };
+
+    fn runtime() -> CoreRuntime<InMemoryHost> {
+        let root = PathBuf::from("/shine-sys-bootstrap-test");
+        CoreRuntime::new(
+            InMemoryHost::new(),
+            RuntimeContext::isolated(
+                root.join("home"),
+                root.join("state"),
+                root.join("presets"),
+                root.join("bin"),
+                RuntimePlatform::Linux,
+            ),
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        )
+    }
+
+    #[tokio::test]
+    async fn installer_timeout_uses_error_kind_through_context_and_arbitrary_wording() {
+        let runtime = runtime();
+        runtime
+            .host()
+            .queue_process_output(Err(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "deadline reached",
+            ))
+            .context("waiting for installer")));
+        let report = runtime
+            .run_package("ubuntu", SysPackageProvider::Apt, "example", false)
+            .await
+            .unwrap();
+        assert!(!report.success);
+        assert_eq!(
+            report.failure_detail,
+            "Apt install failed: timed out after 30 minutes"
+        );
+        assert!(report.logs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn installer_timeout_words_do_not_reclassify_other_failures() {
+        for error in [
+            anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "timed out",
+            )),
+            anyhow::anyhow!("timed out"),
+        ] {
+            let runtime = runtime();
+            runtime.host().queue_process_output(Err(error));
+            let error = runtime
+                .run_package("ubuntu", SysPackageProvider::Apt, "example", false)
+                .await
+                .err()
+                .expect("non-timeout errors must propagate");
+            assert_eq!(error.to_string(), "running sys bootstrap installer");
+            assert!(format!("{error:#}").contains("timed out"));
+        }
+    }
+
+    #[test]
+    fn installer_exit_failures_keep_logs_and_windows_admin_guidance() {
+        let result = execution_result(
+            Ok(super::super::ProcessOutput {
+                exit_code: Some(5),
+                stdout: b"installer output".to_vec(),
+                stderr: b"failure detail".to_vec(),
+            }),
+            "Winget install failed".into(),
+            true,
+        )
+        .unwrap();
+        assert!(!result.success);
+        assert_eq!(
+            result.failure_detail,
+            "Winget install failed (exit 5); retry from an elevated PowerShell"
+        );
+        assert_eq!(result.logs, ["installer output", "failure detail"]);
     }
 }

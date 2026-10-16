@@ -346,8 +346,9 @@ async fn handle_init_for_os(
         .map(|(key, value)| ((*key).to_string(), value.clone()))
         .collect::<std::collections::BTreeMap<_, _>>();
 
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    runtime.context_mut_for_cli().proxy_env = proxy_env_map.clone();
+    let runtime = crate::core_runtime::from_config(config)
+        .await?
+        .with_proxy_env(proxy_env_map.clone());
     let mut interaction = crate::presentation::TerminalInteraction;
     let mut observer = BatchBootstrapObserver::default();
     if dry_run {

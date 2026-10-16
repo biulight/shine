@@ -813,7 +813,7 @@ pub(super) async fn resolve_explicit_values(
 ) -> Result<BTreeMap<String, String>> {
     let parsed = super::parse_env_specs(specs)?;
 
-    let env = super::EnvConfig::load_or_init(config).await?;
+    let env = super::EnvConfig::from_config(config);
     let mut values = BTreeMap::new();
     for spec in parsed {
         let value = match super::resolve_stored_value(&env, &spec.source)? {

@@ -637,8 +637,6 @@ mod tests {
         assert_eq!(report.skipped, 1, "up-to-date app config should be skipped");
         assert_eq!(fs::read(&dest).await.unwrap(), before);
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -683,8 +681,6 @@ mod tests {
             .unwrap();
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -745,8 +741,6 @@ mod tests {
         }));
         assert_eq!(fs::read(&other_dest).await.unwrap(), other_before);
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -914,8 +908,6 @@ mod tests {
                 .any(|entry| entry.source == "app/other/config.json")
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -974,8 +966,6 @@ mod tests {
         }));
         assert_eq!(fs::read_to_string(&marker).await.unwrap(), "x");
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1013,8 +1003,6 @@ mod tests {
         assert_eq!(report.updated, 0);
         assert!(!marker.exists(), "unchanged config must not run hook");
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1063,8 +1051,6 @@ mod tests {
             "external hook must be skipped without a matching scoped trust grant"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1116,8 +1102,6 @@ mod tests {
             "new app file should be tracked in manifest"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1164,8 +1148,6 @@ mod tests {
             "unmanaged destination should not be added to manifest"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1206,8 +1188,6 @@ mod tests {
             "stale manifest entry should be removed"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1248,8 +1228,6 @@ mod tests {
             "missing stale destination should be removed from manifest"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1290,8 +1268,6 @@ mod tests {
             "stale manifest entry should remain without prune"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1334,8 +1310,6 @@ mod tests {
             "user-modified stale entry should remain tracked"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1391,8 +1365,6 @@ mod tests {
         let entry = manifest.find_by_dest(&dest).unwrap();
         assert_eq!(entry.source, "app/sample/daemon-renamed.jsonc");
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1427,8 +1399,6 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert_eq!(fs::read(&dest).await.unwrap(), b"{\"user\":true}\n");
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }

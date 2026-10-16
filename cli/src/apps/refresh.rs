@@ -412,8 +412,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     async fn explicit_generator_evaluation_materializes_desired_content_before_install() {
         let root = crate::test_support::make_temp_dir("shine-generator-preview").await;
         let config = write_fixture(&root, false).await;
-        let mut runtime = crate::core_runtime::from_config(&config).await.unwrap();
-        runtime.context_mut_for_cli().env = config.env.clone();
+        let runtime = crate::core_runtime::from_config(&config).await.unwrap();
         let inspections = runtime
             .inspect_apps_with_options(
                 shine_core::runtime::AppInspectionOptions {

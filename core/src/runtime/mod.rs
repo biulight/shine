@@ -285,9 +285,15 @@ impl<H> CoreRuntime<H> {
         &self.context
     }
 
-    /// Frontend adapter hook used while legacy configuration loading is being
-    /// collapsed into one captured context. Domain executors never call this.
-    pub fn context_mut_for_cli(&mut self) -> &mut RuntimeContext {
+    /// Supply explicit Sys bootstrap proxy inputs before review or execution.
+    /// Approval validation still binds the resulting captured inputs.
+    pub fn with_proxy_env(mut self, proxy_env: BTreeMap<String, String>) -> Self {
+        self.context.proxy_env = proxy_env;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn context_mut_for_test(&mut self) -> &mut RuntimeContext {
         &mut self.context
     }
 

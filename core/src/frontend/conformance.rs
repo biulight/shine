@@ -81,7 +81,7 @@ source = 'config.toml'
         for _ in 0..2 {
             let mut runtime = runtime(InMemoryHost::new(), presets.clone());
             runtime
-                .context_mut_for_cli()
+                .context_mut_for_test()
                 .env
                 .insert("TOKEN".into(), "private-plaintext".into());
             let mut input_versions = PlanningInputVersions::default();
@@ -179,7 +179,7 @@ path = '$HOME/.tool/bin'
         let mut reports = Vec::new();
         for request in &requests {
             let mut runtime = runtime(host.clone(), presets.clone());
-            runtime.context_mut_for_cli().shell = ShellType::Bash;
+            runtime.context_mut_for_test().shell = ShellType::Bash;
             let trusted = FrontendService::new(runtime).into_trusted();
             let review = trusted.review(request.clone()).await.unwrap();
             let operation = review.report().plan.operation;
@@ -231,7 +231,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
     for _ in 0..2 {
         let mut runtime = runtime(InMemoryHost::new(), presets.clone());
         runtime
-            .context_mut_for_cli()
+            .context_mut_for_test()
             .env
             .insert("SOURCE".into(), "private-source".into());
         let destination = runtime

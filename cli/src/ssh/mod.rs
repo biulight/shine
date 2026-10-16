@@ -440,7 +440,7 @@ async fn resolve_forwarded_env(
 ) -> Result<BTreeMap<String, String>> {
     let plain_specs = parse_env_specs(with)?;
     let secret_specs = parse_env_specs(with_secret)?;
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     let mut targets = BTreeSet::new();
     let mut resolved = BTreeMap::new();
 

@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::Config;
-use crate::env::EnvConfig;
 use crate::presentation::{
     LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
@@ -175,12 +174,7 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
     prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
-    let crate::lifecycle_plan::PreparedLifecyclePlan {
-        reviewed,
-        mut runtime,
-    } = prepared;
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
+    let crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime } = prepared;
     let mut observer = UpgradeObserver::default();
     let mut interaction = TerminalInteraction;
     let artifact_categories = runtime

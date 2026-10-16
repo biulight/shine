@@ -9,7 +9,6 @@ use crate::apps::{AppCategory, AppListMode};
 use crate::apps::{installed_content_hash, resolve_install_destination, source_hash_for_file};
 use crate::colors;
 use crate::config::Config;
-use crate::env::EnvConfig;
 #[cfg(test)]
 use crate::install_core::{AppEntry, AppManifest};
 use crate::path_display;
@@ -138,10 +137,7 @@ pub(crate) async fn build_app_rows_with_lifecycle_options(
     LifecycleResultV1,
     Vec<shine_core::runtime::AppFileInspection>,
 )> {
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    if let Ok(env) = EnvConfig::load_or_init(config).await {
-        runtime.context_mut_for_cli().env = env.as_map().clone();
-    }
+    let runtime = crate::core_runtime::from_config(config).await?;
     let selected = categories
         .iter()
         .map(|category| category.name.as_str())

@@ -25,7 +25,7 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   included even when they update public docs in the same change.
 - Pre-commit runs `cargo fmt --check`, `clippy -D warnings`, `cargo deny check`, `typos`, and
   `cargo nextest run --workspace`; it validates `mise.toml`, and changes to Bun tooling or TypeScript sources
-  additionally run `mise exec -- bun run check:ts` (strict type-check + Bun tests). All must pass
+  additionally run `mise exec -- bun run --bun check:ts` (strict type-check + Bun tests). All must pass
   locally before a commit lands.
 - **Never `git push` without explicit user approval** (`AGENTS.md` § Hard repository rules).
 
@@ -55,7 +55,11 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 
 - Runner: `cargo nextest run --workspace --all-features` (each test is its own OS process — in-process
   locks do not serialize across tests).
-- Any test that mutates environment variables must hold `crate::test_support::env_lock()`.
+- Any test that mutates environment variables or cwd must hold `crate::test_support::env_lock()`;
+  the guard restores both before unlocking, including during panic unwinding.
+  This serializes participating tests only: unguarded ambient-env reads and PATH-based child
+  launches can still race under parallel `cargo test`. Use nextest process isolation for the full
+  suite; restoration alone does not make those readers safe.
 - Any test that performs privileged (sudo) file operations on real paths must hold the
   cross-process admin lock for its full body (`install_core/file_ops.rs`, commit `fbd9c55`).
 - Verify CLI behavior against an isolated config dir:
@@ -65,9 +69,12 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 - Rust and Bun versions have a single source of truth in root `mise.toml`; local development and CI
   must use those mise-managed tools. Root-level Bun development dependencies are locked by
   `bun.lock`; CI installs them with `bun install --frozen-lockfile` before running
-  `bun run check:ts`. Built-in runtime preset scripts remain self-contained and may import only
+  `bun run --bun check:ts`. Built-in runtime preset scripts remain self-contained and may import only
   relative modules plus Bun/Node built-ins. External or overlay Bun scripts may use dependencies
   only through a category-local committed `package.json` + `bun.lock` pair; see ADR 0031.
+
+The local Bun hook covers every `presets/**/*.ts` file and its tooling configuration. The
+`presets/tooling.test.ts` regression checks the actual hook filter against the maintained files.
 
 ## File size
 

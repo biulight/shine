@@ -1,5 +1,34 @@
 # Lessons Learned
 
+## 2026-10-16 — Mise selection must survive nested Bun package scripts
+
+- **Symptom**: `mise exec -- bun run check:ts` selected Bun 1.3.14 at entry, but nested scripts
+  ran a different Bun from PATH. A source-filter regression alone still passed.
+- **Fix**: use `bun run --bun check:ts` in the local hook and CI. Check `Bun.version` against
+  `mise.toml` in the ordinary tooling suite; the old invocation fails this regression when a
+  different ambient Bun is present.
+- **Rule**: verify the consumer process's runtime, not only the outer launcher or command text.
+
+## 2026-10-16 — Test guards must retain ownership and restore original process state
+
+- **Symptoms**: the admin test directory lock reclaimed a possibly live owner after 60 seconds
+  and ignored other acquisition errors. Manual HOME cleanup removed pre-existing values;
+  panic skipped cleanup entirely.
+- **Fix**: reuse the persistent lifecycle OS file lock, fail loudly on acquisition errors, and
+  restore captured env/cwd before releasing the shared test mutex. Child-process regressions
+  cover contention, owner exit, invalid lock paths, normal return and panic restoration.
+- **Rule**: timeout is not abandonment evidence. Restore the original process state, including
+  variable absence, rather than assuming the caller started without test-controlled values.
+
+## 2026-10-16 — Process failure classification must survive wording and context changes
+
+- **Cause**: Sys bootstrap classified timeouts by searching English error text, despite the
+  process host preserving `std::io::ErrorKind::TimedOut`.
+- **Fix**: inspect the typed error through its anyhow context chain. Derive the displayed duration
+  from the configured bootstrap timeout; retain ordinary installer failures and Windows hints.
+- **Coverage**: deadline errors with unrelated wording and outer context, non-timeout errors
+  containing `timed out`, and nonzero process output with administrator guidance.
+
 ## 2026-10-15 — Consumed temporary credentials are already cleaned
 
 - **Symptom**: a child consumed and deleted its mapped credential, exited zero, and left no file,

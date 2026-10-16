@@ -194,7 +194,7 @@ pub async fn exec(config: &Config, target: &Path, command: &str, args: &[OsStrin
     let Some(rule) = rule.filter(|rule| rule.enabled) else {
         return run_target(target, args, BTreeMap::new()).await;
     };
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     let mut injected = BTreeMap::new();
     for spec in parse_env_specs(&rule.with)? {
         let value = match resolve_stored_value(&env, &spec.source)? {

@@ -3,7 +3,6 @@ use render::*;
 pub(crate) use render::{permission_group, permission_name, styled_action_name};
 
 use crate::config::Config;
-use crate::env::EnvConfig;
 use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 use shine_core::plan::{
@@ -89,9 +88,10 @@ impl LifecyclePlanRequest {
         }
     }
 
-    fn configure_runtime(&self, runtime: &mut CoreRuntime<RealHost>) {
-        if let Self::SysBootstrap { proxy_env, .. } = self {
-            runtime.context_mut_for_cli().proxy_env = proxy_env.clone();
+    fn configure_runtime(&self, runtime: CoreRuntime<RealHost>) -> CoreRuntime<RealHost> {
+        match self {
+            Self::SysBootstrap { proxy_env, .. } => runtime.with_proxy_env(proxy_env.clone()),
+            _ => runtime,
         }
     }
 
@@ -215,14 +215,14 @@ async fn review_plans_with_render_mode(
     let code_confirmation =
         !yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let config_digest = active_config_digest(config).await?;
-    let mut runtime = runtime_with_env(config).await?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     let mut planned = Vec::new();
     let mut human_reviews = Vec::new();
     let mut needs_confirmation = false;
     let mut blocked = false;
     let mut blocked_diagnostics = std::collections::BTreeSet::new();
     for request in requests {
-        request.configure_runtime(&mut runtime);
+        runtime = request.configure_runtime(runtime);
         let mut trusted = shine_core::frontend::FrontendService::new(runtime)
             .with_configuration_revision(Some(config_digest.clone()))
             .into_trusted();
@@ -553,8 +553,9 @@ pub(crate) async fn prepare_runtime(
     reviewed: &ReviewedLifecyclePlan,
 ) -> Result<CoreRuntime<RealHost>> {
     let revision = active_config_digest(config).await?;
-    let mut runtime = runtime_with_env(config).await?;
-    reviewed.request.configure_runtime(&mut runtime);
+    let runtime = reviewed
+        .request
+        .configure_runtime(crate::core_runtime::from_config(config).await?);
     let trusted = shine_core::frontend::FrontendService::new(runtime)
         .with_configuration_revision(Some(revision))
         .into_trusted();
@@ -620,12 +621,6 @@ pub(crate) async fn prepare_plans(
         prepared.push(PreparedLifecyclePlan { reviewed, runtime });
     }
     Ok(prepared)
-}
-
-async fn runtime_with_env(config: &Config) -> Result<CoreRuntime<RealHost>> {
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    runtime.context_mut_for_cli().env = EnvConfig::load_or_init(config).await?.as_map().clone();
-    Ok(runtime)
 }
 
 fn planning_input_versions(config: &Config) -> PlanningInputVersions {

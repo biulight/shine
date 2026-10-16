@@ -155,6 +155,56 @@ mod tests {
     use super::*;
     use shine_core::runtime::{PlanningInputVersions, SysBootstrapPlanRequest};
 
+    #[tokio::test]
+    async fn runtime_captures_resolved_environment_once_without_initializing_state() {
+        let root =
+            std::env::temp_dir().join(format!("shine-captured-env-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&root);
+        config.env.insert("PLAIN".into(), "resolved-value".into());
+        config
+            .env
+            .insert("TOKEN_SECRET".into(), "captured-ciphertext".into());
+        let runtime = from_config(&config).await.unwrap();
+        assert_eq!(runtime.context().env, config.env);
+        config.env.insert("PLAIN".into(), "later-edit".into());
+        assert_eq!(runtime.context().env["PLAIN"], "resolved-value");
+        assert_eq!(runtime.context().env["TOKEN_SECRET"], "captured-ciphertext");
+        assert!(
+            !root.exists(),
+            "runtime assembly must not initialize config or presets"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_proxy_override_is_bound_to_review_without_mutating_config_env() {
+        let runtime = from_embedded_presets_for_platform(RuntimePlatform::Linux);
+        let env = runtime.context().env.clone();
+        let runtime = runtime.with_proxy_env(std::collections::BTreeMap::from([(
+            "HTTPS_PROXY".into(),
+            "http://localhost:8111".into(),
+        )]));
+        let request = SysBootstrapPlanRequest {
+            os_id: "ubuntu".into(),
+            item_ids: vec!["rust".into()],
+            sys_shell: "zsh".into(),
+            force_profile: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let reviewed = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
+        assert!(reviewed.is_ready(), "{reviewed:#?}");
+        let approval = shine_core::plan::PlanApprovalV1::for_reviewed_plan(&reviewed).unwrap();
+        let changed = runtime.with_proxy_env(std::collections::BTreeMap::from([(
+            "HTTPS_PROXY".into(),
+            "http://localhost:8222".into(),
+        )]));
+        assert_eq!(changed.context().env, env);
+        let fresh = changed.plan_sys_bootstrap(request).await.unwrap();
+        assert_eq!(
+            approval.validate(&fresh),
+            Err(shine_core::plan::PlanApprovalError::PlanChanged)
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn relative_config_directory_runs_captured_app_generator() {

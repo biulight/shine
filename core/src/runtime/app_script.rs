@@ -369,7 +369,7 @@ generator = { script = "scripts/generate.sh", env = ["ENABLE", "ENABLE=SHINE_APP
             .external_code_requirements("app/demo")
             .await
             .unwrap();
-        runtime.context_mut_for_cli().trust_grants = requirements
+        runtime.context_mut_for_test().trust_grants = requirements
             .requirements
             .iter()
             .map(TrustGrantV1::for_reviewed_requirement)

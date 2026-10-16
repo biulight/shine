@@ -1,5 +1,4 @@
 use crate::config::Config;
-use crate::env::EnvConfig;
 use crate::presentation::{
     LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
@@ -259,9 +258,7 @@ async fn managed_updates_for_os_with_result(
     config: &Config,
     os_id: &str,
 ) -> Result<(Vec<SysUpdateRow>, LifecycleResultV1)> {
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
+    let runtime = crate::core_runtime::from_config(config).await?;
     let inspection = shine_core::frontend::FrontendService::new(runtime)
         .inspect_sys(os_id)
         .await
@@ -384,9 +381,7 @@ async fn run_managed_for_os_with_reporter(
         .await;
     }
 
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
+    let runtime = crate::core_runtime::from_config(config).await?;
     let mut observer = ManagedObserver {
         reporter,
         action,
@@ -427,12 +422,7 @@ async fn run_managed_for_os_with_prepared_reporter(
         output_mode,
         ..
     } = request;
-    let crate::lifecycle_plan::PreparedLifecyclePlan {
-        reviewed,
-        mut runtime,
-    } = prepared;
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
+    let crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime } = prepared;
     let mut observer = ManagedObserver {
         reporter,
         action,

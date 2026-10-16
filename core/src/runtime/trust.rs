@@ -535,7 +535,7 @@ mod tests {
             crate::trust::TrustGrantV1::for_development_requirement(&before.requirements[0])
                 .unwrap();
         let mut after = external_app_runtime(b"#!/bin/sh\necho after\n");
-        after.context_mut_for_cli().trust_grants = vec![grant];
+        after.context_mut_for_test().trust_grants = vec![grant];
         let category = after.app_categories(Some("demo")).unwrap().remove(0);
 
         assert!(

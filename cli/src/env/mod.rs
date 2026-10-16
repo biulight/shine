@@ -33,10 +33,6 @@ impl EnvConfig {
         }
     }
 
-    pub async fn load_or_init(config: &Config) -> Result<Self> {
-        Ok(Self::from_config(config))
-    }
-
     pub fn get(&self, key: &str) -> Option<&str> {
         self.vars.get(key).map(|s| s.as_str())
     }

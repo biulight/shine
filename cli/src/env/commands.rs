@@ -8,7 +8,7 @@ use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{colors, path_display, secret, shells};
 
 pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     let catalog = super::catalog::load(config).await?;
     let terminal_width = usize::from(console::Term::stdout().size().1).max(40);
     let key_width = env
@@ -309,7 +309,7 @@ pub async fn handle_delete(config: &Config, key: &str, target: &EnvWriteOptions)
 }
 
 pub async fn handle_get(config: &Config, key: &str) -> Result<()> {
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     match env.get(key) {
         Some(v) => println!("{v}"),
         None => {
@@ -324,7 +324,7 @@ pub async fn handle_get(config: &Config, key: &str) -> Result<()> {
 }
 
 pub async fn handle_decrypt(config: &Config, key: &str) -> Result<()> {
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     let Some(value) = env.get(key) else {
         bail!("{key} is not set in the active config [env]");
     };
@@ -347,7 +347,7 @@ pub async fn handle_export(config: &Config, key: &str, alias: Option<&str>) -> R
     if let Some(alias) = alias {
         validate_env_export_key(alias)?;
     }
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     let value = match resolve_env_export_value(&env, key)? {
         EnvExportValue::Secret {
             key: secret_key,
@@ -535,7 +535,7 @@ pub async fn handle_encrypt(
     let backend = resolve_encrypt_backend(config, backend)?;
     let recipients = resolve_encrypt_recipients(backend, recipients, config)?;
     let plaintext = if let Some(key) = from_key {
-        let env = EnvConfig::load_or_init(config).await?;
+        let env = EnvConfig::from_config(config);
         let Some(value) = env.get(key) else {
             bail!("{key} is not set in the active config [env]");
         };

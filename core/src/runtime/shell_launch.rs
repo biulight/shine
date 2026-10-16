@@ -359,7 +359,7 @@ mod tests {
             b"@@VALUE@@".to_vec(),
         );
         let mut runtime = CoreRuntime::new(base.host().clone(), context, snapshot);
-        runtime.context_mut_for_cli().trust_grants = runtime
+        runtime.context_mut_for_test().trust_grants = runtime
             .external_code_requirements("shell/demo/run")
             .await
             .unwrap()

@@ -1093,10 +1093,14 @@ bugs. Check this list before changing the modules named in each entry.
 ## Tests
 
 - **Env-var mutation in tests must hold `crate::test_support::env_lock()`** — a single shared
-  mutex used across the lib/bin boundary (it is deliberately *not* `#[cfg(test)]`-gated because
-  `cfg(test)` does not cross that boundary).
+  guard used across the lib/bin boundary (it is deliberately *not* `#[cfg(test)]`-gated because
+  `cfg(test)` does not cross that boundary). The guard restores the captured environment and cwd
+  before releasing its mutex, including on panic. Manual cleanup must not substitute removing
+  a variable for restoring its original value.
 - **Tests that touch real system paths** (e.g. docker-engine's `/etc/docker/daemon.json`) must
-  additionally hold the cross-process admin lock for their full body (commit `fbd9c55`).
+  additionally hold the cross-process admin test lock for their full body. It uses the same
+  persistent OS file-lock implementation as lifecycle locks; errors fail the test, timeout never
+  revokes a live owner, and release never unlinks the lock file (ADR 0113).
 
 ## One-operation external code consent
 
