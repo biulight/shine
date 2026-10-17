@@ -414,7 +414,10 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         })
     }
 
-    pub async fn validate_shell_category_snapshot(&self, category: &str) -> Result<bool> {
+    pub(in crate::runtime) async fn validate_shell_category_snapshot(
+        &self,
+        category: &str,
+    ) -> Result<bool> {
         let metadata = format!("shell/{category}/shine.toml");
         let has_metadata = self.presets().file(&metadata).is_some();
         let categories = self.shell_categories(Some(category))?;
@@ -939,7 +942,10 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(report)
     }
 
-    pub async fn validate_shell_snapshot(&self, categories: &[ShellCategory]) -> Result<()> {
+    pub(in crate::runtime) async fn validate_shell_snapshot(
+        &self,
+        categories: &[ShellCategory],
+    ) -> Result<()> {
         if !self.context().is_external_presets
             || self.context().external_shell_mode != ExternalShellMode::Snapshot
         {
@@ -965,7 +971,10 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(())
     }
 
-    pub async fn materialize_shell_snapshots(&self, categories: &[ShellCategory]) -> Result<usize> {
+    pub(in crate::runtime) async fn materialize_shell_snapshots(
+        &self,
+        categories: &[ShellCategory],
+    ) -> Result<usize> {
         if !self.context().is_external_presets
             || self.context().external_shell_mode != ExternalShellMode::Snapshot
         {
@@ -1203,7 +1212,10 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(())
     }
 
-    pub async fn remove_shell_snapshot_tree(&self, category: &str) -> Result<()> {
+    pub(in crate::runtime) async fn remove_shell_snapshot_tree(
+        &self,
+        category: &str,
+    ) -> Result<()> {
         let path = self
             .context()
             .shine_dir
@@ -1476,7 +1488,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         }])
     }
 
-    pub async fn render_shell_templates(
+    pub(in crate::runtime) async fn render_shell_templates(
         &self,
         scripts: &[ShellScriptTemplate],
     ) -> Result<ShellTemplateReport> {
@@ -1685,10 +1697,6 @@ impl ShellManifest {
             .retain(|entry| !categories.contains(&entry.category));
         self.entries.extend(entries);
         self.entries.sort_by_key(canonical_target);
-    }
-
-    pub fn remove_category(&mut self, category: &str) {
-        self.entries.retain(|entry| entry.category != category);
     }
 
     pub fn remove_target(&mut self, category: &str, command: &str) {

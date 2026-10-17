@@ -79,6 +79,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/app/refresh.rs` | Named selected-file/prepared/applied states for explicit refresh; per-file continuation and final receipt-before-hook completion under the approved caller |
 | `core/src/runtime/app/upgrade.rs` | Upgrade phases under the lifecycle lock; typed unjournaled/update/relocation completion retains transaction guards through receipt save and commit |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
+| `core/src/runtime/app_metadata.rs` | App snapshot parsing and effective destinations, including legacy `shine-dest` compatibility and shared parent-component rejection |
 | `core/src/runtime/shell.rs` | Shell models, lifecycle entry points, source-scoped Bun dependency policy, live render, launcher, cache, profile, and manifest helpers |
 | `core/src/runtime/shell/metadata.rs` | Snapshot-only metadata parsing, explicit declarations, native discovery and platform/source admission; no Host required |
 | `core/src/runtime/shell/inspect.rs` | Observation-only Shell inspection orchestration, per-command evidence, pure changes/status projection and receipt-only records |
@@ -177,14 +178,13 @@ Update this file when modules move, split, merge, or take on a different respons
 
 | Path | Responsibility |
 |---|---|
-| `cli/src/apps/mod.rs` | Shared app kernel and handler re-exports |
+| `cli/src/apps/mod.rs` | App scaffolding, handler re-exports and Core-backed destination tests |
 | `cli/src/apps/install.rs` | Core App-install request adapter and terminal rendering |
 | `cli/src/apps/uninstall.rs` | Core App-uninstall request adapter and terminal rendering |
 | `cli/src/apps/upgrade.rs` | Core App-upgrade request adapter and terminal rendering |
 | `cli/src/apps/info.rs` | App list/info status |
 | `cli/src/apps/report.rs` | Install/uninstall outcome formatting |
 | `cli/src/apps/metadata.rs` | Compatibility re-exports of Core App metadata types |
-| `cli/src/apps/annotation.rs` | Legacy `shine-dest:` annotation parsing |
 | `cli/src/apps/refresh.rs` | Core explicit-generator-refresh adapter |
 | `cli/src/apps/recovery.rs` | Core explicit App operation recovery Plan/apply adapter |
 | `cli/src/apps/build.rs` | Core artifact apply/remove adapter |
@@ -204,7 +204,7 @@ execution primitives and transforms live in `core/src/install/`.
 | `cli/src/shells/install.rs` | Core category/command install and upgrade adapter |
 | `cli/src/shells/recovery.rs` | Core explicit Shell transaction recovery Plan/apply adapter |
 | `cli/src/shells/uninstall.rs` | Category/command uninstall results with sibling/cache and foreign-launcher protection |
-| `cli/src/shells/links.rs` | Launcher/link specifications and conflict reporting |
+| `cli/src/shells/links.rs` | Conflict reporting and category-specific repair guidance for preset/rendered sources |
 | `cli/src/shells/report.rs` | Shell list/install/uninstall/upgrade reporting |
 | `cli/src/shells/metadata.rs` | Compatibility re-exports of Core Shell metadata types |
 | `cli/src/sentinel.rs` | Shared sentinel-block primitives used by shell and sys profiles |

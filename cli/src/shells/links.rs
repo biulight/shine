@@ -84,7 +84,10 @@ fn reinstall_command(config: &Config, category_hint: Option<&str>, source: &Path
 }
 
 fn infer_shell_category(config: &Config, source: &Path) -> Option<String> {
-    shell_category_after_root(source.strip_prefix(config.presets_dir()).ok()?)
+    source
+        .strip_prefix(config.presets_dir())
+        .ok()
+        .and_then(shell_category_after_root)
         .or_else(|| shell_category_after_root(source.strip_prefix(config.rendered_dir()).ok()?))
 }
 
@@ -173,5 +176,50 @@ mod tests {
         );
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod category_tests {
+    use super::*;
+
+    #[test]
+    fn conflict_guidance_preserves_category_for_preset_and_rendered_sources() {
+        let root = std::env::temp_dir().join("shine-link-guidance-test");
+        let config = Config::new_for_test(&root);
+        for source in [
+            config.presets_dir().join("shell/proxy/set_proxy.sh"),
+            config.rendered_dir().join("shell/proxy/set_proxy.sh"),
+        ] {
+            let conflict = crate::bin_links::LinkConflict {
+                link_path: config.bin_dir().join("setproxy"),
+                source,
+                kind: crate::bin_links::LinkConflictKind::DuplicateName,
+            };
+            let lines = link_conflict_detail_lines(&config, &conflict, None);
+            assert!(
+                lines[2].contains("shine install shell/proxy --replace-managed"),
+                "{lines:?}"
+            );
+            let hinted = link_conflict_detail_lines(&config, &conflict, Some("explicit"));
+            assert!(hinted[2].contains("shine install shell/explicit --replace-managed"));
+        }
+    }
+
+    #[test]
+    fn unknown_or_non_shell_source_keeps_generic_guidance() {
+        let root = std::env::temp_dir().join("shine-link-guidance-test");
+        let config = Config::new_for_test(&root);
+        for source in [
+            root.join("unrelated/proxy.sh"),
+            config.presets_dir().join("app/proxy/config"),
+            config.rendered_dir().join("app/proxy/config"),
+            config.rendered_dir().join("shell"),
+        ] {
+            assert_eq!(
+                reinstall_command(&config, None, &source),
+                "shine shell install --replace-managed"
+            );
+        }
     }
 }

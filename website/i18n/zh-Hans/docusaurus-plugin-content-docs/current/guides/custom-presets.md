@@ -471,6 +471,9 @@ dest = { base = "data-dir", path = "com.example.my-app" }
 
 文件级覆盖既支持类别已有的绝对路径字符串，也支持平台映射。映射可使用精确的 `macos`、`linux`、`windows` 键，并可用 `unix` 作为 macOS/Linux 回退；同时存在时精确键优先。某个平台缺少分支时，该类别或文件不会在对应系统出现。App 与 Shell 显式文件的 `platforms` 数组使用同样四个选择器，按 OR 语义组合且不能为空。仅文件级可使用结构化 `data-dir`：它在 Windows 解析为 `%APPDATA%`，在 macOS 解析为 Application Support，在 Linux 解析为 `XDG_DATA_HOME`（未设置时为 `~/.local/share`）。`path` 和 `target` 必须是相对路径，且不能包含 `..`。
 
+没有 `shine.toml` 的旧 App 预设仍支持在首行或 shebang 的下一行用 `# shine-dest:` 指定完整目标路径。
+展开主目录后，路径必须是绝对路径，且不能包含 `..`。请改用不含父目录组件的明确目标路径后再重试。
+
 如果两个条目最终指向同一路径，Shine 会在写入前拒绝整个操作。后续 metadata 若移动已受管 source，`shine upgrade` 只会在旧文件未被修改且新目标不存在时迁移；否则保留两端现状并提示用户处理。
 
 ## 可选运行时的 Shell 入口

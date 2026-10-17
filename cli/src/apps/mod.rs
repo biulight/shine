@@ -1,5 +1,3 @@
-#[cfg(test)]
-mod annotation;
 mod build;
 mod info;
 mod install;
@@ -30,11 +28,7 @@ pub(crate) use upgrade::{
     handle_upgrade_installed_with_output_with_result_prepared,
 };
 
-#[cfg(test)]
-use crate::config::Config;
 use anyhow::{Context, Result};
-#[cfg(test)]
-use std::collections::BTreeMap;
 #[cfg(test)]
 use std::path::{Path, PathBuf};
 const APP_TEMPLATE: &str = r#"# App preset metadata for shine.
@@ -107,104 +101,6 @@ fn unrestricted_init_template_is_valid_schema_v2() {
 }
 
 #[cfg(test)]
-pub fn resolve_install_destination(
-    category: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    config: &Config,
-) -> Result<PathBuf> {
-    if let Some(file_root) = &file.destination_root {
-        let root = match file_root {
-            metadata::AppDestinationRoot::Path(dest_root) => {
-                expand_destination_root(dest_root, config)?
-            }
-            metadata::AppDestinationRoot::DataDir(relative) => {
-                data_dir_for_config(config)?.join(relative)
-            }
-        };
-        return Ok(root.join(&file.target_rel));
-    }
-    if let Some(dest_root) = category.destination_root.as_ref() {
-        let root = expand_destination_root(dest_root, config)?;
-        return Ok(root.join(&file.target_rel));
-    }
-
-    annotation::resolve_destination(
-        file.legacy_dest_annotation.as_deref(),
-        &category.name,
-        &file.target_rel.display().to_string(),
-        config,
-    )
-}
-
-#[cfg(test)]
-fn expand_destination_root(dest_root: &str, config: &Config) -> Result<PathBuf> {
-    let expanded = crate::config::full_expand_with_home(dest_root, &config.home_dir)
-        .with_context(|| format!("failed to expand destination root: {dest_root}"))?;
-    let root = PathBuf::from(&expanded);
-    if !is_install_destination_root_absolute(&expanded, &root) {
-        anyhow::bail!("destination root must be absolute after expansion");
-    }
-    if root
-        .components()
-        .any(|c| c == std::path::Component::ParentDir)
-    {
-        anyhow::bail!("destination root must not contain '..'");
-    }
-    Ok(root)
-}
-
-#[cfg(test)]
-fn data_dir_for_config(config: &Config) -> Result<PathBuf> {
-    if config.home_dir == crate::home::effective_home_dir() {
-        return directories::BaseDirs::new()
-            .context("resolving system data directory")
-            .map(|dirs| dirs.data_dir().to_path_buf());
-    }
-    if cfg!(windows) {
-        Ok(config.home_dir.join("AppData/Roaming"))
-    } else if cfg!(target_os = "macos") {
-        Ok(config.home_dir.join("Library/Application Support"))
-    } else {
-        Ok(config.home_dir.join(".local/share"))
-    }
-}
-
-#[cfg(test)]
-fn validate_unique_install_destinations<'a>(
-    categories: impl IntoIterator<Item = &'a metadata::AppCategory>,
-    config: &Config,
-) -> Result<()> {
-    let mut destinations = BTreeMap::<String, String>::new();
-    for category in categories {
-        for file in &category.files {
-            let destination = resolve_install_destination(category, file, config)?;
-            let mut key = destination.to_string_lossy().into_owned();
-            if cfg!(windows) {
-                key.make_ascii_lowercase();
-            }
-            let source = format!("app/{}/{}", category.name, file.source_rel.display());
-            if let Some(existing) = destinations.insert(key, source.clone()) {
-                anyhow::bail!(
-                    "app preset destinations collide: '{existing}' and '{source}' both resolve to {}",
-                    destination.display()
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(all(test, windows))]
-fn is_install_destination_root_absolute(_expanded: &str, root: &Path) -> bool {
-    root.is_absolute()
-}
-
-#[cfg(all(test, not(windows)))]
-fn is_install_destination_root_absolute(expanded: &str, root: &Path) -> bool {
-    root.is_absolute() || expanded.starts_with('/')
-}
-
-#[cfg(test)]
 mod tests {
     #![allow(clippy::await_holding_lock)]
     use super::*;
@@ -214,6 +110,28 @@ mod tests {
     #[cfg(unix)]
     use crate::test_support::env_lock;
     use tokio::fs;
+
+    fn embedded_destination_runtime(
+        home: &Path,
+    ) -> shine_core::runtime::CoreRuntime<shine_core::runtime::InMemoryHost> {
+        use shine_core::runtime::{CoreRuntime, InMemoryHost, RuntimeContext, RuntimePlatform};
+        let mut context = RuntimeContext::isolated(
+            home.to_path_buf(),
+            home.join(".shine"),
+            home.join("presets"),
+            home.join("bin"),
+            RuntimePlatform::current(),
+        );
+        // The captured data directory is independent of HOME and ambient BaseDirs.
+        context.data_dir = std::env::temp_dir().join("shine-captured-app-data");
+        CoreRuntime::new(
+            InMemoryHost::new(),
+            context,
+            crate::core_runtime::from_embedded_presets()
+                .presets()
+                .clone(),
+        )
+    }
 
     async fn make_temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-apps").await
@@ -414,15 +332,15 @@ mod tests {
     #[test]
     fn install_resolves_windows_docker_engine_destination_on_windows() {
         let dir = std::env::temp_dir().join("shine-apps-win-dest");
-        let config = Config::new_for_test(&dir);
-        let categories = metadata::load_embedded_categories(Some("docker-engine")).unwrap();
+        let runtime = embedded_destination_runtime(&dir);
+        let categories = runtime.app_categories(Some("docker-engine")).unwrap();
         let docker = categories
             .iter()
             .find(|c| c.name == "docker-engine")
             .unwrap();
         let file = docker.files.first().unwrap();
 
-        let destination = resolve_install_destination(docker, file, &config).unwrap();
+        let destination = runtime.app_destination(docker, file).unwrap();
 
         assert_eq!(destination, dir.join(".docker").join("daemon.json"));
     }
@@ -431,15 +349,15 @@ mod tests {
     #[test]
     fn install_accepts_unix_metadata_destination_on_unix() {
         let dir = std::env::temp_dir().join("shine-apps-unix-dest");
-        let config = Config::new_for_test(&dir);
-        let categories = metadata::load_embedded_categories(Some("docker-engine")).unwrap();
+        let runtime = embedded_destination_runtime(&dir);
+        let categories = runtime.app_categories(Some("docker-engine")).unwrap();
         let docker = categories
             .iter()
             .find(|c| c.name == "docker-engine")
             .unwrap();
         let file = docker.files.first().unwrap();
 
-        let destination = resolve_install_destination(docker, file, &config).unwrap();
+        let destination = runtime.app_destination(docker, file).unwrap();
 
         assert_eq!(
             destination,
@@ -450,8 +368,8 @@ mod tests {
     #[test]
     fn per_file_destination_overrides_category_root() {
         let dir = std::env::temp_dir().join("shine-apps-file-dest");
-        let config = Config::new_for_test(&dir);
-        let categories = metadata::load_embedded_categories(Some("clash-verge")).unwrap();
+        let runtime = embedded_destination_runtime(&dir);
+        let categories = runtime.app_categories(Some("clash-verge")).unwrap();
         let clash = categories.first().unwrap();
         let merge = clash
             .files
@@ -465,31 +383,17 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            resolve_install_destination(clash, merge, &config).unwrap(),
+            runtime.app_destination(clash, merge).unwrap(),
             dir.join(".shine/clash-verge/merge.yaml")
         );
         assert_eq!(
-            resolve_install_destination(clash, local_rule, &config).unwrap(),
-            data_dir_for_config(&config)
-                .unwrap()
+            runtime.app_destination(clash, local_rule).unwrap(),
+            runtime
+                .context()
+                .data_dir
                 .join("io.github.clash-verge-rev.clash-verge-rev")
                 .join("ruleset/shine-source/lan.list")
         );
-    }
-
-    #[test]
-    fn duplicate_effective_destinations_are_rejected() {
-        let dir = std::env::temp_dir().join("shine-apps-collision");
-        let config = Config::new_for_test(&dir);
-        let mut category = metadata::load_embedded_categories(Some("clash-verge"))
-            .unwrap()
-            .remove(0);
-        let mut duplicate = category.files[0].clone();
-        duplicate.source_rel = PathBuf::from("duplicate.yaml");
-        category.files.push(duplicate);
-
-        let error = validate_unique_install_destinations([&category], &config).unwrap_err();
-        assert!(error.to_string().contains("destinations collide"));
     }
 
     #[cfg(unix)]

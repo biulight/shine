@@ -546,6 +546,10 @@ and resolves the platform's user
 application-data root: `%APPDATA%` on Windows, Application Support on macOS, and `XDG_DATA_HOME`
 (or `~/.local/share`) on Linux. `path` and `target` must be relative and cannot contain `..`.
 
+Legacy App presets without `shine.toml` still support a `# shine-dest:` full destination path
+on the first line, or immediately after a shebang. The path must be absolute after home expansion
+and cannot contain `..`. Replace parent components with an explicit destination before retrying.
+
 Shine rejects two entries that resolve to the same destination before writing anything. If a later
 metadata revision moves an already managed source, `shine upgrade` moves it only when the old copy
 is unmodified and the new destination is free. Otherwise both locations are left untouched for the

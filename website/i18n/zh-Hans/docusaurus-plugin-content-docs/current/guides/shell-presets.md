@@ -47,6 +47,8 @@ shine install shell/proxy --replace-managed
 
 `--replace-managed` 会覆盖 Shine 管理的对应内容。先用 `shine info shell/proxy --diff` 检查状态，避免把有意的本地修改当作损坏处理。
 
+批量操作遇到命令冲突时，修复提示会指出所属类别，模板生成的脚本也一样。删除或替换前，请先检查提示中的路径。
+
 切换预设来源后，可运行 `shine upgrade shell/<CATEGORY>` 更新已安装命令。Shine 会根据安装记录识别旧路径上的受管命令，再迁移到当前部署位置；不会因此接管无关命令文件。外部代码仍需按当前计划审阅和确认。
 
 在 Windows 上，从 CMD 启动原生 PowerShell 命令时，脚本路径中的单引号会被原样保留

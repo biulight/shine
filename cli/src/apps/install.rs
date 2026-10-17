@@ -338,7 +338,6 @@ mod tests {
     use super::super::uninstall::handle_uninstall;
     use super::super::uninstall::handle_uninstall_with_result;
     use super::*;
-    use crate::apps::resolve_install_destination;
     use crate::config::Config;
     use crate::install_core::manifest::AppManifest;
     #[cfg(unix)]
@@ -921,16 +920,26 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             .await
             .unwrap();
 
-        let categories = metadata::load_installed_categories(&config, Some("vim"))
+        let installed_bytes = b"# installed vim fixture\n";
+        fs::write(config.presets_dir().join("app/vim/vimrc"), installed_bytes)
             .await
             .unwrap();
+
+        let runtime = crate::core_runtime::from_installed_presets(&config)
+            .await
+            .unwrap();
+        let categories = runtime.app_categories(Some("vim")).unwrap();
         let vim = categories.iter().find(|c| c.name == "vim").unwrap();
         let vimrc = vim
             .files
             .iter()
             .find(|f| f.source_rel == std::path::Path::new("vimrc"))
             .unwrap();
-        let destination = resolve_install_destination(vim, vimrc, &config).unwrap();
+        assert!(
+            runtime.app_source_bytes("vim", vimrc).unwrap() == installed_bytes,
+            "destination tests must read the installed fixture, not an embedded fallback"
+        );
+        let destination = runtime.app_destination(vim, vimrc).unwrap();
         assert_eq!(destination, dir.join(".vim").join("vimrc"));
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -952,16 +961,29 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             .await
             .unwrap();
 
-        let categories = metadata::load_installed_categories(&config, Some("ghostty"))
+        let installed_bytes = b"# installed ghostty fixture\n";
+        fs::write(
+            config.presets_dir().join("app/ghostty/config.ghostty"),
+            installed_bytes,
+        )
+        .await
+        .unwrap();
+
+        let runtime = crate::core_runtime::from_installed_presets(&config)
             .await
             .unwrap();
+        let categories = runtime.app_categories(Some("ghostty")).unwrap();
         let ghostty = categories.iter().find(|c| c.name == "ghostty").unwrap();
         let config_file = ghostty
             .files
             .iter()
             .find(|f| f.source_rel == std::path::Path::new("config.ghostty"))
             .unwrap();
-        let destination = resolve_install_destination(ghostty, config_file, &config).unwrap();
+        assert!(
+            runtime.app_source_bytes("ghostty", config_file).unwrap() == installed_bytes,
+            "destination tests must read the installed fixture, not an embedded fallback"
+        );
+        let destination = runtime.app_destination(ghostty, config_file).unwrap();
         assert_eq!(
             destination,
             dir.join(".config/ghostty").join("config.ghostty")
@@ -972,7 +994,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             .iter()
             .find(|f| f.source_rel == std::path::Path::new("themes/iTerm2 Solarized Light"))
             .unwrap();
-        let light_destination = resolve_install_destination(ghostty, light_theme, &config).unwrap();
+        let light_destination = runtime.app_destination(ghostty, light_theme).unwrap();
         assert_eq!(
             light_destination,
             dir.join(".config/ghostty")

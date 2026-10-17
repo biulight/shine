@@ -18,9 +18,11 @@ bugs. Check this list before changing the modules named in each entry.
   ownership, hash or status algorithm. Missing declared sources fail metadata validation. Ordinary
   inspection reports an unchanged receipt-owned manual-generator file as not-evaluated; directly
   installed missing/partial/user-modified files retain their existing precedence (ADR 0127).
-- **Migrated tests exercise the production owner.** Bun dependency and managed JSON regressions
-  use Core snapshot policy and ownership helpers, not retired CLI implementations. Preserve
-  source-layer admission and receipt/hash cases when removing a test-only copy (ADR 0131).
+- **Migrated tests exercise the production owner.** Bun dependency, managed JSON and App destination
+  regressions use Core snapshot policy, ownership and destination entry points, not retired CLI
+  implementations. App data-directory tests use captured context rather than inferring it from HOME;
+  legacy full-path annotations pass the same parent-component check as metadata destinations.
+  Preserve source-layer admission, receipt/hash and compatibility cases (ADRs 0131, 0132).
 - **Ordinary frontend inspection requires observation capability only.** App, Shell and Sys
   default inspection, including the safe `ReadOnlyFrontend` surface, require only
   `FileSystemObservationHost`. Sys status compares desired metadata with receipts; it must not

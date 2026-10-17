@@ -1,5 +1,24 @@
 # Lessons Learned
 
+## 2026-10-17 — Test-only destination checks can hide production gaps
+
+- **Symptom**: legacy App parent-path rejection passed in a CLI-only resolver but failed after moving
+  the test to Core. The production annotation branch returned before shared destination validation.
+- **Fix**: resolve legacy full paths through the common check and test both metadata resolution and
+  install planning. Supply an explicit captured data directory in embedded destination tests.
+- **Rule**: migrate behavioral assertions before deleting copies; a passing independent algorithm
+  says nothing about production validation or captured-context semantics.
+- **Migration check**: preserve installed versus active snapshot selection. Vim/Ghostty destination
+  tests must use `from_installed_presets`; distinct disk fixture bytes catch an accidental embedded
+  fallback even when destination assertions still pass.
+
+## 2026-10-17 — Optional root matching must not terminate fallback lookup
+
+- **Symptom**: Shell conflict guidance lost the category for rendered template sources.
+- **Cause**: `?` returned from the whole function when the presets prefix did not match.
+- **Fix**: chain each root match independently and test the rendered-source conflict message, explicit
+  hint precedence and unknown-source fallback.
+
 ## 2026-10-17 — Compilation does not prove retired adapters were removed
 
 - **Symptom**: a detached Shell template file still received edits, and migrated App status tests
