@@ -950,8 +950,10 @@ Inspection regressions use this production path through `FrontendService`, inclu
 ownership, missing/new/relocated files, manual-generator snapshots and lifecycle projection. The CLI
 keeps presentation tests and its real-host refresh integration; removed test-only status helpers
 cannot serve as the behavior baseline (ADR 0127).
-Explicit refresh delegates to `app/refresh.rs`: preparation selects exact receipt-owned generated
-files and completes administrator authorization; per-file apply retains generator/transform/read/
+Explicit refresh delegates to `app/refresh.rs`; `app/refresh_selection.rs` shares generated-file
+selection and exact receipt admission with the planner. Each caller loads its own current manifest
+at the original observation boundary; no review-time selection crosses into approved execution.
+Preparation selects exact receipt-owned generated files and completes administrator authorization; per-file apply retains generator/transform/read/
 install/upsert order and continues after a file failure. Completion saves the shared manifest once
 when any file changed, then runs post-upgrade hooks. The approved caller retains the lifecycle lock
 and fresh approval gate throughout. A final receipt-save error still prevents hooks and leaves the

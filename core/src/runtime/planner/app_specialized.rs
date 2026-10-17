@@ -12,34 +12,12 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         let candidates = select_refresh_files(&category, request.file.as_deref())?;
         let (manifest, manifest_bytes) =
             load_app_manifest(self.host(), &self.context().shine_dir).await?;
-        let mut selected = Vec::new();
-        for file in candidates {
-            let destination = self.app_destination(&category, &file)?;
-            let Some(entry) = manifest
-                .find_by_dest(&destination)
-                .filter(|entry| {
-                    entry.source
-                        == format!("app/{}/{}", request.category, file.source_rel.display())
-                })
-                .cloned()
-            else {
-                if request.file.is_some() {
-                    bail!(generated_file_not_installed_message(
-                        &request.category,
-                        &file.source_rel
-                    ));
-                }
-                continue;
-            };
-            selected.push((file, destination, entry));
-        }
-        if selected.is_empty() {
-            bail!(
-                "app '{}' has no installed generated files; run `shine install app/{}` first",
-                request.category,
-                request.category
-            );
-        }
+        let selected = self.select_installed_refresh_files(
+            &category,
+            candidates,
+            &manifest,
+            request.file.is_some(),
+        )?;
 
         let mut state = StateCapture::new("app-refresh", PlanOperationV1::AppRefresh)?;
         capture_context(&mut state, self.context())?;
@@ -60,7 +38,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             manifest.schema_version,
             &selected
                 .iter()
-                .map(|(_, _, entry)| entry)
+                .map(|selected| &selected.entry)
                 .collect::<Vec<_>>(),
         )?;
 
@@ -88,7 +66,12 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             "app_refresh_permission_declaration_missing",
         );
         let mut steps = Vec::new();
-        for (file, destination, entry) in &selected {
+        for SelectedRefreshFile {
+            file,
+            destination,
+            entry,
+        } in &selected
+        {
             let generator = file
                 .generator
                 .as_ref()

@@ -77,7 +77,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/app/assessment_tests.rs` | Consumer regressions for generator assessment, inspection priority, approved lifecycle reports and last-known-good receipts |
 | `core/src/runtime/app/outcome.rs` | Internal typed App file outcomes projected into the existing local report fields |
 | `core/src/runtime/app/lifecycle/{install,remove}.rs` | App preparation, per-file apply/receipt commit and finalization; caller retains lifecycle lock and exact approval |
-| `core/src/runtime/app/refresh.rs` | Named selected-file/prepared/applied states for explicit refresh; per-file continuation and final receipt-before-hook completion under the approved caller |
+| `core/src/runtime/app/refresh.rs` | Prepared/applied states for explicit refresh; per-file continuation and final receipt-before-hook completion under the approved caller |
+| `core/src/runtime/app/refresh_selection.rs` | Shared pure generated-file selection and exact receipt admission for planning and execution; each caller retains fresh capture and error ordering |
 | `core/src/runtime/app/upgrade.rs` | Upgrade phases under the lifecycle lock; typed unjournaled/update/relocation completion retains transaction guards through receipt save and commit |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
 | `core/src/runtime/app_metadata.rs` | App snapshot parsing and effective destinations, including legacy `shine-dest` compatibility and shared parent-component rejection |
@@ -141,7 +142,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/privilege.rs` | Cross-platform administrator/elevation orchestration |
 | `cli/src/proc.rs` | Small domain-neutral subprocess helpers |
 | `cli/src/persist.rs` | Compatibility re-export of Core persistence helpers |
-| `cli/src/shell_quote.rs` | Copy-paste-safe shell argument rendering |
+| `core/src/shell_quote.rs` | Internal POSIX and PowerShell literal encoding shared by CLI and runtime; no validation, path expansion or execution policy |
+| `cli/src/shell_quote.rs` | Copy-paste-safe argument display policy over Core literal encoding |
 | `cli/src/version.rs` | Version string formatting |
 
 ### Command routing table
@@ -219,7 +221,6 @@ execution primitives and transforms live in `core/src/install/`.
 | `cli/src/sys/detect.rs` | OS and Linux distribution detection |
 | `cli/src/sys/managed.rs` | Managed-resource apply/update/remove/upgrade and structured result adapters |
 | `cli/src/sys/model.rs` | Compatibility re-exports of Core Sys models |
-| `cli/src/sys/manifest.rs` | Core parser compatibility adapter |
 | `cli/src/sys/run_manifest.rs` | Compatibility re-export of Core-owned Sys manifest and receipt state |
 | `cli/src/sys/selection.rs` | Selected-item terminal formatting only |
 | `cli/src/sys/execution.rs` | Bootstrap reporting and proxy environment |
@@ -270,9 +271,10 @@ Config discovery priority is documented as a behavioral contract in
 | `cli/src/env/live_bun.rs` | Receipt-prepared Bun execution, declared env injection, and direct-child Unix signal relay |
 | `cli/src/env/workspace.rs` | Stable workspace handler facade, discovery and shared path/source resolution |
 | `cli/src/env/workspace/{model,dotenv}.rs` | Workspace/source/cache DTOs and validation; dotenv import/export, portable quoting and private/no-clobber publication |
-| `cli/src/env/workspace/{sealing,compilation,cache}.rs` | Snapshot-bound sealing, complete source compilation/decryption and encrypted default-backend cache IO |
+| `cli/src/env/workspace/{sealing,compilation,cache}.rs` | Snapshot-bound sealing, ordered source compilation and encrypted default-backend cache IO |
 | `cli/src/env/workspace/{broker_snapshot,run}.rs` | Immutable broker capture/release and local child environment/execution orchestration |
 | `cli/src/env/workspace/{tests,hybrid_snapshot_tests}.rs` | Existing workspace/source, dotenv, plaintext-lifetime and hybrid snapshot regressions |
+| `cli/src/env/workspace/source_payload.rs` | Shared sealed-declaration and decrypted-key validation with zeroizing plaintext ownership; sealing retains its separate pending-source decoder |
 | `cli/src/env/workspace/sources.rs` | Pure ordered plain/secret declaration precedence shared by local compilation, export and broker release |
 | `cli/src/env/workspace/values.rs` | Owned environment maps with redacted diagnostics and cleanup on replacement, error and cancellation |
 | `cli/src/env/workspace/file_groups.rs` | Version 3 binary selection, seal/verification, export and scoped release; typed operations and preview streams preserve preflight and output contracts |

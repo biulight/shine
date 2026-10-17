@@ -606,9 +606,10 @@ mod tests {
         let categories = metadata::load_active_categories(&config, None)
             .await
             .unwrap();
-        let (_rows, update) = crate::status::build_app_rows_with_lifecycle(&config, &categories)
-            .await
-            .unwrap();
+        let (_rows, update, _) =
+            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, false)
+                .await
+                .unwrap();
         let pending = update
             .outcomes
             .iter()
@@ -665,8 +666,8 @@ mod tests {
         let categories = metadata::load_active_categories(&config, None)
             .await
             .unwrap();
-        let (_rows, after_upgrade) =
-            crate::status::build_app_rows_with_lifecycle(&config, &categories)
+        let (_rows, after_upgrade, _) =
+            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, false)
                 .await
                 .unwrap();
         assert!(after_upgrade.outcomes.iter().any(|outcome| {

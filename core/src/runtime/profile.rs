@@ -1,4 +1,6 @@
 use crate::runtime::{CoreRuntime, FileSystemHost, ShellType};
+use crate::shell_quote::posix_single_quote as single_quote;
+use crate::shell_quote::powershell_single_quote_contents;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -66,7 +68,7 @@ pub(super) fn managed_profile_snippet(
                 };
                 body.push_str(&format!(
                     "\nfunction {command} {{ . (Join-Path $shineBin '{}') @args }}",
-                    script.replace('\'', "''")
+                    powershell_single_quote_contents(&script)
                 ));
             }
             _ => body.push_str(&format!(
@@ -125,12 +127,12 @@ fn powershell_bin_assignment(bin: &str) -> String {
     if let Some(relative) = normalized.strip_prefix("$HOME/") {
         format!(
             "$shineBin = Join-Path $HOME '{}'",
-            relative.replace('\'', "''")
+            powershell_single_quote_contents(relative)
         )
     } else if normalized == "$HOME" {
         "$shineBin = $HOME".to_string()
     } else {
-        format!("$shineBin = '{}'", bin.replace('\'', "''"))
+        format!("$shineBin = '{}'", powershell_single_quote_contents(&bin))
     }
 }
 
@@ -148,12 +150,10 @@ fn shell_quote(path: &Path) -> String {
 fn powershell_quote(path: &Path) -> String {
     format!(
         "'{}'",
-        strip_windows_verbatim_prefix(&path.display().to_string()).replace('\'', "''")
+        powershell_single_quote_contents(&strip_windows_verbatim_prefix(
+            &path.display().to_string()
+        ))
     )
-}
-
-fn single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn escape_shell_path_double_quoted(value: &str, shell: ShellType) -> String {
@@ -186,11 +186,14 @@ fn powershell_path_expr(value: &str) -> String {
     let value = strip_windows_verbatim_prefix(value);
     let normalized = value.replace('\\', "/");
     if let Some(relative) = normalized.strip_prefix("$HOME/") {
-        format!("(Join-Path $HOME '{}')", relative.replace('\'', "''"))
+        format!(
+            "(Join-Path $HOME '{}')",
+            powershell_single_quote_contents(relative)
+        )
     } else if normalized == "$HOME" {
         "$HOME".to_string()
     } else {
-        format!("'{}'", value.replace('\'', "''"))
+        format!("'{}'", powershell_single_quote_contents(&value))
     }
 }
 

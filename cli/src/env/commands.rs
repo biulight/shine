@@ -1,6 +1,8 @@
 //! Handlers for env inspection, directed writes, and secret commands.
 
 use anyhow::{Context, Result, bail};
+use shine_core::shell_quote::posix_single_quote as posix_shell_quote;
+use shine_core::shell_quote::powershell_single_quote as powershell_string_quote;
 
 use super::{EnvConfig, StoredValue, resolve_stored_value, secret_key};
 use crate::config::{Config, EnvLayerKind, EnvWriteOptions, EnvWritePlan};
@@ -402,16 +404,8 @@ pub(crate) fn format_env_export(shell: &shells::ShellType, key: &str, value: &st
     }
 }
 
-fn posix_shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 fn fish_quote(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
-}
-
-fn powershell_string_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 #[derive(Debug, PartialEq, Eq)]

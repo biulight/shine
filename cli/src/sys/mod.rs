@@ -2,8 +2,6 @@ mod commands;
 mod detect;
 mod execution;
 mod managed;
-#[cfg(test)]
-mod manifest;
 mod model;
 mod profile_commands;
 mod recovery;
@@ -81,7 +79,7 @@ mod tests {
 
     #[test]
     fn init_template_does_not_require_a_permission_declaration() {
-        let manifest = manifest::parse_and_validate_manifest(SYS_TEMPLATE).unwrap();
+        let manifest = shine_core::runtime::parse_sys_manifest(SYS_TEMPLATE).unwrap();
 
         assert_eq!(manifest.items.len(), 1);
         assert!(manifest.items[0].permissions.is_none());
@@ -89,7 +87,7 @@ mod tests {
 
     #[test]
     fn unrestricted_init_template_contains_valid_permission_defaults() {
-        let manifest = manifest::parse_and_validate_manifest(&init_template(true)).unwrap();
+        let manifest = shine_core::runtime::parse_sys_manifest(&init_template(true)).unwrap();
         let permissions = manifest.items[0].permissions.as_ref().unwrap();
         assert_eq!(permissions.schema_version, 2);
         assert!(permissions.opaque_code.is_some());

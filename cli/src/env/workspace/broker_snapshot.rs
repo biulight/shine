@@ -1,10 +1,10 @@
 //! Broker snapshot for workspace environments.
+use super::source_payload::{SealHint, decrypt_sealed_source, validate_sealed_source};
 use super::sources;
 use super::{
-    BTreeMap, BTreeSet, Binding, Config, Context, Path, Result, SecretState, SensitiveValues,
-    SourceFile, SourceSnapshot, WorkspaceSnapshot, Zeroize, bail, decrypt_source_payload,
-    effective_bindings, find_workspace_optional, parse_source, parse_workspace, resolve_sources,
-    validate_mode,
+    BTreeMap, BTreeSet, Binding, Config, Context, Path, Result, SensitiveValues, SourceFile,
+    SourceSnapshot, WorkspaceSnapshot, Zeroize, bail, effective_bindings, find_workspace_optional,
+    parse_source, parse_workspace, resolve_sources, validate_mode,
 };
 
 /// Reads one workspace/mode exactly once for SSH broker hashing and execution.
@@ -36,14 +36,7 @@ pub async fn snapshot_for_broker(
             .with_context(|| format!("reading {}", source_path.display()))?;
         // Parse now so malformed/unsealed metadata never reaches the broker.
         let source = parse_source(&source_path, &contents)?;
-        for (key, state) in &source.secret {
-            if !matches!(state, SecretState::Sealed(true)) {
-                bail!(
-                    "{key} in {} is not sealed; run `shine env secret seal`",
-                    source_path.display()
-                );
-            }
-        }
+        validate_sealed_source(&source_path, &source, SealHint::Include)?;
         let display_path = source_path
             .strip_prefix(root)
             .map(Path::to_path_buf)
@@ -124,20 +117,7 @@ pub async fn decrypt_broker_snapshot(
     let mut values = SensitiveValues::default();
     for (index, (source, parsed)) in snapshot.sources.iter().zip(&parsed_sources).enumerate() {
         let path = Path::new(&source.path);
-        for (key, state) in &parsed.secret {
-            if !matches!(state, SecretState::Sealed(true)) {
-                bail!("{key} in {} is not sealed", source.path);
-            }
-        }
-        let secrets = decrypt_source_payload(path, parsed, config).await?;
-        let expected = parsed.secret.keys().cloned().collect::<BTreeSet<_>>();
-        let actual = secrets.keys().cloned().collect::<BTreeSet<_>>();
-        if expected != actual {
-            bail!(
-                "secret key list does not match encrypted payload in {}",
-                source.path
-            );
-        }
+        let secrets = decrypt_sealed_source(path, parsed, config, SealHint::Omit).await?;
         for (key, mut value) in secrets {
             if release.contains(&key) && bindings.get(&key) == Some(&Binding::Secret(index)) {
                 values.insert(key, value);

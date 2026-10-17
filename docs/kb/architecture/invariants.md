@@ -732,6 +732,11 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Shell profile editing
 
+- **Literal encoding does not select shell semantics.** Shared POSIX and PowerShell encoders retain
+  exact output bytes. Callers still own Fish escaping, path normalization, `$HOME` expansion,
+  SSH NUL rejection and nesting, and CMD literal/legacy reconstruction. An escaped PowerShell
+  literal body excludes delimiters and must not become a CMD argument encoder (ADR 0141).
+
 - **Declarative PATH integrations are literal and idempotent.** Repeated profile loading must not
   duplicate existing entries. Reuse each path expression's own quoting in membership patterns,
   including `$HOME` values containing whitespace, quotes or shell pattern characters.
@@ -884,6 +889,11 @@ bugs. Check this list before changing the modules named in each entry.
   preserve the manifest snapshot. Install, `shine app refresh`, or explicit
   `info`/`update --run-generators` evaluation may run it. Evaluation never writes; refresh must
   target manifest-owned files and preserve user modifications unless `--force` is explicit.
+- **Refresh shares rules, not captured authority.** Candidate selection and exact source/destination
+  receipt admission use `app/refresh_selection.rs`. Planning selects candidates before loading the
+  manifest; execution retains its manifest-first preparation order. Both use their own current
+  manifest, and approved execution still locks before fresh Plan validation. Selection stays in
+  declaration order and cannot authorize generators or reuse review-time receipts (ADR 0141).
 - **Generator failures never destroy the last-known-good managed file.** Status
   and upgrade warn and retain an existing manifest-owned destination. An enabled
   generator with no successful installed snapshot fails rather than installing
@@ -1017,6 +1027,10 @@ bugs. Check this list before changing the modules named in each entry.
   bypasses destructors. Existing broker map APIs explicitly transfer successful result ownership.
   Shared source precedence must not skip validation/decryption of shadowed sources or reduce
   complete declared-secret sets bound to broker policy (ADR 0114).
+  `workspace/source_payload.rs` shares sealed-source validation and full decrypted-key equality.
+  Plain export bypasses decryption; local and broker callers retain their existing hint wording,
+  precedence and release filtering. Sealing uses the pending-source decoder without the sealed
+  precondition. Cache/broker snapshot metadata validation never decrypts (ADR 0141).
 
 - **Workspace file groups are explicit binary release.** Version 3 mappings require repeatable
   `--file-group` selection. Capture all ciphertext before decryption and decrypt all selected files

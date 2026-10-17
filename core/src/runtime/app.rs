@@ -16,6 +16,8 @@ mod inspection_contract_tests;
 mod lifecycle;
 mod outcome;
 mod refresh;
+mod refresh_selection;
+pub(super) use refresh_selection::{SelectedRefreshFile, select_refresh_files};
 #[cfg(test)]
 mod refresh_tests;
 mod upgrade;

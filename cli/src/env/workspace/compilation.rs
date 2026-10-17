@@ -1,31 +1,10 @@
 //! Compilation for workspace environments.
 use super::Digest;
 use super::{
-    BTreeSet, Binding, CACHE_FORMAT_VERSION, Config, Context, Encryption, Path, PathBuf, Result,
-    SECRET_PAYLOAD_VERSION, SecretPayload, SecretState, SensitiveValues, Sha256, SourceFile,
-    Zeroize, Zeroizing, bail, effective_bindings, parse_source, secret,
+    Binding, CACHE_FORMAT_VERSION, Config, Context, Encryption, Path, PathBuf, Result,
+    SensitiveValues, Sha256, Zeroize, Zeroizing, bail, effective_bindings, parse_source, secret,
+    source_payload::{SealHint, decrypt_sealed_source},
 };
-
-pub(super) async fn decrypt_source_payload(
-    path: &Path,
-    source: &SourceFile,
-    config: &Config,
-) -> Result<SensitiveValues> {
-    if source.payload.data.trim().is_empty() {
-        return Ok(SensitiveValues::default());
-    }
-    let plaintext = Zeroizing::new(
-        secret::decrypt_with_config(&source.payload.data, config)
-            .await
-            .with_context(|| format!("decrypting {}", path.display()))?,
-    );
-    let mut payload: SecretPayload = toml::from_str(&plaintext)
-        .map_err(|_| anyhow::anyhow!("invalid decrypted environment payload"))?;
-    if payload.version != SECRET_PAYLOAD_VERSION {
-        bail!("unsupported encrypted payload version {}", payload.version);
-    }
-    Ok(std::mem::take(&mut payload.values))
-}
 
 pub(super) async fn compile_export_sources(
     sources: &[PathBuf],
@@ -64,23 +43,7 @@ pub(super) async fn compile_source_layers(
     for (index, (path, source)) in parsed.into_iter().enumerate() {
         // Preserve validation/decryption of every source, including shadowed sources.
         if include_secrets {
-            for (key, state) in &source.secret {
-                if !matches!(state, SecretState::Sealed(true)) {
-                    bail!(
-                        "{key} in {} is not sealed; run `shine env secret seal`",
-                        path.display()
-                    );
-                }
-            }
-            let secrets = decrypt_source_payload(path, &source, config).await?;
-            if source.secret.keys().collect::<BTreeSet<_>>()
-                != secrets.keys().collect::<BTreeSet<_>>()
-            {
-                bail!(
-                    "secret key list does not match encrypted payload in {}",
-                    path.display()
-                );
-            }
+            let secrets = decrypt_sealed_source(path, &source, config, SealHint::Include).await?;
             for (key, mut value) in secrets {
                 if bindings.get(&key) == Some(&Binding::Secret(index)) {
                     values.insert(key, value);

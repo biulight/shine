@@ -127,7 +127,7 @@ pub(super) fn powershell_single_quoted_literal(value: &str) -> Result<String> {
     if value.contains('\0') {
         bail!("cannot forward values containing NUL bytes to Windows PowerShell");
     }
-    Ok(format!("'{}'", value.replace('\'', "''")))
+    Ok(shine_core::shell_quote::powershell_single_quote(value))
 }
 
 pub(super) fn utf16le_bytes(value: &str) -> Result<Vec<u8>> {
@@ -144,6 +144,4 @@ pub(super) fn utf16le_bytes(value: &str) -> Result<Vec<u8>> {
 /// any literal `'` via the standard `'\''` idiom (close quote, escaped
 /// quote, reopen quote). Applying this at each nesting level independently
 /// composes correctly regardless of how many quoting layers are involved.
-pub(super) fn single_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
+pub(super) use crate::shell_quote::single_quote;

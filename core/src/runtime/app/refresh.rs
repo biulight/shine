@@ -1,11 +1,6 @@
 //! Explicit refresh selection, per-file application and final receipt/hook completion.
 use super::*;
 
-struct SelectedRefreshFile {
-    file: AppFile,
-    destination: PathBuf,
-    entry: AppEntry,
-}
 struct PreparedRefresh {
     category: AppCategory,
     manifest: AppManifest,
@@ -42,70 +37,13 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
             .cloned()
             .with_context(|| format!("app preset category not found: {}", request.category))?;
         let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        let candidates = if let Some(selector) = &request.file {
-            let file = category
-                .files
-                .iter()
-                .find(|file| &file.source_rel == selector)
-                .with_context(|| {
-                    format!(
-                        "app '{}' file not found: {}",
-                        request.category,
-                        selector.display()
-                    )
-                })?;
-            if file.generator.is_none() {
-                bail!(
-                    "app '{}' file is not generated: {}",
-                    request.category,
-                    selector.display()
-                );
-            }
-            vec![file.clone()]
-        } else {
-            category
-                .files
-                .iter()
-                .filter(|file| file.generator.is_some())
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        if candidates.is_empty() {
-            bail!("app '{}' has no generated files", request.category);
-        }
-
-        let mut selected = Vec::new();
-        for file in candidates {
-            let destination = self.app_destination(&category, &file)?;
-            let Some(entry) = manifest
-                .find_by_dest(&destination)
-                .filter(|entry| {
-                    entry.source
-                        == format!("app/{}/{}", request.category, file.source_rel.display())
-                })
-                .cloned()
-            else {
-                if request.file.is_some() {
-                    bail!(generated_file_not_installed_message(
-                        &request.category,
-                        &file.source_rel
-                    ));
-                }
-                continue;
-            };
-            selected.push(SelectedRefreshFile {
-                file,
-                destination,
-                entry,
-            });
-        }
-        if selected.is_empty() {
-            bail!(
-                "app '{}' has no installed generated files; run `shine install app/{}` first",
-                request.category,
-                request.category
-            );
-        }
+        let candidates = select_refresh_files(&category, request.file.as_deref())?;
+        let selected = self.select_installed_refresh_files(
+            &category,
+            candidates,
+            &manifest,
+            request.file.is_some(),
+        )?;
 
         let admin_count = selected
             .iter()

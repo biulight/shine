@@ -42,21 +42,6 @@ pub struct AppRow {
 // Shared row builders (data-only, no printing)
 // ---------------------------------------------------------------------------
 
-pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Result<Vec<AppRow>> {
-    build_app_rows_with_lifecycle(config, categories)
-        .await
-        .map(|(rows, _)| rows)
-}
-
-pub(crate) async fn build_app_rows_with_lifecycle(
-    config: &Config,
-    categories: &[AppCategory],
-) -> Result<(Vec<AppRow>, LifecycleResultV1)> {
-    build_app_rows_with_lifecycle_options(config, categories, false)
-        .await
-        .map(|(rows, lifecycle, _)| (rows, lifecycle))
-}
-
 pub(crate) async fn build_app_rows_with_lifecycle_options(
     config: &Config,
     categories: &[AppCategory],
@@ -948,7 +933,9 @@ mod tests {
             metadata_is_overlay: false,
         };
 
-        let rows = build_app_rows(&config, &[category]).await.unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &[category], false)
+            .await
+            .unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "ghostty");
@@ -1026,7 +1013,9 @@ mod tests {
             metadata_is_overlay: false,
         };
 
-        let rows = build_app_rows(&config, &[category]).await.unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &[category], false)
+            .await
+            .unwrap();
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].label, "sample/config.toml");
@@ -1049,7 +1038,9 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         let categories = crate::apps::load_embedded_categories(Some("docker-engine")).unwrap();
-        let rows = build_app_rows(&config, &categories).await.unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &categories, false)
+            .await
+            .unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "docker-engine/daemon.jsonc");
@@ -1074,7 +1065,9 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         let categories = crate::apps::load_embedded_categories(Some("docker-desktop")).unwrap();
-        let rows = build_app_rows(&config, &categories).await.unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &categories, false)
+            .await
+            .unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "docker-desktop/settings-store.jsonc");

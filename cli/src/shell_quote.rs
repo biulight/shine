@@ -1,14 +1,8 @@
-//! Shared POSIX shell-quoting helpers for rendering commands back into copy-paste-safe or
-//! sourceable shell syntax. Display-only: `task::mod` and `apps::upgrade` never execute the
-//! quoted string itself, they always run the underlying argv directly via
-//! `std::process::Command`/`tokio::process::Command`, so this module has no injection surface
-//! of its own.
+//! CLI display policy over the shared literal encoders.
 
 /// Single-quotes `value` for POSIX shells. The only character a single-quoted string cannot
 /// contain is `'`, which is closed, escaped, and reopened as `'\''`.
-pub(crate) fn single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
+pub(crate) use shine_core::shell_quote::posix_single_quote as single_quote;
 
 /// Renders `value` back into a copy-paste-safe shell argument: left bare when every character
 /// is inert to POSIX shells, single-quoted otherwise.

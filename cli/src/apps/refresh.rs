@@ -195,7 +195,7 @@ mod tests {
     use crate::apps::{
         handle_install_approved, handle_upgrade_installed_target_with_result_approved,
     };
-    use crate::status::{FileStatus, build_app_rows};
+    use crate::status::{FileStatus, build_app_rows_with_lifecycle_options};
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
 
@@ -331,7 +331,9 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         let categories = metadata::load_active_categories(&config, Some("sample"))
             .await
             .unwrap();
-        let rows = build_app_rows(&config, &categories).await.unwrap();
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &categories, false)
+            .await
+            .unwrap();
         assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
         assert!(!rows[0].upgrade_available);
         let mut separator = crate::output::SectionSeparator::new();
@@ -386,9 +388,10 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         let categories = metadata::load_active_categories(&config, Some("sample"))
             .await
             .unwrap();
-        let rows = crate::status::build_app_rows(&config, &categories)
-            .await
-            .unwrap();
+        let (rows, _, _) =
+            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, false)
+                .await
+                .unwrap();
         assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
         assert_eq!(
             fs::read_to_string(config.presets_dir().join("app/sample/first.runs"))

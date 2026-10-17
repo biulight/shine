@@ -5,6 +5,7 @@ mod dotenv;
 mod model;
 mod run;
 mod sealing;
+mod source_payload;
 pub(crate) use broker_snapshot::declared_secrets_from_source;
 pub use broker_snapshot::decrypt_broker_snapshot;
 use broker_snapshot::merge_broker_values;
@@ -18,7 +19,6 @@ use compilation::compile_captured_sources;
 use compilation::compile_export_sources;
 #[cfg(test)]
 use compilation::compile_source_layers;
-use compilation::decrypt_source_payload;
 use compilation::involves_hybrid;
 use compilation::snapshot_input_hash;
 #[cfg(test)]
@@ -58,6 +58,7 @@ pub use sealing::handle_seal;
 #[cfg(test)]
 use sealing::replace_sealed_file;
 use sealing::resolve_seal_encryption;
+use source_payload::decrypt_source_payload;
 
 pub mod file_groups;
 mod local_cache;

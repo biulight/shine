@@ -1,3 +1,5 @@
+use crate::shell_quote::posix_single_quote as posix_quote;
+use crate::shell_quote::powershell_single_quote as powershell_quote;
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -288,10 +290,6 @@ fn posix_path_expr(value: &str) -> Result<String> {
     posix_value(value)
 }
 
-fn posix_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 fn powershell_value(value: &str) -> String {
     if value == "$HOME" {
         "$HOME".to_string()
@@ -300,10 +298,6 @@ fn powershell_value(value: &str) -> String {
     } else {
         powershell_quote(value)
     }
-}
-
-fn powershell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn indent(value: &str, prefix: &str) -> String {

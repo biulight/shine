@@ -72,14 +72,11 @@ fn validate_sources(sources: &CapturedSources) -> Result<bool> {
         let Some(contents) = contents else { continue };
         let source = parse_source(path, contents)?;
         has_payload |= !source.payload.data.trim().is_empty();
-        for (key, state) in &source.secret {
-            if !matches!(state, SecretState::Sealed(true)) {
-                bail!(
-                    "{key} in {} is not sealed; run `shine env secret seal`",
-                    path.display()
-                );
-            }
-        }
+        super::source_payload::validate_sealed_source(
+            path,
+            &source,
+            super::source_payload::SealHint::Include,
+        )?;
         if let Some(encoded) = source.payload.data.strip_prefix(secret::hybrid::PREFIX) {
             secret::hybrid::validate(encoded)?;
         }

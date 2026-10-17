@@ -1079,3 +1079,220 @@ async fn explicit_values_override_workspace_and_process_values() {
     // SAFETY: the shared test env lock serializes process environment mutation.
     unsafe { std::env::remove_var("SHINE_RUN_OVERRIDE_TEST") };
 }
+
+#[cfg(unix)]
+#[test]
+fn local_and_broker_validate_every_secret_source_and_redact_failures() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use std::os::unix::fs::PermissionsExt;
+    let _guard = crate::test_support::env_lock();
+    let root =
+        std::env::temp_dir().join(format!("shine-source-validation-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let gpg = root.join("gpg");
+    std::fs::write(&gpg, "#!/bin/sh\nprintf x >> \"$0.calls\"\nfor arg in \"$@\"; do file=\"$arg\"; done\n/bin/cat \"$file\"\n").unwrap();
+    std::fs::set_permissions(&gpg, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // SAFETY: env_lock restores PATH after serializing this entire test.
+    unsafe { std::env::set_var("PATH", &root) };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let config = Config::new_for_test(&root);
+        let first = format!(
+            "[secret]\nFIRST = true\n[payload]\ndata = '{}'\n",
+            STANDARD.encode("version = 1\n[values]\nFIRST = 'first-private-value'\n")
+        );
+        for (declaration, payload, expected, decryptions, wiped_key) in [
+            (
+                "TOKEN = 'pending-private-value'",
+                None,
+                "TOKEN in suspect.toml is not sealed",
+                1,
+                None,
+            ),
+            (
+                "TOKEN = true",
+                None,
+                "secret key list does not match encrypted payload in suspect.toml",
+                1,
+                None,
+            ),
+            (
+                "TOKEN = true",
+                Some("version = 1\n[values]\nUNEXPECTED = 'sentinel-private-value'\n"),
+                "secret key list does not match encrypted payload in suspect.toml",
+                2,
+                Some("UNEXPECTED"),
+            ),
+            (
+                "TOKEN = true",
+                Some("version = 1\n[values]\nTOKEN = { bad = 'sentinel-private-value' }\n"),
+                "invalid decrypted environment payload",
+                2,
+                None,
+            ),
+            (
+                "TOKEN = true",
+                Some("version = 99\n[values]\nTOKEN = 'sentinel-private-value'\n"),
+                "unsupported encrypted payload version 99",
+                2,
+                Some("TOKEN"),
+            ),
+        ] {
+            let mut suspect = format!("[secret]\n{declaration}\n");
+            if let Some(payload) = payload {
+                suspect.push_str(&format!(
+                    "[payload]\ndata = '{}'\n",
+                    STANDARD.encode(payload)
+                ));
+            }
+            let snapshot = WorkspaceSnapshot {
+                workspace_path: root.join(WORKSPACE_FILE).to_string_lossy().into_owned(),
+                workspace_contents:
+                    "version = 2\n[env]\nfiles = ['first.toml', 'suspect.toml', 'last.toml']\n"
+                        .into(),
+                mode: "development".into(),
+                override_process_env: true,
+                sources: vec![
+                    SourceSnapshot {
+                        path: "first.toml".into(),
+                        contents: first.clone(),
+                    },
+                    SourceSnapshot {
+                        path: "suspect.toml".into(),
+                        contents: suspect,
+                    },
+                    SourceSnapshot {
+                        path: "last.toml".into(),
+                        contents: "[plain]\nTOKEN = 'public'\n".into(),
+                    },
+                ],
+            };
+            let captured = snapshot
+                .sources
+                .iter()
+                .map(|source| {
+                    (
+                        PathBuf::from(&source.path),
+                        Some(Zeroizing::new(source.contents.clone())),
+                    )
+                })
+                .collect();
+            for broker in [false, true] {
+                let _ = std::fs::remove_file(root.join("gpg.calls"));
+                values::take_wipe_events();
+                let error = if broker {
+                    // TOKEN is neither winning nor released; it must still be validated.
+                    decrypt_broker_snapshot(&config, &snapshot, &["FIRST".into()])
+                        .await
+                        .unwrap_err()
+                } else {
+                    compile_captured_sources(&captured, &config)
+                        .await
+                        .unwrap_err()
+                };
+                let text = format!("{error:#}");
+                let expected = if !broker && payload.is_none() && declaration.contains("pending") {
+                    format!("{expected}; run `shine env secret seal`")
+                } else {
+                    expected.to_string()
+                };
+                assert_eq!(text, expected);
+                assert!(!text.contains("private-value"));
+                let wiped = values::take_wipe_events();
+                assert!(
+                    wiped
+                        .iter()
+                        .any(|keys| keys.iter().any(|key| key == "FIRST"))
+                );
+                if let Some(key) = wiped_key {
+                    assert!(
+                        wiped
+                            .iter()
+                            .any(|keys| keys.iter().any(|wiped| wiped == key))
+                    );
+                }
+                assert_eq!(
+                    std::fs::read(root.join("gpg.calls")).unwrap().len(),
+                    decryptions
+                );
+            }
+            // Plain export must not start any backend or validate decrypted payloads.
+            std::fs::remove_file(root.join("gpg.calls")).unwrap();
+            let plain = compile_source_layers(&captured, &config, false)
+                .await
+                .unwrap();
+            assert_eq!(plain, BTreeMap::from([("TOKEN".into(), "public".into())]));
+            assert!(!root.join("gpg.calls").exists());
+            assert_eq!(
+                decrypt_broker_snapshot(&config, &snapshot, &["UNKNOWN".into()])
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "broker release contains an undeclared secret key"
+            );
+            assert!(!root.join("gpg.calls").exists());
+        }
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn resealing_accepts_pending_values_and_reconciles_existing_payload_keys() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use std::os::unix::fs::PermissionsExt;
+    let _guard = crate::test_support::env_lock();
+    let root = std::env::temp_dir().join(format!("shine-reseal-contract-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let gpg = root.join("gpg");
+    // A controlled byte-preserving backend exercises the actual seal and decrypt consumers.
+    std::fs::write(&gpg, "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --encrypt) printf e >> \"$0.calls\"; exec /bin/cat ;;\n  esac\n  file=\"$arg\"\ndone\nprintf d >> \"$0.calls\"\nexec /bin/cat \"$file\"\n").unwrap();
+    std::fs::set_permissions(&gpg, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // SAFETY: env_lock restores the environment after the test, including on panic.
+    unsafe { std::env::set_var("PATH", &root) };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let config = Config::new_for_test(&root);
+        let workspace = root.join(WORKSPACE_FILE);
+        let path = root.join("source.toml");
+        std::fs::write(&workspace, "version = 2\n[env]\nfiles = ['source.toml']\n").unwrap();
+        let old_payload = "version = 1\n[values]\nKEEP = 'kept-secret'\nREPLACE = 'old-secret'\nRETIRED = 'retired-secret'\n";
+        let source = format!("version = 1\n[plain]\nPUBLIC = 'public'\n[secret]\nKEEP = true\nREPLACE = 'replacement-secret'\nNEW = 'new-secret'\n[payload]\ndata = '{}'\n", STANDARD.encode(old_payload));
+        std::fs::write(&path, &source).unwrap();
+        assert_eq!(snapshot_for_broker(Some(&workspace), "development").await.unwrap_err().to_string(),
+            format!("NEW in {} is not sealed; run `shine env secret seal`", path.display()));
+        assert!(!root.join("gpg.calls").exists(), "snapshot admission must not decrypt");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+        handle_seal(&config, Some(&workspace), Some(&path), Some("gpg"), &["test-recipient".into()])
+            .await.unwrap();
+        assert_eq!(std::fs::read(root.join("gpg.calls")).unwrap(), b"de");
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(!updated.contains("-secret"));
+        let parsed = parse_source(&path, &updated).unwrap();
+        assert_eq!(parsed.plain["PUBLIC"], "public");
+        assert!(parsed.secret.values().all(|state| matches!(state, SecretState::Sealed(true))));
+        let snapshot = snapshot_for_broker(Some(&workspace), "development").await.unwrap();
+        assert_eq!(std::fs::read(root.join("gpg.calls")).unwrap(), b"de");
+        let released = decrypt_broker_snapshot(&config, &snapshot,
+            &["KEEP".into(), "NEW".into(), "REPLACE".into()]).await.unwrap();
+        assert_eq!(released, BTreeMap::from([
+            ("KEEP".into(), "kept-secret".into()),
+            ("NEW".into(), "new-secret".into()),
+            ("REPLACE".into(), "replacement-secret".into()),
+        ]));
+        // A successful reseal must remove retired ciphertext keys and remain consumable locally.
+        let captured = vec![(path, Some(Zeroizing::new(updated)))];
+        let local = compile_captured_sources(&captured, &config).await.unwrap();
+        assert_eq!(local.len(), 4);
+        assert_eq!(local.get("PUBLIC").map(String::as_str), Some("public"));
+        for (key, value) in released { assert_eq!(local.get(&key), Some(&value)); }
+        assert_eq!(std::fs::read(root.join("gpg.calls")).unwrap(), b"dedd");
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
