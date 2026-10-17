@@ -81,6 +81,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
 | `core/src/runtime/app_metadata.rs` | App snapshot parsing and effective destinations, including legacy `shine-dest` compatibility and shared parent-component rejection |
 | `core/src/runtime/shell.rs` | Shell models, lifecycle entry points, source-scoped Bun dependency policy, live render, launcher, cache, profile, and manifest helpers |
+| `core/src/runtime/profile.rs` | Shell profile rendering, sentinel handling and profile execution; rendering regressions live here, internal helpers are not exposed for CLI tests |
 | `core/src/runtime/shell/metadata.rs` | Snapshot-only metadata parsing, descriptions, explicit declarations, native discovery and platform/source admission; production owner for migrated description/discovery tests; no Host required |
 | `core/src/runtime/shell/inspect.rs` | Observation-only Shell inspection orchestration, per-command evidence, pure changes/status projection and receipt-only records |
 | `core/src/runtime/tests/shell_inspection.rs` | Read-only consumer regressions for Shell status/change ordering, missing presets, trust/conflicts and observation failures |

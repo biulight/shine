@@ -38,7 +38,7 @@ fn home_relative_path(path: &Path, home_dir: &Path) -> String {
     }
 }
 
-pub fn managed_profile_snippet(
+pub(super) fn managed_profile_snippet(
     shell: ShellType,
     bin_dir: &Path,
     home_dir: &Path,
@@ -99,7 +99,11 @@ pub fn supports_completion_registration(shell: ShellType) -> bool {
     completion_registration_snippet(shell).is_some()
 }
 
-pub fn shell_config_snippet(shell: ShellType, profile_path: &Path, home_dir: &Path) -> String {
+pub(super) fn shell_config_snippet(
+    shell: ShellType,
+    profile_path: &Path,
+    home_dir: &Path,
+) -> String {
     let profile = home_relative_path(profile_path, home_dir);
     let body = match shell {
         ShellType::PowerShell => format!(". {}", powershell_path_expr(&profile)),
@@ -115,7 +119,7 @@ fn powershell_path_snippet(bin: &str) -> String {
     )
 }
 
-pub fn powershell_bin_assignment(bin: &str) -> String {
+fn powershell_bin_assignment(bin: &str) -> String {
     let bin = strip_windows_verbatim_prefix(bin);
     let normalized = bin.replace('\\', "/");
     if let Some(relative) = normalized.strip_prefix("$HOME/") {
@@ -141,7 +145,7 @@ fn shell_quote(path: &Path) -> String {
     single_quote(&path.display().to_string())
 }
 
-pub fn powershell_quote(path: &Path) -> String {
+fn powershell_quote(path: &Path) -> String {
     format!(
         "'{}'",
         strip_windows_verbatim_prefix(&path.display().to_string()).replace('\'', "''")
@@ -197,7 +201,7 @@ fn sentinel() -> crate::sentinel::Sentinel<'static> {
     }
 }
 
-pub fn remove_shell_sentinel(content: &str) -> String {
+pub(super) fn remove_shell_sentinel(content: &str) -> String {
     crate::sentinel::remove_block_bytewise(content, &sentinel())
 }
 
@@ -344,6 +348,178 @@ fn strip_windows_verbatim_prefix(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_profile_uses_home_relative_bin_path() {
+        let home = PathBuf::from("/home/user");
+        let bin = home.join(".shine/bin");
+        let snippet = managed_profile_snippet(ShellType::Zsh, &bin, &home, &[]);
+        assert!(
+            snippet.contains("$HOME/.shine/bin"),
+            "should use $HOME: {snippet}"
+        );
+        assert!(!snippet.contains(SHELL_SENTINEL_START));
+        assert!(!snippet.contains(SHELL_SENTINEL_END));
+    }
+
+    #[test]
+    fn managed_profile_uses_absolute_bin_path_when_outside_home() {
+        let home = PathBuf::from("/home/user");
+        let bin = PathBuf::from("/opt/shine/bin");
+        let snippet = managed_profile_snippet(ShellType::Zsh, &bin, &home, &[]);
+        assert!(
+            snippet.contains("/opt/shine/bin"),
+            "should use absolute: {snippet}"
+        );
+        assert!(!snippet.contains("$HOME"));
+    }
+
+    #[test]
+    fn snippet_fish_uses_fish_add_path() {
+        let home = PathBuf::from("/home/user");
+        let bin = home.join("bin");
+        let snippet = managed_profile_snippet(ShellType::Fish, &bin, &home, &[]);
+        assert!(
+            snippet.contains("fish_add_path"),
+            "fish should use fish_add_path: {snippet}"
+        );
+    }
+
+    #[test]
+    fn snippet_bash_zsh_uses_if_guard() {
+        let home = PathBuf::from("/home/user");
+        let bin = home.join("bin");
+        for shell in [ShellType::Bash, ShellType::Zsh] {
+            let snippet = managed_profile_snippet(shell, &bin, &home, &[]);
+            assert!(
+                snippet.contains("if [["),
+                "{shell:?} should have if-guard: {snippet}"
+            );
+            assert!(snippet.contains("export PATH="));
+            let shell_name: &'static str = shell.into();
+            assert!(
+                snippet.contains(&format!("COMPLETE={shell_name} shine")),
+                "{shell:?} should register shine completion: {snippet}"
+            );
+            if matches!(shell, ShellType::Zsh) {
+                assert!(
+                    snippet.contains("autoload -Uz compinit"),
+                    "zsh completion registration should initialize compinit: {snippet}"
+                );
+                assert!(
+                    snippet.contains("compinit -i"),
+                    "zsh completion registration should avoid insecure-dir prompts: {snippet}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snippet_powershell_registers_completion_but_fish_does_not() {
+        let home = PathBuf::from("/home/user");
+        let bin = home.join("bin");
+
+        let powershell = managed_profile_snippet(ShellType::PowerShell, &bin, &home, &[]);
+        assert!(
+            powershell.contains("$env:COMPLETE = 'powershell'"),
+            "PowerShell should register shine completion: {powershell}"
+        );
+
+        let fish = managed_profile_snippet(ShellType::Fish, &bin, &home, &[]);
+        assert!(
+            !fish.contains("COMPLETE=fish shine"),
+            "fish completion should not be changed: {fish}"
+        );
+        assert!(supports_completion_registration(ShellType::PowerShell));
+        assert!(!supports_completion_registration(ShellType::Fish));
+        assert!(!supports_completion_registration(ShellType::Elvish));
+    }
+
+    #[test]
+    fn snippet_source_commands_generate_wrapper_functions() {
+        let home = PathBuf::from("/home/user");
+        let bin = home.join(".shine/bin");
+        let cmds = vec!["setproxy".to_string(), "usetproxy".to_string()];
+        for shell in [ShellType::Bash, ShellType::Zsh] {
+            let snippet = managed_profile_snippet(shell, &bin, &home, &cmds);
+            assert!(
+                snippet.contains("setproxy() { source"),
+                "{shell:?} should have setproxy wrapper: {snippet}"
+            );
+            assert!(
+                snippet.contains("usetproxy() { source"),
+                "{shell:?} should have usetproxy wrapper: {snippet}"
+            );
+        }
+        let fish_snippet = managed_profile_snippet(ShellType::Fish, &bin, &home, &cmds);
+        assert!(
+            fish_snippet.contains("function setproxy"),
+            "fish should have setproxy function: {fish_snippet}"
+        );
+        let powershell_snippet = managed_profile_snippet(ShellType::PowerShell, &bin, &home, &cmds);
+        assert!(
+            powershell_snippet.contains("$env:Path"),
+            "PowerShell should update env Path: {powershell_snippet}"
+        );
+        assert!(
+            powershell_snippet.contains("function setproxy"),
+            "PowerShell should have setproxy function: {powershell_snippet}"
+        );
+        assert!(
+            powershell_snippet.contains("Join-Path $shineBin"),
+            "PowerShell wrapper should resolve through shine bin: {powershell_snippet}"
+        );
+        assert!(
+            powershell_snippet.contains("$shineBin = Join-Path $HOME '.shine/bin'"),
+            "PowerShell should expand $HOME when assigning shine bin: {powershell_snippet}"
+        );
+        assert!(
+            !powershell_snippet.contains("$shineBin = '$HOME"),
+            "PowerShell should not keep $HOME as a literal path: {powershell_snippet}"
+        );
+    }
+
+    #[test]
+    fn shell_config_snippet_sources_managed_profile_only() {
+        let home = PathBuf::from("/home/user");
+        let profile = home.join(".shine/shell/profile.sh");
+        let snippet = shell_config_snippet(ShellType::Zsh, &profile, &home);
+        assert!(snippet.contains(SHELL_SENTINEL_START));
+        assert!(snippet.contains("source \"$HOME/.shine/shell/profile.sh\""));
+        assert!(!snippet.contains("export PATH"));
+        assert!(!snippet.contains("function setproxy"));
+    }
+
+    #[test]
+    fn powershell_paths_strip_windows_verbatim_prefix() {
+        let assignment = powershell_bin_assignment(r"\\?\D:\Github\Biulight\shine\.shine\bin");
+        assert!(assignment.contains(r"D:\Github\Biulight\shine\.shine\bin"));
+        assert!(!assignment.contains(r"\\?\"));
+
+        let quoted = powershell_quote(Path::new(r"\\?\D:\Github\Biulight\shine\profile.ps1"));
+        assert_eq!(quoted, r"'D:\Github\Biulight\shine\profile.ps1'");
+    }
+
+    #[test]
+    fn remove_sentinel_block_strips_block_and_blank_line() {
+        let content = "before\n\n# >>> shine >>>\nexport PATH\n# <<< shine <<<\nafter\n";
+        let cleaned = remove_shell_sentinel(content);
+        assert_eq!(cleaned, "before\nafter\n");
+    }
+
+    #[test]
+    fn remove_sentinel_block_no_op_when_absent() {
+        let content = "no sentinel here\n";
+        let cleaned = remove_shell_sentinel(content);
+        assert_eq!(cleaned, content);
+    }
+    #[test]
+    fn remove_sentinel_block_preserves_existing_bytewise_contract() {
+        assert_eq!(
+            remove_shell_sentinel("keep\n\n# >>> shine >>>\nsource x\n# <<< shine <<<\nafter\n"),
+            "keep\nafter\n"
+        );
+    }
 
     #[cfg(unix)]
     #[test]

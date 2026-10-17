@@ -32,6 +32,9 @@ bugs. Check this list before changing the modules named in each entry.
   Asset copy/export and Config file/global-load tests call their production owners. Removal tests
   use approved Shell uninstall; extra cache-tree files survive ordinary removal but are included
   in whole-shell purge. Do not revive the retired asset-name deletion algorithm (ADR 0136).
+  Seal and stored-secret process regressions use `handle_seal` and `decrypt_with_config`; profile
+  rendering tests live beside their Core owner so CLI test wrappers do not require public helpers.
+  Preserve tag-based decrypt routing and legacy source/recipient cases (ADR 0137).
 - **Ordinary frontend inspection requires observation capability only.** App, Shell and Sys
   default inspection, including the safe `ReadOnlyFrontend` surface, require only
   `FileSystemObservationHost`. Sys status compares desired metadata with receipts; it must not

@@ -1443,7 +1443,8 @@ mode, complete declared-secret set, requested release mapping, and argv. `env/br
 only an exact match in `<shine_dir>/ssh-secret-broker.toml`; the local agent then confirms unless
 `--trust-remote-session` was explicitly set, decrypts captured sealed payloads, and returns only
 policy-approved effective secrets. The remote merges those values with non-secret entries from the same
-snapshot bytes and injects them only into the child process.
+snapshot bytes through `merge_broker_values` and injects them only into the child process.
+The retired standalone plain-value extraction entry has no role in release or merging (ADR 0137).
 
 Both sides preserve source order across plain and secret declarations: later plain suppresses an
 earlier secret response, later secret removes an earlier plain value even if unreleased, and only
@@ -1523,6 +1524,9 @@ All workspace sealing rejects symbolic-link sources (and multiple hard links on 
 capturing any sources and rechecks file type/link count before atomic replacement. Ordinary GPG
 encryption and decryption force `--output -`; empty successful encryption output is rejected
 before serializing a sealed source, preserving pending plaintext on failure.
+The plain-only regression enters `handle_seal` with explicit workspace/file paths, and controlled
+backend tests enter `decrypt_with_config`; no separate test sealing orchestration or config-free
+decryption wrapper remains (ADR 0137).
 
 Hybrid workspace sealing captures policy and source bytes under cooperating workspace/source
 locks, resolves exact GPG public encryption keys with option files disabled, and preflights both

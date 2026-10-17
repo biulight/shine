@@ -82,14 +82,6 @@ pub(super) fn parse_broker_sources(snapshot: &WorkspaceSnapshot) -> Result<Vec<S
         .collect()
 }
 
-pub fn plain_values_from_broker_snapshot(
-    snapshot: &WorkspaceSnapshot,
-) -> Result<BTreeMap<String, String>> {
-    let sources = parse_broker_sources(snapshot)?;
-    let bindings = effective_bindings(&sources);
-    Ok(sources::plain_values(&sources, &bindings).into_map())
-}
-
 pub(super) fn merge_broker_values(
     snapshot: &WorkspaceSnapshot,
     secrets: BTreeMap<String, String>,

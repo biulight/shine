@@ -1343,7 +1343,7 @@ pub(super) async fn prepare_shell_profile_files(
     let mut files = Vec::new();
     let managed_profile = super::managed_shell_profile_path(&context.shine_dir, context.shell);
     let desired_profile = (!remove_all).then(|| {
-        super::managed_profile_snippet(
+        super::profile::managed_profile_snippet(
             context.shell,
             &context.bin_dir,
             &context.home_dir,

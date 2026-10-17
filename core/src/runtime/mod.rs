@@ -99,9 +99,8 @@ pub use preset_migration::{
 };
 pub use profile::{
     PathUpdateStatus, SHELL_SENTINEL_END, SHELL_SENTINEL_START, ShellConfigUpdate,
-    ShellProfileRemoval, managed_profile_snippet, managed_shell_profile_path,
-    powershell_bin_assignment, powershell_quote, remove_shell_sentinel, shell_config_snippet,
-    shell_source_command, supports_completion_registration,
+    ShellProfileRemoval, managed_shell_profile_path, shell_source_command,
+    supports_completion_registration,
 };
 pub use schema::{
     PRESET_SCHEMA_REFERENCE_VERSION, PresetSchemaReferenceV1, PresetSchemaReferenceV2,

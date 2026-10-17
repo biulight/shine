@@ -8,7 +8,6 @@ mod sealing;
 pub(crate) use broker_snapshot::declared_secrets_from_source;
 pub use broker_snapshot::decrypt_broker_snapshot;
 use broker_snapshot::merge_broker_values;
-pub use broker_snapshot::plain_values_from_broker_snapshot;
 pub use broker_snapshot::snapshot_for_broker;
 use cache::cache_path;
 use cache::read_valid_cache;
@@ -61,8 +60,6 @@ pub use sealing::handle_seal;
 #[cfg(test)]
 use sealing::replace_sealed_file;
 use sealing::resolve_seal_encryption;
-#[cfg(test)]
-use sealing::seal_file;
 
 pub mod file_groups;
 mod local_cache;

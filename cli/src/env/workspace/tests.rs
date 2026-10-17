@@ -905,10 +905,20 @@ async fn plain_only_source_can_be_sealed_without_recipient() {
         .await
         .unwrap();
 
+    let workspace = directory.join("shine.workspace.toml");
+    tokio::fs::write(&workspace, "version = 2\n[env]\nfiles = ['env.toml']\n")
+        .await
+        .unwrap();
     let config = Config::new_for_test(&directory);
-    seal_file(&path, &config, None).await.unwrap();
+    handle_seal(&config, Some(&workspace), Some(&path), None, &[])
+        .await
+        .unwrap();
     let source = tokio::fs::read_to_string(&path).await.unwrap();
     assert!(source.contains("[payload]"));
+    let parsed = parse_source(&path, &source).unwrap();
+    assert_eq!(parsed.plain["NAME"], "shine");
+    assert!(parsed.secret.is_empty());
+    assert!(parsed.payload.data.is_empty());
     tokio::fs::remove_dir_all(directory).await.unwrap();
 }
 

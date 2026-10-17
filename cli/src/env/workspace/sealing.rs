@@ -229,19 +229,6 @@ pub(super) async fn existing_workspace_sources(
     Ok(unique.into_iter().collect())
 }
 
-#[cfg(test)]
-pub(super) async fn seal_file(
-    path: &Path,
-    config: &Config,
-    encryption: Option<&EncryptRecipients>,
-) -> Result<()> {
-    validate_seal_source(path).await?;
-    let contents = tokio::fs::read_to_string(path).await?;
-    let updated = prepare_sealed_file(path, &contents, config, encryption).await?;
-    verify_snapshot(path, &contents).await?;
-    replace_sealed_file(path, updated.as_bytes(), &contents, None).await
-}
-
 pub(super) async fn prepare_sealed_file(
     path: &Path,
     contents: &str,
