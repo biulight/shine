@@ -70,6 +70,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/managed_json.rs` | Host-free top-level managed-key extraction, merge/remove/restore, comparison and stable subset hash/serialization shared by App assessment, planning, execution and recovery |
 | `core/src/runtime/app/assessment.rs` | Snapshot-only content assessment and named install-preview/install/upgrade/evaluated-inspection generator policies |
 | `core/src/runtime/app/inspect.rs` | Observation-only ordinary inspection, explicit generator evaluation adapter and pure inspection projection |
+| `core/src/runtime/app/inspection_contract_tests.rs` | Production FrontendService inspection/status-to-lifecycle regressions; fixtures seed receipts and bytes without duplicating assessment |
 | `core/src/runtime/app/assessment_tests.rs` | Consumer regressions for generator assessment, inspection priority, approved lifecycle reports and last-known-good receipts |
 | `core/src/runtime/app/outcome.rs` | Internal typed App file outcomes projected into the existing local report fields |
 | `core/src/runtime/app/lifecycle/{install,remove}.rs` | App preparation, per-file apply/receipt commit and finalization; caller retains lifecycle lock and exact approval |
@@ -155,8 +156,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `preset migrate [PATH]` | `cli/src/preset_migration.rs` orchestrates `preset_migration/{discovery,assessment,render,apply}.rs`: read-only inputs, same-scope validation, report/diffs, source rechecks/private backup/atomic edits |
 | `preset pull`, `update --pull`, `upgrade --pull` | `cli/src/git_pull.rs` plus top-level routing |
 | `init` | `cli/src/init.rs` |
-| `self install/upgrade` | `cli/src/self_install.rs`, `cli/src/update_check/` |
-| `update [TARGET]`, `upgrade [TARGET]` | filtered handlers; untargeted upgrade batches Shell/App/managed Sys review in `self_install.rs` |
+| `self install/upgrade` | `cli/src/self_install.rs` facade → `self_install/{binary,release}.rs`, `cli/src/update_check/` |
+| `update [TARGET]`, `upgrade [TARGET]` | `self_install/{update,config_upgrade}.rs`; untargeted upgrade retains Shell/App/managed Sys batch review |
 | `state migrate` | `cli/src/state.rs` |
 | `ssh ...` | `cli/src/ssh/mod.rs` |
 | `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
@@ -243,7 +244,7 @@ logic.
 | `core/src/runtime/schema.rs` | Generated JSON Schemas for authoring reports, fixtures, and bundle manifests |
 | `cli/src/git_pull.rs` | FF-only external source pulls and managed overlay mirroring |
 | `cli/src/state.rs` | Versioned runtime-state cleanup |
-| `cli/src/status.rs` | App inspection-to-terminal row adapter and stable row re-exports |
+| `cli/src/status.rs` | App inspection-to-terminal row adapter and stable row re-exports; no independent test-only App status engine |
 | `cli/src/status/shell.rs` | Pure Shell inspection-to-row projection, stable command selectors/targets and typed CLI status priority |
 
 Config discovery priority is documented as a behavioral contract in
@@ -305,7 +306,12 @@ See [`data-flows.md`](data-flows.md#ssh-environment-forwarding),
 | `cli/src/task/manifest.rs` | `tasks.toml` model and persistence |
 | `cli/src/theme/` | Terminal theme detection and synchronization |
 | `cli/src/update_check/` | Release lookup, cache, notification, and binary upgrade |
-| `cli/src/self_install.rs` | Self-install and installed-configuration upgrade orchestration |
+| `cli/src/self_install.rs` | Stable handler facade for update, self-upgrade, local installation and configuration upgrade |
+| `cli/src/self_install/update.rs` | Configuration/release update checks with their existing separate error policies |
+| `cli/src/self_install/release.rs` | Release installation result rendering and best-effort local binary synchronization |
+| `cli/src/self_install/binary.rs` | Local binary publication, destination persistence, synchronization and existing elevation policy |
+| `cli/src/self_install/config_upgrade.rs` | Target/aggregate configuration upgrade routing, review, preparation, execution and rendering |
+| `cli/src/self_install/config_upgrade/summary.rs` | Named target summary and domain-specific counters; display data carries no approval authority |
 | `cli/src/home.rs` | Sudo-aware home discovery and path expansion |
 | `cli/src/test_support.rs` | Shared process-state restoration guard and approved virtual Core installation fixtures |
 

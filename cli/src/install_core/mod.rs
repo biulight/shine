@@ -11,6 +11,6 @@ pub mod manifest;
 
 pub use manifest::AppEntry;
 #[cfg(test)]
-pub use manifest::{AppInstallStrategy, AppManifest, hash_content};
+pub use manifest::{AppInstallStrategy, hash_content};
 #[cfg(test)]
 pub use shine_core::install::transforms;

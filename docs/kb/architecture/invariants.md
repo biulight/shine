@@ -13,6 +13,11 @@ bugs. Check this list before changing the modules named in each entry.
   Named assessment policies keep install preview on transformed static fallback, install explicit,
   upgrade automatic-only and evaluated inspection explicit. Ordinary `inspect_apps` needs only
   filesystem observation; its assessment cannot execute generators or mutate state (ADR 0124).
+  Status regressions must exercise the production Core/FrontendService producer, with CLI tests
+  retaining row/rendering assertions; test fixtures may seed state but must not substitute a second
+  ownership, hash or status algorithm. Missing declared sources fail metadata validation. Ordinary
+  inspection reports an unchanged receipt-owned manual-generator file as not-evaluated; directly
+  installed missing/partial/user-modified files retain their existing precedence (ADR 0127).
 - **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
   from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
   `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery
@@ -88,6 +93,12 @@ bugs. Check this list before changing the modules named in each entry.
   succeeds before any domain executes. Prepared handoffs are consumed, not cloned or reconstructed
   by adapters. These internal types do not authorize mutation: existing Core locks, fresh Plan and
   exact permission checks still run at apply time (ADR 0123).
+- **Target upgrade summaries retain domain-specific units.** App counts changed categories and
+  preserved non-auxiliary resources; Shell counts changed non-cache-only categories plus PATH and
+  lifecycle conflicts; Sys counts changed resources plus preserved/conflicting resources. Fatal App
+  and Sys totals come from their reports, so non-fatal hook outcomes do not change exit status.
+  Aggregate upgrade retains its separate counters and App-before-Sys failure precedence. The named
+  summary is display data, never approval or a shared transaction (ADR 0127).
 - **Filesystem summaries are Core-attributed review data.** Optional `filesystem_review` groups
   bind exact permissions and their typed purpose/target into the Plan fingerprint. CLI summaries
   never infer ownership from path prefixes or suffixes, never remove required permissions, and

@@ -202,8 +202,7 @@ mod tests {
     use super::*;
     use crate::apps::metadata;
     use crate::apps::{handle_install, handle_upgrade_installed};
-    use crate::install_core::manifest::AppManifest;
-    use crate::status::{FileStatus, app_entry_status};
+    use crate::status::{FileStatus, build_app_rows};
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
 
@@ -339,16 +338,9 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         let categories = metadata::load_active_categories(&config, Some("sample"))
             .await
             .unwrap();
-        let cat = &categories[0];
-        let file = &cat.files[0];
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
-        let entry = manifest.find_by_dest(&dest).unwrap();
-        assert_eq!(
-            app_entry_status(&config, cat, file, entry, &config.env).await,
-            FileStatus::UpToDate
-        );
+        let rows = build_app_rows(&config, &categories).await.unwrap();
+        assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
+        assert!(!rows[0].upgrade_available);
         let mut separator = crate::output::SectionSeparator::new();
         let report = handle_upgrade_installed(&config, false, &mut separator)
             .await

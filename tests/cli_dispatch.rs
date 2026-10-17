@@ -105,6 +105,192 @@ fn app_mutation_requires_consent_and_preserves_modified_files() {
 }
 
 #[test]
+fn targeted_upgrade_keeps_category_scope_consent_and_summary_contracts() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let presets = state.join("presets");
+    let destination = fixture.0.join("destination");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    for category in ["demo", "other"] {
+        let preset = presets.join("app").join(category);
+        fs::create_dir_all(&preset).unwrap();
+        let dest = toml::Value::String(destination.join(category).to_string_lossy().into_owned())
+            .to_string();
+        fs::write(preset.join("shine.toml"), format!("metadata_schema_version = 2\ndest = {dest}\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'one.txt'\n[[files]]\nsource = 'two.txt'\n")).unwrap();
+        for file in ["one.txt", "two.txt"] {
+            fs::write(preset.join(file), "v1").unwrap();
+        }
+    }
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("SHINE_PRESETS", &presets)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    for category in ["demo", "other"] {
+        let installed = run(&["app", "install", category, "--yes"]);
+        assert!(installed.status.success(), "{installed:?}");
+        for file in ["one.txt", "two.txt"] {
+            fs::write(presets.join("app").join(category).join(file), "v2").unwrap();
+        }
+    }
+    let receipt = fs::read(state.join("app-manifest.toml")).unwrap();
+    let rejected = run(&["upgrade", "app/demo/one.txt"]);
+    assert!(!rejected.status.success(), "{rejected:?}");
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("approval requires"),
+        "{rejected:?}"
+    );
+    assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+    assert_eq!(fs::read(destination.join("demo/one.txt")).unwrap(), b"v1");
+
+    // A file suffix intentionally still selects the entire category, not one file.
+    let upgraded = run(&["upgrade", "app/demo/one.txt", "--yes"]);
+    assert!(upgraded.status.success(), "{upgraded:?}");
+    assert!(
+        String::from_utf8_lossy(&upgraded.stdout).contains("1 updated"),
+        "{upgraded:?}"
+    );
+    for file in ["one.txt", "two.txt"] {
+        assert_eq!(
+            fs::read(destination.join("demo").join(file)).unwrap(),
+            b"v2"
+        );
+        assert_eq!(
+            fs::read(destination.join("other").join(file)).unwrap(),
+            b"v1"
+        );
+    }
+    let receipt = fs::read(state.join("app-manifest.toml")).unwrap();
+    let noop = run(&["upgrade", "app/demo", "--yes"]);
+    assert!(noop.status.success(), "{noop:?}");
+    assert!(
+        String::from_utf8_lossy(&noop.stdout).contains("Nothing to upgrade."),
+        "{noop:?}"
+    );
+    assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+
+    fs::write(destination.join("demo/one.txt"), "user edit").unwrap();
+    fs::write(presets.join("app/demo/one.txt"), "v3").unwrap();
+    let preserved = run(&["upgrade", "app/demo", "--yes"]);
+    assert!(preserved.status.success(), "{preserved:?}");
+    assert!(
+        String::from_utf8_lossy(&preserved.stdout).contains("1 user-modified (kept)"),
+        "{preserved:?}"
+    );
+    assert_eq!(
+        fs::read(destination.join("demo/one.txt")).unwrap(),
+        b"user edit"
+    );
+    assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+
+    for (args, error) in [
+        (vec!["upgrade", "sys/", "--yes"], "invalid system target"),
+        (
+            vec!["upgrade", "sys/demo/extra", "--yes"],
+            "invalid system target",
+        ),
+        (
+            vec!["upgrade", "sys/demo", "--prune-stale", "--yes"],
+            "applies only to app targets",
+        ),
+    ] {
+        let invalid = run(&args);
+        assert!(!invalid.status.success(), "{invalid:?}");
+        assert!(
+            String::from_utf8_lossy(&invalid.stderr).contains(error),
+            "{invalid:?}"
+        );
+        assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn targeted_upgrade_distinguishes_nonfatal_hook_and_generator_failures() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let presets = state.join("presets");
+    let preset = presets.join("app/demo");
+    let destination = fixture.0.join("destination");
+    fs::create_dir_all(&preset).unwrap();
+    fs::write(
+        state.join("config.toml"),
+        "schema_version = 2\n[env]\nENABLE = '1'\n",
+    )
+    .unwrap();
+    let dest = toml::Value::String(destination.to_string_lossy().into_owned()).to_string();
+    let metadata = format!(
+        "metadata_schema_version = 2\ndest = {dest}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'exit 7'] }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\nrestart_hint = 'Restart demo'\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n"
+    );
+    fs::write(preset.join("shine.toml"), metadata).unwrap();
+    fs::write(preset.join("config.txt"), "fallback").unwrap();
+    let script = preset.join("generate.sh");
+    let write_script = |body: &str| {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(&script, body).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("SHINE_PRESETS", &presets)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    write_script("#!/bin/sh\nprintf v1\n");
+    let trusted = run(&["trust", "grant", "app/demo", "--yes"]);
+    assert!(trusted.status.success(), "{trusted:?}");
+    let installed = run(&["install", "app/demo", "--yes"]);
+    assert!(installed.status.success(), "{installed:?}");
+    assert_eq!(fs::read(destination.join("config.txt")).unwrap(), b"v1");
+    let initial_receipt = fs::read(state.join("app-manifest.toml")).unwrap();
+
+    write_script("#!/bin/sh\nprintf v2\n");
+    // Snapshot trust must be renewed for changed executable input.
+    let untrusted = run(&["upgrade", "app/demo", "--yes"]);
+    assert!(!untrusted.status.success(), "{untrusted:?}");
+    assert!(
+        String::from_utf8_lossy(&untrusted.stderr).contains("Plan is blocked"),
+        "{untrusted:?}"
+    );
+    assert_eq!(fs::read(destination.join("config.txt")).unwrap(), b"v1");
+    assert_eq!(
+        fs::read(state.join("app-manifest.toml")).unwrap(),
+        initial_receipt
+    );
+    let trusted = run(&["trust", "grant", "app/demo", "--yes"]);
+    assert!(trusted.status.success(), "{trusted:?}");
+    let upgraded = run(&["upgrade", "app/demo", "--yes"]);
+    assert!(upgraded.status.success(), "{upgraded:?}");
+    let stdout = String::from_utf8_lossy(&upgraded.stdout);
+    assert!(stdout.contains("1 updated"), "{upgraded:?}");
+    assert!(stdout.contains("Restart demo"), "{upgraded:?}");
+    assert!(
+        String::from_utf8_lossy(&upgraded.stderr).contains("/bin/sh exited with 7"),
+        "{upgraded:?}"
+    );
+    assert_eq!(fs::read(destination.join("config.txt")).unwrap(), b"v2");
+    let receipt = fs::read(state.join("app-manifest.toml")).unwrap();
+
+    write_script("#!/bin/sh\nexit 9\n");
+    let trusted = run(&["trust", "grant", "app/demo", "--yes"]);
+    assert!(trusted.status.success(), "{trusted:?}");
+    let failed = run(&["upgrade", "app/demo", "--yes"]);
+    assert_eq!(failed.status.code(), Some(1), "{failed:?}");
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("1 managed configuration item(s) failed"),
+        "{failed:?}"
+    );
+    assert_eq!(fs::read(destination.join("config.txt")).unwrap(), b"v2");
+    assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+}
+
+#[test]
 fn top_level_uninstall_uses_receipts_after_app_source_removal() {
     for target in ["app/retired", "retired"] {
         let fixture = Fixture::new();

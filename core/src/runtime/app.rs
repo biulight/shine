@@ -11,6 +11,8 @@ mod execution_tests;
 mod generator;
 mod hooks;
 mod inspect;
+#[cfg(test)]
+mod inspection_contract_tests;
 mod lifecycle;
 mod outcome;
 mod upgrade;

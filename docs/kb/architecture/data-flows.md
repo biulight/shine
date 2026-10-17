@@ -104,6 +104,14 @@ adapters consume them and receive their domain's typed Core report. The shared m
 still accepts its existing install/remove paths through a separate managed-Sys handoff. Neither
 handoff construction nor prevalidation replaces Core's fresh apply-time Plan/permission gate
 ([ADR 0123](../decisions/0123-typed-upgrade-handoffs-and-launcher-tests.md)).
+The `self_install.rs` facade delegates configuration orchestration to `self_install/config_upgrade.rs`;
+Update checks (including explicit generator evaluation), release installation and local binary
+publication have separate owners.
+Compatibility checks, env upgrade and Shell/App/Sys review/prevalidation/execution retain their
+existing order. Target routes normalize App/Shell file/command suffixes to categories, reject malformed
+Sys targets and limit stale pruning to App. The private `TargetUpgradeSummary` preserves each domain's
+counting units, restart hints and authoritative fatal report total; aggregate counters, lazy no-op
+headings and App-before-Sys failure precedence remain separate (ADR 0127).
 `upgrade --verbose` expands relevant scopes, while `upgrade --verbose --full-plan` displays every planned scope and step. Compact
 review combines known routine App/Shell cache writes into one internal maintenance summary;
 verbose review retains their category/file steps. Permissions, code boundaries, preservation,
@@ -801,11 +809,12 @@ CLI reports only a safe rollback count and journal-cleanup outcome.
 
 ## App update (`shine update`)
 
-App update loads active categories, the App manifest, and effective env once, then derives each
-`AppRow` and `LifecycleOutcomeV1` from the same `AppFileAssessment`. This keeps terminal filtering
-compatible while preventing an automatic generator from running a second time solely to build the
-structured result. Manifest-owned current files are `unchanged`; source, new-file, relocation, or
-missing-destination work is `pending`; user-modified destinations are `conflict` with a safe code
+App update uses `FrontendService` inspection over the captured active categories, App manifest and
+effective env. The CLI derives `AppRow` values from the same `AppFileInspection` records that Core
+projects into `LifecycleOutcomeV1`. Ordinary inspection never runs generators; explicit evaluation
+assesses each file once without a second run solely to build the structured result. No independent
+CLI test-only assessment remains (ADR 0127). Manifest-owned current files are `unchanged`; source,
+new-file, relocation, or missing-destination work is `pending`; user-modified destinations are `conflict` with a safe code
 and preservation effect. Preview effects describe resource/receipt work without copying the
 assessment's absolute paths or content into the reusable result.
 
@@ -878,6 +887,10 @@ policies, while `app/inspect.rs` separates filesystem observations from pure sta
 projection. Default inspection requires only `FileSystemObservationHost`; explicit evaluation
 retains the process/trust gates and performs the same one-pass assessment before reading installed
 content. Install preview uses the transformed static fallback without executing code (ADR 0124).
+Inspection regressions use this production path through `FrontendService`, including copy/JSON
+ownership, missing/new/relocated files, manual-generator snapshots and lifecycle projection. The CLI
+keeps presentation tests and its real-host refresh integration; removed test-only status helpers
+cannot serve as the behavior baseline (ADR 0127).
 The execution and reporting rules remain:
 
 1. `shine app install` always materializes first, then reuses the normal

@@ -179,43 +179,11 @@ pub async fn source_bytes_for_file(
 }
 
 #[cfg(test)]
-pub async fn source_hash_for_file(
-    config: &Config,
-    cat: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    env: &BTreeMap<String, String>,
-) -> Option<u64> {
-    let effective = match materialize_file_content(config, cat, file, env).await {
-        Ok(content) => content,
-        Err(error) => {
-            eprintln!(
-                "  {} {}/{}: source unavailable; no changes applied ({error:#})",
-                crate::colors::symbol("!"),
-                cat.name,
-                file.source_rel.display()
-            );
-            return None;
-        }
-    };
-    desired_content_hash(file, &effective).ok()
-}
-
-#[cfg(test)]
 pub fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u64> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(hash_content(bytes)),
         AppInstallStrategy::JsonMerge { managed_keys } => {
             json_merge::managed_hash(bytes, managed_keys)
-        }
-    }
-}
-
-#[cfg(test)]
-pub fn installed_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<Option<u64>> {
-    match &file.install_strategy {
-        AppInstallStrategy::Copy => Ok(Some(hash_content(bytes))),
-        AppInstallStrategy::JsonMerge { managed_keys } => {
-            json_merge::installed_hash(bytes, managed_keys)
         }
     }
 }
