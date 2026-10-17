@@ -1,6 +1,4 @@
 use super::manifest::{AppEntry, hash_content};
-#[cfg(test)]
-use crate::runtime::RealHost;
 use crate::runtime::{FileSystemHost, HostError};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -22,17 +20,6 @@ pub enum UninstallOutcome {
     NotFound,
     UserModified,
     DryRun,
-}
-
-#[cfg(test)]
-pub async fn install_bytes(
-    content: &[u8],
-    destination: &Path,
-    is_managed: bool,
-    dry_run: bool,
-    force: bool,
-) -> Result<InstallOutcome> {
-    install_bytes_with_host(&RealHost, content, destination, is_managed, dry_run, force).await
 }
 
 pub async fn install_bytes_with_host<H: FileSystemHost>(
@@ -85,15 +72,6 @@ pub async fn install_bytes_with_host<H: FileSystemHost>(
         .await
         .map_err(|error| host_context(error, "failed to install destination"))?;
     Ok(InstallOutcome::Installed { hash })
-}
-
-#[cfg(test)]
-pub async fn uninstall_entry(
-    entry: &AppEntry,
-    dry_run: bool,
-    force: bool,
-) -> Result<UninstallOutcome> {
-    uninstall_entry_with_host(&RealHost, entry, dry_run, force).await
 }
 
 pub async fn uninstall_entry_with_host<H: FileSystemHost>(

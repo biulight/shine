@@ -332,7 +332,11 @@ async fn ordinary_app_inspection_needs_only_observation_and_defers_generators() 
         runtime.context().clone(),
         runtime.presets().clone(),
     );
-    let rows = reader.inspect_apps(&mut NullObserver).await.unwrap();
+    let rows = crate::frontend::FrontendService::new(reader)
+        .inspect_apps(Vec::new())
+        .await
+        .unwrap()
+        .files;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].status, InspectionFileStatus::GeneratorNotEvaluated);
     assert_eq!(

@@ -33,8 +33,6 @@ use std::path::{Path, PathBuf};
 pub const SENTINEL_START: &str = "# >>> shine >>>";
 
 use shine_core::runtime::PathUpdateStatus;
-#[cfg(test)]
-use shine_core::runtime::ShellConfigUpdate;
 
 pub fn get_shell() -> Result<ShellType> {
     match std::env::var("SHELL") {

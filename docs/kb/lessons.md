@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-18 — Production-entry fixtures must not pre-satisfy mutation assertions
+
+- **Symptom**: the migrated legacy Shell sentinel test installed source commands through the real
+  handler, which also created the managed profile. Later wrapper assertions could pass even if the
+  completion entry did not write the profile.
+- **Fix**: retain the real receipt and launchers, remove the fixture's managed profile, then require
+  completion to report a profile update and recreate both source wrappers without changing receipts.
+- **Rule**: check the precondition immediately before the operation under test; production setup
+  must not silently perform the mutation the regression is meant to verify (ADR 0139).
+
 ## 2026-10-17 — Asset-removal tests must preserve production purge semantics
 
 - **Symptom**: migrating an asset-reader deletion test to approved uninstall initially asserted

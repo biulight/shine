@@ -3,7 +3,7 @@
 use super::*;
 
 impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
-    pub async fn run_app_hooks(
+    pub(in crate::runtime) async fn run_app_hooks(
         &self,
         request: AppHookRequest,
         observer: &mut impl RuntimeObserver,

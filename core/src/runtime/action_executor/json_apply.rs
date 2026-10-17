@@ -9,7 +9,7 @@ where
     /// Merge one top-level managed JSON subset while retaining the previous
     /// whole file only as same-directory transaction material. Recovery reads
     /// that material but restores only the declared keys.
-    pub async fn execute_app_managed_json_merge_approved(
+    pub(in crate::runtime) async fn execute_app_managed_json_merge_approved(
         &self,
         plan: &PlanV1,
         approval: &PlanApprovalV1,
@@ -164,7 +164,7 @@ where
 {
     /// Remove only the declared managed JSON keys while staging the exact
     /// pre-removal file for receipt-safe rollback.
-    pub async fn execute_app_managed_json_removal_approved(
+    pub(in crate::runtime) async fn execute_app_managed_json_removal_approved(
         &self,
         plan: &PlanV1,
         approval: &PlanApprovalV1,

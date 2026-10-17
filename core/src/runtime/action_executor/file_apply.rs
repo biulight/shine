@@ -10,7 +10,7 @@ where
     /// destination or by preserving an unowned destination at its fixed
     /// backup path. The journal remains active until its owner persists the
     /// corresponding receipt and commits the operation.
-    pub async fn execute_app_managed_file_creation_approved(
+    pub(in crate::runtime) async fn execute_app_managed_file_creation_approved(
         &self,
         plan: &PlanV1,
         approval: &PlanApprovalV1,
@@ -157,7 +157,7 @@ where
     /// Replace one existing static Copy receipt while retaining
     /// the previous managed bytes at a same-directory transaction path until
     /// the new receipt is durable.
-    pub async fn execute_app_managed_file_update_approved(
+    pub(in crate::runtime) async fn execute_app_managed_file_update_approved(
         &self,
         plan: &PlanV1,
         approval: &PlanApprovalV1,

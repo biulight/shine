@@ -9,13 +9,6 @@ enum AppInspectionMode {
 }
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
-    pub async fn inspect_apps(
-        &self,
-        _observer: &mut impl RuntimeObserver,
-    ) -> Result<Vec<AppFileInspection>> {
-        self.inspect_apps_read_only(&[]).await
-    }
-
     pub(crate) async fn inspect_apps_read_only(
         &self,
         selected: &[String],

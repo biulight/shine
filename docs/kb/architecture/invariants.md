@@ -38,6 +38,10 @@ bugs. Check this list before changing the modules named in each entry.
   Generic harness tests enter Frontend App/Shell inspection with captured inputs and virtual
   state; they must not preserve a second root-plus-path inspection algorithm. CLI lifecycle tests
   pass their confirmation choice explicitly to production approved handlers (ADR 0138).
+  App inspection capability and partial-failure tests enter `FrontendService::inspect_apps`.
+  Shell profile mutation tests use approved install/uninstall or the completion entry; source
+  wrappers derive from installed commands, not caller-supplied test lists. Internal profile and
+  App action/generator/hook helpers stay runtime-scoped (ADR 0139).
 - **Ordinary frontend inspection requires observation capability only.** App, Shell and Sys
   default inspection, including the safe `ReadOnlyFrontend` surface, require only
   `FileSystemObservationHost`. Sys status compares desired metadata with receipts; it must not

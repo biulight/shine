@@ -1,5 +1,3 @@
-#[cfg(test)]
-use super::profile::remove_path_from_shell_config;
 use super::report::{
     shell_cache_remove_summary_parts, style_dim, style_symbol, unlink_report_summary_parts,
 };
@@ -190,7 +188,7 @@ async fn handle_uninstall_with_reporter(
 mod tests {
     use super::super::ShellType;
     use super::super::install::handle_install_approved;
-    use super::super::profile::{append_path_to_shell_config, managed_shell_profile_path};
+    use super::super::profile::managed_shell_profile_path;
     use super::*;
     use std::path::PathBuf;
     use tokio::fs;
@@ -598,14 +596,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_clears_sentinel_from_shell_config() {
+    async fn approved_uninstall_clears_sentinel_from_shell_config() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config, false, &[])
+        handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
-        remove_path_from_shell_config(&config).await.unwrap();
+        handle_uninstall_approved(&config, None, false, false, true)
+            .await
+            .unwrap();
 
         let config_path =
             super::super::get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
@@ -614,14 +614,24 @@ mod tests {
             !content.contains(super::super::SENTINEL_START),
             "sentinel should be gone after remove"
         );
+        assert!(!managed_shell_profile_path(&config).exists());
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn remove_is_no_op_when_config_missing() {
+    async fn approved_uninstall_leaves_missing_shell_config_absent() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
+        let config_path =
+            super::super::get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
+        assert!(!config_path.exists());
         // No install — config file doesn't exist
-        remove_path_from_shell_config(&config).await.unwrap();
+        handle_uninstall_approved(&config, None, false, false, true)
+            .await
+            .unwrap();
+        assert!(!config_path.exists());
+        assert!(!managed_shell_profile_path(&config).exists());
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[cfg(unix)]

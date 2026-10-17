@@ -210,7 +210,7 @@ pub(crate) fn shell_sentinel_block(content: &str) -> Option<&str> {
 }
 
 impl<H: FileSystemHost> CoreRuntime<H> {
-    pub async fn install_shell_profile(
+    pub(in crate::runtime) async fn install_shell_profile(
         &self,
         config_paths: &[PathBuf],
         force: bool,
@@ -297,7 +297,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(removal)
     }
 
-    pub async fn remove_shell_config_blocks(
+    pub(in crate::runtime) async fn remove_shell_config_blocks(
         &self,
         config_paths: &[PathBuf],
     ) -> Result<Vec<PathBuf>> {

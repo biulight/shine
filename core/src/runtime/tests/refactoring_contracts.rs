@@ -1,4 +1,5 @@
 //! Cross-module contracts shared by the six runtime refactorings.
+use crate::frontend::FrontendService;
 use crate::install::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
 use crate::lifecycle::{LifecycleOperation, LifecycleStatus};
 use crate::plan::PlanApprovalV1;
@@ -92,7 +93,9 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['ENABLE'], when_env = '
         .unwrap();
         let runtime = CoreRuntime::new(host, context, snapshot);
         let before = runtime.host().operations().len();
-        let inspection = runtime.inspect_apps(&mut NullObserver).await.unwrap();
+        let frontend = FrontendService::new(runtime);
+        let inspection = frontend.inspect_apps(Vec::new()).await.unwrap().files;
+        let runtime = frontend.into_runtime();
         assert_eq!(inspection[0].status, InspectionFileStatus::UpdateAvail);
         assert_eq!(
             inspection[1].status,
@@ -215,7 +218,9 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['ENABLE'], when_env = '
                 .await
                 .is_err()
         );
-        let after = runtime.inspect_apps(&mut NullObserver).await.unwrap();
+        let frontend = FrontendService::new(runtime);
+        let after = frontend.inspect_apps(Vec::new()).await.unwrap().files;
+        let runtime = frontend.into_runtime();
         assert_eq!(after[0].status, InspectionFileStatus::UpToDate);
         assert_eq!(after[1].status, InspectionFileStatus::GeneratorNotEvaluated);
         // Partial generator failure must not permit replay of the earlier static update approval.

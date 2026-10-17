@@ -8,7 +8,7 @@ where
 {
     /// Stage one unchanged, receipt-owned, unprivileged static Copy at a
     /// same-directory transaction path until receipt removal is durable.
-    pub async fn execute_app_managed_file_removal_approved(
+    pub(in crate::runtime) async fn execute_app_managed_file_removal_approved(
         &self,
         plan: &PlanV1,
         approval: &PlanApprovalV1,

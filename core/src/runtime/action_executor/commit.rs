@@ -12,7 +12,7 @@ where
     /// Clear a completed journal only after the caller has durably persisted
     /// the matching App receipt state: ownership for create/update, or safe
     /// receipt absence for remove.
-    pub async fn commit_app_managed_file_operation(
+    pub(in crate::runtime) async fn commit_app_managed_file_operation(
         &self,
         execution: &AppOperationExecutionV1,
     ) -> Result<()> {

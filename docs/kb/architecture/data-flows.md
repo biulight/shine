@@ -274,6 +274,10 @@ receipt and actual destination, and Shell assertions use declared command availa
 check read-only Host operations. The retired generic `inspect_snapshot` path and its DTOs have
 no production role. CLI lifecycle tests call dispatch's `*_approved` handlers with an explicit
 confirmation choice; removing convenience wrappers does not change approval flow (ADR 0138).
+The observation-only App capability test and static/generated partial-failure regression also
+enter `FrontendService::inspect_apps`; the old observer-ignoring runtime forwarding method is
+removed. Read-only assessment, explicit generator evaluation and report projection remain the
+production owners (ADR 0139).
 
 Shell source discovery and description tests follow captured embedded/external snapshots into
 `CoreRuntime::shell_categories`; the retired CLI `.sh` scanners are not compatibility owners.
@@ -1059,10 +1063,17 @@ The Shell source/deployment model, canonical target parser, external mode, and v
 are Core-owned. The CLI deployment module consumes those types while retaining the current
 distribution adapter for embedded `rust-embed` assets and terminal presentation.
 
-Embedded install transactionally patches selected category assets into the managed cache, links
-executables into `~/.shine/bin/` (`bin_links.rs`), and appends a sentinel-guarded PATH block to the
-shell config (`shells/profile.rs`). Uninstall removes only Shine-managed symlinks/files and deletes
-the sentinel block precisely.
+Embedded install transactionally patches selected category assets into the managed cache and
+links executables into `~/.shine/bin/`. Core profile reconciliation places PATH setup, source-command
+wrappers and supported completion registration in a managed profile; the shell config contains a
+sentinel-guarded source entry. Uninstall removes only Shine-managed symlinks/files and deletes the
+sentinel block precisely. CLI `shells/profile.rs` retains path and activation-hint adapters only.
+
+Profile mutation tests exercise approved install/uninstall and the production completion entry.
+Completion acquires the Shell lifecycle lock, derives source commands from installed receipts and
+existing launchers, and calls runtime-scoped profile helpers. The legacy sentinel regression checks
+exact update status, preservation of surrounding text and unchanged receipt bytes. These tests no
+longer depend on CLI append/remove wrappers (ADR 0139).
 
 For external presets, `external_shell_mode = "snapshot"` first materializes the effective
 base/overlay category under `<shine_dir>/installed/shell/`; update compares that snapshot with the

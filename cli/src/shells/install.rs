@@ -1,6 +1,4 @@
 use super::links::link_conflict_render_lines;
-#[cfg(test)]
-use super::profile::append_path_to_shell_config;
 use super::profile::{
     managed_shell_profile_path, shell_source_command, source_command_activation_hint_lines,
 };
@@ -1220,13 +1218,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_writes_snippet_to_shell_config() {
+    async fn completion_install_writes_snippet_to_shell_config() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config, false, &[])
-            .await
-            .unwrap();
+        handle_completion_install(&config).await.unwrap();
 
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let content = fs::read_to_string(&config_path).await.unwrap();
@@ -1234,6 +1230,7 @@ mod tests {
             content.contains(super::super::SENTINEL_START),
             "sentinel should be present"
         );
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
@@ -1265,33 +1262,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_is_idempotent() {
+    async fn completion_install_is_idempotent() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config, false, &[])
-            .await
-            .unwrap();
-        append_path_to_shell_config(&config, false, &[])
-            .await
-            .unwrap();
+        handle_completion_install(&config).await.unwrap();
+        handle_completion_install(&config).await.unwrap();
 
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let content = fs::read_to_string(&config_path).await.unwrap();
         let count = content.matches(super::super::SENTINEL_START).count();
         assert_eq!(count, 1, "sentinel should appear exactly once");
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn append_is_idempotent_with_source_wrappers() {
+    async fn approved_install_is_idempotent_with_source_wrappers() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
-        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
 
-        append_path_to_shell_config(&config, false, &source_commands)
+        handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
-        append_path_to_shell_config(&config, false, &source_commands)
+        handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
 
@@ -1327,12 +1320,11 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn append_writes_source_entry_and_managed_profile() {
+    async fn approved_install_writes_source_entry_and_managed_profile() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
-        let source_commands = vec!["setproxy".to_string()];
 
-        append_path_to_shell_config(&config, false, &source_commands)
+        handle_install_approved(&config, Some("proxy/setproxy"), false, true)
             .await
             .unwrap();
 
@@ -1368,13 +1360,12 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn append_writes_both_windows_powershell_profiles() {
+    async fn approved_install_writes_both_windows_powershell_profiles() {
         let dir = make_temp_dir().await;
         let mut config = Config::new_for_test(&dir);
         config.shell_type = ShellType::PowerShell;
-        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
 
-        append_path_to_shell_config(&config, false, &source_commands)
+        handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
 
@@ -1405,9 +1396,19 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn append_refreshes_stale_sentinel_with_managed_profile_source() {
+    async fn completion_install_refreshes_stale_sentinel_with_installed_source_commands() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
+        let manifest_path = config.shine_dir().join("shell-manifest.toml");
+        let manifest_before = fs::read(&manifest_path).await.unwrap();
+        // Keep real receipts/launchers, but model the legacy layout with no managed profile.
+        // The completion entry itself must recreate the profile and its source wrappers.
+        let profile_path = managed_shell_profile_path(&config);
+        fs::remove_file(&profile_path).await.unwrap();
+        assert!(!profile_path.exists());
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent).await.unwrap();
@@ -1423,13 +1424,18 @@ mod tests {
         .await
         .unwrap();
 
-        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
-        let update = append_path_to_shell_config(&config, false, &source_commands)
+        let completion = crate::core_runtime::from_config(&config)
+            .await
+            .unwrap()
+            .install_shell_completion(false)
             .await
             .unwrap();
+        assert_eq!(completion.source_commands, ["setproxy", "usetproxy"]);
+        assert!(completion.profile.profile_updated);
+        assert_eq!(fs::read(&manifest_path).await.unwrap(), manifest_before);
 
         assert!(
-            matches!(update.config_status, PathUpdateStatus::Updated(_)),
+            completion.profile.config_status == PathUpdateStatus::Updated(config_path.clone()),
             "stale sentinel should be refreshed"
         );
         let content = fs::read_to_string(&config_path).await.unwrap();
@@ -1453,9 +1459,7 @@ mod tests {
             content.contains("after"),
             "non-managed content should be preserved"
         );
-        let profile = fs::read_to_string(managed_shell_profile_path(&config))
-            .await
-            .unwrap();
+        let profile = fs::read_to_string(&profile_path).await.unwrap();
         let setproxy_marker = wrapper_marker("setproxy", &config.shell_type);
         let usetproxy_marker = wrapper_marker("usetproxy", &config.shell_type);
         assert!(

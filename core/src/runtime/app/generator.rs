@@ -9,7 +9,7 @@ const GENERATOR_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 const GENERATOR_STDERR_LIMIT: usize = 64 * 1024;
 
 impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
-    pub async fn run_app_generator(
+    pub(in crate::runtime) async fn run_app_generator(
         &self,
         request: AppGeneratorRequest,
         observer: &mut impl RuntimeObserver,
