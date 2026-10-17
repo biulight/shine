@@ -1,5 +1,6 @@
 //! CLI-only compatibility, remediation and diff rendering.
 use super::*;
+use crate::preset_report::count_phrase;
 
 pub fn print_compatibility(plan: &PresetMigrationPlan) {
     print!("{}", compatibility_text(plan));
@@ -405,10 +406,6 @@ pub(super) fn quote_command_arg(path: &Path, platform: RuntimePlatform) -> Strin
     } else {
         crate::shell_quote::quote_if_needed(&value)
     }
-}
-
-pub(super) fn count_phrase(count: usize, singular: &str, plural: &str) -> String {
-    format!("{count} {}", if count == 1 { singular } else { plural })
 }
 
 pub(super) fn print_diffs(edits: &[PresetMigrationEdit]) {

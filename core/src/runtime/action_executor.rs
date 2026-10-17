@@ -366,6 +366,7 @@ use journal_io::*;
 use receipts::*;
 use recovery_apply::restore_json_keys_from_rollback;
 use recovery_assessment::*;
+use recovery_plan::observe_recovery_pair;
 
 #[cfg(test)]
 mod tests;

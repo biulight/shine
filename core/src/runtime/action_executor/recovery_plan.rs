@@ -211,3 +211,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         ))
     }
 }
+
+/// Both reads precede digest registration; preserve error and observation order.
+pub(super) async fn observe_recovery_pair(
+    host: &impl FileSystemObservationHost,
+    state: &mut SnapshotDigestBuilderV1,
+    action_id: &str,
+    destination: &Path,
+    rollback: &Path,
+) -> Result<(RecoveryFileObservation, RecoveryFileObservation)> {
+    let current = observe_recovery_file(host, destination).await?;
+    let rollback_current = observe_recovery_file(host, rollback).await?;
+    state.add_observation(format!("destination:{action_id}"), current.identity())?;
+    state.add_observation(format!("rollback:{action_id}"), rollback_current.identity())?;
+    Ok((current, rollback_current))
+}

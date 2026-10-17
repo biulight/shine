@@ -55,7 +55,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/action_executor.rs` | App journal/result/recovery models; `action_executor/` owns typed apply, commit, receipt and recovery phases |
 | `core/src/runtime/action_executor/{authority,file_apply,relocation_apply,json_apply,removal_apply,commit}.rs` | Shared exact approval/IR/permission gate and resource-specific transactions with receipt-gated commit |
 | `core/src/runtime/action_executor/commit/{action,files,json}.rs` | Borrowed App-only commit view, exhaustive dispatch and resource-specific rollback cleanup |
-| `core/src/runtime/action_executor/{inspection,recovery_plan,recovery_apply}.rs` | Journal inspection, receipt-conflict recovery orchestration and approved reverse-order rollback dispatch |
+| `core/src/runtime/action_executor/{inspection,recovery_plan,recovery_apply}.rs` | Journal inspection, receipt-conflict recovery orchestration, ordered destination/rollback observation and approved reverse-order rollback dispatch |
 | `core/src/runtime/action_executor/recovery_{plan,apply}_{file,json,relocation,removal}.rs` | Action-specific read-only recovery review and mutation handlers; rollback semantics remain domain-owned |
 | `core/src/runtime/action_executor/{receipts,recovery_assessment,file_ops,journal_io}.rs` | Ownership predicates, exact live-state assessments, privileged path dispatch and durable journal IO |
 | `core/src/runtime/shell_action_executor.rs` | Shell transaction contracts and shared resource observations |

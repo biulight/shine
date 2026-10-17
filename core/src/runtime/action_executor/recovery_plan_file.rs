@@ -181,16 +181,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             blocked,
             ..
         } = planning;
-        let current = observe_recovery_file(self.host(), destination).await?;
-        let rollback_current = observe_recovery_file(self.host(), rollback).await?;
-        state.add_observation(
-            format!("destination:{}", action.action_id),
-            current.identity(),
-        )?;
-        state.add_observation(
-            format!("rollback:{}", action.action_id),
-            rollback_current.identity(),
-        )?;
+        let (current, rollback_current) =
+            observe_recovery_pair(self.host(), state, &action.action_id, destination, rollback)
+                .await?;
         let (plan_action, code) = if matching_app_receipt(manifest, action) {
             match &rollback_current {
                 RecoveryFileObservation::Missing => {
