@@ -26,7 +26,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
 | `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, scoped operation-lock, process, privileged, and system mutation ports |
-| `core/src/runtime/launcher.rs` | Host-backed launcher preparation, exact comparison, installation and ownership probes; deterministic Unix and Windows delivery templates |
+| `core/src/runtime/launcher.rs` | Borrowed launcher inputs, shared resource preparation, exact comparison, Host installation and ownership probes |
+| `core/src/runtime/launcher/templates.rs` | Pure Unix/PowerShell/CMD launcher byte generation, quoting and legacy/current format reconstruction |
 | `core/src/runtime/launcher/tests.rs` | Launcher consumer regressions against production Host APIs and prepared transaction resources; no parallel test-only filesystem implementation |
 | `core/src/runtime/operation_lock.rs` | Persistent OS file locks and configuration-scoped App/Shell/Sys lifecycle serialization |
 | `core/src/runtime/tests/` | Test-only runtime harness and regressions spanning domain modules; `lifecycle_concurrency.rs` covers receipt preservation and approval revalidation under contention |
@@ -74,7 +75,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/app/assessment_tests.rs` | Consumer regressions for generator assessment, inspection priority, approved lifecycle reports and last-known-good receipts |
 | `core/src/runtime/app/outcome.rs` | Internal typed App file outcomes projected into the existing local report fields |
 | `core/src/runtime/app/lifecycle/{install,remove}.rs` | App preparation, per-file apply/receipt commit and finalization; caller retains lifecycle lock and exact approval |
-| `core/src/runtime/app/upgrade.rs` | Upgrade preparation, installed-file convergence, stale pruning, additions, receipt finalization and hooks under the existing lifecycle lock |
+| `core/src/runtime/app/upgrade.rs` | Upgrade phases under the lifecycle lock; typed unjournaled/update/relocation completion retains transaction guards through receipt save and commit |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
 | `core/src/runtime/shell.rs` | Shell models, lifecycle entry points, live render, launcher, cache, profile, and manifest helpers |
 | `core/src/runtime/shell/metadata.rs` | Snapshot-only metadata parsing, explicit declarations, native discovery and platform/source admission; no Host required |
@@ -85,7 +86,10 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/action/shell_receipt.rs` | Shared internal receipt delivery validation for manifest reconstruction, Action IR and recovery; persisted DTOs remain unchanged |
 | `core/src/runtime/sys.rs` | Managed Sys models, receipt assessment, managed-file/split-DNS primitives and run-manifest persistence |
 | `core/src/runtime/sys/{lifecycle,transaction}.rs`, `sys/lifecycle/` | Current-item/receipt-only selection, preflight, resource execution, result persistence and fresh transaction preparation; approved facade retains the lifecycle lock |
-| `core/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
+| `core/src/runtime/sys_bootstrap.rs` | Sys v2 batch/item orchestration, preflight, post-detection, profile reconciliation and persistence |
+| `core/src/runtime/sys_bootstrap/selection.rs` | Ordered explicit/profile/interactive/default selection without installation effects |
+| `core/src/runtime/sys_bootstrap/provider.rs` | Named fixed provider invocation, platform admission, preview and administrator requirement |
+| `core/src/runtime/sys_bootstrap/{detection,execution}.rs` | Captured-context presence probes and bounded installer execution/result classification respectively |
 | `core/src/runtime/sys_profile/` | Sys profile facade, composition and phase-sentinel/BOM handling in `compose.rs` and `blocks.rs` |
 | `core/src/runtime/sys_profile/{files,reconcile,merge,three_way}.rs` | Profile observations and EOL normalization, ordered writes, bounded Git adapter and pure fallback merge respectively |
 | `core/src/runtime/validation.rs` | Stable V1 diagnostics/report facade and ordered all-platform validation orchestration |
@@ -291,7 +295,8 @@ Config discovery priority is documented as a behavioral contract in
 | `cli/src/ssh/agent/connection.rs` | Handshake, exact session-token checks, status and broker request routing; secret-response zeroization |
 | `cli/src/ssh/agent/transfer.rs`, `transfer/{argv,relay}.rs` | Operand resolution/tool fallback/preview, pure trusted-context argv construction, and child/process-group supervision |
 | `cli/src/ssh/remote_client.rs` | Remote-side `shine local` handlers |
-| `cli/src/ssh/broker.rs` | Local authorization, TTY confirmation, and decrypt-on-demand broker |
+| `cli/src/ssh/broker.rs` | Frozen session authorization, nonce claims, operation serialization and confirmation/decryption/enrollment orchestration |
+| `cli/src/ssh/broker/interaction.rs` | Private interaction port, local TTY pause/restore/display/confirmation and owning confirmation guard; no policy or secret authority |
 
 See [`data-flows.md`](data-flows.md#ssh-environment-forwarding),
 [`invariants.md`](invariants.md#ssh-transfer), the

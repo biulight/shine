@@ -1212,3 +1212,153 @@ async fn app_upgrade_prune_receipt_failure_recovers_stale_static_copy() {
         .unwrap();
     assert_eq!(manifest.entries.len(), 1);
 }
+
+#[tokio::test]
+async fn app_upgrade_update_completion_keeps_receipt_before_commit_and_recovers_failed_save() {
+    use crate::install::{AppInstallStrategy, hash_content};
+    use crate::runtime::{APP_OPERATION_JOURNAL_FILE, FileSystemObservationHost};
+    for json in [false, true] {
+        for fail_receipt in [false, true] {
+            let (old, next, strategy) = if json {
+                (
+                    br#"{"managed":1,"user":"keep"}"#.as_slice(),
+                    br#"{"managed":2}"#.as_slice(),
+                    AppInstallStrategy::JsonMerge {
+                        managed_keys: vec!["managed".into()],
+                    },
+                )
+            } else {
+                (
+                    b"old".as_slice(),
+                    b"next".as_slice(),
+                    AppInstallStrategy::Copy,
+                )
+            };
+            let hash = |bytes: &[u8]| match &strategy {
+                AppInstallStrategy::Copy => hash_content(bytes),
+                AppInstallStrategy::JsonMerge { managed_keys } => {
+                    crate::runtime::managed_json::managed_json_hash(bytes, managed_keys).unwrap()
+                }
+            };
+            let metadata = format!(
+                "metadata_schema_version = 2\ndest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config'\n{}",
+                if json {
+                    "install_mode = 'json-merge'\nmanaged_keys = ['managed']\n"
+                } else {
+                    ""
+                }
+            );
+            let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+                .file("app/demo/shine.toml", metadata.into_bytes())
+                .file("app/demo/config", next.to_vec())
+                .build();
+            let runtime = runtime(snapshot);
+            let destination = runtime.context().home_dir.join(".config/demo/config");
+            let receipt_path = runtime.context().shine_dir.join("app-manifest.toml");
+            let journal = runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE);
+            runtime.host().put_file(&destination, old.to_vec());
+            AppManifest {
+                entries: vec![AppEntry {
+                    source: "app/demo/config".into(),
+                    destination: destination.clone(),
+                    backup: None,
+                    content_hash: hash(old),
+                    install_strategy: strategy.clone(),
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+                ..Default::default()
+            }
+            .save(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+            let before_receipt = runtime.host().read(&receipt_path).await.unwrap();
+            let request = AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo".into()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: Default::default(),
+            };
+            let plan = runtime.plan_apps(request.clone()).await.unwrap();
+            let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+            if fail_receipt {
+                runtime.host().fail_write_after(&receipt_path, 0);
+            }
+            let since = runtime.host().operations().len();
+            let applied = runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut crate::runtime::NullObserver,
+                    &mut Interaction,
+                )
+                .await;
+            if fail_receipt {
+                assert!(applied.is_err());
+                assert_eq!(
+                    runtime.host().read(&receipt_path).await.unwrap(),
+                    before_receipt
+                );
+                assert!(runtime.host().read(&journal).await.is_ok());
+                let recovery = runtime.plan_app_operation_recovery().await.unwrap();
+                let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+                runtime
+                    .recover_app_operation_approved(&approval)
+                    .await
+                    .unwrap();
+                let recovered = runtime.host().read(&destination).await.unwrap();
+                if json {
+                    assert_eq!(
+                        serde_json::from_slice::<serde_json::Value>(&recovered).unwrap(),
+                        serde_json::from_slice::<serde_json::Value>(old).unwrap()
+                    );
+                } else {
+                    assert_eq!(recovered, old);
+                }
+                assert_eq!(
+                    runtime.host().read(&receipt_path).await.unwrap(),
+                    before_receipt
+                );
+            } else {
+                assert_eq!(applied.unwrap().failed, 0);
+                let receipt = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    receipt.find_by_dest(&destination).unwrap().content_hash,
+                    hash(next)
+                );
+                let operations = runtime.host().operations();
+                let trace = &operations[since..];
+                let saved = trace
+                    .iter()
+                    .position(
+                        |op| matches!(op, HostOperation::Write(path) if path == &receipt_path),
+                    )
+                    .unwrap();
+                let rollback = crate::action::managed_file_rollback_path(&destination);
+                let cleaned = trace
+                    .iter()
+                    .position(|op| matches!(op, HostOperation::Remove(path) if path == &rollback))
+                    .unwrap();
+                assert!(
+                    saved < cleaned,
+                    "receipt must be durable before rollback cleanup"
+                );
+                if json {
+                    assert_eq!(
+                        serde_json::from_slice::<serde_json::Value>(
+                            &runtime.host().read(&destination).await.unwrap()
+                        )
+                        .unwrap()["user"],
+                        "keep"
+                    );
+                }
+            }
+            assert!(runtime.host().read(&journal).await.is_err());
+        }
+    }
+}

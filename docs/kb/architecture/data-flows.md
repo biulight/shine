@@ -486,6 +486,11 @@ Inspection, planning, launcher preparation and manifest construction share pure 
 built at the original Bun-policy assessment point. Native PowerShell and live Bun launcher format
 identities both participate in receipt current-ness, so a refreshed native launcher converges on
 subsequent upgrade review (ADR 0116).
+`launcher.rs` groups borrowed invocation fields and expands every native launcher resource through
+one preparation function. `launcher/templates.rs` owns pure platform bytes and quoting; it does not
+observe or mutate files. Creation and current-status reconstruction retain their distinct legacy
+name/format choices. Format markers, companion ownership and exact mode/byte checks remain unchanged
+(ADR 0128).
 
 Transaction preparation retains each journal Action and its execution payload in one ordered
 `PreparedShellStep`. Apply projects the Action IR from those records, validates it and its exact
@@ -821,7 +826,12 @@ assessment's absolute paths or content into the reusable result.
 ## App upgrade (`shine upgrade`)
 
 Core App upgrade re-applies presets (including re-running transforms
-with the *current* `[env]` values) to every manifest-tracked install, and cleans up stale entries
+with the *current* `[env]` values) through `app/upgrade.rs`. Its private completion enum distinguishes
+unjournaled work, journaled updates and journaled relocations. Only the last owns old-source cleanup;
+other relocated paths retain the existing uninstall/rollback behavior. Journaled variants retain the
+execution capability through immediate manifest save and transaction commit, then release it at the
+same per-file boundary. Receipt-save failure leaves the journal for explicit recovery (ADR 0128).
+The operation visits every manifest-tracked install and cleans up stale entries
 whose preset no longer exists. `shine upgrade app/<category>` selects manifest entries before the
 stale/update loop, so no other app category can be mutated. Shell and managed-sys targeted upgrades
 apply the same pre-mutation filtering at their own category/item boundaries. `env/upgrade.rs` does
@@ -1095,6 +1105,12 @@ profile retain their separate typed domain reports.
 Core selection resolves explicit ordered items, a named selection profile, or the existing
 interactive/default path through the interaction port. Explicit items accept only `mode = "init"`,
 deduplicate by first occurrence, and never widen to sibling items.
+`sys_bootstrap.rs` retains the batch/item coordinator. Private `selection.rs`, `provider.rs`,
+`detection.rs` and `execution.rs` own selection, named fixed provider invocations, presence probes and
+bounded installer/result handling. Provider preview and administrator requirements use the same
+invocation description. Every selected item and composed profile is preflighted before the first
+probe/installer or administrator prompt; execution stops after the first failed item. Successful
+items retain their existing additive profile and receipt handling (ADR 0128).
 
 Every executable sys manifest declares `version = 2`. Each init item has both `[items.detect]` and
 `[items.install]`; Rust performs the read-only detection, invokes a fixed Homebrew/APT/Winget
@@ -1355,6 +1371,11 @@ necessarily exposed in process argv/environments on the local and remote hosts; 
 `shine ssh --secret-broker` attaches a local `ssh::broker::BrokerSession` to the existing reverse
 control channel. The local process freezes the active config, encrypted direct-secret inputs, and
 the policy file for the lifetime of that SSH session; private-key operations remain local.
+The private `ssh/broker/interaction.rs` port owns terminal mechanics only. Session mode, exact
+allow-list/policy matching, nonce claims and the operation lock stay in `BrokerSession`. A successful
+confirmation returns an owning guard that spans subsequent decryption or enrollment persistence;
+dropping it restores termios and resumes SSH on success, error or cancellation. The blocking terminal
+task also retains its restoration guard if its async caller is cancelled before completion (ADR 0128).
 
 For a direct remote request, `shine env run --no-workspace --secret-broker --secret KEY[=ALIAS]
 -- <argv>` sends only the requested mapping and argv. The local agent checks the SSH session's

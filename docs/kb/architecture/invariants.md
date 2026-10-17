@@ -352,6 +352,11 @@ bugs. Check this list before changing the modules named in each entry.
   mutation. Missing `schema_version` is legacy v0, read-only loads never rewrite it, the next
   successful mutation writes Shell v2 or App/Sys v1, and an unsupported future version fails first. The inner Sys
   receipt `version` is independent of `sys-manifest.toml`'s schema version.
+- **Bootstrap preparation precedes every installer and administrator prompt.** Validate persistent
+  state, preflight all selected items and compose selected profile inputs first. Keep fixed provider
+  invocation/preview policy separate from Host execution; optional version probes belong only to
+  execution-time detection. Stop after the first failed item without widening the selection, and
+  retain existing successful-item profile/receipt persistence (ADR 0128).
 
 - **Removal must use domain ownership checks.** `PresetAssetReader::remove_prefix` enumerates
   embedded plus explicitly selected overlay asset paths; it is currently used only by tests and
@@ -371,6 +376,9 @@ bugs. Check this list before changing the modules named in each entry.
   template reads those from its installed receipt; exact receipt comparisons still refresh both
   changes through an approved lifecycle operation. Ownership/removal still key only on the
   marker + target, independent of `env` and dependency mode.
+  Pure templates live in `launcher/templates.rs`; grouping invocation fields must preserve exact
+  bytes and the distinct creation/status name reconstruction rules. Neither grouping nor a single
+  current resource permits replacing a foreign Windows companion (ADR 0128).
 - **Native CMD script escaping is receipt-versioned.** `native-cmd-v2` preserves apostrophes in
   a double-quoted PowerShell `-File` argument. Absent format fields retain exact legacy bytes for
   update, uninstall and recovery; PowerShell expression escaping must not be applied to CMD argv.
@@ -436,6 +444,10 @@ bugs. Check this list before changing the modules named in each entry.
   App commit converts to an App-only borrowed view and explicitly dispatches every supported
   variant, including creation with no rollback cleanup. Journal removal follows every resource's
   receipt/live-state checks and successful cleanup (ADR 0116).
+- **App upgrade completion owns the transaction guard.** Unjournaled, journaled-update and
+  journaled-relocation states are private variants; only journaled relocation owns old-source
+  cleanup. Keep the execution capability alive through immediate receipt save and commit, releasing
+  it at the same per-file boundary. Receipt-save failure retains explicit recovery state (ADR 0128).
 - **Shell phases share an exhaustive borrowed Action view.** Journal admission rejects non-Shell
   kinds before resource effects. Receipt-marker eligibility, commit preflight/cleanup and recovery
   projection/dispatch explicitly handle every supported Shell variant. Creation/update use matching
@@ -1131,6 +1143,9 @@ bugs. Check this list before changing the modules named in each entry.
   then an RAII guard restores raw termios and resumes SSH on success or every error path. Dropping
   the guard immediately after the yes/no prompt breaks terminal pinentry and permits concurrent
   requests to corrupt each other's TTY interaction.
+  The private interaction port owns terminal mechanics and the returned guard only. Mode/policy
+  authorization, nonce claims and the operation lock remain with the broker coordinator; a mock or
+  successful prompt is never itself secret-release authority (ADR 0128).
 - **Broker UI is rendered only inside the local-TTY guard.** OpenSSH raw mode disables normal LF
   cursor handling, so inspect/enrollment details printed before termios restoration form a
   staircase and can interleave with the remote shell. Confirmation accepts plain `y`/`yes` and

@@ -14,6 +14,14 @@ struct PreparedUpgrade {
     assessments: BTreeMap<String, AssessedAppFile>,
 }
 
+/// Holds the transaction capability until the receipt is durable and commit finishes.
+/// Relocation transactions already own source cleanup; other paths retain legacy cleanup.
+enum FileUpgradeCompletion {
+    Unjournaled,
+    JournaledUpdate(crate::runtime::AppOperationExecutionV1),
+    JournaledRelocation(crate::runtime::AppOperationExecutionV1),
+}
+
 impl<H> CoreRuntime<H>
 where
     H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost,
@@ -378,8 +386,7 @@ where
         let action_index = approved.action_irs.iter().position(|ir| {
                 matches!(ir.actions.as_slice(), [action] if action.target == target && action.resource == resource)
             });
-        let mut journal_execution = None;
-        let mut journaled_relocation = false;
+        let mut completion = FileUpgradeCompletion::Unjournaled;
         let installed = if let Some(index) = action_index {
             let action_ir = approved.action_irs.remove(index);
             let is_json = matches!(
@@ -395,7 +402,6 @@ where
                 )
             );
             let execution = if is_relocation {
-                journaled_relocation = true;
                 if matches!(
                     action_ir.actions.as_slice(),
                     [action] if matches!(
@@ -436,7 +442,11 @@ where
                 )
                 .await?
             };
-            journal_execution = Some(execution);
+            completion = if is_relocation {
+                FileUpgradeCompletion::JournaledRelocation(execution)
+            } else {
+                FileUpgradeCompletion::JournaledUpdate(execution)
+            };
             Ok(InstallOutcome::Installed { hash: desired_hash })
         } else {
             self.install_app_content(
@@ -472,7 +482,7 @@ where
                 return Ok(());
             }
         };
-        if relocated && !journaled_relocation {
+        if relocated && !matches!(&completion, FileUpgradeCompletion::JournaledRelocation(_)) {
             match self.uninstall_app_entry(&entry, false, false).await {
                 Ok(UninstallOutcome::Removed)
                 | Ok(UninstallOutcome::RestoredBackup { .. })
@@ -513,9 +523,13 @@ where
                 entry.backup.clone()
             },
         ));
-        if let Some(execution) = journal_execution {
-            save_manifest(&self.host, &self.context.shine_dir, manifest).await?;
-            self.commit_app_managed_file_operation(&execution).await?;
+        match completion {
+            FileUpgradeCompletion::Unjournaled => {}
+            FileUpgradeCompletion::JournaledUpdate(execution)
+            | FileUpgradeCompletion::JournaledRelocation(execution) => {
+                save_manifest(&self.host, &self.context.shine_dir, manifest).await?;
+                self.commit_app_managed_file_operation(&execution).await?;
+            }
         }
         changed.insert(category_name.to_string());
         if let Some(hint) = &assessment.file.restart_hint {

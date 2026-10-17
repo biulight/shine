@@ -1008,3 +1008,72 @@ async fn host_unlink_preserves_all_resources_when_any_launcher_is_foreign() {
         }
     }
 }
+
+// Digests are captured from the pre-refactor production templates, including quoting and EOLs.
+#[test]
+#[cfg(unix)]
+fn launcher_template_bytes_remain_compatible() {
+    use sha2::{Digest, Sha256};
+    let source = Path::new("/captured root/O'Connor/$tools/run.ts");
+    let env = vec!["SOURCE=TARGET".to_string(), "PLAIN".to_string()];
+    let cases = [
+        unix_bun_launcher_content(source, "run", BunDependencyMode::Disabled, &[]),
+        unix_bun_launcher_content(source, "run", BunDependencyMode::Locked, &env),
+        unix_live_launcher_content(
+            source,
+            "run",
+            LinkRuntime::Bun,
+            BunDependencyMode::Locked,
+            &env,
+            "demo/run",
+        ),
+        unix_live_launcher_content(
+            source,
+            "run",
+            LinkRuntime::Native,
+            BunDependencyMode::Disabled,
+            &[],
+            "demo/run",
+        ),
+        unix_live_bun_launch_content(source, Path::new("/captured config"), "demo/run"),
+        powershell_live_bun_launch_content(source, Path::new("/captured config"), "demo/run"),
+        cmd_live_bun_launch_content(source, Path::new("/captured config"), "demo/run"),
+        cmd_shim_content(
+            Path::new(r"C:\Users\O'Connor\run.ps1"),
+            LinkRuntime::Native,
+            "run",
+            BunDependencyMode::Disabled,
+            &[],
+            None,
+        ),
+        correct_native_cmd_path(
+            cmd_shim_content(
+                Path::new(r"C:\Users\O'Connor\run.ps1"),
+                LinkRuntime::Native,
+                "run",
+                BunDependencyMode::Disabled,
+                &[],
+                None,
+            ),
+            Path::new(r"C:\Users\O'Connor\run.ps1"),
+        ),
+    ];
+    let hashes = cases
+        .iter()
+        .map(|content| format!("{:x}", Sha256::digest(content.as_bytes())))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        hashes,
+        [
+            "d3435639a50a3b45af95d7248b65ad839b25681fef3aebfa0a3f105396dae229",
+            "2e2562a7c7618d9dd85a1208664a9087a36c301c2b4d0668ea8c008f0a6f3cd3",
+            "6684c697a19379494c3836f1cbffe8c61611ad3d3b992fbed476b90890b223a6",
+            "811f87e50f688a79ce4f4959d4fe048fba35e068dce8e68fa738b3724f1ffd87",
+            "d507e930ce521bdbf0a2f6a5cffbb9b19f5c0ca4187d7affd32135e3262bbc7e",
+            "bf1197e1801687e77f0a53ed308f43d17bdde3bc29fdb6845253de17cde00b98",
+            "8a1803b944a0397212f89fd71a9a6047a371879659cfcd2a62223b7165bfc7c9",
+            "5be59a029c6e43b298b30770602e335da183ce02c4d8028372a55b5d31ee9737",
+            "8bdc6e0f573f3efe2d7211257766e4d90ed55179d87844d4a8d918e6e6c2f466"
+        ]
+    );
+}
