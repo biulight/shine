@@ -200,6 +200,15 @@ Shell upgrade planning also projects source-command receipts in execution order 
 read-only profile-file comparison. Only observed profile differences contribute profile steps and
 permissions; the compact review labels them as internal Shell integration (ADR 0096).
 
+The CLI `status/shell.rs` adapter preserves command identity and Core status/attention flags while
+projecting existing display fields. List grouping uses typed severity, update outcomes and pending
+matching use explicit `shell/<category>/<command>` identities, and diff/uninstall selectors use
+`<category>/<command>`. Lifecycle target construction retains the legacy terminal-component
+normalization for non-canonical receipt command names. Display labels and symbols never feed those
+decisions. Snapshot capture,
+read order, category sorting, last-row tie selection and partial-install rules stay unchanged;
+this projection does not grant approval or launcher ownership (ADR 0125).
+
 ## Frontend Service inventory
 
 The CLI and future adapters construct `FrontendService` from the same captured `CoreRuntime`,
@@ -638,7 +647,11 @@ retained files from receipt cleanup and offers no force override.
 
 `planner/app_actions.rs` remains the approved factory entry. It validates approval before reading
 Host state, resolves each static file from the captured snapshot and initial manifest, then dispatches
-in the existing order to private JSON relocation, Copy relocation, JSON merge or Copy handlers.
+in the existing order to private JSON relocation, Copy relocation, JSON merge or Copy handlers. Pure JSON
+subset operations come from `runtime/managed_json.rs`, shared by App hashing adapters, planners and
+executors/recovery. Its extraction changes no bytes, hashes, parsing/error order or missing/partial
+subset semantics. Host reads/writes, exact approval, journal publication and receipt transitions
+remain in the existing domain phases (ADR 0125).
 A per-file input owns desired bytes only in memory and carries the same request/Plan/manifest/file
 references; handlers retain their source/destination/backup/rollback observation order, skip rules
 and diagnostics. One common wrapper retains Action/operation IDs and file ordering. Ordinary Create/

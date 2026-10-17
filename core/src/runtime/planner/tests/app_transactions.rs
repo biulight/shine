@@ -451,8 +451,11 @@ async fn approved_app_upgrade_journals_key_owned_json_relocation() {
             source: "app/demo/settings.json".to_string(),
             destination: previous.clone(),
             backup: None,
-            content_hash: crate::runtime::app::managed_json_hash(previous_source, &managed_keys)
-                .unwrap(),
+            content_hash: crate::runtime::managed_json::managed_json_hash(
+                previous_source,
+                &managed_keys,
+            )
+            .unwrap(),
             install_strategy: crate::install::AppInstallStrategy::JsonMerge {
                 managed_keys: managed_keys.clone(),
             },
@@ -531,7 +534,7 @@ async fn approved_app_upgrade_journals_key_owned_json_relocation() {
     assert_eq!(entry.destination, desired);
     assert_eq!(
         entry.content_hash,
-        crate::runtime::app::managed_json_hash(
+        crate::runtime::managed_json::managed_json_hash(
             br#"{"containersProxy":"next"}"#,
             &["containersProxy".to_string()],
         )
@@ -2134,8 +2137,11 @@ async fn approved_app_upgrade_prune_journals_stale_json_keys() {
             source: "app/demo/config.json".to_string(),
             destination: destination.clone(),
             backup: None,
-            content_hash: crate::runtime::app::managed_json_hash(managed_source, &managed_keys)
-                .unwrap(),
+            content_hash: crate::runtime::managed_json::managed_json_hash(
+                managed_source,
+                &managed_keys,
+            )
+            .unwrap(),
             install_strategy: crate::install::AppInstallStrategy::JsonMerge { managed_keys },
             uses_env: false,
             requires_admin: false,

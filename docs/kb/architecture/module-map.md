@@ -65,6 +65,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence plus target-local and current-Preset batch `shine trust` workflows |
 | `core/src/runtime/app_script.rs` | Per-invocation captured App script/helper materialization, fixed execution paths, and cleanup |
 | `core/src/runtime/app.rs` | App models and typed content/generator states, install/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `core/src/runtime/managed_json.rs` | Host-free top-level managed-key extraction, merge/remove/restore, comparison and stable subset hash/serialization shared by App assessment, planning, execution and recovery |
 | `core/src/runtime/app/assessment.rs` | Snapshot-only content assessment and named install-preview/install/upgrade/evaluated-inspection generator policies |
 | `core/src/runtime/app/inspect.rs` | Observation-only ordinary inspection, explicit generator evaluation adapter and pure inspection projection |
 | `core/src/runtime/app/assessment_tests.rs` | Consumer regressions for generator assessment, inspection priority, approved lifecycle reports and last-known-good receipts |
@@ -238,7 +239,8 @@ logic.
 | `core/src/runtime/schema.rs` | Generated JSON Schemas for authoring reports, fixtures, and bundle manifests |
 | `cli/src/git_pull.rs` | FF-only external source pulls and managed overlay mirroring |
 | `cli/src/state.rs` | Versioned runtime-state cleanup |
-| `cli/src/status.rs` | Core App/Shell inspection-to-terminal row adapter |
+| `cli/src/status.rs` | App inspection-to-terminal row adapter and stable row re-exports |
+| `cli/src/status/shell.rs` | Pure Shell inspection-to-row projection, stable command selectors/targets and typed CLI status priority |
 
 Config discovery priority is documented as a behavioral contract in
 [`data-flows.md`](data-flows.md#config-discovery) and
@@ -299,7 +301,7 @@ See [`data-flows.md`](data-flows.md#ssh-environment-forwarding),
 | `cli/src/update_check/` | Release lookup, cache, notification, and binary upgrade |
 | `cli/src/self_install.rs` | Self-install and installed-configuration upgrade orchestration |
 | `cli/src/home.rs` | Sudo-aware home discovery and path expansion |
-| `cli/src/test_support.rs` | Shared cross-lib/bin test environment mutex |
+| `cli/src/test_support.rs` | Shared process-state restoration guard and approved virtual Core installation fixtures |
 
 ## Embedded preset tree
 

@@ -554,12 +554,16 @@ fn should_print_link_summary(verbose: bool, changed_count: usize, conflict_count
 }
 
 pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<LifecycleResultV1> {
+    Ok(shell_update_lifecycle_from_rows(
+        crate::status::build_shell_rows(config).await?,
+    ))
+}
+
+fn shell_update_lifecycle_from_rows(
+    rows: impl IntoIterator<Item = crate::status::ShellRow>,
+) -> LifecycleResultV1 {
     let mut result = LifecycleResultV1::new(LifecycleOperation::Update, false);
-    for row in crate::status::build_shell_rows(config)
-        .await?
-        .into_iter()
-        .filter(|row| row.is_installed)
-    {
+    for row in rows.into_iter().filter(|row| row.is_installed) {
         let mut effects = Vec::new();
         if row.changes.iter().any(|change| {
             matches!(
@@ -591,17 +595,13 @@ pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<L
             effects.push(LifecycleEffect::ResourceWritePreviewed);
         }
         let outcome = LifecycleOutcomeV1::new(
-            format!(
-                "shell/{}/{}",
-                row.category,
-                row.label.split('/').next_back().unwrap_or(&row.label)
-            ),
+            row.target(),
             None::<String>,
             if row.link_conflict {
                 LifecycleStatus::Conflict
             } else if row.preset_missing {
                 LifecycleStatus::Preserved
-            } else if row.status_sym == "↑" {
+            } else if row.status() == crate::status::ShellRowStatus::UpdateAvail {
                 LifecycleStatus::Pending
             } else {
                 LifecycleStatus::Unchanged
@@ -620,7 +620,7 @@ pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<L
             outcome
         });
     }
-    Ok(result)
+    result
 }
 
 pub async fn handle_completion_install(config: &Config) -> Result<()> {
@@ -691,6 +691,91 @@ mod tests {
     use crate::config::Config;
     use std::path::PathBuf;
     use tokio::fs;
+
+    #[tokio::test]
+    async fn shell_update_outcomes_keep_core_identity_conflicts_and_missing_receipts_read_only() {
+        use shine_core::runtime::{
+            CoreRuntime, FileSystemObservationHost, HostOperation, PresetSnapshot,
+            PresetSourceKind, command_path_for_name,
+        };
+        for state in ["current", "update", "conflict", "missing"] {
+            let installed = crate::test_support::installed_shell_runtime().await;
+            let mut snapshot = installed.presets().clone();
+            if state == "update" {
+                let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
+                for (logical, bytes) in snapshot.files() {
+                    builder = builder.file(
+                        logical,
+                        if logical == "shell/demo/run.ts" {
+                            b"console.log('changed');\n".to_vec()
+                        } else {
+                            bytes.clone()
+                        },
+                    );
+                }
+                snapshot = builder.build();
+            } else if state == "conflict" {
+                installed.host().put_file(
+                    command_path_for_name(&installed.context().bin_dir, "run".as_ref()),
+                    b"foreign launcher".to_vec(),
+                );
+            } else if state == "missing" {
+                snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded).build();
+            }
+            let runtime = CoreRuntime::new(
+                installed.host().clone(),
+                installed.context().clone(),
+                snapshot,
+            );
+            let manifest_path = runtime.context().shine_dir.join("shell-manifest.toml");
+            let manifest = runtime.host().read(&manifest_path).await.unwrap();
+            let before = runtime.host().operations().len();
+            let rows = runtime
+                .inspect_shells()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|file| {
+                    let mut row = crate::status::ShellRow::from(file);
+                    row.label = "friendly label/other".into();
+                    row.status_sym = "✗";
+                    row
+                });
+            let result = shell_update_lifecycle_from_rows(rows);
+            assert_eq!(result.outcomes.len(), 1, "{state}: {result:?}");
+            let outcome = &result.outcomes[0];
+            assert_eq!(outcome.target, "shell/demo/run");
+            let (status, codes) = match state {
+                "current" => (LifecycleStatus::Unchanged, vec![]),
+                "update" => (LifecycleStatus::Pending, vec![]),
+                "conflict" => (LifecycleStatus::Conflict, vec!["shell_command_conflict"]),
+                "missing" => (LifecycleStatus::Preserved, vec!["shell_preset_missing"]),
+                _ => unreachable!(),
+            };
+            assert_eq!(outcome.status, status);
+            assert_eq!(outcome.diagnostic_codes, codes);
+            if state == "conflict" {
+                assert_eq!(
+                    outcome.effects,
+                    vec![LifecycleEffect::UserResourcePreserved]
+                );
+            } else if state == "update" {
+                assert_eq!(
+                    outcome.effects,
+                    vec![
+                        LifecycleEffect::CacheWritePreviewed,
+                        LifecycleEffect::ResourceWritePreviewed
+                    ]
+                );
+            }
+            assert!(
+                runtime.host().operations()[before..]
+                    .iter()
+                    .all(|op| matches!(op, HostOperation::Read(_)))
+            );
+            assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), manifest);
+        }
+    }
 
     #[test]
     fn upgrade_section_hides_no_op_without_full_output_and_shows_changes() {

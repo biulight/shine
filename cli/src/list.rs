@@ -4,7 +4,8 @@ use crate::config::Config;
 use crate::info::UpdateDiffs;
 use crate::output;
 use crate::status::{
-    AppRow, FileStatus, ShellRow, build_app_rows_with_lifecycle_options, build_shell_rows,
+    AppRow, FileStatus, ShellRow, ShellRowStatus, build_app_rows_with_lifecycle_options,
+    build_shell_rows,
 };
 use crate::sys;
 use anyhow::{Context, Result};
@@ -111,20 +112,7 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
         .filter(|outcome| outcome.status == shine_core::lifecycle::LifecycleStatus::Pending)
         .map(|outcome| outcome.target.as_str())
         .collect::<BTreeSet<_>>();
-    let update_shell: Vec<&ShellRow> = shell_rows
-        .iter()
-        .filter(|r| {
-            r.is_installed
-                && pending_shell.contains(
-                    format!(
-                        "shell/{}/{}",
-                        r.category,
-                        r.label.split('/').next_back().unwrap_or(&r.label)
-                    )
-                    .as_str(),
-                )
-        })
-        .collect();
+    let update_shell = pending_shell_rows(&shell_rows, &pending_shell);
 
     let cats = load_active_categories(config, None)
         .await
@@ -231,7 +219,9 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
                 pad,
                 colors::status_label(row.status_text, row.status_sym),
             );
-            update_diffs.print_shell_for_row(config, &row.label).await?;
+            update_diffs
+                .print_shell_for_row(config, &row.selector())
+                .await?;
         }
     }
 
@@ -303,6 +293,12 @@ pub async fn handle_update_list(config: &Config, diff: bool, run_generators: boo
     Ok(true)
 }
 
+fn pending_shell_rows<'a>(rows: &'a [ShellRow], pending: &BTreeSet<&str>) -> Vec<&'a ShellRow> {
+    rows.iter()
+        .filter(|row| row.is_installed && pending.contains(row.target().as_str()))
+        .collect()
+}
+
 fn shell_attention_lines(rows: &[&ShellRow]) -> Vec<String> {
     let mut lines = Vec::new();
     for row in rows
@@ -314,7 +310,7 @@ fn shell_attention_lines(rows: &[&ShellRow]) -> Vec<String> {
             lines.push("    Launcher preserved; resolve its ownership conflict before upgrading this target.".to_string());
         }
         if row.preset_missing {
-            lines.push(format!("    Restore the Preset or review `shine shell uninstall {}` to remove the installed command.", row.label));
+            lines.push(format!("    Restore the Preset or review `shine shell uninstall {}` to remove the installed command.", row.selector()));
         }
     }
     lines
@@ -467,12 +463,7 @@ pub async fn handle_status_list(config: &Config, diff: bool, run_generators: boo
     let shell_statuses = if diff {
         installed_shell
             .iter()
-            .map(|row| ShellLifecycleStatus {
-                category: row.category.clone(),
-                detail_label: row.label.clone(),
-                status_sym: row.status_sym,
-                status_text: row.status_text,
-            })
+            .map(|row| ShellLifecycleStatus::from(*row))
             .collect()
     } else {
         shell_category_statuses(&all_shell)
@@ -513,24 +504,24 @@ pub async fn handle_status_list(config: &Config, diff: bool, run_generators: boo
                 &row.category
             };
             let pad = " ".repeat(label_width.saturating_sub(label.len()));
-            let run_hint = if row.status_sym == "↑" {
+            let run_hint = if row.status == ShellRowStatus::UpdateAvail {
                 format!("  {}", colors::dim("run `shine upgrade`"))
             } else {
                 String::new()
             };
             println!(
                 "  {}  {}{}  {}{}",
-                colors::symbol(row.status_sym),
+                colors::symbol(row.status.symbol()),
                 label,
                 pad,
-                colors::status_label(row.status_text, row.status_sym),
+                colors::status_label(row.status_text, row.status.symbol()),
                 run_hint,
             );
             if diff
-                && row.status_sym == "↑"
+                && row.status == ShellRowStatus::UpdateAvail
                 && let Some(diffs) = &update_diffs
             {
-                diffs.print_shell_for_row(config, &row.detail_label).await?;
+                diffs.print_shell_for_row(config, &row.selector).await?;
             }
         }
     }
@@ -778,8 +769,21 @@ fn shell_categories(rows: &[&ShellRow]) -> Vec<String> {
 struct ShellLifecycleStatus {
     category: String,
     detail_label: String,
-    status_sym: &'static str,
+    selector: String,
+    status: ShellRowStatus,
     status_text: &'static str,
+}
+
+impl From<&ShellRow> for ShellLifecycleStatus {
+    fn from(row: &ShellRow) -> Self {
+        Self {
+            category: row.category.clone(),
+            detail_label: row.label.clone(),
+            selector: row.selector(),
+            status: row.status(),
+            status_text: row.status_text,
+        }
+    }
 }
 
 fn shell_category_statuses(rows: &[&ShellRow]) -> Vec<ShellLifecycleStatus> {
@@ -795,42 +799,29 @@ fn shell_category_statuses(rows: &[&ShellRow]) -> Vec<ShellLifecycleStatus> {
             }
             if rows.len() == 1 {
                 let row = rows[0];
-                return Some(ShellLifecycleStatus {
-                    category: category.to_string(),
-                    detail_label: row.label.clone(),
-                    status_sym: row.status_sym,
-                    status_text: row.status_text,
-                });
+                return Some(ShellLifecycleStatus::from(row));
             }
             let selected = rows
                 .iter()
                 .filter(|row| row.is_installed)
-                .max_by_key(|row| shell_status_priority(row.status_sym))
+                .max_by_key(|row| row.status().priority())
                 .expect("grouped shell category is non-empty");
             let partially_installed = rows.iter().any(|row| !row.is_installed);
-            let (status_sym, status_text) = if partially_installed && selected.status_sym == "✓" {
-                ("~", "partial install")
-            } else {
-                (selected.status_sym, selected.status_text)
-            };
+            let (status, status_text) =
+                if partially_installed && selected.status() == ShellRowStatus::UpToDate {
+                    (ShellRowStatus::Partial, "partial install")
+                } else {
+                    (selected.status(), selected.status_text)
+                };
             Some(ShellLifecycleStatus {
                 category: category.to_string(),
                 detail_label: category.to_string(),
-                status_sym,
+                selector: category.to_string(),
+                status,
                 status_text,
             })
         })
         .collect()
-}
-
-fn shell_status_priority(sym: &str) -> usize {
-    match sym {
-        "!" => 4,
-        "~" => 3,
-        "↑" => 2,
-        "✓" => 1,
-        _ => 0,
-    }
 }
 
 struct AppLifecycleStatus {
@@ -993,6 +984,8 @@ mod tests {
     fn shell_row(status_text: &'static str, is_installed: bool) -> ShellRow {
         ShellRow {
             category: "proxy".to_string(),
+            command_name: "setproxy".to_string(),
+            file_status: FileStatus::Partial,
             symbol: String::new(),
             label: "proxy/setproxy".to_string(),
             status_sym: "~",
@@ -1032,6 +1025,150 @@ mod tests {
         assert!(!lines.contains("shine upgrade"));
         assert!(!lines.contains("up-to-date"));
         assert!(shell_attention_lines(&[&current]).is_empty());
+    }
+
+    #[tokio::test]
+    async fn shell_rows_keep_identity_and_partial_status_when_display_fields_change() {
+        use shine_core::runtime::{CoreRuntime, PresetSnapshot, PresetSourceKind};
+        let runtime = crate::test_support::installed_shell_runtime().await;
+        let mut rows = runtime
+            .inspect_shells()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(ShellRow::from)
+            .collect::<Vec<_>>();
+        let run = rows
+            .iter_mut()
+            .find(|row| row.command_name == "run")
+            .unwrap();
+        run.label = "friendly label/with/slashes".into();
+        run.status_sym = "↑"; // Presentation must not manufacture an applicable update.
+        let statuses = shell_category_statuses(&rows.iter().collect::<Vec<_>>());
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].status, ShellRowStatus::Partial);
+        assert_eq!(statuses[0].status_text, "partial install");
+
+        let mut snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded);
+        for (logical, bytes) in runtime.presets().files() {
+            snapshot = snapshot.file(
+                logical,
+                if logical == "shell/demo/run.ts" {
+                    b"console.log('changed');\n".to_vec()
+                } else {
+                    bytes.clone()
+                },
+            );
+        }
+        let updated = CoreRuntime::new(
+            runtime.host().clone(),
+            runtime.context().clone(),
+            snapshot.build(),
+        );
+        let mut rows = updated
+            .inspect_shells()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(ShellRow::from)
+            .collect::<Vec<_>>();
+        let run = rows
+            .iter_mut()
+            .find(|row| row.command_name == "run")
+            .unwrap();
+        assert_eq!(run.status(), ShellRowStatus::UpdateAvail);
+        run.label = "friendly label/with/slashes".into();
+        run.status_sym = "!"; // Display changes cannot hide the stable pending target either.
+        let detail = ShellLifecycleStatus::from(&*run);
+        assert_eq!(detail.detail_label, "friendly label/with/slashes");
+        assert_eq!(detail.selector, "demo/run");
+        assert_eq!(detail.status, ShellRowStatus::UpdateAvail);
+
+        let pending = pending_shell_rows(&rows, &BTreeSet::from(["shell/demo/run"]));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].target(), "shell/demo/run");
+        assert_eq!(pending[0].selector(), "demo/run");
+        assert_eq!(
+            shell_category_statuses(&rows.iter().collect::<Vec<_>>())[0].status,
+            ShellRowStatus::UpdateAvail
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_preset_guidance_uses_receipt_identity_instead_of_display_label() {
+        use shine_core::runtime::{CoreRuntime, PresetSnapshot, PresetSourceKind};
+        let runtime = crate::test_support::installed_shell_runtime().await;
+        let missing = CoreRuntime::new(
+            runtime.host().clone(),
+            runtime.context().clone(),
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        );
+        let mut rows = missing
+            .inspect_shells()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(ShellRow::from)
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].preset_missing && rows[0].is_installed);
+        rows[0].label = "friendly label".into();
+        let attention = shell_attention_lines(&[&rows[0]]).join("\n");
+        assert!(attention.contains("! shell/friendly label"));
+        assert!(attention.contains("shine shell uninstall demo/run"));
+        assert!(!attention.contains("uninstall friendly label"));
+        assert!(!attention.contains("shine upgrade"));
+        assert_eq!(
+            shell_category_statuses(&[&rows[0]])[0].status,
+            ShellRowStatus::Attention
+        );
+    }
+
+    #[test]
+    fn typed_shell_priority_keeps_attention_order_and_last_row_ties() {
+        let mut current = shell_row("current", true);
+        current.file_status = FileStatus::UpToDate;
+        let mut pending = shell_row("pending", true);
+        pending.file_status = FileStatus::UpdateAvail;
+        let partial = shell_row("partial", true);
+        let mut modified = shell_row("modified", true);
+        modified.file_status = FileStatus::UserModified;
+        let mut missing = shell_row("missing", true);
+        missing.file_status = FileStatus::Missing;
+        let mut conflict = shell_row("conflict", true);
+        conflict.link_conflict = true;
+        for (rows, status, text) in [
+            (
+                vec![&current, &pending],
+                ShellRowStatus::UpdateAvail,
+                "pending",
+            ),
+            (vec![&pending, &partial], ShellRowStatus::Partial, "partial"),
+            (
+                vec![&partial, &modified],
+                ShellRowStatus::Partial,
+                "modified",
+            ),
+            (
+                vec![&modified, &partial],
+                ShellRowStatus::Partial,
+                "partial",
+            ),
+            (
+                vec![&partial, &missing],
+                ShellRowStatus::Attention,
+                "missing",
+            ),
+            (
+                vec![&missing, &conflict],
+                ShellRowStatus::Attention,
+                "conflict",
+            ),
+        ] {
+            let grouped = shell_category_statuses(&rows);
+            assert_eq!(grouped[0].status, status);
+            assert_eq!(grouped[0].status_text, text);
+        }
     }
 
     #[test]
@@ -1121,9 +1258,12 @@ mod tests {
     fn default_shell_status_collapses_commands_and_reports_partial_install() {
         let mut installed = shell_row("up-to-date", true);
         installed.status_sym = "✓";
+        installed.file_status = FileStatus::UpToDate;
         let mut missing = shell_row("not installed", false);
         missing.label = "proxy/usetproxy".to_string();
         missing.status_sym = "✗";
+        missing.file_status = FileStatus::NotInstalled;
+        missing.command_name = "usetproxy".into();
 
         let statuses = shell_category_statuses(&[&installed, &missing]);
 

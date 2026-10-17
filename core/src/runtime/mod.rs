@@ -16,6 +16,7 @@ mod host;
 mod inspection;
 mod launcher;
 mod lint;
+mod managed_json;
 mod memory;
 mod metadata_diagnostic;
 mod operation_lock;

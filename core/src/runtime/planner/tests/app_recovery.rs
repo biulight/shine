@@ -275,7 +275,7 @@ async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
             source: "app/demo/settings.json".to_string(),
             destination: previous.clone(),
             backup: None,
-            content_hash: crate::runtime::app::managed_json_hash(
+            content_hash: crate::runtime::managed_json::managed_json_hash(
                 br#"{"proxy":"previous"}"#,
                 &managed_keys,
             )
@@ -398,7 +398,7 @@ async fn json_relocation_receipt_failure_restores_only_owned_keys_on_both_sides(
             source: "app/demo/settings.json".to_string(),
             destination: previous.clone(),
             backup: None,
-            content_hash: crate::runtime::app::managed_json_hash(
+            content_hash: crate::runtime::managed_json::managed_json_hash(
                 br#"{"proxy":"previous"}"#,
                 &managed_keys,
             )
@@ -499,7 +499,7 @@ async fn committed_json_relocation_cleanup_preserves_user_owned_values_on_both_s
             source: "app/demo/settings.json".to_string(),
             destination: previous.clone(),
             backup: None,
-            content_hash: crate::runtime::app::managed_json_hash(
+            content_hash: crate::runtime::managed_json::managed_json_hash(
                 br#"{"proxy":"previous"}"#,
                 &managed_keys,
             )

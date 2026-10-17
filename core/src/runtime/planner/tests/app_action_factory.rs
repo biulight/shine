@@ -23,7 +23,7 @@ fn receipt(resource: &str, destination: PathBuf, bytes: &[u8], json: bool) -> Ap
         AppInstallStrategy::Copy
     };
     let content_hash = if json {
-        crate::runtime::app::managed_json_hash(bytes, &["owned".into()]).unwrap()
+        crate::runtime::managed_json::managed_json_hash(bytes, &["owned".into()]).unwrap()
     } else {
         hash_content(bytes)
     };

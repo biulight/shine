@@ -4,10 +4,13 @@
 //! status-row library: it computes per-file/per-category install status
 //! (`FileStatus`) and renders it into `AppRow`/`ShellRow` for display.
 
+mod shell;
+pub(crate) use shell::ShellRowStatus;
+pub use shell::{ShellRow, build_shell_rows};
+
 use crate::apps::{AppCategory, AppListMode};
 #[cfg(test)]
 use crate::apps::{installed_content_hash, resolve_install_destination, source_hash_for_file};
-use crate::colors;
 use crate::config::Config;
 #[cfg(test)]
 use crate::install_core::{AppEntry, AppManifest};
@@ -35,23 +38,6 @@ pub(crate) struct AppFileAssessment {
     pub(crate) changes: Vec<UpdateChange>,
 }
 
-pub struct ShellRow {
-    /// Shell preset category owning this command row. Lifecycle commands act
-    /// on this category; `label` remains the command-level diagnostic target.
-    pub category: String,
-    pub symbol: String,
-    pub label: String,
-    pub status_sym: &'static str,
-    pub status_text: &'static str,
-    /// `true` when at least one of preset-file or bin-symlink exists.
-    pub is_installed: bool,
-    /// Existing launcher is outside Shine's ownership proof and must be
-    /// preserved rather than reported as an applicable update.
-    pub(crate) link_conflict: bool,
-    pub(crate) preset_missing: bool,
-    pub(crate) changes: Vec<UpdateChange>,
-}
-
 pub struct AppRow {
     /// App preset category owning this row. Unlike `label`, this is stable
     /// even when a multi-file category supplies custom display names.
@@ -73,46 +59,6 @@ pub struct AppRow {
 // Shared row builders (data-only, no printing)
 // ---------------------------------------------------------------------------
 
-/// Build shell preset rows.  Does not include the PATH sentinel line.
-pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
-    let inspections = crate::core_runtime::frontend_from_config(config)
-        .await?
-        .inspect_shells()
-        .await
-        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
-        .files;
-    Ok(inspections
-        .into_iter()
-        .map(|file| {
-            let (symbol, status_sym) = if file.link_conflict || file.preset_missing {
-                ("!", "!")
-            } else {
-                match file.status {
-                    FileStatus::NotInstalled => ("✗", "✗"),
-                    FileStatus::UpdateAvail => ("↑", "↑"),
-                    FileStatus::Missing => ("!", "!"),
-                    FileStatus::Partial
-                    | FileStatus::UserModified
-                    | FileStatus::GeneratorNotEvaluated
-                    | FileStatus::GeneratorEvaluationFailed
-                    | FileStatus::GeneratorTrustRequired => ("~", "~"),
-                    FileStatus::UpToDate => ("✓", "✓"),
-                }
-            };
-            ShellRow {
-                category: file.category.name.clone(),
-                symbol: colors::symbol(symbol),
-                label: format!("{}/{}", file.category.name, file.file.command_name),
-                status_sym,
-                status_text: file.status_text,
-                is_installed: file.installed,
-                link_conflict: file.link_conflict,
-                preset_missing: file.preset_missing,
-                changes: file.changes,
-            }
-        })
-        .collect())
-}
 pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Result<Vec<AppRow>> {
     build_app_rows_with_lifecycle(config, categories)
         .await

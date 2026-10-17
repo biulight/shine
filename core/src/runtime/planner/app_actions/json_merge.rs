@@ -3,7 +3,7 @@ use super::{AppFileActionInput, has_app_file_step};
 use crate::action::{DeclarativeActionV1, ManagedJsonMergeSpecV1};
 use crate::lifecycle::LifecycleOperation;
 use crate::plan::PlanActionV1;
-use crate::runtime::app::installed_json_hash;
+use crate::runtime::managed_json::installed_json_hash;
 use crate::runtime::planner::{path_exists, read_optional};
 use crate::runtime::{CoreRuntime, FileKind, FileSystemObservationHost};
 use anyhow::{Result, bail};

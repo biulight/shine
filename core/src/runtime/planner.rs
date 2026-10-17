@@ -6,7 +6,7 @@
 
 use super::app::{
     desired_app_hash, generated_file_not_installed_message, installed_app_entry_hash,
-    installed_app_hash, installed_json_hash,
+    installed_app_hash,
 };
 use super::app_change::{StaticAppRelocation, static_app_relocation};
 use super::command_detection::{command_candidates, observe_command_candidate};
@@ -14,6 +14,7 @@ use super::launcher::{
     prepare_launcher_resources, prepared_launcher_resource_is_exact,
     probe_managed_command_with_host,
 };
+use super::managed_json::installed_json_hash;
 use super::review_path::{logical_path, review_path};
 use super::shell::has_template_annotation;
 use super::shell::shell_link_spec_from_manifest_entry;

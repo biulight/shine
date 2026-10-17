@@ -315,6 +315,12 @@ bugs. Check this list before changing the modules named in each entry.
   must exclude it from upgrade targets and point to the exact `app refresh` selector. A category
   with both automatic and manual changes must retain both actions. Typed inspection paths remain
   non-serializable and must not enter the lifecycle result.
+- **Shell display fields never supply identity or status decisions.** CLI rows retain Core's file
+  status, category, command name and ownership/missing-source flags. Pending matching, lifecycle
+  targets, diff selection and uninstall guidance use explicit selectors; symbols and labels are
+  presentation only. Category severity remains attention, partial, update, current, uninstalled,
+  in descending order, with the last row winning ties. An otherwise-current category with an
+  uninstalled sibling remains partial (ADR 0125).
 - **Managed-file update details are field labels, not payloads.** The read-only comparison may
   report that destination or content changed, but must not copy the destination, desired bytes, or
   environment values into structured lifecycle outcomes. Ownership and user-modification checks
@@ -515,6 +521,12 @@ bugs. Check this list before changing the modules named in each entry.
   unchanged rollback material may be removed. Invalid JSON, changed managed keys, changed rollback
   kind/hash/mode, or a receipt conflict blocks without mutation. Prior and desired JSON values never
   enter Action IR or the journal.
+- **Managed JSON helpers preserve byte and subset identity.** The host-free `managed_json` module
+  owns the existing pretty-object serialization with a trailing LF and FNV-1a subset hashing.
+  A present `null` is not an absent key. No managed keys present yields no installed subset hash;
+  a partial subset still yields its existing hash. Approval and recovery remain responsible for
+  deciding whether an observed subset is admissible; helper extraction adds no write authority
+  and never serializes JSON values into Plans or journals (ADR 0125).
 - **App JSON relocation owns keys independently at both destinations.** `RelocateManagedJson`
   binds the exact old/new receipt identities, separate old/new managed-key sets and subset hashes,
   the optional old whole-file identity, canonical old rollback path, and an absent new destination.

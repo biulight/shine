@@ -1,4 +1,4 @@
-use super::app::{
+use super::managed_json::{
     installed_json_hash, managed_json_hash, managed_json_keys_absent, managed_json_keys_match,
     merge_managed_json_bytes, parse_json_object, remove_managed_json_bytes,
     restore_managed_json_bytes,

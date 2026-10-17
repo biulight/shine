@@ -22,6 +22,42 @@ pub async fn make_temp_dir(prefix: &str) -> PathBuf {
     dir
 }
 
+/// A real approved Core installation over a virtual filesystem, shared by CLI consumer regressions.
+pub async fn installed_shell_runtime()
+-> shine_core::runtime::CoreRuntime<shine_core::runtime::InMemoryHost> {
+    use shine_core::runtime::{
+        CoreRuntime, InMemoryHost, PlanningInputVersions, PresetSnapshot, PresetSourceKind,
+        RuntimeContext, RuntimePlatform, ShellPlanRequest,
+    };
+    let root = std::env::temp_dir().join("shine-cli-shell-row-contract");
+    let context = RuntimeContext::isolated(
+        root.join("home"),
+        root.join("state"),
+        root.join("presets"),
+        root.join("bin"),
+        RuntimePlatform::current(),
+    );
+    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+        .file("shell/demo/shine.toml", b"[[files]]\nsource = 'run.ts'\nruntime = 'bun'\n[[files]]\nsource = 'idle.ts'\nruntime = 'bun'\n".to_vec())
+        .file("shell/demo/run.ts", b"console.log('run');\n".to_vec())
+        .file("shell/demo/idle.ts", b"console.log('idle');\n".to_vec()).build();
+    let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
+    let request = ShellPlanRequest {
+        operation: shine_core::lifecycle::LifecycleOperation::Install,
+        target: Some("demo/run".into()),
+        force: false,
+        purge: false,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let plan = runtime.plan_shells(request.clone()).await.unwrap();
+    let approval = shine_core::plan::PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    runtime
+        .install_shells_approved(request, &approval)
+        .await
+        .unwrap();
+    runtime
+}
+
 /// A `Config` rooted at `dir`, for tests that don't need a separate `home`
 /// subdirectory. `config::test_util::config_in` is a distinct homed variant
 /// (it additionally roots `home_dir` under `dir.join("home")`) and stays

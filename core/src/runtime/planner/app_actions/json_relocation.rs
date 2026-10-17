@@ -2,7 +2,7 @@
 use super::AppFileActionInput;
 use crate::action::{DeclarativeActionV1, ManagedJsonRelocationSpecV1};
 use crate::install::AppEntry;
-use crate::runtime::app::installed_json_hash;
+use crate::runtime::managed_json::installed_json_hash;
 use crate::runtime::planner::{path_exists, read_optional};
 use crate::runtime::{CoreRuntime, FileKind, FileSystemObservationHost};
 use anyhow::{Result, bail};
