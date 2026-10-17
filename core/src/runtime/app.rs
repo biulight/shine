@@ -1045,14 +1045,7 @@ async fn load_manifest(
         Err(error) if error.is_not_found() => AppManifest::default(),
         Err(error) => return Err(error.into_anyhow("failed to read app manifest")),
     };
-    match manifest.schema_version {
-        0 => manifest.schema_version = crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION,
-        crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION => {}
-        version => bail!(
-            "app manifest schema version {version} is newer than this Shine supports ({})",
-            crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION
-        ),
-    }
+    manifest.normalize_schema_version()?;
     Ok(manifest)
 }
 
@@ -1331,5 +1324,103 @@ mod lifecycle_tests {
             runtime.host().read(&home_dir.join("other")).await.unwrap(),
             b"other"
         );
+    }
+}
+
+#[cfg(test)]
+mod manifest_reader_tests {
+    use super::*;
+    use crate::runtime::{HostOperation, InMemoryHost};
+
+    #[tokio::test]
+    async fn app_manifest_reader_compatibility() {
+        for input in [
+            None,
+            Some("entries = []\n"),
+            Some(
+                r#"[[entries]]
+source = "app/demo/config"
+destination = "/old/config"
+content_hash = 7
+[[entries]]
+source = "app/demo/config"
+destination = "/new/config"
+content_hash = 8
+"#,
+            ),
+            Some("schema_version = 0\n"),
+            Some("schema_version = 1\n"),
+            Some("schema_version = 2\n"),
+            Some("schema_version = -1\n"),
+            Some("["),
+        ] {
+            let host = InMemoryHost::new();
+            let root = Path::new("/state");
+            let path = root.join("app-manifest.toml");
+            if let Some(input) = input {
+                host.put_file(&path, input.as_bytes().to_vec());
+            }
+            let loaded = load_manifest(&host, root).await;
+            assert_eq!(host.operations(), vec![HostOperation::Read(path.clone())]);
+            match input {
+                Some("schema_version = 2\n") => assert_eq!(
+                    loaded.unwrap_err().to_string(),
+                    "app manifest schema version 2 is newer than this Shine supports (1)"
+                ),
+                Some("schema_version = -1\n" | "[") => {
+                    let error = loaded.unwrap_err();
+                    assert_eq!(error.to_string(), "failed to parse app manifest");
+                    let parse_error = toml::from_str::<AppManifest>(input.unwrap()).unwrap_err();
+                    assert_eq!(error.root_cause().to_string(), parse_error.to_string());
+                }
+                _ => {
+                    let manifest = loaded.unwrap();
+                    assert_eq!(manifest.schema_version, 1);
+                    let parsed: AppManifest = toml::from_str(input.unwrap_or("")).unwrap();
+                    assert_eq!(manifest.entries, parsed.entries);
+                }
+            }
+            let direct = AppManifest::load(&host, root).await;
+            match input {
+                Some("schema_version = 2\n") => assert_eq!(
+                    direct.unwrap_err().to_string(),
+                    "app manifest schema version 2 is newer than this Shine supports (1)"
+                ),
+                Some("schema_version = -1\n" | "[") => assert_eq!(
+                    direct.unwrap_err().to_string(),
+                    toml::from_str::<AppManifest>(input.unwrap())
+                        .unwrap_err()
+                        .to_string()
+                ),
+                _ => assert_eq!(direct.unwrap().schema_version, 1),
+            }
+            assert!(
+                host.operations()
+                    .iter()
+                    .all(|op| matches!(op, HostOperation::Read(_)))
+            );
+            assert_eq!(
+                host.read(&path).await.ok().as_deref(),
+                input.map(str::as_bytes)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn app_manifest_reader_preserves_io_errors() {
+        let host = crate::runtime::RealHost;
+        let root = std::env::temp_dir().join(format!(
+            "shine-manifest-read-error-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = root.join("app-manifest.toml");
+        tokio::fs::create_dir_all(&path).await.unwrap();
+        let error = load_manifest(&host, &root).await.unwrap_err();
+        assert_eq!(error.to_string(), "failed to read app manifest");
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        let direct = AppManifest::load(&host, &root).await.unwrap_err();
+        assert_eq!(direct.to_string(), "failed to read app manifest");
+        assert!(path.is_dir());
+        tokio::fs::remove_dir_all(&root).await.unwrap();
     }
 }

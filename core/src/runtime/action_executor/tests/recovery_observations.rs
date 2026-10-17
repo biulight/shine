@@ -65,7 +65,7 @@ fn planning() -> AppRecoveryPlanning {
 #[tokio::test]
 async fn recovery_revalidates_observations_after_each_lock_wait() {
     for privileged in [false, true] {
-        for changed in ["destination", "rollback", "receipt"] {
+        for changed in ["destination", "rollback", "receipt", "receipt-format"] {
             let runtime = runtime();
             let destination = runtime.context().home_dir.join(".config/demo/config");
             let rollback = managed_file_rollback_path(&destination);
@@ -104,6 +104,13 @@ async fn recovery_revalidates_observations_after_each_lock_wait() {
                 "destination" => runtime.host().put_file(&destination, b"user-edit".to_vec()),
                 "rollback" => runtime.host().put_file(&rollback, b"user-edit".to_vec()),
                 "receipt" => save_matching_receipt(&runtime, b"concurrent-receipt").await,
+                "receipt-format" => {
+                    let mut bytes = runtime.host().read(&manifest).await.unwrap();
+                    let before: AppManifest = toml::from_slice(&bytes).unwrap();
+                    bytes.extend_from_slice(b"\n# formatting changed after review\n");
+                    assert_eq!(toml::from_slice::<AppManifest>(&bytes).unwrap(), before);
+                    runtime.host().put_file(&manifest, bytes);
+                }
                 _ => unreachable!(),
             }
             let mut preserved = Vec::new();

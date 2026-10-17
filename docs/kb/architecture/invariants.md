@@ -400,6 +400,8 @@ bugs. Check this list before changing the modules named in each entry.
   mutation. Missing `schema_version` is legacy v0, read-only loads never rewrite it, the next
   successful mutation writes Shell v2 or App/Sys v1, and an unsupported future version fails first. The inner Sys
   receipt `version` is independent of `sys-manifest.toml`'s schema version.
+  App and Sys readers share only their domain-owned in-memory schema normalization; each reader
+  retains its original bytes, parsing diagnostics and IO behavior (ADR 0145).
 - **Bootstrap preparation precedes every installer and administrator prompt.** Validate persistent
   state, preflight all selected items and compose selected profile inputs first. Keep fixed provider
   invocation/preview policy separate from Host execution; optional version probes belong only to

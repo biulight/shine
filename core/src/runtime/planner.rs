@@ -38,6 +38,7 @@ use crate::action::{
     managed_file_rollback_path, shell_snapshot_rollback_path, shell_snapshot_stage_path,
 };
 use crate::digest::sha256_hex;
+#[cfg(test)]
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::transforms::MissingTemplateVariables;
 use crate::install::{AppEntry, AppManifest};

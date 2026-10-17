@@ -93,7 +93,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/shell/delivery.rs` | Pure captured-input source layout and desired delivery shared by inspection, planning, launcher preparation and receipt construction |
 | `core/src/runtime/shell/lifecycle.rs`, `shell/lifecycle/{deploy,remove,report}.rs` | Typed Shell deployment/removal phases and pure lifecycle reporting; preparation retains legacy effects |
 | `core/src/action/shell_receipt.rs` | Shared internal receipt delivery validation for manifest reconstruction, Action IR and recovery; persisted DTOs remain unchanged |
-| `core/src/runtime/sys.rs` | Managed Sys models, receipt assessment, lifecycle-owned managed-file/split-DNS primitives and run-manifest persistence; roundtrip tests use the approved planner facade |
+| `core/src/runtime/sys.rs` | Managed Sys models, receipt assessment, lifecycle-owned managed-file/split-DNS primitives and run-manifest persistence/schema normalization; roundtrip tests use the approved planner facade |
 | `core/src/runtime/sys/inspect.rs` | Observation-only managed receipt inspection and pure desired-versus-receipt details; installed-only inventory filtering belongs to FrontendService, with no detection probes |
 | `core/src/runtime/sys/{lifecycle,transaction}.rs`, `sys/lifecycle/` | Current-item/receipt-only selection, preflight, resource execution, result persistence and fresh transaction preparation; approved facade retains the lifecycle lock |
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 batch/item orchestration, preflight, post-detection, profile reconciliation and persistence |
@@ -107,7 +107,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/metadata_diagnostic.rs` | Typed metadata error origins mapped to stable validation codes; message prose is not a classifier |
 | `core/src/runtime/preset_migration.rs` | Immutable legacy compatibility assessment, safe metadata candidate generation, released-1.x fingerprints, and versioned content-free migration reports |
 | `core/src/runtime/inspection.rs` | Typed App/Shell inspection status and structural change vocabulary |
-| `core/src/install/` | Core-owned transforms, EOL handling, host-required App manifest persistence, and host-neutral managed-file operations |
+| `core/src/install/` | Core-owned transforms, EOL handling, host-required App manifest persistence and shared in-memory schema normalization, and host-neutral managed-file operations |
 | `core/src/persist.rs` | Core-owned synced atomic replacement and no-clobber publication, mode preservation, Windows write-through moves, and versioned TOML helpers |
 | `presets/` | Embedded shell, app, and OS bootstrap assets |
 | `skills/shine-preset-author/` | Portable AI workflow and kind-specific preset author references |

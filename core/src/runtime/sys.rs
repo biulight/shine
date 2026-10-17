@@ -881,6 +881,18 @@ fn default_profile_enabled() -> bool {
 }
 
 impl SysRunManifest {
+    /// Normalize the container schema independently of inner receipt versions.
+    pub(super) fn normalize_schema_version(&mut self) -> Result<()> {
+        match self.schema_version {
+            0 => self.schema_version = SYS_MANIFEST_SCHEMA_VERSION,
+            SYS_MANIFEST_SCHEMA_VERSION => {}
+            version => bail!(
+                "sys manifest schema version {version} is newer than this Shine supports ({SYS_MANIFEST_SCHEMA_VERSION})"
+            ),
+        }
+        Ok(())
+    }
+
     pub async fn load(
         host: &impl crate::runtime::FileSystemObservationHost,
         shine_dir: &Path,
@@ -961,13 +973,7 @@ pub(crate) async fn load_manifest_with_host(
         Err(error) if error.is_not_found() => SysRunManifest::default(),
         Err(error) => return Err(error.into_anyhow("failed to read sys manifest")),
     };
-    match manifest.schema_version {
-        0 => manifest.schema_version = SYS_MANIFEST_SCHEMA_VERSION,
-        SYS_MANIFEST_SCHEMA_VERSION => {}
-        version => bail!(
-            "sys manifest schema version {version} is newer than this Shine supports ({SYS_MANIFEST_SCHEMA_VERSION})"
-        ),
-    }
+    manifest.normalize_schema_version()?;
     Ok(manifest)
 }
 

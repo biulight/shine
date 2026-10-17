@@ -11,6 +11,7 @@ use crate::action::{
     ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, RollbackSupportV1,
     managed_file_rollback_path,
 };
+#[cfg(test)]
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppInstallStrategy, AppManifest, hash_content};
 use crate::plan::{

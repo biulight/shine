@@ -71,6 +71,18 @@ pub fn hash_content(bytes: &[u8]) -> u64 {
 }
 
 impl AppManifest {
+    /// Normalize supported read-time schemas without writing or changing receipts.
+    pub(crate) fn normalize_schema_version(&mut self) -> Result<()> {
+        match self.schema_version {
+            0 => self.schema_version = APP_MANIFEST_SCHEMA_VERSION,
+            APP_MANIFEST_SCHEMA_VERSION => {}
+            version => bail!(
+                "app manifest schema version {version} is newer than this Shine supports ({APP_MANIFEST_SCHEMA_VERSION})"
+            ),
+        }
+        Ok(())
+    }
+
     pub async fn load(host: &impl FileSystemObservationHost, shine_dir: &Path) -> Result<Self> {
         let path = shine_dir.join(MANIFEST_FILE);
         let mut manifest: Self = match host.read(&path).await {
@@ -78,13 +90,7 @@ impl AppManifest {
             Err(error) if error.is_not_found() => Self::default(),
             Err(error) => return Err(error.into_anyhow("failed to read app manifest")),
         };
-        match manifest.schema_version {
-            0 => manifest.schema_version = APP_MANIFEST_SCHEMA_VERSION,
-            APP_MANIFEST_SCHEMA_VERSION => {}
-            version => bail!(
-                "app manifest schema version {version} is newer than this Shine supports ({APP_MANIFEST_SCHEMA_VERSION})"
-            ),
-        }
+        manifest.normalize_schema_version()?;
         Ok(manifest)
     }
 
