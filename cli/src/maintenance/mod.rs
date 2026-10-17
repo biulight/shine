@@ -212,7 +212,7 @@ impl Scope {
         xdg: Option<PathBuf>,
         platform: &str,
     ) -> Result<Self> {
-        use sha2::{Digest, Sha256};
+        use shine_core::digest::sha256_hex;
         fn absolute(path: PathBuf) -> Result<PathBuf> {
             let mut existing = std::path::absolute(path)?;
             let mut missing = Vec::new();
@@ -244,7 +244,7 @@ impl Scope {
             std::env::var("USERNAME").unwrap_or_default()
         );
         let identity = serde_json::to_vec(&(&config_dir, &home, &xdg, platform, user))?;
-        let key = format!("{:x}", Sha256::digest(identity));
+        let key = sha256_hex(&identity);
         let root = config_dir.join("maintenance").join(&key);
         Ok(Self {
             root,

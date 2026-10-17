@@ -121,5 +121,8 @@ pub(super) fn snapshot_input_hash(
         );
     }
     hash.update(workspace_path.to_string_lossy().as_bytes());
-    format!("sha256:{:x}", hash.finalize())
+    format!(
+        "sha256:{}",
+        shine_core::digest::encode_sha256(&hash.finalize().into())
+    )
 }

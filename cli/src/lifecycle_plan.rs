@@ -10,7 +10,7 @@ pub(crate) use render::{permission_group, permission_name, styled_action_name};
 
 use crate::config::Config;
 use anyhow::{Result, bail};
-use sha2::{Digest, Sha256};
+use shine_core::digest::sha256_hex as hex_digest;
 use shine_core::plan::{CodeSourceV2, PlanActionV1, PlanV1};
 use shine_core::runtime::{
     AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest, CoreRuntime,
@@ -624,11 +624,6 @@ fn planning_input_versions(config: &Config) -> PlanningInputVersions {
         }
     }
     versions
-}
-
-fn hex_digest(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

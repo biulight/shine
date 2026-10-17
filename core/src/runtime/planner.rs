@@ -37,6 +37,7 @@ use crate::action::{
     ManagedFileRemoveSpecV1, ManagedFileRemoveWithBackupSpecV1, ManagedJsonRemoveSpecV1,
     managed_file_rollback_path, shell_snapshot_rollback_path, shell_snapshot_stage_path,
 };
+use crate::digest::sha256_hex;
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::transforms::MissingTemplateVariables;
 use crate::install::{AppEntry, AppManifest};
@@ -51,7 +52,6 @@ use crate::plan::{
 };
 use crate::trust::{TRUST_GRANT_SCHEMA_VERSION, TrustCapabilityV1, TrustDecisionV1, TrustModeV1};
 use anyhow::{Context, Result, bail};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 

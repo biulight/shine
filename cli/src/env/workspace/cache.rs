@@ -1,8 +1,8 @@
 //! Cache for workspace environments.
 use super::{
-    BTreeMap, BaseDirs, CACHE_FORMAT_VERSION, CacheFile, CachedMode, Config, Context, Digest,
+    BTreeMap, BaseDirs, CACHE_FORMAT_VERSION, CacheFile, CachedMode, Config, Context,
     EncryptRecipients, Path, PathBuf, Result, SECRET_PAYLOAD_VERSION, SecretPayload,
-    SensitiveValues, Sha256, Zeroizing, atomic_write, bail, secret,
+    SensitiveValues, Zeroizing, atomic_write, bail, secret,
 };
 
 pub(super) fn cache_path(workspace_path: &Path, mode: &str) -> Result<PathBuf> {
@@ -10,10 +10,7 @@ pub(super) fn cache_path(workspace_path: &Path, mode: &str) -> Result<PathBuf> {
         .parent()
         .context("workspace path has no parent directory")?;
     let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let project_id = format!(
-        "{:x}",
-        Sha256::digest(canonical.to_string_lossy().as_bytes())
-    );
+    let project_id = shine_core::digest::sha256_hex(canonical.to_string_lossy().as_bytes());
     let base = BaseDirs::new().context("resolving system cache directory")?;
     Ok(base
         .cache_dir()

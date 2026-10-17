@@ -1,10 +1,10 @@
 //! Journal observation is Core-owned; this module only projects validated results.
 
 use super::{CapabilityKindV1, FrontendService, FrontendServiceError};
+use crate::digest::sha256_hex;
 use crate::plan::PlanV1;
 use crate::runtime::{FileSystemObservationHost, SplitDnsObservationHost};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 pub const OPERATION_STATE_SCHEMA_VERSION: u32 = 1;
 
@@ -66,8 +66,8 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> FrontendService<H> 
             },
             journal: Some(JournalProgressV1 {
                 operation_id: format!(
-                    "operation:{:x}",
-                    Sha256::digest(observation.operation_id.as_bytes())
+                    "operation:{}",
+                    sha256_hex(observation.operation_id.as_bytes())
                 ),
                 prepared_actions: observation.prepared_actions,
                 applied_actions: observation.applied_actions,

@@ -5,6 +5,7 @@
 //! carries file content, environment values, secret plaintext, or raw command
 //! arguments.
 
+use crate::digest::encode_sha256 as encode_hex;
 use crate::lifecycle::LifecycleOperation;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -660,16 +661,6 @@ fn write_frame(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
-fn encode_hex(bytes: &[u8; 32]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(64);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
-}
-
 fn decode_digest(encoded: &str) -> Result<[u8; 32], &'static str> {
     if encoded.len() != 64 || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("expected a 64-character SHA-256 digest");
@@ -1008,5 +999,30 @@ mod tests {
             digest
         );
         assert!(serde_json::from_str::<SnapshotDigestV1>("\"ABC\"").is_err());
+        for invalid in [
+            digest.as_hex().to_uppercase(),
+            "0".repeat(63),
+            "0".repeat(65),
+            "g".repeat(64),
+        ] {
+            let json = serde_json::to_string(&invalid).unwrap();
+            assert!(serde_json::from_str::<SnapshotDigestV1>(&json).is_err());
+            assert!(serde_json::from_str::<PlanFingerprintV1>(&json).is_err());
+        }
+    }
+
+    #[test]
+    fn sha256_protocol_vectors_remain_stable() {
+        let mut snapshot = SnapshotDigestV1::builder("state:compatibility");
+        snapshot.add_observation("z", b"\0\xff").unwrap();
+        snapshot.add_observation("a", b"").unwrap();
+        assert_eq!(
+            snapshot.finish().as_hex(),
+            "6a7051cb4d0b13a49ee7ccecf991f1ecd4ffb172852db68ecabe10cdd2bbc961"
+        );
+        assert_eq!(
+            ready_plan().fingerprint().unwrap().as_hex(),
+            "88e33559e1ae272fa92d4a23c10f322723ceb3744fb5f9f49d98853fcd07a35d"
+        );
     }
 }

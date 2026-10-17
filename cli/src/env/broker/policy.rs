@@ -5,12 +5,8 @@ use super::model::{
 };
 use crate::env::{RESERVED_REMOTE_ENV, workspace};
 use anyhow::{Context, Result, bail};
-use sha2::{Digest, Sha256};
+pub use shine_core::digest::sha256_hex as sha256;
 use std::{collections::BTreeSet, path::Path};
-
-pub fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
 
 pub(super) fn validate_store(store: &PolicyStore) -> Result<()> {
     if store.version != POLICY_VERSION {

@@ -3,6 +3,7 @@
 use super::{
     CapabilityKindV1, FrontendDiagnosticV1, FrontendService, FrontendServiceError, InventoryRequest,
 };
+use crate::digest::sha256_hex;
 use crate::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
 };
@@ -12,7 +13,6 @@ use crate::runtime::{
     ShellFileInspection, SysInstalledRow, SysUpdateRow,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 pub const INSPECTION_REPORT_SCHEMA_VERSION: u32 = 1;
 
@@ -130,8 +130,8 @@ fn is_manual_generator_update(file: &AppFileInspection) -> bool {
 fn resource_id(source: &std::path::Path) -> String {
     // Normalize native separators so the same logical source has the same identity on every host.
     format!(
-        "resource:{:x}",
-        Sha256::digest(source.to_string_lossy().replace('\\', "/").as_bytes())
+        "resource:{}",
+        sha256_hex(source.to_string_lossy().replace('\\', "/").as_bytes())
     )
 }
 

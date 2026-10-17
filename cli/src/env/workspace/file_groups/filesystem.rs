@@ -247,7 +247,7 @@ impl PathLocks {
         let mut keys = BTreeSet::new();
         for path in paths {
             check_path(root, path)?;
-            keys.insert(format!("{:x}", Sha256::digest(platform::path_key(path))));
+            keys.insert(shine_core::digest::sha256_hex(&platform::path_key(path)));
         }
         let mut files = Vec::new();
         for key in keys {

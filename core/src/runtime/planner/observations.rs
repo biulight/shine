@@ -372,8 +372,3 @@ pub(super) fn app_source_parts(source: &str) -> Option<(&str, &str)> {
 pub(super) fn operation_name(operation: PlanOperationV1) -> &'static str {
     operation.as_str()
 }
-
-pub(super) fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}

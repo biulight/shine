@@ -2,12 +2,12 @@
 
 use super::validation::{load_preset_source_scope, validate_preset_source_scope};
 use super::{FileKind, FileSystemObservationHost, SysInstall, SysManifest};
+use crate::digest::sha256_hex as sha256;
 use crate::permission::{PermissionDeclarationV1, PermissionPathBaseV1};
 use crate::plan::FilesystemAccessV1;
 use flate2::{Compression, GzBuilder};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -494,13 +494,6 @@ fn append(
     header.set_cksum();
     tar.append_data(&mut header, path, bytes)?;
     Ok(())
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 fn logical_path(path: &Path) -> String {

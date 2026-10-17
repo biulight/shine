@@ -63,7 +63,7 @@ fn cache_context(input_hash: &str, backend: BackendKind, recipients: &[String]) 
     // Length-delimited serialization binds boundaries as well as values.
     let encoded = serde_json::to_vec(&(VERSION, input_hash, backend_name(backend), recipients))
         .expect("cache context is serializable");
-    format!("sha256:{:x}", Sha256::digest(encoded))
+    format!("sha256:{}", shine_core::digest::sha256_hex(&encoded))
 }
 
 fn validate_sources(sources: &CapturedSources) -> Result<bool> {
@@ -293,6 +293,10 @@ mod tests {
     fn encrypted_context_rejects_relabelled_cache() {
         let recipients = vec!["age1test".into()];
         let context = cache_context("source-v1", BackendKind::Age, &recipients);
+        assert_eq!(
+            context,
+            "sha256:c3b0f15bd9bc983897edffeec6b83c633aa69a35e5319b37fac36a43084f6302"
+        );
         let plaintext = toml::to_string(&Payload {
             version: VERSION,
             context: context.clone(),

@@ -6,7 +6,7 @@ use crate::env::broker::{self, PolicyStore, WorkspaceSnapshot};
 use crate::env::{EnvConfig, parse_env_specs, secret_key};
 use crate::secret;
 use anyhow::{Context, Result, bail};
-use sha2::{Digest, Sha256};
+use shine_core::digest::sha256_hex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -103,7 +103,7 @@ impl BrokerSession {
                 .get(&storage_key)
                 .with_context(|| format!("{storage_key} is not set in the active config [env]"))?
                 .to_string();
-            let ciphertext_sha256 = format!("{:x}", Sha256::digest(ciphertext.as_bytes()));
+            let ciphertext_sha256 = sha256_hex(ciphertext.as_bytes());
             direct.push(DirectSecret {
                 source: spec.source,
                 target: spec.target,
@@ -233,7 +233,7 @@ impl BrokerSession {
         };
         let values =
             broker::decrypt_workspace_snapshot(&self.config, snapshot, &matched.release).await?;
-        let argv_sha256 = format!("{:x}", Sha256::digest(argv.join("\0").as_bytes()));
+        let argv_sha256 = sha256_hex(argv.join("\0").as_bytes());
         let audit = format!(
             "shine ssh broker: released policy {} project={} argv_sha256={} approval={}",
             matched.policy_name,
@@ -267,7 +267,7 @@ impl BrokerSession {
         }
         broker::validate_snapshot(snapshot)?;
         let allow = broker::allow_from_snapshot(snapshot, release, argv)?;
-        let argv_sha256 = format!("{:x}", Sha256::digest(argv.join("\0").as_bytes()));
+        let argv_sha256 = sha256_hex(argv.join("\0").as_bytes());
         let summary = format!(
             "workspace={} mode={} argv_sha256={} sources={} release={}",
             broker::sha256(snapshot.workspace_contents.as_bytes()),

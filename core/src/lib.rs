@@ -1,4 +1,6 @@
 pub mod action;
+#[doc(hidden)]
+pub mod digest;
 pub mod env;
 #[doc(hidden)]
 pub mod frontend;

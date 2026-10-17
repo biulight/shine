@@ -1,5 +1,29 @@
 use super::*;
 
+#[test]
+fn sha256_protocol_vectors_remain_stable() {
+    let sources = vec![
+        (
+            PathBuf::from("base.toml"),
+            Some(Zeroizing::new("[plain]\nKEY = 'value'\n".into())),
+        ),
+        (PathBuf::from("absent.toml"), None),
+        (
+            PathBuf::from("empty.toml"),
+            Some(Zeroizing::new(String::new())),
+        ),
+    ];
+    assert_eq!(
+        snapshot_input_hash(
+            Path::new("workspace/shine.workspace.toml"),
+            "version = 2\n",
+            "development",
+            &sources
+        ),
+        "sha256:5155d192b35915c41bf3f422c21f9dc0c06a0542f18bc597724e4fe5f9bfd815"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn malformed_decrypted_cache_diagnostics_do_not_expose_plaintext() {

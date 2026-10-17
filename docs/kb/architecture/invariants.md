@@ -110,6 +110,11 @@ bugs. Check this list before changing the modules named in each entry.
   target fields must belong to the generated Plan's canonical allow-list. Neither serialized
   operation state nor progress events authorize mutation (ADR 0079).
 
+- **Shared SHA-256 encoding does not unify fingerprint protocols.** `digest.rs` hashes exact bytes
+  and encodes 32-byte digests as 64 lowercase hexadecimal characters. Each caller owns its input
+  order, framing, normalization, domain separator, prefix, version and validation. Plan/snapshot
+  framing, workspace/cache protocols and FNV content receipt hashes remain distinct (ADR 0142).
+
 - **A security Plan is not dry-run and approval is snapshot-bound.** `PlanV1` contains only ordered
   semantic steps, safe diagnostic codes, resolved permissions, and digests of exact source/state
   observations. App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile
