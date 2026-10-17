@@ -50,10 +50,6 @@ impl ManagedOutputMode {
     }
 }
 
-pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) -> Result<()> {
-    handle_apply_approved(config, item, dry_run, true).await
-}
-
 pub async fn handle_apply_approved(
     config: &Config,
     item: Option<&str>,
@@ -123,28 +119,6 @@ pub(crate) async fn handle_uninstall_with_result_approved(
     .await
 }
 
-pub async fn handle_upgrade_managed(
-    config: &Config,
-    verbose: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<SysUpgradeReport> {
-    handle_upgrade_managed_with_result_approved(config, verbose, true, sep)
-        .await
-        .map(|(report, _)| report)
-}
-
-pub(crate) async fn handle_upgrade_managed_with_result_approved(
-    config: &Config,
-    verbose: bool,
-    yes: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
-    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
-    let mut interaction = TerminalInteraction;
-    handle_upgrade_managed_with_reporter(config, verbose, yes, &mut renderer, &mut interaction)
-        .await
-}
-
 pub(crate) async fn handle_upgrade_managed_with_result_prepared(
     config: &Config,
     verbose: bool,
@@ -169,42 +143,6 @@ pub(crate) async fn handle_upgrade_managed_with_result_prepared(
         &mut interaction,
     )
     .await
-}
-
-async fn handle_upgrade_managed_with_reporter(
-    config: &Config,
-    verbose: bool,
-    yes: bool,
-    reporter: &mut dyn LifecycleReporter,
-    interaction: &mut TerminalInteraction,
-) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
-    let os_id = detect_os_id().await?;
-    let (report, lifecycle_result) = run_managed_for_os_with_reporter(
-        ManagedRunRequest {
-            config,
-            os_id: &os_id,
-            requested: None,
-            action: SysAction::Apply,
-            dry_run: false,
-            yes,
-            output_mode: ManagedOutputMode::Upgrade { verbose },
-        },
-        reporter,
-        interaction,
-    )
-    .await?;
-    Ok((report, lifecycle_result))
-}
-
-pub async fn handle_upgrade_managed_target(
-    config: &Config,
-    item: Option<&str>,
-    verbose: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<SysUpgradeReport> {
-    handle_upgrade_managed_target_with_result_approved(config, item, verbose, true, sep)
-        .await
-        .map(|(report, _)| report)
 }
 
 pub(crate) async fn handle_upgrade_managed_target_with_result_approved(

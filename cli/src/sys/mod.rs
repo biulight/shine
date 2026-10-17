@@ -24,16 +24,12 @@ use anyhow::{Context, Result};
 pub use commands::{BootstrapCliOptions, handle_info, handle_init, handle_list, handle_status};
 pub use detect::detect_os_id;
 pub use managed::{
-    handle_apply, handle_apply_approved, handle_uninstall, handle_uninstall_approved,
-    handle_upgrade_managed, handle_upgrade_managed_target, managed_updates,
+    handle_apply_approved, handle_uninstall, handle_uninstall_approved, managed_updates,
 };
 pub(crate) use managed::{
     handle_upgrade_managed_target_with_result_approved, handle_upgrade_managed_with_result_prepared,
 };
-pub use profile_commands::{
-    handle_profile_disable, handle_profile_disable_approved, handle_profile_enable,
-    handle_profile_enable_approved,
-};
+pub use profile_commands::{handle_profile_disable_approved, handle_profile_enable_approved};
 pub use recovery::handle_recover_approved;
 
 const SYS_TEMPLATE: &str = r#"# System bootstrap preset metadata for shine (schema v2).

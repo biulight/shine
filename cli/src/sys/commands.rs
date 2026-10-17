@@ -6,7 +6,8 @@ use crate::config::Config;
 
 use super::detect::detect_os_id;
 use super::execution::{
-    print_item_outcome, print_run_header, print_sys_summary, status_text, sys_item_label_width,
+    item_install_start_line, print_item_outcome, print_run_header, print_sys_summary, status_text,
+    sys_item_label_width,
 };
 use super::managed::managed_updates;
 use super::render::{driver_name, item_mode_name, print_available_item, print_dry_run};
@@ -486,15 +487,9 @@ impl shine_core::runtime::RuntimeObserver for BatchBootstrapObserver {
                 label,
                 requires_admin,
             } => {
-                let admin = if requires_admin {
-                    " (administrator access required)"
-                } else {
-                    ""
-                };
                 println!(
-                    "  {} {}",
-                    colors::symbol("•"),
-                    colors::dim(&format!("sys/{item_id} ({label}) installing{admin}"))
+                    "{}",
+                    item_install_start_line(&item_id, &label, requires_admin)
                 );
             }
             shine_core::runtime::RuntimeEvent::SysBootstrapOutcome(outcome) => {

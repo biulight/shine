@@ -381,27 +381,6 @@ mod tests {
     }
 
     #[test]
-    fn simple_list_collapses_installed_app_files_to_their_category() {
-        let rows = vec![
-            app_row("surge", FileStatus::UpToDate),
-            app_row("surge", FileStatus::Missing),
-            app_row("ghostty", FileStatus::NotInstalled),
-        ];
-
-        assert_eq!(installed_app_categories(&rows), vec!["surge"]);
-    }
-
-    #[test]
-    fn simple_list_shows_partially_installed_app_categories() {
-        let rows = vec![
-            app_row("surge", FileStatus::NotInstalled),
-            app_row("surge", FileStatus::UserModified),
-        ];
-
-        assert_eq!(installed_app_categories(&rows), vec!["surge"]);
-    }
-
-    #[test]
     fn frontend_inventory_projection_preserves_legacy_list_visibility() {
         let report = InventoryReportV1 {
             schema_version: shine_core::frontend::INVENTORY_REPORT_SCHEMA_VERSION,

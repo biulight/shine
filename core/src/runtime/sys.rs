@@ -138,25 +138,6 @@ pub struct ResourceConflict {
     message: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct ManagedFileRequest {
-    pub os_id: String,
-    pub item_id: String,
-    pub label: String,
-    pub destination: PathBuf,
-    pub content: Vec<u8>,
-    pub privileged: bool,
-    pub restart_hint: Option<String>,
-    pub dry_run: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct ManagedFileRemoveRequest {
-    pub os_id: String,
-    pub item_id: String,
-    pub dry_run: bool,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SplitDnsDomainRequest {
     pub os_id: String,
@@ -298,7 +279,10 @@ fn split_dns_host_request(receipt: &SplitDnsReceipt) -> SplitDnsRequest {
 }
 
 impl<H: SplitDnsHost + PrivilegedFileSystemHost> CoreRuntime<H> {
-    pub async fn split_dns_up_to_date(&self, request: &SplitDnsDomainRequest) -> Result<bool> {
+    pub(in crate::runtime) async fn split_dns_up_to_date(
+        &self,
+        request: &SplitDnsDomainRequest,
+    ) -> Result<bool> {
         let desired = split_dns_receipt(request)?;
         let host_request = split_dns_host_request(&desired);
         let state = self.host.inspect_split_dns(&host_request).await?;
@@ -934,208 +918,6 @@ impl SysRunManifest {
     }
 }
 
-impl<H: FileSystemHost> CoreRuntime<H> {
-    pub async fn apply_managed_sys_file(
-        &self,
-        request: ManagedFileRequest,
-    ) -> Result<LifecycleResultV1> {
-        let _lifecycle_guard = if request.dry_run {
-            None
-        } else {
-            Some(self.acquire_sys_lifecycle_operation().await?)
-        };
-        if request.privileged {
-            bail!("managed Sys file requires a privileged host capability");
-        }
-        let mut manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
-        let previous = manifest
-            .entries
-            .iter()
-            .find(|entry| entry.os_id == request.os_id && entry.item_id == request.item_id);
-        let previous_receipt = previous.and_then(|entry| match &entry.receipt {
-            Some(SystemReceipt::ManagedFile(receipt)) => Some(receipt),
-            _ => None,
-        });
-        if let Some(receipt) = previous_receipt
-            && receipt.destination != request.destination
-        {
-            let entry = app_entry_from_receipt(receipt);
-            if matches!(
-                uninstall_entry_with_host(&self.host, &entry, request.dry_run, false).await?,
-                UninstallOutcome::UserModified
-            ) {
-                let mut result =
-                    LifecycleResultV1::new(LifecycleOperation::Upgrade, request.dry_run);
-                result.push(
-                    LifecycleOutcomeV1::new(
-                        format!("sys/{}", request.item_id),
-                        None::<String>,
-                        LifecycleStatus::Conflict,
-                        [LifecycleEffect::UserResourcePreserved],
-                    )
-                    .with_diagnostic_code("sys_user_modified"),
-                );
-                return Ok(result);
-            }
-        }
-        let is_managed =
-            previous_receipt.is_some_and(|receipt| receipt.destination == request.destination);
-        let outcome = install_bytes_with_host(
-            &self.host,
-            &request.content,
-            &request.destination,
-            is_managed,
-            request.dry_run,
-            true,
-        )
-        .await?;
-        let (status, mut effects, backup) = match outcome {
-            InstallOutcome::Installed { .. } => (
-                LifecycleStatus::Changed,
-                vec![LifecycleEffect::ResourceWritten],
-                previous_receipt.and_then(|receipt| receipt.backup.clone()),
-            ),
-            InstallOutcome::BackedUpAndInstalled { backup, .. } => (
-                LifecycleStatus::Changed,
-                vec![
-                    LifecycleEffect::BackupCreated,
-                    LifecycleEffect::ResourceWritten,
-                ],
-                Some(backup),
-            ),
-            InstallOutcome::AlreadyManaged => (
-                LifecycleStatus::Unchanged,
-                Vec::new(),
-                previous_receipt.and_then(|receipt| receipt.backup.clone()),
-            ),
-            InstallOutcome::DryRun => (
-                LifecycleStatus::Previewed,
-                vec![
-                    LifecycleEffect::ResourceWritePreviewed,
-                    LifecycleEffect::ReceiptWritePreviewed,
-                ],
-                None,
-            ),
-        };
-        if !request.dry_run {
-            manifest.upsert(SysRunEntry {
-                os_id: request.os_id,
-                item_id: request.item_id.clone(),
-                label: request.label,
-                status: if status == LifecycleStatus::Unchanged {
-                    SysItemStatus::AlreadyInstalled
-                } else {
-                    SysItemStatus::Updated
-                },
-                detail: request.destination.display().to_string(),
-                updated_at: String::new(),
-                managed: true,
-                profile_enabled: true,
-                receipt: Some(SystemReceipt::ManagedFile(ManagedFileReceipt {
-                    version: RECEIPT_VERSION,
-                    destination: request.destination,
-                    backup,
-                    content_hash: hash_content(&request.content),
-                    privileged: request.privileged,
-                    restart_hint: request.restart_hint,
-                })),
-            });
-            effects.push(LifecycleEffect::ReceiptWritten);
-            save_manifest_with_host(&self.host, &self.context.shine_dir, &manifest).await?;
-        }
-        let mut result = LifecycleResultV1::new(LifecycleOperation::Upgrade, request.dry_run);
-        result.push(LifecycleOutcomeV1::new(
-            format!("sys/{}", request.item_id),
-            None::<String>,
-            status,
-            effects,
-        ));
-        Ok(result)
-    }
-
-    pub async fn remove_managed_sys_file(
-        &self,
-        request: ManagedFileRemoveRequest,
-    ) -> Result<LifecycleResultV1> {
-        let _lifecycle_guard = if request.dry_run {
-            None
-        } else {
-            Some(self.acquire_sys_lifecycle_operation().await?)
-        };
-        let mut manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
-        let position = manifest
-            .entries
-            .iter()
-            .position(|entry| entry.os_id == request.os_id && entry.item_id == request.item_id);
-        let mut result = LifecycleResultV1::new(LifecycleOperation::Uninstall, request.dry_run);
-        let Some(position) = position else {
-            return Ok(result);
-        };
-        let entry = manifest.entries[position].clone();
-        let Some(SystemReceipt::ManagedFile(receipt)) = entry.receipt else {
-            return Ok(result);
-        };
-        if receipt.privileged {
-            bail!("managed Sys file requires a privileged host capability");
-        }
-        let outcome = uninstall_entry_with_host(
-            &self.host,
-            &app_entry_from_receipt(&receipt),
-            request.dry_run,
-            false,
-        )
-        .await?;
-        let (status, effects, remove_receipt) = match outcome {
-            UninstallOutcome::UserModified => (
-                LifecycleStatus::Conflict,
-                vec![LifecycleEffect::UserResourcePreserved],
-                false,
-            ),
-            UninstallOutcome::DryRun => (
-                LifecycleStatus::Previewed,
-                vec![
-                    LifecycleEffect::ResourceRemovePreviewed,
-                    LifecycleEffect::ReceiptRemovePreviewed,
-                ],
-                false,
-            ),
-            UninstallOutcome::RestoredBackup { .. }
-            | UninstallOutcome::ForceRestoredBackup { .. } => (
-                LifecycleStatus::Changed,
-                vec![
-                    LifecycleEffect::BackupRestored,
-                    LifecycleEffect::ReceiptRemoved,
-                ],
-                true,
-            ),
-            UninstallOutcome::Removed | UninstallOutcome::ForceRemoved => (
-                LifecycleStatus::Changed,
-                vec![
-                    LifecycleEffect::ResourceRemoved,
-                    LifecycleEffect::ReceiptRemoved,
-                ],
-                true,
-            ),
-            UninstallOutcome::NotFound => (
-                LifecycleStatus::Changed,
-                vec![LifecycleEffect::ReceiptRemoved],
-                true,
-            ),
-        };
-        if remove_receipt {
-            manifest.entries.remove(position);
-            save_manifest_with_host(&self.host, &self.context.shine_dir, &manifest).await?;
-        }
-        result.push(LifecycleOutcomeV1::new(
-            format!("sys/{}", request.item_id),
-            None::<String>,
-            status,
-            effects,
-        ));
-        Ok(result)
-    }
-}
-
 fn app_entry_from_receipt(receipt: &ManagedFileReceipt) -> AppEntry {
     AppEntry {
         source: "sys/managed-file".into(),
@@ -1223,8 +1005,7 @@ pub(crate) async fn save_manifest_with_host(
 mod tests {
     use super::*;
     use crate::runtime::{
-        FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost,
-        RuntimeContext, RuntimePlatform,
+        InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost, RuntimeContext, RuntimePlatform,
     };
 
     #[tokio::test]
@@ -1249,51 +1030,6 @@ mod tests {
         receipt.ensure_supported().unwrap();
         assert_eq!(receipt.driver(), SysDriverKind::ManagedFile);
         tokio::fs::remove_dir_all(root).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn managed_file_roundtrip_uses_virtual_host_and_receipt() {
-        let runtime = CoreRuntime::new(
-            InMemoryHost::new(),
-            RuntimeContext::isolated(
-                PathBuf::from("/home/test"),
-                PathBuf::from("/home/test/.shine"),
-                PathBuf::from("/presets"),
-                PathBuf::from("/bin"),
-                RuntimePlatform::Linux,
-            ),
-            PresetSnapshot::builder(PresetSourceKind::External).build(),
-        );
-        let applied = runtime
-            .apply_managed_sys_file(ManagedFileRequest {
-                os_id: "linux".into(),
-                item_id: "managed".into(),
-                label: "Managed".into(),
-                destination: PathBuf::from("/etc/example"),
-                content: b"desired".to_vec(),
-                privileged: false,
-                restart_hint: None,
-                dry_run: false,
-            })
-            .await
-            .unwrap();
-        assert_eq!(applied.summary().changed, 1);
-        let removed = runtime
-            .remove_managed_sys_file(ManagedFileRemoveRequest {
-                os_id: "linux".into(),
-                item_id: "managed".into(),
-                dry_run: false,
-            })
-            .await
-            .unwrap();
-        assert_eq!(removed.summary().changed, 1);
-        assert!(
-            runtime
-                .host()
-                .read(Path::new("/etc/example"))
-                .await
-                .is_err()
-        );
     }
 
     #[tokio::test]

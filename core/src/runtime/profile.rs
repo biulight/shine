@@ -278,7 +278,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(true)
     }
 
-    pub async fn remove_shell_profile(
+    pub(in crate::runtime) async fn remove_shell_profile(
         &self,
         config_paths: &[PathBuf],
     ) -> Result<ShellProfileRemoval> {
@@ -314,7 +314,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(removed)
     }
 
-    pub async fn remove_managed_shell_profile(&self) -> Result<Option<PathBuf>> {
+    pub(in crate::runtime) async fn remove_managed_shell_profile(&self) -> Result<Option<PathBuf>> {
         let profile = managed_shell_profile_path(&self.context.shine_dir, self.context.shell);
         match self.host.metadata(&profile).await {
             Ok(_) => {

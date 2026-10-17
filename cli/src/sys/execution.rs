@@ -2,8 +2,6 @@ use std::collections::BTreeMap;
 
 use crate::colors;
 
-#[cfg(test)]
-use super::SysItem;
 use super::{ResolvedSelection, SysItemOutcome, SysItemStatus, selection::format_item_ids};
 
 pub(super) fn sys_item_label_width(
@@ -54,14 +52,17 @@ pub(super) fn proxy_env_vars(config: &crate::config::Config) -> Vec<(&'static st
     ]
 }
 
-#[cfg(test)]
-pub(super) fn item_install_start_text(item: &SysItem, requires_admin: bool) -> String {
-    let admin_note = if requires_admin {
+pub(super) fn item_install_start_line(item_id: &str, label: &str, requires_admin: bool) -> String {
+    let admin = if requires_admin {
         " (administrator access required)"
     } else {
         ""
     };
-    format!("sys/{} ({}) installing{admin_note}", item.id, item.label)
+    format!(
+        "  {} {}",
+        colors::symbol("•"),
+        colors::dim(&format!("sys/{item_id} ({label}) installing{admin}"))
+    )
 }
 
 pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
@@ -172,30 +173,16 @@ pub(super) fn presentation_symbol_stderr(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sys::manifest::parse_and_validate_manifest;
 
     #[test]
     fn item_install_start_names_item_and_admin_requirement() {
-        let manifest = parse_and_validate_manifest(
-            r#"
-version = 2
-
-[[items]]
-id = "zerotier"
-label = "ZeroTier"
-detect = { kind = "command", command = "zerotier-cli" }
-install = { kind = "script", path = "install/zerotier.sh" }
-"#,
-        )
-        .unwrap();
-
         assert_eq!(
-            item_install_start_text(&manifest.items[0], true),
-            "sys/zerotier (ZeroTier) installing (administrator access required)"
+            item_install_start_line("zerotier", "ZeroTier", true),
+            "  • sys/zerotier (ZeroTier) installing (administrator access required)"
         );
         assert_eq!(
-            item_install_start_text(&manifest.items[0], false),
-            "sys/zerotier (ZeroTier) installing"
+            item_install_start_line("zerotier", "ZeroTier", false),
+            "  • sys/zerotier (ZeroTier) installing"
         );
     }
 

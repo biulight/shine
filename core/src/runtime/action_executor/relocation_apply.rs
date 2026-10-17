@@ -9,7 +9,7 @@ where
     /// Move one static Copy receipt to a new, absent destination while retaining
     /// exact rollback material for the previous managed file until the new
     /// receipt is durable.
-    pub async fn execute_app_managed_file_relocation_approved(
+    pub(in crate::runtime) async fn execute_app_managed_file_relocation_approved(
         &self,
         plan: &PlanV1,
         approval: &PlanApprovalV1,
@@ -190,7 +190,7 @@ where
     /// Move one key-owned JSON receipt to a new, absent destination. The old
     /// whole file is retained only as rollback material; apply and recovery
     /// mutate declared top-level keys while preserving unrelated values.
-    pub async fn execute_app_managed_json_relocation_approved(
+    pub(in crate::runtime) async fn execute_app_managed_json_relocation_approved(
         &self,
         plan: &PlanV1,
         approval: &PlanApprovalV1,

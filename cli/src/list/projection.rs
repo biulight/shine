@@ -119,16 +119,6 @@ pub(super) fn installed_sys_items_from_inventory(report: &InventoryReportV1) -> 
         .collect()
 }
 
-#[cfg(test)]
-pub(super) fn installed_app_categories(rows: &[AppRow]) -> Vec<String> {
-    rows.iter()
-        .filter(|row| row.file_status != FileStatus::NotInstalled)
-        .map(|row| row.category.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
 pub(super) fn shell_categories(rows: &[&ShellRow]) -> Vec<String> {
     rows.iter()
         .map(|row| row.category.clone())

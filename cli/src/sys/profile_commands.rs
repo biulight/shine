@@ -4,14 +4,6 @@ use crate::{colors, config::Config};
 
 use super::detect::detect_os_id;
 
-pub async fn handle_profile_enable(config: &Config, item_id: &str, dry_run: bool) -> Result<()> {
-    handle_profile_enable_approved(config, item_id, dry_run, true).await
-}
-
-pub async fn handle_profile_disable(config: &Config, item_id: &str, dry_run: bool) -> Result<()> {
-    handle_profile_disable_approved(config, item_id, dry_run, true).await
-}
-
 pub async fn handle_profile_enable_approved(
     config: &Config,
     item_id: &str,

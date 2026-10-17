@@ -229,7 +229,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         })
     }
 
-    pub async fn sys_item_is_present(&self, item: &SysItem) -> Result<bool> {
+    pub(in crate::runtime) async fn sys_item_is_present(&self, item: &SysItem) -> Result<bool> {
         let detect = item
             .detect
             .as_ref()
@@ -404,7 +404,12 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         Ok(())
     }
 
-    pub fn sys_install_preview(&self, os_id: &str, root: &Path, item: &SysItem) -> Result<String> {
+    pub(in crate::runtime) fn sys_install_preview(
+        &self,
+        os_id: &str,
+        root: &Path,
+        item: &SysItem,
+    ) -> Result<String> {
         let install = item
             .install
             .as_ref()

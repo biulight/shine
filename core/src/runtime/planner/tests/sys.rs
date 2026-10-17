@@ -1194,3 +1194,96 @@ target = '~/.config/managed.txt'
         );
     }
 }
+
+#[tokio::test]
+async fn managed_file_roundtrip_uses_approved_production_lifecycle_and_receipt() {
+    for original in [None, Some(b"user-original".as_slice())] {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "sys/test/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'managed'
+label = 'Managed'
+mode = 'managed'
+driver = 'managed-file'
+permissions = { schema_version = 1 }
+[items.config]
+source = 'managed.txt'
+target = '$HOME/.config/managed.txt'
+"#
+                .to_vec(),
+            )
+            .file("sys/test/managed.txt", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/managed.txt");
+        if let Some(bytes) = original {
+            runtime.host().put_file(&destination, bytes.to_vec());
+        }
+        let mut observer = crate::runtime::NullObserver;
+        let request = |operation| SysManagedPlanRequest {
+            operation,
+            os_id: "test".into(),
+            target: Some("managed".into()),
+            input_versions: PlanningInputVersions::default(),
+        };
+        let install = request(LifecycleOperation::Install);
+        let plan = runtime.plan_managed_sys(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let applied = runtime
+            .run_managed_sys_approved(install, &approval, &mut Interaction, &mut observer)
+            .await
+            .unwrap();
+        assert_eq!(applied.lifecycle.summary().changed, 1);
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"desired");
+        let manifest = runtime.inspect_sys_run_manifest().await.unwrap();
+        let [entry] = manifest.entries.as_slice() else {
+            panic!("expected one receipt")
+        };
+        let Some(SystemReceipt::ManagedFile(receipt)) = &entry.receipt else {
+            panic!("expected managed file receipt")
+        };
+        assert_eq!(receipt.destination, destination);
+        assert_eq!(
+            receipt.content_hash,
+            crate::install::hash_content(b"desired")
+        );
+        assert_eq!(receipt.backup.is_some(), original.is_some());
+        let backup = receipt.backup.clone();
+        if let (Some(path), Some(bytes)) = (&backup, original) {
+            assert_eq!(runtime.host().read(path).await.unwrap(), bytes);
+        }
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(crate::runtime::SYS_OPERATION_JOURNAL_FILE);
+        assert!(runtime.host().read(&journal).await.is_err());
+
+        let uninstall = request(LifecycleOperation::Uninstall);
+        let plan = runtime.plan_managed_sys(uninstall.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let removed = runtime
+            .run_managed_sys_approved(uninstall, &approval, &mut Interaction, &mut observer)
+            .await
+            .unwrap();
+        assert_eq!(removed.lifecycle.summary().changed, 1);
+        if let Some(bytes) = original {
+            assert_eq!(runtime.host().read(&destination).await.unwrap(), bytes);
+        } else {
+            assert!(runtime.host().read(&destination).await.is_err());
+        }
+        assert!(
+            runtime
+                .inspect_sys_run_manifest()
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        if let Some(path) = backup {
+            assert!(runtime.host().read(&path).await.is_err());
+        }
+        assert!(runtime.host().read(&journal).await.is_err());
+    }
+}

@@ -8,7 +8,7 @@ mod report;
 mod uninstall;
 mod upgrade;
 
-pub use build::{handle_build, handle_build_approved, handle_unbuild, handle_unbuild_approved};
+pub use build::{handle_build, handle_build_approved, handle_unbuild_approved};
 #[doc(hidden)]
 pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};

@@ -1066,9 +1066,10 @@ invocation, then executes or sources the atomically refreshed file under `render
 
 Approved managed operations, bootstrap, profile changes, and recovery acquire `sys-lifecycle.lock`
 before fresh approval validation, retaining it through shared manifest persistence and cleanup.
-Standalone managed-file mutations and profile synchronization use the same lock. The privileged
-transaction lock is acquired afterward; a manifest change while waiting invalidates an approval
-that observes it (ADR 0106).
+Profile synchronization uses the same lock. Managed-file roundtrip tests enter through
+`plan_managed_sys` and `run_managed_sys_approved`; the former test-only standalone mutation path
+has been removed (ADR 0133). The privileged transaction lock is acquired afterward; a manifest
+change while waiting invalidates an approval that observes it (ADR 0106).
 
 `sys/lifecycle` selects current preset items or a distinct receipt-only removal, then performs input
 and administrator preflight, resource execution, and outcome persistence. Batch items retain their

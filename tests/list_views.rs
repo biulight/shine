@@ -216,3 +216,78 @@ fn status_prints_shell_attention_before_later_app_error_and_update_waits_for_que
         receipt
     );
 }
+
+#[test]
+fn simple_list_collapses_installed_app_files_to_their_category() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    let uninstalled = fixture.0.join("state/presets/app/uninstalled");
+    fs::create_dir_all(&uninstalled).unwrap();
+    fs::write(
+        uninstalled.join("shine.toml"),
+        "dest = '~/.config/uninstalled'\n[[files]]\nsource = 'config.txt'\n",
+    )
+    .unwrap();
+    fs::write(uninstalled.join("config.txt"), "not installed").unwrap();
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fs::remove_file(fixture.0.join("destination/manual.txt")).unwrap();
+    let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    let output = fixture.run(&["list"]);
+    success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("App Configs"), "{output:?}");
+    assert_eq!(
+        text.lines().filter(|line| line.trim() == "demo").count(),
+        1,
+        "{output:?}"
+    );
+    assert!(!text.contains("uninstalled"), "{output:?}");
+    assert!(
+        !text.contains("config.txt") && !text.contains("manual.txt"),
+        "{output:?}"
+    );
+    assert_eq!(
+        fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+        receipt
+    );
+    assert_eq!(
+        fs::read(fixture.0.join("destination/config.txt")).unwrap(),
+        b"static-v1\n"
+    );
+    assert!(!fixture.0.join("destination/manual.txt").exists());
+}
+
+#[test]
+fn simple_list_shows_partially_installed_app_categories() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    let metadata = fixture.0.join("state/presets/app/demo/shine.toml");
+    let initial = fs::read_to_string(&metadata).unwrap();
+    fs::write(
+        &metadata,
+        initial.replace("[[files]]\nsource = 'manual.txt'\n", ""),
+    )
+    .unwrap();
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fs::write(&metadata, initial).unwrap();
+    fs::write(fixture.0.join("destination/config.txt"), "user modified").unwrap();
+    let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    let output = fixture.run(&["list"]);
+    success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("App Configs"), "{output:?}");
+    assert_eq!(
+        text.lines().filter(|line| line.trim() == "demo").count(),
+        1,
+        "{output:?}"
+    );
+    assert_eq!(
+        fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+        receipt
+    );
+    assert_eq!(
+        fs::read(fixture.0.join("destination/config.txt")).unwrap(),
+        b"user modified"
+    );
+    assert!(!fixture.0.join("destination/manual.txt").exists());
+}

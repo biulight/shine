@@ -10,10 +10,6 @@ pub async fn handle_build(config: &Config, app_id: &str) -> Result<()> {
     handle_build_approved(config, app_id, true).await
 }
 
-pub async fn handle_unbuild(config: &Config, app_id: &str) -> Result<()> {
-    handle_unbuild_approved(config, app_id, true).await
-}
-
 pub async fn handle_build_approved(config: &Config, app_id: &str, yes: bool) -> Result<()> {
     run_explicit(config, app_id, AppArtifactAction::Apply, yes).await
 }
