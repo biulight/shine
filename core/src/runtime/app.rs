@@ -1,5 +1,7 @@
+mod assessment;
 #[cfg(test)]
 mod assessment_tests;
+mod inspect;
 mod lifecycle;
 mod outcome;
 mod upgrade;
@@ -18,9 +20,9 @@ use crate::lifecycle::{
 use crate::permission::PermissionDeclarationV1;
 use crate::plan::{PermissionV1, PlanActionV1, PlanApprovalV1, PlanV1};
 use crate::runtime::{
-    AppFileInspection, CoreRuntime, FileSystemHost, InspectionChange, InspectionFileStatus,
-    PrivilegedFileSystemHost, ProcessHost, ProcessIo, ProcessRequest, RuntimeEvent,
-    RuntimeInteraction, RuntimeObserver,
+    AppFileInspection, CoreRuntime, FileSystemHost, FileSystemObservationHost, InspectionChange,
+    InspectionFileStatus, PrivilegedFileSystemHost, ProcessHost, ProcessIo, ProcessRequest,
+    RuntimeEvent, RuntimeInteraction, RuntimeObserver,
 };
 use crate::trust::TrustCapabilityV1;
 use anyhow::{Context, Result, bail};
@@ -315,12 +317,12 @@ impl AppContentAssessment {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct AppAssessmentOptions {
-    dry_run: bool,
-    run_generators: bool,
-    explicit_generators: bool,
-    preserve_generator_errors: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppAssessmentPolicy {
+    InstallPreview,
+    Install,
+    Upgrade,
+    InspectEvaluated,
 }
 
 struct ApprovedAppInstall<'a> {
@@ -626,275 +628,6 @@ where
             report.lifecycle.outcomes.extend(hooks.outcomes);
         }
         Ok(report)
-    }
-
-    /// Reconcile only manifest-installed App categories against one immutable
-    /// preset assessment. Automatic generators run once; manual generators
-    /// remain explicit-refresh only.
-    /// Inspect every active App file using the same one-pass generator
-    /// assessment and ownership rules as upgrade.
-    pub async fn inspect_apps(
-        &self,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<Vec<AppFileInspection>> {
-        self.inspect_apps_with_options(AppInspectionOptions::default(), observer)
-            .await
-    }
-
-    /// Receipt-owned resources absent from the effective App metadata. No code is evaluated.
-    pub(crate) async fn missing_app_sources(&self) -> Result<Vec<(String, String)>> {
-        let active =
-            self.app_categories(None)?
-                .into_iter()
-                .flat_map(|category| {
-                    category.files.into_iter().map(move |file| {
-                        format!("app/{}/{}", category.name, file.source_rel.display())
-                    })
-                })
-                .collect::<BTreeSet<_>>();
-        let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        Ok(manifest
-            .entries
-            .iter()
-            .filter(|entry| !active.contains(&entry.source))
-            .filter_map(|entry| {
-                app_source_parts(&entry.source)
-                    .map(|(category, resource)| (category.to_string(), resource.to_string()))
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect())
-    }
-
-    pub async fn inspect_apps_with_options(
-        &self,
-        options: AppInspectionOptions,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<Vec<AppFileInspection>> {
-        let selected = options.categories.iter().collect::<BTreeSet<_>>();
-        let categories = self
-            .app_categories(None)?
-            .into_iter()
-            .filter(|category| selected.is_empty() || selected.contains(&category.name))
-            .collect::<Vec<_>>();
-        let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        let assessments = self
-            .assess_app_files(
-                &categories,
-                AppAssessmentOptions {
-                    run_generators: options.run_generators,
-                    explicit_generators: options.run_generators,
-                    preserve_generator_errors: true,
-                    ..AppAssessmentOptions::default()
-                },
-                &manifest,
-                observer,
-            )
-            .await?;
-        let installed_categories = manifest
-            .entries
-            .iter()
-            .filter_map(|entry| {
-                app_source_parts(&entry.source).map(|(category, _)| category.to_string())
-            })
-            .collect::<BTreeSet<_>>();
-        let mut files = Vec::new();
-        for assessment in assessments {
-            let source = format!(
-                "app/{}/{}",
-                assessment.category.name,
-                assessment.file.source_rel.display()
-            );
-            let direct_entry = manifest.find_by_dest(&assessment.destination).cloned();
-            let source_entry = manifest.find_by_source(&source).cloned();
-            let entry = direct_entry.clone().or_else(|| source_entry.clone());
-            let current_content = match entry.as_ref() {
-                Some(entry) => match self.host.read(&entry.destination).await {
-                    Ok(bytes) => Some(bytes),
-                    Err(error) if error.is_not_found() => None,
-                    Err(error) => return Err(error.into_anyhow("reading installed App file")),
-                },
-                None => None,
-            };
-            let manual_generator = assessment
-                .file
-                .generator
-                .as_ref()
-                .is_some_and(|generator| !generator.auto);
-            let mut changes = Vec::new();
-            let status = if let Some(entry) = direct_entry.as_ref() {
-                let current_hash = current_content
-                    .as_deref()
-                    .map(|bytes| installed_app_hash(&assessment.file, bytes))
-                    .transpose()?;
-                match (current_hash, assessment.content.generator_status()) {
-                    (None, _) => InspectionFileStatus::Missing,
-                    (Some(None), _) => InspectionFileStatus::Partial,
-                    (Some(Some(hash)), _) if hash != entry.content_hash => {
-                        InspectionFileStatus::UserModified
-                    }
-                    (Some(Some(_)), Some(status)) => status,
-                    (Some(Some(_)), None) => {
-                        let desired = assessment
-                            .content
-                            .bytes()
-                            .map(|content| desired_app_hash(&assessment.file, content))
-                            .transpose()?;
-                        if desired.is_some_and(|hash| hash != entry.content_hash) {
-                            changes.push(InspectionChange::ContentChanged);
-                            InspectionFileStatus::UpdateAvail
-                        } else {
-                            InspectionFileStatus::UpToDate
-                        }
-                    }
-                }
-            } else if let Some(entry) = source_entry.as_ref() {
-                if let Some(status) = assessment.content.generator_status() {
-                    status
-                } else if manual_generator && !options.run_generators {
-                    let current_hash = current_content
-                        .as_deref()
-                        .map(|bytes| installed_app_hash(&assessment.file, bytes))
-                        .transpose()?;
-                    match current_hash {
-                        None => InspectionFileStatus::Missing,
-                        Some(None) => InspectionFileStatus::Partial,
-                        Some(Some(hash)) if hash != entry.content_hash => {
-                            InspectionFileStatus::UserModified
-                        }
-                        Some(Some(_)) => InspectionFileStatus::UpToDate,
-                    }
-                } else {
-                    changes.push(InspectionChange::DestinationRelocated {
-                        from: entry.destination.clone(),
-                        to: assessment.destination.clone(),
-                    });
-                    if assessment
-                        .content
-                        .bytes()
-                        .map(|content| desired_app_hash(&assessment.file, content))
-                        .transpose()?
-                        .is_some_and(|hash| hash != entry.content_hash)
-                    {
-                        changes.push(InspectionChange::ContentChanged);
-                    }
-                    InspectionFileStatus::UpdateAvail
-                }
-            } else if installed_categories.contains(&assessment.category.name)
-                && let Some(status) = assessment.content.generator_status()
-            {
-                status
-            } else if installed_categories.contains(&assessment.category.name)
-                && (!manual_generator || options.run_generators)
-                && assessment.content.bytes().is_some()
-            {
-                changes.push(InspectionChange::NewFile {
-                    destination: assessment.destination.clone(),
-                });
-                InspectionFileStatus::UpdateAvail
-            } else {
-                InspectionFileStatus::NotInstalled
-            };
-            let content = assessment.content;
-            files.push(AppFileInspection {
-                category: assessment.category,
-                file: assessment.file,
-                destination: Some(assessment.destination),
-                status,
-                manifest_entry: entry,
-                desired_content: content.bytes().map(<[u8]>::to_vec),
-                current_content,
-                changes,
-                assessment_error: content.error().map(str::to_owned),
-                assessment_diagnostic: content.diagnostic(),
-            });
-        }
-        Ok(files)
-    }
-
-    async fn assess_app_files(
-        &self,
-        categories: &[AppCategory],
-        options: AppAssessmentOptions,
-        manifest: &AppManifest,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<Vec<AssessedAppFile>> {
-        let mut assessed = Vec::new();
-        for category in categories {
-            for file in &category.files {
-                let destination = self.app_destination(category, file)?;
-                let raw = if !options.run_generators && file.generator.is_some() {
-                    assessed.push(AssessedAppFile {
-                        category: category.clone(),
-                        file: file.clone(),
-                        destination,
-                        content: AppContentAssessment::NotEvaluated,
-                    });
-                    continue;
-                } else if options.dry_run || file.generator.is_none() {
-                    self.app_source_bytes(category.name.as_str(), file)?
-                        .to_vec()
-                } else {
-                    if options.preserve_generator_errors
-                        && let Err(error) =
-                            self.ensure_app_code_allowed(&category.name, "generator")
-                    {
-                        assessed.push(AssessedAppFile {
-                            category: category.clone(),
-                            file: file.clone(),
-                            destination,
-                            content: AppContentAssessment::TrustRequired {
-                                error: format!("{error:#}"),
-                            },
-                        });
-                        continue;
-                    }
-                    match self
-                        .run_app_generator(
-                            AppGeneratorRequest {
-                                category: category.name.clone(),
-                                source: file.source_rel.display().to_string(),
-                                generator: file.generator.clone().expect("checked generator"),
-                                explicit: options.explicit_generators,
-                            },
-                            observer,
-                        )
-                        .await
-                    {
-                        Ok(Some(bytes)) => bytes,
-                        Ok(None) => self.app_source_bytes(&category.name, file)?.to_vec(),
-                        Err(error)
-                            if options.preserve_generator_errors
-                                || (manifest.find_by_dest(&destination).is_some()
-                                    && self.host.metadata(&destination).await.is_ok()) =>
-                        {
-                            assessed.push(AssessedAppFile {
-                                category: category.clone(),
-                                file: file.clone(),
-                                destination,
-                                content: AppContentAssessment::EvaluationFailed {
-                                    error: format!("{error:#}"),
-                                },
-                            });
-                            continue;
-                        }
-                        Err(error) => return Err(error),
-                    }
-                };
-                let content =
-                    crate::install::transforms::apply(&file.transforms, &raw, &self.context.env)
-                        .with_context(|| {
-                            format!("transform failed: {}", file.transforms.join(", "))
-                        })?;
-                assessed.push(AssessedAppFile {
-                    category: category.clone(),
-                    file: file.clone(),
-                    destination,
-                    content: AppContentAssessment::Ready(content),
-                });
-            }
-        }
-        Ok(assessed)
     }
 
     async fn install_app_content(
@@ -2030,7 +1763,7 @@ fn process_detail(output: &crate::runtime::ProcessOutput) -> String {
 }
 
 async fn load_manifest(
-    host: &impl FileSystemHost,
+    host: &impl FileSystemObservationHost,
     shine_dir: &std::path::Path,
 ) -> Result<AppManifest> {
     let path = shine_dir.join("app-manifest.toml");

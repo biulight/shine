@@ -10,6 +10,9 @@ bugs. Check this list before changing the modules named in each entry.
   DTOs retain their fields and diagnostic codes; missing/partial/user-modified states take
   precedence for directly installed files. Generator failure preserves last-known-good content and
   receipts, with the existing install-preserved and upgrade-failed report semantics (ADR 0117).
+  Named assessment policies keep install preview on transformed static fallback, install explicit,
+  upgrade automatic-only and evaluated inspection explicit. Ordinary `inspect_apps` needs only
+  filesystem observation; its assessment cannot execute generators or mutate state (ADR 0124).
 - **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
   from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
   `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery

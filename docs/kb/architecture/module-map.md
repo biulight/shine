@@ -64,13 +64,16 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/trust.rs` | Derivation of App/Shell/Sys external-code requirements from immutable logical code inputs, resolved defaults, and declared permissions |
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence plus target-local and current-Preset batch `shine trust` workflows |
 | `core/src/runtime/app_script.rs` | Per-invocation captured App script/helper materialization, fixed execution paths, and cleanup |
-| `core/src/runtime/app.rs` | App assessment with typed content/generator states, install/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `core/src/runtime/app.rs` | App models and typed content/generator states, install/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `core/src/runtime/app/assessment.rs` | Snapshot-only content assessment and named install-preview/install/upgrade/evaluated-inspection generator policies |
+| `core/src/runtime/app/inspect.rs` | Observation-only ordinary inspection, explicit generator evaluation adapter and pure inspection projection |
 | `core/src/runtime/app/assessment_tests.rs` | Consumer regressions for generator assessment, inspection priority, approved lifecycle reports and last-known-good receipts |
 | `core/src/runtime/app/outcome.rs` | Internal typed App file outcomes projected into the existing local report fields |
 | `core/src/runtime/app/lifecycle/{install,remove}.rs` | App preparation, per-file apply/receipt commit and finalization; caller retains lifecycle lock and exact approval |
 | `core/src/runtime/app/upgrade.rs` | Upgrade preparation, installed-file convergence, stale pruning, additions, receipt finalization and hooks under the existing lifecycle lock |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
-| `core/src/runtime/shell.rs` | Shell models/metadata, lifecycle entry points, live render, launcher, cache, profile, and manifest helpers |
+| `core/src/runtime/shell.rs` | Shell models, lifecycle entry points, live render, launcher, cache, profile, and manifest helpers |
+| `core/src/runtime/shell/metadata.rs` | Snapshot-only metadata parsing, explicit declarations, native discovery and platform/source admission; no Host required |
 | `core/src/runtime/shell/inspect.rs` | Observation-only Shell inspection orchestration, per-command evidence, pure changes/status projection and receipt-only records |
 | `core/src/runtime/tests/shell_inspection.rs` | Read-only consumer regressions for Shell status/change ordering, missing presets, trust/conflicts and observation failures |
 | `core/src/runtime/shell/delivery.rs` | Pure captured-input source layout and desired delivery shared by inspection, planning, launcher preparation and receipt construction |
@@ -79,7 +82,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/sys.rs` | Managed Sys models, receipt assessment, managed-file/split-DNS primitives and run-manifest persistence |
 | `core/src/runtime/sys/{lifecycle,transaction}.rs`, `sys/lifecycle/` | Current-item/receipt-only selection, preflight, resource execution, result persistence and fresh transaction preparation; approved facade retains the lifecycle lock |
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
-| `core/src/runtime/sys_profile/` | Sys profile composition, three-way reconciliation, phase sentinels, BOM and CRLF behavior |
+| `core/src/runtime/sys_profile/` | Sys profile facade, composition and phase-sentinel/BOM handling in `compose.rs` and `blocks.rs` |
+| `core/src/runtime/sys_profile/{files,reconcile,merge,three_way}.rs` | Profile observations and EOL normalization, ordered writes, bounded Git adapter and pure fallback merge respectively |
 | `core/src/runtime/validation.rs` | Host-backed preset discovery from a captured cwd, V1 diagnostics, and App/Shell/Sys schema validation |
 | `core/src/runtime/metadata_diagnostic.rs` | Typed metadata error origins mapped to stable validation codes; message prose is not a classifier |
 | `core/src/runtime/preset_migration.rs` | Immutable legacy compatibility assessment, safe metadata candidate generation, released-1.x fingerprints, and versioned content-free migration reports |
@@ -143,7 +147,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `env ...` | `cli/src/env/` plus `cli/src/secret/` |
 | `preset export/copy/link/unlink/overlay` | `cli/src/preset_commands.rs` |
 | `preset new/validate/lint/plan/test/pack` | Kind template handlers plus the `cli/src/preset_{validation,lint,authoring,test,pack}.rs` adapters |
-| `preset migrate [PATH]` | `cli/src/preset_migration.rs` for active/explicit discovery, diff review, candidate validation, private backup, source recheck, and atomic apply |
+| `preset migrate [PATH]` | `cli/src/preset_migration.rs` orchestrates `preset_migration/{discovery,assessment,render,apply}.rs`: read-only inputs, same-scope validation, report/diffs, source rechecks/private backup/atomic edits |
 | `preset pull`, `update --pull`, `upgrade --pull` | `cli/src/git_pull.rs` plus top-level routing |
 | `init` | `cli/src/init.rs` |
 | `self install/upgrade` | `cli/src/self_install.rs`, `cli/src/update_check/` |

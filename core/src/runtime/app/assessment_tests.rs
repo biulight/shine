@@ -294,3 +294,202 @@ async fn generator_failure_preserves_install_and_upgrade_report_semantics_and_re
     );
     assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), manifest);
 }
+
+// Ordinary inspection can be constructed with no filesystem mutation or process port.
+struct AppObservationHost(InMemoryHost);
+type ReadFuture<'a, T> = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = std::result::Result<T, crate::runtime::HostError>>
+            + Send
+            + 'a,
+    >,
+>;
+impl FileSystemObservationHost for AppObservationHost {
+    fn canonicalize<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, PathBuf> {
+        self.0.canonicalize(path)
+    }
+    fn read<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, Vec<u8>> {
+        self.0.read(path)
+    }
+    fn metadata<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, crate::runtime::FileMetadata> {
+        self.0.metadata(path)
+    }
+    fn read_dir<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, Vec<PathBuf>> {
+        self.0.read_dir(path)
+    }
+    fn read_link<'a>(&'a self, path: &'a Path) -> ReadFuture<'a, PathBuf> {
+        self.0.read_link(path)
+    }
+}
+
+#[tokio::test]
+async fn ordinary_app_inspection_needs_only_observation_and_defers_generators() {
+    let runtime = generated_runtime(PresetSourceKind::External, true);
+    let destination = seed_installed(&runtime).await;
+    let before = runtime.host().operations().len();
+    let reader = CoreRuntime::new(
+        AppObservationHost(runtime.host().clone()),
+        runtime.context().clone(),
+        runtime.presets().clone(),
+    );
+    let rows = reader.inspect_apps(&mut NullObserver).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, InspectionFileStatus::GeneratorNotEvaluated);
+    assert_eq!(
+        rows[0].current_content.as_deref(),
+        Some(b"last-good".as_slice())
+    );
+    assert!(rows[0].desired_content.is_none());
+    assert!(rows[0].assessment_error.is_none());
+    assert_eq!(rows[0].destination.as_ref(), Some(&destination));
+    assert!(
+        runtime.host().operations()[before..]
+            .iter()
+            .all(|op| matches!(op, HostOperation::Read(_)))
+    );
+}
+
+#[tokio::test]
+async fn assessment_policies_keep_preview_fallback_and_manual_generator_execution_distinct() {
+    let runtime = generated_runtime(PresetSourceKind::Embedded, true);
+    let mut categories = runtime.app_categories(None).unwrap();
+    categories[0].files[0].generator.as_mut().unwrap().auto = false;
+    for (policy, expected, runs) in [
+        (
+            AppAssessmentPolicy::InstallPreview,
+            b"fallback resolved".as_slice(),
+            0,
+        ),
+        (
+            AppAssessmentPolicy::Upgrade,
+            b"fallback resolved".as_slice(),
+            0,
+        ),
+        (
+            AppAssessmentPolicy::Install,
+            b"generated resolved".as_slice(),
+            1,
+        ),
+        (
+            AppAssessmentPolicy::InspectEvaluated,
+            b"generated resolved".as_slice(),
+            1,
+        ),
+    ] {
+        if runs > 0 {
+            runtime.host().queue_process_output(Ok(ProcessOutput {
+                exit_code: Some(0),
+                stdout: b"generated @@VALUE@@".to_vec(),
+                ..Default::default()
+            }));
+        }
+        let before = runtime.host().operations().len();
+        let rows = runtime
+            .assess_app_files(
+                &categories,
+                policy,
+                &AppManifest::default(),
+                &mut NullObserver,
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows[0].content.bytes(), Some(expected));
+        assert_eq!(
+            runtime.host().operations()[before..]
+                .iter()
+                .filter(|op| matches!(op, HostOperation::Run { .. }))
+                .count(),
+            runs
+        );
+    }
+}
+
+#[tokio::test]
+async fn evaluated_inspection_assesses_selected_files_once_before_installed_reads() {
+    let original = generated_runtime(PresetSourceKind::Embedded, true);
+    let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
+    for (logical, bytes) in original.presets().files() {
+        let bytes = if logical == "app/demo/shine.toml" {
+            let mut metadata = bytes.clone();
+            metadata.extend_from_slice(b"\n[[files]]\nsource = 'two'\ntransforms = ['template']\ngenerator = { script = 'gen.sh', env = ['ENABLE'], when_env = 'ENABLE', auto = true }\n");
+            metadata
+        } else {
+            bytes.clone()
+        };
+        builder = builder.file(logical, bytes);
+    }
+    // This category is valid but excluded from the requested assessment.
+    let snapshot = builder.file("app/demo/two", b"fallback two".to_vec())
+        .file("app/other/shine.toml", b"dest = '~/.other'\n[[files]]\nsource = 'config'\ngenerator = { script = 'gen.sh', env = ['ENABLE'], when_env = 'ENABLE', auto = true }\n".to_vec())
+        .file("app/other/config", b"other".to_vec())
+        .file("app/other/gen.sh", b"echo other".to_vec()).build();
+    let runtime = CoreRuntime::new(
+        original.host().clone(),
+        original.context().clone(),
+        snapshot,
+    );
+    let first = seed_installed(&runtime).await;
+    let second = first.with_file_name("two");
+    runtime.host().put_file(&second, b"last-good".to_vec());
+    let mut manifest = load_manifest(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    let mut entry = manifest.entries[0].clone();
+    entry.source = "app/demo/two".into();
+    entry.destination = second.clone();
+    manifest.entries.push(entry);
+    manifest
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
+    let receipt = runtime.host().read(&manifest_path).await.unwrap();
+    runtime.host().queue_process_output(Ok(failed_generator()));
+    runtime.host().queue_process_output(Ok(ProcessOutput {
+        exit_code: Some(0),
+        stdout: b"generated @@VALUE@@".to_vec(),
+        ..Default::default()
+    }));
+    let before = runtime.host().operations().len();
+    let rows = runtime
+        .inspect_apps_with_options(
+            AppInspectionOptions {
+                categories: vec!["demo".into()],
+                run_generators: true,
+            },
+            &mut NullObserver,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.category.name == "demo"));
+    assert_eq!(
+        rows[0].status,
+        InspectionFileStatus::GeneratorEvaluationFailed
+    );
+    assert_eq!(rows[1].status, InspectionFileStatus::UpdateAvail);
+    assert_eq!(
+        rows[1].desired_content.as_deref(),
+        Some(b"generated resolved".as_slice())
+    );
+    let operations = &runtime.host().operations()[before..];
+    let runs = operations
+        .iter()
+        .enumerate()
+        .filter_map(|(i, op)| matches!(op, HostOperation::Run { .. }).then_some(i))
+        .collect::<Vec<_>>();
+    assert_eq!(runs.len(), 2);
+    let reads = operations
+        .iter()
+        .enumerate()
+        .filter_map(|(i, op)| match op {
+            HostOperation::Read(path) if path == &first || path == &second => Some(i),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reads.len(), 2);
+    assert!(reads.iter().all(|read| *read > runs[1]));
+    assert_eq!(runtime.host().read(&first).await.unwrap(), b"last-good");
+    assert_eq!(runtime.host().read(&second).await.unwrap(), b"last-good");
+    assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), receipt);
+}

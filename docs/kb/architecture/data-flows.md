@@ -278,7 +278,11 @@ item succeeded. Validation rejection produces no execution events or effects. Se
 `shine preset migrate` is routed before mutable config initialization. Default scope uses read-only
 discovery for the active external source and overlay; an explicit repository, category, or manifest
 path bypasses active-source selection. Core plans only `shine.toml` changes from one effective
-snapshot and returns a content-free report plus process-local candidate bytes.
+snapshot and returns a content-free report plus process-local candidate bytes. The CLI facade
+retains approval and execution order; `preset_migration/discovery.rs` returns named immutable
+inputs, `assessment.rs` validates candidates, `render.rs` formats reports/diffs, and `apply.rs`
+owns source checks, backup and edits. Source checks run before backup and again before applying
+any edit; each file is also checked immediately before its replacement/removal (ADR 0124).
 
 ```text
 read-only source discovery or explicit PATH → immutable effective/base/current-embedded snapshots
@@ -834,7 +838,12 @@ An app `[[files]]` entry may declare
 safe fallback and stable manifest identity. When `when_env` exists in the active `[env]` table, an
 approved install, upgrade, or explicit refresh may run the generator and use its UTF-8 stdout as
 the effective source before normal transforms and install strategies. Ordinary read-oriented
-inspection never runs it; explicit evaluation may:
+inspection never runs it; explicit evaluation may execute it. `app/assessment.rs` owns named execution
+policies, while `app/inspect.rs` separates filesystem observations from pure status/change
+projection. Default inspection requires only `FileSystemObservationHost`; explicit evaluation
+retains the process/trust gates and performs the same one-pass assessment before reading installed
+content. Install preview uses the transformed static fallback without executing code (ADR 0124).
+The execution and reporting rules remain:
 
 1. `shine app install` always materializes first, then reuses the normal
    manifest hash and atomic file installer.
@@ -1060,6 +1069,14 @@ Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`.
 integrations in stable manifest order. Core reconciles the two generated files before its profile
 block module updates the existing pre/post sentinels. Composition
 happens once after item execution, and render failure leaves the last installed profile intact.
+`sys_profile/files.rs` reads phase inputs and normalizes comparisons; `reconcile.rs` retains the
+ordered active/base writes and pending-artifact cleanup. `merge.rs` owns bounded Git invocation;
+`three_way.rs` owns the pure fallback algorithm. Non-LF inputs and composed templates bypass Git.
+Git exit 0 commits its clean output, exit 1 retains its conflict output for review, and other exits
+or a missing Git executable use the fallback. Other spawn errors stop before profile writes.
+Conflicts write only `.new` and `.merge`, preserving active/base bytes. A later write failure can
+leave an earlier phase/file write applied; this remains ordered reconciliation, not a transaction
+(ADR 0124).
 `sys profile enable/disable` changes only this activation state and generated profile content.
 
 Shine does not run update checks for bootstrap software. Homebrew, APT, Winget, mise, rustup, or

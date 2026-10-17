@@ -1,3 +1,7 @@
+mod metadata;
+use metadata::{
+    ShellCategoryToml, is_native_shell_script, normalize_shell_metadata_source, shell_logical_path,
+};
 mod delivery;
 mod inspect;
 mod lifecycle;
@@ -36,26 +40,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-
-#[derive(Debug, Deserialize)]
-struct ShellCategoryToml {
-    description: Option<String>,
-    permission_defaults: Option<PermissionDeclarationV1>,
-    files: Option<Vec<ShellFileToml>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ShellFileToml {
-    source: String,
-    target: Option<String>,
-    description: Option<String>,
-    needs_source: Option<bool>,
-    platforms: Option<Vec<String>>,
-    runtime: Option<String>,
-    transforms: Option<Vec<String>>,
-    env: Option<Vec<String>>,
-    permissions: Option<PermissionDeclarationV1>,
-}
 
 pub const SHELL_MANIFEST_FILE: &str = "shell-manifest.toml";
 pub const SHELL_MANIFEST_SCHEMA_VERSION: u32 = 2;
@@ -1302,37 +1286,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
 }
 
 impl<H> CoreRuntime<H> {
-    pub fn shell_categories(&self, filter: Option<&str>) -> Result<Vec<ShellCategory>> {
-        let categories = self.shell_categories_or_missing(filter)?;
-        if filter.is_some() && categories.is_empty() && self.context().is_external_presets {
-            bail!(
-                "shell preset category not found: {}",
-                filter.unwrap_or_default()
-            );
-        }
-        Ok(categories)
-    }
-
-    pub(super) fn shell_categories_or_missing(
-        &self,
-        filter: Option<&str>,
-    ) -> Result<Vec<ShellCategory>> {
-        let prefix = "shell/";
-        let names = self
-            .presets()
-            .files()
-            .keys()
-            .filter_map(|path| path.strip_prefix(prefix))
-            .filter_map(|rest| rest.split_once('/').map(|(category, _)| category))
-            .filter(|category| filter.is_none_or(|filter| filter == *category))
-            .map(str::to_string)
-            .collect::<BTreeSet<_>>();
-        names
-            .into_iter()
-            .map(|name| self.parse_shell_category(&name))
-            .collect()
-    }
-
     pub(crate) fn effective_shell_cache_logicals(
         &self,
         category: &ShellCategory,
@@ -1382,142 +1335,6 @@ impl<H> CoreRuntime<H> {
             });
         }
         Ok(selected)
-    }
-
-    fn parse_shell_category(&self, name: &str) -> Result<ShellCategory> {
-        let prefix = format!("shell/{name}/");
-        let metadata_path = format!("{prefix}shine.toml");
-        let metadata = self.presets().get(&metadata_path);
-        let parsed = metadata
-            .map(|bytes| {
-                toml::from_slice::<ShellCategoryToml>(bytes)
-                    .with_context(|| format!("failed to parse {metadata_path}"))
-            })
-            .transpose()?;
-        if let Some(defaults) = parsed
-            .as_ref()
-            .and_then(|parsed| parsed.permission_defaults.as_ref())
-        {
-            defaults
-                .validate()
-                .with_context(|| format!("invalid permission_defaults in {metadata_path}"))?;
-        }
-        let mut files = Vec::new();
-        if let Some(entries) = parsed.as_ref().and_then(|parsed| parsed.files.as_ref()) {
-            for entry in entries {
-                if !shell_platform_matches(
-                    entry.platforms.as_deref(),
-                    self.context().platform,
-                    &metadata_path,
-                )? {
-                    continue;
-                }
-                let runtime = match entry.runtime.as_deref() {
-                    None | Some("native") => LinkRuntime::Native,
-                    Some("bun") => LinkRuntime::Bun,
-                    Some(other) => bail!("unsupported runtime `{other}` (expected `bun`)"),
-                };
-                let source_rel = normalize_shell_metadata_source(&entry.source, runtime)
-                    .with_context(|| format!("invalid source in {metadata_path}"))?;
-                if !shell_source_matches(runtime, self.context().shell, &source_rel) {
-                    continue;
-                }
-                let command_name = shell_command_name(&source_rel, entry.target.as_deref())?;
-                let needs_source = entry.needs_source.unwrap_or(false);
-                if runtime == LinkRuntime::Bun && needs_source {
-                    bail!(
-                        "{metadata_path}: `runtime = \"bun\"` cannot be combined with `needs_source = true`"
-                    );
-                }
-                let transforms = entry.transforms.clone().unwrap_or_default();
-                crate::install::transforms::validate(&transforms)
-                    .with_context(|| format!("invalid transforms in {metadata_path}"))?;
-                let env = crate::env::parse_env_specs(entry.env.as_deref().unwrap_or_default())
-                    .with_context(|| format!("invalid env in {metadata_path}"))?;
-                if runtime != LinkRuntime::Bun && !env.is_empty() {
-                    bail!("{metadata_path}: `env` is only valid when `runtime = \"bun\"`");
-                }
-                let permissions = entry.permissions.as_ref().or_else(|| {
-                    parsed
-                        .as_ref()
-                        .and_then(|parsed| parsed.permission_defaults.as_ref())
-                });
-                if let Some(permissions) = permissions {
-                    permissions
-                        .validate()
-                        .with_context(|| format!("invalid permissions in {metadata_path}"))?;
-                }
-                let logical = format!("{prefix}{}", shell_logical_path(&source_rel));
-                let bytes = self.presets().get(&logical).ok_or_else(|| {
-                    MetadataDiagnosticError::new(
-                        MetadataDiagnosticKind::MissingReference,
-                        format!(
-                            "shell/{name}/shine.toml references missing file: {}",
-                            source_rel.display()
-                        ),
-                    )
-                })?;
-                let description = entry.description.clone().map_or_else(
-                    || shell_description(bytes, runtime),
-                    |description| vec![description],
-                );
-                files.push(ShellFile {
-                    source_rel,
-                    command_name,
-                    description,
-                    needs_source,
-                    runtime,
-                    transforms,
-                    env,
-                    permissions: permissions.cloned(),
-                });
-            }
-        } else {
-            for path in self.presets().files().keys() {
-                let Some(relative) = path.strip_prefix(&prefix) else {
-                    continue;
-                };
-                if relative == "shine.toml" || !is_native_shell_script(Path::new(relative)) {
-                    continue;
-                }
-                let source_rel = normalize_shell_metadata_source(relative, LinkRuntime::Native)?;
-                if !shell_source_matches(LinkRuntime::Native, self.context().shell, &source_rel) {
-                    continue;
-                }
-                let bytes = self.presets().get(path).unwrap_or_default();
-                files.push(ShellFile {
-                    command_name: shell_command_name(&source_rel, None)?,
-                    description: shell_description(bytes, LinkRuntime::Native),
-                    needs_source: false,
-                    runtime: LinkRuntime::Native,
-                    transforms: Vec::new(),
-                    env: Vec::new(),
-                    permissions: parsed
-                        .as_ref()
-                        .and_then(|parsed| parsed.permission_defaults.clone()),
-                    source_rel,
-                });
-            }
-        }
-        files.sort_by(|left, right| left.command_name.cmp(&right.command_name));
-        let mut commands = BTreeSet::new();
-        for file in &files {
-            if !commands.insert(file.command_name.clone()) {
-                bail!(MetadataDiagnosticError::new(
-                    MetadataDiagnosticKind::DuplicateCommand,
-                    format!(
-                        "shell/{name} declares command `{}` more than once",
-                        file.command_name
-                    ),
-                ));
-            }
-        }
-        Ok(ShellCategory {
-            name: name.to_string(),
-            description: parsed.and_then(|parsed| parsed.description),
-            files,
-            uses_metadata: metadata.is_some(),
-        })
     }
 }
 
@@ -2055,127 +1872,6 @@ async fn save_shell_manifest_with_host(
     host.write_atomic(&shine_dir.join(SHELL_MANIFEST_FILE), bytes.as_bytes())
         .await
         .map_err(|error| error.into_anyhow("failed to write shell manifest"))
-}
-
-fn shell_platform_matches(
-    platforms: Option<&[String]>,
-    current: super::RuntimePlatform,
-    context: &str,
-) -> Result<bool> {
-    let Some(platforms) = platforms else {
-        return Ok(true);
-    };
-    if platforms.is_empty() {
-        bail!(
-            "{context} platforms must not be empty; expected `macos`, `linux`, `windows`, or `unix`"
-        );
-    }
-    let mut matches = false;
-    for platform in platforms {
-        match platform.trim().to_ascii_lowercase().as_str() {
-            "macos" => matches |= current == super::RuntimePlatform::Macos,
-            "linux" => matches |= current == super::RuntimePlatform::Linux,
-            "windows" => matches |= current == super::RuntimePlatform::Windows,
-            "unix" => matches |= current.is_unix(),
-            _ => bail!(
-                "{context} has unsupported platform `{platform}`; expected `macos`, `linux`, `windows`, or `unix`"
-            ),
-        }
-    }
-    Ok(matches)
-}
-
-fn normalize_shell_metadata_source(value: &str, runtime: LinkRuntime) -> Result<PathBuf> {
-    let path = Path::new(value);
-    if path.as_os_str().is_empty() || path.is_absolute() {
-        bail!("source path must be a non-empty relative path");
-    }
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(value) => normalized.push(value),
-            std::path::Component::CurDir => {}
-            _ => bail!("source path must be relative and must not contain '..'"),
-        }
-    }
-    if normalized.file_name().and_then(|value| value.to_str()) == Some("shine.toml") {
-        bail!("source path must not point to shine.toml");
-    }
-    let valid = match runtime {
-        LinkRuntime::Native => is_native_shell_script(&normalized),
-        LinkRuntime::Bun => matches!(
-            normalized.extension().and_then(|value| value.to_str()),
-            Some("ts" | "js" | "mts" | "mjs")
-        ),
-    };
-    if !valid {
-        bail!("source path extension is incompatible with the declared runtime");
-    }
-    Ok(normalized)
-}
-
-fn shell_command_name(source: &Path, target: Option<&str>) -> Result<String> {
-    let command = target
-        .map(str::to_string)
-        .unwrap_or_else(|| super::link_stem(source).to_string_lossy().to_string());
-    let trimmed = command.trim();
-    let path = Path::new(trimmed);
-    if trimmed.is_empty() || matches!(trimmed, "." | "..") || path.components().count() != 1 {
-        bail!("command name must be a plain filename");
-    }
-    Ok(trimmed.to_string())
-}
-
-fn is_native_shell_script(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|value| value.to_str()),
-        Some("sh" | "ps1")
-    )
-}
-
-fn shell_source_matches(runtime: LinkRuntime, shell: ShellType, source: &Path) -> bool {
-    if runtime == LinkRuntime::Bun {
-        return true;
-    }
-    let is_powershell = source.extension().and_then(|value| value.to_str()) == Some("ps1");
-    is_powershell == (shell == ShellType::PowerShell)
-}
-
-fn shell_logical_path(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn shell_description(bytes: &[u8], runtime: LinkRuntime) -> Vec<String> {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return Vec::new();
-    };
-    let leader = if runtime == LinkRuntime::Bun {
-        "//"
-    } else {
-        "#"
-    };
-    let mut description = Vec::new();
-    for line in text.lines() {
-        if line.starts_with("#!") {
-            continue;
-        }
-        let trimmed = line.trim_start();
-        if let Some(value) = trimmed.strip_prefix(leader) {
-            let value = value.strip_prefix(' ').unwrap_or(value);
-            if !value.starts_with("shine-") {
-                description.push(value.to_string());
-            }
-        } else if !trimmed.is_empty() {
-            break;
-        }
-    }
-    while description.last().is_some_and(String::is_empty) {
-        description.pop();
-    }
-    description
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

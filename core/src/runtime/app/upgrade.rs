@@ -218,10 +218,7 @@ where
         let assessments = self
             .assess_app_files(
                 &categories,
-                AppAssessmentOptions {
-                    run_generators: true,
-                    ..AppAssessmentOptions::default()
-                },
+                AppAssessmentPolicy::Upgrade,
                 &manifest,
                 observer,
             )

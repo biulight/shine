@@ -145,11 +145,10 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
         let assessed = self
             .assess_app_files(
                 &execution_categories,
-                AppAssessmentOptions {
-                    dry_run: request.dry_run,
-                    run_generators: true,
-                    explicit_generators: true,
-                    preserve_generator_errors: false,
+                if request.dry_run {
+                    AppAssessmentPolicy::InstallPreview
+                } else {
+                    AppAssessmentPolicy::Install
                 },
                 &manifest,
                 observer,
