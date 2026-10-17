@@ -108,7 +108,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             })
             .collect()
     }
+}
 
+impl<H: super::FileSystemObservationHost> CoreRuntime<H> {
     pub async fn inspect_sys_run_manifest(&self) -> Result<super::SysRunManifest> {
         super::sys::load_manifest_with_host(self.host(), &self.context().shine_dir).await
     }

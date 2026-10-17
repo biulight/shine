@@ -18,6 +18,19 @@ bugs. Check this list before changing the modules named in each entry.
   ownership, hash or status algorithm. Missing declared sources fail metadata validation. Ordinary
   inspection reports an unchanged receipt-owned manual-generator file as not-evaluated; directly
   installed missing/partial/user-modified files retain their existing precedence (ADR 0127).
+- **Ordinary frontend inspection requires observation capability only.** App, Shell and Sys
+  default inspection, including the safe `ReadOnlyFrontend` surface, require only
+  `FileSystemObservationHost`. Sys status compares desired metadata with receipts; it must not
+  become a live provider or split-DNS probe. Explicit App generator evaluation retains its separate
+  trusted entry point and execution bounds. Shared report projection preserves safe errors,
+  category selection, status priority and observation order; it grants no approval (ADR 0129).
+- **CLI list presentation preserves query and output timing.** List/update/status query results
+  and borrowed view projections are local presentation data. Update retains its separate Shell
+  row/lifecycle captures and queries all domains before printing attention. Status prints the
+  Preset note and Shell attention before App/Sys queries; later errors cannot erase that output.
+  Diff reads stay at their original presentation boundary. Manual refresh and upgrade hints remain
+  distinct, generator evaluation stays opt-in, and evaluation failures render before nonzero exit.
+  Inventory listing keeps its distinct missing-App-source error policy (ADR 0129).
 - **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
   from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
   `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery

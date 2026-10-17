@@ -4,10 +4,7 @@ use super::{
     CapabilityKindV1, FrontendDiagnosticV1, FrontendService, InspectionReportV1, InventoryReportV1,
     InventoryRequest, OperationStateReportV1, PlanReviewReportV1, ReviewRequest,
 };
-use crate::runtime::{
-    FileSystemHost, FileSystemObservationHost, PrivilegedFileSystemHost, ProcessHost, SplitDnsHost,
-    SplitDnsObservationHost,
-};
+use crate::runtime::{FileSystemObservationHost, SplitDnsObservationHost};
 
 /// No runtime accessor, generator evaluation, approval constructor or execution method.
 ///
@@ -29,6 +26,13 @@ use crate::runtime::{
 /// use shine_core::{frontend::{ReadOnlyFrontend, ApprovedOperation}, runtime::InMemoryHost};
 /// fn cannot_apply(view: ReadOnlyFrontend<'_, InMemoryHost>, approved: ApprovedOperation) {
 ///     view.apply(approved);
+/// }
+/// ```
+///
+/// ```compile_fail,E0599
+/// use shine_core::{frontend::ReadOnlyFrontend, runtime::{AppInspectionOptions, InMemoryHost, NullObserver}};
+/// fn cannot_evaluate_generators(view: ReadOnlyFrontend<'_, InMemoryHost>) {
+///     view.inspect_apps_with_options(AppInspectionOptions::default(), &mut NullObserver);
 /// }
 /// ```
 pub struct ReadOnlyFrontend<'a, H> {
@@ -74,7 +78,7 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> ReadOnlyFrontend<'_
     }
 }
 
-impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> ReadOnlyFrontend<'_, H> {
+impl<H: FileSystemObservationHost> ReadOnlyFrontend<'_, H> {
     pub async fn inspect_apps(
         &self,
         categories: Vec<String>,
@@ -87,7 +91,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> ReadOnlyFronten
     }
 }
 
-impl<H: FileSystemHost + PrivilegedFileSystemHost> ReadOnlyFrontend<'_, H> {
+impl<H: FileSystemObservationHost> ReadOnlyFrontend<'_, H> {
     pub async fn inspect_shells(&self) -> Result<InspectionReportV1, FrontendDiagnosticV1> {
         self.service
             .inspect_shells()
@@ -97,7 +101,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> ReadOnlyFrontend<'_, H> {
     }
 }
 
-impl<H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost> ReadOnlyFrontend<'_, H> {
+impl<H: FileSystemObservationHost> ReadOnlyFrontend<'_, H> {
     pub async fn inspect_sys(
         &self,
         os_id: &str,

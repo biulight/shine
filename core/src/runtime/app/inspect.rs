@@ -16,7 +16,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         self.inspect_apps_read_only(&[]).await
     }
 
-    async fn inspect_apps_read_only(&self, selected: &[String]) -> Result<Vec<AppFileInspection>> {
+    pub(crate) async fn inspect_apps_read_only(
+        &self,
+        selected: &[String],
+    ) -> Result<Vec<AppFileInspection>> {
         let (categories, manifest) = self.app_inspection_inputs(selected).await?;
         let assessments =
             self.assess_app_files_static(&categories, StaticAssessmentMode::Inspect)?;

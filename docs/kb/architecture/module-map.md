@@ -18,7 +18,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
 | `core/src/action.rs` | Versioned executable Action IR, constructors, opaque provenance and rollback DTOs |
 | `core/src/action/contracts.rs`, `action/contracts/` | Exhaustive resource-family routing and domain validation/permission rules; incompatible input fails closed |
-| `core/src/frontend.rs` | Versioned redacted Frontend Service contracts and inventory; `frontend/inspection.rs` owns inspection/status projection and local details; `frontend/review.rs` dispatches pure Plan review |
+| `core/src/frontend.rs` | Versioned redacted Frontend Service contracts and inventory; `frontend/inspection.rs` owns observation-only ordinary inspection/shared report projection and separate trusted explicit evaluation; `frontend/review.rs` dispatches pure Plan review |
 | `core/src/frontend/{operations,events}.rs` | Safe journal-state/recovery projection and explicit progress-event redaction; domain executors retain journal parsing and recovery decisions |
 | `core/src/frontend/{bootstrap,read_only,trusted}.rs` | Shared source capture, restricted safe report facade, human review and one-shot approval, exact validation and lifecycle/recovery dispatch; `conformance.rs` checks adapter equivalence |
 | `core/src/permission.rs` | Versioned target-local Preset permission declarations, normalization, and payload-free identity validation |
@@ -85,6 +85,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/shell/lifecycle.rs`, `shell/lifecycle/{deploy,remove,report}.rs` | Typed Shell deployment/removal phases and pure lifecycle reporting; preparation retains legacy effects |
 | `core/src/action/shell_receipt.rs` | Shared internal receipt delivery validation for manifest reconstruction, Action IR and recovery; persisted DTOs remain unchanged |
 | `core/src/runtime/sys.rs` | Managed Sys models, receipt assessment, managed-file/split-DNS primitives and run-manifest persistence |
+| `core/src/runtime/sys/inspect.rs` | Observation-only managed receipt inspection and pure desired-versus-receipt details; bootstrap receipts stay recorded, with no detection probes |
 | `core/src/runtime/sys/{lifecycle,transaction}.rs`, `sys/lifecycle/` | Current-item/receipt-only selection, preflight, resource execution, result persistence and fresh transaction preparation; approved facade retains the lifecycle lock |
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 batch/item orchestration, preflight, post-detection, profile reconciliation and persistence |
 | `core/src/runtime/sys_bootstrap/selection.rs` | Ordered explicit/profile/interactive/default selection without installation effects |
@@ -117,7 +118,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/shim.rs` | Canonical `install`/`uninstall <TARGET>` routing and bare-category ambiguity checks |
 | `cli/src/init.rs` | `shine init` project-local `shine.config.toml` creation |
 | `cli/src/completion.rs` | Static and dynamic shell completion before ordinary CLI initialization |
-| `cli/src/list.rs` | Top-level installed/available status views |
+| `cli/src/list.rs` | Stable installed-list/update/status entry points and the status Shell-attention output boundary |
+| `cli/src/list/{query,projection,render}.rs` | Ordered observations and named local query results, pure row grouping/pending/action projection, and terminal/diff presentation |
 | `cli/src/info/` | Canonical target resolution, installed data collection, and diff rendering |
 | `cli/src/path_display.rs` | Home-relative terminal paths and display-only logical filesystem permission labels |
 | `cli/src/colors.rs` | Terminal color helpers |

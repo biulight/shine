@@ -262,6 +262,21 @@ update applicability and update lifecycle outcomes are service-owned; manual gen
 remain refresh-only. Sys inspection additionally includes bootstrap receipts as recorded state,
 without changing inventory v1's managed-only installed Sys compatibility contract.
 
+Default App/Shell/Sys service inspection and `ReadOnlyFrontend` inspection accept only a
+`FileSystemObservationHost`. App default inspection uses the existing selected static assessment;
+trusted explicit generator evaluation feeds the same report projection through its separate
+execution-capable entry. `runtime/sys/inspect.rs` reads managed receipts and compares desired
+snapshot inputs without live resource/provider probes. Preset parsing and desired Sys builders
+need no Host; manifest version/error rules and read order remain unchanged (ADR 0129).
+
+The CLI list facade delegates ordered observations to `list/query.rs`, pure grouping and action
+selection to `list/projection.rs`, and output to `list/render.rs`. Local query results retain App
+inspections for diff collection without re-evaluation. Update retains two Shell captures followed
+by App, Sys and missing-source queries before output; status prints its initial note and Shell
+attention before loading App/Sys. Detailed diff collection remains after the original empty-result
+checks (and after initial update attention output). Renderers still perform the existing per-row
+diff display reads. No shared snapshot optimization, new evaluation, approval or mutation is added.
+
 `frontend/review.rs` dispatches typed workspace-local `ReviewRequest` values to existing pure
 planners and wraps the unchanged `PlanV1`. CLI review and preparation use this service. Neither
 request nor report contains approval; opaque input versions remain attached to the reviewed domain

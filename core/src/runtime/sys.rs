@@ -1,3 +1,4 @@
+mod inspect;
 mod lifecycle;
 mod transaction;
 use super::sys_action_executor::SysReceiptTransitionV1;
@@ -459,157 +460,6 @@ impl<H> CoreRuntime<H>
 where
     H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost,
 {
-    pub async fn installed_managed_sys(&self, os_id: &str) -> Result<Vec<SysInstalledRow>> {
-        let manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
-        let mut rows = manifest
-            .entries
-            .into_iter()
-            .filter(|entry| entry.os_id == os_id && entry.managed)
-            .map(|entry| SysInstalledRow {
-                item_id: entry.item_id,
-                label: entry.label,
-            })
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| {
-            left.label
-                .cmp(&right.label)
-                .then_with(|| left.item_id.cmp(&right.item_id))
-        });
-        Ok(rows)
-    }
-
-    /// Inspect recorded managed resources against the same desired-state
-    /// assessment used by mutation, without executing a host operation.
-    pub async fn inspect_managed_sys(
-        &self,
-        os_id: &str,
-    ) -> Result<(Vec<SysInstalledRow>, Vec<SysUpdateRow>, LifecycleResultV1)> {
-        let manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
-        let recorded = manifest
-            .entries
-            .iter()
-            .filter(|entry| entry.os_id == os_id && entry.managed)
-            .collect::<Vec<_>>();
-        let mut installed = recorded
-            .iter()
-            .map(|entry| SysInstalledRow {
-                item_id: entry.item_id.clone(),
-                label: entry.label.clone(),
-            })
-            .collect::<Vec<_>>();
-        installed.sort_by(|left, right| {
-            left.label
-                .cmp(&right.label)
-                .then_with(|| left.item_id.cmp(&right.item_id))
-        });
-        let mut lifecycle = LifecycleResultV1::new(LifecycleOperation::Update, false);
-        if recorded.is_empty() {
-            return Ok((installed, Vec::new(), lifecycle));
-        }
-        let loaded = self.load_sys_preset(os_id).await?;
-        let mut updates = Vec::new();
-        for entry in recorded {
-            let Some(item) = loaded.manifest.items.iter().find(|item| {
-                item.id == entry.item_id
-                    && item.mode == SysItemMode::Managed
-                    && item.driver != SysDriverKind::Script
-            }) else {
-                lifecycle.push(
-                    LifecycleOutcomeV1::new(
-                        format!("sys/{}", entry.item_id),
-                        None::<String>,
-                        LifecycleStatus::Skipped,
-                        [],
-                    )
-                    .with_diagnostic_code("sys_managed_item_unavailable"),
-                );
-                continue;
-            };
-            let details = self.managed_update_details(os_id, item, entry.receipt.as_ref())?;
-            if details.is_empty() {
-                lifecycle.push(LifecycleOutcomeV1::new(
-                    format!("sys/{}", item.id),
-                    None::<String>,
-                    LifecycleStatus::Unchanged,
-                    [],
-                ));
-            } else {
-                lifecycle.push(LifecycleOutcomeV1::new(
-                    format!("sys/{}", item.id),
-                    None::<String>,
-                    LifecycleStatus::Pending,
-                    [
-                        LifecycleEffect::ResourceWritePreviewed,
-                        LifecycleEffect::ReceiptWritePreviewed,
-                    ],
-                ));
-                updates.push(SysUpdateRow {
-                    item_id: item.id.clone(),
-                    label: item.label.clone(),
-                    details,
-                });
-            }
-        }
-        Ok((installed, updates, lifecycle))
-    }
-
-    fn managed_update_details(
-        &self,
-        os_id: &str,
-        item: &SysItem,
-        previous: Option<&SystemReceipt>,
-    ) -> Result<Vec<String>> {
-        match item.driver {
-            SysDriverKind::SplitDns => {
-                let desired = split_dns_receipt(&self.split_dns_item_request(os_id, item, true)?)?;
-                let Some(SystemReceipt::SplitDns(previous)) = previous else {
-                    return Ok(vec![
-                        "Receipt: missing or incompatible -> desired split DNS state".to_string(),
-                    ]);
-                };
-                let mut details = Vec::new();
-                if previous.domain != desired.domain {
-                    details.push(format!("Domain: {} -> {}", previous.domain, desired.domain));
-                }
-                if previous.servers != desired.servers {
-                    details.push(format!(
-                        "Servers: {} -> {}",
-                        previous.servers.join(", "),
-                        desired.servers.join(", ")
-                    ));
-                }
-                if previous.resource != desired.resource || previous.os_id != desired.os_id {
-                    details.push(format!(
-                        "Resource: {} -> {}",
-                        previous.resource, desired.resource
-                    ));
-                }
-                if previous.item_id != desired.item_id {
-                    details.push(format!("Item: {} -> {}", previous.item_id, desired.item_id));
-                }
-                Ok(details)
-            }
-            SysDriverKind::ManagedFile => {
-                let desired = self.managed_file_desired(os_id, item)?;
-                let Some(SystemReceipt::ManagedFile(previous)) = previous else {
-                    return Ok(vec![
-                        "Receipt: missing or incompatible -> desired managed file state"
-                            .to_string(),
-                    ]);
-                };
-                let mut details = Vec::new();
-                if previous.destination != desired.destination {
-                    details.push("Destination: changed".to_string());
-                }
-                if previous.content_hash != hash_content(&desired.content) {
-                    details.push("Content: changed".to_string());
-                }
-                Ok(details)
-            }
-            SysDriverKind::Script => Ok(Vec::new()),
-        }
-    }
-
     /// Core-owned managed Sys lifecycle. Selection and receipt assessment are
     /// performed once and reused for authorization, mutation and reporting.
     async fn sys_managed_up_to_date(
@@ -677,80 +527,6 @@ where
                 bail!("script receipt is not a managed system resource")
             }
         }
-    }
-
-    fn split_dns_item_request(
-        &self,
-        os_id: &str,
-        item: &SysItem,
-        dry_run: bool,
-    ) -> Result<SplitDnsDomainRequest> {
-        let domain_key = sys_config_string(&item.config, "domain_env")?;
-        let servers_key = sys_config_string(&item.config, "servers_env")?;
-        Ok(SplitDnsDomainRequest {
-            os_id: os_id.to_string(),
-            item_id: item.id.clone(),
-            domain: self
-                .context
-                .env
-                .get(&domain_key)
-                .cloned()
-                .with_context(|| format!("missing environment variable `{domain_key}`"))?,
-            servers: self
-                .context
-                .env
-                .get(&servers_key)
-                .cloned()
-                .with_context(|| format!("missing environment variable `{servers_key}`"))?,
-            dry_run,
-        })
-    }
-
-    fn managed_file_desired(&self, os_id: &str, item: &SysItem) -> Result<ManagedFileDesired> {
-        let source = safe_managed_source(&sys_config_string(&item.config, "source")?)?;
-        let logical = format!(
-            "sys/{os_id}/{}",
-            source
-                .components()
-                .map(|part| part.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/")
-        );
-        let raw = self
-            .presets
-            .get(&logical)
-            .with_context(|| format!("reading {logical}"))?;
-        let destination = captured_sys_path(
-            &sys_config_string(&item.config, "target")?,
-            &self.context.home_dir,
-        )?;
-        let transforms = item
-            .config
-            .get("transforms")
-            .and_then(toml::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .map(|value| {
-                        value
-                            .as_str()
-                            .map(str::to_string)
-                            .context("managed-file transforms must be strings")
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let content = crate::install::apply_transforms(&transforms, raw, &self.context.env)?;
-        Ok(ManagedFileDesired {
-            destination,
-            content,
-            restart_hint: item
-                .config
-                .get("restart_hint")
-                .and_then(toml::Value::as_str)
-                .map(str::to_string),
-        })
     }
 
     async fn apply_managed_file_item(
@@ -880,6 +656,82 @@ where
             detail: receipt.destination.display().to_string(),
             receipt: None,
             restart_hint: receipt.restart_hint.clone(),
+        })
+    }
+}
+
+impl<H> CoreRuntime<H> {
+    fn split_dns_item_request(
+        &self,
+        os_id: &str,
+        item: &SysItem,
+        dry_run: bool,
+    ) -> Result<SplitDnsDomainRequest> {
+        let domain_key = sys_config_string(&item.config, "domain_env")?;
+        let servers_key = sys_config_string(&item.config, "servers_env")?;
+        Ok(SplitDnsDomainRequest {
+            os_id: os_id.to_string(),
+            item_id: item.id.clone(),
+            domain: self
+                .context
+                .env
+                .get(&domain_key)
+                .cloned()
+                .with_context(|| format!("missing environment variable `{domain_key}`"))?,
+            servers: self
+                .context
+                .env
+                .get(&servers_key)
+                .cloned()
+                .with_context(|| format!("missing environment variable `{servers_key}`"))?,
+            dry_run,
+        })
+    }
+
+    fn managed_file_desired(&self, os_id: &str, item: &SysItem) -> Result<ManagedFileDesired> {
+        let source = safe_managed_source(&sys_config_string(&item.config, "source")?)?;
+        let logical = format!(
+            "sys/{os_id}/{}",
+            source
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        );
+        let raw = self
+            .presets
+            .get(&logical)
+            .with_context(|| format!("reading {logical}"))?;
+        let destination = captured_sys_path(
+            &sys_config_string(&item.config, "target")?,
+            &self.context.home_dir,
+        )?;
+        let transforms = item
+            .config
+            .get("transforms")
+            .and_then(toml::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_string)
+                            .context("managed-file transforms must be strings")
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let content = crate::install::apply_transforms(&transforms, raw, &self.context.env)?;
+        Ok(ManagedFileDesired {
+            destination,
+            content,
+            restart_hint: item
+                .config
+                .get("restart_hint")
+                .and_then(toml::Value::as_str)
+                .map(str::to_string),
         })
     }
 }
