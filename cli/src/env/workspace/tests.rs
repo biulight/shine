@@ -649,7 +649,8 @@ async fn plain_sources_merge_in_declared_order() {
         .unwrap();
 
     let config = Config::new_for_test(&directory);
-    let values = compile_sources(&[base, local], &config).await.unwrap();
+    let captured = capture_sources(&[base, local]).await.unwrap();
+    let values = compile_captured_sources(&captured, &config).await.unwrap();
     assert_eq!(values.get("A").map(String::as_str), Some("base"));
     assert_eq!(values.get("B").map(String::as_str), Some("local"));
     tokio::fs::remove_dir_all(directory).await.unwrap();

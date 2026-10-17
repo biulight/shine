@@ -20,9 +20,9 @@ mod files;
 mod merge;
 mod reconcile;
 mod three_way;
-use files::{install_sys_profile_files_with_templates, install_sys_profile_loader_with_templates};
 #[cfg(test)]
-use files::{install_sys_profile_phase, sys_profile_file_path};
+use files::{ProfilePhaseInstall, install_sys_profile_phase_with_template, sys_profile_file_path};
+use files::{install_sys_profile_files_with_templates, install_sys_profile_loader_with_templates};
 pub(super) use three_way::fallback_three_way_merge;
 
 pub(crate) use blocks::{restore_sys_owned_blocks, sys_owned_blocks_hash};
@@ -621,13 +621,17 @@ mod tests {
             .await
             .unwrap();
 
-        let update = install_sys_profile_phase(
-            &profile_dir,
-            "ubuntu",
-            &script_dir,
-            SysProfilePhase::Pre,
-            "sh",
-            false,
+        let update = install_sys_profile_phase_with_template(
+            &crate::runtime::RealHost,
+            ProfilePhaseInstall {
+                profile_dir: &profile_dir,
+                os_id: "ubuntu",
+                script_dir: &script_dir,
+                phase: SysProfilePhase::Pre,
+                ext: "sh",
+                force_profile: false,
+                template_override: None,
+            },
         )
         .await
         .unwrap();
@@ -638,13 +642,17 @@ mod tests {
     }
 
     async fn run_phase(profile_dir: &Path, script_dir: &Path) -> SysProfileFileUpdate {
-        install_sys_profile_phase(
-            profile_dir,
-            "ubuntu",
-            script_dir,
-            SysProfilePhase::Pre,
-            "sh",
-            false,
+        install_sys_profile_phase_with_template(
+            &crate::runtime::RealHost,
+            ProfilePhaseInstall {
+                profile_dir,
+                os_id: "ubuntu",
+                script_dir,
+                phase: SysProfilePhase::Pre,
+                ext: "sh",
+                force_profile: false,
+                template_override: None,
+            },
         )
         .await
         .unwrap()

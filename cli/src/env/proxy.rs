@@ -582,39 +582,6 @@ async fn restore_install_file(file: &InstallFile, snapshot: Option<&FileSnapshot
     }
 }
 
-#[cfg(test)]
-async fn install_shims_for_platform(
-    bin_dir: &Path,
-    command: &str,
-    target: &Path,
-    shine_dir: &Path,
-    windows: bool,
-) -> Result<()> {
-    let files = prepare_shims(bin_dir, command, target, shine_dir, windows)?;
-    let snapshots = capture_install_files(&files, files.len()).await?;
-    apply_install_files(&files, &snapshots, |file| {
-        Box::pin(write_install_file(file))
-    })
-    .await
-}
-
-#[cfg(test)]
-async fn upsert_rule(path: &Path, rule: EnvProxyRule) -> Result<()> {
-    mutate_rules(path, |rules| {
-        rules.retain(|r| r.command != rule.command);
-        rules.push(rule);
-        Ok(())
-    })
-    .await
-}
-#[cfg(test)]
-async fn remove_rule(path: &Path, command: &str) -> Result<()> {
-    mutate_rules(path, |rules| {
-        rules.retain(|r| r.command != command);
-        Ok(())
-    })
-    .await
-}
 async fn mutate_rules(
     path: &Path,
     change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
@@ -956,24 +923,12 @@ mod tests {
 
     async fn uninstall_fixture(dir: &Path) -> Config {
         let config = Config::new_for_test(dir);
-        upsert_rule(
-            config.config_path(),
-            EnvProxyRule {
-                command: "demo".into(),
-                with: vec!["TOKEN".into()],
-                enabled: true,
-            },
-        )
-        .await
-        .unwrap();
-        let mut manifest = ProxyManifest::default();
-        manifest.entries.insert("demo".into(), dir.join("real"));
-        save_manifest(config.shine_dir(), &manifest).await.unwrap();
-        install_shims_for_platform(
-            config.bin_dir(),
+        install_proxy_files(
+            &config,
             "demo",
+            &["TOKEN".into()],
             &dir.join("real"),
-            config.shine_dir(),
+            config.config_path(),
             true,
         )
         .await
@@ -1274,25 +1229,26 @@ mod tests {
     #[tokio::test]
     async fn rule_mutation_replaces_only_matching_command() {
         let dir = crate::test_support::make_temp_dir("shine-env-proxy").await;
-        let path = dir.join("config.toml");
+        let config = Config::new_for_test(&dir);
+        let path = config.config_path();
         tokio::fs::write(
-            &path,
+            path,
             "[[env_proxy]]\ncommand = \"gh\"\nwith = [\"OLD\"]\n\n[[env_proxy]]\ncommand = \"docker\"\nwith = [\"DOCKER_TOKEN\"]\n",
         )
         .await
         .unwrap();
-        upsert_rule(
-            &path,
-            EnvProxyRule {
-                command: "gh".into(),
-                with: vec!["GH_TOKEN".into()],
-                enabled: true,
-            },
+        install_proxy_files(
+            &config,
+            "gh",
+            &["GH_TOKEN".into()],
+            &dir.join("real-gh"),
+            path,
+            true,
         )
         .await
         .unwrap();
         let parsed: toml::Table =
-            toml::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+            toml::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
         let rules: Vec<EnvProxyRule> = parsed["env_proxy"].clone().try_into().unwrap();
         assert_eq!(rules.len(), 2);
         assert_eq!(
@@ -1308,24 +1264,25 @@ mod tests {
         let dir = crate::test_support::make_temp_dir("shine-proxy-config").await;
         let state = dir.join("state with 'quotes' and %NAME%");
         let target = dir.join("real tool");
-        install_shims_for_platform(&dir.join("bin"), "demo", &target, &state, true)
+        let config = Config::new_for_test(&state);
+        install_proxy_files(&config, "demo", &[], &target, config.config_path(), true)
             .await
             .unwrap();
-        let sh = tokio::fs::read_to_string(dir.join("bin/demo"))
+        let sh = tokio::fs::read_to_string(config.bin_dir().join("demo"))
             .await
             .unwrap();
         assert!(sh.contains(&format!(
             "--config-dir {} env proxy",
             shell_quote::single_quote(&state.display().to_string())
         )));
-        let cmd = tokio::fs::read_to_string(dir.join("bin/demo.cmd"))
+        let cmd = tokio::fs::read_to_string(config.bin_dir().join("demo.cmd"))
             .await
             .unwrap();
         assert!(cmd.contains(&format!(
             "--config-dir \"{}\" env proxy",
             state.display().to_string().replace('%', "%%")
         )));
-        let ps = tokio::fs::read_to_string(dir.join("bin/demo.ps1"))
+        let ps = tokio::fs::read_to_string(config.bin_dir().join("demo.ps1"))
             .await
             .unwrap();
         assert!(ps.contains(&format!(
@@ -1343,37 +1300,54 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
     async fn proxy_rule_mutations_keep_config_private_and_preserve_env() {
         use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::test_support::env_lock();
+        let original_dir = std::env::current_dir().unwrap();
         let dir = crate::test_support::make_temp_dir("shine-proxy-private").await;
-        for name in ["config.toml", "shine.config.toml"] {
-            let path = dir.join(name);
+        let dir = tokio::fs::canonicalize(dir).await.unwrap();
+        for project in [false, true] {
+            let root = dir.join(if project { "project" } else { "global" });
+            let state = root.join("state");
+            tokio::fs::create_dir_all(&state).await.unwrap();
+            std::env::set_current_dir(&root).unwrap();
+            // SAFETY: env_lock holds and restores the process environment and cwd.
+            unsafe { std::env::set_var("SHINE_CONFIG_DIR", &state) };
+            let path = if project {
+                root.join("shine.config.toml")
+            } else {
+                state.join("config.toml")
+            };
             crate::persist::atomic_write_private(
                 &path,
                 b"# retained\n[env]\nTOKEN = 'synthetic-value'\n",
             )
             .await
             .unwrap();
+            let config = Config::load_read_only().await.unwrap();
+            assert_eq!(config.is_project_config(), project);
+            assert_eq!(config.config_path(), path);
+            let mut before_uninstall = Vec::new();
             for action in 0..3 {
                 match action {
-                    0 => upsert_rule(
+                    0 => install_proxy_files(
+                        &config,
+                        "demo",
+                        &["TOKEN".into()],
+                        &root.join("real-demo"),
                         &path,
-                        EnvProxyRule {
-                            command: "demo".into(),
-                            with: vec!["TOKEN".into()],
-                            enabled: true,
-                        },
+                        true,
                     )
                     .await
                     .unwrap(),
-                    1 => mutate_rules(&path, |rules| {
-                        rules[0].enabled = false;
-                        Ok(())
-                    })
-                    .await
-                    .unwrap(),
-                    _ => remove_rule(&path, "demo").await.unwrap(),
+                    1 => {
+                        let config = Config::load_read_only().await.unwrap();
+                        set_enabled(&config, "demo", false, project).await.unwrap();
+                        before_uninstall = tokio::fs::read(&path).await.unwrap();
+                    }
+                    _ => uninstall_for_platform(&config, "demo", true).await.unwrap(),
                 }
                 assert_eq!(
                     tokio::fs::metadata(&path)
@@ -1382,14 +1356,36 @@ mod tests {
                         .permissions()
                         .mode()
                         & 0o777,
-                    0o600,
+                    0o600
                 );
                 let contents = tokio::fs::read_to_string(&path).await.unwrap();
                 assert!(contents.contains("# retained"));
                 let table: toml::Table = toml::from_str(&contents).unwrap();
                 assert_eq!(table["env"]["TOKEN"].as_str(), Some("synthetic-value"));
+                if action < 2 || project {
+                    let rules: Vec<EnvProxyRule> = table["env_proxy"].clone().try_into().unwrap();
+                    assert_eq!(rules.len(), 1);
+                    assert_eq!(rules[0].enabled, action == 0);
+                } else {
+                    assert!(!table.contains_key("env_proxy"));
+                }
+            }
+            // Uninstall owns global rules and launchers; a project override remains intact.
+            if project {
+                assert_eq!(tokio::fs::read(&path).await.unwrap(), before_uninstall);
+            }
+            assert!(
+                load_manifest(config.shine_dir())
+                    .await
+                    .unwrap()
+                    .entries
+                    .is_empty()
+            );
+            for name in ["demo", "demo.cmd", "demo.ps1"] {
+                assert!(!config.bin_dir().join(name).exists());
             }
         }
+        crate::test_support::restore_current_dir(&original_dir);
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
@@ -1397,38 +1393,84 @@ mod tests {
     async fn windows_proxy_preflights_all_launchers_before_writing() {
         let dir = crate::test_support::make_temp_dir("shine-proxy-conflict").await;
         for occupied in ["demo", "demo.cmd", "demo.ps1"] {
-            let bin = dir.join(occupied);
-            tokio::fs::create_dir_all(&bin).await.unwrap();
+            let config = Config::new_for_test(&dir.join(occupied));
+            let bin = config.bin_dir();
+            tokio::fs::create_dir_all(bin).await.unwrap();
             let foreign = bin.join(occupied);
             tokio::fs::write(&foreign, b"user launcher").await.unwrap();
             assert!(
-                install_shims_for_platform(&bin, "demo", &dir.join("real-demo"), &dir, true)
-                    .await
-                    .is_err()
+                install_proxy_files(
+                    &config,
+                    "demo",
+                    &[],
+                    &dir.join("real-demo"),
+                    config.config_path(),
+                    true
+                )
+                .await
+                .is_err()
             );
             assert_eq!(tokio::fs::read(&foreign).await.unwrap(), b"user launcher");
+            assert!(!config.config_path().exists());
+            assert!(!manifest_path(config.shine_dir()).exists());
             for candidate in ["demo", "demo.cmd", "demo.ps1"] {
                 assert_eq!(bin.join(candidate).exists(), candidate == occupied);
             }
         }
-        let bin = dir.join("owned");
-        install_shims_for_platform(&bin, "demo", &dir.join("first"), &dir, true)
+        let config = Config::new_for_test(&dir.join("owned"));
+        let bin = config.bin_dir();
+        install_proxy_files(
+            &config,
+            "demo",
+            &[],
+            &dir.join("first"),
+            config.config_path(),
+            true,
+        )
+        .await
+        .unwrap();
+        let before = tokio::fs::read(bin.join("demo")).await.unwrap();
+        let rules_before = tokio::fs::read(config.config_path()).await.unwrap();
+        let receipt_before = tokio::fs::read(manifest_path(config.shine_dir()))
             .await
             .unwrap();
-        let before = tokio::fs::read(bin.join("demo")).await.unwrap();
         tokio::fs::write(bin.join("demo.ps1"), b"user replacement")
             .await
             .unwrap();
         assert!(
-            install_shims_for_platform(&bin, "demo", &dir.join("second"), &dir, true)
-                .await
-                .is_err()
+            install_proxy_files(
+                &config,
+                "demo",
+                &[],
+                &dir.join("second"),
+                config.config_path(),
+                true
+            )
+            .await
+            .is_err()
         );
         assert_eq!(tokio::fs::read(bin.join("demo")).await.unwrap(), before);
+        assert_eq!(
+            tokio::fs::read(config.config_path()).await.unwrap(),
+            rules_before
+        );
+        assert_eq!(
+            tokio::fs::read(manifest_path(config.shine_dir()))
+                .await
+                .unwrap(),
+            receipt_before
+        );
         tokio::fs::remove_file(bin.join("demo.ps1")).await.unwrap();
-        install_shims_for_platform(&bin, "demo", &dir.join("second"), &dir, true)
-            .await
-            .unwrap();
+        install_proxy_files(
+            &config,
+            "demo",
+            &[],
+            &dir.join("second"),
+            config.config_path(),
+            true,
+        )
+        .await
+        .unwrap();
         for name in ["demo", "demo.cmd", "demo.ps1"] {
             assert!(
                 tokio::fs::read_to_string(bin.join(name))
@@ -1444,20 +1486,33 @@ mod tests {
     #[tokio::test]
     async fn proxy_refuses_dangling_launcher_links() {
         let dir = crate::test_support::make_temp_dir("shine-proxy-link").await;
+        let config = Config::new_for_test(&dir);
+        tokio::fs::create_dir_all(config.bin_dir()).await.unwrap();
         let missing = dir.join("missing");
-        tokio::fs::symlink(&missing, dir.join("demo.cmd"))
+        tokio::fs::symlink(&missing, config.bin_dir().join("demo.cmd"))
             .await
             .unwrap();
         assert!(
-            install_shims_for_platform(&dir, "demo", &dir.join("real"), &dir, true)
-                .await
-                .is_err()
+            install_proxy_files(
+                &config,
+                "demo",
+                &[],
+                &dir.join("real"),
+                config.config_path(),
+                true
+            )
+            .await
+            .is_err()
         );
         assert_eq!(
-            tokio::fs::read_link(dir.join("demo.cmd")).await.unwrap(),
+            tokio::fs::read_link(config.bin_dir().join("demo.cmd"))
+                .await
+                .unwrap(),
             missing
         );
-        assert!(!dir.join("demo").exists());
+        assert!(!config.bin_dir().join("demo").exists());
+        assert!(!config.config_path().exists());
+        assert!(!manifest_path(config.shine_dir()).exists());
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 }

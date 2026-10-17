@@ -162,7 +162,9 @@ pub struct SysManagedReport {
     pub lifecycle: LifecycleResultV1,
 }
 
-pub fn split_dns_receipt(request: &SplitDnsDomainRequest) -> Result<SplitDnsReceipt> {
+pub(in crate::runtime) fn split_dns_receipt(
+    request: &SplitDnsDomainRequest,
+) -> Result<SplitDnsReceipt> {
     let domain = normalize_dns_domain(&request.domain)?;
     let servers = normalize_dns_servers(&request.servers)?;
     let resource = match request.os_id.as_str() {
@@ -282,7 +284,7 @@ impl<H: SplitDnsHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         Ok(split_dns_state_matches(&state, &host_request))
     }
 
-    pub async fn apply_split_dns(
+    pub(in crate::runtime) async fn apply_split_dns(
         &self,
         request: SplitDnsDomainRequest,
         previous: Option<&SystemReceipt>,
@@ -336,7 +338,7 @@ impl<H: SplitDnsHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         })
     }
 
-    pub async fn remove_split_dns(
+    pub(in crate::runtime) async fn remove_split_dns(
         &self,
         receipt: &SplitDnsReceipt,
         dry_run: bool,

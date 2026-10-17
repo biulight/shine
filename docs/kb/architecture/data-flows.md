@@ -1145,6 +1145,8 @@ to the normal sealed-source compiler, then writes the standalone plaintext resul
 owner-only file on Unix. Export never edits or removes the workspace definition or source files.
 Local run, export and broker release share a pure resolver of the winning declaration and source
 index. The sealed compiler still validates/decrypts every source, including shadowed declarations.
+The ordered-source regression uses `capture_sources` then `compile_captured_sources`, shared with
+workspace run, instead of the retired test-only export forwarding method (ADR 0140).
 Compiled/explicit maps own their cleanup through `SensitiveValues`; serialized dotenv and decrypted
 cache plaintext use `Zeroizing`. Errors and cancelled consumers drop the same guards. Child execution
 drops its owned maps before propagating a nonzero process status (ADR 0114).
@@ -1206,6 +1208,10 @@ or a missing Git executable use the fallback. Other spawn errors stop before pro
 Conflicts write only `.new` and `.merge`, preserving active/base bytes. A later write failure can
 leave an earlier phase/file write applied; this remains ordered reconciliation, not a transaction
 (ADR 0124).
+Sentinel regressions enter `update_sys_shell_profiles` with explicit configuration and Host; phase
+EOL regressions call `install_sys_profile_phase_with_template` with observed templates. Removing
+ambient-Host test wrappers does not remove BOM/CRLF, legacy blocks or merge recovery behavior
+(ADR 0140).
 `sys profile enable/disable` changes only this activation state and generated profile content.
 
 Shine does not run update checks for bootstrap software. Homebrew, APT, Winget, mise, rustup, or
@@ -1378,6 +1384,10 @@ preimage; reported failures roll back touched files in reverse order. Rollback a
 installation's expected bytes and mode states, preserves concurrent edits, and reports incomplete
 restoration. Configuration and restoration temporary files start private. This is an in-process
 failure rollback, not durable crash recovery ([ADR 0101](../decisions/0101-proxy-install-failure-rollback.md)).
+Proxy regression fixtures now use the same `install_proxy_files` owner, rather than separately
+writing rules, receipts and launchers. Conflict assertions include configuration and receipt bytes.
+Global uninstall keeps project rule overrides intact; privacy tests exercise both scopes through
+production install/disable/uninstall, with captured environment restoration (ADR 0140).
 
 `shine env proxy install <command> --with KEY` places a Shine-owned PATH shim
 ahead of the real CLI. The shim records the resolved real executable and absolute installation

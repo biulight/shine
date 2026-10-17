@@ -96,30 +96,6 @@ pub(super) async fn install_sys_profile_files_with_templates(
     })
 }
 
-#[cfg(test)]
-pub(super) async fn install_sys_profile_phase(
-    profile_dir: &Path,
-    os_id: &str,
-    script_dir: &Path,
-    phase: SysProfilePhase,
-    ext: &str,
-    force_profile: bool,
-) -> Result<SysProfileFileUpdate> {
-    install_sys_profile_phase_with_template(
-        &crate::runtime::RealHost,
-        ProfilePhaseInstall {
-            profile_dir,
-            os_id,
-            script_dir,
-            phase,
-            ext,
-            force_profile,
-            template_override: None,
-        },
-    )
-    .await
-}
-
 pub(super) struct ProfilePhaseInstall<'a> {
     pub(super) profile_dir: &'a Path,
     pub(super) os_id: &'a str,

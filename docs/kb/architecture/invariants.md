@@ -42,6 +42,9 @@ bugs. Check this list before changing the modules named in each entry.
   Shell profile mutation tests use approved install/uninstall or the completion entry; source
   wrappers derive from installed commands, not caller-supplied test lists. Internal profile and
   App action/generator/hook helpers stay runtime-scoped (ADR 0139).
+  Proxy tests use the production installation transaction and preserve project overrides during
+  global uninstall. Sys profile tests enter explicit-Host routing/reconciliation, and workspace
+  precedence tests compile captured sources. Keep rollback, BOM/CRLF and legacy cases (ADR 0140).
 - **Ordinary frontend inspection requires observation capability only.** App, Shell and Sys
   default inspection, including the safe `ReadOnlyFrontend` surface, require only
   `FileSystemObservationHost`. Sys status compares desired metadata with receipts; it must not

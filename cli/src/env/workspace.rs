@@ -18,8 +18,6 @@ use compilation::compile_captured_sources;
 use compilation::compile_export_sources;
 #[cfg(test)]
 use compilation::compile_source_layers;
-#[cfg(test)]
-use compilation::compile_sources;
 use compilation::decrypt_source_payload;
 use compilation::involves_hybrid;
 use compilation::snapshot_input_hash;

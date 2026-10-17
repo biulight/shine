@@ -27,14 +27,6 @@ pub(super) async fn decrypt_source_payload(
     Ok(std::mem::take(&mut payload.values))
 }
 
-#[cfg(test)]
-pub(super) async fn compile_sources(
-    sources: &[PathBuf],
-    config: &Config,
-) -> Result<SensitiveValues> {
-    compile_export_sources(sources, config, true).await
-}
-
 pub(super) async fn compile_export_sources(
     sources: &[PathBuf],
     config: &Config,

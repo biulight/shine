@@ -89,14 +89,14 @@ pub enum SysInstall {
 }
 
 impl SysInstall {
-    pub fn success_status(&self) -> SysItemStatus {
+    pub(in crate::runtime) fn success_status(&self) -> SysItemStatus {
         match self {
             Self::Package { success_status, .. } | Self::Script { success_status, .. } => {
                 success_status.unwrap_or(SysItemStatus::Installed)
             }
         }
     }
-    pub fn success_hint(&self) -> &str {
+    pub(in crate::runtime) fn success_hint(&self) -> &str {
         match self {
             Self::Package { success_hint, .. } | Self::Script { success_hint, .. } => success_hint,
         }

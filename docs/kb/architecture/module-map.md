@@ -281,7 +281,7 @@ Config discovery priority is documented as a behavioral contract in
 | `cli/src/env/catalog.rs` | Known variable metadata |
 | `cli/src/env/identity.rs` | age identity generation and recipient inspection |
 | `cli/src/env/upgrade.rs` | Reapply env templates to installed content |
-| `cli/src/env/proxy.rs` | Transparent command proxy rules and execution |
+| `cli/src/env/proxy.rs` | Transparent command proxy rules, complete installation transaction and execution; migrated tests use production owners |
 | `cli/src/env/broker.rs`, `env/broker/{model,policy,store,commands}.rs` | Stable broker facade/DTOs, pure exact policy matching, private locked persistence and CLI commands; `env/mod.rs` owns reserved SSH keys |
 | `cli/src/secret/mod.rs` | Backend-independent tagged ciphertext router |
 | `cli/src/env/workspace/local_cache.rs` | Personal workspace hybrid preference and encrypted per-backend compilation cache; excluded from broker snapshots |
