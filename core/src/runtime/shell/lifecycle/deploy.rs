@@ -169,7 +169,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         let cache_receipts = cache_replacements
             .iter()
             .flat_map(|replacement| replacement.receipt_transitions.iter())
-            .map(|(target, _, desired)| (target.clone(), desired.clone()))
+            .map(|transition| (transition.target.clone(), transition.desired.clone()))
             .collect::<BTreeMap<_, _>>();
         let mut transactional_snapshot_categories = BTreeSet::new();
         if approval.is_some()
@@ -452,11 +452,11 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let mut receipt_transitions = Vec::new();
             for file in &category.files {
                 let target = format!("shell/{}/{}", category.name, file.command_name);
-                receipt_transitions.push((
-                    target.clone(),
-                    manifest_before.find(&target).cloned(),
-                    self.desired_shell_manifest_entry(category, file)?,
-                ));
+                receipt_transitions.push(ShellReceiptTransition {
+                    target: target.clone(),
+                    previous: manifest_before.find(&target).cloned(),
+                    desired: self.desired_shell_manifest_entry(category, file)?,
+                });
             }
             snapshot_replacements.push(ShellSnapshotReplacement {
                 target: format!("shell/{}", category.name),

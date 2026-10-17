@@ -57,11 +57,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = cache
                 .receipt_transitions
                 .iter()
-                .map(|(target, previous, desired)| ShellReceiptTransitionV1 {
-                    target: target.clone(),
-                    previous: previous.as_ref().map(receipt_contract).map(Box::new),
-                    desired: Box::new(receipt_contract(desired)),
-                })
+                .map(ShellReceiptTransition::contract)
                 .collect();
             pending.steps.push(PreparedShellStep {
                 action: DeclarativeActionV1::replace_shell_cache(
@@ -107,11 +103,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = snapshot
                 .receipt_transitions
                 .iter()
-                .map(|(target, previous, desired)| ShellReceiptTransitionV1 {
-                    target: target.clone(),
-                    previous: previous.as_ref().map(receipt_contract).map(Box::new),
-                    desired: Box::new(receipt_contract(desired)),
-                })
+                .map(ShellReceiptTransition::contract)
                 .collect();
             pending.steps.push(PreparedShellStep {
                 action: DeclarativeActionV1::replace_shell_snapshot(
@@ -175,11 +167,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = rendered
                 .receipt_transitions
                 .iter()
-                .map(|(target, previous, desired)| ShellReceiptTransitionV1 {
-                    target: target.clone(),
-                    previous: previous.as_ref().map(receipt_contract).map(Box::new),
-                    desired: Box::new(receipt_contract(desired)),
-                })
+                .map(ShellReceiptTransition::contract)
                 .collect();
             pending.steps.push(PreparedShellStep {
                 action: DeclarativeActionV1::replace_shell_rendered_file(
@@ -234,10 +222,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = removal
                 .previous_receipts
                 .iter()
-                .map(|(target, entry)| ShellReceiptRemovalV1 {
-                    target: target.clone(),
-                    previous: Box::new(receipt_contract(entry)),
-                })
+                .map(ShellReceiptRemoval::contract)
                 .collect::<Vec<_>>();
             if !shell_removal_receipts_match_previous(&manifest, &receipts) {
                 bail!("Shell rendered-file receipts changed after Plan approval");
@@ -299,10 +284,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = removal
                 .previous_receipts
                 .iter()
-                .map(|(target, entry)| ShellReceiptRemovalV1 {
-                    target: target.clone(),
-                    previous: Box::new(receipt_contract(entry)),
-                })
+                .map(ShellReceiptRemoval::contract)
                 .collect::<Vec<_>>();
             let manifest =
                 load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
@@ -356,10 +338,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = removal
                 .previous_receipts
                 .iter()
-                .map(|(target, entry)| ShellReceiptRemovalV1 {
-                    target: target.clone(),
-                    previous: Box::new(receipt_contract(entry)),
-                })
+                .map(ShellReceiptRemoval::contract)
                 .collect::<Vec<_>>();
             let manifest =
                 load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
@@ -455,19 +434,12 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipt_transitions = profile
                 .receipt_transitions
                 .iter()
-                .map(|(target, previous, desired)| ShellReceiptTransitionV1 {
-                    target: target.clone(),
-                    previous: previous.as_ref().map(receipt_contract).map(Box::new),
-                    desired: Box::new(receipt_contract(desired)),
-                })
+                .map(ShellReceiptTransition::contract)
                 .collect::<Vec<_>>();
             let receipt_removals = profile
                 .receipt_removals
                 .iter()
-                .map(|(target, previous)| ShellReceiptRemovalV1 {
-                    target: target.clone(),
-                    previous: Box::new(receipt_contract(previous)),
-                })
+                .map(ShellReceiptRemoval::contract)
                 .collect::<Vec<_>>();
             let manifest =
                 load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;

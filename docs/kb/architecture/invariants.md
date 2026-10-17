@@ -286,7 +286,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **App refresh requires exact receipt ownership.** Destination equality alone cannot select a
   generated file: the receipt source must match the requested category and logical source file.
   Both planning and execution enforce this even with force; a foreign receipt never authorizes
-  generator execution or reassignment of its destination.
+  generator execution or reassignment of its destination. Named refresh preparation, application and completion
+  states retain the approved caller's lifecycle lock, selection-before-authorization, per-file
+  continuation and one final receipt save before hooks. A failed final save does not roll back
+  already-applied refresh writes; hooks do not run (ADR 0130).
 - **App executable environment is explicit.** Generators receive only fixed `SHINE_APP_*` contract
   variables plus their `generator.env` mappings. Artifacts receive only the fixed contract plus
   their `[artifact].env` mappings, whose sources must be declared by the category's
@@ -392,6 +395,12 @@ bugs. Check this list before changing the modules named in each entry.
   Pure templates live in `launcher/templates.rs`; grouping invocation fields must preserve exact
   bytes and the distinct creation/status name reconstruction rules. Neither grouping nor a single
   current resource permits replacing a foreign Windows companion (ADR 0128).
+- **Shell preparation handoffs do not redefine receipt authority.** Named local transitions and
+  removals retain ordered targets, previous/desired receipts and explicit absence before projecting
+  the unchanged V1 contracts. Cache/render preparation retains preserved embedded bytes, optional
+  modes, transform inference, shared-output conflict checks and original effect timing. Fresh
+  observations, exact approval, transaction guards, receipt-positive commit and reverse recovery
+  remain in their existing owners (ADR 0130).
 - **Native CMD script escaping is receipt-versioned.** `native-cmd-v2` preserves apostrophes in
   a double-quoted PowerShell `-File` argument. Absent format fields retain exact legacy bytes for
   update, uninstall and recovery; PowerShell expression escaping must not be applied to CMD argv.
@@ -1090,6 +1099,12 @@ bugs. Check this list before changing the modules named in each entry.
   persistence, spawn/wait failures and cancellation must release the listener and session
   directory. Stop and await the accept loop before draining connection tasks; finish cleanup
   before propagating the SSH exit status, including `process::exit` paths.
+- **SSH construction preserves the user option boundary and wrapper bytes.** The named parsed
+  result is local input data, not approval. Preserve separate/attached option values, repeated
+  option order, `--`, destination and remote argv; POSIX quoting and encoded Windows wrappers stay
+  byte-compatible. Pure builders own no listener, process or broker capability. Session setup,
+  broker mode/trust/nonce checks and cleanup remain at the original orchestration boundaries
+  (ADR 0130).
 - **IPv6 transfer destinations remain one address.** Bracket IPv6 literals, including user and
   zone-qualified forms, in SCP operands. Select SCP for literal IPv6 destinations because the
   macOS system rsync parser splits even bracketed literals at the first colon. Retain the SCP

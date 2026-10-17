@@ -2,7 +2,9 @@ mod action;
 mod apply;
 mod commit;
 mod journal_io;
+mod receipt_changes;
 mod receipts;
+pub(crate) use receipt_changes::{ShellReceiptRemoval, ShellReceiptTransition};
 mod recovery_apply;
 mod recovery_plan;
 use action::ShellAction;
@@ -82,7 +84,7 @@ pub(crate) struct ShellSnapshotReplacement {
     pub target: String,
     pub destination: PathBuf,
     pub files: Vec<ShellSnapshotFile>,
-    pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
+    pub receipt_transitions: Vec<ShellReceiptTransition>,
 }
 
 pub(crate) struct ShellRenderedFileReplacement {
@@ -90,14 +92,14 @@ pub(crate) struct ShellRenderedFileReplacement {
     pub destination: PathBuf,
     pub bytes: Vec<u8>,
     pub unix_mode: Option<u32>,
-    pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
+    pub receipt_transitions: Vec<ShellReceiptTransition>,
 }
 
 pub(crate) struct ShellRenderedFileRemoval {
     pub target: String,
     pub destination: PathBuf,
     pub previous: ShellFileIdentityV1,
-    pub previous_receipts: Vec<(String, ShellManifestEntry)>,
+    pub previous_receipts: Vec<ShellReceiptRemoval>,
 }
 
 pub(crate) struct ShellCacheReplacementFile {
@@ -109,27 +111,27 @@ pub(crate) struct ShellCacheReplacementFile {
 pub(crate) struct ShellCacheReplacement {
     pub target: String,
     pub files: Vec<ShellCacheReplacementFile>,
-    pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
+    pub receipt_transitions: Vec<ShellReceiptTransition>,
 }
 
 pub(crate) struct ShellCacheRemoval {
     pub target: String,
     pub files: Vec<(PathBuf, ShellFileIdentityV1)>,
-    pub previous_receipts: Vec<(String, ShellManifestEntry)>,
+    pub previous_receipts: Vec<ShellReceiptRemoval>,
 }
 
 pub(crate) struct ShellSnapshotRemoval {
     pub target: String,
     pub destination: PathBuf,
     pub previous_files: Vec<ShellTreeFileV1>,
-    pub previous_receipts: Vec<(String, ShellManifestEntry)>,
+    pub previous_receipts: Vec<ShellReceiptRemoval>,
 }
 
 pub(crate) struct ShellProfileReconciliation {
     pub target: String,
     pub files: Vec<ShellProfilePreparedFile>,
-    pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
-    pub receipt_removals: Vec<(String, ShellManifestEntry)>,
+    pub receipt_transitions: Vec<ShellReceiptTransition>,
+    pub receipt_removals: Vec<ShellReceiptRemoval>,
     pub legacy_targets: Vec<String>,
 }
 

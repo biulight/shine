@@ -461,16 +461,14 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 };
                 let previous_receipts = consumers
                     .into_iter()
-                    .map(|entry| {
-                        (
-                            format!("shell/{}/{}", entry.category, entry.command),
-                            entry.clone(),
-                        )
+                    .map(|entry| ShellReceiptRemoval {
+                        target: format!("shell/{}/{}", entry.category, entry.command),
+                        previous: entry.clone(),
                     })
                     .collect::<Vec<_>>();
                 let target = previous_receipts
                     .first()
-                    .map(|(target, _)| target.clone())
+                    .map(|receipt| receipt.target.clone())
                     .context("Shell rendered-file removal has no receipt consumer")?;
                 rendered_removals.push(ShellRenderedFileRemoval {
                     target,
@@ -507,11 +505,9 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         category.is_none_or(|category| entry.category == category)
                             && selected.contains(&(entry.category.clone(), entry.command.clone()))
                     })
-                    .map(|entry| {
-                        (
-                            format!("shell/{}/{}", entry.category, entry.command),
-                            entry.clone(),
-                        )
+                    .map(|entry| ShellReceiptRemoval {
+                        target: format!("shell/{}/{}", entry.category, entry.command),
+                        previous: entry.clone(),
                     })
                     .collect::<Vec<_>>()
             };

@@ -344,3 +344,123 @@ async fn shell_inspection_stays_read_only_across_interruption_recovery_and_fresh
     );
     assert!(next.host().metadata(&journal).await.is_err());
 }
+
+#[tokio::test]
+async fn shared_shell_rendering_keeps_cached_bytes_receipt_consumers_and_recovery_order() {
+    use crate::action::{ActionIrV1, ActionKindV1};
+    #[derive(serde::Deserialize)]
+    struct Journal {
+        action_ir: ActionIrV1,
+    }
+    let mut context = context();
+    context.env.insert("VALUE".into(), "captured".into());
+    let mut metadata = String::new();
+    for command in ["first", "second"] {
+        metadata.push_str(&format!("[[files]]\nsource = 'shared.ts'\ntarget = '{command}'\nruntime = 'bun'\ntransforms = ['template']\n[files.permissions]\nschema_version = 1\nenvironment = [{{ name = 'VALUE', sensitivity = 'plain' }}]\n"));
+    }
+    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+        .file("shell/demo/shine.toml", metadata.into_bytes())
+        .file(
+            "shell/demo/shared.ts",
+            b"console.log('embedded @@VALUE@@');\n".to_vec(),
+        )
+        .build();
+    let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
+    let cached = runtime.context().presets_dir.join("shell/demo/shared.ts");
+    let cached_bytes = b"console.log('cached @@VALUE@@');\n";
+    runtime
+        .host()
+        .put_file_with_mode(&cached, cached_bytes.to_vec(), 0o744);
+    let rendered = runtime.shell_rendered_path("demo", std::path::Path::new("shared.ts"));
+    let receipt = runtime.context().shine_dir.join("shell-manifest.toml");
+    runtime.host().fail_write_after(&receipt, 0);
+    let request = ShellPlanRequest {
+        operation: LifecycleOperation::Install,
+        target: Some("demo".into()),
+        force: false,
+        purge: false,
+        input_versions: Default::default(),
+    };
+    let plan = runtime.plan_shells(request.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    assert!(
+        runtime
+            .install_shells_approved(request.clone(), &approval)
+            .await
+            .is_err()
+    );
+    let journal_path = runtime
+        .context()
+        .shine_dir
+        .join(SHELL_OPERATION_JOURNAL_FILE);
+    let bytes = runtime.host().read(&journal_path).await.unwrap();
+    let journal: Journal = toml::from_slice(&bytes).unwrap();
+    let mut cache_at = None;
+    let mut rendered_at = None;
+    for (index, action) in journal.action_ir.actions.iter().enumerate() {
+        match &action.kind {
+            ActionKindV1::ReplaceShellCache { receipts, .. } => {
+                cache_at = Some(index);
+                assert_eq!(
+                    receipts
+                        .iter()
+                        .map(|r| r.target.as_str())
+                        .collect::<Vec<_>>(),
+                    ["shell/demo/first", "shell/demo/second"]
+                );
+                assert!(receipts.iter().all(|r| r.previous.is_none()
+                    && r.desired.content_hash == hash_content(cached_bytes)));
+            }
+            ActionKindV1::ReplaceShellRenderedFile {
+                receipts, desired, ..
+            } => {
+                rendered_at = Some(index);
+                assert_eq!(
+                    receipts
+                        .iter()
+                        .map(|r| r.target.as_str())
+                        .collect::<Vec<_>>(),
+                    ["shell/demo/first", "shell/demo/second"]
+                );
+                assert_eq!(
+                    desired.content_hash,
+                    hash_content(b"console.log('cached captured');\n")
+                );
+                assert_eq!(desired.unix_mode, Some(0o744));
+            }
+            _ => {}
+        }
+    }
+    assert!(cache_at.unwrap() < rendered_at.unwrap());
+    assert!(!String::from_utf8_lossy(&bytes).contains("cached captured"));
+    assert_eq!(runtime.host().read(&cached).await.unwrap(), cached_bytes);
+    let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+    runtime
+        .recover_shell_operation_approved(&PlanApprovalV1::for_reviewed_plan(&recovery).unwrap())
+        .await
+        .unwrap();
+    assert!(runtime.host().metadata(&rendered).await.is_err());
+    assert_eq!(runtime.host().read(&cached).await.unwrap(), cached_bytes);
+    let approval =
+        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(request.clone()).await.unwrap())
+            .unwrap();
+    runtime
+        .install_shells_approved(request, &approval)
+        .await
+        .unwrap();
+    let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    assert_eq!(manifest.entries.len(), 2);
+    assert!(
+        manifest
+            .entries
+            .iter()
+            .all(|entry| entry.content_hash == hash_content(cached_bytes))
+    );
+    assert_eq!(
+        runtime.host().read(&rendered).await.unwrap(),
+        b"console.log('cached captured');\n"
+    );
+    assert!(runtime.host().metadata(&journal_path).await.is_err());
+}

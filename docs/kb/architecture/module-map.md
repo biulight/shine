@@ -56,6 +56,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/action_executor/recovery_{plan,apply}_{file,json,relocation,removal}.rs` | Action-specific read-only recovery review and mutation handlers; rollback semantics remain domain-owned |
 | `core/src/runtime/action_executor/{receipts,recovery_assessment,file_ops,journal_io}.rs` | Ownership predicates, exact live-state assessments, privileged path dispatch and durable journal IO |
 | `core/src/runtime/shell_action_executor.rs` | Shell transaction contracts and shared resource observations |
+| `core/src/runtime/shell_action_executor/receipt_changes.rs` | Named local previous/desired receipt handoffs and their existing payload-free V1 projection; persistence/validation stay at transaction owners |
 | `core/src/runtime/shell_action_executor/action.rs` | Exhaustive borrowed Shell-only Action conversion and receipt-marker eligibility shared by journal validation, commit and recovery dispatch |
 | `core/src/runtime/shell_action_executor/{apply,commit,journal_io,receipts}.rs` | Paired Action/payload preparation and application, receipt-gated commit and durable journal IO; `apply/prepare.rs` revalidates each resource before journal publication |
 | `core/src/runtime/shell_action_executor/commit/tests.rs` | Mixed-resource commit preflight/cleanup, retry, marker eligibility and foreign-domain journal boundary regressions |
@@ -75,12 +76,14 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/app/assessment_tests.rs` | Consumer regressions for generator assessment, inspection priority, approved lifecycle reports and last-known-good receipts |
 | `core/src/runtime/app/outcome.rs` | Internal typed App file outcomes projected into the existing local report fields |
 | `core/src/runtime/app/lifecycle/{install,remove}.rs` | App preparation, per-file apply/receipt commit and finalization; caller retains lifecycle lock and exact approval |
+| `core/src/runtime/app/refresh.rs` | Named selected-file/prepared/applied states for explicit refresh; per-file continuation and final receipt-before-hook completion under the approved caller |
 | `core/src/runtime/app/upgrade.rs` | Upgrade phases under the lifecycle lock; typed unjournaled/update/relocation completion retains transaction guards through receipt save and commit |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
 | `core/src/runtime/shell.rs` | Shell models, lifecycle entry points, live render, launcher, cache, profile, and manifest helpers |
 | `core/src/runtime/shell/metadata.rs` | Snapshot-only metadata parsing, explicit declarations, native discovery and platform/source admission; no Host required |
 | `core/src/runtime/shell/inspect.rs` | Observation-only Shell inspection orchestration, per-command evidence, pure changes/status projection and receipt-only records |
 | `core/src/runtime/tests/shell_inspection.rs` | Read-only consumer regressions for Shell status/change ordering, missing presets, trust/conflicts and observation failures |
+| `core/src/runtime/shell/{cache,rendered}.rs` | Ordered embedded-cache/source selection and rendered-resource preparation with shared-destination consistency; existing effect timing stays with lifecycle orchestration |
 | `core/src/runtime/shell/delivery.rs` | Pure captured-input source layout and desired delivery shared by inspection, planning, launcher preparation and receipt construction |
 | `core/src/runtime/shell/lifecycle.rs`, `shell/lifecycle/{deploy,remove,report}.rs` | Typed Shell deployment/removal phases and pure lifecycle reporting; preparation retains legacy effects |
 | `core/src/action/shell_receipt.rs` | Shared internal receipt delivery validation for manifest reconstruction, Action IR and recovery; persisted DTOs remain unchanged |
@@ -290,7 +293,8 @@ Config discovery priority is documented as a behavioral contract in
 
 | Path | Responsibility |
 |---|---|
-| `cli/src/ssh/mod.rs` | System-ssh wrapper, session setup, remote command wrapper, cleanup |
+| `cli/src/ssh/mod.rs` | System-ssh facade, forwarding resolution, session setup, child supervision and cleanup |
+| `cli/src/ssh/{arguments,command}.rs` | Named parsed SSH operands, unchanged option-order/transport argv rules, and pure POSIX/encoded-PowerShell remote command construction |
 | `cli/src/ssh/session_context.rs` | Trusted reconnect arguments and local session state |
 | `cli/src/ssh/protocol.rs` | Transfer and log-relay wire frames |
 | `cli/src/ssh/agent.rs` | Local listener and tracked connection-task lifetimes |

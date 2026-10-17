@@ -2,9 +2,11 @@ mod metadata;
 use metadata::{
     ShellCategoryToml, is_native_shell_script, normalize_shell_metadata_source, shell_logical_path,
 };
+mod cache;
 mod delivery;
 mod inspect;
 mod lifecycle;
+mod rendered;
 use delivery::{ShellSourceLayout, source_transforms};
 
 use super::launcher::{
@@ -15,9 +17,9 @@ use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind
 use super::shell_action_executor::{
     ShellCacheRemoval, ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation,
     ShellLauncherRemoval, ShellLauncherUpdate, ShellLegacyLauncherRemoval,
-    ShellProfilePreparedFile, ShellProfileReconciliation, ShellRenderedFileRemoval,
-    ShellRenderedFileReplacement, ShellSharedReplacements, ShellSnapshotFile, ShellSnapshotRemoval,
-    ShellSnapshotReplacement,
+    ShellProfilePreparedFile, ShellProfileReconciliation, ShellReceiptRemoval,
+    ShellReceiptTransition, ShellRenderedFileRemoval, ShellRenderedFileReplacement,
+    ShellSharedReplacements, ShellSnapshotFile, ShellSnapshotRemoval, ShellSnapshotReplacement,
 };
 use super::{
     CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, LinkConflict,
@@ -1477,13 +1479,16 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             .collect::<BTreeSet<_>>()
         {
             match (before.get(&target), after.get(&target)) {
-                (previous, Some(desired)) => receipt_transitions.push((
+                (previous, Some(desired)) => receipt_transitions.push(ShellReceiptTransition {
                     target,
-                    previous.map(|entry| (*entry).clone()),
-                    (*desired).clone(),
-                )),
+                    previous: previous.map(|entry| (*entry).clone()),
+                    desired: (*desired).clone(),
+                }),
                 (Some(previous), None) => {
-                    receipt_removals.push((target, (*previous).clone()));
+                    receipt_removals.push(ShellReceiptRemoval {
+                        target,
+                        previous: (*previous).clone(),
+                    });
                 }
                 (None, None) => unreachable!(),
             }
@@ -1495,273 +1500,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             receipt_removals,
             legacy_targets: legacy_targets.to_vec(),
         }])
-    }
-
-    async fn planned_embedded_shell_source(
-        &self,
-        category: &ShellCategory,
-        file: &ShellFile,
-        overwrite: bool,
-    ) -> Result<(Vec<u8>, Option<u32>)> {
-        let logical = format!(
-            "shell/{}/{}",
-            category.name,
-            shell_logical_path(&file.source_rel)
-        );
-        let desired = self
-            .presets()
-            .get(&logical)
-            .context("missing desired embedded Shell source")?;
-        let source_path = self.shell_deployment_source_path(&category.name, &file.source_rel);
-        match self.host().metadata(&source_path).await {
-            Ok(metadata) if metadata.kind == FileKind::File => {
-                let current =
-                    self.host().read(&source_path).await.map_err(|error| {
-                        error.into_anyhow("reading embedded Shell cache source")
-                    })?;
-                if overwrite && current != *desired {
-                    Ok((desired.to_vec(), embedded_shell_cache_mode(&logical)))
-                } else {
-                    Ok((current, metadata.unix_mode))
-                }
-            }
-            Ok(_) => bail!(
-                "embedded Shell cache source is not a regular file: {}",
-                source_path.display()
-            ),
-            Err(error) if error.is_not_found() => {
-                Ok((desired.to_vec(), embedded_shell_cache_mode(&logical)))
-            }
-            Err(error) => Err(error.into_anyhow("inspecting embedded Shell cache source")),
-        }
-    }
-
-    async fn planned_embedded_shell_manifest_entry(
-        &self,
-        category: &ShellCategory,
-        file: &ShellFile,
-        overwrite: bool,
-    ) -> Result<ShellManifestEntry> {
-        let source_path = self.shell_deployment_source_path(&category.name, &file.source_rel);
-        let (bytes, _) = self
-            .planned_embedded_shell_source(category, file, overwrite)
-            .await?;
-        let transforms = if !file.transforms.is_empty() {
-            file.transforms.clone()
-        } else if has_template_annotation(&bytes) {
-            vec!["template".to_string()]
-        } else {
-            Vec::new()
-        };
-        self.shell_manifest_entry_for_content(category, file, source_path, transforms, &bytes)
-    }
-
-    async fn prepare_shell_cache_replacements(
-        &self,
-        categories: &[ShellCategory],
-        manifest_before: &ShellManifest,
-        overwrite: bool,
-    ) -> Result<(Vec<ShellCacheReplacement>, ShellCacheReport)> {
-        let mut replacements = Vec::new();
-        let mut report = ShellCacheReport::default();
-        for category in categories {
-            let prefix = format!("shell/{}/", category.name);
-            let effective_logicals = self.effective_shell_cache_logicals(category)?;
-            let mut files = Vec::new();
-            for (logical, bytes) in self.presets().files().iter().filter(|(logical, _)| {
-                logical.starts_with(&prefix) && effective_logicals.contains(*logical)
-            }) {
-                let destination = self.context().presets_dir.join(logical);
-                let previous = match self.host().metadata(&destination).await {
-                    Ok(metadata) if metadata.kind == FileKind::File => {
-                        let current = self.host().read(&destination).await.map_err(|error| {
-                            error.into_anyhow("reading embedded Shell cache file")
-                        })?;
-                        if current == *bytes || !overwrite {
-                            report.skipped.push(destination);
-                            continue;
-                        }
-                        report.overwritten.push(destination.clone());
-                        Some(ShellFileIdentityV1 {
-                            content_hash: crate::install::hash_content(&current),
-                            unix_mode: metadata.unix_mode,
-                        })
-                    }
-                    Ok(_) => bail!(
-                        "embedded Shell cache destination is not a regular file: {}",
-                        destination.display()
-                    ),
-                    Err(error) if error.is_not_found() => {
-                        report.created.push(destination.clone());
-                        None
-                    }
-                    Err(error) => {
-                        return Err(error.into_anyhow("inspecting embedded Shell cache file"));
-                    }
-                };
-                let rollback = managed_file_rollback_path(&destination);
-                match self.host().metadata(&rollback).await {
-                    Err(error) if error.is_not_found() => {}
-                    Ok(_) => bail!(
-                        "embedded Shell cache rollback path is occupied: {}",
-                        rollback.display()
-                    ),
-                    Err(error) => {
-                        return Err(error.into_anyhow("inspecting embedded Shell cache rollback"));
-                    }
-                }
-                let unix_mode = embedded_shell_cache_mode(logical);
-                let desired = ShellFileIdentityV1 {
-                    content_hash: crate::install::hash_content(bytes),
-                    unix_mode,
-                };
-                if previous.as_ref() == Some(&desired) {
-                    report.skipped.push(destination);
-                    continue;
-                }
-                files.push(ShellCacheReplacementFile {
-                    destination,
-                    bytes: bytes.clone(),
-                    unix_mode,
-                });
-            }
-            if files.is_empty() {
-                continue;
-            }
-            let mut receipt_transitions = Vec::new();
-            for file in &category.files {
-                let target = format!("shell/{}/{}", category.name, file.command_name);
-                receipt_transitions.push((
-                    target.clone(),
-                    manifest_before.find(&target).cloned(),
-                    self.planned_embedded_shell_manifest_entry(category, file, overwrite)
-                        .await?,
-                ));
-            }
-            replacements.push(ShellCacheReplacement {
-                target: format!("shell/{}", category.name),
-                files,
-                receipt_transitions,
-            });
-        }
-        Ok((replacements, report))
-    }
-
-    async fn prepare_shell_rendered_replacements(
-        &self,
-        categories: &[ShellCategory],
-        manifest_before: &ShellManifest,
-        overwrite_embedded: bool,
-    ) -> Result<(Vec<ShellRenderedFileReplacement>, ShellTemplateReport)> {
-        let mut replacements = BTreeMap::<PathBuf, ShellRenderedFileReplacement>::new();
-        let mut report = ShellTemplateReport::default();
-        for category in categories {
-            for file in &category.files {
-                let source = self.shell_deployment_source_path(&category.name, &file.source_rel);
-                let (content, source_mode, transforms) = if self.context().is_external_presets {
-                    let logical = format!(
-                        "shell/{}/{}",
-                        category.name,
-                        shell_logical_path(&file.source_rel)
-                    );
-                    let desired = self
-                        .presets()
-                        .get(&logical)
-                        .context("missing desired Shell rendered-file source")?;
-                    let transforms = if !file.transforms.is_empty() {
-                        file.transforms.clone()
-                    } else if has_template_annotation(desired) {
-                        vec!["template".to_string()]
-                    } else {
-                        continue;
-                    };
-                    let content =
-                        self.host().read(&source).await.map_err(|error| {
-                            error.into_anyhow("reading Shell rendered-file source")
-                        })?;
-                    let mode = self
-                        .host()
-                        .metadata(&source)
-                        .await
-                        .ok()
-                        .and_then(|metadata| metadata.unix_mode);
-                    (content, mode, transforms)
-                } else {
-                    let (content, mode) = self
-                        .planned_embedded_shell_source(category, file, overwrite_embedded)
-                        .await?;
-                    let transforms = if !file.transforms.is_empty() {
-                        file.transforms.clone()
-                    } else if has_template_annotation(&content) {
-                        vec!["template".to_string()]
-                    } else {
-                        continue;
-                    };
-                    (content, mode, transforms)
-                };
-                let rendered =
-                    crate::install::apply_transforms(&transforms, &content, &self.context().env)
-                        .with_context(|| {
-                            format!("template substitution failed for {}", source.display())
-                        })?;
-                let destination = self.shell_rendered_path(&category.name, &file.source_rel);
-                let unix_mode = source_mode.or_else(|| cfg!(unix).then_some(0o755));
-                let current = match self.host().metadata(&destination).await {
-                    Ok(metadata) if metadata.kind == FileKind::File => {
-                        let bytes = self.host().read(&destination).await.map_err(|error| {
-                            error.into_anyhow("reading current Shell rendered file")
-                        })?;
-                        bytes == rendered && metadata.unix_mode == unix_mode
-                    }
-                    Ok(_) => false,
-                    Err(error) if error.is_not_found() => false,
-                    Err(error) => {
-                        return Err(error.into_anyhow("inspecting Shell rendered file"));
-                    }
-                };
-                if current {
-                    continue;
-                }
-                let target = format!("shell/{}/{}", category.name, file.command_name);
-                let desired_receipt = if self.context().is_external_presets {
-                    self.shell_manifest_entry(category, file).await?
-                } else {
-                    self.planned_embedded_shell_manifest_entry(category, file, overwrite_embedded)
-                        .await?
-                };
-                let transition = (
-                    target.clone(),
-                    manifest_before.find(&target).cloned(),
-                    desired_receipt,
-                );
-                if let Some(existing) = replacements.get_mut(&destination) {
-                    if existing.bytes != rendered || existing.unix_mode != unix_mode {
-                        bail!(
-                            "Shell commands sharing rendered path {} produce different output",
-                            destination.display()
-                        );
-                    }
-                    existing.receipt_transitions.push(transition);
-                } else {
-                    replacements.insert(
-                        destination.clone(),
-                        ShellRenderedFileReplacement {
-                            target,
-                            destination,
-                            bytes: rendered,
-                            unix_mode,
-                            receipt_transitions: vec![transition],
-                        },
-                    );
-                }
-                report
-                    .updated
-                    .push(format!("{}/{}", category.name, file.command_name));
-            }
-        }
-        report.updated.sort();
-        report.updated.dedup();
-        Ok((replacements.into_values().collect(), report))
     }
 
     pub async fn render_shell_templates(

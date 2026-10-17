@@ -597,6 +597,14 @@ Shell execution emits CLI-private presentation events instead of writing termina
 terminal renderer owns shared upgrade-section state, while writer-backed recording tests pin
 quiet/verbose sections, conflicts, profile hints, and stdout/stderr routing.
 
+Embedded source/cache replacement preparation lives in `shell/cache.rs`; shared rendered-file
+preparation lives in `shell/rendered.rs`. Keep cache overwrite/preserve rules, source/mode selection,
+transform inference, shared-output conflict checks, report ordering and lifecycle preparation
+side effects unchanged. Both pass named local receipt transitions/removals through
+`shell_action_executor/receipt_changes.rs` to the existing V1 Action contracts. The conversion
+preserves target, previous/desired receipt, order and optional absence; validation, exact approval,
+journal publication, receipt commit and recovery remain with their existing owners (ADR 0130).
+
 ## Transformed Live Bun invocation
 
 A `live-bun-v2` launcher binds its absolute installation root and calls hidden `__shell-launch`
@@ -916,6 +924,14 @@ Inspection regressions use this production path through `FrontendService`, inclu
 ownership, missing/new/relocated files, manual-generator snapshots and lifecycle projection. The CLI
 keeps presentation tests and its real-host refresh integration; removed test-only status helpers
 cannot serve as the behavior baseline (ADR 0127).
+Explicit refresh delegates to `app/refresh.rs`: preparation selects exact receipt-owned generated
+files and completes administrator authorization; per-file apply retains generator/transform/read/
+install/upsert order and continues after a file failure. Completion saves the shared manifest once
+when any file changed, then runs post-upgrade hooks. The approved caller retains the lifecycle lock
+and fresh approval gate throughout. A final receipt-save error still prevents hooks and leaves the
+already-applied file writes with the previous durable receipt; no new transaction or automatic
+rollback is introduced (ADR 0130).
+
 The execution and reporting rules remain:
 
 1. `shine app install` always materializes first, then reuses the normal
@@ -1364,6 +1380,12 @@ drop the guard. Literal IPv6 destinations select SCP, whose bracketed operand pr
 address and optional user/zone; this avoids the macOS system rsync parser's first-colon split.
 
 ## SSH environment forwarding
+
+`ssh/arguments.rs` parses the option/destination/command boundary into a named local result and
+builds transport argv without reinterpreting user options. `ssh/command.rs` owns pure POSIX quoting
+and UTF-16LE/Base64 PowerShell wrapping. The session facade keeps capture, broker setup, listener
+ownership, PID handoff, Ctrl-C handling, shutdown and exit propagation; moving pure construction
+changes neither command bytes nor the distinct POSIX/Windows transport behavior (ADR 0130).
 
 `ssh::handle_ssh` resolves each `--with KEY[=ALIAS]` from the exact plaintext key in the active
 config `[env]`; it never performs the secret-first fallback used by `env run`. Each
