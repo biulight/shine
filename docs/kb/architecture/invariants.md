@@ -18,6 +18,11 @@ bugs. Check this list before changing the modules named in each entry.
   `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery
   intent into the full Plan fingerprint. Executors use typed intent plus exact ownership/state
   checks; diagnostic codes remain review output, not deletion authority (ADR 0104).
+- **Static validation retains its read-only order.** Source capture requires only filesystem
+  observation. Declaration diagnostics precede App destination checks and ordered all-platform
+  metadata validation; the first platform error wins. File filtering, snapshot executable flags,
+  portable foreign-platform paths and V1 report ordering remain unchanged across module splits
+  (ADR 0126).
 - **Static validation codes follow typed error origins.** Missing references, duplicate targets
   or commands and Bun policy failures carry structured kinds at the failing check. Category
   names and human-readable error chains cannot change the code; unclassified metadata failures
@@ -38,6 +43,12 @@ bugs. Check this list before changing the modules named in each entry.
   verbose review retains them and every Plan stays approval-bound. Only a typed already-reported
   CLI failure may suppress the binary's duplicate error; its exit remains nonzero and other
   errors/unknown diagnostics must remain visible.
+
+- **Review layouts remain pure and conservative.** Compact, detailed and bootstrap projections
+  preserve their existing formatting and classification rules. Unknown/blocking diagnostics, code
+  boundaries, administrator access and uncomputable permissions remain visible. Incomplete or
+  ambiguous bootstrap attribution falls back to the full review; display never edits the Plan or
+  creates approval (ADR 0126).
 
 - **Frontend approval is a consumed local capability.** Trusted human review retains the exact
   request and opaque configuration revision. Execution consumes a non-cloneable, non-serializable

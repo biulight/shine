@@ -4,10 +4,6 @@ pub(crate) use prepared::{
     prepare_upgrade_plans,
 };
 mod classification;
-use classification::{
-    is_routine_cache_maintenance, is_stale_app_preservation, quiet_uninstall_step,
-    upgrade_step_has_review_content,
-};
 mod render;
 use render::*;
 pub(crate) use render::{permission_group, permission_name, styled_action_name};
@@ -15,11 +11,7 @@ pub(crate) use render::{permission_group, permission_name, styled_action_name};
 use crate::config::Config;
 use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
-use shine_core::plan::{
-    CodeEntryKindV2, CodeSourceV2, CodeTargetRoleV2, CodeTimingV2, CodeTrustStateV2,
-    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, OpaqueCodeScopeV1, PermissionV1,
-    PlanActionV1, PlanV1,
-};
+use shine_core::plan::{CodeSourceV2, PlanActionV1, PlanV1};
 use shine_core::runtime::{
     AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest, CoreRuntime,
     OpaqueSecretVersion, PlanningInputVersions, RealHost, ShellPlanRequest,
@@ -641,8 +633,13 @@ fn hex_digest(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::classification::{is_routine_cache_maintenance, is_stale_app_preservation};
     use super::*;
     use shine_core::lifecycle::LifecycleOperation;
+    use shine_core::plan::{
+        CodeEntryKindV2, CodeTargetRoleV2, CodeTimingV2, CodeTrustStateV2, FilesystemAccessV1,
+        NetworkScopeV1, PermissionV1,
+    };
     use shine_core::plan::{PermissionSetV1, PlanInputsV1, PlanStepV1, SnapshotDigestV1};
 
     fn digest(label: &str) -> shine_core::plan::SnapshotDigestV1 {
@@ -2120,5 +2117,93 @@ mod tests {
         let receipt =
             std::collections::BTreeSet::from(["shell_recovery_receipt_conflict".to_string()]);
         assert!(blocked_plan_message(&receipt).contains("ownership receipts"));
+    }
+
+    #[test]
+    fn bootstrap_attribution_failures_preserve_the_exact_full_review() {
+        let plan = bootstrap_display_plan();
+        for invalid in ["duplicate", "unknown-target", "incomplete-union"] {
+            let mut plan = plan.clone();
+            match invalid {
+                "duplicate" => plan
+                    .permission_scopes
+                    .push(plan.permission_scopes[0].clone()),
+                "unknown-target" => {
+                    plan.permission_scopes[0].target = Some("sys/not-selected".into())
+                }
+                "incomplete-union" => {
+                    plan.permissions.required.insert(PermissionV1::Command {
+                        program: "unattributed".into(),
+                    });
+                }
+                _ => unreachable!(),
+            }
+            let before = serde_json::to_value(&plan).unwrap();
+            let full = render_plan_lines(&plan, "config").unwrap();
+            for verbose in [false, true] {
+                assert_eq!(
+                    render_bootstrap_plan_lines(&plan, "config", verbose).unwrap(),
+                    full,
+                    "{invalid}"
+                );
+            }
+            assert_eq!(serde_json::to_value(&plan).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn all_review_layouts_retain_code_boundaries_privilege_and_unknown_blockers() {
+        let mut plan = bootstrap_display_plan();
+        plan.steps[0].action = PlanActionV1::Blocked;
+        plan.steps[0]
+            .diagnostic_codes
+            .push("future_blocking_diagnostic".into());
+        plan.code_boundaries.push(shine_core::plan::CodeBoundaryV2 {
+            target: "sys/rust".into(),
+            entry_kind: CodeEntryKindV2::SysBootstrapScript,
+            timing: CodeTimingV2::ExecuteNow,
+            source: CodeSourceV2::ExternalOrOverlay,
+            trust: CodeTrustStateV2::MissingOrStale,
+            unisolated: true,
+            shared_resource: None,
+            target_role: CodeTargetRoleV2::Selected,
+        });
+        plan.permissions
+            .uncomputable_codes
+            .insert("future_permission_diagnostic".into());
+        let before = plan.fingerprint().unwrap();
+        let request = LifecyclePlanRequest::SysBootstrap {
+            request: SysBootstrapPlanRequest {
+                os_id: "ubuntu".into(),
+                item_ids: vec![],
+                sys_shell: "bash".into(),
+                force_profile: false,
+                input_versions: PlanningInputVersions::default(),
+            },
+            proxy_env: Default::default(),
+        };
+        let planned = vec![(request, plan.clone())];
+        let mut layouts = vec![
+            render_plan_lines(&plan, "config").unwrap(),
+            render_compact_plan_lines(&planned, "config").unwrap(),
+            render_upgrade_detailed_plan_lines(&planned, "config").unwrap(),
+        ];
+        for verbose in [false, true] {
+            layouts.push(render_bootstrap_plan_lines(&plan, "config", verbose).unwrap());
+        }
+        for lines in layouts {
+            let text = lines.join("\n");
+            for required in [
+                "future_blocking_diagnostic",
+                "future_permission_diagnostic",
+                "Code execution and trust",
+                "trust missing or stale",
+                "unisolated code",
+            ] {
+                assert!(text.contains(required), "missing {required}: {text}");
+            }
+            assert!(text.to_lowercase().contains("administrator"));
+        }
+        assert_eq!(plan.fingerprint().unwrap(), before);
     }
 }

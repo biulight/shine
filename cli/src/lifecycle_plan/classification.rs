@@ -1,6 +1,6 @@
 //! Local presentation classification over unchanged, fingerprint-bound Plan DTOs.
 //! These classes control terminal grouping only and never grant execution authority.
-use shine_core::plan::{PlanActionV1, PlanStepV1};
+use shine_core::plan::{PlanActionV1, PlanStepV1, PlanV1};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StepPresentation {
@@ -83,4 +83,13 @@ pub(super) fn upgrade_step_has_review_content(step: &PlanStepV1) -> bool {
             .diagnostic_codes
             .iter()
             .any(|code| !is_manual_refresh_notice(code))
+}
+
+pub(super) fn upgrade_plan_has_review_content(plan: &PlanV1) -> bool {
+    !plan.is_ready()
+        || plan.steps.iter().any(upgrade_step_has_review_content)
+        || !plan.permissions.required.is_empty()
+        || !plan.permissions.missing_declarations.is_empty()
+        || !plan.permissions.uncomputable_codes.is_empty()
+        || !plan.code_boundaries.is_empty()
 }

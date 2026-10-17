@@ -2,8 +2,8 @@
 
 - **Status**: accepted
 - **Evidence**: `cli/src/ssh/protocol.rs` (`Transfer`/`Starting`/`Log`/`Done`,
-  `PROTOCOL_VERSION = 2`), `cli/src/ssh/agent.rs` (`handle_transfer`,
-  `build_transfer_argv`, `choose_tool`, `resolve_tool_binary`),
+  `PROTOCOL_VERSION`), `cli/src/ssh/agent/transfer.rs` (`handle_transfer`),
+  `cli/src/ssh/agent/transfer/argv.rs` (`build_transfer_argv`, `choose_tool`, `resolve_tool_binary`),
   `cli/src/ssh/remote_client.rs` (`absolutize_remote_spec`, `relay_until_done`),
   `cli/src/ssh/session_context.rs` (`SessionContext`), `cli/src/ssh/mod.rs`
   (ControlMaster injection in `build_ssh_invocation_args`),
@@ -65,8 +65,8 @@ its own.
   and glob support — none of it reimplemented in shine.
 - **New attack surface**: the agent now executes external tools with argv partly
   derived from wire-supplied (untrusted, token-leakable) strings. Mitigations
-  (all in `agent.rs`): argv only, never a shell; the remote operand is always
-  the single token `<host>:<remote_spec>` after a `--` separator (so a hostile
+  (in `agent/transfer.rs` and `agent/transfer/argv.rs`): argv only, never a shell;
+  the remote operand is always the single token `<host>:<remote_spec>` after a `--` separator (so a hostile
   `-oProxyCommand=…` becomes an inert `host:-oProxyCommand=…`); local operands
   anchored to the session dir and `./`-prefixed if dash-leading; the `-e`/`-o`
   reconnection string built solely from `SessionContext`; tilde-only expansion

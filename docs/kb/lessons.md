@@ -2071,8 +2071,8 @@ measured, not inferred.
 - **Root cause**: rsync/scp interpret leading-`-` operands as options, and rsync's `-e`/`--rsh`
   (and `-o ProxyCommand`) are command-execution vectors. Any wire string that lands in an option
   slot — or is word-split by a shell — is a local RCE.
-- **Fix** (`cli/src/ssh/agent.rs`): spawn argv-only, never `sh -c`; emit the remote path only as
-  the single token `<host>:<remote_spec>` after a `--` separator (a `-`-leading spec becomes an
+- **Fix** (`cli/src/ssh/agent/transfer/argv.rs`; originally `agent.rs`): spawn argv-only, never
+  `sh -c`; emit the remote path only as the single token `<host>:<remote_spec>` after a `--` separator (a `-`-leading spec becomes an
   inert `host:-…`); anchor local operands to the session dir and `./`-prefix any dash-leading one;
   build the ssh reconnection `-e`/`-o` string **solely** from the local `SessionContext` (never the
   wire); reject control chars in `remote_spec`; expand wire paths tilde-only (not `${VAR}`); expand

@@ -82,7 +82,10 @@ uniquely attributed installation, maintenance and recovery material in ordinary 
 user destinations, ambiguous entries, blocked Plans and recovery reviews stay explicit. All
 Security Plan commands accept `--verbose`; the display preference is scoped to the command future
 and never changes the execution request. Full permissions and purpose groups remain fingerprint-bound
-(ADR 0094).
+(ADR 0094). `lifecycle_plan/render.rs` is a display-only facade over compact, detailed and
+bootstrap layouts, permissions, code boundaries and labels. Bootstrap retains its ordered scopes
+and distinct permission formatting; incomplete attribution falls back to the full detailed review.
+No rendering module creates approval or changes the reviewed Plan (ADR 0126).
 
 CLI review creates approval for one exact ready Plan. Apply deliberately follows:
 
@@ -166,6 +169,14 @@ Snapshot grants bind the complete effective category files, bytes, executable fl
 identity while allowing content changes. Schema v1 grants require review again.
 
 ## App script execution snapshots
+
+App `generator`, `hooks` and `artifact` modules own their distinct execution contracts. Generator
+activation/manual policy gates precede trust and bounded execution; failures redact untrusted stderr.
+Hooks stop on a category failure but continue other changed categories, preserving prior notes.
+Artifact preview returns before effects, implicit execution captures output and reports non-fatal
+failures, and explicit execution inherits I/O and propagates failure. Environment mappings remain
+entry-local. These modules share the existing trust gate and `app_script` mechanism, not a generic
+runner (ADR 0126).
 
 After trust and Plan approval, App generators, script hooks and artifacts materialize the complete
 captured effective category into a fresh owner-only invocation directory below
@@ -311,6 +322,17 @@ result non-successful and the retained backup supports manual recovery.
 `update` prints this same compatibility assessment while continuing its read-only configuration and
 release checks. `upgrade` performs it after an optional pull/reload and before lifecycle planning or
 mutation. Neither path applies candidates or creates migration backups.
+
+## Static Preset validation
+
+`validation/source.rs` accepts repository, category or `shine.toml` inputs through an observation-only
+Host and captures one immutable external scope using the existing traversal/filtering rules.
+`validation.rs` keeps the V1 report and diagnostic aggregation. Permission diagnostics run first,
+then all App destination branches, then metadata checks in macOS/Linux/Windows order; the first
+platform error ends that category's metadata checks. `permissions`, `destinations` and `sys` own
+these separate rules. Sys references resolve only against captured bytes. Authoring, lint and
+migration reuse the same scope/report path; the split grants no mutation or process capability
+(ADR 0126).
 
 ## Preset authoring Plan report
 
@@ -1276,6 +1298,15 @@ retains the shim but bypasses environment-value lookup and secret decryption ent
 applicable rules also pass through without injection, so project-only proxies work outside that
 project. Target discovery compares canonical directory identities to exclude aliases of Shine bin,
 but retains the executable filename for rustup-style dispatch.
+
+## SSH transfer control channel
+
+The SSH agent listener retains the tracked task set. `agent/connection.rs` performs the unchanged
+Hello/version exchange and checks tokens before status, transfer or broker dispatch. Broker
+authorization and nonce replay protection remain in `ssh/broker.rs`; tokens alone release no
+secret. `agent/transfer.rs` retains path resolution, local/remote tool probing, fallback and
+preview order; `transfer/argv.rs` builds operands only from wire paths and connection options only
+from trusted session context. `transfer/relay.rs` owns child supervision (ADR 0126).
 
 Transfer control connections monitor peer closure concurrently with child output and final wait.
 Failure terminates and reaps the local transfer child, and cancellation drops a child guard. Unix

@@ -64,7 +64,9 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/trust.rs` | Derivation of App/Shell/Sys external-code requirements from immutable logical code inputs, resolved defaults, and declared permissions |
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence plus target-local and current-Preset batch `shine trust` workflows |
 | `core/src/runtime/app_script.rs` | Per-invocation captured App script/helper materialization, fixed execution paths, and cleanup |
-| `core/src/runtime/app.rs` | App models and typed content/generator states, install/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `core/src/runtime/app.rs` | App models and typed content/generator states, install/refresh/uninstall, shared code-trust gate, embedded cache and manifest orchestration |
+| `core/src/runtime/app/{generator,hooks,artifact}.rs` | Separate generator, post-lifecycle hook and artifact execution contracts; all script entries use the captured-category `app_script` seam |
+| `core/src/runtime/app/execution_tests.rs` | Entry-point trust/no-effect gates, allowlisted process requests, generator limits/redaction, hook continuation and artifact I/O/failure regressions |
 | `core/src/runtime/managed_json.rs` | Host-free top-level managed-key extraction, merge/remove/restore, comparison and stable subset hash/serialization shared by App assessment, planning, execution and recovery |
 | `core/src/runtime/app/assessment.rs` | Snapshot-only content assessment and named install-preview/install/upgrade/evaluated-inspection generator policies |
 | `core/src/runtime/app/inspect.rs` | Observation-only ordinary inspection, explicit generator evaluation adapter and pure inspection projection |
@@ -85,7 +87,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
 | `core/src/runtime/sys_profile/` | Sys profile facade, composition and phase-sentinel/BOM handling in `compose.rs` and `blocks.rs` |
 | `core/src/runtime/sys_profile/{files,reconcile,merge,three_way}.rs` | Profile observations and EOL normalization, ordered writes, bounded Git adapter and pure fallback merge respectively |
-| `core/src/runtime/validation.rs` | Host-backed preset discovery from a captured cwd, V1 diagnostics, and App/Shell/Sys schema validation |
+| `core/src/runtime/validation.rs` | Stable V1 diagnostics/report facade and ordered all-platform validation orchestration |
+| `core/src/runtime/validation/{source,permissions,destinations,sys}.rs` | Observation-only scope capture; target-local permission diagnostics; portable destination paths; snapshot-only Sys references and metadata |
 | `core/src/runtime/metadata_diagnostic.rs` | Typed metadata error origins mapped to stable validation codes; message prose is not a classifier |
 | `core/src/runtime/preset_migration.rs` | Immutable legacy compatibility assessment, safe metadata candidate generation, released-1.x fingerprints, and versioned content-free migration reports |
 | `core/src/runtime/inspection.rs` | Typed App/Shell inspection status and structural change vocabulary |
@@ -116,7 +119,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/output.rs` | Shared command output mode and rendering support |
 | `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
 | `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap and Frontend Service construction; tests cover live overlay readers versus captured snapshots and review authority |
-| `cli/src/lifecycle_plan.rs` | Default-No/non-TTY approval policy, input identities, and batch prevalidation; `lifecycle_plan/render.rs` owns pure terminal Plan projection |
+| `cli/src/lifecycle_plan.rs` | Default-No/non-TTY approval policy, input identities and batch prevalidation; retains the public review adapter |
+| `cli/src/lifecycle_plan/render.rs`, `render/` | Pure Plan display facade with compact/detailed/bootstrap layouts, conservative permission summaries, code-boundary warnings and semantic labels |
 | `cli/src/lifecycle_plan/prepared.rs` | Private reviewed-request handoffs, named three-domain upgrade prevalidation and consuming typed report execution; Core retains fresh approval checks |
 | `cli/src/lifecycle_plan/prepared/tests.rs` | Batch shape/domain rejection before capture, all-domain prevalidation before execution and apply-time revalidation regressions |
 | `cli/src/lifecycle_plan/classification.rs` | Terminal-only typed grouping of unchanged Plan steps, routine notices and conservative unknown-diagnostic fallback |
@@ -282,7 +286,9 @@ Config discovery priority is documented as a behavioral contract in
 | `cli/src/ssh/mod.rs` | System-ssh wrapper, session setup, remote command wrapper, cleanup |
 | `cli/src/ssh/session_context.rs` | Trusted reconnect arguments and local session state |
 | `cli/src/ssh/protocol.rs` | Transfer and log-relay wire frames |
-| `cli/src/ssh/agent.rs` | Local transfer server and rsync/scp execution |
+| `cli/src/ssh/agent.rs` | Local listener and tracked connection-task lifetimes |
+| `cli/src/ssh/agent/connection.rs` | Handshake, exact session-token checks, status and broker request routing; secret-response zeroization |
+| `cli/src/ssh/agent/transfer.rs`, `transfer/{argv,relay}.rs` | Operand resolution/tool fallback/preview, pure trusted-context argv construction, and child/process-group supervision |
 | `cli/src/ssh/remote_client.rs` | Remote-side `shine local` handlers |
 | `cli/src/ssh/broker.rs` | Local authorization, TTY confirmation, and decrypt-on-demand broker |
 

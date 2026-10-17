@@ -113,12 +113,21 @@ fn core_domain_sources_do_not_bypass_captured_hosts() {
         );
     }
 
-    let validation = std::fs::read_to_string(core_root.join("src/runtime/validation.rs")).unwrap();
-    for forbidden in ["std::fs::", "std::env::current_dir"] {
-        assert!(
-            !validation.contains(forbidden),
-            "Core validation bypasses its host with `{forbidden}`"
-        );
+    for module in [
+        "validation.rs",
+        "validation/source.rs",
+        "validation/permissions.rs",
+        "validation/destinations.rs",
+        "validation/sys.rs",
+    ] {
+        let validation =
+            std::fs::read_to_string(core_root.join("src/runtime").join(module)).unwrap();
+        for forbidden in ["std::fs::", "std::env::current_dir"] {
+            assert!(
+                !validation.contains(forbidden),
+                "Core {module} bypasses its host with `{forbidden}`"
+            );
+        }
     }
 
     let sys_bootstrap =
