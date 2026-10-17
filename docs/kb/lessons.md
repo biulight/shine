@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-18 — Simulated runtime fixtures must select their Shell explicitly
+
+- **Symptom**: Windows CI returned no Shell inspection rows for the Core-only Linux harness.
+- **Cause**: `RuntimeContext::isolated` defaults to the host's Shell; PowerShell filtered out the
+  harness's declared `.sh` source even though its captured platform was Linux.
+- **Fix**: explicitly select Bash alongside the simulated Linux platform, retaining the production
+  inspection entry, all report assertions and the observation-only Host check (ADR 0138).
+- **Rule**: captured platform and Shell are independent inputs. Set both when a fixture models a
+  specific runtime; do not weaken production source filtering to accommodate host defaults.
+- **Evidence**: native Windows reproduced the original zero-row failure; after selecting Bash,
+  all six `runtime_boundary` tests passed under nextest. The same six tests passed on macOS.
+
 ## 2026-10-18 — Production-entry fixtures must not pre-satisfy mutation assertions
 
 - **Symptom**: the migrated legacy Shell sentinel test installed source commands through the real

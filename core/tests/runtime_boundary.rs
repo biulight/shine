@@ -282,7 +282,7 @@ install = { kind = 'script', path = 'install.sh' }
 #[tokio::test]
 async fn core_only_harness_uses_explicit_inputs_and_virtual_state() {
     use shine_core::frontend::{FrontendService, InspectionOperationV1, InspectionStateV1};
-    use shine_core::runtime::{HostOperation, InspectionFileStatus};
+    use shine_core::runtime::{HostOperation, InspectionFileStatus, ShellType};
 
     let host = InMemoryHost::new();
     let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
@@ -293,13 +293,15 @@ async fn core_only_harness_uses_explicit_inputs_and_virtual_state() {
         .file("shell/tools/tool.sh", b"#!/bin/sh\n".to_vec())
         .build();
     let root = std::env::temp_dir().join("shine-runtime-boundary-harness");
-    let context = RuntimeContext::isolated(
+    let mut context = RuntimeContext::isolated(
         root.join("home"),
         root.join("state"),
         root.join("presets"),
         root.join("bin"),
         RuntimePlatform::Linux,
     );
+    // Match the simulated platform and .sh fixture, regardless of the host OS.
+    context.shell = ShellType::Bash;
     let runtime = CoreRuntime::new(host.clone(), context, snapshot);
 
     assert!(runtime.validate().valid);

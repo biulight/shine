@@ -10,7 +10,9 @@ Move the two generic runtime harness regressions to `FrontendService::inspect_ap
 then checks current and desired content, update status and the Upgrade operation. The Shell
 fixture checks a declared, uninstalled command and the Install operation. Both retain captured
 inputs and an in-memory Host, and assert that inspection performs only reads. Use native absolute
-fixture roots without creating real files; the Shell boundary fixture explicitly models Linux.
+fixture roots without creating real files; the Shell boundary fixture explicitly models Linux
+and Bash. `RuntimeContext::isolated` otherwise chooses the host's default Shell independently of
+the captured platform, which filters out this fixture's `.sh` source on Windows.
 Delete `inspect_snapshot` and its `ResourceInspection` / `RuntimeInspection` DTOs: generic
 root-plus-logical-path byte comparison is not the production domain inspection contract.
 
