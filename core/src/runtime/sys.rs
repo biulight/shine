@@ -2,6 +2,7 @@ mod inspect;
 mod lifecycle;
 mod transaction;
 use super::sys_action_executor::SysReceiptTransitionV1;
+use super::sys_manifest::config_string as sys_config_string;
 use crate::action::{
     ActionIrV1, DeclarativeActionV1, ManagedFileCreationWithBackupSpecV1,
     ManagedFileRelocationBackupV1, ManagedFileRelocationSpecV1, ManagedFileRemoveSpecV1,
@@ -713,15 +714,6 @@ impl<H> CoreRuntime<H> {
                 .map(str::to_string),
         })
     }
-}
-
-fn sys_config_string(config: &toml::Table, key: &str) -> Result<String> {
-    config
-        .get(key)
-        .and_then(toml::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .with_context(|| format!("driver config requires non-empty `{key}`"))
 }
 
 fn safe_managed_source(value: &str) -> Result<PathBuf> {

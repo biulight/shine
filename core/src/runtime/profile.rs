@@ -1,3 +1,4 @@
+use super::path_text::strip_windows_verbatim_prefix;
 use crate::runtime::{CoreRuntime, FileSystemHost, ShellType};
 use crate::shell_quote::posix_single_quote as single_quote;
 use crate::shell_quote::powershell_single_quote_contents;
@@ -338,14 +339,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             Err(error) => Err(error.into_anyhow("inspecting managed shell profile")),
         }
     }
-}
-
-fn strip_windows_verbatim_prefix(value: &str) -> String {
-    value
-        .strip_prefix(r"\\?\UNC\")
-        .map(|rest| format!(r"\\{rest}"))
-        .or_else(|| value.strip_prefix(r"\\?\").map(str::to_string))
-        .unwrap_or_else(|| value.to_string())
 }
 
 #[cfg(test)]

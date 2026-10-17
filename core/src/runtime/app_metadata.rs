@@ -1,4 +1,5 @@
 use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind};
+use super::path_text::preset_path as logical;
 use super::{
     AppArtifact, AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppHookAction,
     AppListMode, ArtifactRuntime, CoreRuntime, RuntimePlatform,
@@ -408,13 +409,6 @@ fn collect_category_files<'a>(
         .filter(|relative| !relative.is_empty() && *relative != "shine.toml")
         .map(PathBuf::from)
         .collect()
-}
-
-fn logical(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 fn normalize_relative(value: &str) -> Result<PathBuf> {

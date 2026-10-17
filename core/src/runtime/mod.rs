@@ -21,6 +21,7 @@ mod memory;
 mod metadata_diagnostic;
 mod operation_lock;
 mod pack;
+mod path_text;
 mod planner;
 mod preset;
 mod preset_migration;

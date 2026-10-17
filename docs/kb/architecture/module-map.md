@@ -36,6 +36,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/tests/refactoring_contracts.rs` | Cross-module App static/generator receipt preservation and Shell read-only interruption/recovery/retry contracts |
 | `core/src/runtime/process_scope.rs` | Isolated-process cancellation guard and scoped Unix foreground-terminal handoff |
 | `core/src/runtime/review_path.rs` | Shared root-aware path identity encoding for planners and App/Shell/Sys action executors |
+| `core/src/runtime/path_text.rs` | Existing preset component spelling, author-home path detection and Windows verbatim-prefix removal; no filesystem validation or approval identity encoding |
 | `core/src/runtime/planner.rs` | Pure Plan request types and shared observation/permission accumulators; domain methods live in `planner/` |
 | `core/src/runtime/planner/{app_plan,app_convergence,app_file_plan,app_stale_plan,app_specialized,app_code}.rs` | App lifecycle orchestration, per-file convergence, stale receipt assessment, refresh/artifacts and triggered code |
 | `core/src/runtime/planner/app_file_plan/{generated,static_file}.rs` | Generated/static permission and step projection after the shared ownership preflight; captured facts remain local to one planning call |

@@ -1,4 +1,5 @@
 //! Snapshot-only Shell metadata parsing, platform admission and compatible native discovery.
+pub(super) use super::super::path_text::preset_path as shell_logical_path;
 use super::*;
 use crate::runtime::{RuntimePlatform, link_stem};
 
@@ -295,13 +296,6 @@ pub(super) fn shell_source_matches(runtime: LinkRuntime, shell: ShellType, sourc
     }
     let is_powershell = source.extension().and_then(|value| value.to_str()) == Some("ps1");
     is_powershell == (shell == ShellType::PowerShell)
-}
-
-pub(super) fn shell_logical_path(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 pub(super) fn shell_description(bytes: &[u8], runtime: LinkRuntime) -> Vec<String> {

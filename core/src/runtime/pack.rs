@@ -1,5 +1,6 @@
 //! Deterministic, policy-gated Preset bundle construction.
 
+use super::path_text::preset_path as logical_path;
 use super::validation::{load_preset_source_scope, validate_preset_source_scope};
 use super::{FileKind, FileSystemObservationHost, SysInstall, SysManifest};
 use crate::digest::sha256_hex as sha256;
@@ -494,13 +495,6 @@ fn append(
     header.set_cksum();
     tar.append_data(&mut header, path, bytes)?;
     Ok(())
-}
-
-fn logical_path(path: &Path) -> String {
-    path.components()
-        .map(|part| part.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 fn invalid(target: Option<String>, code: &str) -> PresetPackArtifactV3 {

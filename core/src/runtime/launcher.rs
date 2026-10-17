@@ -431,12 +431,12 @@ async fn host_launcher_status(
     })
 }
 
-async fn host_source_is_linkable(host: &impl FileSystemHost, path: &Path) -> bool {
+async fn host_source_is_linkable(_host: &impl FileSystemHost, path: &Path) -> bool {
     if has_linkable_script_extension(path) {
         return true;
     }
     #[cfg(unix)]
-    return host
+    return _host
         .metadata(path)
         .await
         .ok()

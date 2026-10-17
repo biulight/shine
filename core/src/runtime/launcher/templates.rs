@@ -1,4 +1,6 @@
 //! Pure, byte-compatible platform launcher templates. No Host operations.
+#[cfg(any(not(unix), test))]
+use super::super::path_text::strip_windows_verbatim_prefix;
 use super::*;
 #[cfg(any(not(unix), test))]
 use crate::shell_quote::powershell_single_quote_contents;
@@ -340,15 +342,6 @@ pub(super) fn bash_compatible_path(path: &Path) -> String {
 #[cfg(any(not(unix), test))]
 pub(super) fn windows_native_path(path: &Path) -> String {
     strip_windows_verbatim_prefix(&path.display().to_string())
-}
-
-#[cfg(any(not(unix), test))]
-pub(super) fn strip_windows_verbatim_prefix(value: &str) -> String {
-    value
-        .strip_prefix(r"\\?\UNC\")
-        .map(|rest| format!(r"\\{rest}"))
-        .or_else(|| value.strip_prefix(r"\\?\").map(str::to_string))
-        .unwrap_or_else(|| value.to_string())
 }
 
 #[cfg(not(unix))]

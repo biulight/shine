@@ -479,7 +479,7 @@ fn validate_relative(id: &str, label: &str, value: &str) -> Result<()> {
     }
     Ok(())
 }
-fn config_string(config: &toml::Table, key: &str) -> Result<String> {
+pub(super) fn config_string(config: &toml::Table, key: &str) -> Result<String> {
     config
         .get(key)
         .and_then(toml::Value::as_str)
@@ -491,6 +491,31 @@ fn config_string(config: &toml::Table, key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn driver_config_strings_reject_empty_without_trimming_values() {
+        for value in [
+            None,
+            Some(toml::Value::Integer(1)),
+            Some("".into()),
+            Some(" \t\n".into()),
+        ] {
+            let mut config = toml::Table::new();
+            if let Some(value) = value {
+                config.insert("source".into(), value);
+            }
+            assert_eq!(
+                config_string(&config, "source").unwrap_err().to_string(),
+                "driver config requires non-empty `source`"
+            );
+        }
+        let mut config = toml::Table::new();
+        config.insert("source".into(), "  config/中文.txt  ".into());
+        assert_eq!(
+            config_string(&config, "source").unwrap(),
+            "  config/中文.txt  "
+        );
+    }
 
     #[test]
     fn v2_manifest_rejects_duplicate_items_and_invalid_profiles() {

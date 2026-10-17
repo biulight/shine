@@ -1,5 +1,6 @@
 //! Preset author-quality linting over validated immutable snapshots.
 
+use super::path_text::private_absolute_path;
 use super::validation::{load_preset_source_scope, validate_preset_source_scope};
 use super::{
     AppDestinationRoot, CoreRuntime, FileSystemObservationHost, InMemoryHost, RuntimeContext,
@@ -321,13 +322,6 @@ fn lint_permissions(
             "filesystem permission appears to contain a private machine home path",
         ));
     }
-}
-
-fn private_absolute_path(value: &str) -> bool {
-    let normalized = value.replace('\\', "/");
-    normalized.starts_with("/Users/")
-        || normalized.starts_with("/home/")
-        || normalized.to_ascii_lowercase().starts_with("c:/users/")
 }
 
 fn validation_error(target: Option<String>, code: String) -> PresetLintDiagnosticV1 {

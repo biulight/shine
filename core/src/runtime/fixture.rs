@@ -1,6 +1,7 @@
 //! Declarative Preset authoring fixtures over synthetic planning state.
 
 use super::authoring::{PresetAuthoringSyntheticState, plan_preset_source_scope_with_state};
+use super::path_text::private_absolute_path as private_absolute_fixture_path;
 use super::validation::load_preset_source_scope;
 use super::{FileSystemObservationHost, InMemoryHost, RuntimePlatform};
 use crate::plan::{
@@ -485,13 +486,6 @@ fn resolve_fixture_path(
         FixturePathBaseV1::Bin if !path.is_absolute() => Ok(bin.join(path)),
         _ => Err("fixture_file_path_invalid"),
     }
-}
-
-fn private_absolute_fixture_path(value: &str) -> bool {
-    let normalized = value.replace('\\', "/");
-    normalized.starts_with("/Users/")
-        || normalized.starts_with("/home/")
-        || normalized.to_ascii_lowercase().starts_with("c:/users/")
 }
 
 fn expand_placeholders(

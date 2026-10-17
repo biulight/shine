@@ -1,9 +1,9 @@
 //! Snapshot-only Sys metadata and referenced-file validation.
 
+use super::super::path_text::preset_path as logical_path;
 use super::{
     CategoryPath,
     destinations::{is_portable_absolute_destination, is_portable_relative_path},
-    source::logical_path,
 };
 use crate::runtime::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind};
 use crate::runtime::{

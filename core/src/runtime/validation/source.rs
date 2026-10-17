@@ -1,5 +1,6 @@
 //! Observation-only discovery and immutable source capture.
 
+use super::super::path_text::preset_path as logical_path;
 use super::{CategoryPath, PresetDiagnostic, PresetSourceScope, error};
 use crate::runtime::{FileKind, FileSystemObservationHost, PresetSnapshot, PresetSourceKind};
 use std::path::{Path, PathBuf};
@@ -242,13 +243,6 @@ fn common_repository_root(categories: &[CategoryPath]) -> PathBuf {
         .and_then(Path::parent)
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf()
-}
-
-pub(super) fn logical_path(path: &Path) -> String {
-    path.components()
-        .map(|part| part.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 pub(super) fn absolute_path(cwd: &Path, path: &Path) -> PathBuf {
