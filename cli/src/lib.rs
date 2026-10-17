@@ -1,8 +1,6 @@
 mod admin_fs;
 pub mod apps;
 pub mod bin_links;
-#[cfg(test)]
-mod bun_runtime;
 pub mod colors;
 pub mod commands;
 pub mod completion;

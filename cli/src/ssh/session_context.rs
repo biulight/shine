@@ -9,7 +9,9 @@
 //! to shape the `ssh`/`rsync -e` reconnection arguments (a wire-supplied value
 //! reaching `-e`/`-o` would be a local command-execution vector).
 
-use anyhow::{Context, Result};
+#[cfg(test)]
+use anyhow::Context;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -41,10 +43,8 @@ impl SessionContext {
             .await
     }
 
-    /// Reads back a persisted context. The running agent uses the in-memory
-    /// `Arc` instead, so this exists for out-of-process/diagnostic reads of a
-    /// live session's `context.toml` (and is exercised by the round-trip test).
-    #[allow(dead_code)]
+    // Only the serialization round-trip test reads this back; the agent uses its Arc.
+    #[cfg(test)]
     pub async fn load(session_dir: &Path) -> Result<Self> {
         let path = Self::path(session_dir);
         let content = tokio::fs::read_to_string(&path)

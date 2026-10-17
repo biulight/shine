@@ -86,7 +86,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         }
     }
 
-    pub async fn install_composed_sys_profile(
+    pub(in crate::runtime) async fn install_composed_sys_profile(
         &self,
         os_id: &str,
         loaded: &LoadedSysPreset,
@@ -110,7 +110,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         .await
     }
 
-    pub fn enabled_sys_profile_items(
+    pub(in crate::runtime) fn enabled_sys_profile_items(
         &self,
         manifest: &crate::runtime::SysManifest,
         entries: &[SysRunEntry],
@@ -119,7 +119,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         compose::enabled_profile_items(manifest, entries, os_id)
     }
 
-    pub async fn preflight_composed_sys_profile(
+    pub(in crate::runtime) async fn preflight_composed_sys_profile(
         &self,
         os_id: &str,
         loaded: &LoadedSysPreset,
@@ -131,17 +131,6 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         compose::compose_sys_profiles(&config, os_id, loaded, enabled_items, sys_shell)
             .await
             .map(|_| ())
-    }
-
-    pub async fn sync_composed_sys_profile(&self, os_id: &str) -> Result<SysItemOutcome> {
-        let _lifecycle_guard = self.acquire_sys_lifecycle_operation().await?;
-        let loaded = self.load_sys_preset(os_id).await?;
-        let manifest =
-            super::sys::load_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-        let enabled = compose::enabled_profile_items(&loaded.manifest, &manifest.entries, os_id);
-        let shell: &'static str = self.context().shell.into();
-        self.install_composed_sys_profile(os_id, &loaded, &enabled, shell, false)
-            .await
     }
 
     fn sys_profile_code_trusted(

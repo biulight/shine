@@ -115,3 +115,128 @@ fn parsed_shell_entry_permissions_replace_defaults_without_inheriting_opaque_gra
         program: "git".into()
     }));
 }
+
+fn bun_snapshot(kind: PresetSourceKind) -> crate::runtime::preset::PresetSnapshotBuilder {
+    PresetSnapshot::builder(kind)
+        .file(
+            "shell/demo/shine.toml",
+            b"[[files]]\nsource = 'run.ts'\nruntime = 'bun'\n".to_vec(),
+        )
+        .file("shell/demo/run.ts", b"console.log('demo')".to_vec())
+}
+
+fn bun_spec(snapshot: PresetSnapshot) -> Result<BunRuntimeSpec> {
+    let mut context = runtime("").context().clone();
+    context.is_external_presets = snapshot.source_kind() == PresetSourceKind::External;
+    let runtime = CoreRuntime::new((), context, snapshot);
+    let categories = runtime.shell_categories(Some("demo"))?;
+    runtime.shell_bun_runtime_spec("demo", &categories[0].files[0])
+}
+
+#[test]
+fn built_in_scripts_ignore_package_files() {
+    let snapshot = bun_snapshot(PresetSourceKind::Embedded)
+        .file("shell/demo/package.json", b"invalid package".to_vec())
+        .overlay_file("shell/demo/bun.lock", b"overlay lock".to_vec())
+        .build();
+    assert_eq!(bun_spec(snapshot).unwrap(), BunRuntimeSpec::default());
+}
+
+#[test]
+fn external_scripts_require_a_complete_locked_pair() {
+    assert_eq!(
+        bun_spec(bun_snapshot(PresetSourceKind::External).build()).unwrap(),
+        BunRuntimeSpec::default()
+    );
+    for (file, bytes, missing) in [
+        ("package.json", b"{}".as_slice(), "bun.lock"),
+        ("bun.lock", b"lock".as_slice(), "package.json"),
+    ] {
+        let snapshot = bun_snapshot(PresetSourceKind::External)
+            .file(format!("shell/demo/{file}"), bytes.to_vec())
+            .build();
+        let error = bun_spec(snapshot).unwrap_err();
+        assert!(error.to_string().contains(missing));
+        assert_eq!(
+            error
+                .downcast_ref::<MetadataDiagnosticError>()
+                .unwrap()
+                .kind,
+            MetadataDiagnosticKind::BunDependencyPolicy
+        );
+    }
+}
+
+#[test]
+fn external_scripts_accept_locked_dependencies_and_hash_both_files() {
+    let spec = |package: &[u8], lock: &[u8]| {
+        bun_spec(
+            bun_snapshot(PresetSourceKind::External)
+                .file("shell/demo/package.json", package.to_vec())
+                .file("shell/demo/bun.lock", lock.to_vec())
+                .build(),
+        )
+        .unwrap()
+    };
+    let first = spec(br#"{"dependencies":{"zod":"4.0.0"}}"#, b"lock");
+    assert_eq!(first.dependency_mode, BunDependencyMode::Locked);
+    assert!(first.dependency_hash.is_some());
+    assert_ne!(
+        first.dependency_hash,
+        spec(br#"{"dependencies":{"zod":"4.0.0"}}"#, b"changed lock").dependency_hash
+    );
+    assert_ne!(
+        first.dependency_hash,
+        spec(br#"{"dependencies":{"zod":"4.0.1"}}"#, b"lock").dependency_hash
+    );
+}
+
+#[test]
+fn external_scripts_reject_trusted_dependencies() {
+    let snapshot = bun_snapshot(PresetSourceKind::External)
+        .file(
+            "shell/demo/package.json",
+            br#"{"trustedDependencies":[]}"#.to_vec(),
+        )
+        .file("shell/demo/bun.lock", b"lock".to_vec())
+        .build();
+    let error = bun_spec(snapshot).unwrap_err();
+    assert!(error.to_string().contains("trustedDependencies"));
+    assert_eq!(
+        error
+            .downcast_ref::<MetadataDiagnosticError>()
+            .unwrap()
+            .kind,
+        MetadataDiagnosticKind::BunDependencyPolicy
+    );
+}
+
+#[test]
+fn overlay_scripts_require_package_and_lock_from_their_own_layer() {
+    let snapshot = || {
+        bun_snapshot(PresetSourceKind::Embedded)
+            .file("shell/demo/package.json", b"{}".to_vec())
+            .file("shell/demo/bun.lock", b"embedded lock".to_vec())
+            .overlay_file("shell/demo/run.ts", b"console.log('overlay')".to_vec())
+    };
+    assert_eq!(
+        bun_spec(snapshot().build()).unwrap(),
+        BunRuntimeSpec::default()
+    );
+    let error = bun_spec(
+        snapshot()
+            .overlay_file("shell/demo/package.json", b"{}".to_vec())
+            .build(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("bun.lock"));
+    let spec = bun_spec(
+        snapshot()
+            .overlay_file("shell/demo/package.json", b"{}".to_vec())
+            .overlay_file("shell/demo/bun.lock", b"overlay lock".to_vec())
+            .build(),
+    )
+    .unwrap();
+    assert_eq!(spec.dependency_mode, BunDependencyMode::Locked);
+    assert!(spec.dependency_hash.is_some());
+}

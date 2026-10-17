@@ -159,43 +159,6 @@ pub fn extract_annotation_from_line(line: &str) -> Option<String> {
     None
 }
 
-/// Parse the `shine-dest:` annotation from the first (or second, if shebang) line.
-pub fn parse_dest_annotation(content: &[u8]) -> Option<String> {
-    let text = std::str::from_utf8(content).ok()?;
-    let mut lines = text.lines();
-    let first = lines.next()?;
-    let candidate = if first.starts_with("#!") {
-        lines.next()?
-    } else {
-        first
-    };
-    extract_annotation_from_line(candidate)
-}
-
-/// Return `true` if the script opts into env-variable substitution.
-///
-/// Looks for `# shine-template: true` in the shebang or leading comment block.
-pub fn parse_template_annotation(content: &[u8]) -> bool {
-    let text = match std::str::from_utf8(content) {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-    for line in text.lines() {
-        if line.starts_with("#!") {
-            continue;
-        }
-        let trimmed = line.trim_start();
-        if trimmed == "# shine-template: true" {
-            return true;
-        }
-        // Stop scanning once we leave the leading comment block.
-        if !trimmed.starts_with('#') && !trimmed.is_empty() {
-            break;
-        }
-    }
-    false
-}
-
 /// Parse the leading comment block from a shell script, skipping the shebang line
 /// and any `shine-dest:` annotation line.
 ///

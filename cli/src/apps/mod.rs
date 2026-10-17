@@ -1,12 +1,8 @@
 #[cfg(test)]
 mod annotation;
 mod build;
-#[cfg(test)]
-mod generator;
 mod info;
 mod install;
-#[cfg(test)]
-mod json_merge;
 mod metadata;
 mod recovery;
 mod refresh;
@@ -36,10 +32,6 @@ pub(crate) use upgrade::{
 
 #[cfg(test)]
 use crate::config::Config;
-#[cfg(test)]
-use crate::install_core::manifest::{self, AppInstallStrategy, hash_content};
-#[cfg(test)]
-use crate::install_core::transforms;
 use anyhow::{Context, Result};
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -112,80 +104,6 @@ fn unrestricted_init_template_is_valid_schema_v2() {
         permissions.get("opaque_code").and_then(toml::Value::as_str),
         Some("unrestricted")
     );
-}
-
-/// Hash the effective install content for `file` — applies transforms if declared.
-///
-/// Returns `None` when the source cannot be read (e.g. not yet extracted).
-#[cfg(test)]
-pub async fn materialize_file_content(
-    config: &Config,
-    cat: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<u8>> {
-    if let Some(generated) = generator::generate(config, cat, file, env).await? {
-        return apply_file_transforms(file, generated, env);
-    }
-    materialize_static_file_content(config, cat, file, env).await
-}
-
-/// Read and transform only the declared static source. Used by installation
-/// dry-runs so inspecting a plan can never execute a generator.
-#[cfg(test)]
-async fn materialize_static_file_content(
-    config: &Config,
-    cat: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<u8>> {
-    let raw = if config.is_external_presets {
-        let path = config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
-        tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("reading {}", path.display()))?
-    } else {
-        let key = format!("app/{}/{}", cat.name, file.source_rel.display());
-        crate::presets::PresetAssetReader::new(config.active_presets_overlay_dir())
-            .read_asset_bytes(&key)
-            .with_context(|| format!("embedded source not found: {key}"))?
-    };
-
-    apply_file_transforms(file, raw, env)
-}
-
-#[cfg(test)]
-fn apply_file_transforms(
-    file: &metadata::AppFile,
-    raw: Vec<u8>,
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<u8>> {
-    if file.transforms.is_empty() {
-        Ok(raw)
-    } else {
-        transforms::apply(&file.transforms, &raw, env)
-            .with_context(|| format!("transform failed: {}", file.transforms.join(", ")))
-    }
-}
-
-#[cfg(test)]
-pub async fn source_bytes_for_file(
-    config: &Config,
-    cat: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    env: &BTreeMap<String, String>,
-) -> Option<Vec<u8>> {
-    materialize_file_content(config, cat, file, env).await.ok()
-}
-
-#[cfg(test)]
-pub fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u64> {
-    match &file.install_strategy {
-        AppInstallStrategy::Copy => Ok(hash_content(bytes)),
-        AppInstallStrategy::JsonMerge { managed_keys } => {
-            json_merge::managed_hash(bytes, managed_keys)
-        }
-    }
 }
 
 #[cfg(test)]

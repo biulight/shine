@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-17 — Compilation does not prove retired adapters were removed
+
+- **Symptom**: a detached Shell template file still received edits, and migrated App status tests
+  left an unused helper chain and CLI-only JSON/Bun policy copies behind.
+- **Cause**: files outside the module tree are not compiled; public helpers and self-contained
+  test implementations can survive without a production caller.
+- **Rule**: trace module membership and callers after migration, move behavioral assertions to
+  the production owner, then delete the retired chain. Retain platform-gated code, receipt-format
+  reconstruction and recovery consumers; a missing local-platform depfile alone is not proof.
+
 ## 2026-10-17 — Desired launcher delivery must have one definition
 
 - **Cause**: Shell inspection and receipts understood native-cmd-v2, but planning's independent

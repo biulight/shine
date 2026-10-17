@@ -772,7 +772,7 @@ impl<H> CoreRuntime<H> {
             .join(source_rel)
     }
 
-    pub fn shell_bun_runtime_spec(
+    pub(in crate::runtime) fn shell_bun_runtime_spec(
         &self,
         category: &str,
         file: &ShellFile,
@@ -1035,15 +1035,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(changed)
     }
 
-    pub async fn update_shell_manifest(
-        &self,
-        categories: &[ShellCategory],
-        scope: ShellManifestUpdateScope,
-    ) -> Result<()> {
-        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
-        self.update_shell_manifest_unlocked(categories, scope).await
-    }
-
     async fn update_shell_manifest_unlocked(
         &self,
         categories: &[ShellCategory],
@@ -1210,23 +1201,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             .await
             .map_err(|error| error.into_anyhow("setting live rendered shell mode"))?;
         Ok(())
-    }
-
-    pub async fn remove_shell_manifest_entries(
-        &self,
-        category: Option<&str>,
-        command: Option<&str>,
-    ) -> Result<()> {
-        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
-        let mut manifest =
-            load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-        match (category, command) {
-            (Some(category), Some(command)) => manifest.remove_target(category, command),
-            (Some(category), None) => manifest.remove_category(category),
-            (None, None) => manifest.entries.clear(),
-            (None, Some(_)) => bail!("shell command removal requires a category"),
-        }
-        save_shell_manifest_with_host(self.host(), &self.context().shine_dir, &manifest).await
     }
 
     pub async fn remove_shell_snapshot_tree(&self, category: &str) -> Result<()> {

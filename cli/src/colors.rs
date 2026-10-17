@@ -50,16 +50,6 @@ pub fn bold_yellow_stderr(s: &str) -> String {
         .to_string()
 }
 
-pub fn cyan_stderr(s: &str) -> String {
-    s.if_supports_color(Stream::Stderr, |t| t.cyan())
-        .to_string()
-}
-
-pub fn dim_stderr(s: &str) -> String {
-    s.if_supports_color(Stream::Stderr, |t| t.dimmed())
-        .to_string()
-}
-
 pub fn red(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.red()).to_string()
 }

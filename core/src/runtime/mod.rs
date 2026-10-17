@@ -306,10 +306,6 @@ impl<H> CoreRuntime<H> {
         &self.host
     }
 
-    pub fn into_host(self) -> H {
-        self.host
-    }
-
     pub fn validate(&self) -> PresetValidationReport {
         self.presets.validate()
     }

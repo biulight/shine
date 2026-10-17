@@ -1,7 +1,7 @@
 # 0016 — Generated app files and Surge URI subscriptions
 
 - **Status**: accepted
-- **Evidence**: `cli/src/apps/generator.rs`,
+- **Evidence**: `core/src/runtime/app/generator.rs`, `core/src/runtime/app_script.rs`,
   `presets/app/surge/generate-subscription.ts`,
   `presets/app/surge/shine.toml`
 - **Supersedes**: ADR 0009's narrower conclusion that Shine never fetches a

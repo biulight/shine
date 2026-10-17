@@ -48,12 +48,6 @@ pub(crate) trait LifecycleReporter {
 
 pub(crate) trait LifecycleInteraction {
     fn confirm(&mut self, prompt: &str, default: bool) -> anyhow::Result<bool>;
-
-    #[allow(dead_code)]
-    fn authorize_admin<'a>(
-        &'a mut self,
-        item_count: usize,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + 'a>>;
 }
 
 #[derive(Default)]
@@ -65,13 +59,6 @@ impl LifecycleInteraction for TerminalInteraction {
             .with_prompt(prompt)
             .default(default)
             .interact()?)
-    }
-
-    fn authorize_admin<'a>(
-        &'a mut self,
-        item_count: usize,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + 'a>> {
-        Box::pin(crate::privilege::ensure_admin(item_count))
     }
 }
 
@@ -189,19 +176,11 @@ mod tests {
 
     struct FakeInteraction {
         confirm: bool,
-        authorize: bool,
     }
 
     impl LifecycleInteraction for FakeInteraction {
         fn confirm(&mut self, _prompt: &str, _default: bool) -> anyhow::Result<bool> {
             Ok(self.confirm)
-        }
-
-        fn authorize_admin<'a>(
-            &'a mut self,
-            _item_count: usize,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + 'a>> {
-            Box::pin(async move { Ok(self.authorize) })
         }
     }
 
@@ -223,8 +202,8 @@ mod tests {
         assert_eq!(String::from_utf8(stderr).unwrap(), "warning\n");
     }
 
-    #[tokio::test]
-    async fn presentation_and_interaction_ports_are_replaceable() {
+    #[test]
+    fn presentation_and_interaction_ports_are_replaceable() {
         let mut reporter = RecordingReporter::default();
         reporter.emit(PresentationEvent::stdout("changed"));
         reporter.emit(PresentationEvent::stderr("failed"));
@@ -236,12 +215,8 @@ mod tests {
             ]
         );
 
-        let mut interaction = FakeInteraction {
-            confirm: false,
-            authorize: true,
-        };
+        let mut interaction = FakeInteraction { confirm: false };
         assert!(!interaction.confirm("remove?", false).unwrap());
-        assert!(interaction.authorize_admin(2).await.unwrap());
     }
 }
 

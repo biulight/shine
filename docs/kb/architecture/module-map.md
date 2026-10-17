@@ -79,7 +79,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/app/refresh.rs` | Named selected-file/prepared/applied states for explicit refresh; per-file continuation and final receipt-before-hook completion under the approved caller |
 | `core/src/runtime/app/upgrade.rs` | Upgrade phases under the lifecycle lock; typed unjournaled/update/relocation completion retains transaction guards through receipt save and commit |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
-| `core/src/runtime/shell.rs` | Shell models, lifecycle entry points, live render, launcher, cache, profile, and manifest helpers |
+| `core/src/runtime/shell.rs` | Shell models, lifecycle entry points, source-scoped Bun dependency policy, live render, launcher, cache, profile, and manifest helpers |
 | `core/src/runtime/shell/metadata.rs` | Snapshot-only metadata parsing, explicit declarations, native discovery and platform/source admission; no Host required |
 | `core/src/runtime/shell/inspect.rs` | Observation-only Shell inspection orchestration, per-command evidence, pure changes/status projection and receipt-only records |
 | `core/src/runtime/tests/shell_inspection.rs` | Read-only consumer regressions for Shell status/change ordering, missing presets, trust/conflicts and observation failures |
@@ -192,8 +192,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/install_core/manifest.rs` | Compatibility re-export of Core-owned `app-manifest.toml` types |
 | `core/src/install/` | App manifest, file ownership primitives, `jsonc-to-json`/`template`, and EOL helpers |
 
-`install_core` contains app/sys-shared primitives only; `sys` depends on it, not on app-specific
-logic.
+`install_core` retains CLI manifest aliases and test-only file-operation compatibility coverage;
+execution primitives and transforms live in `core/src/install/`.
 
 ## Shell deployment
 
@@ -207,7 +207,6 @@ logic.
 | `cli/src/shells/links.rs` | Launcher/link specifications and conflict reporting |
 | `cli/src/shells/report.rs` | Shell list/install/uninstall/upgrade reporting |
 | `cli/src/shells/metadata.rs` | Compatibility re-exports of Core Shell metadata types |
-| `cli/src/bun_runtime.rs` | Shared source-scoped Bun dependency policy and command construction |
 | `cli/src/sentinel.rs` | Shared sentinel-block primitives used by shell and sys profiles |
 
 ## System configuration

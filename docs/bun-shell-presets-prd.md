@@ -72,7 +72,7 @@ bun <effective-script-path> arg1 arg2
 因此现有 embedded preset、外部 preset 和 overlay 的有效来源规则不变。
 
 **模板 opt-in 约定（重要，不能沿用现状不变）**：现有 shell 模板由 `# shine-template: true` 注解
-经 `parse_template_annotation` 解析，它要求一行恰好是 `# shine-template: true`，且在首个非 `#`
+经 Core 的 `has_template_annotation` 解析，它要求一行恰好是 `# shine-template: true`，且在首个非 `#`
 注解行处停止扫描。JS/TS 的注释是 `//`，`# ...` 在 `.ts`/`.js` 顶层是语法错误，因此 Bun 入口
 **无法**沿用该注解开启模板。
 
