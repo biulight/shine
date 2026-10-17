@@ -13,7 +13,7 @@ pub struct LiveBunLaunch {
     pub env: Vec<String>,
 }
 
-pub fn validate_live_shell_target(target: &str) -> Result<()> {
+fn validate_live_shell_target(target: &str) -> Result<()> {
     let parts = target.split('/').collect::<Vec<_>>();
     if parts.len() != 3
         || parts[0] != "shell"

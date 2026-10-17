@@ -26,6 +26,9 @@ bugs. Check this list before changing the modules named in each entry.
   Sys/Shell inventory tests use Frontend inventory and the actual CLI projection; current Shell
   visibility follows available/installed state, not legacy status strings. Upgrade summary tests
   capture the production reporter instead of maintaining a second wording function (ADR 0134).
+  Shell description/discovery regressions query Core metadata from captured snapshots; validation
+  golden reports come from the production validator, with only asserted temporary paths normalized.
+  Do not retain independent scanners or report aggregation inside tests (ADR 0135).
 - **Ordinary frontend inspection requires observation capability only.** App, Shell and Sys
   default inspection, including the safe `ReadOnlyFrontend` surface, require only
   `FileSystemObservationHost`. Sys status compares desired metadata with receipts; it must not

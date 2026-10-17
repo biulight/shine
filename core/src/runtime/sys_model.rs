@@ -143,7 +143,7 @@ pub enum SysShellKind {
 }
 
 impl SysShellKind {
-    pub fn from_runtime(value: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_runtime(value: &str) -> Option<Self> {
         match value {
             "bash" => Some(Self::Bash),
             "zsh" => Some(Self::Zsh),

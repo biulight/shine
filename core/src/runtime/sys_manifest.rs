@@ -22,7 +22,7 @@ pub fn parse_sys_manifest(content: &str) -> Result<SysManifest> {
     Ok(manifest)
 }
 
-pub fn validate_sys_manifest(manifest: &SysManifest) -> Result<()> {
+fn validate_sys_manifest(manifest: &SysManifest) -> Result<()> {
     match manifest.version {
         Some(2) => {}
         None | Some(1) => bail!(

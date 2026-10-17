@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-17 — Test fixtures must not reimplement discovery or report aggregation
+
+- **Symptom**: Shell description/scanner tests called retired CLI algorithms, while validation
+  golden tests used a byte-for-byte copy of Core's report aggregation.
+- **Rule**: seed sources and query production metadata/validation before deleting old copies.
+  Preserve current parsing and platform rules; an old `.sh` scanner is not the compatibility owner.
+- **Evidence**: migrated tests cover real external snapshot capture, nested sources, declared Bun
+  and native platform alternatives, plus production error/warning counts. Normalize temporary
+  golden paths only after checking their canonical values (ADR 0135).
+
 ## 2026-10-17 — Historical presentation tests can encode obsolete behavior
 
 - **Symptom**: Shell simple-list and upgrade-summary tests passed against private copies while

@@ -81,7 +81,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |
 | `core/src/runtime/app_metadata.rs` | App snapshot parsing and effective destinations, including legacy `shine-dest` compatibility and shared parent-component rejection |
 | `core/src/runtime/shell.rs` | Shell models, lifecycle entry points, source-scoped Bun dependency policy, live render, launcher, cache, profile, and manifest helpers |
-| `core/src/runtime/shell/metadata.rs` | Snapshot-only metadata parsing, explicit declarations, native discovery and platform/source admission; no Host required |
+| `core/src/runtime/shell/metadata.rs` | Snapshot-only metadata parsing, descriptions, explicit declarations, native discovery and platform/source admission; production owner for migrated description/discovery tests; no Host required |
 | `core/src/runtime/shell/inspect.rs` | Observation-only Shell inspection orchestration, per-command evidence, pure changes/status projection and receipt-only records |
 | `core/src/runtime/tests/shell_inspection.rs` | Read-only consumer regressions for Shell status/change ordering, missing presets, trust/conflicts and observation failures |
 | `core/src/runtime/shell/{cache,rendered}.rs` | Ordered embedded-cache/source selection and rendered-resource preparation with shared-destination consistency; existing effect timing stays with lifecycle orchestration |
@@ -236,10 +236,10 @@ execution primitives and transforms live in `core/src/install/`.
 | `cli/src/config/env_layer.rs` | Env value parsing, removed-file diagnosis and override persistence |
 | `cli/src/config/env_resolution.rs` | Raw six-layer env resolution, input snapshots and independent value/description provenance |
 | `cli/src/config/env_write.rs` | Explicit write targets, preflight, snapshot checks and shared per-target config locks |
-| `cli/src/presets.rs` | Pristine embedded assets plus explicit `PresetAssetReader` overlay enumeration/reads/extraction; shared safe output publication |
+| `cli/src/presets.rs` | Pristine embedded assets plus explicit `PresetAssetReader` overlay enumeration/reads/extraction; shared safe output publication; Shell command discovery belongs to Core metadata |
 | `cli/src/preset_commands.rs` | Preset copy/export/link/unlink/overlay commands |
 | `cli/src/preset_meta.rs` | Test-only Core capability-report renderer for public manual parity |
-| `cli/src/preset_validation.rs` | Core validation report text/JSON rendering and exit mapping |
+| `cli/src/preset_validation.rs` | Core validation report text/JSON rendering and exit mapping; golden tests consume production reports without a duplicate aggregator |
 | `cli/src/preset_lint.rs` | Core author-quality lint report rendering and strict-CI exit mapping |
 | `cli/src/preset_authoring.rs` | Hypothetical authoring-plan text/JSON rendering and platform mapping |
 | `cli/src/preset_test.rs` | Declarative fixture report rendering and failed-case exit mapping |

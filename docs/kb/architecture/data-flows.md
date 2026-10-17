@@ -269,6 +269,12 @@ execution-capable entry. `runtime/sys/inspect.rs` reads managed receipts and com
 snapshot inputs without live resource/provider probes. Preset parsing and desired Sys builders
 need no Host; manifest version/error rules and read order remain unchanged (ADR 0129).
 
+Shell source discovery and description tests follow captured embedded/external snapshots into
+`CoreRuntime::shell_categories`; the retired CLI `.sh` scanners are not compatibility owners.
+Validation output tests follow `validate_path` into Core's discovery, validation and report
+aggregation, then render the returned report. Golden normalization touches only already-asserted
+temporary paths, never validity, diagnostics or counts (ADR 0135).
+
 The CLI list facade delegates ordered observations to `list/query.rs`, pure grouping and action
 selection to `list/projection.rs`, and output to `list/render.rs`. Local query results retain App
 inspections for diff collection without re-evaluation. Simple Shell inventory projects only

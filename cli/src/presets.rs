@@ -1,6 +1,4 @@
 use anyhow::{Context, Result, bail};
-#[cfg(test)]
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -56,18 +54,6 @@ pub struct ExtractReport {
 pub struct RemoveReport {
     pub removed: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
-}
-
-#[cfg(test)]
-pub struct ScriptInfo {
-    pub name: String,
-    pub description: Vec<String>,
-}
-
-#[cfg(test)]
-pub struct CategoryInfo {
-    pub name: String,
-    pub scripts: Vec<ScriptInfo>,
 }
 
 /// Return paths from the binary's embedded preset bundle only.
@@ -141,235 +127,6 @@ fn collect_overlay_paths(root: &Path, prefix: &str, out: &mut BTreeSet<String>) 
 
 fn is_safe_asset_path(path: &str) -> bool {
     !path.contains("..") && !Path::new(path).is_absolute()
-}
-
-/// Extract a `shine-dest:` annotation from a single comment line.
-///
-/// Recognises `# shine-dest:` (shell/TOML/INI) and `" shine-dest:` (VimScript).
-pub fn extract_annotation_from_line(line: &str) -> Option<String> {
-    const PREFIXES: &[&str] = &["# shine-dest:", "\" shine-dest:"];
-    for &prefix in PREFIXES {
-        if let Some(rest) = line.trim_start().strip_prefix(prefix) {
-            let dest = rest.trim().to_string();
-            if !dest.is_empty() {
-                return Some(dest);
-            }
-        }
-    }
-    None
-}
-
-/// Parse the leading comment block from a shell script, skipping the shebang line
-/// and any `shine-dest:` annotation line.
-///
-/// Collects consecutive lines starting with `# ` or bare `#` until the first
-/// non-comment, non-shebang line. Trailing empty description lines are trimmed.
-pub fn parse_script_description(content: &[u8]) -> Vec<String> {
-    let Ok(text) = std::str::from_utf8(content) else {
-        return vec![];
-    };
-    let mut desc = Vec::new();
-
-    for line in text.lines() {
-        if line.starts_with("#!") {
-            continue;
-        }
-        if extract_annotation_from_line(line).is_some() {
-            continue;
-        }
-        if line.trim_start() == "# shine-template: true" {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("# ") {
-            desc.push(rest.to_string());
-        } else if line == "#" {
-            desc.push(String::new());
-        } else {
-            break;
-        }
-    }
-
-    while desc.last().is_some_and(|l: &String| l.is_empty()) {
-        desc.pop();
-    }
-
-    desc
-}
-
-/// Parse a leading `//` comment block from a bun source (`.ts`/`.js`/`.mts`/`.mjs`)
-/// as its description — the JS/TS-comment mirror of `parse_script_description`'s
-/// `#` handling for `.sh`/`.ps1`. An optional `#!` shebang is skipped; `// ` lines
-/// are collected (a bare `//` is a blank line); the first non-comment line ends the
-/// block; trailing blank lines are trimmed. There are no `shine-dest`/`shine-template`
-/// annotations to skip here — those are `#`/`.sh`-only.
-pub fn parse_bun_description(content: &[u8]) -> Vec<String> {
-    let Ok(text) = std::str::from_utf8(content) else {
-        return vec![];
-    };
-    let mut desc = Vec::new();
-
-    for line in text.lines() {
-        if line.starts_with("#!") {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("// ") {
-            desc.push(rest.to_string());
-        } else if line.trim_end() == "//" {
-            desc.push(String::new());
-        } else {
-            break;
-        }
-    }
-
-    while desc.last().is_some_and(|l: &String| l.is_empty()) {
-        desc.pop();
-    }
-
-    desc
-}
-
-/// List all preset categories under `prefix/` and their scripts with descriptions.
-///
-/// Categories are the immediate subdirectories of `prefix/`. Scripts within each
-/// category are sorted by name. Returns categories in alphabetical order.
-#[cfg(test)]
-pub fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
-    let normalized = prefix.trim_end_matches('/');
-    let filter = format!("{normalized}/");
-
-    let mut map: BTreeMap<String, Vec<ScriptInfo>> = BTreeMap::new();
-
-    for asset_path in PresetAssets::iter() {
-        let relative: &str = asset_path.as_ref();
-        if !relative.starts_with(filter.as_str()) {
-            continue;
-        }
-        let rest = &relative[filter.len()..];
-        let slash = match rest.find('/') {
-            Some(p) => p,
-            None => continue,
-        };
-        let category = &rest[..slash];
-        let file_name = &rest[slash + 1..];
-
-        if file_name.is_empty() || !file_name.ends_with(".sh") {
-            continue;
-        }
-
-        let asset_data = PresetAssets::get(relative);
-        let description = asset_data
-            .as_ref()
-            .map(|f| parse_script_description(f.data.as_ref()))
-            .unwrap_or_default();
-        map.entry(category.to_string())
-            .or_default()
-            .push(ScriptInfo {
-                name: file_name.to_string(),
-                description,
-            });
-    }
-
-    map.into_iter()
-        .map(|(name, mut scripts)| {
-            scripts.sort_by(|a, b| a.name.cmp(&b.name));
-            CategoryInfo { name, scripts }
-        })
-        .collect()
-}
-
-/// List shell preset categories by scanning the filesystem under `presets_dir/shell/`.
-///
-/// Each immediate subdirectory of `presets_dir/shell/` is a category; `.sh` files within
-/// it are the scripts. Descriptions are parsed from each script's leading comment block.
-/// Returns categories in alphabetical order.
-#[cfg(test)]
-pub async fn list_fs_shell_categories(presets_dir: &Path) -> Vec<CategoryInfo> {
-    let shell_root = presets_dir.join("shell");
-    if !shell_root.is_dir() {
-        return Vec::new();
-    }
-
-    let mut categories: std::collections::BTreeMap<String, Vec<ScriptInfo>> =
-        std::collections::BTreeMap::new();
-
-    let Ok(mut cat_entries) = fs::read_dir(&shell_root).await else {
-        return Vec::new();
-    };
-
-    while let Ok(Some(cat_entry)) = cat_entries.next_entry().await {
-        let Ok(ft) = cat_entry.file_type().await else {
-            continue;
-        };
-        if !ft.is_dir() {
-            continue;
-        }
-        let category = cat_entry.file_name().to_string_lossy().to_string();
-        let cat_dir = shell_root.join(&category);
-
-        let Ok(mut script_entries) = fs::read_dir(&cat_dir).await else {
-            continue;
-        };
-        let mut scripts: Vec<ScriptInfo> = Vec::new();
-        while let Ok(Some(script_entry)) = script_entries.next_entry().await {
-            let Ok(sft) = script_entry.file_type().await else {
-                continue;
-            };
-            if !sft.is_file() {
-                continue;
-            }
-            let name = script_entry.file_name().to_string_lossy().to_string();
-            if !name.ends_with(".sh") {
-                continue;
-            }
-            let description = fs::read(script_entry.path())
-                .await
-                .map(|b| parse_script_description(&b))
-                .unwrap_or_default();
-            scripts.push(ScriptInfo { name, description });
-        }
-        scripts.sort_by(|a, b| a.name.cmp(&b.name));
-        if !scripts.is_empty() {
-            categories.insert(category, scripts);
-        }
-    }
-
-    categories
-        .into_iter()
-        .map(|(name, scripts)| CategoryInfo { name, scripts })
-        .collect()
-}
-
-/// Collect full paths to `.sh` files under `presets_dir/<prefix>/`.
-///
-/// Used by `shell install` when `is_external_presets` is true, to link scripts
-/// that already exist on disk without extracting embedded assets.
-#[cfg(test)]
-pub async fn collect_fs_shell_scripts(presets_dir: &Path, prefix: &str) -> Result<Vec<PathBuf>> {
-    let root = presets_dir.join(prefix);
-    if !root.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut scripts = Vec::new();
-    let mut stack = vec![root.clone()];
-
-    while let Some(dir) = stack.pop() {
-        let mut entries = fs::read_dir(&dir)
-            .await
-            .with_context(|| format!("reading directory: {}", dir.display()))?;
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            let ft = entry.file_type().await?;
-            if ft.is_dir() {
-                stack.push(path);
-            } else if ft.is_file() && path.extension().is_some_and(|e| e == "sh") {
-                scripts.push(path);
-            }
-        }
-    }
-
-    scripts.sort();
-    Ok(scripts)
 }
 
 impl PresetAssetReader<'_> {
@@ -669,6 +426,32 @@ async fn write_extracted_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn external_shell_runtime(
+        root: &Path,
+    ) -> shine_core::runtime::CoreRuntime<shine_core::runtime::RealHost> {
+        use shine_core::runtime::*;
+        let snapshot = capture_preset_snapshot(
+            &RealHost,
+            PresetSnapshotRequest {
+                source: PresetSnapshotSource::External(root.to_path_buf()),
+                overlay_root: None,
+            },
+        )
+        .await
+        .unwrap();
+        let mut context = RuntimeContext::isolated(
+            root.join("home"),
+            root.join("state"),
+            root.to_path_buf(),
+            root.join("bin"),
+            RuntimePlatform::Linux,
+        );
+        context.is_external_presets = true;
+        context.shell = ShellType::Zsh;
+        CoreRuntime::new(RealHost, context, snapshot)
+    }
+
     use tokio::fs;
 
     async fn make_temp_dir() -> PathBuf {
@@ -986,70 +769,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_description_extracts_comment_block() {
-        let script = b"#!/bin/bash\n# First line.\n# Second line.\n\nsome_command\n";
-        let desc = parse_script_description(script);
-        assert_eq!(desc, vec!["First line.", "Second line."]);
-    }
-
-    #[test]
-    fn parse_description_skips_shebang_only() {
-        let script = b"#!/bin/bash\nsome_command\n";
-        let desc = parse_script_description(script);
-        assert!(desc.is_empty());
-    }
-
-    #[test]
-    fn parse_description_handles_bare_hash_as_empty_line() {
-        let script = b"#!/bin/bash\n# First.\n#\n# Third.\n";
-        let desc = parse_script_description(script);
-        assert_eq!(desc, vec!["First.", "", "Third."]);
-    }
-
-    #[test]
-    fn parse_description_trims_trailing_empty_lines() {
-        let script = b"#!/bin/bash\n# First.\n#\n#\n";
-        let desc = parse_script_description(script);
-        assert_eq!(desc, vec!["First."]);
-    }
-
-    #[test]
-    fn parse_bun_description_extracts_slash_comment_block() {
-        let script = b"// First line.\n// Second line.\nconsole.log('hi')\n";
-        let desc = parse_bun_description(script);
-        assert_eq!(desc, vec!["First line.", "Second line."]);
-    }
-
-    #[test]
-    fn parse_bun_description_skips_shebang_and_stops_at_code() {
-        let script = b"#!/usr/bin/env bun\n// Only line.\nexport const x = 1\n";
-        let desc = parse_bun_description(script);
-        assert_eq!(desc, vec!["Only line."]);
-    }
-
-    #[test]
-    fn parse_bun_description_handles_bare_slash_as_empty_line() {
-        let script = b"// First.\n//\n// Third.\n";
-        let desc = parse_bun_description(script);
-        assert_eq!(desc, vec!["First.", "", "Third."]);
-    }
-
-    #[test]
-    fn parse_bun_description_empty_when_starts_with_code() {
-        let script = b"import { foo } from './foo'\n// not a header\n";
-        let desc = parse_bun_description(script);
-        assert!(desc.is_empty());
-    }
-
-    #[test]
-    fn parse_description_empty_content() {
-        let desc = parse_script_description(b"");
-        assert!(desc.is_empty());
-    }
-
-    #[test]
-    fn list_categories_returns_proxy_and_utils() {
-        let cats = list_categories("shell");
+    fn embedded_shell_metadata_returns_proxy_and_utils() {
+        let cats = crate::core_runtime::from_embedded_presets_for_platform(
+            shine_core::runtime::RuntimePlatform::Linux,
+        )
+        .shell_categories(None)
+        .unwrap();
         let names: Vec<&str> = cats.iter().map(|c| c.name.as_str()).collect();
         assert!(
             names.contains(&"proxy"),
@@ -1062,21 +787,30 @@ mod tests {
     }
 
     #[test]
-    fn list_categories_proxy_scripts_have_descriptions() {
-        let cats = list_categories("shell");
+    fn embedded_shell_metadata_proxy_scripts_have_descriptions() {
+        let cats = crate::core_runtime::from_embedded_presets_for_platform(
+            shine_core::runtime::RuntimePlatform::Linux,
+        )
+        .shell_categories(None)
+        .unwrap();
         let proxy = cats.iter().find(|c| c.name == "proxy").unwrap();
-        for script in &proxy.scripts {
+        assert!(!proxy.files.is_empty());
+        for script in &proxy.files {
             assert!(
                 !script.description.is_empty(),
                 "{} should have a description",
-                script.name
+                script.source_rel.display()
             );
         }
     }
 
     #[test]
-    fn list_categories_empty_prefix_returns_empty() {
-        let cats = list_categories("nonexistent");
+    fn embedded_shell_metadata_missing_category_returns_empty() {
+        let cats = crate::core_runtime::from_embedded_presets_for_platform(
+            shine_core::runtime::RuntimePlatform::Linux,
+        )
+        .shell_categories(Some("nonexistent"))
+        .unwrap();
         assert!(cats.is_empty());
     }
 
@@ -1335,18 +1069,26 @@ mod tests {
         assert!(!missing.exists());
     }
 
-    // --- list_fs_shell_categories tests ---
+    // Production snapshot discovery and metadata regressions.
 
     #[tokio::test]
-    async fn list_fs_shell_categories_returns_empty_for_missing_dir() {
+    async fn external_shell_metadata_returns_empty_for_missing_dir() {
         let missing =
             std::env::temp_dir().join(format!("shine-presets-no-{}", uuid::Uuid::new_v4()));
-        let cats = list_fs_shell_categories(&missing).await;
+        let runtime = external_shell_runtime(&missing).await;
+        let cats = runtime.shell_categories(None).unwrap();
+        assert!(
+            runtime
+                .shell_categories(Some("missing"))
+                .unwrap_err()
+                .to_string()
+                .contains("not found")
+        );
         assert!(cats.is_empty());
     }
 
     #[tokio::test]
-    async fn list_fs_shell_categories_finds_categories_from_disk() {
+    async fn external_shell_metadata_finds_categories_from_disk() {
         let dir = make_temp_dir().await;
         // Create presets/shell/myplugin/hello.sh
         let cat_dir = dir.join("shell/myplugin");
@@ -1358,19 +1100,22 @@ mod tests {
         .await
         .unwrap();
 
-        let cats = list_fs_shell_categories(&dir).await;
+        let cats = external_shell_runtime(&dir)
+            .await
+            .shell_categories(None)
+            .unwrap();
 
         assert_eq!(cats.len(), 1, "should find exactly one category");
         assert_eq!(cats[0].name, "myplugin");
-        assert_eq!(cats[0].scripts.len(), 1);
-        assert_eq!(cats[0].scripts[0].name, "hello.sh");
-        assert_eq!(cats[0].scripts[0].description, vec!["Says hello."]);
+        assert_eq!(cats[0].files.len(), 1);
+        assert_eq!(cats[0].files[0].source_rel, Path::new("hello.sh"));
+        assert_eq!(cats[0].files[0].description, vec!["Says hello."]);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn list_fs_shell_categories_ignores_non_sh_files() {
+    async fn external_shell_metadata_ignores_non_script_files() {
         let dir = make_temp_dir().await;
         let cat_dir = dir.join("shell/extras");
         fs::create_dir_all(&cat_dir).await.unwrap();
@@ -1381,17 +1126,24 @@ mod tests {
             .await
             .unwrap();
 
-        let cats = list_fs_shell_categories(&dir).await;
+        let cats = external_shell_runtime(&dir)
+            .await
+            .shell_categories(None)
+            .unwrap();
 
         assert_eq!(cats.len(), 1);
-        assert_eq!(cats[0].scripts.len(), 1, "only .sh files should be listed");
-        assert_eq!(cats[0].scripts[0].name, "script.sh");
+        assert_eq!(
+            cats[0].files.len(),
+            1,
+            "non-script assets must not become commands"
+        );
+        assert_eq!(cats[0].files[0].source_rel, Path::new("script.sh"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn list_fs_shell_categories_returns_alphabetical_order() {
+    async fn external_shell_metadata_returns_alphabetical_order() {
         let dir = make_temp_dir().await;
         for cat in ["zzz", "aaa", "mmm"] {
             let cat_dir = dir.join("shell").join(cat);
@@ -1401,25 +1153,20 @@ mod tests {
                 .unwrap();
         }
 
-        let cats = list_fs_shell_categories(&dir).await;
+        let cats = external_shell_runtime(&dir)
+            .await
+            .shell_categories(None)
+            .unwrap();
         let names: Vec<&str> = cats.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["aaa", "mmm", "zzz"]);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    // --- collect_fs_shell_scripts tests ---
+    // Legacy recursive source discovery through the same metadata entry point.
 
     #[tokio::test]
-    async fn collect_fs_shell_scripts_returns_empty_for_missing_dir() {
-        let missing =
-            std::env::temp_dir().join(format!("shine-presets-noscr-{}", uuid::Uuid::new_v4()));
-        let scripts = collect_fs_shell_scripts(&missing, "shell").await.unwrap();
-        assert!(scripts.is_empty());
-    }
-
-    #[tokio::test]
-    async fn collect_fs_shell_scripts_finds_sh_files_recursively() {
+    async fn external_shell_sources_finds_sh_files_recursively() {
         let dir = make_temp_dir().await;
         let cat_dir = dir.join("shell/myplugin");
         fs::create_dir_all(&cat_dir).await.unwrap();
@@ -1433,17 +1180,82 @@ mod tests {
             .await
             .unwrap();
 
-        let scripts = collect_fs_shell_scripts(&dir, "shell").await.unwrap();
+        fs::create_dir_all(cat_dir.join("nested")).await.unwrap();
+        fs::write(cat_dir.join("nested/c.sh"), b"#!/bin/sh\n")
+            .await
+            .unwrap();
+        let categories = external_shell_runtime(&dir)
+            .await
+            .shell_categories(Some("myplugin"))
+            .unwrap();
+        let scripts = &categories[0].files;
 
         let names: Vec<_> = scripts
             .iter()
-            .map(|p| p.file_name().unwrap().to_str().unwrap())
+            .map(|file| file.source_rel.file_name().unwrap().to_str().unwrap())
             .collect();
-        assert!(names.contains(&"a.sh"), "a.sh missing: {names:?}");
-        assert!(names.contains(&"b.sh"), "b.sh missing: {names:?}");
-        assert!(!names.contains(&"readme.txt"), "non-.sh should be excluded");
+        assert_eq!(names, ["a.sh", "b.sh", "c.sh"]);
+        assert!(
+            !names.contains(&"readme.txt"),
+            "non-script should be excluded"
+        );
+        assert!(
+            scripts
+                .iter()
+                .any(|file| file.source_rel == Path::new("nested/c.sh"))
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn external_shell_metadata_preserves_declared_sources_and_platform_selection() {
+        use shine_core::runtime::{CoreRuntime, LinkRuntime, RealHost, RuntimePlatform, ShellType};
+        let dir = make_temp_dir().await;
+        let category = dir.join("shell/declared");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(category.join("shine.toml"), "[[files]]\nsource = 'native.sh'\ntarget = 'native'\nplatforms = ['unix']\n[[files]]\nsource = 'native.ps1'\ntarget = 'native'\nplatforms = ['windows']\n[[files]]\nsource = 'run.ts'\nruntime = 'bun'\n").await.unwrap();
+        for (name, bytes) in [
+            ("native.sh", "# Unix description\necho native\n"),
+            ("native.ps1", "# Windows description\nWrite-Output native\n"),
+            ("run.ts", "// Bun description\nconsole.log('run');\n"),
+            ("unlisted.sh", "echo unlisted\n"),
+        ] {
+            fs::write(category.join(name), bytes).await.unwrap();
+        }
+        let captured = external_shell_runtime(&dir).await;
+        for platform in RuntimePlatform::ALL {
+            let mut context = captured.context().clone();
+            context.platform = platform;
+            context.shell = if platform == RuntimePlatform::Windows {
+                ShellType::PowerShell
+            } else {
+                ShellType::Zsh
+            };
+            let runtime = CoreRuntime::new(RealHost, context, captured.presets().clone());
+            let categories = runtime.shell_categories(Some("declared")).unwrap();
+            assert!(categories[0].uses_metadata);
+            let files = &categories[0].files;
+            assert_eq!(files.len(), 2);
+            assert_eq!(files[0].command_name, "native");
+            let windows = platform == RuntimePlatform::Windows;
+            assert_eq!(
+                files[0].source_rel,
+                Path::new(if windows { "native.ps1" } else { "native.sh" })
+            );
+            assert_eq!(
+                files[0].description,
+                [if windows {
+                    "Windows description"
+                } else {
+                    "Unix description"
+                }]
+            );
+            assert_eq!(files[1].command_name, "run");
+            assert_eq!(files[1].runtime, LinkRuntime::Bun);
+            assert_eq!(files[1].description, ["Bun description"]);
+        }
+        fs::remove_dir_all(dir).await.unwrap();
     }
 
     // --- extract_all (presets export) tests ---

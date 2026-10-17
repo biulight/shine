@@ -118,12 +118,12 @@ pub use shell::{
 pub use shell_action_executor::{
     SHELL_OPERATION_JOURNAL_FILE, ShellOperationExecutionV1, ShellRecoveryReportV1,
 };
-pub use shell_launch::{LiveBunLaunch, validate_live_shell_target};
+pub use shell_launch::LiveBunLaunch;
 pub use sys::{
     ManagedFileReceipt, RECEIPT_VERSION, ResourceConflict, ResourceOutcome, ResourcePlan,
     SYS_MANIFEST_FILE, SYS_MANIFEST_SCHEMA_VERSION, SplitDnsDomainRequest, SplitDnsReceipt,
     SysDriverKind, SysItemStatus, SysManagedAction, SysManagedReport, SysManagedRequest,
-    SysRunEntry, SysRunManifest, SystemReceipt, remove_split_dns_with_host, split_dns_receipt,
+    SysRunEntry, SysRunManifest, SystemReceipt, split_dns_receipt,
 };
 pub use sys_action_executor::{
     SYS_OPERATION_JOURNAL_FILE, SysOperationExecutionV1, SysRecoveryReportV1,
@@ -132,7 +132,7 @@ pub use sys_bootstrap::{
     SysBootstrapBatchReport, SysBootstrapBatchRequest, SysBootstrapReport, SysBootstrapRequest,
     sys_install_requires_admin,
 };
-pub use sys_manifest::{parse_sys_manifest, validate_sys_manifest};
+pub use sys_manifest::parse_sys_manifest;
 pub use sys_model::{
     LoadedSysPreset, ResolvedSelection, SYS_PROFILE_PHASES, SelectionSource,
     ShellProfileBlockPosition, SysDetection, SysDetectionProbe, SysInstall, SysInstalledRow,

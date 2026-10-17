@@ -42,7 +42,7 @@ impl HostError {
         self.kind == std::io::ErrorKind::NotFound
     }
 
-    pub fn is_not_directory(&self) -> bool {
+    pub(in crate::runtime) fn is_not_directory(&self) -> bool {
         self.kind == std::io::ErrorKind::NotADirectory
     }
 

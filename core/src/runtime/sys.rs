@@ -352,7 +352,7 @@ impl<H: SplitDnsHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     }
 }
 
-pub async fn remove_split_dns_with_host(
+async fn remove_split_dns_with_host(
     host: &(impl SplitDnsHost + PrivilegedFileSystemHost),
     receipt: &SplitDnsReceipt,
     dry_run: bool,

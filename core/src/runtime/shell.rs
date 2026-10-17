@@ -1695,7 +1695,7 @@ impl ShellManifest {
             .find(|entry| canonical_target(entry) == target)
     }
 
-    pub fn replace_categories(
+    pub(in crate::runtime) fn replace_categories(
         &mut self,
         categories: &BTreeSet<String>,
         entries: Vec<ShellManifestEntry>,
@@ -1706,7 +1706,7 @@ impl ShellManifest {
         self.entries.sort_by_key(canonical_target);
     }
 
-    pub fn remove_target(&mut self, category: &str, command: &str) {
+    pub(in crate::runtime) fn remove_target(&mut self, category: &str, command: &str) {
         self.entries
             .retain(|entry| entry.category != category || entry.command != command);
     }
