@@ -459,6 +459,124 @@ mod tests {
         fs::remove_dir_all(root).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn copy_shell_category_only_extracts_matching_files() {
+        let dir = make_temp_dir().await;
+        let report = copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+
+        assert!(!report.created.is_empty());
+        for path in &report.created {
+            assert!(
+                path.starts_with(dir.join("shell/proxy")),
+                "{path:?} should be under shell/proxy/"
+            );
+        }
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_skips_existing_files_when_overwrite_false() {
+        let dir = make_temp_dir().await;
+        let marker = b"original content";
+
+        copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+
+        let first_file = presets::embedded_asset_paths("shell/proxy")
+            .into_iter()
+            .find(|p| p.starts_with("shell/proxy/"))
+            .unwrap();
+        let dest = dir.join(&first_file);
+        fs::write(&dest, marker).await.unwrap();
+
+        let report = copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+        assert!(report.skipped.contains(&dest));
+
+        let content = fs::read(&dest).await.unwrap();
+        assert_eq!(content, marker, "existing file should not be overwritten");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_overwrites_when_overwrite_true() {
+        let dir = make_temp_dir().await;
+        let marker = b"marker";
+
+        copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+
+        let first_file = presets::embedded_asset_paths("shell/proxy")
+            .into_iter()
+            .find(|p| p.starts_with("shell/proxy/"))
+            .unwrap();
+        let dest = dir.join(&first_file);
+        fs::write(&dest, marker).await.unwrap();
+
+        let report = copy_embedded_preset("shell/proxy", &dir, true)
+            .await
+            .unwrap();
+        assert!(report.overwritten.contains(&dest));
+
+        let content = fs::read(&dest).await.unwrap();
+        assert_eq!(
+            content,
+            presets::read_embedded_asset_bytes(&first_file).unwrap(),
+            "force copy must publish the complete embedded content"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_creates_nested_directories() {
+        let dir = make_temp_dir().await;
+        copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+
+        let nested = dir.join("shell").join("proxy");
+        assert!(
+            nested.is_dir(),
+            "shell/proxy/ subdirectory should be created"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_sets_executable_bit_on_sh_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = make_temp_dir().await;
+        let report = copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+
+        assert!(
+            report
+                .created
+                .iter()
+                .any(|path| path.extension().is_some_and(|ext| ext == "sh"))
+        );
+        for path in &report.created {
+            if path.extension().and_then(|e| e.to_str()) == Some("sh") {
+                let mode = fs::metadata(path).await.unwrap().permissions().mode();
+                assert!(mode & 0o111 != 0, "{path:?} should be executable");
+            }
+        }
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[test]
     fn copy_target_requires_canonical_safe_category() {
         for valid in ["app/surge", "shell/proxy", "sys/macos"] {

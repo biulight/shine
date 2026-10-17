@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-17 — Asset-removal tests must preserve production purge semantics
+
+- **Symptom**: migrating an asset-reader deletion test to approved uninstall initially asserted
+  that extra cache-tree files survived whole-shell `--purge`. The real approved purge includes them.
+- **Rule**: test ordinary removal and explicit purge separately. Preserve current selection,
+  approval and receipt semantics instead of importing a retired helper's deletion policy.
+- **Evidence**: production-handler regressions cover ordinary user-file retention, whole-tree
+  purge, configuration retention, dry-run byte preservation, repeated removal and absent-runtime
+  preview. App fixtures still prove installed-source selection with distinct disk bytes (ADR 0136).
+
 ## 2026-10-17 — Test fixtures must not reimplement discovery or report aggregation
 
 - **Symptom**: Shell description/scanner tests called retired CLI algorithms, while validation

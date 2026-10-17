@@ -204,10 +204,6 @@ impl Config {
         Ok(config)
     }
 
-    pub async fn load_global_runtime_or_init() -> Result<Self> {
-        Self::load_global_runtime(true).await
-    }
-
     async fn load_global_runtime(initialize: bool) -> Result<Self> {
         let (mut config, _) = Self::load_global_runtime_base().await?;
         config.reject_removed_global_env_file().await?;
@@ -564,7 +560,7 @@ mod tests {
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
         std::env::set_current_dir(&child_dir).unwrap();
 
-        let config = Config::load_global_runtime_or_init().await.unwrap();
+        let config = Config::load_global_runtime(true).await.unwrap();
 
         assert_eq!(
             fs::canonicalize(config.config_path()).await.unwrap(),

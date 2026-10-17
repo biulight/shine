@@ -312,7 +312,8 @@ impl Config {
     }
 
     /// Shine-owned snapshots of external shell categories.
-    pub fn installed_shell_dir(&self) -> PathBuf {
+    #[cfg(test)]
+    pub(crate) fn installed_shell_dir(&self) -> PathBuf {
         self.shine_dir().join("installed").join("shell")
     }
 
@@ -445,7 +446,8 @@ impl Config {
     }
 
     /// Effective source for `key`, including builtin and config layers.
-    pub fn env_override_source(&self, key: &str) -> Option<&EnvOverrideSource> {
+    #[cfg(test)]
+    fn env_override_source(&self, key: &str) -> Option<&EnvOverrideSource> {
         self.env_override_sources.get(key)
     }
 

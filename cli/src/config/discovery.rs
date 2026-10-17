@@ -56,15 +56,6 @@ pub(super) fn preliminary_shine_dir_from_env(default: &Path) -> PathBuf {
     default.to_owned()
 }
 
-/// Attempt to read the `presets_dir` key from an existing config without
-/// doing a full parse. Returns `None` if the file is absent, unreadable, or the
-/// key is not set.
-#[cfg(test)]
-pub(super) async fn read_presets_override_from_toml(config_path: &Path) -> Option<PathBuf> {
-    let content = tokio::fs::read_to_string(config_path).await.ok()?;
-    read_minimal_config(&content).ok()?.presets_dir
-}
-
 pub(super) fn resolve_config_presets_path(path: &Path, config_dir: &Path) -> PathBuf {
     if let Some(s) = path.to_str()
         && s.starts_with('~')
@@ -477,34 +468,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_presets_override_returns_none_when_file_missing() {
+    async fn read_minimal_config_file_presets_returns_none_when_file_missing() {
         let missing =
             std::env::temp_dir().join(format!("shine-no-config-{}.toml", uuid::Uuid::new_v4()));
-        let result = read_presets_override_from_toml(&missing).await;
+        let result = read_minimal_config_file(&missing);
         assert!(result.is_none());
     }
 
     #[tokio::test]
-    async fn read_presets_override_returns_none_when_key_absent() {
+    async fn read_minimal_config_file_presets_returns_none_when_key_absent() {
         let dir = make_temp_dir().await;
         let path = dir.join("config.toml");
         fs::write(&path, "schema_version = 0\n").await.unwrap();
 
-        let result = read_presets_override_from_toml(&path).await;
+        let result = read_minimal_config_file(&path).unwrap().presets_dir;
         assert!(result.is_none());
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn read_presets_override_returns_path_when_key_present() {
+    async fn read_minimal_config_file_presets_returns_path_when_key_present() {
         let dir = make_temp_dir().await;
         let path = dir.join("config.toml");
         fs::write(&path, "schema_version = 0\npresets_dir = \"/my/presets\"\n")
             .await
             .unwrap();
 
-        let result = read_presets_override_from_toml(&path).await;
+        let result = read_minimal_config_file(&path).unwrap().presets_dir;
         assert_eq!(result, Some(PathBuf::from("/my/presets")));
 
         fs::remove_dir_all(&dir).await.unwrap();

@@ -229,14 +229,14 @@ execution primitives and transforms live in `core/src/install/`.
 
 | Path | Responsibility |
 |---|---|
-| `cli/src/config/mod.rs` | `Config` model and accessors |
+| `cli/src/config/mod.rs` | `Config` model and accessors; installed-Shell path and env-source lookup helpers are test-only |
 | `cli/src/config/discovery.rs` | Global/project and environment path priority |
 | `cli/src/config/load.rs` | Load/init and schema/version layering |
 | `cli/src/config/save.rs` | Atomic, comment-preserving, raw-layer config saves |
 | `cli/src/config/env_layer.rs` | Env value parsing, removed-file diagnosis and override persistence |
 | `cli/src/config/env_resolution.rs` | Raw six-layer env resolution, input snapshots and independent value/description provenance |
 | `cli/src/config/env_write.rs` | Explicit write targets, preflight, snapshot checks and shared per-target config locks |
-| `cli/src/presets.rs` | Pristine embedded assets plus explicit `PresetAssetReader` overlay enumeration/reads/extraction; shared safe output publication; Shell command discovery belongs to Core metadata |
+| `cli/src/presets.rs` | Pristine embedded assets plus explicit `PresetAssetReader` overlay enumeration/reads and full export; pristine embedded prefix copy; shared safe output publication; removal belongs to the Core lifecycle and Shell discovery to Core metadata |
 | `cli/src/preset_commands.rs` | Preset copy/export/link/unlink/overlay commands |
 | `cli/src/preset_meta.rs` | Test-only Core capability-report renderer for public manual parity |
 | `cli/src/preset_validation.rs` | Core validation report text/JSON rendering and exit mapping; golden tests consume production reports without a duplicate aggregator |

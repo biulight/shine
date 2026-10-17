@@ -275,6 +275,13 @@ Validation output tests follow `validate_path` into Core's discovery, validation
 aggregation, then render the returned report. Golden normalization touches only already-asserted
 temporary paths, never validity, diagnostics or counts (ADR 0135).
 
+Asset copy tests enter `copy_embedded_preset` and pristine `extract_embedded_prefix`; concurrent
+export tests enter `handle_preset_export` and each Config's `PresetAssetReader::extract_all`.
+Both retain the same shared extraction/publication checks. Removal tests instead enter approved
+Shell uninstall and Core's receipt-aware lifecycle, never asset-reader deletion. Config file
+regressions use `read_minimal_config_file`; global-only initialization uses the production
+`load_global_runtime(true)` owner (ADR 0136).
+
 The CLI list facade delegates ordered observations to `list/query.rs`, pure grouping and action
 selection to `list/projection.rs`, and output to `list/render.rs`. Local query results retain App
 inspections for diff collection without re-evaluation. Simple Shell inventory projects only

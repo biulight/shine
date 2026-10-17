@@ -29,6 +29,9 @@ bugs. Check this list before changing the modules named in each entry.
   Shell description/discovery regressions query Core metadata from captured snapshots; validation
   golden reports come from the production validator, with only asserted temporary paths normalized.
   Do not retain independent scanners or report aggregation inside tests (ADR 0135).
+  Asset copy/export and Config file/global-load tests call their production owners. Removal tests
+  use approved Shell uninstall; extra cache-tree files survive ordinary removal but are included
+  in whole-shell purge. Do not revive the retired asset-name deletion algorithm (ADR 0136).
 - **Ordinary frontend inspection requires observation capability only.** App, Shell and Sys
   default inspection, including the safe `ReadOnlyFrontend` surface, require only
   `FileSystemObservationHost`. Sys status compares desired metadata with receipts; it must not
@@ -385,9 +388,9 @@ bugs. Check this list before changing the modules named in each entry.
   execution-time detection. Stop after the first failed item without widening the selection, and
   retain existing successful-item profile/receipt persistence (ADR 0128).
 
-- **Removal must use domain ownership checks.** `PresetAssetReader::remove_prefix` enumerates
-  embedded plus explicitly selected overlay asset paths; it is currently used only by tests and
-  does not validate content ownership or authorize lifecycle removal.
+- **Removal must use domain ownership checks.** CLI asset readers expose extraction, not lifecycle
+  deletion. Approved Shell uninstall owns cache/launcher removal and receipt transitions; asset
+  enumeration is not removal authority (ADR 0136).
   `launcher::unlink_managed_command_with_host` removes only symlinks pointing into the managed presets dir,
   plus **regular files that carry the native `# shine-managed`/`REM shine-managed` marker and a
   matching `# shine-target:`/`REM shine-target:` under the managed root** (Windows `.ps1`/`.cmd`

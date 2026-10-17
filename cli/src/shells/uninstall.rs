@@ -228,6 +228,67 @@ mod tests {
         crate::test_support::make_temp_dir("shine-shell").await
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uninstall_removes_managed_resources_preserves_user_files_and_can_repeat() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        handle_install(&config, Some("proxy"), false).await.unwrap();
+        let cached = config.presets_dir().join("shell/proxy/set_proxy.sh");
+        let launcher = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("setproxy"),
+        );
+        assert!(cached.is_file());
+        assert!(launcher.exists());
+        let user_file = config.presets_dir().join("shell/proxy/user-note.txt");
+        fs::write(&user_file, b"user-owned content").await.unwrap();
+        fs::write(config.config_path(), b"# retain configuration\n")
+            .await
+            .unwrap();
+
+        handle_uninstall_approved(&config, None, false, false, true)
+            .await
+            .unwrap();
+        assert!(!cached.exists());
+        assert_eq!(
+            fs::symlink_metadata(&launcher).await.unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
+        assert!(manifest.entries.is_empty());
+
+        // Whole-shell removal can repeat. A selected missing command still errors.
+        handle_uninstall_approved(&config, None, false, false, true)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&user_file).await.unwrap(), b"user-owned content");
+        assert_eq!(
+            fs::read(config.config_path()).await.unwrap(),
+            b"# retain configuration\n"
+        );
+        let error = handle_uninstall_approved(&config, Some("proxy/setproxy"), false, false, true)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("not installed"));
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn uninstall_preview_of_missing_runtime_creates_nothing() {
+        let dir = make_temp_dir().await;
+        let root = dir.join("missing");
+        let config = Config::new_for_test(&root);
+        handle_uninstall_approved(&config, None, true, true, true)
+            .await
+            .unwrap();
+        assert!(!root.exists());
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
     #[tokio::test]
     async fn command_scoped_uninstall_preserves_installed_sibling() {
         let dir = make_temp_dir().await;
@@ -484,7 +545,16 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
         handle_install(&config, None, false).await.unwrap();
+        let extra = config.presets_dir().join("shell/user-note.txt");
+        fs::write(&extra, b"extra cache-tree file").await.unwrap();
+        fs::write(config.config_path(), b"# keep config\n")
+            .await
+            .unwrap();
         handle_uninstall(&config, None, true, false).await.unwrap();
+        assert!(
+            !extra.exists(),
+            "whole-shell purge includes extra cache-tree files"
+        );
 
         assert!(!config.bin_dir().exists(), "bin_dir should be purged");
         assert!(
@@ -492,9 +562,9 @@ mod tests {
             "shell presets dir should be purged"
         );
         // config.toml must never be removed by uninstall
-        assert!(
-            config.presets_dir().parent().is_some(),
-            "shine root still accessible"
+        assert_eq!(
+            fs::read(config.config_path()).await.unwrap(),
+            b"# keep config\n"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -511,10 +581,19 @@ mod tests {
         handle_install(&config, None, false).await.unwrap();
         let preset_path = config.presets_dir().join("shell/proxy/set_proxy.sh");
         assert!(preset_path.exists());
+        let before = fs::read(&preset_path).await.unwrap();
+        let manifest_path = config.shine_dir().join("shell-manifest.toml");
+        let manifest_before = fs::read(&manifest_path).await.unwrap();
+        let profile_path = managed_shell_profile_path(&config);
+        let profile_before = fs::read(&profile_path).await.unwrap();
 
-        handle_uninstall(&config, None, false, true).await.unwrap();
+        handle_uninstall_approved(&config, None, true, true, true)
+            .await
+            .unwrap();
 
-        assert!(preset_path.exists(), "dry-run must not remove preset files");
+        assert_eq!(fs::read(&preset_path).await.unwrap(), before);
+        assert_eq!(fs::read(&manifest_path).await.unwrap(), manifest_before);
+        assert_eq!(fs::read(&profile_path).await.unwrap(), profile_before);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

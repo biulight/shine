@@ -12,8 +12,9 @@ separate files would require an installer, a download step, or a fixed filesyste
 
 Everything under `presets/` is compiled into the binary with rust-embed. Core captures those bytes
 for host-backed runtime materialization; CLI asset extraction uses
-`PresetAssetReader::extract_prefix` with an explicit source selection
-([ADR 0119](0119-explicit-preset-asset-readers.md)). `cli/build.rs` registers
+`extract_embedded_prefix` for pristine copy and `PresetAssetReader::extract_all` for export with
+an explicitly selected overlay ([ADR 0119](0119-explicit-preset-asset-readers.md),
+[ADR 0136](0136-production-asset-and-config-test-owners.md)). `cli/build.rs` registers
 `cargo:rerun-if-changed=presets` so editing a preset triggers re-embedding.
 
 External presets remain possible: `SHINE_PRESETS` / `presets_dir` point at a directory, and

@@ -915,8 +915,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
-        presets::PresetAssetReader::new(config.active_presets_overlay_dir())
-            .extract_prefix("app/vim", config.presets_dir(), false)
+        presets::extract_embedded_prefix("app/vim", config.presets_dir(), false)
             .await
             .unwrap();
 
@@ -956,8 +955,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
-        presets::PresetAssetReader::new(config.active_presets_overlay_dir())
-            .extract_prefix("app/ghostty", config.presets_dir(), false)
+        presets::extract_embedded_prefix("app/ghostty", config.presets_dir(), false)
             .await
             .unwrap();
 
