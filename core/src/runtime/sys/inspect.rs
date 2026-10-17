@@ -2,25 +2,6 @@
 use super::*;
 
 impl<H: crate::runtime::FileSystemObservationHost> CoreRuntime<H> {
-    pub async fn installed_managed_sys(&self, os_id: &str) -> Result<Vec<SysInstalledRow>> {
-        let manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
-        let mut rows = manifest
-            .entries
-            .into_iter()
-            .filter(|entry| entry.os_id == os_id && entry.managed)
-            .map(|entry| SysInstalledRow {
-                item_id: entry.item_id,
-                label: entry.label,
-            })
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| {
-            left.label
-                .cmp(&right.label)
-                .then_with(|| left.item_id.cmp(&right.item_id))
-        });
-        Ok(rows)
-    }
-
     /// Inspect recorded managed resources against the same desired-state
     /// assessment used by mutation, without executing a host operation.
     pub async fn inspect_managed_sys(

@@ -25,49 +25,6 @@ pub struct AppUpgradeReport {
     pub restart_hints: BTreeSet<String>,
 }
 
-pub async fn handle_upgrade_installed(
-    config: &Config,
-    prune_stale: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<AppUpgradeReport> {
-    handle_upgrade_installed_with_output(config, prune_stale, false, sep).await
-}
-
-pub(crate) async fn handle_upgrade_installed_with_output(
-    config: &Config,
-    prune_stale: bool,
-    verbose: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<AppUpgradeReport> {
-    handle_upgrade_installed_with_output_with_result_approved(
-        config,
-        prune_stale,
-        verbose,
-        true,
-        sep,
-    )
-    .await
-    .map(|(report, _)| report)
-}
-
-pub(crate) async fn handle_upgrade_installed_with_output_with_result_approved(
-    config: &Config,
-    prune_stale: bool,
-    verbose: bool,
-    yes: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
-    handle_upgrade_installed_target_with_result_approved(
-        config,
-        None,
-        prune_stale,
-        verbose,
-        yes,
-        sep,
-    )
-    .await
-}
-
 pub(crate) async fn handle_upgrade_installed_with_output_with_result_prepared(
     config: &Config,
     prune_stale: bool,

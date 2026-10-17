@@ -232,7 +232,10 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         })
     }
 
-    pub async fn write_shell_profile(&self, source_commands: &[String]) -> Result<bool> {
+    pub(in crate::runtime) async fn write_shell_profile(
+        &self,
+        source_commands: &[String],
+    ) -> Result<bool> {
         let path = managed_shell_profile_path(&self.context.shine_dir, self.context.shell);
         let desired = managed_profile_snippet(
             self.context.shell,

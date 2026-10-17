@@ -4,8 +4,6 @@ use crate::presentation::{
 };
 use anyhow::{Result, bail};
 
-#[cfg(test)]
-use super::SysInstalledRow;
 use super::detect::detect_os_id;
 use super::execution::{
     item_outcome_lines_with_status, presentation_bold, presentation_dim, presentation_symbol,
@@ -182,14 +180,6 @@ pub(crate) async fn managed_updates_with_result(
 ) -> Result<(Vec<SysUpdateRow>, LifecycleResultV1)> {
     let os_id = detect_os_id().await?;
     managed_updates_for_os_with_result(config, &os_id).await
-}
-
-#[cfg(test)]
-async fn installed_managed_for_os(config: &Config, os_id: &str) -> Result<Vec<SysInstalledRow>> {
-    crate::core_runtime::from_config(config)
-        .await?
-        .installed_managed_sys(os_id)
-        .await
 }
 
 async fn managed_updates_for_os_with_result(
@@ -888,7 +878,7 @@ resource = "/etc/resolver/private.example"
     }
 
     #[tokio::test]
-    async fn installed_managed_lists_only_current_os_managed_entries() {
+    async fn sys_inventory_lists_only_current_os_managed_entries() {
         let dir = make_temp_dir().await;
         fs::write(
             dir.join(SYS_MANIFEST_FILE),
@@ -910,8 +900,8 @@ updated_at = "1"
 
 [[entries]]
 os_id = "ubuntu"
-item_id = "split-dns"
-label = "Ubuntu split DNS"
+item_id = "ubuntu-only"
+label = "Ubuntu managed item"
 status = "installed"
 updated_at = "1"
 managed = true
@@ -921,15 +911,29 @@ managed = true
         .unwrap();
         let config = Config::new_for_test(&dir);
 
-        let rows = installed_managed_for_os(&config, "macos").await.unwrap();
-
-        assert_eq!(
-            rows,
-            [SysInstalledRow {
-                item_id: "split-dns".to_string(),
-                label: "Private split DNS".to_string(),
-            }]
-        );
+        let before = fs::read(dir.join(SYS_MANIFEST_FILE)).await.unwrap();
+        let service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
+        // Distinct targets prevent inventory deduplication from hiding a broken OS filter.
+        for (os_id, target) in [("macos", "sys/split-dns"), ("ubuntu", "sys/ubuntu-only")] {
+            let inventory = service
+                .inventory(
+                    shine_core::frontend::InventoryRequest::for_kind(
+                        shine_core::frontend::CapabilityKindV1::Sys,
+                    )
+                    .with_sys_os_id(os_id)
+                    .installed_only(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(inventory.items.len(), 1, "{os_id}: {inventory:?}");
+            assert_eq!(inventory.items[0].target, target);
+            assert!(inventory.items[0].installed);
+            assert!(!inventory.items[0].available);
+            assert!(inventory.diagnostics.is_empty());
+        }
+        assert_eq!(fs::read(dir.join(SYS_MANIFEST_FILE)).await.unwrap(), before);
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

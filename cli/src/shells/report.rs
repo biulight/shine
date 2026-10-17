@@ -135,39 +135,6 @@ pub(super) fn link_report_summary_parts(link_report: &crate::bin_links::LinkRepo
     parts
 }
 
-#[cfg(test)]
-pub(super) fn upgrade_link_report_summary_parts(
-    link_report: &crate::bin_links::LinkReport,
-    verbose: bool,
-) -> Vec<String> {
-    let mut parts: Vec<String> = Vec::new();
-    if !link_report.created.is_empty() {
-        parts.push(colors::green(&format!(
-            "{} created",
-            link_report.created.len()
-        )));
-    }
-    if !link_report.overwritten.is_empty() {
-        parts.push(colors::green(&format!(
-            "{} updated",
-            link_report.overwritten.len()
-        )));
-    }
-    if verbose && !link_report.skipped.is_empty() {
-        parts.push(colors::dim(&format!(
-            "{} up to date",
-            link_report.skipped.len()
-        )));
-    }
-    if !link_report.conflicts.is_empty() {
-        parts.push(colors::yellow(&format!(
-            "{} conflicts",
-            link_report.conflicts.len()
-        )));
-    }
-    parts
-}
-
 fn format_file_action(count: usize, action: &str) -> String {
     let noun = if count == 1 { "file" } else { "files" };
     format!("{count} {noun} {action}")
@@ -442,7 +409,7 @@ mod lifecycle_render_tests {
     use super::*;
 
     #[test]
-    fn shell_lifecycle_summary_parts_keep_legacy_wording() {
+    fn shell_install_summary_parts_keep_legacy_wording() {
         let report = crate::bin_links::LinkReport {
             created: vec!["created".into()],
             overwritten: vec!["updated".into()],
@@ -452,10 +419,6 @@ mod lifecycle_render_tests {
         assert_eq!(
             link_report_summary_parts(&report),
             vec!["1 created", "1 updated", "1 up to date"]
-        );
-        assert_eq!(
-            upgrade_link_report_summary_parts(&report, false),
-            vec!["1 created", "1 updated"]
         );
     }
 }

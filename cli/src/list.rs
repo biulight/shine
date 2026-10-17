@@ -21,9 +21,6 @@ use shine_core::frontend::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-#[cfg(test)]
-const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
-
 pub async fn handle_update_list(config: &Config, diff: bool, run_generators: bool) -> Result<bool> {
     let inputs = query::collect_update(config, run_generators).await?;
     render::update(config, inputs, diff, run_generators).await
@@ -350,34 +347,105 @@ mod tests {
         assert_eq!(statuses[0].file_status, FileStatus::Partial);
     }
 
-    #[test]
-    fn simple_list_hides_preset_present_when_bin_symlink_missing() {
-        let row = shell_row(SHELL_PRESET_PRESENT_LINK_MISSING, true);
-
-        assert!(!should_show_shell_in_simple_list(&row));
-    }
-
-    #[test]
-    fn simple_list_keeps_other_installed_shell_states() {
-        assert!(should_show_shell_in_simple_list(&shell_row(
-            "up-to-date",
-            true
-        )));
-        assert!(should_show_shell_in_simple_list(&shell_row(
-            "bin symlink present, preset missing",
-            true
-        )));
-        assert!(should_show_shell_in_simple_list(&shell_row(
-            "update available",
-            true
-        )));
-    }
-
-    #[test]
-    fn simple_list_hides_uninstalled_shell_rows() {
-        let row = shell_row("not installed", false);
-
-        assert!(!should_show_shell_in_simple_list(&row));
+    #[tokio::test]
+    async fn simple_list_shell_visibility_uses_production_inventory() {
+        use shine_core::runtime::{
+            CoreRuntime, FileSystemHost, FileSystemObservationHost, HostOperation, PresetSnapshot,
+            PresetSourceKind, command_path_for_name,
+        };
+        for (state, expected) in [
+            ("current", true),
+            ("update", true),
+            ("foreign-launcher", true),
+            ("receipt-without-launcher", true),
+            ("legacy-launcher-without-receipt", true),
+            ("uninstalled", false),
+            ("missing-preset", false),
+        ] {
+            let installed = crate::test_support::installed_shell_runtime().await;
+            let manifest_path = installed.context().shine_dir.join("shell-manifest.toml");
+            let launcher = command_path_for_name(&installed.context().bin_dir, "run".as_ref());
+            let mut snapshot = installed.presets().clone();
+            match state {
+                "update" => {
+                    let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
+                    for (path, bytes) in snapshot.files() {
+                        builder = builder.file(
+                            path,
+                            if path == "shell/demo/run.ts" {
+                                b"console.log('new');\n".to_vec()
+                            } else {
+                                bytes.clone()
+                            },
+                        );
+                    }
+                    snapshot = builder.build();
+                }
+                "foreign-launcher" => installed.host().put_file(&launcher, b"foreign".to_vec()),
+                "receipt-without-launcher" | "uninstalled" => {
+                    installed.host().remove_file(&launcher).await.unwrap();
+                }
+                "missing-preset" => {
+                    snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded).build()
+                }
+                _ => {}
+            }
+            if matches!(state, "uninstalled" | "legacy-launcher-without-receipt") {
+                installed.host().put_file(
+                    &manifest_path,
+                    b"schema_version = 1\nentries = []\n".to_vec(),
+                );
+            }
+            let manifest = installed.host().read(&manifest_path).await.unwrap();
+            let launcher_before = installed.host().read(&launcher).await.ok();
+            let start = installed.host().operations().len();
+            let service = shine_core::frontend::FrontendService::new(CoreRuntime::new(
+                installed.host().clone(),
+                installed.context().clone(),
+                snapshot,
+            ));
+            let report = service
+                .inventory(InventoryRequest::for_kind(CapabilityKindV1::Shell))
+                .await
+                .unwrap();
+            let run = report
+                .items
+                .iter()
+                .find(|item| item.target == "shell/demo/run")
+                .unwrap_or_else(|| {
+                    panic!("{state}: missing receipt or available item: {report:?}")
+                });
+            assert_eq!(run.available, state != "missing-preset", "{state}: {run:?}");
+            assert_eq!(run.installed, state != "uninstalled", "{state}: {run:?}");
+            assert_eq!(
+                installed_shell_categories_from_inventory(&report),
+                if expected {
+                    vec!["demo".to_string()]
+                } else {
+                    Vec::new()
+                },
+                "{state}: {report:?}"
+            );
+            // An available, uninstalled sibling cannot create another category entry.
+            if state != "missing-preset" {
+                let idle = report
+                    .items
+                    .iter()
+                    .find(|item| item.target == "shell/demo/idle")
+                    .unwrap();
+                assert!(idle.available && !idle.installed, "{state}: {idle:?}");
+            }
+            assert!(
+                installed.host().operations()[start..]
+                    .iter()
+                    .all(|op| matches!(op, HostOperation::Read(_)))
+            );
+            assert_eq!(
+                installed.host().read(&manifest_path).await.unwrap(),
+                manifest
+            );
+            assert_eq!(installed.host().read(&launcher).await.ok(), launcher_before);
+        }
     }
 
     #[test]

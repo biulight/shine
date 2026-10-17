@@ -20,9 +20,9 @@ pub use metadata::{
 pub use recovery::handle_recover_approved;
 pub use refresh::{handle_refresh, handle_refresh_approved};
 pub use uninstall::{handle_uninstall, handle_uninstall_approved};
+pub use upgrade::AppUpgradeReport;
 #[cfg(test)]
 pub(crate) use upgrade::handle_upgrade_installed_target_with_result;
-pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
 pub(crate) use upgrade::{
     handle_upgrade_installed_target_with_result_approved,
     handle_upgrade_installed_with_output_with_result_prepared,
@@ -420,9 +420,11 @@ mod tests {
         let before = fs::read(&dest).await.unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 0, "up-to-date app config must not update");
         assert_eq!(report.skipped, 1, "up-to-date app config should be skipped");
@@ -460,9 +462,11 @@ mod tests {
         )
         .await;
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 1, "changed source should update");
         assert_eq!(report.skipped, 0);
@@ -787,9 +791,11 @@ mod tests {
             .await
             .unwrap();
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 0);
         assert!(!marker.exists(), "unchanged config must not run hook");
@@ -869,9 +875,11 @@ mod tests {
         .await;
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         let new_dest = dir.join(".config/sample/themes/theme.conf");
         assert_eq!(report.updated, 1, "new app file should be installed");
@@ -925,9 +933,11 @@ mod tests {
         fs::write(&new_dest, b"user-owned\n").await.unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let error = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap_err();
+        let error = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap_err();
 
         assert!(error.to_string().contains("Plan is blocked"));
         assert_eq!(fs::read(&new_dest).await.unwrap(), b"user-owned\n");
@@ -964,9 +974,11 @@ mod tests {
             .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, true, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, true, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 1, "stale cleanup should count as a change");
         assert_eq!(report.skipped, 0);
@@ -1005,9 +1017,11 @@ mod tests {
             .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, true, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, true, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 1, "manifest cleanup should count as change");
         assert_eq!(report.skipped, 0);
@@ -1044,9 +1058,11 @@ mod tests {
             .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
@@ -1085,9 +1101,11 @@ mod tests {
             .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, true, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, true, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
@@ -1135,9 +1153,11 @@ mod tests {
         .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, true, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, true, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         let dest = dir.join(".config/sample/daemon.json");
         assert_eq!(
@@ -1179,9 +1199,11 @@ mod tests {
         fs::write(&dest, b"{\"user\":true}\n").await.unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             report.updated, 0,

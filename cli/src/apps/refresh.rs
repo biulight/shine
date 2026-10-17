@@ -201,7 +201,7 @@ impl RuntimeObserver for RefreshObserver {
 mod tests {
     use super::*;
     use crate::apps::metadata;
-    use crate::apps::{handle_install, handle_upgrade_installed};
+    use crate::apps::{handle_install, handle_upgrade_installed_target_with_result_approved};
     use crate::status::{FileStatus, build_app_rows};
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
@@ -342,9 +342,16 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
         assert!(!rows[0].upgrade_available);
         let mut separator = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut separator)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config,
+            None,
+            false,
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.updated, 0);
         assert_eq!(
             fs::read_to_string(app_dir.join("first.runs"))

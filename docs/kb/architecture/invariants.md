@@ -23,6 +23,9 @@ bugs. Check this list before changing the modules named in each entry.
   implementations. App data-directory tests use captured context rather than inferring it from HOME;
   legacy full-path annotations pass the same parent-component check as metadata destinations.
   Preserve source-layer admission, receipt/hash and compatibility cases (ADRs 0131, 0132).
+  Sys/Shell inventory tests use Frontend inventory and the actual CLI projection; current Shell
+  visibility follows available/installed state, not legacy status strings. Upgrade summary tests
+  capture the production reporter instead of maintaining a second wording function (ADR 0134).
 - **Ordinary frontend inspection requires observation capability only.** App, Shell and Sys
   default inspection, including the safe `ReadOnlyFrontend` surface, require only
   `FileSystemObservationHost`. Sys status compares desired metadata with receipts; it must not

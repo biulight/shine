@@ -89,7 +89,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/shell/lifecycle.rs`, `shell/lifecycle/{deploy,remove,report}.rs` | Typed Shell deployment/removal phases and pure lifecycle reporting; preparation retains legacy effects |
 | `core/src/action/shell_receipt.rs` | Shared internal receipt delivery validation for manifest reconstruction, Action IR and recovery; persisted DTOs remain unchanged |
 | `core/src/runtime/sys.rs` | Managed Sys models, receipt assessment, lifecycle-owned managed-file/split-DNS primitives and run-manifest persistence; roundtrip tests use the approved planner facade |
-| `core/src/runtime/sys/inspect.rs` | Observation-only managed receipt inspection and pure desired-versus-receipt details; bootstrap receipts stay recorded, with no detection probes |
+| `core/src/runtime/sys/inspect.rs` | Observation-only managed receipt inspection and pure desired-versus-receipt details; installed-only inventory filtering belongs to FrontendService, with no detection probes |
 | `core/src/runtime/sys/{lifecycle,transaction}.rs`, `sys/lifecycle/` | Current-item/receipt-only selection, preflight, resource execution, result persistence and fresh transaction preparation; approved facade retains the lifecycle lock |
 | `core/src/runtime/sys_bootstrap.rs` | Sys v2 batch/item orchestration, preflight, post-detection, profile reconciliation and persistence |
 | `core/src/runtime/sys_bootstrap/selection.rs` | Ordered explicit/profile/interactive/default selection without installation effects |

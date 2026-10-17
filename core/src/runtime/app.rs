@@ -909,7 +909,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
 }
 
 impl<H: FileSystemHost> CoreRuntime<H> {
-    pub async fn reconcile_app_cache(
+    pub(in crate::runtime) async fn reconcile_app_cache(
         &self,
         request: AppCacheRequest,
     ) -> Result<LifecycleOutcomeV1> {

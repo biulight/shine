@@ -11,8 +11,6 @@ mod render;
 mod run_manifest;
 mod selection;
 
-#[cfg(test)]
-use model::SysInstalledRow;
 use model::{
     LoadedSysPreset, ResolvedSelection, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall,
     SysItem, SysItemMode, SysItemOutcome, SysItemStatus, SysPackageProvider, SysUpdateRow,

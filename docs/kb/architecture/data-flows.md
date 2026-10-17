@@ -271,7 +271,10 @@ need no Host; manifest version/error rules and read order remain unchanged (ADR 
 
 The CLI list facade delegates ordered observations to `list/query.rs`, pure grouping and action
 selection to `list/projection.rs`, and output to `list/render.rs`. Local query results retain App
-inspections for diff collection without re-evaluation. Update retains two Shell captures followed
+inspections for diff collection without re-evaluation. Simple Shell inventory projects only
+available/installed targets; a receipt can establish installation even when its launcher is missing.
+Managed Sys inventory uses the frontend's OS/managed receipt filter; its former test-only runtime
+query has been removed (ADR 0134). Update retains two Shell captures followed
 by App, Sys and missing-source queries before output; status prints its initial note and Shell
 attention before loading App/Sys. Detailed diff collection remains after the original empty-result
 checks (and after initial update attention output). Renderers still perform the existing per-row

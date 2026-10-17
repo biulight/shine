@@ -285,11 +285,6 @@ pub(super) fn sorted_names(mut names: Vec<String>) -> Vec<String> {
     names
 }
 
-#[cfg(test)]
-pub(super) fn should_show_shell_in_simple_list(row: &ShellRow) -> bool {
-    row.is_installed && row.status_text != SHELL_PRESET_PRESENT_LINK_MISSING
-}
-
 pub(super) struct GeneratorAttention<'a> {
     pub not_evaluated: bool,
     pub failures: Vec<&'a AppRow>,

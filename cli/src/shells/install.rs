@@ -268,25 +268,6 @@ async fn handle_install_dry_run_with_reporter(
     Ok(core_report.lifecycle)
 }
 
-pub async fn handle_upgrade_installed(
-    config: &Config,
-    verbose: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<ShellUpgradeReport> {
-    handle_upgrade_installed_with_result_approved(config, verbose, true, sep)
-        .await
-        .map(|(report, _)| report)
-}
-
-pub(crate) async fn handle_upgrade_installed_with_result_approved(
-    config: &Config,
-    verbose: bool,
-    yes: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
-    handle_upgrade_installed_target_with_result_approved(config, None, verbose, yes, sep).await
-}
-
 pub(crate) async fn handle_upgrade_installed_with_result_prepared(
     config: &Config,
     verbose: bool,
@@ -302,23 +283,6 @@ pub(crate) async fn handle_upgrade_installed_with_result_prepared(
         &mut renderer,
     )
     .await
-}
-
-pub async fn handle_upgrade_installed_target(
-    config: &Config,
-    category_filter: Option<&str>,
-    verbose: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<ShellUpgradeReport> {
-    handle_upgrade_installed_target_with_result_approved(
-        config,
-        category_filter,
-        verbose,
-        true,
-        sep,
-    )
-    .await
-    .map(|(report, _)| report)
 }
 
 #[cfg(test)]
@@ -976,9 +940,16 @@ mod tests {
         );
 
         let mut separator = crate::output::SectionSeparator::new();
-        handle_upgrade_installed_target(&config, Some("utils"), false, &mut separator)
-            .await
-            .unwrap();
+        handle_upgrade_installed_target_with_result_approved(
+            &config,
+            Some("utils"),
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .map(|(report, _)| report)
+        .unwrap();
 
         assert!(selected.exists());
         assert!(!sibling.exists());
@@ -1798,6 +1769,89 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn upgrade_link_summary_uses_production_reporter() {
+        #[derive(Default)]
+        struct Reporter(Vec<PresentationEvent>);
+        impl LifecycleReporter for Reporter {
+            fn emit(&mut self, event: PresentationEvent) {
+                self.0.push(event);
+            }
+        }
+        for verbose in [false, true] {
+            let dir = make_temp_dir().await;
+            let config = Config::new_for_test(&dir);
+            handle_install(&config, Some("utils"), false).await.unwrap();
+            let stale = dir.join("stale-copyfile.sh");
+            fs::write(&stale, b"#!/bin/sh\necho stale\n").await.unwrap();
+            make_executable(&stale).await;
+            let copyfile = config.bin_dir().join("copyfile");
+            fs::remove_file(&copyfile).await.unwrap();
+            fs::symlink(&stale, &copyfile).await.unwrap();
+            fs::remove_file(config.bin_dir().join("shine-env-export"))
+                .await
+                .unwrap();
+            let mut reporter = Reporter::default();
+            let (report, _) = handle_upgrade_installed_target_with_reporter(
+                &config,
+                Some("utils"),
+                verbose,
+                true,
+                &mut reporter,
+            )
+            .await
+            .unwrap();
+            assert_eq!(report.links_created, 1);
+            assert_eq!(report.links_updated, 1);
+            let lines = reporter
+                .0
+                .iter()
+                .filter_map(|event| match event {
+                    PresentationEvent::Line { text, .. } if text.contains("Bin Links") => {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                lines,
+                vec![output::summary_line_text(
+                    "Bin Links",
+                    &["1 created".into(), "1 updated".into()]
+                )]
+            );
+            assert!(!lines[0].contains("up to date"));
+
+            let manifest = fs::read(config.shine_dir().join("shell-manifest.toml"))
+                .await
+                .unwrap();
+            let mut unchanged = Reporter::default();
+            crate::presentation::with_full_upgrade_plan(true, async {
+                handle_upgrade_installed_target_with_reporter(
+                    &config,
+                    Some("utils"),
+                    verbose,
+                    true,
+                    &mut unchanged,
+                )
+                .await
+                .unwrap();
+            })
+            .await;
+            assert!(!unchanged.0.iter().any(|event| matches!(event,
+                PresentationEvent::Line { text, .. } if text.contains("Bin Links")
+            )));
+            assert_eq!(
+                fs::read(config.shine_dir().join("shell-manifest.toml"))
+                    .await
+                    .unwrap(),
+                manifest
+            );
+            fs::remove_dir_all(dir).await.unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn embedded_source_and_link_upgrade_report_target_once() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
@@ -1821,9 +1875,15 @@ mod tests {
         fs::symlink(&stale_source, &link).await.unwrap();
 
         let mut separator = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut separator)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config,
+            None,
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated_targets, vec!["utils/copyfile"]);
         assert_eq!(report.updated_categories, vec!["utils"]);
@@ -1884,9 +1944,11 @@ mod tests {
         crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             report.templates_updated, 1,
@@ -2218,9 +2280,15 @@ mod tests {
             .unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
         let mut separator = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut separator)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config,
+            None,
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.snapshots_updated, 1);
         assert_eq!(report.updated_targets, vec!["custom/mytool"]);
         assert_eq!(report.updated_categories, vec!["custom"]);
@@ -2264,9 +2332,15 @@ mod tests {
             .unwrap();
 
         let mut separator = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut separator)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config,
+            None,
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.snapshots_updated, 1);
         assert_eq!(
             fs::read_link(config.bin_dir().join("mytool"))
@@ -2309,9 +2383,16 @@ mod tests {
         config.external_shell_mode = crate::config::ExternalShellMode::Live;
         crate::trust::grant_development_for_test(&config, "custom").await;
         let mut separator = crate::output::SectionSeparator::new();
-        handle_upgrade_installed(&config, false, &mut separator)
-            .await
-            .unwrap();
+        handle_upgrade_installed_target_with_result_approved(
+            &config,
+            None,
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .map(|(report, _)| report)
+        .unwrap();
         assert_eq!(
             fs::read_link(config.bin_dir().join("mytool"))
                 .await

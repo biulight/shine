@@ -745,7 +745,11 @@ impl<H> CoreRuntime<H> {
             .collect()
     }
 
-    pub fn desired_shell_source_path(&self, category: &str, source_rel: &Path) -> PathBuf {
+    pub(in crate::runtime) fn desired_shell_source_path(
+        &self,
+        category: &str,
+        source_rel: &Path,
+    ) -> PathBuf {
         let logical = format!("shell/{category}/{}", shell_logical_path(source_rel));
         self.presets()
             .origin(&logical)
@@ -841,7 +845,7 @@ impl<H> CoreRuntime<H> {
 }
 
 impl<H: FileSystemHost> CoreRuntime<H> {
-    pub async fn effective_shell_transforms(
+    pub(in crate::runtime) async fn effective_shell_transforms(
         &self,
         file: &ShellFile,
         source: &Path,
@@ -861,7 +865,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         })
     }
 
-    pub async fn reconcile_shell_cache(
+    pub(in crate::runtime) async fn reconcile_shell_cache(
         &self,
         request: ShellCacheRequest,
     ) -> Result<ShellCacheReport> {
@@ -1235,7 +1239,10 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(())
     }
 
-    pub async fn remove_empty_shell_roots(&self, categories: &BTreeSet<String>) -> Result<()> {
+    pub(in crate::runtime) async fn remove_empty_shell_roots(
+        &self,
+        categories: &BTreeSet<String>,
+    ) -> Result<()> {
         let shell_root = self.context().presets_dir.join("shell");
         for category in categories {
             let path = shell_root.join(category);

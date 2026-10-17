@@ -364,7 +364,12 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         })
     }
 
-    pub fn preflight_sys_item(&self, _os_id: &str, root: &Path, item: &SysItem) -> Result<()> {
+    pub(in crate::runtime) fn preflight_sys_item(
+        &self,
+        _os_id: &str,
+        root: &Path,
+        item: &SysItem,
+    ) -> Result<()> {
         for key in &item.required_env {
             if self
                 .context()

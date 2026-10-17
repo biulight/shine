@@ -1,5 +1,19 @@
 # Lessons Learned
 
+## 2026-10-17 — Historical presentation tests can encode obsolete behavior
+
+- **Symptom**: Shell simple-list and upgrade-summary tests passed against private copies while
+  production used inventory availability/installation and a different summary branch.
+- **Rule**: establish replacement assertions against the current production consumer before
+  deleting the copies. Preserve current behavior rather than reviving obsolete status-string
+  filtering or verbose `up to date` output. Keep installation and upgrade summaries distinct.
+- **Evidence**: inventory tests seed real receipts/launchers; upgrade tests capture the approved
+  handler's reporter. Sys installed-only filtering now tests the frontend's OS/managed selection
+  rather than a standalone runtime query (ADR 0134).
+- **Review check**: use distinct cross-OS targets so inventory deduplication cannot hide a missing
+  OS filter. Assert receipt-only inventory flags before projection; an empty simple list alone
+  cannot prove the underlying receipt remains visible.
+
 ## 2026-10-17 — Test-only destination checks can hide production gaps
 
 - **Symptom**: legacy App parent-path rejection passed in a CLI-only resolver but failed after moving
