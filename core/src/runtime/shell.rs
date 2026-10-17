@@ -757,7 +757,11 @@ impl<H> CoreRuntime<H> {
             .unwrap_or_else(|| self.context().presets_dir.join(logical))
     }
 
-    pub fn shell_deployment_source_path(&self, category: &str, source_rel: &Path) -> PathBuf {
+    pub(super) fn shell_deployment_source_path(
+        &self,
+        category: &str,
+        source_rel: &Path,
+    ) -> PathBuf {
         if self.context().is_external_presets
             && self.context().external_shell_mode == ExternalShellMode::Snapshot
         {
@@ -771,7 +775,7 @@ impl<H> CoreRuntime<H> {
         }
     }
 
-    pub fn shell_rendered_path(&self, category: &str, source_rel: &Path) -> PathBuf {
+    pub(super) fn shell_rendered_path(&self, category: &str, source_rel: &Path) -> PathBuf {
         self.context()
             .shine_dir
             .join("rendered/shell")

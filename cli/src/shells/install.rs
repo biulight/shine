@@ -93,10 +93,6 @@ fn unrestricted_init_template_uses_valid_category_defaults() {
     );
 }
 
-pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) -> Result<()> {
-    handle_install_approved(config, target, force, true).await
-}
-
 pub async fn handle_install_approved(
     config: &Config,
     target: Option<&str>,
@@ -650,7 +646,7 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
 mod tests {
     use super::super::ShellType;
     #[cfg(unix)]
-    use super::super::uninstall::handle_uninstall;
+    use super::super::uninstall::handle_uninstall_approved;
     use super::*;
     use crate::config::Config;
     use std::path::PathBuf;
@@ -844,10 +840,10 @@ mod tests {
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("utils/shine-env-export"), false)
+        handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
             .await
             .unwrap();
-        handle_install(&config, Some("utils/shine-theme-sync"), false)
+        handle_install_approved(&config, Some("utils/shine-theme-sync"), false, true)
             .await
             .unwrap();
 
@@ -866,7 +862,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        let error = handle_install(&config, Some("utils/not-a-command"), false)
+        let error = handle_install_approved(&config, Some("utils/not-a-command"), false, true)
             .await
             .unwrap_err()
             .to_string();
@@ -889,7 +885,7 @@ mod tests {
         .await
         .unwrap();
 
-        let error = handle_install(&config, Some("utils/shine-env-export"), false)
+        let error = handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
             .await
             .unwrap_err();
 
@@ -905,7 +901,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
-        handle_install(&config, Some("utils/shine-env-export"), false)
+        handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
             .await
             .unwrap();
         let selected = crate::bin_links::command_path_for_name(
@@ -988,7 +984,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "shell/custom/one").await;
 
-        handle_install(&config, Some("custom/one"), false)
+        handle_install_approved(&config, Some("custom/one"), false, true)
             .await
             .unwrap();
 
@@ -1164,7 +1160,9 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, None, false).await.unwrap();
+        handle_install_approved(&config, None, false, true)
+            .await
+            .unwrap();
         assert!(
             config
                 .presets_dir()
@@ -1193,7 +1191,9 @@ mod tests {
             "managed shell profile should exist after install"
         );
 
-        handle_uninstall(&config, None, false, false).await.unwrap();
+        handle_uninstall_approved(&config, None, false, false, true)
+            .await
+            .unwrap();
         assert!(
             !config
                 .presets_dir()
@@ -1212,7 +1212,9 @@ mod tests {
         );
 
         // Idempotency: second uninstall must not error
-        handle_uninstall(&config, None, false, false).await.unwrap();
+        handle_uninstall_approved(&config, None, false, false, true)
+            .await
+            .unwrap();
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1475,8 +1477,12 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("agent"), false).await.unwrap();
-        handle_install(&config, Some("proxy"), false).await.unwrap();
+        handle_install_approved(&config, Some("agent"), false, true)
+            .await
+            .unwrap();
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
 
         let commands = crate::core_runtime::from_config(&config)
             .await
@@ -1522,7 +1528,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "shell/custom/my_tool").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -1571,7 +1577,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "shell/custom/setproxy").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -1612,7 +1618,9 @@ mod tests {
         crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
         crate::trust::grant_current_for_test(&config, "shell/proxy/usetproxy").await;
 
-        handle_install(&config, Some("proxy"), false).await.unwrap();
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
 
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(config.bin_dir().join("usetproxy").exists());
@@ -1711,7 +1719,7 @@ mod tests {
             .await
             .unwrap();
 
-        let err = handle_install(&config, Some("proxy"), false)
+        let err = handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .expect_err("install should fail when rendered_dir cannot be created");
 
@@ -1735,7 +1743,9 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("agent"), false).await.unwrap();
+        handle_install_approved(&config, Some("agent"), false, true)
+            .await
+            .unwrap();
 
         let source = config.presets_dir().join("shell/agent/cc.ts");
         assert!(source.exists());
@@ -1780,7 +1790,9 @@ mod tests {
         for verbose in [false, true] {
             let dir = make_temp_dir().await;
             let config = Config::new_for_test(&dir);
-            handle_install(&config, Some("utils"), false).await.unwrap();
+            handle_install_approved(&config, Some("utils"), false, true)
+                .await
+                .unwrap();
             let stale = dir.join("stale-copyfile.sh");
             fs::write(&stale, b"#!/bin/sh\necho stale\n").await.unwrap();
             make_executable(&stale).await;
@@ -1857,7 +1869,9 @@ mod tests {
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
-        handle_install(&config, Some("utils"), false).await.unwrap();
+        handle_install_approved(&config, Some("utils"), false, true)
+            .await
+            .unwrap();
 
         let source = config.presets_dir().join("shell/utils/copyfile.sh");
         fs::write(&source, b"#!/bin/sh\necho stale\n")
@@ -1927,7 +1941,9 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
 
-        handle_install(&config, Some("proxy"), false).await.unwrap();
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(
             !config.bin_dir().join("extra_tool").exists(),
@@ -1987,7 +2003,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -2010,7 +2026,7 @@ mod tests {
             "command should use the target rename, not the .ts stem"
         );
 
-        handle_uninstall(&config, Some("custom"), false, false)
+        handle_uninstall_approved(&config, Some("custom"), false, false, true)
             .await
             .unwrap();
         assert!(
@@ -2046,7 +2062,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -2096,7 +2112,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -2145,7 +2161,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -2197,7 +2213,7 @@ mod tests {
             .insert("PROXY_HOST".into(), "first.example".into());
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_development_for_test(&config, "custom").await;
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -2264,7 +2280,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
         let installed = config.installed_shell_dir().join("custom/tool.sh");
@@ -2376,7 +2392,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 

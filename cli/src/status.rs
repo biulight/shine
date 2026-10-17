@@ -293,7 +293,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "preset").await;
 
-        crate::shells::handle_install(&config, Some("proxy"), false)
+        crate::shells::handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
 
@@ -329,7 +329,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "preset").await;
-        crate::shells::handle_install(&config, Some("custom"), false)
+        crate::shells::handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
         fs::remove_file(config.bin_dir().join("mytool"))
@@ -389,7 +389,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "preset").await;
 
-        crate::shells::handle_install(&config, Some("proxy"), false)
+        crate::shells::handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
 
@@ -434,7 +434,7 @@ mod tests {
         config.external_shell_mode = crate::config::ExternalShellMode::Live;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_development_for_test(&config, "preset").await;
-        crate::shells::handle_install(&config, Some("custom"), false)
+        crate::shells::handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
         fs::write(&source, b"#!/bin/sh\necho second\n")
@@ -461,7 +461,7 @@ mod tests {
             change,
             UpdateChange::DeploymentChanged { field: "trust", .. }
         )));
-        crate::shells::handle_install(&config, Some("custom"), false)
+        crate::shells::handle_install_approved(&config, Some("custom"), false, true)
             .await
             .expect("a fully no-op live install remains removable/reviewable without new mutation");
         fs::remove_dir_all(&dir).await.unwrap();
@@ -491,7 +491,7 @@ mod tests {
         old_config.external_shell_mode = crate::config::ExternalShellMode::Live;
         fs::create_dir_all(old_config.bin_dir()).await.unwrap();
         crate::trust::grant_development_for_test(&old_config, "preset").await;
-        crate::shells::handle_install(&old_config, Some("custom"), false)
+        crate::shells::handle_install_approved(&old_config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -575,7 +575,7 @@ mod tests {
         old_config.is_external_presets = true;
         fs::create_dir_all(old_config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&old_config, "preset").await;
-        crate::shells::handle_install(&old_config, Some("custom"), false)
+        crate::shells::handle_install_approved(&old_config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -712,7 +712,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "preset").await;
-        crate::shells::handle_install(&config, Some("custom"), false)
+        crate::shells::handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -746,7 +746,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        crate::shells::handle_install(&config, Some("agent"), false)
+        crate::shells::handle_install_approved(&config, Some("agent"), false, true)
             .await
             .unwrap();
 
@@ -789,7 +789,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "preset").await;
-        crate::shells::handle_install(&config, Some("agent"), false)
+        crate::shells::handle_install_approved(&config, Some("agent"), false, true)
             .await
             .unwrap();
 
@@ -828,7 +828,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "preset").await;
-        crate::shells::handle_install(&config, Some("agent"), false)
+        crate::shells::handle_install_approved(&config, Some("agent"), false, true)
             .await
             .unwrap();
 
@@ -878,7 +878,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "preset").await;
 
-        crate::shells::handle_install(&config, Some("proxy"), false)
+        crate::shells::handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
 

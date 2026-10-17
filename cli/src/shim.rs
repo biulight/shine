@@ -19,14 +19,6 @@ enum ShimResolution {
     Missing,
 }
 
-pub async fn handle_install_shim(
-    config: &Config,
-    target: &str,
-    replace_managed: bool,
-) -> Result<()> {
-    handle_install_shim_approved(config, target, replace_managed, true).await
-}
-
 pub async fn handle_install_shim_approved(
     config: &Config,
     target: &str,
@@ -66,16 +58,6 @@ pub async fn handle_install_shim_approved(
         ShimResolution::Conflict => bail_ambiguous(category),
         ShimResolution::Missing => bail_shim_missing(category),
     }
-}
-
-pub async fn handle_uninstall_shim(
-    config: &Config,
-    target: &str,
-    force: bool,
-    purge: bool,
-    dry_run: bool,
-) -> Result<()> {
-    handle_uninstall_shim_approved(config, target, force, purge, dry_run, true).await
 }
 
 pub async fn handle_uninstall_shim_approved(
@@ -400,7 +382,7 @@ mod tests {
         let config = config_in(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install_shim(&config, "shell/utils/shine-env-export", false)
+        handle_install_shim_approved(&config, "shell/utils/shine-env-export", false, true)
             .await
             .unwrap();
         let selected = crate::bin_links::command_path_for_name(
@@ -414,9 +396,16 @@ mod tests {
         assert!(selected.exists());
         assert!(!sibling.exists());
 
-        handle_uninstall_shim(&config, "shell/utils/shine-env-export", false, false, false)
-            .await
-            .unwrap();
+        handle_uninstall_shim_approved(
+            &config,
+            "shell/utils/shine-env-export",
+            false,
+            false,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
         assert!(!selected.exists());
 
         fs::remove_dir_all(dir).await.unwrap();

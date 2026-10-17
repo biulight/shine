@@ -21,9 +21,7 @@ use anyhow::{Context, Result};
 
 pub use commands::{BootstrapCliOptions, handle_info, handle_init, handle_list, handle_status};
 pub use detect::detect_os_id;
-pub use managed::{
-    handle_apply_approved, handle_uninstall, handle_uninstall_approved, managed_updates,
-};
+pub use managed::{handle_apply_approved, handle_uninstall_approved, managed_updates};
 pub(crate) use managed::{
     handle_upgrade_managed_target_with_result_approved, handle_upgrade_managed_with_result_prepared,
 };

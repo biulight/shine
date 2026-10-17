@@ -359,7 +359,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
-        super::super::install::handle_install(&config, Some("sample"), false, false)
+        super::super::install::handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
 

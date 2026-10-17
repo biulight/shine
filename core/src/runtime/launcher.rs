@@ -528,7 +528,7 @@ pub async fn link_executables_with_host(
     Ok(report)
 }
 
-pub async fn link_is_current_with_host(
+pub(super) async fn link_is_current_with_host(
     host: &impl FileSystemObservationHost,
     link_path: &Path,
     source: &Path,

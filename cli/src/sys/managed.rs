@@ -82,10 +82,6 @@ pub(crate) async fn handle_apply_with_result_approved(
     .await
 }
 
-pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Result<()> {
-    handle_uninstall_approved(config, item, dry_run, true).await
-}
-
 pub async fn handle_uninstall_approved(
     config: &Config,
     item: &str,

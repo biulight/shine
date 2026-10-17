@@ -31,6 +31,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/launcher/tests.rs` | Launcher consumer regressions against production Host APIs and prepared transaction resources; no parallel test-only filesystem implementation |
 | `core/src/runtime/operation_lock.rs` | Persistent OS file locks and configuration-scoped App/Shell/Sys lifecycle serialization |
 | `core/src/runtime/tests/` | Test-only runtime harness and regressions spanning domain modules; `lifecycle_concurrency.rs` covers receipt preservation and approval revalidation under contention |
+| `core/src/runtime/tests/harness.rs`, `core/tests/runtime_boundary.rs` | Captured-input and virtual-state harnesses exercise production Frontend App/Shell inspection and assert read-only Host operations |
 | `core/src/runtime/tests/refactoring_contracts.rs` | Cross-module App static/generator receipt preservation and Shell read-only interruption/recovery/retry contracts |
 | `core/src/runtime/process_scope.rs` | Isolated-process cancellation guard and scoped Unix foreground-terminal handoff |
 | `core/src/runtime/review_path.rs` | Shared root-aware path identity encoding for planners and App/Shell/Sys action executors |

@@ -12,15 +12,6 @@ use shine_core::runtime::{
 
 use super::report::{print_install_error, print_install_success};
 
-pub async fn handle_refresh(
-    config: &Config,
-    category: &str,
-    file_selector: Option<&str>,
-    force: bool,
-) -> Result<()> {
-    handle_refresh_approved(config, category, file_selector, force, true).await
-}
-
 pub async fn handle_refresh_approved(
     config: &Config,
     category: &str,
@@ -201,7 +192,9 @@ impl RuntimeObserver for RefreshObserver {
 mod tests {
     use super::*;
     use crate::apps::metadata;
-    use crate::apps::{handle_install, handle_upgrade_installed_target_with_result_approved};
+    use crate::apps::{
+        handle_install_approved, handle_upgrade_installed_target_with_result_approved,
+    };
     use crate::status::{FileStatus, build_app_rows};
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
@@ -319,7 +312,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     async fn manual_generator_skips_status_and_upgrade_but_refreshes_explicitly() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
         let config = write_fixture(&root, false).await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
 
@@ -362,7 +355,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         assert_eq!(fs::read(&dest).await.unwrap(), b"first-v1\n");
 
         crate::trust::grant_current_for_test(&config, "app/sample").await;
-        handle_refresh(&config, "sample", Some("first.txt"), false)
+        handle_refresh_approved(&config, "sample", Some("first.txt"), false, true)
             .await
             .unwrap();
         assert_eq!(fs::read(&dest).await.unwrap(), b"first-v2\n");
@@ -386,7 +379,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
             .replace("auto = false", "auto = true");
         fs::write(&metadata_path, metadata).await.unwrap();
         crate::trust::grant_current_for_test(&config, "app/sample").await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
 
@@ -441,7 +434,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         let root = crate::test_support::make_temp_dir("shine-generator-evaluation").await;
         let config = write_fixture(&root, false).await;
         crate::trust::grant_current_for_test(&config, "app/sample").await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let app_dir = config.presets_dir().join("app/sample");
@@ -481,7 +474,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     async fn refresh_selector_and_force_preserve_other_generated_files() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
         let config = write_fixture(&root, true).await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let app_dir = config.presets_dir().join("app/sample");
@@ -497,13 +490,13 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         assert!(
-            handle_refresh(&config, "sample", Some("first.txt"), false)
+            handle_refresh_approved(&config, "sample", Some("first.txt"), false, true)
                 .await
                 .is_err()
         );
         assert_eq!(fs::read(&first_dest).await.unwrap(), b"user edit\n");
         crate::trust::grant_current_for_test(&config, "app/sample").await;
-        handle_refresh(&config, "sample", Some("first.txt"), true)
+        handle_refresh_approved(&config, "sample", Some("first.txt"), true, true)
             .await
             .unwrap();
         assert_eq!(fs::read(&first_dest).await.unwrap(), b"first-v2\n");
@@ -522,7 +515,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     async fn refresh_keeps_last_good_file_and_continues_after_generator_failure() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
         let config = write_fixture(&root, true).await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let app_dir = config.presets_dir().join("app/sample");
@@ -537,7 +530,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         assert!(
-            handle_refresh(&config, "sample", None, false)
+            handle_refresh_approved(&config, "sample", None, false, true)
                 .await
                 .is_err()
         );
@@ -558,14 +551,14 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     async fn refresh_requires_the_generator_condition_env() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
         let mut config = write_fixture(&root, false).await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         config.env.remove("SOURCE_URL");
         let dest = root.join("dest/first.txt");
 
         assert!(
-            handle_refresh(&config, "sample", Some("first.txt"), false)
+            handle_refresh_approved(&config, "sample", Some("first.txt"), false, true)
                 .await
                 .is_err()
         );

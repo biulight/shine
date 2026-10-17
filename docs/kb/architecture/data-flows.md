@@ -269,6 +269,12 @@ execution-capable entry. `runtime/sys/inspect.rs` reads managed receipts and com
 snapshot inputs without live resource/provider probes. Preset parsing and desired Sys builders
 need no Host; manifest version/error rules and read order remain unchanged (ADR 0129).
 
+The generic runtime harness now enters these Frontend inspection paths: App assertions use a
+receipt and actual destination, and Shell assertions use declared command availability. Both
+check read-only Host operations. The retired generic `inspect_snapshot` path and its DTOs have
+no production role. CLI lifecycle tests call dispatch's `*_approved` handlers with an explicit
+confirmation choice; removing convenience wrappers does not change approval flow (ADR 0138).
+
 Shell source discovery and description tests follow captured embedded/external snapshots into
 `CoreRuntime::shell_categories`; the retired CLI `.sh` scanners are not compatibility owners.
 Validation output tests follow `validate_path` into Core's discovery, validation and report

@@ -15,15 +15,6 @@ use shine_core::runtime::{
 };
 use std::collections::BTreeSet;
 
-pub async fn handle_install(
-    config: &Config,
-    category: Option<&str>,
-    dry_run: bool,
-    force: bool,
-) -> Result<()> {
-    handle_install_approved(config, category, dry_run, force, true).await
-}
-
 pub async fn handle_install_approved(
     config: &Config,
     category: Option<&str>,
@@ -335,7 +326,7 @@ impl RuntimeObserver for InstallObserver<'_> {
 mod tests {
     #![allow(clippy::await_holding_lock)]
     #[cfg(windows)]
-    use super::super::uninstall::handle_uninstall;
+    use super::super::uninstall::handle_uninstall_approved;
     use super::super::uninstall::handle_uninstall_with_result;
     use super::*;
     use crate::config::Config;
@@ -640,7 +631,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("git"), false, false)
+        handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
         let manifest_first = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
@@ -648,7 +639,7 @@ mod tests {
             .unwrap();
         let count_first = manifest_first.entries.len();
 
-        handle_install(&config, Some("git"), false, false)
+        handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
         let manifest_second = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
@@ -698,14 +689,14 @@ source = \"file.conf\"\n",
         crate::trust::grant_current_for_test(&config, "app/hooktest").await;
 
         // First install writes the file → post_install fires.
-        handle_install(&config, Some("hooktest"), false, false)
+        handle_install_approved(&config, Some("hooktest"), false, false, true)
             .await
             .unwrap();
         assert!(marker.exists(), "post_install must run on first install");
 
         // Second install changes nothing → hook must not fire again.
         fs::remove_file(&marker).await.unwrap();
-        handle_install(&config, Some("hooktest"), false, false)
+        handle_install_approved(&config, Some("hooktest"), false, false, true)
             .await
             .unwrap();
         assert!(
@@ -714,7 +705,7 @@ source = \"file.conf\"\n",
         );
 
         // Replacement install (force) rewrites the file → post_install fires again.
-        handle_install(&config, Some("hooktest"), false, true)
+        handle_install_approved(&config, Some("hooktest"), false, true, true)
             .await
             .unwrap();
         assert!(
@@ -788,7 +779,13 @@ source = \"file.conf\"\n",
             .enable_all()
             .build()
             .unwrap()
-            .block_on(handle_install(&config, Some("docker"), true, false))
+            .block_on(handle_install_approved(
+                &config,
+                Some("docker"),
+                true,
+                false,
+                true,
+            ))
             .unwrap_err();
 
         assert!(
@@ -860,7 +857,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         .await
         .unwrap();
 
-        handle_install(&config, Some("docker-desktop-test"), false, false)
+        handle_install_approved(&config, Some("docker-desktop-test"), false, false, true)
             .await
             .unwrap();
 
@@ -879,9 +876,16 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             .await
             .unwrap();
 
-        handle_uninstall(&config, Some("docker-desktop-test"), false, false, false)
-            .await
-            .unwrap();
+        handle_uninstall_approved(
+            &config,
+            Some("docker-desktop-test"),
+            false,
+            false,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
 
         let removed: serde_json::Value =
             serde_json::from_slice(&fs::read(&destination).await.unwrap()).unwrap();
@@ -1022,7 +1026,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("ghostty"), false, false)
+        handle_install_approved(&config, Some("ghostty"), false, false, true)
             .await
             .unwrap();
 

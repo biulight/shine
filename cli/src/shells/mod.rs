@@ -13,7 +13,7 @@ mod uninstall;
 pub use deployment::{handle_launch_live, handle_render_live};
 pub(crate) use install::collect_update_lifecycle_result;
 pub use install::{
-    handle_completion_install, handle_init_template, handle_install, handle_install_approved,
+    handle_completion_install, handle_init_template, handle_install_approved,
     handle_install_dry_run,
 };
 pub(crate) use install::{
@@ -24,7 +24,7 @@ pub use recovery::handle_recover_approved;
 #[doc(hidden)]
 pub use report::handle_list_with_presets_note;
 pub use report::{ShellUpgradeReport, handle_info, handle_list};
-pub use uninstall::{handle_uninstall, handle_uninstall_approved};
+pub use uninstall::handle_uninstall_approved;
 
 use anyhow::{Result, bail};
 pub use shine_core::runtime::ShellType;

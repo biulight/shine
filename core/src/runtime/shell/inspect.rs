@@ -1,10 +1,9 @@
 //! Read-only Shell inspection: host observations followed by pure report projection.
 use super::delivery::DesiredShellDelivery;
 use super::*;
+use crate::runtime::launcher::link_is_current_with_host;
 use crate::runtime::planner::shell_snapshot_tree_current;
-use crate::runtime::{
-    InspectionChange, InspectionFileStatus, ShellFileInspection, link_is_current_with_host,
-};
+use crate::runtime::{InspectionChange, InspectionFileStatus, ShellFileInspection};
 use crate::runtime::{PresetSnapshot, RuntimeContext};
 
 struct ShellInspectionTarget<'a> {

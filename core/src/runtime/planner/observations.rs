@@ -57,7 +57,7 @@ pub(super) fn add_sys_bootstrap_install_permissions<H>(
             );
         }
     }
-    if crate::runtime::sys_install_requires_admin(os_id, install, item)? {
+    if crate::runtime::sys_bootstrap::sys_install_requires_admin(os_id, install, item)? {
         permissions.implicit(PermissionV1::Administrator);
     }
     for name in runtime.context().proxy_env.keys() {

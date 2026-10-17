@@ -13,15 +13,6 @@ use shine_core::lifecycle::LifecycleResultV1;
 use shine_core::lifecycle::{LifecycleEffect, LifecycleStatus};
 use shine_core::runtime::{PlanningInputVersions, ShellPlanRequest};
 
-pub async fn handle_uninstall(
-    config: &Config,
-    target: Option<&str>,
-    purge: bool,
-    dry_run: bool,
-) -> Result<()> {
-    handle_uninstall_approved(config, target, purge, dry_run, true).await
-}
-
 pub async fn handle_uninstall_approved(
     config: &Config,
     target: Option<&str>,
@@ -198,7 +189,7 @@ async fn handle_uninstall_with_reporter(
 #[cfg(test)]
 mod tests {
     use super::super::ShellType;
-    use super::super::install::handle_install;
+    use super::super::install::handle_install_approved;
     use super::super::profile::{append_path_to_shell_config, managed_shell_profile_path};
     use super::*;
     use std::path::PathBuf;
@@ -233,7 +224,9 @@ mod tests {
     async fn uninstall_removes_managed_resources_preserves_user_files_and_can_repeat() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
-        handle_install(&config, Some("proxy"), false).await.unwrap();
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
         let cached = config.presets_dir().join("shell/proxy/set_proxy.sh");
         let launcher = crate::bin_links::command_path_for_name(
             config.bin_dir(),
@@ -295,13 +288,13 @@ mod tests {
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("utils/shine-env-export"), false)
+        handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
             .await
             .unwrap();
-        handle_install(&config, Some("utils/shine-theme-sync"), false)
+        handle_install_approved(&config, Some("utils/shine-theme-sync"), false, true)
             .await
             .unwrap();
-        handle_uninstall(&config, Some("utils/shine-env-export"), false, false)
+        handle_uninstall_approved(&config, Some("utils/shine-env-export"), false, false, true)
             .await
             .unwrap();
 
@@ -359,16 +352,16 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "preset").await;
 
-        handle_install(&config, Some("custom/one"), false)
+        handle_install_approved(&config, Some("custom/one"), false, true)
             .await
             .unwrap();
-        handle_install(&config, Some("custom/two"), false)
+        handle_install_approved(&config, Some("custom/two"), false, true)
             .await
             .unwrap();
         let rendered = config.rendered_dir().join("shell/custom").join(source);
         assert!(rendered.exists());
 
-        handle_uninstall(&config, Some("custom/one"), false, false)
+        handle_uninstall_approved(&config, Some("custom/one"), false, false, true)
             .await
             .unwrap();
 
@@ -398,7 +391,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
-        handle_install(&config, Some("utils/shine-env-export"), false)
+        handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
             .await
             .unwrap();
 
@@ -433,7 +426,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
-        handle_install(&config, Some("utils/shine-env-export"), false)
+        handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
             .await
             .unwrap();
         let command = crate::bin_links::command_path_for_name(
@@ -544,13 +537,17 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, None, false).await.unwrap();
+        handle_install_approved(&config, None, false, true)
+            .await
+            .unwrap();
         let extra = config.presets_dir().join("shell/user-note.txt");
         fs::write(&extra, b"extra cache-tree file").await.unwrap();
         fs::write(config.config_path(), b"# keep config\n")
             .await
             .unwrap();
-        handle_uninstall(&config, None, true, false).await.unwrap();
+        handle_uninstall_approved(&config, None, true, false, true)
+            .await
+            .unwrap();
         assert!(
             !extra.exists(),
             "whole-shell purge includes extra cache-tree files"
@@ -578,7 +575,9 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, None, false).await.unwrap();
+        handle_install_approved(&config, None, false, true)
+            .await
+            .unwrap();
         let preset_path = config.presets_dir().join("shell/proxy/set_proxy.sh");
         assert!(preset_path.exists());
         let before = fs::read(&preset_path).await.unwrap();
@@ -633,14 +632,18 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, None, false).await.unwrap();
+        handle_install_approved(&config, None, false, true)
+            .await
+            .unwrap();
         let config_path =
             super::super::get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let before = fs::read_to_string(&config_path).await.unwrap();
         let profile_path = managed_shell_profile_path(&config);
         let profile_before = fs::read_to_string(&profile_path).await.unwrap();
 
-        handle_uninstall(&config, None, false, true).await.unwrap();
+        handle_uninstall_approved(&config, None, false, true, true)
+            .await
+            .unwrap();
 
         let after = fs::read_to_string(&config_path).await.unwrap();
         assert_eq!(before, after, "dry-run must not touch shell config");
@@ -660,10 +663,14 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("agent"), false).await.unwrap();
-        handle_install(&config, Some("proxy"), false).await.unwrap();
+        handle_install_approved(&config, Some("agent"), false, true)
+            .await
+            .unwrap();
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
 
-        handle_uninstall(&config, Some("proxy"), false, false)
+        handle_uninstall_approved(&config, Some("proxy"), false, false, true)
             .await
             .unwrap();
 
@@ -714,12 +721,12 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "preset").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
         assert!(config.bin_dir().join("my_tool").exists());
 
-        handle_uninstall(&config, Some("custom"), false, false)
+        handle_uninstall_approved(&config, Some("custom"), false, false, true)
             .await
             .unwrap();
 

@@ -8,18 +8,18 @@ mod report;
 mod uninstall;
 mod upgrade;
 
-pub use build::{handle_build, handle_build_approved, handle_unbuild_approved};
+pub use build::{handle_build_approved, handle_unbuild_approved};
 #[doc(hidden)]
 pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};
-pub use install::{handle_install, handle_install_approved};
+pub use install::handle_install_approved;
 pub use metadata::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
     load_active_categories, load_embedded_categories, load_installed_categories,
 };
 pub use recovery::handle_recover_approved;
-pub use refresh::{handle_refresh, handle_refresh_approved};
-pub use uninstall::{handle_uninstall, handle_uninstall_approved};
+pub use refresh::handle_refresh_approved;
+pub use uninstall::handle_uninstall_approved;
 pub use upgrade::AppUpgradeReport;
 #[cfg(test)]
 pub(crate) use upgrade::handle_upgrade_installed_target_with_result;
@@ -147,11 +147,13 @@ mod tests {
             info::handle_info(&config, "surge", false, false)
                 .await
                 .unwrap_err(),
-            build::handle_build(&config, "surge").await.unwrap_err(),
-            refresh::handle_refresh(&config, "surge", None, false)
+            build::handle_build_approved(&config, "surge", true)
                 .await
                 .unwrap_err(),
-            install::handle_install(&config, Some("surge"), false, false)
+            refresh::handle_refresh_approved(&config, "surge", None, false, true)
+                .await
+                .unwrap_err(),
+            install::handle_install_approved(&config, Some("surge"), false, false, true)
                 .await
                 .unwrap_err(),
         ] {
@@ -210,7 +212,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        install::handle_install(&config, Some("sample"), false, false)
+        install::handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let destination = dir.join(".config/sample/daemon.json");
@@ -222,7 +224,7 @@ mod tests {
         )
         .await
         .unwrap();
-        uninstall::handle_uninstall(&config, Some("sample"), false, false, false)
+        uninstall::handle_uninstall_approved(&config, Some("sample"), false, false, false, true)
             .await
             .unwrap();
 
@@ -413,7 +415,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -446,7 +448,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -503,10 +505,10 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
-        handle_install(&config, Some("other"), false, false)
+        handle_install_approved(&config, Some("other"), false, false, true)
             .await
             .unwrap();
 
@@ -729,7 +731,7 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         assert!(
@@ -787,7 +789,7 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let mut sep = crate::output::SectionSeparator::new();
@@ -825,7 +827,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         write_external_sample_app_with_post_upgrade(
@@ -864,7 +866,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         write_external_sample_app_with_extra(
@@ -917,7 +919,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         write_external_sample_app_with_extra(
@@ -965,7 +967,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1007,7 +1009,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1049,7 +1051,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1091,7 +1093,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1135,7 +1137,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let cat_dir = dir.join("presets/app/sample");
@@ -1192,7 +1194,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");

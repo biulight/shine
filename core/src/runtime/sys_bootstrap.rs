@@ -4,7 +4,7 @@ mod execution;
 mod provider;
 mod selection;
 use detection::DetectionResult;
-pub use provider::sys_install_requires_admin;
+pub(super) use provider::sys_install_requires_admin;
 use provider::{install_requires_admin, package_preview};
 use selection::resolve_selection;
 

@@ -117,13 +117,6 @@ pub struct ManagedFileReceipt {
     pub restart_hint: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResourcePlan {
-    pub description: String,
-    pub requires_admin: bool,
-    pub restart_hint: Option<String>,
-}
-
 #[derive(Clone, Debug)]
 pub struct ResourceOutcome {
     pub changed: bool,

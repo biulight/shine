@@ -756,7 +756,7 @@ async fn uninstall_json_merge(
 }
 
 impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
-    pub fn validate_app_category_snapshot(&self, category: &str) -> Result<bool> {
+    pub(super) fn validate_app_category_snapshot(&self, category: &str) -> Result<bool> {
         let metadata = format!("app/{category}/shine.toml");
         let has_metadata = self.presets.file(&metadata).is_some();
         let categories = self.app_categories(Some(category))?;

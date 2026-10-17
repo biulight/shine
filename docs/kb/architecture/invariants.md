@@ -35,6 +35,9 @@ bugs. Check this list before changing the modules named in each entry.
   Seal and stored-secret process regressions use `handle_seal` and `decrypt_with_config`; profile
   rendering tests live beside their Core owner so CLI test wrappers do not require public helpers.
   Preserve tag-based decrypt routing and legacy source/recipient cases (ADR 0137).
+  Generic harness tests enter Frontend App/Shell inspection with captured inputs and virtual
+  state; they must not preserve a second root-plus-path inspection algorithm. CLI lifecycle tests
+  pass their confirmation choice explicitly to production approved handlers (ADR 0138).
 - **Ordinary frontend inspection requires observation capability only.** App, Shell and Sys
   default inspection, including the safe `ReadOnlyFrontend` surface, require only
   `FileSystemObservationHost`. Sys status compares desired metadata with receipts; it must not

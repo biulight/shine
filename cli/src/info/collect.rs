@@ -112,7 +112,7 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shells::handle_install;
+    use crate::shells::handle_install_approved;
     use tokio::fs;
 
     #[cfg(windows)]
@@ -161,7 +161,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
         crate::trust::grant_current_for_test(&config, "shell/custom/one").await;
-        handle_install(&config, Some("custom/one"), false)
+        handle_install_approved(&config, Some("custom/one"), false, true)
             .await
             .unwrap();
 

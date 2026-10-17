@@ -10,16 +10,6 @@ use shine_core::lifecycle::LifecycleOperation;
 use shine_core::lifecycle::LifecycleResultV1;
 use shine_core::runtime::{AppPlanRequest, PlanningInputVersions};
 
-pub async fn handle_uninstall(
-    config: &Config,
-    category: Option<&str>,
-    force: bool,
-    purge: bool,
-    dry_run: bool,
-) -> Result<()> {
-    handle_uninstall_approved(config, category, force, purge, dry_run, true).await
-}
-
 pub async fn handle_uninstall_approved(
     config: &Config,
     category: Option<&str>,
@@ -362,7 +352,7 @@ impl shine_core::runtime::RuntimeObserver for UninstallObserver<'_> {
 mod tests {
     #![allow(clippy::await_holding_lock)]
     #[cfg(unix)]
-    use super::super::install::handle_install;
+    use super::super::install::handle_install_approved;
     use super::*;
     use crate::install_core::manifest::AppInstallStrategy;
     #[cfg(unix)]
@@ -559,7 +549,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("git"), false, false)
+        handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
 
@@ -634,7 +624,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -679,10 +669,10 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         // Install two categories so targeted removal can prove isolation.
-        handle_install(&config, Some("git"), false, false)
+        handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
-        handle_install(&config, Some("starship"), false, false)
+        handle_install_approved(&config, Some("starship"), false, false, true)
             .await
             .unwrap();
         let manifest_all = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
@@ -1080,7 +1070,7 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         // Nothing installed — uninstalling a specific category should succeed silently
-        handle_uninstall(&config, Some("nonexistent"), false, false, false)
+        handle_uninstall_approved(&config, Some("nonexistent"), false, false, false, true)
             .await
             .unwrap();
 

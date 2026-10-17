@@ -8,7 +8,7 @@ pub(super) struct ProviderInvocation {
     pub(super) requires_admin: bool,
 }
 
-pub fn sys_install_requires_admin(
+pub(in crate::runtime) fn sys_install_requires_admin(
     os_id: &str,
     install: &SysInstall,
     item: &SysItem,
