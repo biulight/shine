@@ -579,18 +579,6 @@ mod interoperability {
 mod controlled_process_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    struct Restore(Option<std::ffi::OsString>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            // SAFETY: shared environment lock is held until restoration completes.
-            unsafe {
-                match &self.0 {
-                    Some(v) => std::env::set_var("PATH", v),
-                    None => std::env::remove_var("PATH"),
-                }
-            }
-        }
-    }
     fn tool(dir: &std::path::Path, name: &str, fails: bool) {
         let path = dir.join(name);
         let script = if fails {
@@ -607,7 +595,6 @@ mod controlled_process_tests {
     #[test]
     fn candidates_cancellation_and_bounded_unwrap() {
         let _lock = crate::test_support::env_lock();
-        let _restore = Restore(std::env::var_os("PATH"));
         let dir =
             std::env::temp_dir().join(format!("shine-hybrid-controlled-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).unwrap();
@@ -676,6 +663,7 @@ mod controlled_process_tests {
                 .contains("limit")
             );
         });
+        drop(_lock);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
