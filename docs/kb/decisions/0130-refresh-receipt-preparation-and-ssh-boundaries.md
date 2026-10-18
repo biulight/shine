@@ -13,7 +13,9 @@ also contained pure option parsing and POSIX/PowerShell command construction.
 ## Decision
 
 - Keep the approved App refresh entry point and caller-owned lifecycle lock/fresh Plan validation.
-  Use named selected-file, prepared and applied states. Preserve exact receipt source/destination
+  Keep selected-file records and the per-file helper, but orchestrate selection, application and
+  completion directly. Single-caller prepared/applied transport states added no invariant and are
+  removed. Preserve exact receipt source/destination
   admission, selector/default order, administrator authorization before generation, generator trust
   and environment contracts, per-file failure continuation, result projection and force policy.
   Save the shared manifest once after changed files, then run hooks. Receipt-save failure still

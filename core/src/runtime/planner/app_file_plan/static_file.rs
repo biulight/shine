@@ -50,10 +50,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             None => PlanActionV1::Create,
             Some(entry)
                 if entry.destination == destination
-                    && current
-                        .as_deref()
-                        .and_then(|bytes| installed_app_hash(file, bytes).ok().flatten())
-                        == Some(entry.content_hash)
+                    && current.as_deref().and_then(|bytes| {
+                        installed_strategy_hash(&file.install_strategy, bytes)
+                            .ok()
+                            .flatten()
+                    }) == Some(entry.content_hash)
                     && desired_hash == entry.content_hash =>
             {
                 PlanActionV1::None
@@ -248,9 +249,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             return Ok(false);
         }
         if json_action_candidate
-            && current
-                .as_deref()
-                .is_some_and(|bytes| installed_app_hash(file, bytes).is_err())
+            && current.as_deref().is_some_and(|bytes| {
+                installed_strategy_hash(&file.install_strategy, bytes).is_err()
+            })
         {
             steps.push(
                 PlanStepV1::new(

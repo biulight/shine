@@ -48,8 +48,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/planner/tests.rs`, `planner/tests/` | Shared in-memory fixtures and domain/contract-grouped planning, transaction, recovery and frontend regressions |
 | `core/src/runtime/planner/{sys_managed_plan,sys_specialized,sys_support}.rs` | Managed Sys, bootstrap and profile planning with shared Sys observation helpers |
 | `core/src/runtime/planner/approved.rs` | Lifecycle locks, fresh-plan approval revalidation and approved domain entry points |
-| `core/src/runtime/planner/app_actions.rs` | Approved App factory routing, per-file inputs, exact step matching and ordered Action IR wrapping |
-| `core/src/runtime/planner/app_actions/{copy,json_merge,file_relocation,json_relocation}.rs` | Observation-only resource admission/rechecks and payload-free static Action construction |
+| `core/src/runtime/planner/app_actions.rs` | Approved App factory with direct resource branches, exact step matching and ordered Action IR wrapping |
 | `core/src/runtime/planner/app_remove_actions.rs` | Existing receipt-driven uninstall and stale-prune Action construction |
 | `core/src/runtime/planner/tests/app_action_factory.rs` | Mixed resource order/identity/permission, Preserve/generator exclusion, typed relocation and late-state factory regressions |
 | `core/src/runtime/planner/{observations,inputs,permissions,code_boundaries}.rs` | State/input capture, permissions, typed code-boundary assembly and Plan finalization |
@@ -81,7 +80,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/app/assessment_tests.rs` | Consumer regressions for generator assessment, inspection priority, approved lifecycle reports and last-known-good receipts |
 | `core/src/runtime/app/outcome.rs` | Internal typed App file outcomes projected into the existing local report fields |
 | `core/src/runtime/app/lifecycle/{install,remove}.rs` | App preparation, per-file apply/receipt commit and finalization; caller retains lifecycle lock and exact approval |
-| `core/src/runtime/app/refresh.rs` | Prepared/applied states for explicit refresh; per-file continuation and final receipt-before-hook completion under the approved caller |
+| `core/src/runtime/app/refresh.rs` | Direct orchestration of explicit refresh; per-file continuation and final receipt-before-hook completion under the approved caller |
 | `core/src/runtime/app/refresh_selection.rs` | Shared pure generated-file selection and exact receipt admission for planning and execution; each caller retains fresh capture and error ordering |
 | `core/src/runtime/app/upgrade.rs` | Upgrade phases under the lifecycle lock; typed unjournaled/update/relocation completion retains transaction guards through receipt save and commit |
 | `core/src/runtime/shell_launch.rs` | Installed-receipt Live Bun preparation under the operation lock; typed launch description |

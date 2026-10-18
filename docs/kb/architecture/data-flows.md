@@ -730,19 +730,18 @@ retained files from receipt cleanup and offers no force override.
 ## Declarative App action and recovery
 
 `planner/app_actions.rs` remains the approved factory entry. It validates approval before reading
-Host state, resolves each static file from the captured snapshot and initial manifest, then dispatches
-in the existing order to private JSON relocation, Copy relocation, JSON merge or Copy handlers. Pure JSON
+Host state, resolves each static file from the captured snapshot and initial manifest, then evaluates
+direct JSON relocation, Copy relocation, JSON merge or Copy branches in that order. Pure JSON
 subset operations come from `runtime/managed_json.rs`, shared by App hashing adapters, planners and
 executors/recovery. Its extraction changes no bytes, hashes, parsing/error order or missing/partial
 subset semantics. Host reads/writes, exact approval, journal publication and receipt transitions
 remain in the existing domain phases (ADR 0125).
-A per-file input owns desired bytes only in memory and carries the same request/Plan/manifest/file
-references; handlers retain their source/destination/backup/rollback observation order, skip rules
-and diagnostics. One common wrapper retains Action/operation IDs and file ordering. Ordinary Create/
+Desired bytes remain local in memory alongside request/Plan/manifest/file references; branches retain
+their source/destination/backup/rollback observation order, skip rules and diagnostics. One common wrapper retains Action/operation IDs and file ordering. Ordinary Create/
 Update step matching remains target/resource/action based; relocation additionally requires its typed
 step kind. Uninstall and appended upgrade stale-prune still use `app_remove_actions.rs`, including
-its existing manifest reloads. All factory handlers accept only `FileSystemObservationHost`; no
-factory input grants execution authority. See
+its existing manifest reloads. The factory requires only `FileSystemObservationHost`; construction
+locals grant no execution authority. See
 [ADR 0121](../decisions/0121-resource-specific-app-action-factories.md).
 
 Approved App install routes two deliberately narrow creation cases through the Roadmap Phase 4

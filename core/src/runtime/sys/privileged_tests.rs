@@ -2,7 +2,7 @@ use super::*;
 use crate::runtime::{FileSystemObservationHost, HostOperation, InMemoryHost};
 
 #[tokio::test]
-async fn privileged_sys_file_policy_and_failure_compatibility() {
+async fn privileged_sys_install_routes_and_restores_failed_writes() {
     for privileged in [false, true] {
         let host = InMemoryHost::new();
         let destination = std::env::temp_dir().join("shine-sys-privileged-contract");
@@ -35,6 +35,25 @@ async fn privileged_sys_file_policy_and_failure_compatibility() {
             matches!(outcome, InstallOutcome::AlreadyManaged),
             privileged
         );
+        assert_eq!(host.read(&backup).await.unwrap(), b"original");
+        if !privileged {
+            assert!(
+                !host
+                    .operations()
+                    .iter()
+                    .any(|op| matches!(op, HostOperation::AcquirePrivilegedOperation))
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn privileged_sys_uninstall_preserves_edits_and_restores_backups() {
+    for privileged in [false, true] {
+        let host = InMemoryHost::new();
+        let destination = std::env::temp_dir().join("shine-sys-privileged-contract");
+        let backup = crate::install::backup_path(&destination);
+        host.put_file(&backup, b"original".to_vec());
         let entry = AppEntry {
             source: "sys/demo/config".into(),
             destination: destination.clone(),

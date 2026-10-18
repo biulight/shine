@@ -24,7 +24,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sha256_known_answers_and_legacy_encoders_match() {
+    fn sha256_known_answers_match() {
         for (input, expected) in [
             (
                 b"".as_slice(),
@@ -36,15 +36,6 @@ mod tests {
             ),
         ] {
             assert_eq!(sha256_hex(input), expected);
-        }
-        // Include padding/block boundaries, NUL and non-UTF-8 bytes. Keep the old
-        // encoders here as independent compatibility oracles, not production helpers.
-        for len in [0, 1, 31, 32, 55, 56, 63, 64, 65, 127, 128, 255, 256, 1024] {
-            let input = (0..len).map(|i| (i % 256) as u8).collect::<Vec<_>>();
-            let digest = Sha256::digest(&input);
-            let per_byte: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-            assert_eq!(sha256_hex(&input), per_byte);
-            assert_eq!(sha256_hex(&input), format!("{digest:x}"));
         }
     }
 

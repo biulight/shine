@@ -318,9 +318,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **App refresh requires exact receipt ownership.** Destination equality alone cannot select a
   generated file: the receipt source must match the requested category and logical source file.
   Both planning and execution enforce this even with force; a foreign receipt never authorizes
-  generator execution or reassignment of its destination. Named refresh preparation, application and completion
-  states retain the approved caller's lifecycle lock, selection-before-authorization, per-file
-  continuation and one final receipt save before hooks. A failed final save does not roll back
+  generator execution or reassignment of its destination. Direct refresh orchestration retains the
+  approved caller's lifecycle lock, selection-before-authorization, per-file continuation and one final receipt save before hooks. A failed final save does not roll back
   already-applied refresh writes; hooks do not run (ADR 0130).
 - **App executable environment is explicit.** Generators receive only fixed `SHINE_APP_*` contract
   variables plus their `generator.env` mappings. Artifacts receive only the fixed contract plus
@@ -483,12 +482,12 @@ bugs. Check this list before changing the modules named in each entry.
   correspondence with independently appended vectors or positional truncating iteration. Pairing
   does not replace Action validation, permission checks, journal-before-effect ordering, per-action
   progress saves or fresh recovery approval (ADR 0117).
-- **App factory extraction preserves per-resource admission.** The observation-only factory validates
+- **App factory preserves per-resource admission.** The observation-only factory validates
   approval before Host reads, then tries JSON relocation, Copy relocation, JSON merge and Copy in
   that order. Relocation requires its exact typed Update step; ordinary Create/Update matching keeps
   its existing target/resource/action rule. Generators remain excluded, non-admitted files emit no
-  action, and upgrade stale-prune actions follow active-file actions. Private construction inputs are
-  local to that factory call and never replace fresh planning, executor authority or rollback checks
+  action, and upgrade stale-prune actions follow active-file actions. Desired bytes and construction
+  locals remain local to that factory call and never replace fresh planning, executor authority or rollback checks
   (ADR 0121).
 - **The executable Action IR is not the security Plan.** `PlanV1` remains a payload-free review and
   approval contract. `ActionIrV1` is created for execution only after planning and may carry resolved

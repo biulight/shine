@@ -22,24 +22,13 @@ Only the final hash/hex primitives are shared. This is not a common fingerprint 
 opportunity to change an existing protocol's framing; such changes require independent versioning.
 Approval, locks, receipts, journals and recovery dispatch remain unchanged.
 
-## Validation
+## Coverage
 
-Before extraction, capture fixed snapshot, Plan fingerprint and workspace-input vectors from
-`c431aeb`; keep exact expected values as permanent consumer regressions. Independently calculate
-the workspace-input and local-cache JSON tuple vectors. Check standard SHA-256 known answers,
-leading zeroes, every byte value and padding/block boundaries against both old hex encoders.
-Keep invalid length, non-hex and uppercase digest rejection with the Plan owners. Existing Plan,
-broker, cache, migration, package and recovery tests validate the consumers of the shared helper.
-Test-only historical encoders remain independent compatibility oracles.
+Keep fixed snapshot, Plan fingerprint and workspace-input vectors captured before extraction from
+`c431aeb`, independently calculated cache vectors, standard SHA-256 known answers, leading zeroes
+and every byte value. Plan owners retain invalid length, non-hex and uppercase rejection. Existing
+broker, cache, migration, package and recovery tests exercise their own framing and consumers.
 
-A second review used a temporary differential harness with the original `c431aeb` Plan module
-and extracted original/current domain functions. All 708 output comparisons matched, covering
-snapshot and Plan fingerprints, Plan JSON and approvals, workspace inputs and cache contexts,
-package/migration hashes, broker inputs, lifecycle hashes, resource/recovery IDs, normalized
-file-lock keys, project-cache paths and maintenance scopes. Cases included empty/binary inputs,
-SHA-256 block boundaries, missing versus empty sources, source/recipient order, Unicode and
-non-UTF-8 paths. Source review also confirmed unchanged domain versions, prefixes and framing.
-
-Local macOS validation passed 1711 all-feature workspace tests (two skipped), including all four
-new tests, and all-target/all-feature Clippy with warnings denied. Formatting, spelling and KB
-relative-link checks passed. No native Windows/Linux execution was performed for this change.
+Historical encoders and block-boundary comparisons served the extraction audit; they are not
+permanent parallel implementations. The shared encoder retains direct known-answer coverage.
+Native platform behavior requires separate evidence from local compatibility tests.

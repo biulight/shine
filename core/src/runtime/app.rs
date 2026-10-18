@@ -484,7 +484,7 @@ where
                 Err(error) => return Err(error.into_anyhow("observing App uninstall preview")),
             };
             if let Some(bytes) = &current {
-                let modified = installed_app_entry_hash(entry, bytes)?
+                let modified = installed_strategy_hash(&entry.install_strategy, bytes)?
                     .is_some_and(|hash| hash != entry.content_hash);
                 if modified && !force {
                     return Ok(UninstallOutcome::UserModified);
@@ -578,18 +578,10 @@ pub(crate) fn desired_app_hash(file: &AppFile, content: &[u8]) -> Result<u64> {
     }
 }
 
-pub(crate) fn installed_app_hash(file: &AppFile, content: &[u8]) -> Result<Option<u64>> {
-    installed_strategy_hash(&file.install_strategy, content)
-}
-
-pub(crate) fn installed_app_entry_hash(
-    entry: &crate::install::AppEntry,
+pub(in crate::runtime) fn installed_strategy_hash(
+    strategy: &AppInstallStrategy,
     content: &[u8],
 ) -> Result<Option<u64>> {
-    installed_strategy_hash(&entry.install_strategy, content)
-}
-
-fn installed_strategy_hash(strategy: &AppInstallStrategy, content: &[u8]) -> Result<Option<u64>> {
     match strategy {
         AppInstallStrategy::Copy => Ok(Some(hash_content(content))),
         AppInstallStrategy::JsonMerge { managed_keys } => {

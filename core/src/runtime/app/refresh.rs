@@ -1,18 +1,6 @@
 //! Explicit refresh selection, per-file application and final receipt/hook completion.
 use super::*;
 
-struct PreparedRefresh {
-    category: AppCategory,
-    manifest: AppManifest,
-    selected: Vec<SelectedRefreshFile>,
-}
-struct AppliedRefresh {
-    category: AppCategory,
-    manifest: AppManifest,
-    report: AppLifecycleReport,
-    changed: BTreeSet<String>,
-}
-
 impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> {
     /// The approved caller retains the lifecycle lock and fresh approval boundary.
     pub(crate) async fn refresh_app_generators(
@@ -21,22 +9,12 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
         observer: &mut impl RuntimeObserver,
         interaction: &mut impl RuntimeInteraction,
     ) -> Result<AppLifecycleReport> {
-        let prepared = self.prepare_app_refresh(&request, interaction).await?;
-        let applied = self.apply_app_refresh(&request, prepared, observer).await;
-        self.finish_app_refresh(applied, observer).await
-    }
-
-    async fn prepare_app_refresh(
-        &self,
-        request: &AppRefreshRequest,
-        interaction: &mut impl RuntimeInteraction,
-    ) -> Result<PreparedRefresh> {
         let categories = self.app_categories(Some(&request.category))?;
         let category = categories
             .first()
             .cloned()
             .with_context(|| format!("app preset category not found: {}", request.category))?;
-        let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
+        let mut manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
         let candidates = select_refresh_files(&category, request.file.as_deref())?;
         let selected = self.select_installed_refresh_files(
             &category,
@@ -56,31 +34,13 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
             bail!("administrator permission was not granted");
         }
 
-        Ok(PreparedRefresh {
-            category,
-            manifest,
-            selected,
-        })
-    }
-
-    async fn apply_app_refresh(
-        &self,
-        request: &AppRefreshRequest,
-        prepared: PreparedRefresh,
-        observer: &mut impl RuntimeObserver,
-    ) -> AppliedRefresh {
-        let PreparedRefresh {
-            category,
-            mut manifest,
-            selected,
-        } = prepared;
         let mut report =
             AppLifecycleReport::new(LifecycleOperation::Update, false, vec![category.clone()]);
         let mut changed = BTreeSet::new();
         for selected in selected {
             let source = selected.file.source_rel.clone();
             let result = self
-                .refresh_app_file(request, &selected, &mut manifest, observer)
+                .refresh_app_file(&request, &selected, &mut manifest, observer)
                 .await;
             let SelectedRefreshFile {
                 file,
@@ -130,12 +90,22 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
                 .finish(file_outcome),
             );
         }
-        AppliedRefresh {
-            category,
-            manifest,
-            report,
-            changed,
+        if !changed.is_empty() {
+            save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
+            let hooks = self
+                .run_app_hooks(
+                    AppHookRequest {
+                        categories: vec![category],
+                        changed,
+                        phase: AppHookPhase::PostUpgrade,
+                        show_success: true,
+                    },
+                    observer,
+                )
+                .await;
+            report.lifecycle.outcomes.extend(hooks.outcomes);
         }
+        Ok(report)
     }
 
     async fn refresh_app_file(
@@ -176,7 +146,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
             crate::install::transforms::apply(&file.transforms, &bytes, &self.context.env)?;
         let desired_hash = desired_app_hash(file, &content)?;
         let current_hash = match self.host.read(destination).await {
-            Ok(bytes) => installed_app_hash(file, &bytes)?,
+            Ok(bytes) => installed_strategy_hash(&file.install_strategy, &bytes)?,
             Err(error) if error.is_not_found() => None,
             Err(error) => {
                 return Err(error.into_anyhow("reading generated App destination"));
@@ -207,34 +177,5 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
             requires_admin: file.requires_admin,
         });
         Ok(RefreshChange::Installed)
-    }
-
-    async fn finish_app_refresh(
-        &self,
-        applied: AppliedRefresh,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<AppLifecycleReport> {
-        let AppliedRefresh {
-            category,
-            manifest,
-            mut report,
-            changed,
-        } = applied;
-        if !changed.is_empty() {
-            save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-            let hooks = self
-                .run_app_hooks(
-                    AppHookRequest {
-                        categories: vec![category],
-                        changed,
-                        phase: AppHookPhase::PostUpgrade,
-                        show_success: true,
-                    },
-                    observer,
-                )
-                .await;
-            report.lifecycle.outcomes.extend(hooks.outcomes);
-        }
-        Ok(report)
     }
 }

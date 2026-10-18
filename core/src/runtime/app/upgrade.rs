@@ -345,7 +345,7 @@ where
             return Ok(());
         }
         let current_hash = match self.host.read(&entry.destination).await {
-            Ok(bytes) => installed_app_entry_hash(&entry, &bytes)?,
+            Ok(bytes) => installed_strategy_hash(&entry.install_strategy, &bytes)?,
             Err(error) if error.is_not_found() => None,
             Err(error) => return Err(error.into_anyhow("reading installed App file")),
         };

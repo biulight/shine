@@ -10,7 +10,8 @@ reader and direct persistence reader. Keep consumer-specific assertions for erro
 read-only operations, raw recovery bytes and legacy receipt ordering. Move duplicate direct-reader
 checks out of both consumer tests into the persistence owner's tests, including real IO failure.
 
-Share installed-content hashing by App install strategy, retaining the file/receipt entry points.
+Share installed-content hashing by App install strategy; callers pass their strategy directly.
+Remove the file/receipt forwarding wrappers, which add no behavior or compatibility responsibility.
 Desired JSON hashing remains distinct: absent managed keys and invalid content must retain their
 existing installed-versus-desired behavior. Share only the CLI test event recorder; App and Shell
 uninstall guidance assertions continue to exercise their own production handlers.
@@ -38,21 +39,6 @@ Source comparison against `c114524` confirms all four privileged operation bodie
 substituting the caller's force policy and diagnostic context. The pre-extraction domain tests
 pass before moving those bodies; this comparison does not substitute for native platform tests.
 
-Final macOS validation passed 1,728 all-feature workspace tests (two opt-in tests skipped), eight
-compile-fail documentation tests, all-target/all-feature Clippy with warnings denied, formatting,
-spelling, dependency policy and KB relative links. The first sandboxed workspace run stopped at
-an SSH local-socket permission error; the complete rerun with local sockets permitted passed.
-Dependency policy retains existing duplicate-crate warnings. Native Windows/Linux execution was
-not performed. No commit or push was made.
-
-## Second review
-
-Compare against the pre-refactor `c114524` implementation. The manifest input matrix and all
-existing CLI uninstall test bodies are unchanged apart from the shared recorder and its clear
-method. Direct-loader checks now live at the persistence owner; lifecycle and recovery readers
-still assert their distinct diagnostics, raw bytes, legacy entries and read-only behavior.
-Installed hashing retains its exact strategy body and desired hashing remains separate.
-
 The first regression set established acquisition ordering but did not directly observe the guard
 through a suspended restoration. Add a shared Host probe that delegates filesystem behavior to
 InMemoryHost and checks the guard at each read, metadata and privileged mutation. App and Sys
@@ -62,8 +48,7 @@ Additional fault injection covers failed install rollback (original write error 
 failed uninstall restoration (move error propagated, backup retained). These are existing
 best-effort semantics, not new crash recovery. No production behavior correction was required.
 
-All four domain privileged tests pass against an isolated `c114524` source snapshot with the new
-tests added and production code unchanged. The final current workspace run passed 1,730 tests
-(two opt-in tests skipped), including the same four regressions. All-target/all-feature Clippy
-with warnings denied, formatting, spelling, KB relative links and diff whitespace checks passed.
-The second review ran on macOS; native Windows/Linux behavior remains unverified.
+Policy tests are separated into dry-run, install and uninstall scenarios so failures are localized.
+Small local setup is retained instead of introducing another generic fixture. The shared suspended
+restoration Host probe remains necessary: ordinary final-state assertions cannot show that the
+lock stayed held while restoration was pending. Domain force/routing differences remain explicit.

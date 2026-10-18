@@ -142,7 +142,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
 
             let current = read_optional(self.host(), destination).await?;
             let user_modified = current.as_deref().is_some_and(|bytes| {
-                installed_app_hash(file, bytes)
+                installed_strategy_hash(&file.install_strategy, bytes)
                     .ok()
                     .flatten()
                     .is_some_and(|hash| hash != entry.content_hash)

@@ -5,8 +5,7 @@
 //! through a host.
 
 use super::app::{
-    SelectedRefreshFile, desired_app_hash, installed_app_entry_hash, installed_app_hash,
-    select_refresh_files,
+    SelectedRefreshFile, desired_app_hash, installed_strategy_hash, select_refresh_files,
 };
 use super::app_change::{StaticAppRelocation, static_app_relocation};
 use super::command_detection::{command_candidates, observe_command_candidate};

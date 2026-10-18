@@ -142,7 +142,7 @@ fn project_app_inspection(
     let status = if let Some(entry) = direct_entry.as_ref() {
         let current_hash = current_content
             .as_deref()
-            .map(|bytes| installed_app_hash(&assessment.file, bytes))
+            .map(|bytes| installed_strategy_hash(&assessment.file.install_strategy, bytes))
             .transpose()?;
         match (current_hash, assessment.content.generator_status()) {
             (None, _) => InspectionFileStatus::Missing,
@@ -171,7 +171,7 @@ fn project_app_inspection(
         } else if manual_generator && mode != AppInspectionMode::Evaluated {
             let current_hash = current_content
                 .as_deref()
-                .map(|bytes| installed_app_hash(&assessment.file, bytes))
+                .map(|bytes| installed_strategy_hash(&assessment.file.install_strategy, bytes))
                 .transpose()?;
             match current_hash {
                 None => InspectionFileStatus::Missing,

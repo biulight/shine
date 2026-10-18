@@ -76,7 +76,50 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 The local Bun hook covers every `presets/**/*.ts` file and its tooling configuration. The
 `presets/tooling.test.ts` regression checks the actual hook filter against the maintained files.
 
+## Refactoring
+
+Every refactor must answer: compared with keeping the current implementation, does this make
+future understanding, modification and verification easier, and what evidence supports that?
+
+- Confirm the actual release tag, commit and branch before a version-based review; Cargo versions
+  and moving preview tags are not release baselines. If the release cannot be confirmed, agree on
+  the range first. Include subsequent fixes, tests, docs and related uncommitted work; compare both
+  each change's before/after and the release baseline with the final state.
+- Review read-only first. For each item recommend retain, simplify, partially revert, revert or
+  defer for insufficient evidence. Record the original problem, actual benefit, added cost, simpler
+  alternative, required coverage and implementation order. Obtain authorization for implementation.
+- Report additions, deletions and net changes separately for production, tests/fixtures/support and
+  docs, by actual purpose (including inline `cfg(test)`). Count modules, types, forwarding functions,
+  policy parameters, call layers and locations changed for one rule. Moves, macros, generated code
+  and externalized implementations do not remove complexity; formatting compression is not savings.
+- Prefer dead-code removal, narrower visibility and existing interfaces. Verify platform, dynamic,
+  public API, old-format and recovery responsibilities before declaring code unused. Share a stable
+  rule only when its consumers have the same semantics and evolution needs. Local duplication is
+  preferable to extra adapters, switches or transport types with no demonstrated benefit.
+- Map tests by entry point, scenario, risk and assertions. Remove only redundant coverage; record
+  where every necessary assertion remains. Preserve distinct consumers and failure boundaries.
+  Reuse existing fixtures and fault injection, use small local setup helpers, and avoid large
+  sequential tests, copied legacy implementations as permanent oracles, or generic test frameworks.
+  Temporary differential tools need a separate justification before becoming permanent fixtures.
+- Preserve command/output/error contracts, snapshot-bound approvals, lock order/scope and rechecks,
+  receipt/manifest/journal formats and persistence order, ownership/user edits, dry-run/force/admin
+  differences, backups/failure/cancellation/retry, raw bytes versus normalized values, platform and
+  recovery compatibility. Separate introduced regressions, pre-existing defects and evidence gaps;
+  do not mix independent behavior changes into cleanup.
+- Implement high-confidence small changes first. Reassess if actual cost exceeds expected benefit.
+  Net growth needs a concrete explanation and rejected simpler alternatives; net reduction must not
+  lose behavior or coverage. There is no mandatory negative-line-count threshold.
+- Validate according to risk and repository checks, using matching before/after scenarios for key
+  boundaries. Distinguish local tests, cross-target compilation, native platforms and external
+  systems. Report failures and unverified boundaries, then finish with `git diff --check` and
+  `git status --short`. Do not repeat passing suites without a changed input or unresolved concern.
+- Keep lasting decisions in existing KB/ADRs, not repeated execution diaries. Preserve unrelated
+  work and honor the separate authorization boundaries for edits, commits and pushes.
+
 ## File size
+
+File size is a navigation guideline, not a reason by itself to split code. Test/support code still
+counts toward total maintenance cost under the refactoring review above.
 
 - The ~800-line file-size guideline is measured by **production code only** — everything before
   the file's `#[cfg(test)] mod tests { ... }` block. Inline `#[cfg(test)]` unit tests (the Rust
