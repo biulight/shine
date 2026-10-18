@@ -12,7 +12,7 @@ pub(super) fn sys_item_label_width(
         .item_ids
         .iter()
         .filter_map(|id| labels.get(id.as_str()))
-        .map(String::len)
+        .map(|label| console::measure_text_width(label))
         .chain(std::iter::once("profile".len()))
         .max()
         .unwrap_or(14)
@@ -86,7 +86,8 @@ pub(super) fn item_outcome_lines_with_status(
     symbol: &str,
     status: &str,
 ) -> Vec<String> {
-    let label = format!("{:<label_width$}", outcome.label);
+    let padding = label_width.saturating_sub(console::measure_text_width(&outcome.label));
+    let label = format!("{}{}", outcome.label, " ".repeat(padding));
     let status = format!("{status:<17}");
     let detail = if outcome.detail.is_empty() {
         String::new()
@@ -184,6 +185,39 @@ mod tests {
             item_install_start_line("zerotier", "ZeroTier", false),
             "  • sys/zerotier (ZeroTier) installing"
         );
+    }
+
+    #[test]
+    fn sys_outcome_columns_use_terminal_width() {
+        let labels = BTreeMap::from([
+            ("ascii", "ASCII".to_string()),
+            ("wide", "中文标签中文标签".to_string()),
+            ("combining", "e\u{301}".to_string()),
+        ]);
+        let selection = ResolvedSelection {
+            item_ids: labels.keys().map(|id| (*id).to_string()).collect(),
+            source: shine_core::runtime::SelectionSource::Items,
+        };
+        let width = sys_item_label_width(&selection, &labels);
+        assert_eq!(width, 16);
+        for label in labels.values() {
+            let outcome = SysItemOutcome {
+                item_id: "item".into(),
+                label: label.clone(),
+                status: SysItemStatus::Updated,
+                detail: "detail".into(),
+                logs: vec![],
+            };
+            let line = &item_outcome_lines(&outcome, width)[0];
+            assert_eq!(
+                console::measure_text_width(line.split_once("updated").unwrap().0),
+                21
+            );
+            assert_eq!(
+                console::measure_text_width(line.split_once("detail").unwrap().0),
+                39
+            );
+        }
     }
 
     #[test]

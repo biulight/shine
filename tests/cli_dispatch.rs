@@ -1048,3 +1048,118 @@ fn preset_activation_hints_use_templates_and_separate_escaped_paths() {
     );
     assert!(!stdout.contains("Tip: run `"), "{output:?}");
 }
+
+#[test]
+fn task_run_help_describes_saved_and_caller_working_directories() {
+    let fixture = Fixture::new();
+    for args in [vec!["task", "--help"], vec!["task", "run", "--help"]] {
+        let output = fixture.command().args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+        let help = String::from_utf8(output.stdout).unwrap();
+        let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(help.contains("Run a saved task in its saved working directory, or the caller's directory if none was saved"), "{args:?}: {help}");
+        assert!(
+            !help.contains("Run a saved task in the current directory"),
+            "{args:?}: {help}"
+        );
+    }
+    assert!(!fixture.0.join("state").exists());
+}
+
+#[tokio::test]
+async fn sys_status_reports_per_item_records_without_mutating_them() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    let os = cli::sys::detect_os_id().await.unwrap();
+    let mut manifest = shine_core::runtime::SysRunManifest::default();
+    for (index, (label, managed, status)) in [
+        (
+            "ASCII",
+            false,
+            shine_core::runtime::SysItemStatus::Installed,
+        ),
+        (
+            "中文标签中文标签",
+            true,
+            shine_core::runtime::SysItemStatus::Updated,
+        ),
+        (
+            "e\u{301}",
+            false,
+            shine_core::runtime::SysItemStatus::Failed,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        manifest.entries.push(shine_core::runtime::SysRunEntry {
+            os_id: os.clone(),
+            item_id: format!("item-{index}"),
+            label: label.into(),
+            status,
+            detail: "recorded detail".into(),
+            updated_at: index.to_string(),
+            managed,
+            profile_enabled: false,
+            receipt: None,
+        });
+    }
+    let mut foreign = manifest.entries[0].clone();
+    foreign.os_id = "foreign-os".into();
+    foreign.label = "Foreign item".into();
+    manifest.entries.push(foreign.clone());
+    // Foreign-only and genuinely empty records share the current-OS empty state.
+    for entries in [manifest.entries.clone(), vec![foreign], vec![]] {
+        manifest.entries = entries;
+        let bytes = toml::to_string(&manifest).unwrap();
+        let path = state.join("sys-manifest.toml");
+        fs::write(&path, &bytes).unwrap();
+        let output = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["sys", "status"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(!stdout.contains("Foreign item"), "{stdout}");
+        assert!(!stdout.contains("bootstrap"), "{stdout}");
+        if manifest.entries.len() > 1 {
+            assert!(
+                stdout.contains("Recorded System Operation Results"),
+                "{stdout}"
+            );
+            assert!(
+                stdout.contains(
+                    "latest recorded results per item across system operations, not live checks"
+                ),
+                "{stdout}"
+            );
+            let rows: Vec<_> = stdout
+                .lines()
+                .filter(|line| line.contains("recorded detail"))
+                .collect();
+            assert_eq!(rows.len(), 3, "{stdout}");
+            for (row, (label, status)) in rows.iter().zip([
+                ("ASCII", "installed"),
+                ("中文标签中文标签", "updated"),
+                ("e\u{301}", "failed"),
+            ]) {
+                assert!(row.contains(label), "{row}");
+                let (prefix, _) = row.split_once(status).unwrap();
+                assert_eq!(console::measure_text_width(prefix), 21, "{row}");
+            }
+        } else {
+            assert_eq!(
+                stdout.trim(),
+                format!(
+                    "No system operation results recorded for {os}. Use `shine sys list` to view available items."
+                )
+            );
+        }
+        assert_eq!(fs::read_to_string(path).unwrap(), bytes);
+    }
+}

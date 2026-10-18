@@ -2603,3 +2603,14 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Rule**: source availability, installed state, and ownership are separate facts. A source
   disappearance must not hide an installation or authorize removal, and a conflict is not an
   applicable update. Internal App cache maintenance remains distinct from configuration changes.
+
+## 2026-10-18 — Sys recorded results span operations and runs
+
+- **Symptom**: `sys status` called mixed bootstrap/managed records the last bootstrap result, and
+  Unicode labels shifted result columns.
+- **Cause**: the shared manifest upserts individual items across runs; label sizing mixed byte
+  lengths with character-count padding.
+- **Fix**: describe per-item recorded system results and use terminal display widths in Sys result
+  sizing and padding. Preserve observation, exit codes, approval and recovery behavior.
+- **Regression**: exercise real CLI mixed/foreign/empty records and unchanged manifest bytes; check
+  ASCII, wide and combining labels through the shared outcome renderer.

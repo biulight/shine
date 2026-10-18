@@ -378,7 +378,7 @@ fn finish_managed_report(
             emit_item_outcome(
                 observer.reporter,
                 outcome,
-                outcome.label.len().max(14),
+                console::measure_text_width(&outcome.label).max(14),
                 observer.action,
                 observer.dry_run,
             );
@@ -536,35 +536,66 @@ mod tests {
             } else {
                 "biulight.internal -> 10.0.0.53"
             };
-            let core = shine_core::runtime::SysManagedReport {
-                items: vec![SysItemOutcome {
-                    item_id: "split-dns".into(),
-                    label: "Private split DNS".into(),
-                    status: SysItemStatus::Updated,
-                    detail: detail.into(),
-                    logs: vec!["detail log".into()],
-                }],
-                summary: SysUpgradeReport::default(),
-                lifecycle: LifecycleResultV1::new(LifecycleOperation::Upgrade, dry_run),
-            };
-            let mut reporter = RecordingReporter::default();
-            let mut observer = ManagedObserver {
-                reporter: &mut reporter,
-                action,
-                dry_run,
-                started: false,
-                show_item_progress: true,
-            };
-            finish_managed_report(core, ManagedOutputMode::Explicit, &mut observer).unwrap();
-            let lines = reporter
-                .0
-                .iter()
-                .filter_map(|event| match event {
-                    PresentationEvent::Line { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(lines, vec![header, expected_row, "    detail log"]);
+            // Explicit padding/columns keep the expectations independent of the renderer.
+            // The combining label has 24 bytes but only eight display columns.
+            for (label, padded_label, status_column) in [
+                ("Private split DNS", "Private split DNS", 22),
+                ("中文标签中文标签", "中文标签中文标签", 21),
+                (
+                    "e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}",
+                    "e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}      ",
+                    19,
+                ),
+            ] {
+                let core = shine_core::runtime::SysManagedReport {
+                    items: vec![SysItemOutcome {
+                        item_id: "split-dns".into(),
+                        label: label.into(),
+                        status: SysItemStatus::Updated,
+                        detail: detail.into(),
+                        logs: vec!["detail log".into()],
+                    }],
+                    summary: SysUpgradeReport::default(),
+                    lifecycle: LifecycleResultV1::new(LifecycleOperation::Upgrade, dry_run),
+                };
+                let mut reporter = RecordingReporter::default();
+                let mut observer = ManagedObserver {
+                    reporter: &mut reporter,
+                    action,
+                    dry_run,
+                    started: false,
+                    show_item_progress: true,
+                };
+                finish_managed_report(core, ManagedOutputMode::Explicit, &mut observer).unwrap();
+                let lines = reporter
+                    .0
+                    .iter()
+                    .filter_map(|event| match event {
+                        PresentationEvent::Line { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let expected_row = expected_row.replace("Private split DNS", padded_label);
+                assert_eq!(lines, vec![header, expected_row.as_str(), "    detail log"]);
+                let status = match (action, dry_run) {
+                    (SysAction::Apply, true) => "would update",
+                    (SysAction::Apply, false) => "updated",
+                    (SysAction::Remove, true) => "would remove",
+                    (SysAction::Remove, false) => "removed",
+                };
+                assert_eq!(
+                    console::measure_text_width(lines[1].split_once(status).unwrap().0),
+                    status_column,
+                    "{label:?}: {}",
+                    lines[1]
+                );
+                assert_eq!(
+                    console::measure_text_width(lines[1].split_once(detail).unwrap().0),
+                    status_column + 18,
+                    "{label:?}: {}",
+                    lines[1]
+                );
+            }
         }
     }
 

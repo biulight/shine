@@ -268,23 +268,23 @@ pub async fn handle_status(config: &Config) -> Result<()> {
         println!(
             "{}",
             colors::dim(&format!(
-                "No bootstrap items recorded for {os_id}. Run `shine sys bootstrap` to initialize the current system."
+                "No system operation results recorded for {os_id}. Use `shine sys list` to view available items."
             ))
         );
         return Ok(());
     }
 
-    println!("{}\n", colors::bold("Recorded Bootstrap Results"));
+    println!("{}\n", colors::bold("Recorded System Operation Results"));
     println!(
         "{}\n",
         colors::dim(
-            "These are results recorded by the last bootstrap run, not live version checks."
+            "These are the latest recorded results per item across system operations, not live checks."
         )
     );
 
     let label_width = entries
         .iter()
-        .map(|entry| entry.label.len())
+        .map(|entry| console::measure_text_width(&entry.label))
         .max()
         .unwrap_or(14)
         .max(14);

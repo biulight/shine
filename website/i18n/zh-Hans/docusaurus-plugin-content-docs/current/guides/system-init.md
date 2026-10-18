@@ -83,8 +83,8 @@ winget settings --enable ProxyCommandLineOptions
 shine sys status
 ```
 
-这里展示的是执行记录：`installed`、`already installed` 或 `completed` 描述上一次 bootstrap
-调用观察到的结果，并不会实时探测第三方软件当前是否仍存在或已是最新版。
+这里展示每个条目最新保存的结果，包括 bootstrap 和 `shine sys apply` 等受管系统操作的记录。
+不同条目的记录可能来自不同次运行；此命令不会实时检查软件版本或系统配置。
 
 ## 用软件自己的工具升级
 

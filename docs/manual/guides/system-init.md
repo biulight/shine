@@ -101,9 +101,9 @@ After initialization, inspect the recorded state:
 shine sys status
 ```
 
-This view is a run record: `installed`, `already installed`, or `completed` describes what the last
-bootstrap invocation observed. It does not probe whether third-party software is still present or
-current.
+This view shows the latest recorded result for each item, including bootstrap and managed system
+operations such as `shine sys apply`. Entries can come from different runs. It does not perform
+live checks of software versions or system configuration.
 
 ## Upgrade bootstrap software with its owner
 
