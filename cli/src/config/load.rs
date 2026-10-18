@@ -632,8 +632,6 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn global_config_with_presets_dir_remains_global_config() {
         let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
-        let original_home = std::env::var("HOME").ok();
         let home_dir = make_temp_dir().await;
         let shine_dir = home_dir.join(".shine");
         let child_dir = shine_dir.join("presets/shell/proxy");
@@ -678,19 +676,7 @@ mod tests {
             fs::canonicalize(&external_presets).await.unwrap()
         );
 
-        restore_current_dir(&original_dir);
-        match original_home {
-            Some(home) => {
-                // SAFETY: env_lock() is held for the duration of this block, preventing
-                //          concurrent env mutation from other threads in this test binary.
-                unsafe { std::env::set_var("HOME", home) };
-            }
-            None => {
-                // SAFETY: env_lock() is held for the duration of this block, preventing
-                //          concurrent env mutation from other threads in this test binary.
-                unsafe { std::env::remove_var("HOME") };
-            }
-        }
+        drop(_guard);
         fs::remove_dir_all(&home_dir).await.unwrap();
         fs::remove_dir_all(external_presets.parent().unwrap())
             .await
@@ -850,8 +836,6 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn project_config_without_presets_dir_inherits_global_config() {
         let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
-        let original_home = std::env::var("HOME").ok();
         let project_dir = make_temp_dir().await;
         let home_dir = make_temp_dir().await;
         let state_dir = home_dir.join(".shine");
@@ -884,11 +868,7 @@ mod tests {
         assert_eq!(config.gpg_recipients, ["global-key"]);
         assert!(config.is_external_presets);
 
-        restore_current_dir(&original_dir);
-        match original_home {
-            Some(home) => unsafe { std::env::set_var("HOME", home) },
-            None => unsafe { std::env::remove_var("HOME") },
-        }
+        drop(_guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&home_dir).await.unwrap();
     }

@@ -142,7 +142,6 @@ async fn download_relays_child_output_and_zero_exit_code() {
     .unwrap();
 
     let (logs, code) = drain(&mut stream).await;
-    unsafe { std::env::remove_var("SHINE_TEST_RSYNC") };
     assert!(logs.contains("STUB-OUT"), "stdout not relayed: {logs:?}");
     assert!(logs.contains("STUB-ERR"), "stderr not relayed: {logs:?}");
     assert_eq!(code, Some(0));
@@ -173,7 +172,6 @@ async fn nonzero_child_exit_code_is_reported() {
     .unwrap();
 
     let (_logs, code) = drain(&mut stream).await;
-    unsafe { std::env::remove_var("SHINE_TEST_RSYNC") };
     assert_eq!(code, Some(7));
 }
 

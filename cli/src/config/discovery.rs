@@ -280,9 +280,6 @@ mod tests {
             "shine-discovery-managed-overlay-{}",
             uuid::Uuid::new_v4()
         ));
-        let previous_dir = std::env::current_dir().unwrap();
-        let previous_config = std::env::var_os("SHINE_CONFIG_DIR");
-        let previous_presets = std::env::var_os("SHINE_PRESETS");
         std::fs::create_dir_all(root.join("overlay")).unwrap();
         std::fs::write(
             root.join(GLOBAL_CONFIG_FILE),
@@ -298,18 +295,7 @@ mod tests {
 
         let runtime = discover_runtime_paths_read_only().unwrap();
 
-        std::env::set_current_dir(previous_dir).unwrap();
-        // SAFETY: env_lock remains held while the previous environment is restored.
-        unsafe {
-            match previous_config {
-                Some(value) => std::env::set_var("SHINE_CONFIG_DIR", value),
-                None => std::env::remove_var("SHINE_CONFIG_DIR"),
-            }
-            match previous_presets {
-                Some(value) => std::env::set_var("SHINE_PRESETS", value),
-                None => std::env::remove_var("SHINE_PRESETS"),
-            }
-        }
+        drop(_guard);
 
         assert!(runtime.managed_overlay);
         assert_eq!(runtime.presets_overlay_dir, Some(root.join("overlay")));

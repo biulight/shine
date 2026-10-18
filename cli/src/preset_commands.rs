@@ -466,6 +466,10 @@ mod tests {
             .await
             .unwrap();
 
+        assert!(
+            dir.join("shell/proxy").is_dir(),
+            "shell/proxy/ subdirectory should be created"
+        );
         assert!(!report.created.is_empty());
         for path in &report.created {
             assert!(
@@ -530,22 +534,6 @@ mod tests {
             content,
             presets::read_embedded_asset_bytes(&first_file).unwrap(),
             "force copy must publish the complete embedded content"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn copy_creates_nested_directories() {
-        let dir = make_temp_dir().await;
-        copy_embedded_preset("shell/proxy", &dir, false)
-            .await
-            .unwrap();
-
-        let nested = dir.join("shell").join("proxy");
-        assert!(
-            nested.is_dir(),
-            "shell/proxy/ subdirectory should be created"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();

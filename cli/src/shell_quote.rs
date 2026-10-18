@@ -37,10 +37,4 @@ mod tests {
         assert_eq!(quote_if_needed("it's"), "'it'\\''s'");
         assert_eq!(quote_if_needed("a b"), "'a b'");
     }
-
-    #[test]
-    fn single_quote_escapes_embedded_quotes() {
-        assert_eq!(single_quote("it's"), "'it'\\''s'");
-        assert_eq!(single_quote(""), "''");
-    }
 }

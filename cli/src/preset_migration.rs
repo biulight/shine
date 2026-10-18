@@ -389,8 +389,6 @@ mod tests {
             .await
             .unwrap();
 
-        let previous_config = std::env::var_os("SHINE_CONFIG_DIR");
-        let previous_presets = std::env::var_os("SHINE_PRESETS");
         // SAFETY: env_lock serializes process-global environment mutation.
         unsafe {
             std::env::set_var("SHINE_CONFIG_DIR", &state);
@@ -449,17 +447,7 @@ mod tests {
             );
         }
 
-        // SAFETY: env_lock remains held while the previous environment is restored.
-        unsafe {
-            match previous_config {
-                Some(value) => std::env::set_var("SHINE_CONFIG_DIR", value),
-                None => std::env::remove_var("SHINE_CONFIG_DIR"),
-            }
-            match previous_presets {
-                Some(value) => std::env::set_var("SHINE_PRESETS", value),
-                None => std::env::remove_var("SHINE_PRESETS"),
-            }
-        }
+        drop(_guard);
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
 

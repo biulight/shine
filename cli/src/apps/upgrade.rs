@@ -342,7 +342,6 @@ mod tests {
     async fn verbose_upgrade_reports_changed_app_files_but_not_current_files() {
         let _guard = env_lock();
         let dir = crate::test_support::make_temp_dir("shine-app-upgrade-report").await;
-        let previous_home = std::env::var_os("HOME");
         // SAFETY: `_guard` serializes HOME changes across tests in this process.
         unsafe { std::env::set_var("HOME", &dir) };
         let category = dir.join("presets/app/sample");
@@ -414,10 +413,7 @@ mod tests {
             PresentationEvent::Line { text, .. } if text.contains("config.txt")
         )));
 
-        match previous_home {
-            Some(home) => unsafe { std::env::set_var("HOME", home) },
-            None => unsafe { std::env::remove_var("HOME") },
-        }
+        drop(_guard);
         fs::remove_dir_all(dir).await.unwrap();
     }
 }

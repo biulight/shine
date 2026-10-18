@@ -766,7 +766,6 @@ mod tests {
         let _guard = env_lock();
         let home = temp_dir("overlay-home");
         let overlay = temp_dir("overlay");
-        let old_home = std::env::var_os("HOME");
         std::fs::create_dir_all(home.join(".shine")).unwrap();
         std::fs::create_dir_all(overlay.join("shell/personal")).unwrap();
         std::fs::write(
@@ -786,12 +785,7 @@ mod tests {
 
         let shell = category_names("shell");
 
-        unsafe {
-            match old_home {
-                Some(value) => std::env::set_var("HOME", value),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        drop(_guard);
         std::fs::remove_dir_all(home).unwrap();
         std::fs::remove_dir_all(overlay).unwrap();
 

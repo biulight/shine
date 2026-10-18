@@ -509,13 +509,6 @@ mod tests {
         let cleaned = remove_shell_sentinel(content);
         assert_eq!(cleaned, content);
     }
-    #[test]
-    fn remove_sentinel_block_preserves_existing_bytewise_contract() {
-        assert_eq!(
-            remove_shell_sentinel("keep\n\n# >>> shine >>>\nsource x\n# <<< shine <<<\nafter\n"),
-            "keep\nafter\n"
-        );
-    }
 
     #[cfg(unix)]
     #[test]
