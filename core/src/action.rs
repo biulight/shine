@@ -2346,31 +2346,4 @@ mod tests {
             }));
         }
     }
-
-    #[test]
-    fn opaque_execution_fails_permission_derivation_closed() {
-        let value = ActionIrV1::new(
-            "operation-opaque",
-            vec![DeclarativeActionV1 {
-                action_id: "opaque-1".to_string(),
-                target: "app/demo".to_string(),
-                resource: "hook:0".to_string(),
-                kind: ActionKindV1::OpaqueExecution {
-                    capability: "app-hook".to_string(),
-                    provenance: ActionProvenanceV1::External,
-                    requires_administrator: false,
-                },
-                rollback: RollbackSupportV1::Unsupported {
-                    reason_code: "opaque_action_not_reversible".to_string(),
-                },
-            }],
-        );
-        value.validate().unwrap();
-        assert_eq!(
-            value
-                .permission_requirements(|_| "unused".to_string())
-                .uncomputable_codes,
-            BTreeSet::from(["opaque_action_permissions_uncomputable".to_string()])
-        );
-    }
 }

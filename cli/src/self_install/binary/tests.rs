@@ -11,27 +11,7 @@ fn config_in(dir: &std::path::Path) -> Config {
 #[allow(clippy::await_holding_lock)]
 #[tokio::test(flavor = "current_thread")]
 async fn relative_self_install_destination_survives_reload_and_sync() {
-    let _guard = crate::test_support::env_lock();
-    struct Restore {
-        cwd: std::path::PathBuf,
-        config_dir: Option<std::ffi::OsString>,
-    }
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            crate::test_support::restore_current_dir(&self.cwd);
-            // SAFETY: the shared env lock is held through this guard's drop.
-            unsafe {
-                match &self.config_dir {
-                    Some(value) => std::env::set_var("SHINE_CONFIG_DIR", value),
-                    None => std::env::remove_var("SHINE_CONFIG_DIR"),
-                }
-            }
-        }
-    }
-    let restore = Restore {
-        cwd: std::env::current_dir().unwrap(),
-        config_dir: std::env::var_os("SHINE_CONFIG_DIR"),
-    };
+    let guard = crate::test_support::env_lock();
     let dir = make_temp_dir().await;
     let state = dir.join("state");
     let work = dir.join("work");
@@ -60,7 +40,8 @@ async fn relative_self_install_destination_survives_reload_and_sync() {
         .unwrap();
     assert_eq!(tokio::fs::read(&installed).await.unwrap(), b"new binary");
     assert!(!state.join("bin").exists());
-    drop(restore);
+    // Restore cwd and environment before removing the temporary directory.
+    drop(guard);
     tokio::fs::remove_dir_all(dir).await.unwrap();
 }
 

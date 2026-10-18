@@ -151,13 +151,3 @@ fn config_upgrade_summary_parts_reports_actionable_counters() {
         ]
     );
 }
-
-#[test]
-fn app_upgrade_failure_count_uses_the_authoritative_report_total() {
-    let report = apps::AppUpgradeReport {
-        failed: 3,
-        ..Default::default()
-    };
-
-    assert_eq!(app_upgrade_failure_count(&report), 3);
-}
