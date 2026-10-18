@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-18 — Env display and proxy writes need distinct presentation contracts
+
+- **Symptoms**: proxy toggles reported a global change as if it were effective in an overriding
+  project; wide/multiline env values broke list rows; self-upgrade flattened nested errors.
+- **Fix**: report saved scope separately from best-effort effective state, escape display cells
+  after redaction and size them by terminal columns, and retain upgrade error context chains.
+- **Coverage**: CLI tests preserve both proxy write targets and raw env values, check redaction,
+  wide/combining/multiline cells, and verify upgrade error causes without exposing test credentials.
+  A failed post-save proxy inspection still succeeds and leaves the saved rule intact.
+
 ## 2026-10-18 — Status deadlines and preview path boundaries
 
 - **Symptoms**: `local status` could wait forever for a silent peer; SCP previews joined paths

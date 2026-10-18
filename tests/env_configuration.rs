@@ -542,3 +542,98 @@ fn linked_and_special_targets_are_rejected_and_saved_files_are_private() {
         0o600
     );
 }
+
+#[test]
+fn proxy_toggle_reports_write_scope_and_effective_project_override() {
+    for (action, global_enabled, project_enabled) in
+        [("disable", false, true), ("enable", true, false)]
+    {
+        let f = Fixture::new();
+        f.write("state/config.toml", &format!("schema_version = 2\n[[env_proxy]]\ncommand = 'demo'\nwith = ['DEMO']\nenabled = {}\n", !global_enabled));
+        let project = format!(
+            "schema_version = 2\n[[env_proxy]]\ncommand = 'demo'\nwith = ['DEMO']\nenabled = {project_enabled}\n"
+        );
+        f.write("project/shine.config.toml", &project);
+        let output = f.run(true, &["proxy", action, "demo"]);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("in global config"), "{text}");
+        let effective = if project_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        assert!(
+            text.contains(&format!("Current effective state: {effective}")),
+            "{text}"
+        );
+        assert_eq!(f.read("project/shine.config.toml"), project);
+        let global: toml::Value = toml::from_str(&f.read("state/config.toml")).unwrap();
+        // enabled=true can be represented by the default, so decode through the value's default.
+        assert_eq!(
+            global["env_proxy"][0]
+                .get("enabled")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(true),
+            global_enabled
+        );
+        let global_bytes = f.read("state/config.toml");
+        let text = f.ok(true, &["proxy", action, "demo", "--project"]);
+        assert!(text.contains("in project config"), "{text}");
+        let effective = if global_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        assert!(
+            text.contains(&format!("Current effective state: {effective}")),
+            "{text}"
+        );
+        assert_eq!(f.read("state/config.toml"), global_bytes);
+        let list = f.ok(true, &["proxy", "list"]);
+        assert!(
+            list.contains(&format!("demo: DEMO ({effective})")),
+            "{list}"
+        );
+    }
+}
+
+#[test]
+fn env_list_escapes_cells_aligns_display_columns_and_preserves_raw_values() {
+    let f = Fixture::new();
+    f.write(
+        "state/config.toml",
+        r#"schema_version = 2
+[env]
+ASCII = { value = "abc", description = "marker-ascii" }
+WIDE = { value = "中文中文", description = "marker-wide" }
+COMBINING = { value = "éé", description = "marker-combining" }
+MULTILINE = { value = "first\nsecond\tend", description = "marker-multi\nnext" }
+API_TOKEN = { value = "hidden\nvalue", description = "marker-secret" }
+"#,
+    );
+    let before = f.read("state/config.toml");
+    let output = f.ok(false, &["list"]);
+    let rows: Vec<_> = output
+        .lines()
+        .filter(|line| line.contains("marker-"))
+        .collect();
+    assert_eq!(rows.len(), 5, "{output}");
+    let columns: Vec<_> = rows
+        .iter()
+        .map(|line| console::measure_text_width(line.split_once("marker-").unwrap().0))
+        .collect();
+    assert!(
+        columns.iter().all(|column| *column == columns[0]),
+        "{columns:?}\n{output}"
+    );
+    assert!(output.contains(r"first\nsecond\tend"), "{output}");
+    assert!(output.contains(r"marker-multi\nnext"), "{output}");
+    assert!(output.contains("<redacted>"), "{output}");
+    assert!(!output.contains("hidden"), "{output}");
+    let revealed = f.ok(false, &["list", "--reveal"]);
+    assert!(revealed.contains(r"hidden\nvalue"), "{revealed}");
+    assert_eq!(f.ok(false, &["get", "MULTILINE"]), "first\nsecond\tend\n");
+    assert_eq!(f.read("state/config.toml"), before);
+}

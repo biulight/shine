@@ -87,6 +87,9 @@ shine self upgrade --channel stable
 shine self upgrade --channel preview
 ```
 
+If `shine self upgrade` fails, it returns exit code 1 and reports the failure context and underlying
+cause on stderr. Use that diagnostic to distinguish connection, archive, and installation errors.
+
 `preview` is a continuously updated prerelease channel and is not included in routine automatic
 update checks. `shine update` checks both installed configuration and stable Shine releases.
 

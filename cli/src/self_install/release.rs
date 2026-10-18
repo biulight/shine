@@ -4,7 +4,7 @@ use super::binary::sync_self_install_dest;
 use crate::config::Config;
 use crate::update_check::ReleaseChannel;
 use crate::{colors, update_check, version};
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 pub async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
     let current = version::semver();
@@ -46,7 +46,7 @@ pub async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel
         }
         Err(e) => {
             update_check::invalidate_update_cache(config).await;
-            bail!("Upgrade failed: {e}");
+            return Err(e.context("Upgrade failed"));
         }
     }
 

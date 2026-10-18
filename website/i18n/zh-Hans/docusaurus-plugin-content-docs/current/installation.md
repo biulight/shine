@@ -84,6 +84,9 @@ shine self upgrade --channel stable
 shine self upgrade --channel preview
 ```
 
+`shine self upgrade` 失败时返回退出码 1，并在 stderr 中保留失败上下文和底层原因，
+便于区分连接、归档文件和安装错误。
+
 `preview` 是持续滚动的预发布通道，不参与日常自动更新检查。运行 `shine update` 可以同时检查已安装配置和稳定版程序更新。
 
 稳定版通过 `latest` 和 stable 通道提供。从既有 1.x 安装升级前，请先阅读

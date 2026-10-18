@@ -826,6 +826,13 @@ bugs. Check this list before changing the modules named in each entry.
   resolver but route before advisory work, overlay synchronization and mutable initialization.
   Explain hides all values unless revealed, never decrypts, and keeps paths out of safe DTOs.
 
+- **Human-readable env output does not redefine values or write targets.** List cells escape
+  controls only after redaction and use terminal display widths; get/export/injection retain raw
+  values. Proxy toggles still select global config unless `--project` is explicit. Their post-save
+  effective-state inspection is read-only and best-effort: inspection failure warns, but does not
+  change the successful write's exit status. Self-upgrade failures preserve the error chain after
+  the existing cache invalidation, without changing installation or recovery behavior.
+
 - **Configuration edits preserve comments and unrelated raw definitions.** Whole-table saves use
   `shine_core::sync_table`; directed env and runtime-schema edits patch `toml_edit` entries. Never
   replace a loaded file with a serialized effective struct.

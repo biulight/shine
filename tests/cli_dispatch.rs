@@ -848,3 +848,35 @@ fn theme_quiet_exports_to_stdout_without_initializing_state() {
     assert!(!stdout.contains("BAT_THEME"), "{output:?}");
     assert!(!fixture.0.join("state").exists());
 }
+
+#[test]
+fn self_upgrade_preserves_error_chain_without_printing_credentials() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.0.join("state")).unwrap();
+    fs::write(fixture.0.join("state/config.toml"), "schema_version = 2\n").unwrap();
+    // Invalid header bytes fail before any HTTP request or binary installation.
+    let output = fixture
+        .command()
+        .args(["self", "upgrade"])
+        .env("GITHUB_TOKEN", "fixture-secret\ninvalid")
+        .env_remove("GH_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for message in [
+        "Upgrade failed",
+        "invalid GitHub token header",
+        "failed to parse header value",
+    ] {
+        assert!(stderr.contains(message), "{output:?}");
+    }
+    assert!(!stderr.contains("fixture-secret"), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Checking for stable upgrades"),
+        "{output:?}"
+    );
+    assert!(!stdout.contains("Upgraded shine"), "{output:?}");
+    assert!(!stdout.contains("fixture-secret"), "{output:?}");
+}

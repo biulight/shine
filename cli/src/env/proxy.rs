@@ -98,9 +98,41 @@ pub async fn set_enabled(
     })
     .await?;
     println!(
-        "{} transparent proxy {command}",
-        if enabled { "enabled" } else { "disabled" }
+        "{} transparent proxy {command} in {} ({})",
+        if enabled { "enabled" } else { "disabled" },
+        if project {
+            "project config"
+        } else {
+            "global config"
+        },
+        path.display(),
     );
+    // Observational only: a successful save must not become a failed command
+    // because a subsequent read races another editor or encounters invalid config.
+    match Config::load_read_only().await {
+        Ok(current) => {
+            let effective = current
+                .env_proxy
+                .iter()
+                .find(|rule| rule.command == command);
+            println!(
+                "Current effective state: {}",
+                match effective {
+                    Some(rule) if rule.enabled => "enabled",
+                    Some(_) => "disabled",
+                    None => "not configured",
+                }
+            );
+            if !project && current.is_project_config() {
+                println!(
+                    "Project rules can override the global rule; use --project to change this project's rule."
+                );
+            }
+        }
+        Err(error) => eprintln!(
+            "Warning: proxy rule was saved, but effective state could not be verified: {error:#}"
+        ),
+    }
     Ok(())
 }
 
@@ -1223,6 +1255,77 @@ mod tests {
                 .await
                 .is_err()
         );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn toggle_save_stays_successful_when_effective_state_reload_fails() {
+        const CHILD: &str = "SHINE_TEST_PROXY_RELOAD_OUTPUT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // A separate test process captures the real println!/eprintln! streams
+            // without changing production output plumbing or racing global descriptors.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "env::proxy::tests::toggle_save_stays_successful_when_effective_state_reload_fails",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let warning =
+                "Warning: proxy rule was saved, but effective state could not be verified:";
+            assert!(stderr.contains(warning), "{output:?}");
+            assert!(!stdout.contains(warning), "{output:?}");
+            assert!(
+                stdout.contains("disabled transparent proxy demo in global config"),
+                "{output:?}"
+            );
+            assert!(
+                !stderr.contains("disabled transparent proxy demo"),
+                "{output:?}"
+            );
+            for stream in [&stdout, &stderr] {
+                assert!(!stream.contains("Current effective state:"), "{output:?}");
+            }
+            return;
+        }
+        let _guard = crate::test_support::env_lock();
+        let dir = crate::test_support::make_temp_dir("shine-proxy-reload").await;
+        let original_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        // SAFETY: the environment guard restores process state on return or panic.
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", &dir) };
+        let config = Config::new_for_test(&dir);
+        tokio::fs::write(
+            config.config_path(),
+            "[[env_proxy]]\ncommand = 'demo'\nwith = ['DEMO']\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(dir.join("shine.env.toml"), "invalid = [")
+            .await
+            .unwrap();
+        assert!(Config::load_read_only().await.is_err());
+        set_enabled(&config, "demo", false, false).await.unwrap();
+        let document: toml::Value = toml::from_str(
+            &tokio::fs::read_to_string(config.config_path())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(document["env_proxy"][0]["enabled"].as_bool(), Some(false));
+        assert_eq!(
+            tokio::fs::read_to_string(dir.join("shine.env.toml"))
+                .await
+                .unwrap(),
+            "invalid = ["
+        );
+        std::env::set_current_dir(original_cwd).unwrap();
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 

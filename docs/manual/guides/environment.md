@@ -33,6 +33,8 @@ The built-in image commands use `IMAGE_QUALITY=80`, `IMAGE_MAX_WIDTH=1920`, and
 `--height`, or keep different machine-local defaults with `shine env set`.
 
 `shine env list` hides sensitive values by default; use `--reveal` only in a trusted terminal.
+List cells escape line breaks, tabs, other control characters and backslashes, and truncate to
+terminal display width. These display changes do not alter stored values or `env get` output.
 It groups effective values by builtin, overlay, global config, global env file, project config,
 and project env file, with actual file paths and the current project root. `env explain KEY` shows
 that storage key's definitions from low to high, its winning layer and description source, hiding
@@ -565,6 +567,12 @@ shine env proxy disable gh
 shine env proxy enable gh
 shine env proxy disable gh --project
 ```
+
+Enable/disable output identifies the configuration file that was saved and separately reports the
+current effective state. Without `--project`, the global rule changes even inside a project;
+a project override can therefore keep a different state. If the subsequent state check fails,
+Shine warns that the rule was saved but its effective state could not be verified; the successful
+save still returns exit code 0.
 
 Remove the managed shim and user-level rule when no longer needed:
 

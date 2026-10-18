@@ -31,7 +31,9 @@ shine env delete HTTP_PROXY_PORT
 `IMAGE_MAX_HEIGHT=1080`。可用 `--quality`、`--width`、`--height` 只覆盖当次运行，也可用
 `shine env set` 为当前机器保留不同默认值。
 
-`shine env list` 默认隐藏敏感值；`--reveal` 会显示完整值，应只在安全终端中使用。
+`shine env list` 默认隐藏敏感值；`--reveal` 可取消脱敏，应只在安全终端中使用。
+列表中的换行、制表符、其他控制字符及反斜杠会转义显示，并按终端显示宽度截断。
+这些显示调整不会改变存储值或 `env get` 的输出。
 输出按 `builtin`、overlay、全局配置、全局 env 文件、项目配置、项目 env 文件分组，显示实际路径
 及当前项目根。`env explain KEY` 从低到高展示同一存储键的定义、胜出层和描述来源，默认隐藏
 所有值；`--reveal` 不会自动解密。显式注入仍先查找 `KEY_SECRET`，再查找 `KEY`；来源说明和
@@ -505,6 +507,10 @@ shine env proxy disable gh
 shine env proxy enable gh
 shine env proxy disable gh --project
 ```
+
+启用/禁用命令会分别显示已保存的配置文件和当前生效状态。不加 `--project` 时，即使在项目中
+也只修改全局规则，因此项目覆盖规则可能保持不同的状态。如果保存后的状态检查失败，Shine
+会警告规则已保存但无法确认生效状态；成功保存仍返回退出码 0。
 
 不再需要代理时，移除 Shine 管理的 shim 及其用户级规则：
 

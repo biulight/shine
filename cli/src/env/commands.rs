@@ -15,7 +15,7 @@ pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
     let terminal_width = usize::from(console::Term::stdout().size().1).max(40);
     let key_width = env
         .iter()
-        .map(|(key, _)| key.chars().count())
+        .map(|(key, _)| console::measure_text_width(&escape_env_cell(key)))
         .max()
         .unwrap_or(0);
 
@@ -67,17 +67,28 @@ pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
             let display_value = display_env_value(v, sensitive, reveal);
             let (display_value, description) =
                 fit_env_row(&display_value, description, key_width, terminal_width);
-            let key_padding = " ".repeat(key_width.saturating_sub(k.chars().count()));
+            let display_key = escape_env_cell(k);
+            let key_padding =
+                " ".repeat(key_width.saturating_sub(console::measure_text_width(&display_key)));
             if description.is_empty() {
-                println!("  {}{}  {}", colors::cyan(k), key_padding, display_value);
-            } else {
                 println!(
-                    "  {}{}  {:<value_width$}  {}",
-                    colors::cyan(k),
+                    "  {}{}  {}",
+                    colors::cyan(&display_key),
+                    key_padding,
+                    display_value
+                );
+            } else {
+                let value_padding = " ".repeat(
+                    env_value_width(key_width, terminal_width)
+                        .saturating_sub(console::measure_text_width(&display_value)),
+                );
+                println!(
+                    "  {}{}  {}{}  {}",
+                    colors::cyan(&display_key),
                     key_padding,
                     display_value,
+                    value_padding,
                     colors::dim(&description),
-                    value_width = env_value_width(key_width, terminal_width),
                 );
             }
         }
@@ -143,16 +154,21 @@ fn fit_env_row(
     (value, description)
 }
 
+// Escape only presentation cells; raw values used by get/export/children stay untouched.
+fn escape_env_cell(value: &str) -> String {
+    let mut output = String::new();
+    for ch in value.chars() {
+        if ch.is_control() || ch == '\\' {
+            output.extend(ch.escape_debug());
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
 fn truncate_text(value: &str, max_width: usize) -> String {
-    if value.chars().count() <= max_width {
-        return value.to_string();
-    }
-    if max_width <= 1 {
-        return "…".to_string();
-    }
-    let mut result = value.chars().take(max_width - 1).collect::<String>();
-    result.push('…');
-    result
+    console::truncate_str(&escape_env_cell(value), max_width, "…").into_owned()
 }
 
 pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<()> {
@@ -629,6 +645,20 @@ mod tests {
         output.clear();
         write_decrypted_plaintext(&mut output, "abc\n").unwrap();
         assert_eq!(output, b"abc\n");
+    }
+
+    #[test]
+    fn env_show_truncates_by_display_width_and_escapes_controls() {
+        assert_eq!(truncate_text("中文中文", 5), "中文…");
+        assert_eq!(truncate_text("e\u{301}e\u{301}", 2), "e\u{301}e\u{301}");
+        assert_eq!(truncate_text("a\nb\tc\r\u{1b}", 40), r"a\nb\tc\r\u{1b}");
+        assert_eq!(truncate_text(r"a\nb", 40), r"a\\nb");
+        for width in 8..48 {
+            let (value, description) =
+                fit_env_row(&"中文".repeat(30), &"说明".repeat(30), 8, width);
+            assert!(console::measure_text_width(&value) <= env_value_width(8, width));
+            assert!(console::measure_text_width(&description) <= width);
+        }
     }
 
     #[test]
