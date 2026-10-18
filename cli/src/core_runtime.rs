@@ -404,29 +404,4 @@ generator = { script = 'gen.sh', env = ['SOURCE'], when_env = 'SOURCE', auto = f
         assert!(runtime.presets().get("app/ghostty/shine.toml").is_some());
         assert_eq!(runtime.context().home_dir, root);
     }
-
-    #[tokio::test]
-    async fn built_in_sys_bootstrap_plan_is_ready_for_each_platform() {
-        for (platform, os_id, shell) in [
-            (RuntimePlatform::Macos, "macos", "zsh"),
-            (RuntimePlatform::Linux, "ubuntu", "zsh"),
-            (RuntimePlatform::Windows, "windows", "powershell"),
-        ] {
-            let runtime = from_embedded_presets_for_platform(platform);
-            let plan = runtime
-                .plan_sys_bootstrap(SysBootstrapPlanRequest {
-                    os_id: os_id.to_string(),
-                    item_ids: vec!["rust".to_string()],
-                    sys_shell: shell.to_string(),
-                    force_profile: false,
-                    input_versions: PlanningInputVersions::default(),
-                })
-                .await
-                .unwrap();
-            assert!(
-                plan.is_ready(),
-                "blocked built-in Plan for {os_id}: {plan:#?}"
-            );
-        }
-    }
 }

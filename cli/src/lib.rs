@@ -25,8 +25,6 @@ pub(crate) mod presentation;
 pub mod preset_authoring;
 pub mod preset_commands;
 pub mod preset_lint;
-#[cfg(test)]
-mod preset_meta;
 pub mod preset_migration;
 pub mod preset_pack;
 pub(crate) mod preset_report;

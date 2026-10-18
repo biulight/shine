@@ -31,14 +31,18 @@ homepage = "https://github.com/biulight/shine"
 keywords = ["cli", "environment", "configuration", "bootstrap", "shell"]
 categories = ["command-line-utilities", "config"]
 include = [
-    "Cargo.toml",
-    "Cargo.lock",
-    "LICENSE",
-    "README.md",
-    "cli/build.rs",
-    "cli/src/**",
-    "presets/**",
-    "skills/**",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/LICENSE",
+    "/README.md",
+    "/cli/build.rs",
+    "/cli/src/**",
+    "/tests/builtin_presets.rs",
+    "/tests/builtin_presets/**",
+    "/presets/**",
+    "/skills/**",
+    "/tests/source_package.rs",
+    "!**/node_modules/**",
 ]
 build = "cli/build.rs"
 

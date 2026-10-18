@@ -696,42 +696,6 @@ mod tests {
     }
 
     #[test]
-    fn embedded_shell_metadata_returns_proxy_and_utils() {
-        let cats = crate::core_runtime::from_embedded_presets_for_platform(
-            shine_core::runtime::RuntimePlatform::Linux,
-        )
-        .shell_categories(None)
-        .unwrap();
-        let names: Vec<&str> = cats.iter().map(|c| c.name.as_str()).collect();
-        assert!(
-            names.contains(&"proxy"),
-            "proxy category missing: {names:?}"
-        );
-        assert!(
-            names.contains(&"utils"),
-            "utils category missing: {names:?}"
-        );
-    }
-
-    #[test]
-    fn embedded_shell_metadata_proxy_scripts_have_descriptions() {
-        let cats = crate::core_runtime::from_embedded_presets_for_platform(
-            shine_core::runtime::RuntimePlatform::Linux,
-        )
-        .shell_categories(None)
-        .unwrap();
-        let proxy = cats.iter().find(|c| c.name == "proxy").unwrap();
-        assert!(!proxy.files.is_empty());
-        for script in &proxy.files {
-            assert!(
-                !script.description.is_empty(),
-                "{} should have a description",
-                script.source_rel.display()
-            );
-        }
-    }
-
-    #[test]
     fn embedded_shell_metadata_missing_category_returns_empty() {
         let cats = crate::core_runtime::from_embedded_presets_for_platform(
             shine_core::runtime::RuntimePlatform::Linux,

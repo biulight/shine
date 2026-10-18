@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-18 — Cargo include basenames can admit dependency-tree files
+
+- **Symptom**: `cargo package --list` included nested README/LICENSE files from local
+  `website/node_modules`, despite an apparently narrow source-package allow-list.
+- **Cause**: unanchored basename patterns match at any depth; broad source-tree patterns can also
+  include a nested `node_modules` directory. `include` is authoritative over ignored local files.
+- **Fix / rule**: root-anchor intended package paths and explicitly negate `**/node_modules/**`.
+  The `source_package` integration test feeds the real include policy to Cargo with synthetic
+  required files and forbidden dependency trees. Verify both package membership and packaged tests;
+  a clean checkout without installed dependencies is insufficient regression evidence.
+
 ## 2026-10-18 — Simulated runtime fixtures must select their Shell explicitly
 
 - **Symptom**: Windows CI returned no Shell inspection rows for the Core-only Linux harness.

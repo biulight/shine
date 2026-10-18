@@ -76,6 +76,15 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 The local Bun hook covers every `presets/**/*.ts` file and its tooling configuration. The
 `presets/tooling.test.ts` regression checks the actual hook filter against the maintained files.
 
+Built-in preset contracts live in the single `builtin_presets` integration target, outside the
+runtime resource tree. Run it alone with `cargo test --test builtin_presets --target-dir target`,
+or through the existing workspace nextest command. Script tests remain colocated and are discovered
+by `bun test ./presets`. The existing Rust hook also matches all preset files and Cargo/toolchain
+configuration; the Bun tooling regression checks both hook filters. Source packages include the
+integration target and its support modules. Root-anchor include paths and exclude `node_modules`
+even under allowed trees; `source_package` tests this with Cargo against synthetic file trees. Public-manual parity checks retain their source-package
+skip when the manuals are absent. Native CI remains necessary for platform-gated cases.
+
 ## Refactoring
 
 Every refactor must answer: compared with keeping the current implementation, does this make

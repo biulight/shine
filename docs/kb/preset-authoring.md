@@ -38,13 +38,28 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
    reports that classification and the author-statement source. Never place argv, values,
    ciphertext, credentials, or physical checkout paths in declarations.
 14. After changing a built-in App destination or App/Shell file selector, run
-   `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`
+   `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test --test builtin_presets --target-dir target built_in_preset_platform_capability_docs_are_current`
    and commit both regenerated public-manual blocks.
 
 For a 1.x source, begin with `shine preset migrate <path> --dry-run`. The reviewed migrator may
 rebase only exact released metadata or apply safe structural App edits; it never supplies opaque
 permissions, splits a Sys dispatcher, grants trust, or edits payloads. Complete every reported
 manual blocker, then rerun validate, lint, plan, and fixture tests above.
+
+## Built-in regression ownership
+
+When adding or changing a built-in preset, add content/platform/destination contracts under
+`tests/builtin_presets/`, grouped by App, Shell or Sys; shared inventory and capability-document
+checks cover the bundle. Run `mise exec -- cargo test --test builtin_presets --target-dir target`.
+The same target participates in workspace nextest runs and the three native-platform CI jobs.
+Use the existing production embedded reader, snapshot capture and Core APIs, not a second parser.
+
+Keep script logic tests beside the TypeScript preset; `mise exec -- bun run --bun check:ts`
+typechecks and automatically discovers tests under `presets/`. Category-local `shine.test.toml`
+remains appropriate for structured authoring Plan expectations, not executable script assertions.
+Engine safety/recovery and CLI adapter/output regressions stay beside their respective owners.
+Preset changes trigger the existing Rust regression hook; TypeScript changes also trigger Bun.
+See [ADR 0147](decisions/0147-built-in-preset-contract-tests.md).
 
 ## AI authoring boundary
 

@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-27
-- **Evidence**: `core/src/runtime/{app_metadata,shell}.rs`, `cli/src/preset_meta.rs`,
+- **Evidence**: `core/src/runtime/{app_metadata,shell}.rs`, `tests/builtin_presets/docs.rs` (relocated by ADR 0147),
   `docs/manual/reference/built-in-presets.md`
 
 ## Context

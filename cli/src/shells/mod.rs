@@ -108,28 +108,4 @@ mod tests {
             ShellType::PowerShell
         ));
     }
-
-    #[cfg(unix)]
-    #[test]
-    fn proxy_scripts_fail_fast_when_not_sourced() {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let preset_dir = manifest_dir.join("presets/shell/proxy");
-
-        for script in ["set_proxy.sh", "uset_proxy.sh"] {
-            let output = std::process::Command::new("bash")
-                .arg(preset_dir.join(script))
-                .output()
-                .expect("proxy script should run under bash");
-
-            assert!(
-                !output.status.success(),
-                "{script} should fail when executed directly"
-            );
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(
-                stderr.contains("must be sourced"),
-                "{script} should explain source requirement: {stderr}"
-            );
-        }
-    }
 }

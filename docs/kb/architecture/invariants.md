@@ -950,12 +950,12 @@ bugs. Check this list before changing the modules named in each entry.
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
 - **The generated built-in platform capability blocks must use runtime selector semantics.**
-  `preset_meta::tests::built_in_preset_platform_capability_docs_are_current` asks Core to derive App
+  The `builtin_presets` integration target checks capability docs using Core-derived App
   category and Shell command visibility from the pristine immutable snapshot for macOS, Linux, and Windows,
   then checks the delimited blocks in both public manual locales. Do not maintain a parallel
   platform map or weaken the test to trust prose labels; a preset metadata change and both generated
   blocks must land together. Regenerate them with
-  `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`.
+  `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test --test builtin_presets --target-dir target built_in_preset_platform_capability_docs_are_current`.
 - **Fallback depends on the selected preset mode.** In built-in mode, an overlay replaces matching
   paths and unmatched paths continue to read embedded assets. A full external preset source is
   authoritative for app and shell category discovery: a missing category or file is not silently
@@ -1271,6 +1271,12 @@ bugs. Check this list before changing the modules named in each entry.
   would violate the command's user-visible scope.
 
 ## Tests
+
+- **Built-in preset contracts exercise shipped inputs through production owners.** The integration
+  target reads the actual embedded bundle and calls Core/CLI entry points; it must not introduce
+  a second metadata scanner, destination resolver or planner. Keep CLI assembly and generic engine
+  safety tests with their owners. Test relocation preserves assertions and platform gates, including
+  captured data-directory independence and capability-block CRLF/update behavior (ADR 0147).
 
 - **Env-var mutation in tests must hold `crate::test_support::env_lock()`** — a single shared
   guard used across the lib/bin boundary (it is deliberately *not* `#[cfg(test)]`-gated because

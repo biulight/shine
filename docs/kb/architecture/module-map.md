@@ -244,7 +244,8 @@ execution primitives and transforms live in `core/src/install/`.
 | `cli/src/config/env_write.rs` | Explicit write targets, preflight, snapshot checks and shared per-target config locks |
 | `cli/src/presets.rs` | Pristine embedded assets plus explicit `PresetAssetReader` overlay enumeration/reads and full export; pristine embedded prefix copy; shared safe output publication; removal belongs to the Core lifecycle and Shell discovery to Core metadata |
 | `cli/src/preset_commands.rs` | Preset copy/export/link/unlink/overlay commands |
-| `cli/src/preset_meta.rs` | Test-only Core capability-report renderer for public manual parity |
+| `tests/builtin_presets.rs`, `tests/builtin_presets/` | Built-in preset contracts: inventory, App destinations, Shell scripts, Sys Plans and public capability-document parity through production interfaces |
+| `tests/source_package.rs` | Cargo source-package include-policy regression with required files and dependency-tree sentinels |
 | `cli/src/preset_validation.rs` | Core validation report text/JSON rendering and exit mapping; golden tests consume production reports without a duplicate aggregator |
 | `cli/src/preset_lint.rs` | Core author-quality lint report rendering and strict-CI exit mapping |
 | `cli/src/preset_authoring.rs` | Hypothetical authoring-plan text/JSON rendering and platform mapping |
