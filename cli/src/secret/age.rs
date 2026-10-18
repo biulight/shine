@@ -452,7 +452,6 @@ mod tests {
     #[test]
     fn missing_known_recipient_plugins_have_actionable_errors() {
         let _guard = crate::test_support::env_lock();
-        let old_path = std::env::var_os("PATH");
         // SAFETY: env_lock serializes process-environment mutation tests.
         unsafe {
             std::env::set_var(
@@ -464,13 +463,6 @@ mod tests {
         let se = preflight_recipient_plugins(&["age1se1example"]).unwrap_err();
         let phone = preflight_recipient_plugins(&["age1phone1example"]).unwrap_err();
 
-        // SAFETY: same env_lock guard as above.
-        unsafe {
-            match old_path {
-                Some(value) => std::env::set_var("PATH", value),
-                None => std::env::remove_var("PATH"),
-            }
-        }
         assert!(se.to_string().contains("shine state migrate --dry-run"));
         assert!(phone.to_string().contains("every computer that seals"));
     }
@@ -478,7 +470,6 @@ mod tests {
     #[test]
     fn missing_legacy_identity_plugin_has_migration_guidance() {
         let _guard = crate::test_support::env_lock();
-        let old_path = std::env::var_os("PATH");
         // SAFETY: env_lock serializes process-environment mutation tests.
         unsafe {
             std::env::set_var(
@@ -489,13 +480,6 @@ mod tests {
 
         let err = ensure_identity_plugin("age-plugin-se").unwrap_err();
 
-        // SAFETY: same env_lock guard as above.
-        unsafe {
-            match old_path {
-                Some(value) => std::env::set_var("PATH", value),
-                None => std::env::remove_var("PATH"),
-            }
-        }
         assert!(err.to_string().contains("requires age-plugin-se"));
         assert!(err.to_string().contains("shine state migrate --dry-run"));
         assert!(err.to_string().contains("before resealing"));

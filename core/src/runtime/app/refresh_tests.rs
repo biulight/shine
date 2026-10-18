@@ -105,10 +105,7 @@ async fn refresh_continues_after_file_failure_saves_once_and_runs_hooks_after_re
     let request = request();
     let plan = runtime.plan_app_refresh(request.clone()).await.unwrap();
     assert!(plan.is_ready(), "{plan:#?}");
-    let approval = PlanApprovalV1::for_reviewed_plan(
-        &runtime.plan_app_refresh(request.clone()).await.unwrap(),
-    )
-    .unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     let since = runtime.host().operations().len();
     let report = runtime
         .refresh_app_generators_approved(
@@ -176,10 +173,7 @@ async fn refresh_admin_denial_and_failed_final_receipt_do_not_run_hooks() {
         let request = request();
         let plan = runtime.plan_app_refresh(request.clone()).await.unwrap();
         assert!(plan.is_ready(), "{plan:#?}");
-        let approval = PlanApprovalV1::for_reviewed_plan(
-            &runtime.plan_app_refresh(request.clone()).await.unwrap(),
-        )
-        .unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         if !deny {
             runtime.host().fail_write_after(&receipt, 0);
         }

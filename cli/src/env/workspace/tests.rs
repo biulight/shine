@@ -686,18 +686,6 @@ fn broker_preserves_source_precedence_and_releases_only_winning_secrets() {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use std::os::unix::fs::PermissionsExt;
     let _guard = crate::test_support::env_lock();
-    struct RestorePath(Option<OsString>);
-    impl Drop for RestorePath {
-        fn drop(&mut self) {
-            // SAFETY: env_lock is retained throughout this test.
-            unsafe {
-                match &self.0 {
-                    Some(value) => std::env::set_var("PATH", value),
-                    None => std::env::remove_var("PATH"),
-                }
-            }
-        }
-    }
     fn source(path: &str, plain: &[(&str, &str)], secrets: &[(&str, &str)]) -> SourceSnapshot {
         let mut document = DocumentMut::new();
         document["version"] = value(1);
@@ -732,7 +720,6 @@ fn broker_preserves_source_precedence_and_releases_only_winning_secrets() {
     )
     .unwrap();
     std::fs::set_permissions(root.join("gpg"), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let _restore = RestorePath(std::env::var_os("PATH"));
     // SAFETY: all environment-mutating tests hold env_lock.
     unsafe { std::env::set_var("PATH", &root) };
     let snapshot = WorkspaceSnapshot {

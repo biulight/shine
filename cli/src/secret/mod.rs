@@ -330,20 +330,6 @@ mod process_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    struct RestorePath(Option<std::ffi::OsString>);
-
-    impl Drop for RestorePath {
-        fn drop(&mut self) {
-            // SAFETY: the environment lock is held until after this guard drops.
-            unsafe {
-                match &self.0 {
-                    Some(path) => std::env::set_var("PATH", path),
-                    None => std::env::remove_var("PATH"),
-                }
-            }
-        }
-    }
-
     #[test]
     fn both_backends_work_without_external_base64() {
         let _guard = crate::test_support::env_lock();
@@ -352,7 +338,6 @@ mod process_tests {
             .build()
             .unwrap();
         let dir = runtime.block_on(crate::test_support::make_temp_dir("shine-secret-process"));
-        let _restore = RestorePath(std::env::var_os("PATH"));
         for tool in ["gpg", "age"] {
             let path = dir.join(tool);
             std::fs::write(
@@ -461,7 +446,6 @@ esac
             .unwrap();
         let dir = runtime.block_on(crate::test_support::make_temp_dir("shine-age-version"));
         let age = dir.join("age");
-        let _restore = RestorePath(std::env::var_os("PATH"));
         // SAFETY: all environment-mutation tests hold env_lock().
         unsafe { std::env::set_var("PATH", &dir) };
 

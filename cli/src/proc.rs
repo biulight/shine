@@ -48,22 +48,12 @@ mod tests {
 
         let result = {
             let _guard = env_lock();
-            let old_path = std::env::var_os("PATH");
             // SAFETY: env_lock() serialises all env-mutation tests in this
             // crate, preventing concurrent writes to the process environment.
             // No `.await` occurs while the guard is held.
             unsafe { std::env::set_var("PATH", &dir) };
 
-            let result = ensure_command("myfakebin");
-
-            // SAFETY: same env_lock() guard as above.
-            unsafe {
-                match old_path {
-                    Some(value) => std::env::set_var("PATH", value),
-                    None => std::env::remove_var("PATH"),
-                }
-            }
-            result
+            ensure_command("myfakebin")
         };
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
