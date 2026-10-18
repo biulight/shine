@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod privileged_tests;
 use super::managed_json::{
     installed_json_hash, managed_json_hash, managed_json_payload, parse_json_object,
     serialize_json_object,
@@ -577,19 +579,18 @@ pub(crate) fn desired_app_hash(file: &AppFile, content: &[u8]) -> Result<u64> {
 }
 
 pub(crate) fn installed_app_hash(file: &AppFile, content: &[u8]) -> Result<Option<u64>> {
-    match &file.install_strategy {
-        AppInstallStrategy::Copy => Ok(Some(hash_content(content))),
-        AppInstallStrategy::JsonMerge { managed_keys } => {
-            installed_json_hash(content, managed_keys)
-        }
-    }
+    installed_strategy_hash(&file.install_strategy, content)
 }
 
 pub(crate) fn installed_app_entry_hash(
     entry: &crate::install::AppEntry,
     content: &[u8],
 ) -> Result<Option<u64>> {
-    match &entry.install_strategy {
+    installed_strategy_hash(&entry.install_strategy, content)
+}
+
+fn installed_strategy_hash(strategy: &AppInstallStrategy, content: &[u8]) -> Result<Option<u64>> {
+    match strategy {
         AppInstallStrategy::Copy => Ok(Some(hash_content(content))),
         AppInstallStrategy::JsonMerge { managed_keys } => {
             installed_json_hash(content, managed_keys)
@@ -611,39 +612,15 @@ where
     if dry_run {
         return Ok(InstallOutcome::DryRun);
     }
-    let _guard = host.acquire_privileged_operation().await?;
-    let hash = hash_content(content);
-    let exists = match host.metadata(destination).await {
-        Ok(_) => true,
-        Err(error) if error.is_not_found() => false,
-        Err(error) => return Err(error.into_anyhow("inspecting privileged App destination")),
-    };
-    if exists && is_managed && !force {
-        let current = host
-            .read(destination)
-            .await
-            .map_err(|error| error.into_anyhow("reading privileged App destination"))?;
-        if hash_content(&current) == hash {
-            return Ok(InstallOutcome::AlreadyManaged);
-        }
-    }
-    let backup = if exists && !is_managed {
-        let backup = crate::install::file_ops::backup_path(destination);
-        host.move_privileged(destination, &backup).await?;
-        Some(backup)
-    } else {
-        None
-    };
-    if let Err(error) = host.write_privileged(destination, content).await {
-        if let Some(backup) = &backup {
-            let _ = host.move_privileged(backup, destination).await;
-        }
-        return Err(error);
-    }
-    Ok(match backup {
-        Some(backup) => InstallOutcome::BackedUpAndInstalled { backup, hash },
-        None => InstallOutcome::Installed { hash },
-    })
+    super::privileged_files::install_bytes(
+        host,
+        content,
+        destination,
+        is_managed,
+        force,
+        super::privileged_files::APP,
+    )
+    .await
 }
 
 async fn uninstall_privileged_entry<H>(
@@ -658,36 +635,7 @@ where
     if dry_run {
         return Ok(UninstallOutcome::DryRun);
     }
-    let _guard = host.acquire_privileged_operation().await?;
-    let current = match host.read(&entry.destination).await {
-        Ok(bytes) => bytes,
-        Err(error) if error.is_not_found() => return Ok(UninstallOutcome::NotFound),
-        Err(error) => return Err(error.into_anyhow("reading privileged App destination")),
-    };
-    let user_modified = hash_content(&current) != entry.content_hash;
-    if user_modified && !force {
-        return Ok(UninstallOutcome::UserModified);
-    }
-    host.remove_privileged(&entry.destination).await?;
-    if let Some(backup) = &entry.backup
-        && host.metadata(backup).await.is_ok()
-    {
-        host.move_privileged(backup, &entry.destination).await?;
-        return Ok(if user_modified {
-            UninstallOutcome::ForceRestoredBackup {
-                backup: backup.clone(),
-            }
-        } else {
-            UninstallOutcome::RestoredBackup {
-                backup: backup.clone(),
-            }
-        });
-    }
-    Ok(if user_modified {
-        UninstallOutcome::ForceRemoved
-    } else {
-        UninstallOutcome::Removed
-    })
+    super::privileged_files::uninstall_entry(host, entry, force, super::privileged_files::APP).await
 }
 
 async fn install_json_merge(
@@ -1334,26 +1282,7 @@ mod manifest_reader_tests {
 
     #[tokio::test]
     async fn app_manifest_reader_compatibility() {
-        for input in [
-            None,
-            Some("entries = []\n"),
-            Some(
-                r#"[[entries]]
-source = "app/demo/config"
-destination = "/old/config"
-content_hash = 7
-[[entries]]
-source = "app/demo/config"
-destination = "/new/config"
-content_hash = 8
-"#,
-            ),
-            Some("schema_version = 0\n"),
-            Some("schema_version = 1\n"),
-            Some("schema_version = 2\n"),
-            Some("schema_version = -1\n"),
-            Some("["),
-        ] {
+        for &input in crate::install::manifest::APP_MANIFEST_COMPATIBILITY_CASES {
             let host = InMemoryHost::new();
             let root = Path::new("/state");
             let path = root.join("app-manifest.toml");
@@ -1380,20 +1309,6 @@ content_hash = 8
                     assert_eq!(manifest.entries, parsed.entries);
                 }
             }
-            let direct = AppManifest::load(&host, root).await;
-            match input {
-                Some("schema_version = 2\n") => assert_eq!(
-                    direct.unwrap_err().to_string(),
-                    "app manifest schema version 2 is newer than this Shine supports (1)"
-                ),
-                Some("schema_version = -1\n" | "[") => assert_eq!(
-                    direct.unwrap_err().to_string(),
-                    toml::from_str::<AppManifest>(input.unwrap())
-                        .unwrap_err()
-                        .to_string()
-                ),
-                _ => assert_eq!(direct.unwrap().schema_version, 1),
-            }
             assert!(
                 host.operations()
                     .iter()
@@ -1418,8 +1333,6 @@ content_hash = 8
         let error = load_manifest(&host, &root).await.unwrap_err();
         assert_eq!(error.to_string(), "failed to read app manifest");
         assert!(error.downcast_ref::<std::io::Error>().is_some());
-        let direct = AppManifest::load(&host, &root).await.unwrap_err();
-        assert_eq!(direct.to_string(), "failed to read app manifest");
         assert!(path.is_dir());
         tokio::fs::remove_dir_all(&root).await.unwrap();
     }

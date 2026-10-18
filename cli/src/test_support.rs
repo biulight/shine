@@ -138,6 +138,36 @@ async fn admin_category_test_lock_at(path: &Path) -> anyhow::Result<PrivilegedOp
 }
 
 #[cfg(test)]
+mod reporter {
+    use crate::presentation::{LifecycleReporter, PresentationEvent};
+    #[derive(Default)]
+    pub(crate) struct RecordingReporter(Vec<PresentationEvent>);
+    impl LifecycleReporter for RecordingReporter {
+        fn emit(&mut self, event: PresentationEvent) {
+            self.0.push(event);
+        }
+    }
+    impl RecordingReporter {
+        pub(crate) fn clear(&mut self) {
+            self.0.clear();
+        }
+
+        pub(crate) fn text(&self) -> String {
+            self.0
+                .iter()
+                .filter_map(|event| match event {
+                    PresentationEvent::Line { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    }
+}
+#[cfg(test)]
+pub(crate) use reporter::RecordingReporter;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

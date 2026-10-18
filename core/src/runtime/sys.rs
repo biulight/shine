@@ -1,5 +1,7 @@
 mod inspect;
 mod lifecycle;
+#[cfg(test)]
+mod privileged_tests;
 mod transaction;
 use super::sys_action_executor::SysReceiptTransitionV1;
 use super::sys_manifest::config_string as sys_config_string;
@@ -763,39 +765,15 @@ where
     if !privileged {
         return install_bytes_with_host(host, content, destination, is_managed, false, true).await;
     }
-    let _guard = host.acquire_privileged_operation().await?;
-    let hash = hash_content(content);
-    let exists = match host.metadata(destination).await {
-        Ok(_) => true,
-        Err(error) if error.is_not_found() => false,
-        Err(error) => return Err(error.into_anyhow("inspecting privileged managed Sys file")),
-    };
-    if exists && is_managed {
-        let current = host
-            .read(destination)
-            .await
-            .map_err(|error| error.into_anyhow("reading privileged managed Sys file"))?;
-        if hash_content(&current) == hash {
-            return Ok(InstallOutcome::AlreadyManaged);
-        }
-    }
-    let backup = if exists && !is_managed {
-        let backup = crate::install::file_ops::backup_path(destination);
-        host.move_privileged(destination, &backup).await?;
-        Some(backup)
-    } else {
-        None
-    };
-    if let Err(error) = host.write_privileged(destination, content).await {
-        if let Some(backup) = &backup {
-            let _ = host.move_privileged(backup, destination).await;
-        }
-        return Err(error);
-    }
-    Ok(match backup {
-        Some(backup) => InstallOutcome::BackedUpAndInstalled { backup, hash },
-        None => InstallOutcome::Installed { hash },
-    })
+    super::privileged_files::install_bytes(
+        host,
+        content,
+        destination,
+        is_managed,
+        false,
+        super::privileged_files::SYS,
+    )
+    .await
 }
 
 async fn uninstall_sys_entry<H>(
@@ -809,25 +787,7 @@ where
     if !privileged {
         return uninstall_entry_with_host(host, entry, false, false).await;
     }
-    let _guard = host.acquire_privileged_operation().await?;
-    let current = match host.read(&entry.destination).await {
-        Ok(bytes) => bytes,
-        Err(error) if error.is_not_found() => return Ok(UninstallOutcome::NotFound),
-        Err(error) => return Err(error.into_anyhow("reading privileged managed Sys file")),
-    };
-    if hash_content(&current) != entry.content_hash {
-        return Ok(UninstallOutcome::UserModified);
-    }
-    host.remove_privileged(&entry.destination).await?;
-    if let Some(backup) = &entry.backup
-        && host.metadata(backup).await.is_ok()
-    {
-        host.move_privileged(backup, &entry.destination).await?;
-        return Ok(UninstallOutcome::RestoredBackup {
-            backup: backup.clone(),
-        });
-    }
-    Ok(UninstallOutcome::Removed)
+    super::privileged_files::uninstall_entry(host, entry, false, super::privileged_files::SYS).await
 }
 
 impl fmt::Display for ResourceConflict {

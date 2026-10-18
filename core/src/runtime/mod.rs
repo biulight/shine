@@ -25,6 +25,7 @@ mod path_text;
 mod planner;
 mod preset;
 mod preset_migration;
+mod privileged_files;
 mod process_scope;
 mod profile;
 mod review_path;

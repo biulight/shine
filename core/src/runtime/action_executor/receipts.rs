@@ -602,26 +602,7 @@ mod manifest_reader_tests {
 
     #[tokio::test]
     async fn app_receipt_reader_compatibility() {
-        for input in [
-            None,
-            Some("entries = []\n"),
-            Some(
-                r#"[[entries]]
-source = "app/demo/config"
-destination = "/old/config"
-content_hash = 7
-[[entries]]
-source = "app/demo/config"
-destination = "/new/config"
-content_hash = 8
-"#,
-            ),
-            Some("schema_version = 0\n"),
-            Some("schema_version = 1\n"),
-            Some("schema_version = 2\n"),
-            Some("schema_version = -1\n"),
-            Some("["),
-        ] {
+        for &input in crate::install::manifest::APP_MANIFEST_COMPATIBILITY_CASES {
             let host = InMemoryHost::new();
             let root = Path::new("/state");
             let path = root.join("app-manifest.toml");
@@ -649,20 +630,6 @@ content_hash = 8
                     assert_eq!(manifest.entries, parsed.entries);
                 }
             }
-            let direct = AppManifest::load(&host, root).await;
-            match input {
-                Some("schema_version = 2\n") => assert_eq!(
-                    direct.unwrap_err().to_string(),
-                    "app manifest schema version 2 is newer than this Shine supports (1)"
-                ),
-                Some("schema_version = -1\n" | "[") => assert_eq!(
-                    direct.unwrap_err().to_string(),
-                    toml::from_str::<AppManifest>(input.unwrap())
-                        .unwrap_err()
-                        .to_string()
-                ),
-                _ => assert_eq!(direct.unwrap().schema_version, 1),
-            }
             assert!(
                 host.operations()
                     .iter()
@@ -687,8 +654,6 @@ content_hash = 8
         let error = load_app_manifest_receipts(&host, &root).await.unwrap_err();
         assert_eq!(error.to_string(), "failed to observe App recovery resource");
         assert!(error.downcast_ref::<std::io::Error>().is_some());
-        let direct = AppManifest::load(&host, &root).await.unwrap_err();
-        assert_eq!(direct.to_string(), "failed to read app manifest");
         assert!(path.is_dir());
         tokio::fs::remove_dir_all(&root).await.unwrap();
     }

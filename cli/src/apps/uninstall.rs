@@ -359,25 +359,7 @@ mod tests {
     use crate::test_support::env_lock;
     use tokio::fs;
 
-    #[derive(Default)]
-    struct RecordingReporter(Vec<PresentationEvent>);
-    impl LifecycleReporter for RecordingReporter {
-        fn emit(&mut self, event: PresentationEvent) {
-            self.0.push(event);
-        }
-    }
-    impl RecordingReporter {
-        fn text(&self) -> String {
-            self.0
-                .iter()
-                .filter_map(|event| match event {
-                    PresentationEvent::Line { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-    }
+    use crate::test_support::RecordingReporter;
 
     #[tokio::test]
     async fn protected_uninstall_reports_partial_completion_and_strategy_specific_guidance() {

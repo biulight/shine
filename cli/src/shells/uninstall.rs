@@ -193,25 +193,7 @@ mod tests {
     use std::path::PathBuf;
     use tokio::fs;
 
-    #[derive(Default)]
-    struct RecordingReporter(Vec<PresentationEvent>);
-    impl LifecycleReporter for RecordingReporter {
-        fn emit(&mut self, event: PresentationEvent) {
-            self.0.push(event);
-        }
-    }
-    impl RecordingReporter {
-        fn text(&self) -> String {
-            self.0
-                .iter()
-                .filter_map(|event| match event {
-                    PresentationEvent::Line { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-    }
+    use crate::test_support::RecordingReporter;
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-shell").await
@@ -485,7 +467,7 @@ mod tests {
                 .text()
                 .contains("Shell uninstall has no --force override")
         );
-        reporter.0.clear();
+        reporter.clear();
         let result = handle_uninstall_with_reporter(
             &config,
             Some("utils/shine-env-export"),

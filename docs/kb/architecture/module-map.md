@@ -30,8 +30,10 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/launcher.rs` | Borrowed launcher inputs, shared resource preparation, exact comparison, Host installation and ownership probes |
 | `core/src/runtime/launcher/templates.rs` | Pure Unix/PowerShell/CMD launcher byte generation, quoting and legacy/current format reconstruction |
 | `core/src/runtime/launcher/tests.rs` | Launcher consumer regressions against production Host APIs and prepared transaction resources; no parallel test-only filesystem implementation |
+| `core/src/runtime/privileged_files.rs` | Shared App/Sys privileged byte install/remove primitives, holding the admin lock through comparison, backup, mutation and failure restoration; callers retain approval, dry-run, force and non-privileged routing |
 | `core/src/runtime/operation_lock.rs` | Persistent OS file locks and configuration-scoped App/Shell/Sys lifecycle serialization |
 | `core/src/runtime/tests/` | Test-only runtime harness and regressions spanning domain modules; `lifecycle_concurrency.rs` covers receipt preservation and approval revalidation under contention |
+| `core/src/runtime/tests/privileged_contracts.rs` | Shared App/Sys consumer regression probe delegates IO to InMemoryHost and checks guard lifetime across backup restoration, failure and cancellation |
 | `core/src/runtime/tests/harness.rs`, `core/tests/runtime_boundary.rs` | Captured-input and virtual-state harnesses exercise production Frontend App/Shell inspection and assert read-only Host operations |
 | `core/src/runtime/tests/refactoring_contracts.rs` | Cross-module App static/generator receipt preservation and Shell read-only interruption/recovery/retry contracts |
 | `core/src/runtime/process_scope.rs` | Isolated-process cancellation guard and scoped Unix foreground-terminal handoff |
@@ -329,7 +331,7 @@ See [`data-flows.md`](data-flows.md#ssh-environment-forwarding),
 | `cli/src/self_install/config_upgrade.rs` | Target/aggregate configuration upgrade routing, review, preparation, execution and rendering |
 | `cli/src/self_install/config_upgrade/summary.rs` | Named target summary and domain-specific counters; display data carries no approval authority |
 | `cli/src/home.rs` | Sudo-aware home discovery and path expansion |
-| `cli/src/test_support.rs` | Shared process-state restoration guard and approved virtual Core installation fixtures |
+| `cli/src/test_support.rs` | Shared process-state restoration guard, approved virtual Core installation fixtures and test-only presentation event recorder |
 
 ## Embedded preset tree
 
