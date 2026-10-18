@@ -89,11 +89,35 @@ async fn handle_profile_state(
     let outcome = report
         .outcome
         .expect("Core profile mutation returns an outcome");
-    println!(
-        "{} sys/{item_id}: shell integration {} ({})",
-        colors::symbol("✓"),
-        if enabled { "enabled" } else { "disabled" },
-        outcome.detail
-    );
+    println!("{}", profile_outcome_text(item_id, enabled, &outcome));
     Ok(())
+}
+
+fn profile_outcome_text(item_id: &str, enabled: bool, outcome: &super::SysItemOutcome) -> String {
+    use super::SysItemStatus;
+    let state = match outcome.status {
+        SysItemStatus::NeedsAction => "needs action",
+        SysItemStatus::Failed => "failed",
+        SysItemStatus::Skipped | SysItemStatus::AlreadyInstalled => {
+            if enabled {
+                "already enabled"
+            } else {
+                "already disabled"
+            }
+        }
+        SysItemStatus::Installed | SysItemStatus::Updated | SysItemStatus::Completed => {
+            if enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        }
+    };
+    let symbol = super::execution::status_symbol(outcome.status);
+    format!(
+        "{} sys/{item_id}: shell integration {} ({})",
+        colors::symbol(symbol),
+        colors::status_label(state, symbol),
+        outcome.detail
+    )
 }

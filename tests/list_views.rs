@@ -322,3 +322,55 @@ fn shell_descriptions_align_unicode_names_and_continuations() {
     assert_eq!(widths.len(), 6, "{text}");
     assert!(widths.iter().all(|width| *width == widths[0]), "{text}");
 }
+
+#[test]
+fn update_version_check_failure_never_claims_everything_is_current() {
+    for pending in [false, true] {
+        let fixture = Fixture::new();
+        if pending {
+            fixture.app(false);
+            success(&fixture.run(&["app", "install", "demo", "--yes"]));
+            fs::write(
+                fixture.0.join("state/presets/app/demo/config.txt"),
+                "static-v2\n",
+            )
+            .unwrap();
+        }
+        // A local read error prevents network access and exercises the real failure path.
+        let cache = fixture.0.join("state/update-check.json");
+        fs::remove_file(&cache).unwrap();
+        fs::create_dir(&cache).unwrap();
+        let output = fixture.run(&["update"]);
+        success(&output);
+        let text = stdout(&output);
+        assert!(!text.contains("Nothing to update."), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("warning: skipped shine version check: failed to read update cache"),
+            "{output:?}"
+        );
+        if pending {
+            assert!(
+                text.contains("App Configs") && text.contains("demo"),
+                "{output:?}"
+            );
+            assert!(
+                !text.contains("No configuration updates found"),
+                "{output:?}"
+            );
+            assert_eq!(
+                fs::read(fixture.0.join("destination/config.txt")).unwrap(),
+                b"static-v1\n"
+            );
+        } else {
+            assert!(
+                text.contains("No configuration updates found; Shine version check incomplete."),
+                "{output:?}"
+            );
+        }
+    }
+    let fixture = Fixture::new();
+    let output = fixture.run(&["update"]);
+    success(&output);
+    assert!(stdout(&output).contains("Nothing to update."), "{output:?}");
+}

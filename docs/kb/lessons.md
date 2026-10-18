@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-18 — Presentation must retain incomplete observations and profile attention
+
+- **Symptoms**: `update` printed `Nothing to update` after a failed release check; explicit Sys
+  profile commands displayed a success state even when Core returned `NeedsAction`.
+- **Fix**: retain release-check completion for the no-update footer and project typed profile
+  outcomes into the final line. Keep release-check failures and profile attention non-fatal;
+  rendering does not alter approval, merge execution, receipts or recovery.
+- **Coverage**: command regressions exercise unreadable version cache with/without pending App
+  updates and profile merge conflicts. Preset wrapping uses terminal display width, preserves
+  long tokens and keeps JSON untouched; Task info labels share the longest label's width.
+
 ## 2026-10-18 — Install summaries must not discard file failures
 
 - **Symptom**: App install rendered per-file errors but ended with `Done · nothing changed` and

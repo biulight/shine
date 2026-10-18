@@ -138,6 +138,11 @@ automation must pass `--yes`, while `--dry-run` remains a separate preview. `shi
 change or re-render profile enablement implicitly; use these explicit profile commands when that
 state should change.
 
+Profile commands distinguish completed changes, an already enabled/disabled integration, and
+`needs action`. If profile merging needs manual attention, the current profile is preserved and
+the output points to the files to review. This warning alone does not cause a nonzero exit status;
+check the result before assuming the requested integration is active.
+
 `shine update` and `shine upgrade` still manage only Shine configuration and managed system
 resources. They never upgrade this third-party software.
 

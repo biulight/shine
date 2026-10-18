@@ -196,6 +196,10 @@ shine completions install
 shine completions <bash|zsh|powershell>
 ```
 
+If the Shine release check cannot finish, `update` prints a warning and still reports configuration
+updates. When no configuration updates are found, it explicitly says the version check is incomplete
+instead of claiming there is nothing to update. A release-check failure alone remains non-fatal.
+
 `update` is read-only. `upgrade` displays the planned changes and asks for approval when there is
 an action; a fully unchanged run reports `Nothing to upgrade.` without confirmation. Use `--yes`
 only after reviewing the same scope. `--pull` first updates eligible Git-managed Preset sources.

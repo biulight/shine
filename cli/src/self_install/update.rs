@@ -63,6 +63,7 @@ pub async fn handle_update(
         update_check::check_for_update(config).await
     };
 
+    let release_check_completed = update_status.is_ok();
     match update_status {
         Ok(UpdateStatus::UpToDate) => {
             if verbose {
@@ -104,7 +105,14 @@ pub async fn handle_update(
     }
 
     if !printed_update && config_update_error.is_none() && !migration_required {
-        println!("{}", colors::dim("Nothing to update."));
+        println!(
+            "{}",
+            colors::dim(if release_check_completed {
+                "Nothing to update."
+            } else {
+                "No configuration updates found; Shine version check incomplete."
+            })
+        );
     }
 
     if let Some(error) = config_update_error {

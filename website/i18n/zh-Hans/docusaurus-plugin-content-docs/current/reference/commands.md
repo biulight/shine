@@ -150,6 +150,10 @@ shine completions install
 shine completions <bash|zsh|powershell>
 ```
 
+如果 Shine 版本检查未能完成，`update` 会输出警告，并继续报告配置更新。
+没有发现配置更新时，会明确说明版本检查未完成，不会笼统地报告没有更新。
+仅版本检查失败仍不会导致非零退出码。
+
 `update` 只读检查；`upgrade` 显示计划，并在存在动作时等待确认。全部未变化时只报告 `Nothing to upgrade.`，不要求确认。只有审阅过同一范围后才应使用 `--yes`。
 `--pull` 会先更新符合条件的 Git 预设来源；`--prune-stale` 允许删除预设中已经不存在且未被修改的受管项。
 `trust grant --development` 会让所显示本地来源中的代码修改继续受信任，但 target、capability、

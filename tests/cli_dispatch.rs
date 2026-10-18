@@ -682,3 +682,124 @@ fn app_install_early_error_is_not_suppressed_as_already_reported() {
     );
     assert!(!fixture.0.join("home/config.txt").exists());
 }
+
+#[test]
+fn task_info_aligns_values_with_and_without_working_directory() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    let cwd = toml::Value::String(fixture.0.to_string_lossy().into_owned()).to_string();
+    for fixed in [false, true] {
+        let cwd_line = if fixed {
+            format!("cwd = {cwd}\n")
+        } else {
+            String::new()
+        };
+        fs::write(
+            state.join("tasks.toml"),
+            format!("[tasks.build]\ncommand = ['cargo', 'build']\n{cwd_line}"),
+        )
+        .unwrap();
+        let output = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["task", "info", "build"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        let lines = text.lines().collect::<Vec<_>>();
+        assert_eq!(lines[0], "Task        build");
+        assert_eq!(lines[1], "Command     cargo build");
+        assert_eq!(lines.len(), if fixed { 3 } else { 2 });
+        if fixed {
+            assert!(lines[2].starts_with("Working dir "), "{text}");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sys_profile_reports_attention_and_noop_without_changing_exit_policy() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let preset = state.join("presets/sys/macos");
+    fs::create_dir_all(&preset).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    fs::write(fixture.0.join("home/.tool-present"), "present").unwrap();
+    fs::write(preset.join("shine.toml"), "version = 2\n[[items]]\nid = 'tool'\nlabel = 'Tool'\npermissions = { schema_version = 1 }\ndetect = { kind = 'path', path = '$HOME/.tool-present' }\ninstall = { kind = 'package', provider = 'homebrew', package = 'tool' }\n[[items.shell]]\nshells = ['zsh']\nphase = 'post'\npath = '$HOME/.tool/bin'\n").unwrap();
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("SHELL", "/bin/zsh")
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let denied = run(&["sys", "profile", "enable", "tool"]);
+    assert!(!denied.status.success(), "{denied:?}");
+    assert!(
+        String::from_utf8_lossy(&denied.stderr).contains("approval requires"),
+        "{denied:?}"
+    );
+    let profile = fixture.0.join("home/.shine/profile");
+    assert!(!profile.exists());
+    assert!(!state.join("sys-manifest.toml").exists());
+    assert!(!fixture.0.join("home/.zshrc").exists());
+    let preview = run(&["sys", "profile", "enable", "tool", "--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(
+        String::from_utf8_lossy(&preview.stdout).contains("[dry-run] sys/tool: would enable"),
+        "{preview:?}"
+    );
+    assert!(!profile.exists());
+    assert!(!state.join("sys-manifest.toml").exists());
+    assert!(!fixture.0.join("home/.zshrc").exists());
+    let enabled = run(&["sys", "profile", "enable", "tool", "--yes"]);
+    assert!(enabled.status.success(), "{enabled:?}");
+    assert!(
+        String::from_utf8_lossy(&enabled.stdout).contains("shell integration enabled"),
+        "{enabled:?}"
+    );
+    let again = run(&["sys", "profile", "enable", "tool", "--yes"]);
+    assert!(again.status.success(), "{again:?}");
+    assert!(
+        String::from_utf8_lossy(&again.stdout).contains("shell integration already enabled"),
+        "{again:?}"
+    );
+    // Make the active profile diverge from its merge base at the integration itself.
+    let active = profile.join("macos-sys.post.sh");
+    let original = fs::read_to_string(&active).unwrap();
+    assert!(original.contains(".tool/bin"), "{original}");
+    fs::write(&active, original.replace(".tool/bin", ".custom/bin")).unwrap();
+    let user_edit = fs::read(&active).unwrap();
+    let conflict = run(&["sys", "profile", "disable", "tool", "--yes"]);
+    assert!(conflict.status.success(), "{conflict:?}");
+    let text = String::from_utf8_lossy(&conflict.stdout);
+    assert!(
+        text.lines()
+            .last()
+            .unwrap()
+            .starts_with("~ sys/tool: shell integration needs action")
+            && !text.contains("shell integration disabled"),
+        "{text}"
+    );
+    assert_eq!(fs::read(&active).unwrap(), user_edit);
+    assert!(profile.join("macos-sys.post.new.sh").exists());
+    // Missing merge ancestry also requires attention and must not replace user content.
+    fs::remove_file(profile.join("macos-sys.post.base.sh")).unwrap();
+    let missing_base = run(&["sys", "profile", "enable", "tool", "--yes"]);
+    assert!(missing_base.status.success(), "{missing_base:?}");
+    let text = String::from_utf8_lossy(&missing_base.stdout);
+    assert!(
+        text.lines()
+            .last()
+            .unwrap()
+            .starts_with("~ sys/tool: shell integration needs action")
+            && text.contains("no merge base"),
+        "{text}"
+    );
+    assert_eq!(fs::read(&active).unwrap(), user_edit);
+}

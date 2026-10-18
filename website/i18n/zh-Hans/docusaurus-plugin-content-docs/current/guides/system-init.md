@@ -115,6 +115,10 @@ shine sys profile enable mise
 必须添加 `--yes`，`--dry-run` 仍是独立预览。`shine upgrade` 不再隐式修改或重新组合 profile
 启用状态；需要变更该状态时请使用这些显式 profile 命令。
 
+profile 命令会区分改动完成、已经启用或禁用，以及 `needs action`（需要处理）。
+如果 profile 合并需要人工处理，当前文件会保留，输出会指出需要检查的文件。
+此类警告本身不会导致非零退出码；请检查结果后再确认请求的集成是否已生效。
+
 `shine update` 和 `shine upgrade` 仍只处理 Shine 管理的配置和受管系统资源，不会升级这些
 第三方软件。
 

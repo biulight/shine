@@ -51,6 +51,11 @@ bugs. Check this list before changing the modules named in each entry.
   become a live provider or split-DNS probe. Explicit App generator evaluation retains its separate
   trusted entry point and execution bounds. Shared report projection preserves safe errors,
   category selection, status priority and observation order; it grants no approval (ADR 0129).
+- **Incomplete observations and profile attention keep their CLI meaning.** A failed release
+  check cannot produce an unqualified `Nothing to update` footer. Explicit Sys profile commands
+  render `NeedsAction` as attention rather than enabled/disabled success, and distinguish no-op
+  outcomes. Both policies retain their existing non-fatal exit behavior; rendering never changes
+  approval, profile merge publication, receipt order or recovery.
 - **CLI list presentation preserves query and output timing.** List/update/status query results
   and borrowed view projections are local presentation data. Update retains its separate Shell
   row/lifecycle captures and queries all domains before printing attention. Status prints the

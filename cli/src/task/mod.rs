@@ -118,11 +118,16 @@ pub async fn handle_info(config: &Config, name: &str) -> Result<()> {
         bail!("Task not found: {name}\n\n{NOT_FOUND_HINT}");
     };
 
-    println!("{:<10} {}", "Task", name);
-    println!("{:<10} {}", "Command", render_command(&entry.command));
+    const LABEL_WIDTH: usize = "Working dir".len();
+    println!("{:<LABEL_WIDTH$} {}", "Task", name);
+    println!(
+        "{:<LABEL_WIDTH$} {}",
+        "Command",
+        render_command(&entry.command)
+    );
     if let Some(cwd) = entry.cwd.as_deref() {
         println!(
-            "{:<10} {}",
+            "{:<LABEL_WIDTH$} {}",
             "Working dir",
             path_display::format_home(cwd, &config.home_dir)
         );
