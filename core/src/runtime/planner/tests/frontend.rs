@@ -252,17 +252,12 @@ install = { kind = 'package', provider = 'homebrew', package = 'recorded' }
     }
     let only_filesystem = reports(&restricted).await;
     assert_eq!(only_filesystem[0], after.report);
-    let view = restricted.read_only();
-    assert_eq!(
-        after.report,
-        view.inspect_apps(vec!["demo".into()]).await.unwrap()
-    );
     assert_eq!(
         rich.inspect_shells().await.unwrap().report,
-        view.inspect_shells().await.unwrap()
+        only_filesystem[1]
     );
     let sys = rich.inspect_sys("test").await.unwrap();
-    assert_eq!(sys.report, view.inspect_sys("test").await.unwrap());
+    assert_eq!(sys.report, only_filesystem[2]);
     assert!(
         sys.report
             .items

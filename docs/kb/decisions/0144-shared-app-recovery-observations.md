@@ -24,26 +24,20 @@ copy while retaining exact singular/plural wording. Historical migration and rec
 because production callers still use them. GPG/age recipient validators stay separate because their
 whitespace acceptance differs.
 
-## Validation
+## Coverage and maintenance
 
-Before extraction from `a8bcc0c`, two new consumer regressions passed for all five recovery actions.
-They capture fixed state digests and exact read traces, and verify that duplicate observation labels
-fail only after both reads, before optional backup reads or action assessment. The captured digests
-remain permanent expectations. Existing recovery tests cover missing/non-file resources, modified
-bytes/modes, receipt gaps/commit markers, stale approval, lifecycle locks and explicit rollback.
+Keep fixed state digests and destination-before-rollback read traces for all five recovery actions,
+plus the normal forced-removal backup read after that pair. Retain the lifecycle/privileged lock
+wait matrix: changes to destination, rollback or receipt bytes (including formatting-only changes)
+must invalidate approval without mutating resources, receipts or the journal.
 
-Expanding the five helper calls reproduces the three original planning files byte-for-byte;
-the reused count phrase function body also matches the removed implementation exactly.
-After extraction, all-feature Core and CLI suites passed 651 and 1,066 tests respectively
-(two opt-in CLI tests skipped). One CLI dry-run test was marked leaky in the full run and passed
-without that marker in an isolated rerun. Workspace Clippy with warnings denied, formatting,
-typos, dependency bans/licenses/sources, KB links and diff whitespace checks passed. Dependency
-checks retain existing duplicate-crate and unused-license warnings. Validation ran on macOS;
-native Windows/Linux execution was not performed.
+Do not retain the artificial duplicate-label matrix or its expected partial digest construction.
+The production entry validates the journal and unique Action IDs before creating a fresh recovery
+state. A manually prepopulated conflicting state bypasses that entry, and a failed planning call's
+partial digest is not consumed. Duplicate observation rejection belongs to the existing snapshot
+builder test; normal read order and fixed identities remain consumer tests. This removes test-only
+implementation coupling without changing production error order or recovery behavior.
 
-The pre-commit second review extends label-conflict coverage to partial registration at the
-rollback label and subsequent optional backup reads. A third consumer regression holds each
-lifecycle/privileged lock in turn, changes destination bytes, rollback bytes or receipts while
-recovery waits, and verifies stale approval rejection with no mutation of files, receipts or the
-journal. All three regressions pass both on an isolated `a8bcc0c` source snapshot and the current
-implementation. No production behavior correction was needed.
+Existing recovery tests retain missing/non-file resources, modified bytes/modes, receipt gaps and
+commit markers, stale approval and explicit rollback. Native platform execution and external
+administrator operations require evidence beyond virtual Host tests.

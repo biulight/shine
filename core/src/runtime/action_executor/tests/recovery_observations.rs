@@ -3,11 +3,11 @@ use super::*;
 const ORIGINAL: &[u8] = br#"{"proxy":"old","containersProxy":"old"}"#;
 const DESIRED: &[u8] = br#"{"proxy":"new","containersProxy":"new"}"#;
 
-fn actions(runtime: &CoreRuntime<InMemoryHost>, backup: Option<&[u8]>) -> Vec<DeclarativeActionV1> {
+fn actions(runtime: &CoreRuntime<InMemoryHost>) -> Vec<DeclarativeActionV1> {
     [
         update_action_ir(runtime, ORIGINAL, DESIRED),
         remove_action_ir(runtime, ORIGINAL),
-        forced_remove_action_ir(runtime, ORIGINAL, DESIRED, backup),
+        forced_remove_action_ir(runtime, ORIGINAL, DESIRED, None),
         json_merge_action_ir(runtime, Some(ORIGINAL), None, DESIRED),
         json_remove_action_ir(runtime, ORIGINAL, DESIRED),
     ]
@@ -147,7 +147,7 @@ async fn recovery_pair_reads_and_fingerprints_remain_stable() {
     let rollback = managed_file_rollback_path(&destination);
     runtime.host().put_file(&destination, DESIRED.to_vec());
     runtime.host().put_file(&rollback, ORIGINAL.to_vec());
-    for action in actions(&runtime, None) {
+    for action in actions(&runtime) {
         let since = runtime.host().operations().len();
         let mut planning = planning();
         review(&runtime, &action, &mut planning).await.unwrap();
@@ -174,68 +174,19 @@ async fn recovery_pair_reads_and_fingerprints_remain_stable() {
         };
         assert_eq!(planning.state.finish().as_hex(), expected);
     }
-}
-
-#[tokio::test]
-async fn recovery_observation_label_conflicts_preserve_read_order_and_partial_digest() {
-    let runtime = runtime();
-    let destination = runtime.context().home_dir.join(".config/demo/config");
-    let rollback = managed_file_rollback_path(&destination);
-    runtime.host().put_file(&destination, DESIRED.to_vec());
-    runtime.host().put_file(&rollback, ORIGINAL.to_vec());
-    runtime.host().put_file(
-        crate::install::backup_path(&destination),
-        b"backup".to_vec(),
+    let backup = crate::install::backup_path(&destination);
+    runtime.host().put_file(&backup, b"backup".to_vec());
+    let action = forced_remove_action_ir(&runtime, ORIGINAL, DESIRED, Some(b"backup"))
+        .actions
+        .remove(0);
+    let since = runtime.host().operations().len();
+    review(&runtime, &action, &mut planning()).await.unwrap();
+    assert_eq!(
+        runtime.host().operations()[since..],
+        [
+            HostOperation::Read(destination),
+            HostOperation::Read(rollback),
+            HostOperation::Read(backup),
+        ]
     );
-    for action in actions(&runtime, Some(b"backup")) {
-        let prefixes: &[&str] =
-            if matches!(action.kind, ActionKindV1::ForceRemoveManagedFile { .. }) {
-                &["destination", "rollback", "backup"]
-            } else {
-                &["destination", "rollback"]
-            };
-        for prefix in prefixes {
-            let mut planning = planning();
-            let label = format!("{prefix}:{}", action.action_id);
-            planning.state.add_observation(&label, b"existing").unwrap();
-            let mut expected = SnapshotDigestV1::builder("state:app-recovery");
-            expected.add_observation(&label, b"existing").unwrap();
-            if *prefix != "destination" {
-                expected
-                    .add_observation(
-                        format!("destination:{}", action.action_id),
-                        RecoveryFileObservation::Regular(DESIRED.to_vec(), Some(0o100644))
-                            .identity(),
-                    )
-                    .unwrap();
-            }
-            let mut expected_reads = vec![
-                HostOperation::Read(destination.clone()),
-                HostOperation::Read(rollback.clone()),
-            ];
-            if *prefix == "backup" {
-                expected
-                    .add_observation(
-                        format!("rollback:{}", action.action_id),
-                        RecoveryFileObservation::Regular(ORIGINAL.to_vec(), Some(0o100644))
-                            .identity(),
-                    )
-                    .unwrap();
-                expected_reads.push(HostOperation::Read(crate::install::backup_path(
-                    &destination,
-                )));
-            }
-            let since = runtime.host().operations().len();
-            let error = review(&runtime, &action, &mut planning).await.unwrap_err();
-            assert_eq!(
-                error.to_string(),
-                format!("duplicate snapshot observation `{label}`")
-            );
-            assert_eq!(runtime.host().operations()[since..], expected_reads);
-            assert_eq!(planning.state.finish(), expected.finish());
-            assert!(planning.steps.is_empty());
-            assert_eq!(planning.required, PermissionSetV1::default());
-            assert!(!planning.blocked);
-        }
-    }
 }

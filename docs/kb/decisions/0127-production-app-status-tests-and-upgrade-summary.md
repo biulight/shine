@@ -31,6 +31,11 @@ four distinct use cases and represented target upgrade results as a five-positio
 
 ## Validation and consequences
 
+Missing, modified and relocated static files each have one independent scenario that checks both
+file status and lifecycle projection, including effects, identity and path redaction. Do not keep a
+second setup matrix for the same entry and states; retain the separate new-file, JSON and generator
+scenarios because their risks differ.
+
 Regressions exercise actual status/lifecycle projections for missing, modified, new and relocated
 files, managed JSON keys, deferred manual generators and explicit refresh identity without receipt
 or destination mutation. Domain summary tests retain category-versus-resource units, cache/hook

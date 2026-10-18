@@ -35,7 +35,9 @@ and output timing difficult to assess.
 Consumer regressions use an observation-only Host for three-domain frontend/read-only inspection,
 compare ordinary App reads and reports against the prior non-evaluated options path, and retain
 safe manifest errors, category filtering, manual-generator unknown state and Sys recorded/missing
-states. Compile-fail coverage keeps generator evaluation outside ReadOnlyFrontend.
+states. Reuse the three reports obtained through the generic observation-only caller for comparisons;
+repeating the same read-only queries with unchanged inputs adds no independent boundary coverage.
+Compile-fail coverage keeps generator evaluation outside ReadOnlyFrontend.
 
 Process-level list/update/status tests first run against the unchanged baseline binary. They cover
 ordinary generator deferral, explicit trust rejection and evaluation, mixed upgrade/refresh hints,

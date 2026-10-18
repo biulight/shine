@@ -76,7 +76,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/managed_json.rs` | Host-free top-level managed-key extraction, merge/remove/restore, comparison and stable subset hash/serialization shared by App assessment, planning, execution and recovery |
 | `core/src/runtime/app/assessment.rs` | Snapshot-only content assessment and named install-preview/install/upgrade/evaluated-inspection generator policies |
 | `core/src/runtime/app/inspect.rs` | Observation-only ordinary inspection, explicit generator evaluation adapter and pure inspection projection |
-| `core/src/runtime/app/inspection_contract_tests.rs` | Production FrontendService inspection/status-to-lifecycle regressions; fixtures seed receipts and bytes without duplicating assessment |
+| `core/src/runtime/app/inspection_contract_tests.rs` | Production FrontendService inspection with status and lifecycle assertions in each independent scenario; fixtures seed receipts and bytes |
 | `core/src/runtime/app/assessment_tests.rs` | Consumer regressions for generator assessment, inspection priority, approved lifecycle reports and last-known-good receipts |
 | `core/src/runtime/app/outcome.rs` | Internal typed App file outcomes projected into the existing local report fields |
 | `core/src/runtime/app/lifecycle/{install,remove}.rs` | App preparation, per-file apply/receipt commit and finalization; caller retains lifecycle lock and exact approval |

@@ -90,69 +90,6 @@ async fn inspect(runtime: &CoreRuntime<InMemoryHost>) -> AppInspection {
 }
 
 #[tokio::test]
-async fn app_update_outcomes_map_owned_conflicts_missing_files_and_relocations() {
-    for (current, relocation, status, effects) in [
-        (
-            None,
-            false,
-            LifecycleStatus::Pending,
-            vec![
-                LifecycleEffect::ResourceWritePreviewed,
-                LifecycleEffect::ReceiptWritePreviewed,
-            ],
-        ),
-        (
-            Some(b"edited".as_slice()),
-            false,
-            LifecycleStatus::Conflict,
-            vec![LifecycleEffect::UserResourcePreserved],
-        ),
-        (
-            Some(b"managed".as_slice()),
-            true,
-            LifecycleStatus::Pending,
-            vec![
-                LifecycleEffect::ResourceRemovePreviewed,
-                LifecycleEffect::ResourceWritePreviewed,
-                LifecycleEffect::ReceiptWritePreviewed,
-            ],
-        ),
-    ] {
-        let runtime = static_runtime(b"managed");
-        let destination = runtime.context().home_dir.join(if relocation {
-            "old/dest.txt"
-        } else {
-            "dest/dest.txt"
-        });
-        seed(
-            &runtime,
-            "dest.txt",
-            &destination,
-            AppInstallStrategy::Copy,
-            hash_content(b"managed"),
-            current,
-        )
-        .await;
-        let inspection = inspect(&runtime).await;
-        assert_eq!(inspection.lifecycle.outcomes.len(), 1);
-        let outcome = &inspection.lifecycle.outcomes[0];
-        assert_eq!(outcome.status, status);
-        assert_eq!(outcome.effects, effects);
-        if status == LifecycleStatus::Conflict {
-            assert_eq!(outcome.diagnostic_codes, ["app_user_modified"]);
-        }
-        assert_eq!(outcome.target, "app/sample");
-        assert_eq!(outcome.resource.as_deref(), Some("dest.txt"));
-        // The marker survives JSON escaping of Windows path separators as well.
-        assert!(
-            !serde_json::to_string(outcome)
-                .unwrap()
-                .contains("shine-app-status-contracts")
-        );
-    }
-}
-
-#[tokio::test]
 async fn app_entry_status_reports_missing_when_destination_absent() {
     let runtime = static_runtime(b"hello");
     let destination = runtime.context().home_dir.join("dest/dest.txt");
@@ -165,9 +102,25 @@ async fn app_entry_status_reports_missing_when_destination_absent() {
         None,
     )
     .await;
+    let inspection = inspect(&runtime).await;
+    assert_eq!(inspection.files[0].status, InspectionFileStatus::Missing);
+    assert_eq!(inspection.lifecycle.outcomes.len(), 1);
+    let outcome = &inspection.lifecycle.outcomes[0];
+    assert_eq!(outcome.target, "app/sample");
+    assert_eq!(outcome.resource.as_deref(), Some("dest.txt"));
+    // The marker survives JSON escaping of Windows path separators as well.
+    assert!(
+        !serde_json::to_string(outcome)
+            .unwrap()
+            .contains("shine-app-status-contracts")
+    );
+    assert_eq!(outcome.status, LifecycleStatus::Pending);
     assert_eq!(
-        inspect(&runtime).await.files[0].status,
-        InspectionFileStatus::Missing
+        outcome.effects,
+        [
+            LifecycleEffect::ResourceWritePreviewed,
+            LifecycleEffect::ReceiptWritePreviewed
+        ]
     );
 }
 
@@ -184,10 +137,23 @@ async fn app_entry_status_reports_user_modified_when_dest_hash_differs() {
         Some(b"locally edited"),
     )
     .await;
+    let inspection = inspect(&runtime).await;
     assert_eq!(
-        inspect(&runtime).await.files[0].status,
+        inspection.files[0].status,
         InspectionFileStatus::UserModified
     );
+    assert_eq!(inspection.lifecycle.outcomes.len(), 1);
+    let outcome = &inspection.lifecycle.outcomes[0];
+    assert_eq!(outcome.target, "app/sample");
+    assert_eq!(outcome.resource.as_deref(), Some("dest.txt"));
+    assert!(
+        !serde_json::to_string(outcome)
+            .unwrap()
+            .contains("shine-app-status-contracts")
+    );
+    assert_eq!(outcome.status, LifecycleStatus::Conflict);
+    assert_eq!(outcome.effects, [LifecycleEffect::UserResourcePreserved]);
+    assert_eq!(outcome.diagnostic_codes, ["app_user_modified"]);
 }
 
 #[tokio::test]
@@ -316,6 +282,24 @@ async fn app_file_row_status_reports_destination_move_as_update() {
             from: old,
             to: runtime.context().home_dir.join("dest/dest.txt")
         }]
+    );
+    assert_eq!(inspection.lifecycle.outcomes.len(), 1);
+    let outcome = &inspection.lifecycle.outcomes[0];
+    assert_eq!(outcome.target, "app/sample");
+    assert_eq!(outcome.resource.as_deref(), Some("dest.txt"));
+    assert!(
+        !serde_json::to_string(outcome)
+            .unwrap()
+            .contains("shine-app-status-contracts")
+    );
+    assert_eq!(outcome.status, LifecycleStatus::Pending);
+    assert_eq!(
+        outcome.effects,
+        [
+            LifecycleEffect::ResourceRemovePreviewed,
+            LifecycleEffect::ResourceWritePreviewed,
+            LifecycleEffect::ReceiptWritePreviewed
+        ]
     );
 }
 
