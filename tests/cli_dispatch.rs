@@ -880,3 +880,171 @@ fn self_upgrade_preserves_error_chain_without_printing_credentials() {
     assert!(!stdout.contains("Upgraded shine"), "{output:?}");
     assert!(!stdout.contains("fixture-secret"), "{output:?}");
 }
+
+#[test]
+fn overlay_unlink_reports_inheritance_without_removing_global_or_source_files() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let global = fixture.0.join("global-overlay");
+    let project = fixture.0.join("project");
+    let local = project.join("local-overlay");
+    for dir in [&state, &global, &local] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    fs::write(global.join("marker"), "global").unwrap();
+    fs::write(local.join("marker"), "project").unwrap();
+    let global_config = format!(
+        "schema_version = 2\npresets_overlay_dir = {}\n",
+        toml::Value::String(global.to_string_lossy().into_owned())
+    );
+    fs::write(state.join("config.toml"), &global_config).unwrap();
+    fs::write(
+        project.join("shine.config.toml"),
+        "# retained\ncustom = 'keep'\npresets_overlay_dir = 'local-overlay'\n",
+    )
+    .unwrap();
+    let output = fixture
+        .command()
+        .current_dir(&project)
+        .args(["preset", "overlay", "unlink"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("removed from the active config"),
+        "{output:?}"
+    );
+    assert!(
+        stdout.contains("Global overlay settings may still be inherited"),
+        "{output:?}"
+    );
+    assert!(
+        !stdout.contains("without overlay on the next run"),
+        "{output:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(state.join("config.toml")).unwrap(),
+        global_config
+    );
+    let project_config = fs::read_to_string(project.join("shine.config.toml")).unwrap();
+    assert!(project_config.contains("# retained"));
+    assert!(project_config.contains("custom = 'keep'"));
+    assert!(!project_config.contains("presets_overlay_dir"));
+    let info = fixture
+        .command()
+        .current_dir(&project)
+        .args(["preset", "overlay", "info"])
+        .output()
+        .unwrap();
+    assert!(info.status.success(), "{info:?}");
+    assert!(
+        String::from_utf8_lossy(&info.stdout).contains("global-overlay"),
+        "{info:?}"
+    );
+    assert_eq!(fs::read(global.join("marker")).unwrap(), b"global");
+    assert_eq!(fs::read(local.join("marker")).unwrap(), b"project");
+    let output = fixture
+        .command()
+        .args(["preset", "overlay", "unlink"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("base presets source"),
+        "{output:?}"
+    );
+    assert_eq!(fs::read(global.join("marker")).unwrap(), b"global");
+}
+
+#[test]
+fn preset_export_reports_overlay_sources_and_preserves_export_semantics() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let overlay = fixture.0.join("overlay");
+    fs::create_dir_all(state.join("presets")).unwrap();
+    fs::create_dir_all(&overlay).unwrap();
+    fs::write(overlay.join("overlay-only.txt"), "overlay").unwrap();
+    fs::write(state.join("presets/external-only.txt"), "external").unwrap();
+    for with_overlay in [false, true] {
+        let mut config = "schema_version = 2\n".to_string();
+        if with_overlay {
+            config.push_str(&format!(
+                "presets_overlay_dir = {}\n",
+                toml::Value::String(overlay.to_string_lossy().into_owned())
+            ));
+        }
+        fs::write(state.join("config.toml"), config).unwrap();
+        let out = fixture
+            .0
+            .join(if with_overlay { "merged" } else { "builtin" });
+        let output = fixture
+            .command()
+            .args(["preset", "export"])
+            .arg(&out)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("Exporting built-in presets"), "{output:?}");
+        assert_eq!(
+            stdout.contains("with overlay overrides and additions"),
+            with_overlay,
+            "{output:?}"
+        );
+        assert_eq!(out.join("overlay-only.txt").exists(), with_overlay);
+        assert!(out.join("shell/proxy/shine.toml").is_file());
+        assert!(!out.join("external-only.txt").exists());
+    }
+}
+
+#[test]
+fn preset_activation_hints_use_templates_and_separate_escaped_paths() {
+    let fixture = Fixture::new();
+    // Apostrophes and shell metacharacters remain legal on Windows too.
+    let destination = fixture.0.join("custom presets 'quoted' $NAME");
+    fs::create_dir_all(&destination).unwrap();
+    let output = fixture
+        .command()
+        .current_dir(&destination)
+        .args(["preset", "copy", "shell/proxy"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("`shine preset overlay link <PATH>`"),
+        "{output:?}"
+    );
+    let shown = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  PATH (display-escaped): "))
+        .unwrap();
+    let shown: String = serde_json::from_str(shown).unwrap();
+    assert_eq!(
+        fs::canonicalize(shown).unwrap(),
+        fs::canonicalize(&destination).unwrap()
+    );
+    assert!(!stdout.contains("Tip: run `"), "{output:?}");
+    // Without the explicit config-dir override, export emits the activation hint.
+    let output = fixture
+        .command()
+        .env_remove("SHINE_CONFIG_DIR")
+        .args(["preset", "export"])
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("`shine preset link <PATH>`"), "{output:?}");
+    assert!(
+        stdout.contains(&format!(
+            "PATH (display-escaped): {:?}",
+            destination.to_string_lossy()
+        )),
+        "{output:?}"
+    );
+    assert!(!stdout.contains("Tip: run `"), "{output:?}");
+}

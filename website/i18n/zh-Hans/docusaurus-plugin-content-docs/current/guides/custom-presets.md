@@ -301,6 +301,9 @@ shine preset overlay info
 shine preset overlay unlink
 ```
 
+解除链接只移除当前配置中的 overlay 设置，不删除源文件。移除项目覆盖设置后，可能重新继承
+全局 overlay；可运行 `shine preset overlay info` 查看之后实际生效的 overlay。
+
 例如 `app/starship/starship.toml` 会覆盖基础来源中的同路径文件，其它预设继续沿用基础来源。
 
 ### 使用 Git 镜像 Overlay
@@ -342,6 +345,12 @@ shine preset copy app/surge
 shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
+
+导出内容是内置预设加上当前 overlay 的覆盖和新增文件，不包含仅存在于外部基础目录中的文件；
+进度提示会说明是否包含 overlay。Copy 仍只提取原始内置类别。
+
+激活提示使用 `<PATH>` 占位符，并单独显示经过转义的目标路径。请按所用 shell 的规则引用实际
+路径，将其作为一个参数传入；转义后的显示文本不是可直接执行的 shell 参数。
 
 `preset copy` 和 `preset export` 都会拒绝作为输出的链接、特殊文件及链接子目录，即使指定
 `--force` 也不例外。请选择普通目录树作为输出位置。未指定 `--force` 时，已有普通文件会保留，

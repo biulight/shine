@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-10-18 — Preset hints must describe source composition and inheritance
+
+- **Symptoms**: project overlay unlink promised no overlay despite global inheritance; export
+  called an embedded-plus-overlay result built-in only; activation hints split paths with spaces.
+- **Fix**: describe unlink's selected scope without changing inheritance, identify overlay-aware
+  export, and show command templates with separate display-escaped paths rather than shell code.
+- **Coverage**: CLI tests check inherited overlay after unlink, preserved source files and global
+  config, export source labels and bytes, and copy/export hints for paths with shell metacharacters.
+
 ## 2026-10-18 — Env display and proxy writes need distinct presentation contracts
 
 - **Symptoms**: proxy toggles reported a global change as if it were effective in an overriding

@@ -338,6 +338,10 @@ shine preset overlay info
 shine preset overlay unlink
 ```
 
+Unlink removes overlay settings from the active configuration; it does not delete source files.
+Removing a project override can restore an inherited global overlay. Run `shine preset overlay info`
+to inspect the effective overlay afterward.
+
 For example, `app/starship/starship.toml` overrides the file at the same path in the base source;
 other presets continue to use the base source.
 
@@ -391,6 +395,14 @@ steps.
 shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
+
+Export includes built-in presets plus overrides and additions from the active overlay. It does not
+copy files that exist only in the external base directory; the progress message identifies whether
+an overlay is included. Copy still extracts the pristine built-in category.
+
+Activation hints use a `<PATH>` placeholder and show the destination separately with display escapes.
+Supply the actual path as one argument, quoting it for your shell; the escaped display is not a
+ready-to-run shell argument.
 
 Both `preset copy` and `preset export` reject linked or special output files and linked
 subdirectories, including with `--force`. Choose an ordinary directory tree for the output.

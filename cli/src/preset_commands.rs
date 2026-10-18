@@ -21,10 +21,7 @@ pub async fn handle_preset_copy(target: &str, force: bool) -> Result<()> {
     println!(
         "Tip: delete files you do not plan to customize so they continue to follow built-in updates."
     );
-    println!(
-        "Tip: run `shine preset overlay link {}` to activate this directory.",
-        current_dir.display()
-    );
+    print_activation_hint("shine preset overlay link", &current_dir);
 
     Ok(())
 }
@@ -72,7 +69,15 @@ pub async fn handle_preset_export(
         .await
         .with_context(|| format!("creating export directory: {}", target.display()))?;
 
-    println!("Exporting built-in presets to {} ...", target.display());
+    println!(
+        "Exporting {} to {} ...",
+        if config.active_presets_overlay_dir().is_some() {
+            "built-in presets with overlay overrides and additions"
+        } else {
+            "built-in presets"
+        },
+        target.display()
+    );
 
     let report = presets::PresetAssetReader::new(config.active_presets_overlay_dir())
         .extract_all(&target, force)
@@ -88,13 +93,16 @@ pub async fn handle_preset_export(
 
     if !config.is_external_presets {
         println!();
-        println!(
-            "Tip: run `shine preset link {}` to activate this directory.",
-            target.display()
-        );
+        print_activation_hint("shine preset link", &target);
     }
 
     Ok(())
+}
+
+// Show a command template and a separate display-only path, not shell-specific code.
+fn print_activation_hint(command: &str, path: &std::path::Path) {
+    println!("Tip: activate this directory with `{command} <PATH>`.");
+    println!("  PATH (display-escaped): {:?}", path.to_string_lossy());
 }
 
 /// Which override a `handle_link`-style command is pointing at. The two link
@@ -344,7 +352,11 @@ pub async fn handle_overlay_unlink(config: &Config) -> Result<()> {
     );
     println!(
         "{}",
-        colors::dim("Built-in embedded presets will be used without overlay on the next run.")
+        colors::dim(if config.is_project_config() {
+            "Global overlay settings may still be inherited. Run `shine preset overlay info` to inspect the effective overlay."
+        } else {
+            "The base presets source will be used without this overlay on the next run."
+        })
     );
     if let Some(dir) = managed_dir.filter(|dir| dir.exists()) {
         println!(
