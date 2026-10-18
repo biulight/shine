@@ -317,7 +317,7 @@ pub async fn handle_get(config: &Config, key: &str) -> Result<()> {
         None => {
             eprintln!(
                 "{}",
-                colors::yellow(&format!("{key} is not set in the active config [env]"))
+                colors::yellow_stderr(&format!("{key} is not set in the active config [env]"))
             );
             std::process::exit(1);
         }

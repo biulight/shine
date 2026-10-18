@@ -86,7 +86,7 @@ pub async fn handle_run(config: &Config, name: &str, extra: &[String]) -> Result
     });
     eprintln!(
         "{}{cwd_note}: {}",
-        colors::bold(&format!("Running {name}")),
+        colors::bold_stderr(&format!("Running {name}")),
         render_command(&argv)
     );
 

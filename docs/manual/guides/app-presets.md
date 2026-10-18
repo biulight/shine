@@ -22,7 +22,8 @@ shine app install starship --dry-run
 ```
 
 Presets that target system directories may need additional permissions. Use `--dry-run` first to
-confirm destinations and scope.
+confirm destinations and scope. The preview summary counts files that would be installed separately
+from files that are skipped; it does not write application files.
 
 ## Install and update
 
@@ -35,6 +36,10 @@ shine upgrade
 
 `shine update` compares installed results with presets and reports status without applying it.
 `shine upgrade` updates managed shell and application configuration to current preset content.
+
+An `Install incomplete` summary means one or more files failed to install, and the command exits
+with a nonzero status. Errors that stop installation early are reported directly, without this summary. Files successfully installed in the same run remain installed;
+check the reported results before retrying. Post-install hook warnings retain their non-fatal behavior.
 
 Reinstalling a category preserves files changed since installation, including managed JSON keys.
 Shine also skips the generator for a file that the reviewed Plan marks for preservation. To

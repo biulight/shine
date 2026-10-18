@@ -2,7 +2,7 @@ use owo_colors::{OwoColorize, Stream};
 
 use crate::path_display;
 
-fn symbol_for_stream(s: &str, stream: Stream) -> String {
+pub(crate) fn symbol_for_stream(s: &str, stream: Stream) -> String {
     match s {
         "✓" => s.if_supports_color(stream, |t| t.green()).to_string(),
         "↑" => s.if_supports_color(stream, |t| t.cyan()).to_string(),
@@ -32,14 +32,21 @@ pub fn green(s: &str) -> String {
 }
 
 pub fn yellow(s: &str) -> String {
-    s.if_supports_color(Stream::Stdout, |t| t.yellow())
-        .to_string()
+    yellow_for_stream(s, Stream::Stdout)
 }
 
 /// Like [`yellow`], but checks color support against stderr. See
 /// [`symbol_stderr`] for why this matters.
 pub fn yellow_stderr(s: &str) -> String {
-    s.if_supports_color(Stream::Stderr, |t| t.yellow())
+    yellow_for_stream(s, Stream::Stderr)
+}
+
+pub(crate) fn yellow_for_stream(s: &str, stream: Stream) -> String {
+    s.if_supports_color(stream, |t| t.yellow()).to_string()
+}
+
+pub fn bold_stderr(s: &str) -> String {
+    s.if_supports_color(Stream::Stderr, |t| t.bold())
         .to_string()
 }
 

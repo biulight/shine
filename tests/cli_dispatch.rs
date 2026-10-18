@@ -224,7 +224,7 @@ fn targeted_upgrade_distinguishes_nonfatal_hook_and_generator_failures() {
     .unwrap();
     let dest = toml::Value::String(destination.to_string_lossy().into_owned()).to_string();
     let metadata = format!(
-        "metadata_schema_version = 2\ndest = {dest}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'exit 7'] }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\nrestart_hint = 'Restart demo'\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n"
+        "metadata_schema_version = 2\ndest = {dest}\npost_install = {{ command = '/bin/sh', args = ['-c', 'exit 6'] }}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'exit 7'] }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\nrestart_hint = 'Restart demo'\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n"
     );
     fs::write(preset.join("shine.toml"), metadata).unwrap();
     fs::write(preset.join("config.txt"), "fallback").unwrap();
@@ -247,6 +247,14 @@ fn targeted_upgrade_distinguishes_nonfatal_hook_and_generator_failures() {
     assert!(trusted.status.success(), "{trusted:?}");
     let installed = run(&["install", "app/demo", "--yes"]);
     assert!(installed.status.success(), "{installed:?}");
+    assert!(
+        String::from_utf8_lossy(&installed.stderr).contains("/bin/sh exited with 6"),
+        "{installed:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&installed.stdout).contains("1 installed"),
+        "{installed:?}"
+    );
     assert_eq!(fs::read(destination.join("config.txt")).unwrap(), b"v1");
     let initial_receipt = fs::read(state.join("app-manifest.toml")).unwrap();
 
@@ -285,6 +293,22 @@ fn targeted_upgrade_distinguishes_nonfatal_hook_and_generator_failures() {
     assert!(
         String::from_utf8_lossy(&failed.stderr).contains("1 managed configuration item(s) failed"),
         "{failed:?}"
+    );
+    assert_eq!(fs::read(destination.join("config.txt")).unwrap(), b"v2");
+    assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+    // Install preserves the last good file on generator failure; unlike upgrade,
+    // that existing policy is a warning, not a failed file result.
+    let preserved = run(&["app", "install", "demo", "--yes"]);
+    assert!(preserved.status.success(), "{preserved:?}");
+    let stdout = String::from_utf8_lossy(&preserved.stdout);
+    assert!(
+        stdout.contains("1 skipped") && !stdout.contains("Install incomplete"),
+        "{stdout}"
+    );
+    assert!(
+        String::from_utf8_lossy(&preserved.stderr)
+            .contains("generator unavailable; installed copy kept"),
+        "{preserved:?}"
     );
     assert_eq!(fs::read(destination.join("config.txt")).unwrap(), b"v2");
     assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
@@ -386,4 +410,275 @@ fn proxy_executable_suffixes_reject_before_target_lookup_or_state_writes() {
         assert!(stderr.contains("use `missing`"), "{output:?}");
         assert!(!fixture.0.join("state").exists());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn app_install_reports_file_failures_without_hiding_partial_success() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for partial in [false, true] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        let preset = state.join("presets/app/demo");
+        let destination = fixture.0.join("destination");
+        fs::create_dir_all(&preset).unwrap();
+        fs::write(
+            state.join("config.toml"),
+            "schema_version = 2\n[env]\nENABLE = '1'\n",
+        )
+        .unwrap();
+        let dest = toml::Value::String(destination.to_string_lossy().into_owned()).to_string();
+        let extra = if partial {
+            "[[files]]\nsource = 'good.txt'\n"
+        } else {
+            ""
+        };
+        fs::write(preset.join("shine.toml"), format!(
+            "metadata_schema_version = 2\ndest = {dest}\n[permissions]\nschema_version = 1\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['demo']\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n{extra}"
+        )).unwrap();
+        fs::write(preset.join("config.json"), r#"{"demo":1}"#).unwrap();
+        fs::write(preset.join("good.txt"), "good").unwrap();
+        let script = preset.join("generate.sh");
+        fs::write(&script, "#!/bin/sh\nprintf invalid-json\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let trusted = fixture
+            .command()
+            .args(["trust", "grant", "app/demo", "--yes"])
+            .output()
+            .unwrap();
+        assert!(trusted.status.success(), "{trusted:?}");
+        // Exercise both public spellings through normal approval and execution.
+        let args = if partial {
+            vec!["install", "app/demo", "--yes"]
+        } else {
+            vec!["app", "install", "demo", "--yes"]
+        };
+        let output = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(
+            stdout.contains("Install incomplete") && stdout.contains("1 failed"),
+            "{stdout}"
+        );
+        assert!(
+            !stdout.contains("Done") && !stdout.contains("nothing changed"),
+            "{stdout}"
+        );
+        assert!(stderr.contains("demo/config.json: json-merge"), "{stderr}");
+        assert!(
+            !stderr.contains("Error:") && !stderr.contains("command incomplete;"),
+            "{stderr}"
+        );
+        assert!(!destination.join("config.json").exists());
+        let receipt = fs::read_to_string(state.join("app-manifest.toml")).unwrap();
+        assert!(!receipt.contains("config.json"), "{receipt}");
+        if partial {
+            assert!(stdout.contains("1 installed"), "{stdout}");
+            assert_eq!(fs::read(destination.join("good.txt")).unwrap(), b"good");
+            assert!(receipt.contains("good.txt"), "{receipt}");
+        }
+    }
+}
+
+#[test]
+fn app_install_preview_and_unchanged_install_keep_distinct_counts() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let preset = state.join("presets/app/demo");
+    let destination = fixture.0.join("destination");
+    fs::create_dir_all(&preset).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    let dest = toml::Value::String(destination.to_string_lossy().into_owned()).to_string();
+    let metadata = format!(
+        "metadata_schema_version = 2\ndest = {dest}\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'one.txt'\n"
+    );
+    fs::write(preset.join("shine.toml"), &metadata).unwrap();
+    fs::write(preset.join("one.txt"), "one").unwrap();
+    let preview = fixture
+        .command()
+        .args(["app", "install", "demo", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(preview.status.success(), "{preview:?}");
+    let stdout = String::from_utf8_lossy(&preview.stdout);
+    assert!(
+        stdout.contains("1 file available") && stdout.contains("1 would install"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("skipped") && !stdout.contains("Done"),
+        "{stdout}"
+    );
+    assert!(!destination.exists());
+    assert!(!state.join("app-manifest.toml").exists());
+    let installed = fixture
+        .command()
+        .args(["app", "install", "demo", "--yes"])
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{installed:?}");
+    let receipt = fs::read(state.join("app-manifest.toml")).unwrap();
+    let unchanged = fixture
+        .command()
+        .args(["app", "install", "demo", "--yes"])
+        .output()
+        .unwrap();
+    assert!(unchanged.status.success(), "{unchanged:?}");
+    let unchanged_stdout = String::from_utf8_lossy(&unchanged.stdout);
+    assert!(
+        unchanged_stdout.contains("1 skipped") && !unchanged_stdout.contains("would install"),
+        "{unchanged_stdout}"
+    );
+    fs::write(
+        preset.join("shine.toml"),
+        format!("{metadata}[[files]]\nsource = 'two.txt'\n"),
+    )
+    .unwrap();
+    fs::write(preset.join("two.txt"), "two").unwrap();
+    let preview = fixture
+        .command()
+        .args(["app", "install", "demo", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(preview.status.success(), "{preview:?}");
+    let stdout = String::from_utf8_lossy(&preview.stdout);
+    assert!(
+        stdout.contains("2 files available")
+            && !stdout.contains("skipped")
+            && stdout.contains("2 would install"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Preview") && !stdout.contains("Done"),
+        "{stdout}"
+    );
+    assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+    assert_eq!(fs::read(destination.join("one.txt")).unwrap(), b"one");
+    assert!(!destination.join("two.txt").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn stderr_warning_color_follows_its_own_terminal_and_no_color() {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    for stderr_terminal in [false, true] {
+        for no_color in [false, true] {
+            let fixture = Fixture::new();
+            let mut master = -1;
+            let mut slave = -1;
+            // SAFETY: openpty initializes both descriptors; defaults are sufficient.
+            assert_eq!(
+                unsafe {
+                    libc::openpty(
+                        &mut master,
+                        &mut slave,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                },
+                0
+            );
+            for fd in [master, slave] {
+                assert_eq!(
+                    unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+                    0
+                );
+            }
+            // SAFETY: each successful openpty descriptor is owned exactly once.
+            let mut master = unsafe { fs::File::from_raw_fd(master) };
+            let slave = unsafe { fs::File::from_raw_fd(slave) };
+            // Keep unread macOS PTY data alive until after the child exits.
+            let keep_alive = slave.try_clone().unwrap();
+            let mut command = fixture.command();
+            command
+                .args(["env", "get", "SHINE_OUTPUT_TEST_MISSING"])
+                .env("TERM", "xterm-256color")
+                .env_remove("NO_COLOR")
+                .env_remove("FORCE_COLOR")
+                .env_remove("CLICOLOR_FORCE");
+            if no_color {
+                command.env("NO_COLOR", "1");
+            }
+            if stderr_terminal {
+                command.stderr(Stdio::from(slave));
+            } else {
+                command.stdout(Stdio::from(slave));
+            }
+            let output = command.output().unwrap();
+            drop(command);
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert_eq!(
+                unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
+                0
+            );
+            let mut terminal = Vec::new();
+            match master.read_to_end(&mut terminal) {
+                Ok(_) => {}
+                Err(error)
+                    if error.raw_os_error() == Some(libc::EIO)
+                        || error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("reading warning PTY: {error}"),
+            }
+            drop(keep_alive);
+            let warning = if stderr_terminal {
+                &terminal
+            } else {
+                &output.stderr
+            };
+            let warning = String::from_utf8_lossy(warning);
+            assert!(
+                warning.contains("SHINE_OUTPUT_TEST_MISSING is not set"),
+                "{warning}"
+            );
+            assert_eq!(
+                warning.contains("\x1b["),
+                stderr_terminal && !no_color,
+                "{warning:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn app_install_early_error_is_not_suppressed_as_already_reported() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let preset = state.join("presets/app/demo");
+    fs::create_dir_all(&preset).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    fs::write(preset.join("shine.toml"), "metadata_schema_version = 2\ndest = '~'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.txt'\n").unwrap();
+    fs::write(preset.join("config.txt"), "managed").unwrap();
+    let future_receipt = b"schema_version = 999\n";
+    fs::write(state.join("app-manifest.toml"), future_receipt).unwrap();
+    let output = fixture
+        .command()
+        .args(["app", "install", "demo", "--yes"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Error:") && stderr.contains("newer than this Shine supports"),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Done") && !stdout.contains("Install incomplete"),
+        "{stdout}"
+    );
+    assert_eq!(
+        fs::read(state.join("app-manifest.toml")).unwrap(),
+        future_receipt
+    );
+    assert!(!fixture.0.join("home/config.txt").exists());
 }

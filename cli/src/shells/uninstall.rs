@@ -1,6 +1,5 @@
-use super::report::{
-    shell_cache_remove_summary_parts, style_dim, style_symbol, unlink_report_summary_parts,
-};
+use super::report::{shell_cache_remove_summary_parts, unlink_report_summary_parts};
+use crate::colors;
 use crate::config::Config;
 use crate::output;
 use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
@@ -47,7 +46,7 @@ async fn handle_uninstall_with_reporter(
         reporter.emit(PresentationEvent::stdout(line));
     }
     if dry_run {
-        reporter.emit(PresentationEvent::stdout(style_dim(
+        reporter.emit(PresentationEvent::stdout(colors::dim(
             "[dry-run] No files will be modified.",
         )));
     }
@@ -113,8 +112,8 @@ async fn handle_uninstall_with_reporter(
     if purge && !dry_run && !config.is_external_presets {
         reporter.emit(PresentationEvent::stdout(format!(
             "  {}  {}",
-            style_symbol("✓"),
-            style_dim("managed directories purged (if empty)"),
+            colors::symbol("✓"),
+            colors::dim("managed directories purged (if empty)"),
         )));
     }
     if let Some(profile) = &core_report.profile {

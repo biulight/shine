@@ -122,6 +122,8 @@ async fn handle_install_with_reporter(
     let mut installed = 0usize;
     let mut skipped = 0usize;
     let mut backed_up = 0usize;
+    let mut previewed = 0usize;
+    let mut failed = 0usize;
     let mut restart_hints = BTreeSet::new();
     for file in &core_report.files {
         let label = file.source.display().to_string();
@@ -165,7 +167,7 @@ async fn handle_install_with_reporter(
                     )));
             }
             AppFileAction::PreviewInstall => {
-                skipped += 1;
+                previewed += 1;
                 observer
                     .reporter
                     .emit(PresentationEvent::stdout(report::dry_run_install_text(
@@ -190,17 +192,18 @@ async fn handle_install_with_reporter(
                     .emit(PresentationEvent::stderr(report::user_modified_kept_text(
                         config,
                         &file.destination,
+                        owo_colors::Stream::Stderr,
                     )));
             }
             AppFileAction::Failed => {
-                if let Some(error) = &file.error {
-                    observer
-                        .reporter
-                        .emit(PresentationEvent::stderr(report::install_error_text(
-                            &display_name,
-                            &anyhow!(error.clone()),
-                        )));
-                }
+                failed += 1;
+                let error = file.error.as_deref().unwrap_or("installation failed");
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stderr(report::install_error_text(
+                        &display_name,
+                        &anyhow!(error.to_string()),
+                    )));
             }
             AppFileAction::Removed
             | AppFileAction::Restored
@@ -210,11 +213,19 @@ async fn handle_install_with_reporter(
             | AppFileAction::PreviewRemove => skipped += 1,
         }
     }
-    let summary_parts = report::install_summary_parts(installed, backed_up, skipped);
+    let summary_parts =
+        report::install_summary_parts(installed, backed_up, skipped, previewed, failed);
     observer.reporter.emit(PresentationEvent::BlankLine);
     observer
         .reporter
-        .emit(PresentationEvent::stdout(report::done_summary_text(
+        .emit(PresentationEvent::stdout(crate::output::summary_line_text(
+            if failed > 0 {
+                "Install incomplete"
+            } else if dry_run {
+                "Preview"
+            } else {
+                "Done"
+            },
             &summary_parts,
         )));
     for hint in restart_hints {
@@ -244,6 +255,11 @@ async fn handle_install_with_reporter(
             .emit(PresentationEvent::stdout(report::artifact_apply_hint_text(
                 &category,
             )));
+    }
+    // File failures are fatal only after the complete report and hints are rendered.
+    // Hook failures retain their existing non-fatal policy.
+    if failed > 0 {
+        return Err(crate::output::ReportedCommandFailure.into());
     }
     Ok(core_report.lifecycle)
 }
@@ -295,7 +311,7 @@ impl RuntimeObserver for InstallObserver<'_> {
                 } else {
                     self.reporter.emit(PresentationEvent::stderr(format!(
                         "  {} {category}: post-install hook failed: {detail}",
-                        report::symbol("!")
+                        crate::colors::symbol_stderr("!")
                     )));
                 }
             }

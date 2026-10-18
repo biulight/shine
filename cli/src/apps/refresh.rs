@@ -85,7 +85,7 @@ pub async fn handle_refresh_approved(
             AppFileAction::UserModified => {
                 eprintln!(
                     "  {} {label}: user-modified, kept (use --force to overwrite)",
-                    colors::symbol("!")
+                    colors::symbol_stderr("!")
                 );
                 failed += 1;
             }
@@ -167,7 +167,9 @@ struct RefreshObserver;
 impl RuntimeObserver for RefreshObserver {
     fn emit(&mut self, event: RuntimeEvent) {
         match event {
-            RuntimeEvent::Warning { detail, .. } => eprintln!("  {} {detail}", colors::symbol("!")),
+            RuntimeEvent::Warning { detail, .. } => {
+                eprintln!("  {} {detail}", colors::symbol_stderr("!"))
+            }
             RuntimeEvent::ProcessOutput { text, .. } => {
                 for line in text.lines() {
                     println!("     {}", colors::dim(line));

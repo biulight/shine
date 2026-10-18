@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-18 — Install summaries must not discard file failures
+
+- **Symptom**: App install rendered per-file errors but ended with `Done · nothing changed` and
+  returned success; dry-run writes were counted as skipped.
+- **Cause**: the CLI counted only installed/skipped files and discarded the resulting lifecycle
+  value. A blanket lifecycle-failure check would also change non-fatal hook behavior.
+- **Fix**: count typed file failures and previews in the production renderer, finish reporting,
+  then return `ReportedCommandFailure` for file failures. Process regressions use real generated
+  JSON merge failures, partial success, and normal trust/approval; hook warnings stay non-fatal.
+- **Rule**: summaries and exit status must reflect the same domain outcomes. Choose color support
+  for the actual destination stream, and measure terminal columns with display width rather than
+  bytes or Unicode scalar counts.
+
 ## 2026-10-18 — Cargo include basenames can admit dependency-tree files
 
 - **Symptom**: `cargo package --list` included nested README/LICENSE files from local

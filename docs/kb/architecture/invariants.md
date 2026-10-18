@@ -79,6 +79,13 @@ bugs. Check this list before changing the modules named in each entry.
   fed back into approval. External-code confirmation wording comes from typed code boundaries;
   plans without external/overlay code still require normal snapshot-bound approval.
 
+- **App install file failures remain visible at the CLI boundary.** Render all file results and
+  hints before returning the typed already-reported failure for any `AppFileAction::Failed`.
+  The footer counts failed files and says `Install incomplete`, including partial success.
+  Hook failures retain their non-fatal policy; do not infer file failure from all lifecycle
+  failures. Preview installs have their own count rather than being called skipped. This changes
+  neither Core execution, approval, receipt persistence nor recovery.
+
 - **Protected uninstall is incomplete in the CLI.** App and Shell report preserved/conflicting
   resources and failures explicitly, including partial completion, and actual commands return
   nonzero. A successfully generated dry-run remains zero and never describes its effects as

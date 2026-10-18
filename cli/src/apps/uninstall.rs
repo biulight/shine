@@ -173,6 +173,7 @@ async fn handle_uninstall_with_reporter(
                     .emit(PresentationEvent::stdout(report::user_modified_kept_text(
                         config,
                         &file.destination,
+                        owo_colors::Stream::Stdout,
                     )));
                 user_modified += 1;
             }
@@ -341,7 +342,7 @@ impl shine_core::runtime::RuntimeObserver for UninstallObserver<'_> {
             } else {
                 self.reporter.emit(PresentationEvent::stderr(format!(
                     "  {} {category}: artifact teardown failed: {detail}",
-                    report::symbol("!")
+                    crate::colors::symbol_stderr("!")
                 )));
             }
         }

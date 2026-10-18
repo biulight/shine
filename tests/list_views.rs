@@ -291,3 +291,34 @@ fn simple_list_shows_partially_installed_app_categories() {
     );
     assert!(!fixture.0.join("destination/manual.txt").exists());
 }
+
+#[test]
+fn shell_descriptions_align_unicode_names_and_continuations() {
+    let fixture = Fixture::new();
+    let preset = fixture.0.join("state/presets/shell/unicode");
+    fs::create_dir_all(&preset).unwrap();
+    #[cfg(windows)]
+    let extension = "ps1";
+    #[cfg(not(windows))]
+    let extension = "sh";
+    for name in ["abc", "猫", "e\u{301}"] {
+        fs::write(
+            preset.join(format!("{name}.{extension}")),
+            "# First description\n# Continued description\n",
+        )
+        .unwrap();
+    }
+    let output = fixture.run(&["shell", "list"]);
+    success(&output);
+    let text = stdout(&output);
+    let widths: Vec<_> = text
+        .lines()
+        .filter_map(|line| {
+            line.split_once("First description")
+                .or_else(|| line.split_once("Continued description"))
+                .map(|(prefix, _)| console::measure_text_width(prefix))
+        })
+        .collect();
+    assert_eq!(widths.len(), 6, "{text}");
+    assert!(widths.iter().all(|width| *width == widths[0]), "{text}");
+}

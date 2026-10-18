@@ -1,26 +1,6 @@
 use super::metadata;
 use crate::colors;
 
-pub(super) fn style_dim(value: &str) -> String {
-    colors::dim(value)
-}
-
-pub(super) fn style_green(value: &str) -> String {
-    colors::green(value)
-}
-
-pub(super) fn style_yellow(value: &str) -> String {
-    colors::yellow(value)
-}
-
-pub(super) fn style_bold(value: &str) -> String {
-    colors::bold(value)
-}
-
-pub(super) fn style_symbol(value: &str) -> String {
-    colors::symbol(value)
-}
-
 #[derive(Debug, Default)]
 pub struct ShellUpgradeReport {
     /// User-facing shell targets that were brought up to date. A target is
@@ -180,13 +160,17 @@ pub async fn handle_list_with_presets_note(
         );
 
         let names: Vec<&str> = cat.files.iter().map(|s| s.command_name.as_str()).collect();
-        let max_name = names.iter().map(|s| s.len()).max().unwrap_or(0);
+        let max_name = names
+            .iter()
+            .map(|s| console::measure_text_width(s))
+            .max()
+            .unwrap_or(0);
         let gap = 4;
         let desc_col = max_name + gap;
         let continuation_indent = " ".repeat(4 + desc_col);
 
         for (script, name) in cat.files.iter().zip(names.iter()) {
-            let padding = " ".repeat(desc_col - name.len());
+            let padding = " ".repeat(desc_col - console::measure_text_width(name));
             match script.description.as_slice() {
                 [] => println!("    {name}"),
                 [first, rest @ ..] => {

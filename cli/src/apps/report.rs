@@ -22,9 +22,14 @@ pub(super) fn transform_label(transforms: &[String]) -> String {
 }
 
 pub(super) fn app_configs_summary_text(total_available: usize) -> String {
+    let noun = if total_available == 1 {
+        "file"
+    } else {
+        "files"
+    };
     crate::output::summary_line_text(
         "App Configs",
-        &[colors::dim(&format!("{total_available} files available"))],
+        &[colors::dim(&format!("{total_available} {noun} available"))],
     )
 }
 
@@ -35,7 +40,7 @@ pub(super) fn dry_run_header_text() -> String {
 pub(super) fn generator_unavailable_text(display_name: &str, error: &anyhow::Error) -> String {
     format!(
         "  {} {display_name}: generator unavailable; installed copy kept ({error:#})",
-        colors::symbol("!")
+        colors::symbol_stderr("!")
     )
 }
 
@@ -43,14 +48,12 @@ pub(super) fn restart_hint_text(hint: &str) -> String {
     format!("  {} {}", colors::symbol("!"), colors::yellow(hint))
 }
 
-pub(super) fn done_summary_text(parts: &[String]) -> String {
-    crate::output::summary_line_text("Done", parts)
-}
-
 pub(super) fn install_summary_parts(
     installed: usize,
     backed_up: usize,
     skipped: usize,
+    previewed: usize,
+    failed: usize,
 ) -> Vec<String> {
     let mut parts = Vec::new();
     if installed > 0 {
@@ -66,6 +69,8 @@ pub(super) fn install_summary_parts(
     if skipped > 0 {
         parts.push(colors::dim(&format!("{skipped} skipped")));
     }
+    crate::output::push_count(&mut parts, previewed, colors::cyan, "would install");
+    crate::output::push_count(&mut parts, failed, colors::red, "failed");
     parts
 }
 
@@ -157,7 +162,11 @@ pub(super) fn artifact_apply_categories(
 }
 
 pub(super) fn warning_text(source: &str, detail: impl AsRef<str>) -> String {
-    format!("  {} {source}: {}", colors::symbol("!"), detail.as_ref())
+    format!(
+        "  {} {source}: {}",
+        colors::symbol_stderr("!"),
+        detail.as_ref()
+    )
 }
 
 // --- Install/upgrade outcome reporting --------------------------------------------------
@@ -312,12 +321,16 @@ pub(super) fn uninstall_not_found_text(config: &Config, destination: &Path) -> S
     )
 }
 
-pub(super) fn user_modified_kept_text(config: &Config, destination: &Path) -> String {
+pub(super) fn user_modified_kept_text(
+    config: &Config,
+    destination: &Path,
+    stream: owo_colors::Stream,
+) -> String {
     format!(
         "  {}  {}  {}",
-        colors::symbol("!"),
+        colors::symbol_for_stream("!", stream),
         path_display::format_home(destination, &config.home_dir),
-        colors::yellow("differs from installation receipt"),
+        colors::yellow_for_stream("differs from installation receipt", stream),
     )
 }
 
@@ -336,7 +349,7 @@ pub(super) fn uninstall_error_text(
 ) -> String {
     format!(
         "  {} {}: {err}",
-        colors::symbol("✗"),
+        colors::symbol_stderr("✗"),
         path_display::format_home(destination, &config.home_dir)
     )
 }
@@ -372,7 +385,7 @@ mod tests {
             "  ✓  ~/.config/sample/config.toml  (restored ~/.config/sample/config.toml.shine.bak)"
         );
         assert_eq!(
-            user_modified_kept_text(&config, &destination),
+            user_modified_kept_text(&config, &destination, owo_colors::Stream::Stdout),
             "  !  ~/.config/sample/config.toml  differs from installation receipt"
         );
     }
