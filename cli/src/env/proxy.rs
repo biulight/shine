@@ -1305,7 +1305,6 @@ mod tests {
     async fn proxy_rule_mutations_keep_config_private_and_preserve_env() {
         use std::os::unix::fs::PermissionsExt;
         let _guard = crate::test_support::env_lock();
-        let original_dir = std::env::current_dir().unwrap();
         let dir = crate::test_support::make_temp_dir("shine-proxy-private").await;
         let dir = tokio::fs::canonicalize(dir).await.unwrap();
         for project in [false, true] {
@@ -1385,7 +1384,7 @@ mod tests {
                 assert!(!config.bin_dir().join(name).exists());
             }
         }
-        crate::test_support::restore_current_dir(&original_dir);
+        drop(_guard);
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 

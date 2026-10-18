@@ -1087,8 +1087,6 @@ async fn explicit_values_override_workspace_and_process_values() {
         std::env::var("SHINE_RUN_OVERRIDE_TEST").as_deref(),
         Ok("process")
     );
-    // SAFETY: the shared test env lock serializes process environment mutation.
-    unsafe { std::env::remove_var("SHINE_RUN_OVERRIDE_TEST") };
 }
 
 #[cfg(unix)]
