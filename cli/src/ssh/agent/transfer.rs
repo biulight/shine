@@ -222,9 +222,11 @@ fn describe_transfer(
     local_paths: &[PathBuf],
 ) -> String {
     let remote = format!("{}:{}", transfer_host(&ctx.host), remote_spec);
+    // Display-only quoting keeps each operand distinct and escapes control characters.
+    let remote = format!("{remote:?}");
     let local = local_paths
         .iter()
-        .map(|p| p.display().to_string())
+        .map(|p| format!("{:?}", p.to_string_lossy()))
         .collect::<Vec<_>>()
         .join(" ");
     match direction {

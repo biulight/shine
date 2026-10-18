@@ -285,6 +285,9 @@ destination, Shine places it in the remote current directory using the source na
 refuses file-to-directory or directory-to-file replacement. Preview resolved paths and overwrite
 behavior with `--dry-run`.
 
+SCP dry-run previews quote each path and escape control characters so spaces and line breaks
+remain distinguishable. This display does not change the paths used for transfer.
+
 ## Inspect connection state
 
 ```bash
@@ -293,6 +296,10 @@ shine local status
 
 The output includes session ID, reachability, protocol version, and the local default directory. A
 shell not entered through `shine ssh` reports the missing session variables.
+Connection/handshake and the subsequent status request each have a five-second timeout.
+An unreachable connection is reported on stdout with exit code 0; a failed status request
+(including authentication rejection or a response timeout) reports an error on stderr with exit code 1.
+These limits apply only to `local status`.
 
 ### Hybrid secrets through the broker
 

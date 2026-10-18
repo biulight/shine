@@ -181,3 +181,107 @@ fn ssh_cli_preserves_option_order_and_remote_wrapper_boundaries_in_both_modes() 
         Fixture::assert_no_sessions(&state);
     }
 }
+
+// Exercise the CLI's output/exit boundary, not just the agent protocol.
+async fn local_status_response(mode: &str) -> std::process::Output {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let fixture = Fixture::new();
+    let socket = fixture.0.join("status.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let mode = mode.to_string();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let len = stream.read_u32_le().await.unwrap();
+        let mut hello = vec![0; len as usize];
+        stream.read_exact(&mut hello).await.unwrap();
+        let hello: serde_json::Value = serde_json::from_slice(&hello).unwrap();
+        assert_eq!(hello["type"], "Hello");
+        if mode != "handshake_timeout" {
+            let ack = serde_json::to_vec(&serde_json::json!({
+                "type": "HelloAck", "protocol_version": hello["protocol_version"]
+            }))
+            .unwrap();
+            stream.write_u32_le(ack.len() as u32).await.unwrap();
+            stream.write_all(&ack).await.unwrap();
+            let len = stream.read_u32_le().await.unwrap();
+            let mut request = vec![0; len as usize];
+            stream.read_exact(&mut request).await.unwrap();
+            let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+            assert_eq!(request["type"], "Status");
+            assert_eq!(request["token"], "fixture-token");
+            if mode != "response_timeout" {
+                let response = if mode == "rejected" {
+                    serde_json::json!({"type": "Error", "message": "invalid session token"})
+                } else {
+                    serde_json::json!({"type": "StatusResponse", "host": "fixture.invalid", "session_local_dir": "/fixture"})
+                };
+                let response = serde_json::to_vec(&response).unwrap();
+                stream.write_u32_le(response.len() as u32).await.unwrap();
+                stream.write_all(&response).await.unwrap();
+                return;
+            }
+        }
+        // Keep the connection alive until the client times out; EOF is not a timeout.
+        assert_eq!(stream.read(&mut [0]).await.unwrap(), 0);
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_shine"))
+            .args(["local", "status"])
+            .current_dir(&fixture.0)
+            .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
+            .env("SHINE_SSH_SESSION", "fixture-session")
+            .env("SHINE_SSH_TOKEN", "fixture-token")
+            .env("SHINE_SSH_REMOTE_SOCK", &socket)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        server.await.unwrap();
+        output
+    })
+    .await
+    .expect("local status must finish without a response")
+}
+
+#[tokio::test]
+async fn local_status_handshake_timeout_reports_unreachable_with_success() {
+    let output = local_status_response("handshake_timeout").await;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("connection: unreachable"), "{output:?}");
+    assert!(
+        stdout.contains("connection timed out after 5 seconds"),
+        "{output:?}"
+    );
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[tokio::test]
+async fn local_status_response_timeout_remains_a_command_error() {
+    let output = local_status_response("response_timeout").await;
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("response timed out after 5 seconds"),
+        "{output:?}"
+    );
+}
+
+#[tokio::test]
+async fn local_status_success_and_token_rejection_preserve_output_streams() {
+    let output = local_status_response("connected").await;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("connection: connected"), "{output:?}");
+    assert!(stdout.contains("host:       fixture.invalid"), "{output:?}");
+    assert!(stdout.contains("local dir:  /fixture"), "{output:?}");
+    let output = local_status_response("rejected").await;
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("invalid session token"),
+        "{output:?}"
+    );
+}

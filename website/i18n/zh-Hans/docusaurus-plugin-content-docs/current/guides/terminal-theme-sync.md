@@ -18,6 +18,9 @@ eval "$(shine theme sync --quiet)"
 
 Shine 依次使用已有的 `SHINE_TERMINAL_THEME`、终端提供的 `COLORFGBG`，最后才通过 OSC 11 查询终端背景色。无法确定时不会猜测或写入变量。
 
+无法确定主题时退出码为 0。`--quiet` 只隐藏非必要诊断；配置错误仍会输出到 stderr，
+退出码为 1，stdout 不输出任何导出语句。
+
 ## 在受管 profile 中自动同步
 
 运行 `shine sys bootstrap` 后，macOS 和 Ubuntu 的受管 profile 会自动调用同步。可通过任一种方式关闭：

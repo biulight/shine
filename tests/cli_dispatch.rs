@@ -803,3 +803,48 @@ fn sys_profile_reports_attention_and_noop_without_changing_exit_policy() {
     );
     assert_eq!(fs::read(&active).unwrap(), user_edit);
 }
+
+#[test]
+fn theme_quiet_preserves_config_errors_and_keeps_stdout_clean() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    let malformed = "invalid = [";
+    fs::write(state.join("config.toml"), malformed).unwrap();
+    let output = fixture
+        .command()
+        .args(["theme", "sync", "--quiet"])
+        .env("SHINE_TERMINAL_THEME", "dark")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("TOML parse error"),
+        "{output:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(state.join("config.toml")).unwrap(),
+        malformed
+    );
+    assert_eq!(fs::read_dir(&state).unwrap().count(), 1);
+}
+
+#[test]
+fn theme_quiet_exports_to_stdout_without_initializing_state() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command()
+        .args(["theme", "sync", "--quiet"])
+        .env("SHINE_TERMINAL_THEME", "dark")
+        .env("BAT_THEME", "user-choice")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("SHINE_TERMINAL_THEME"), "{output:?}");
+    assert!(stdout.contains("dark"), "{output:?}");
+    assert!(!stdout.contains("BAT_THEME"), "{output:?}");
+    assert!(!fixture.0.join("state").exists());
+}

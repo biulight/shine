@@ -1154,6 +1154,12 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## SSH transfer
 
+- **Local status waits are bounded without changing error classification.** Connection/handshake
+  and status request each have a five-second deadline, scoped only to `local status`.
+  Connection errors remain stdout observations with success; post-handshake errors remain command
+  failures on stderr. Transfer and broker approval waits retain their own policies. SCP preview
+  quoting is presentation-only and never feeds argv or path resolution.
+
 - **SSH session resources are owned from the first setup step.** Listener binding, context
   persistence, spawn/wait failures and cancellation must release the listener and session
   directory. Stop and await the accept loop before draining connection tasks; finish cleanup

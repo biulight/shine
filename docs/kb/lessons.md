@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-18 — Status deadlines and preview path boundaries
+
+- **Symptoms**: `local status` could wait forever for a silent peer; SCP previews joined paths
+  with spaces, obscuring operand boundaries and allowing filenames to split output lines.
+- **Fix**: bound status connection and response phases independently while preserving their
+  existing exit policies; quote and escape preview operands without changing transfer inputs.
+- **Coverage**: real CLI silent-peer, connected and rejected-token fixtures check output streams
+  and exit codes; preview tests cover multiple paths, spaces, quotes, newline escaping and no spawn.
+- **Rule**: diagnostic commands need bounded waits; display strings must never become execution
+  inputs. Theme `--quiet` suppresses non-essential diagnostics, not configuration errors.
+
 ## 2026-10-18 — Presentation must retain incomplete observations and profile attention
 
 - **Symptoms**: `update` printed `Nothing to update` after a failed release check; explicit Sys

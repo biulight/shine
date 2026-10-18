@@ -614,3 +614,23 @@ fn resolve_local_sources_expands_glob_and_errors_on_no_match() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn scp_preview_keeps_operand_boundaries_and_control_characters_visible() {
+    let ctx = ctx_with("dev", vec![], None);
+    let locals = vec![
+        PathBuf::from("/local/a b"),
+        PathBuf::from("/local/\"q\"\nnext"),
+    ];
+    let expected_local = r#""/local/a b" "/local/\"q\"\nnext""#;
+    let expected_remote = r#""dev:/remote/a 'b'""#;
+    for direction in [Direction::Download, Direction::Upload] {
+        let actual = describe_transfer(&ctx, direction, "/remote/a 'b'", &locals);
+        let expected = match direction {
+            Direction::Download => format!("{expected_remote} -> {expected_local}"),
+            Direction::Upload => format!("{expected_local} -> {expected_remote}"),
+        };
+        assert_eq!(actual, expected);
+        assert_eq!(actual.lines().count(), 1);
+    }
+}
