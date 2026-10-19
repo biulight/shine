@@ -117,7 +117,8 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
 - `--replace-managed` may overwrite managed content changed after installation. Inspect the target
   with `shine info <TARGET> --diff` first.
 - If Shine reports an interrupted operation, run `shine shell recover`. Changed files are preserved
-  and may require manual review.
+  and may require manual review. The result counts Shell resource actions that needed rollback or
+  cleanup. Cleanup after a committed operation preserves its installed content.
 
 - Shell uninstall identifies retained launcher paths when ownership conflicts prevent removal.
   It has no `--force` override: inspect those files before deciding whether to move or remove them.
@@ -199,6 +200,13 @@ shine completions <bash|zsh|powershell>
 If the Shine release check cannot finish, `update` prints a warning and still reports configuration
 updates. When no configuration updates are found, it explicitly says the version check is incomplete
 instead of claiming there is nothing to update. A release-check failure alone remains non-fatal.
+
+`update --verbose` includes installed managed system configurations even when no update is pending.
+`up-to-date (recorded)` compares the desired configuration with the installation record; it is not a
+live system check. Missing Preset sources are shown explicitly. App summaries distinguish generators
+that were not evaluated, require trust, or failed evaluation from user-modified files.
+These generator-state counts refer to categories, or individual files with `--diff`, rather than
+the number of generator executions.
 
 `update` is read-only. `upgrade` displays the planned changes and asks for approval when there is
 an action; a fully unchanged run reports `Nothing to upgrade.` without confirmation. Use `--yes`

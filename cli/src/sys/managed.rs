@@ -166,28 +166,27 @@ pub(crate) async fn handle_upgrade_managed_target_with_result_approved(
 }
 
 pub async fn managed_updates(config: &Config) -> Result<Vec<SysUpdateRow>> {
-    managed_updates_with_result(config)
+    managed_inspection(config)
         .await
-        .map(|(rows, _)| rows)
+        .map(|inspection| inspection.updates)
 }
 
-pub(crate) async fn managed_updates_with_result(
+pub(crate) async fn managed_inspection(
     config: &Config,
-) -> Result<(Vec<SysUpdateRow>, LifecycleResultV1)> {
+) -> Result<shine_core::frontend::SysInspection> {
     let os_id = detect_os_id().await?;
-    managed_updates_for_os_with_result(config, &os_id).await
+    managed_inspection_for_os(config, &os_id).await
 }
 
-async fn managed_updates_for_os_with_result(
+async fn managed_inspection_for_os(
     config: &Config,
     os_id: &str,
-) -> Result<(Vec<SysUpdateRow>, LifecycleResultV1)> {
+) -> Result<shine_core::frontend::SysInspection> {
     let runtime = crate::core_runtime::from_config(config).await?;
-    let inspection = shine_core::frontend::FrontendService::new(runtime)
+    shine_core::frontend::FrontendService::new(runtime)
         .inspect_sys(os_id)
         .await
-        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
-    Ok((inspection.updates, inspection.lifecycle))
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)
 }
 
 async fn run_managed_with_result(
@@ -372,13 +371,21 @@ fn finish_managed_report(
             )));
     }
     let show_all = output_mode.show_all_outcomes();
+    let label_width = core
+        .items
+        .iter()
+        .filter(|outcome| should_print_managed_outcome(show_all, outcome.status))
+        .map(|outcome| console::measure_text_width(&outcome.label))
+        .max()
+        .unwrap_or(0)
+        .max(14);
     for outcome in &core.items {
         if should_print_managed_outcome(show_all, outcome.status) {
             observer.begin();
             emit_item_outcome(
                 observer.reporter,
                 outcome,
-                console::measure_text_width(&outcome.label).max(14),
+                label_width,
                 observer.action,
                 observer.dry_run,
             );
@@ -619,6 +626,72 @@ mod tests {
         }
     }
 
+    #[test]
+    fn managed_result_rows_share_the_visible_labels_width() {
+        #[derive(Default)]
+        struct RecordingReporter(Vec<PresentationEvent>);
+        impl LifecycleReporter for RecordingReporter {
+            fn emit(&mut self, event: PresentationEvent) {
+                self.0.push(event);
+            }
+        }
+
+        for mode in [
+            ManagedOutputMode::Explicit,
+            ManagedOutputMode::Upgrade { verbose: false },
+        ] {
+            let items = [
+                ("Short", SysItemStatus::Updated),
+                ("A much longer resource label", SysItemStatus::Updated),
+                ("中文标签", SysItemStatus::Updated),
+                ("e\u{301}", SysItemStatus::Updated),
+                (
+                    "An unchanged item longer than any visible changed label",
+                    SysItemStatus::AlreadyInstalled,
+                ),
+            ]
+            .into_iter()
+            .map(|(label, status)| SysItemOutcome {
+                item_id: label.into(),
+                label: label.into(),
+                status,
+                detail: "detail".into(),
+                logs: Vec::new(),
+            })
+            .collect();
+            let mut reporter = RecordingReporter::default();
+            let mut observer = ManagedObserver {
+                reporter: &mut reporter,
+                action: SysAction::Apply,
+                dry_run: false,
+                started: false,
+                show_item_progress: false,
+            };
+            finish_managed_report(
+                shine_core::runtime::SysManagedReport {
+                    items,
+                    summary: SysUpgradeReport::default(),
+                    lifecycle: LifecycleResultV1::new(LifecycleOperation::Upgrade, false),
+                },
+                mode,
+                &mut observer,
+            )
+            .unwrap();
+            let prefixes = reporter
+                .0
+                .iter()
+                .filter_map(|event| match event {
+                    PresentationEvent::Line { text, .. } => text
+                        .split_once("updated")
+                        .map(|(prefix, _)| console::measure_text_width(prefix)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let expected_label_width = if mode.is_explicit() { 55 } else { 28 };
+            assert_eq!(prefixes, vec![expected_label_width + 5; 4]);
+        }
+    }
+
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-sys").await
     }
@@ -724,9 +797,11 @@ target = {:?}
         fs::write(os_dir.join("first.txt"), "first v2")
             .await
             .unwrap();
-        let (updates, update_lifecycle) = managed_updates_for_os_with_result(&config, "fakeos")
-            .await
-            .unwrap();
+        let shine_core::frontend::SysInspection {
+            updates,
+            lifecycle: update_lifecycle,
+            ..
+        } = managed_inspection_for_os(&config, "fakeos").await.unwrap();
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].item_id, "first");
         assert_eq!(updates[0].details, ["Content: changed"]);
@@ -773,10 +848,11 @@ target = {:?}
             &second_manifest_before
         );
 
-        let (current_updates, current_lifecycle) =
-            managed_updates_for_os_with_result(&config, "fakeos")
-                .await
-                .unwrap();
+        let shine_core::frontend::SysInspection {
+            updates: current_updates,
+            lifecycle: current_lifecycle,
+            ..
+        } = managed_inspection_for_os(&config, "fakeos").await.unwrap();
         assert!(current_updates.is_empty());
         assert!(
             current_lifecycle
@@ -885,9 +961,9 @@ resource = "/etc/resolver/private.example"
             .env
             .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.3".to_string());
 
-        let (updates, lifecycle) = managed_updates_for_os_with_result(&config, "macos")
-            .await
-            .unwrap();
+        let shine_core::frontend::SysInspection {
+            updates, lifecycle, ..
+        } = managed_inspection_for_os(&config, "macos").await.unwrap();
 
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].item_id, "split-dns");

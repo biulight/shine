@@ -68,6 +68,13 @@ bugs. Check this list before changing the modules named in each entry.
   Diff reads stay at their original presentation boundary. Manual refresh and upgrade hints remain
   distinct, generator evaluation stays opt-in, and evaluation failures render before nonzero exit.
   Inventory listing keeps its distinct missing-App-source error policy (ADR 0129).
+  Status retains installed managed Sys rows even without pending updates and labels current
+  state as receipt-based, never a live check; missing sources stay explicit. App summary generator
+  unknown/trust/failure counts must not be described as user modifications. Table padding uses
+  terminal display width, with one shared label width across the visible managed Sys result rows.
+  Generator summary units remain categories by default and files with `--diff`. Shell recovery's
+  legacy `rolled_back_actions` report also counts cleanup after commit; CLI wording must not claim
+  that committed content was rolled back.
 - **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
   from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
   `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery

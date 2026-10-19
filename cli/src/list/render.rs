@@ -220,12 +220,13 @@ pub(super) async fn update(
 
         let label_width = update_shell
             .iter()
-            .map(|r| r.label.len())
+            .map(|r| console::measure_text_width(&r.label))
             .max()
             .unwrap_or(0);
 
         for row in &update_shell {
-            let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
+            let pad =
+                " ".repeat(label_width.saturating_sub(console::measure_text_width(&row.label)));
             println!(
                 "  {}  {}{}  {}",
                 row.symbol,
@@ -247,12 +248,12 @@ pub(super) async fn update(
 
         let label_width = actionable_app
             .keys()
-            .map(|category| category.len())
+            .map(|category| console::measure_text_width(category))
             .max()
             .unwrap_or(0);
 
         for (category, rows) in &actionable_app {
-            let pad = " ".repeat(label_width.saturating_sub(category.len()));
+            let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(category)));
             let (status_text, status_sym) = app_category_action_status(rows);
             println!(
                 "  {}  {}{}  {}",
@@ -326,8 +327,9 @@ pub(super) async fn status(
         shell_rows,
         app_rows,
         app_inspections,
-        update_sys,
+        sys,
     } = inputs;
+    let update_sys = &sys.updates;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
     let all_shell: Vec<&ShellRow> = shell_rows.iter().collect();
     let installed_app: Vec<&AppRow> = app_rows
@@ -335,7 +337,7 @@ pub(super) async fn status(
         .filter(|r| r.file_status != FileStatus::NotInstalled)
         .collect();
     let all_app: Vec<&AppRow> = app_rows.iter().collect();
-    let any = !installed_shell.is_empty() || !installed_app.is_empty() || !update_sys.is_empty();
+    let any = !installed_shell.is_empty() || !installed_app.is_empty() || !sys.installed.is_empty();
 
     if !any {
         println!(
@@ -381,9 +383,15 @@ pub(super) async fn status(
         println!("{}", colors::bold("Shell Presets"));
 
         let label_width = if diff {
-            installed_shell.iter().map(|row| row.label.len()).max()
+            installed_shell
+                .iter()
+                .map(|row| console::measure_text_width(&row.label))
+                .max()
         } else {
-            shell_statuses.iter().map(|row| row.category.len()).max()
+            shell_statuses
+                .iter()
+                .map(|row| console::measure_text_width(&row.category))
+                .max()
         }
         .unwrap_or(0);
 
@@ -393,7 +401,7 @@ pub(super) async fn status(
             } else {
                 &row.category
             };
-            let pad = " ".repeat(label_width.saturating_sub(label.len()));
+            let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(label)));
             let run_hint = if row.status == ShellRowStatus::UpdateAvail {
                 format!("  {}", colors::dim("run `shine upgrade`"))
             } else {
@@ -424,9 +432,15 @@ pub(super) async fn status(
         println!("{}", colors::bold("App Configs"));
 
         let label_width = if diff {
-            installed_app.iter().map(|row| row.label.len()).max()
+            installed_app
+                .iter()
+                .map(|row| console::measure_text_width(&row.label))
+                .max()
         } else {
-            app_statuses.iter().map(|row| row.category.len()).max()
+            app_statuses
+                .iter()
+                .map(|row| console::measure_text_width(&row.category))
+                .max()
         }
         .unwrap_or(0);
 
@@ -442,7 +456,7 @@ pub(super) async fn status(
             } else {
                 &row.category
             };
-            let pad = " ".repeat(label_width.saturating_sub(label.len()));
+            let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(label)));
             let dest_part = if diff {
                 row.dest
                     .as_deref()
@@ -487,30 +501,58 @@ pub(super) async fn status(
                 }
                 FileStatus::GeneratorNotEvaluated
                 | FileStatus::GeneratorEvaluationFailed
-                | FileStatus::GeneratorTrustRequired => user_modified += 1,
+                | FileStatus::GeneratorTrustRequired => {}
                 FileStatus::UpToDate => up_to_date += 1,
                 FileStatus::NotInstalled => {}
             }
         }
 
-        let parts = app_status_summary_parts(
+        let mut parts = app_status_summary_parts(
             up_to_date,
             update_available,
             refresh_available,
             user_modified,
             missing,
         );
+        for (status, label) in [
+            (FileStatus::GeneratorNotEvaluated, "generator not evaluated"),
+            (
+                FileStatus::GeneratorEvaluationFailed,
+                "generator evaluation failed",
+            ),
+            (
+                FileStatus::GeneratorTrustRequired,
+                "generator trust required",
+            ),
+        ] {
+            let count = app_statuses
+                .iter()
+                .filter(|row| row.file_status == status)
+                .count();
+            let unit = match (diff, count == 1) {
+                (false, true) => "category",
+                (false, false) => "categories",
+                (true, true) => "file",
+                (true, false) => "files",
+            };
+            output::push_count(
+                &mut parts,
+                count,
+                colors::yellow,
+                &format!("{unit}: {label}"),
+            );
+        }
         if !parts.is_empty() {
             output::footer("Summary", &parts);
         }
     }
 
-    if !update_sys.is_empty() {
+    if !sys.installed.is_empty() {
         if !installed_shell.is_empty() || !installed_app.is_empty() {
             println!();
         }
         println!("{}", colors::bold("System Configs"));
-        for row in &update_sys {
+        for row in update_sys {
             println!(
                 "  {}  {}  {}  {}  {}",
                 colors::symbol("↑"),
@@ -522,6 +564,37 @@ pub(super) async fn status(
             for detail in &row.details {
                 println!("     {}", colors::dim(detail));
             }
+        }
+        for row in &sys.installed {
+            if update_sys
+                .iter()
+                .any(|update| update.item_id == row.item_id)
+            {
+                continue;
+            }
+            let target = format!("sys/{}", row.item_id);
+            let state = sys
+                .report
+                .items
+                .iter()
+                .find(|item| item.target == target)
+                .map(|item| item.state);
+            let (symbol, status) = match state {
+                Some(shine_core::frontend::InspectionStateV1::Current) => {
+                    ("✓", "up-to-date (recorded)")
+                }
+                Some(shine_core::frontend::InspectionStateV1::PresetMissing) => {
+                    ("!", "preset missing; recorded entry preserved")
+                }
+                _ => ("~", "recorded"),
+            };
+            println!(
+                "  {}  {}  {}  {}",
+                colors::symbol(symbol),
+                row.label,
+                colors::dim(&format!("({})", row.item_id)),
+                colors::status_label(status, symbol)
+            );
         }
     }
 

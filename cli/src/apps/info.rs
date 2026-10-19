@@ -56,7 +56,7 @@ pub async fn handle_info(
     let col_width = cat
         .files
         .iter()
-        .map(|f| f.source_rel.display().to_string().len())
+        .map(|f| console::measure_text_width(&f.source_rel.display().to_string()))
         .max()
         .unwrap_or(0);
 
@@ -65,7 +65,8 @@ pub async fn handle_info(
     for inspection in &selected {
         let file = &inspection.file;
         let source_name = file.source_rel.display().to_string();
-        let padding = " ".repeat(col_width.saturating_sub(source_name.len()));
+        let padding =
+            " ".repeat(col_width.saturating_sub(console::measure_text_width(&source_name)));
         let dest_str = match &inspection.destination {
             Some(dest) => {
                 let directly_installed = inspection
@@ -208,7 +209,11 @@ pub async fn handle_list_with_presets_note(
 
     println!("{}\n", colors::bold("App Preset Categories"));
 
-    let name_width = categories.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    let name_width = categories
+        .iter()
+        .map(|c| console::measure_text_width(&c.name))
+        .max()
+        .unwrap_or(0);
 
     for cat in &categories {
         let effective_desc = cat.description.as_deref().or_else(|| {
@@ -219,7 +224,8 @@ pub async fn handle_list_with_presets_note(
             }
         });
 
-        let name_pad = " ".repeat(name_width.saturating_sub(cat.name.len()));
+        let name_pad =
+            " ".repeat(name_width.saturating_sub(console::measure_text_width(&cat.name)));
         let file_count = if cat.files.len() > 1 {
             format!("  {}", colors::dim(&format!("{} files", cat.files.len())))
         } else {

@@ -82,6 +82,7 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
 - 使用 `--dry-run` 预览安装或卸载。
 - `--replace-managed` 可能覆盖安装后被修改的受管内容，请先运行 `shine info <TARGET> --diff`。
 - 如果 Shine 报告操作曾被中断，请运行 `shine shell recover`。发生过变化的文件会保留，可能需要人工处理。
+  结果按需要回滚或清理的 Shell 资源动作计数；已提交操作的清理会保留其安装内容。
 
 - Shell 卸载遇到归属冲突时，会列出未删除的启动器路径。Shell 没有 `--force` 覆盖选项；
   请先检查这些文件，再决定是否移动或删除。冲突文件可能在安装记录清理后仍保留，输出会明确说明。
@@ -153,6 +154,11 @@ shine completions <bash|zsh|powershell>
 如果 Shine 版本检查未能完成，`update` 会输出警告，并继续报告配置更新。
 没有发现配置更新时，会明确说明版本检查未完成，不会笼统地报告没有更新。
 仅版本检查失败仍不会导致非零退出码。
+
+`update --verbose` 也会列出已安装且暂无更新的受管系统配置。
+`up-to-date (recorded)` 表示期望配置与安装记录一致，并非实时系统检查；Preset 来源缺失会单独提示。
+App 汇总分别说明生成器未评估、需要信任或评估失败，不会将这些状态归为用户修改。
+这些生成器状态按分类计数，使用 `--diff` 时按文件计数，不表示生成器执行次数。
 
 `update` 只读检查；`upgrade` 显示计划，并在存在动作时等待确认。全部未变化时只报告 `Nothing to upgrade.`，不要求确认。只有审阅过同一范围后才应使用 `--yes`。
 `--pull` 会先更新符合条件的 Git 预设来源；`--prune-stale` 允许删除预设中已经不存在且未被修改的受管项。

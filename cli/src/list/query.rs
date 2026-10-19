@@ -18,7 +18,7 @@ pub(super) struct StatusInputs {
     pub shell_rows: Vec<ShellRow>,
     pub app_rows: Vec<AppRow>,
     pub app_inspections: Vec<AppFileInspection>,
-    pub update_sys: Vec<SysUpdateRow>,
+    pub sys: shine_core::frontend::SysInspection,
 }
 pub(super) struct InventoryInputs {
     pub installed_shell: Vec<String>,
@@ -100,14 +100,14 @@ pub(super) async fn collect_status(
         .context("loading active App Presets for status")?;
     let (app_rows, _, app_inspections) =
         build_update_app_rows(config, &cats, run_generators).await?;
-    let update_sys = sys::managed_updates(config)
+    let sys = sys::managed_inspection(config)
         .await
         .context("checking managed Sys Presets for status")?;
     Ok(StatusInputs {
         shell_rows,
         app_rows,
         app_inspections,
-        update_sys,
+        sys,
     })
 }
 

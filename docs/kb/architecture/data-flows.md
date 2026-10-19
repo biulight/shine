@@ -261,6 +261,8 @@ never enter the report. Opaque resource identities hash normalized logical sourc
 update applicability and update lifecycle outcomes are service-owned; manual generator changes
 remain refresh-only. Sys inspection additionally includes bootstrap receipts as recorded state,
 without changing inventory v1's managed-only installed Sys compatibility contract.
+CLI verbose status retains the same inspection's managed installed rows, updates and safe states;
+current and missing-source records remain visible without another query or live probe.
 
 Default App/Shell/Sys service inspection and `ReadOnlyFrontend` inspection accept only a
 `FileSystemObservationHost`. App default inspection uses the existing selected static assessment;

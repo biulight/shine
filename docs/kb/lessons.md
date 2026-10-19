@@ -1,5 +1,24 @@
 # Lessons Learned
 
+## 2026-10-19 — Status summaries must retain observation states
+
+- **Symptoms**: deferred generators appeared as `user-modified` in summaries; verbose status said
+  nothing was installed when only current managed Sys records existed. App Unicode rows and
+  managed Sys labels also used inconsistent column widths; Shell recovery still described every
+  action as launcher creation.
+- **Fix**: retain generator summary states and the existing Sys inspection's installed rows;
+  label receipt-based current/missing state explicitly. Measure display columns, size managed
+  result rows together after visibility filtering, and describe recovery resource actions.
+  Name generator counter units explicitly: categories by default, files with `--diff`. Recovery's
+  legacy action counter includes committed rollback-material cleanup, so describe recovery rather
+  than claiming every counted action reversed installed content.
+- **Coverage**: CLI regressions cover generator deferral/trust/failure, Sys current/pending/missing
+  sources with unchanged receipts/destinations, and App Unicode catalog/info/update rows. Reporter
+  coverage checks mixed Sys label widths and hidden unchanged rows. Execution and approval are unchanged.
+  Mixed Sys states retain each record once; multi-generator categories retain category/file units
+  and actual user modifications. Real CLI recovery covers rollback, committed cleanup, journal-only
+  completion and denied consent while preserving committed content and receipts.
+
 ## 2026-10-18 — Preset hints must describe source composition and inheritance
 
 - **Symptoms**: project overlay unlink promised no overlay despite global inheritance; export

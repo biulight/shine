@@ -34,6 +34,143 @@ impl Drop for Fixture {
     }
 }
 
+#[tokio::test]
+async fn shell_recovery_reports_rollback_and_committed_cleanup_without_reversing_committed_content()
+{
+    use shine_core::action::{
+        ActionIrV1, DeclarativeActionV1, ShellFileIdentityV1, ShellLauncherReceiptV1,
+        ShellReceiptTransitionV1, ShellRenderedFileReplacementSpecV1, managed_file_rollback_path,
+    };
+    use shine_core::install::hash_content;
+    use shine_core::runtime::{FileSystemObservationHost, RealHost};
+
+    for committed in [false, true] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        let presets = state.join("presets");
+        let destination = state.join("rendered/demo.ts");
+        let rollback = managed_file_rollback_path(&destination);
+        fs::create_dir_all(&presets).unwrap();
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+        fs::write(&destination, b"new content\n").unwrap();
+        fs::write(&rollback, b"old content\n").unwrap();
+        let previous_mode = RealHost.metadata(&rollback).await.unwrap().unix_mode;
+        let desired_mode = RealHost.metadata(&destination).await.unwrap().unix_mode;
+        let previous = ShellLauncherReceiptV1 {
+            launcher_format: None,
+            launcher_config_dir: None,
+            category: "demo".into(),
+            command: "run".into(),
+            mode: "snapshot".into(),
+            source_path: presets.join("shell/demo/run.ts"),
+            rendered_path: destination.clone(),
+            runtime: "bun".into(),
+            bun_dependencies: None,
+            dependency_hash: None,
+            transforms: vec!["template".into()],
+            env: Vec::new(),
+            needs_source: false,
+            content_hash: hash_content(b"old source\n"),
+        };
+        let desired = ShellLauncherReceiptV1 {
+            content_hash: hash_content(b"new source\n"),
+            ..previous.clone()
+        };
+        let manifest = toml::to_string(&serde_json::json!({
+            "schema_version": 1, "entries": [if committed { &desired } else { &previous }],
+        }))
+        .unwrap();
+        fs::write(state.join("shell-manifest.toml"), &manifest).unwrap();
+        let action_ir = ActionIrV1::new(
+            "recovery-output-fixture",
+            vec![DeclarativeActionV1::replace_shell_rendered_file(
+                "rendered",
+                "shell/demo/run",
+                "rendered",
+                ShellRenderedFileReplacementSpecV1 {
+                    destination: destination.clone(),
+                    previous: Some(ShellFileIdentityV1 {
+                        content_hash: hash_content(b"old content\n"),
+                        unix_mode: previous_mode,
+                    }),
+                    desired: ShellFileIdentityV1 {
+                        content_hash: hash_content(b"new content\n"),
+                        unix_mode: desired_mode,
+                    },
+                    receipts: vec![ShellReceiptTransitionV1 {
+                        target: "shell/demo/run".into(),
+                        previous: Some(Box::new(previous)),
+                        desired: Box::new(desired),
+                    }],
+                },
+            )],
+        );
+        action_ir.validate().unwrap();
+        // The persisted approval is historical data; the CLI must review a fresh recovery Plan.
+        let journal = toml::to_string(&serde_json::json!({
+            "schema_version": 1, "action_ir": action_ir, "applied": ["rendered"],
+            "receipt_committed": if committed { vec!["rendered"] } else { vec![] },
+            "approval": { "schema_version": shine_core::plan::PLAN_APPROVAL_SCHEMA_VERSION,
+                "plan_fingerprint": "0".repeat(64), "approved_permissions": [] },
+        }))
+        .unwrap();
+        let journal_path = state.join("shell-operation-journal.toml");
+        fs::write(&journal_path, &journal).unwrap();
+        let run = |args: &[&str]| {
+            fixture
+                .command()
+                .env("SHINE_PRESETS", &presets)
+                .env("NO_COLOR", "1")
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        let denied = run(&["shell", "recover"]);
+        assert!(!denied.status.success(), "{denied:?}");
+        assert!(
+            String::from_utf8_lossy(&denied.stderr).contains("approval requires"),
+            "{denied:?}"
+        );
+        assert_eq!(fs::read_to_string(&journal_path).unwrap(), journal);
+        assert_eq!(fs::read(&destination).unwrap(), b"new content\n");
+        assert_eq!(fs::read(&rollback).unwrap(), b"old content\n");
+        let output = run(&["shell", "recover", "--yes"]);
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains("recovered 1 Shell resource action(s), including rollback or cleanup"),
+            "{output:?}"
+        );
+        assert!(!text.contains("rolled back"), "{output:?}");
+        assert_eq!(
+            fs::read(&destination).unwrap(),
+            if committed {
+                b"new content\n"
+            } else {
+                b"old content\n"
+            }
+        );
+        assert!(!rollback.exists() && !journal_path.exists());
+        assert_eq!(
+            fs::read_to_string(state.join("shell-manifest.toml")).unwrap(),
+            manifest
+        );
+        if committed {
+            fs::write(&journal_path, &journal).unwrap();
+            let output = run(&["shell", "recover", "--yes"]);
+            assert!(output.status.success(), "{output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stdout)
+                    .contains("no Shell resource action needed recovery"),
+                "{output:?}"
+            );
+            assert_eq!(fs::read(&destination).unwrap(), b"new content\n");
+            assert!(!journal_path.exists());
+        }
+    }
+}
+
 #[test]
 fn schema_and_invalid_validation_do_not_initialize_state() {
     let fixture = Fixture::new();
