@@ -258,6 +258,7 @@ mod tests {
 
     #[test]
     fn manual_generator_updates_render_refresh_commands_instead_of_upgrade_targets() {
+        use clap::Parser;
         let mut row = app_row("surge", FileStatus::UpdateAvail);
         row.upgrade_available = false;
         row.refresh_sources = vec!["subscription-proxies.conf".to_string()];
@@ -271,6 +272,26 @@ mod tests {
             app_category_action_status(&grouped["surge"]),
             ("refresh available", "↑")
         );
+        for (category, source) in [("-surge", "-file.conf"), ("surge", "-file.conf")] {
+            let mut row = app_row(category, FileStatus::UpdateAvail);
+            row.refresh_sources = vec![source.into()];
+            let commands = app_refresh_commands(&app_update_categories(&[&row]));
+            let parsed =
+                crate::commands::Cli::try_parse_from(commands[0].split_whitespace()).unwrap();
+            let crate::commands::Commands::App {
+                command:
+                    crate::commands::AppCommands::Refresh {
+                        category: actual,
+                        file,
+                        ..
+                    },
+            } = parsed.command
+            else {
+                panic!("expected refresh command")
+            };
+            assert_eq!(actual, category);
+            assert_eq!(file.as_deref(), Some(source));
+        }
     }
 
     #[test]

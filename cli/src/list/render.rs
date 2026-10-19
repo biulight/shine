@@ -37,8 +37,8 @@ fn print_missing_app_sources(items: &[(String, String)]) {
                 "! app/{category} · {resource}: Preset source missing; installed content and receipt retained."
             ))
         );
-        let category_arg = crate::shell_quote::command_arg(category);
-        println!("  Preview uninstall: shine app uninstall {category_arg} --dry-run");
+        let category_arg = crate::shell_quote::command_positionals(&[category]);
+        println!("  Preview uninstall: shine app uninstall --dry-run {category_arg}");
     }
 }
 
@@ -133,9 +133,8 @@ fn app_status_run_hint(row: &AppLifecycleStatus) -> String {
     }
     commands.extend(row.refresh_sources.iter().map(|source| {
         format!(
-            "run `shine app refresh {} {}`",
-            crate::shell_quote::command_arg(&row.category),
-            crate::shell_quote::command_arg(source)
+            "run `shine app refresh {}`",
+            crate::shell_quote::command_positionals(&[&row.category, source])
         )
     }));
     if commands.is_empty() {

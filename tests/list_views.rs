@@ -42,7 +42,12 @@ impl Fixture {
         Self(root)
     }
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_shine"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+        command.args(args);
+        self.run_command(command)
+    }
+    fn run_command(&self, mut command: Command) -> Output {
+        command
             .current_dir(&self.0)
             .env("HOME", self.0.join("home"))
             .env("USERPROFILE", self.0.join("home"))
@@ -52,7 +57,6 @@ impl Fixture {
             .env("SHINE_PRESETS", self.0.join("state/presets"))
             .env("NO_COLOR", "1")
             .stdin(Stdio::null())
-            .args(args)
             .output()
             .unwrap()
     }
@@ -93,6 +97,7 @@ fn hint<'a>(text: &'a str, prefix: &str, suffix: &str) -> &'a str {
 }
 
 fn assert_hint_argv(command: &str, expected: &[&str]) {
+    use clap::Parser;
     // Parse the suggested command without invoking Shine or any Preset code.
     #[cfg(unix)]
     let parsed = Command::new("/bin/sh")
@@ -117,6 +122,7 @@ fn assert_hint_argv(command: &str, expected: &[&str]) {
         serde_json::from_slice::<Vec<String>>(&parsed.stdout).unwrap(),
         expected
     );
+    cli::commands::Cli::try_parse_from(expected).unwrap();
 }
 
 #[test]
@@ -143,6 +149,25 @@ fn app_and_trust_hints_preserve_literal_category_arguments() {
         )
         .unwrap();
         let target = format!("app/{category}");
+        let blocked = fixture.run(&["app", "artifact", "apply", category, "--yes"]);
+        assert_eq!(blocked.status.code(), Some(1), "{blocked:?}");
+        let error = String::from_utf8_lossy(&blocked.stderr);
+        let inspect = error
+            .split_once("run `")
+            .unwrap()
+            .1
+            .split_once("` to review")
+            .unwrap()
+            .0;
+        let grant = error
+            .split_once("then `")
+            .unwrap()
+            .1
+            .split_once("` if you accept")
+            .unwrap()
+            .0;
+        assert_hint_argv(inspect, &["shine", "trust", "inspect", &target]);
+        assert_hint_argv(grant, &["shine", "trust", "grant", &target]);
         let info = fixture.run(&["app", "info", category]);
         success(&info);
         assert_hint_argv(
@@ -191,9 +216,9 @@ fn app_and_trust_hints_preserve_literal_category_arguments() {
                 "shine",
                 "app",
                 "uninstall",
-                category,
                 "--force",
                 "--dry-run",
+                category,
             ],
         );
         assert_hint_argv(
@@ -261,11 +286,13 @@ fn missing_app_source_hints_preserve_arguments_and_installed_state() {
         metadata.replace("[[files]]\nsource = 'config.txt'\n", ""),
     )
     .unwrap();
+    let target = format!("app/{category}");
     for args in [
         vec!["update"],
         vec!["list"],
         vec!["update", "--verbose"],
         vec!["update", "--verbose", "--diff"],
+        vec!["upgrade", &target, "--yes"],
     ] {
         let output = fixture.run(&args);
         success(&output);
@@ -273,7 +300,7 @@ fn missing_app_source_hints_preserve_arguments_and_installed_state() {
         assert!(text.contains("Preset source missing"), "{output:?}");
         assert_hint_argv(
             hint(&text, "Preview uninstall: ", ""),
-            &["shine", "app", "uninstall", category, "--dry-run"],
+            &["shine", "app", "uninstall", "--dry-run", category],
         );
         assert_eq!(
             fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
@@ -283,6 +310,233 @@ fn missing_app_source_hints_preserve_arguments_and_installed_state() {
             fs::read(fixture.0.join("destination/config.txt")).unwrap(),
             b"static-v1\n"
         );
+    }
+}
+
+#[test]
+fn leading_hyphen_uninstall_hints_reach_the_cli_parser_without_changing_state() {
+    use clap::Parser;
+    let fixture = Fixture::new();
+    fixture.app(false);
+    let category = "-demo";
+    let preset = fixture.0.join("state/presets/app").join(category);
+    fs::rename(fixture.0.join("state/presets/app/demo"), &preset).unwrap();
+    success(&fixture.run(&["app", "install", "--yes", "--", category]));
+    let metadata = fs::read_to_string(preset.join("shine.toml")).unwrap();
+    fs::write(
+        preset.join("shine.toml"),
+        metadata.replace("[[files]]\nsource = 'config.txt'\n", ""),
+    )
+    .unwrap();
+    let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    for args in [
+        vec!["list"],
+        vec!["update"],
+        vec!["upgrade", "app/-demo", "--yes"],
+    ] {
+        let output = fixture.run(&args);
+        success(&output);
+        let text = stdout(&output);
+        let command = hint(&text, "Preview uninstall: ", "");
+        let argv: Vec<_> = command.split_whitespace().collect();
+        cli::commands::Cli::try_parse_from(&argv).unwrap();
+        success(&fixture.run(&argv[1..]));
+        assert_eq!(
+            fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+            receipt
+        );
+        assert_eq!(
+            fs::read(fixture.0.join("destination/config.txt")).unwrap(),
+            b"static-v1\n"
+        );
+        assert_eq!(
+            fs::read(fixture.0.join("destination/manual.txt")).unwrap(),
+            b"manual-v1\n"
+        );
+    }
+}
+
+#[test]
+fn missing_shell_hints_preserve_special_names_and_dry_run_state() {
+    for (category, posix, powershell) in [
+        (
+            "missing space",
+            "'missing space/tool'",
+            "'missing space/tool'",
+        ),
+        ("it's", "'it'\\''s/tool'", "'it''s/tool'"),
+        ("-demo", "-- -demo/tool", "-- -demo/tool"),
+    ] {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.0.join("state/config.toml"),
+            "schema_version = 2\nexternal_shell_mode = 'snapshot'\n",
+        )
+        .unwrap();
+        let preset = fixture.0.join("state/presets/shell").join(category);
+        fs::create_dir_all(&preset).unwrap();
+        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+        fs::write(
+            preset.join("shine.toml"),
+            format!("[[files]]\nsource = '{script}'\ntarget = 'tool'\n"),
+        )
+        .unwrap();
+        fs::write(preset.join(script), "# never executed\n").unwrap();
+        let selector = format!("{category}/tool");
+        let target = format!("shell/{selector}");
+        success(&fixture.run(&["trust", "grant", &target, "--yes"]));
+        success(&fixture.run(&["shell", "install", "--yes", "--", &selector]));
+        fs::remove_dir_all(&preset).unwrap();
+
+        let mut paths = vec![
+            fixture.0.join("state/shell-manifest.toml"),
+            fixture.0.join("state/config.toml"),
+            fixture.0.join("state/trust.toml"),
+            fixture
+                .0
+                .join("state/installed/shell")
+                .join(category)
+                .join(script),
+        ];
+        for launcher in if cfg!(windows) {
+            &["tool.ps1", "tool.cmd"][..]
+        } else {
+            &["tool"][..]
+        } {
+            paths.push(fixture.0.join("state/bin").join(launcher));
+        }
+        let read_state = || {
+            paths
+                .iter()
+                .map(|path| (fs::read(path).unwrap(), fs::read_link(path).ok()))
+                .collect::<Vec<_>>()
+        };
+        let before = read_state();
+        let category_target = format!("shell/{category}");
+        for args in [
+            vec!["update"],
+            vec!["update", "--verbose"],
+            vec!["update", &category_target],
+            vec!["update", &target],
+        ] {
+            let output = fixture.run(&args);
+            success(&output);
+            assert_eq!(read_state(), before, "{category}: {args:?}");
+            let text = stdout(&output);
+            let operands = text
+                .split_once("`shine shell uninstall ")
+                .unwrap_or_else(|| panic!("missing uninstall hint in {text}"))
+                .1
+                .split('`')
+                .next()
+                .unwrap();
+            assert_eq!(operands, if cfg!(windows) { powershell } else { posix });
+            let preview = format!("shine shell uninstall --dry-run {operands}");
+            #[cfg(unix)]
+            let shell = {
+                let mut command = Command::new("/bin/sh");
+                command.args([
+                    "-c",
+                    &format!(
+                        "shine() {{ {} \"$@\"; }}; {preview}",
+                        shine_core::shell_quote::posix_single_quote(env!("CARGO_BIN_EXE_shine"))
+                    ),
+                ]);
+                command
+            };
+            #[cfg(windows)]
+            let shell = {
+                let mut command = Command::new("powershell.exe");
+                // An alias invokes the native CLI; a PowerShell function would consume `--`.
+                command.args(["-NoProfile", "-NonInteractive", "-Command"]);
+                command.arg(format!(
+                    "Set-Alias shine {}; {preview}; exit $LASTEXITCODE",
+                    shine_core::shell_quote::powershell_single_quote(env!("CARGO_BIN_EXE_shine"))
+                ));
+                command
+            };
+            let preview = fixture.run_command(shell);
+            success(&preview);
+            let text = stdout(&preview);
+            assert!(
+                text.contains("[dry-run] No files will be modified."),
+                "{text}"
+            );
+            assert!(
+                text.lines().any(|line| line.starts_with("Bin Links")
+                    && line.trim_end().ends_with("1 would remove")),
+                "{text}"
+            );
+            assert_eq!(read_state(), before, "{category}: {args:?}");
+            assert!(!preset.exists());
+        }
+    }
+}
+
+#[test]
+fn shell_trust_remediation_preserves_target_and_required_mode_without_enrolling() {
+    for live in [false, true] {
+        let fixture = Fixture::new();
+        let config = format!(
+            "schema_version = 2\nexternal_shell_mode = '{}'\n",
+            if live { "live" } else { "snapshot" }
+        );
+        fs::write(fixture.0.join("state/config.toml"), &config).unwrap();
+        let category = "demo space's";
+        let preset = fixture.0.join("state/presets/shell").join(category);
+        fs::create_dir_all(&preset).unwrap();
+        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+        fs::write(
+            preset.join("shine.toml"),
+            format!("[[files]]\nsource = '{script}'\ntarget = 'tool'\n"),
+        )
+        .unwrap();
+        fs::write(preset.join(script), "# not executed\n").unwrap();
+        let selector = format!("{category}/tool");
+        let target = format!("shell/{selector}");
+        let output = fixture.run(&["shell", "install", &selector, "--yes"]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let text = stdout(&output);
+        assert!(
+            text.contains(if live {
+                "shell_live_requires_development_trust"
+            } else {
+                "shell_external_code_not_allowed"
+            }),
+            "{output:?}"
+        );
+        let error = String::from_utf8_lossy(&output.stderr);
+        let inspect = error
+            .split_once("run `")
+            .unwrap()
+            .1
+            .split_once("` to review")
+            .unwrap()
+            .0;
+        assert_hint_argv(inspect, &["shine", "trust", "inspect", &target]);
+        let grant = error
+            .split_once(if live { "source, run `" } else { "then `" })
+            .unwrap()
+            .1
+            .split('`')
+            .next()
+            .unwrap();
+        let mut expected = vec!["shine", "trust", "grant", &target];
+        if live {
+            expected.push("--development");
+            assert!(error.contains("long-term authorization of future code"));
+            assert!(error.contains("external_shell_mode = \"snapshot\""));
+        } else {
+            assert!(!error.contains("--development"));
+        }
+        assert_hint_argv(grant, &expected);
+        assert_eq!(
+            fs::read_to_string(fixture.0.join("state/config.toml")).unwrap(),
+            config
+        );
+        assert!(!fixture.0.join("state/trust.toml").exists());
+        assert!(!fixture.0.join("state/shell-manifest.toml").exists());
+        assert!(!fixture.0.join("state/bin/tool").exists());
     }
 }
 
@@ -334,7 +588,7 @@ fn status_keeps_receipt_only_apps_visible_and_preserves_the_true_empty_state() {
         }
         assert_hint_argv(
             hint(&text, "Preview uninstall: ", ""),
-            &["shine", "app", "uninstall", category, "--dry-run"],
+            &["shine", "app", "uninstall", "--dry-run", category],
         );
         assert!(!text.contains("Run `shine upgrade"), "{output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");

@@ -56,6 +56,8 @@ Every command accepts the global `--config-dir <PATH>` option.
 Suggested App install/repair, upgrade, artifact, refresh, uninstall, Shell repair, and trust commands quote
 names containing spaces or shell punctuation. Use these hints in a POSIX shell on Unix or in
 PowerShell on Windows; the quotes preserve each original argument.
+For positional names beginning with `-`, these hints put options before `--` and the names after it,
+for example `shine app uninstall --dry-run -- -demo`.
 
 Security Plans show user file paths explicitly and summarize installed files, Shine maintenance,
 and associated backup/recovery files by purpose, with access types and path counts. Installation,

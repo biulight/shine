@@ -239,10 +239,10 @@ async fn handle_uninstall_with_reporter(
             .map(|file| file.category.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         for category in categories {
-            let category_arg = crate::shell_quote::command_arg(category);
+            let category_arg = crate::shell_quote::command_positionals(&[category]);
             observer.reporter.emit(PresentationEvent::BlankLine);
             observer.reporter.emit(PresentationEvent::stdout(format!(
-                "Preview forced uninstall: shine app uninstall {category_arg} --force --dry-run"
+                "Preview forced uninstall: shine app uninstall --force --dry-run {category_arg}"
             )));
             let files = protected
                 .iter()
@@ -333,7 +333,7 @@ impl shine_core::runtime::RuntimeObserver for UninstallObserver<'_> {
                 .unwrap_or("app");
             if code == "app_artifact_permission_required" {
                 let target_arg = crate::shell_quote::command_arg(&format!("app/{category}"));
-                let category_arg = crate::shell_quote::command_arg(category);
+                let category_arg = crate::shell_quote::command_positionals(&[category]);
                 self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: artifact teardown skipped (run `shine trust grant {target_arg}` after review; manual: shine app artifact remove {category_arg})", report::symbol("!"))));
             } else {
                 self.reporter.emit(PresentationEvent::stderr(format!(
@@ -454,7 +454,7 @@ mod tests {
             assert!(text.contains("Uninstall incomplete"));
             assert!(!text.contains("Done"));
             assert!(text.contains("1 removed"));
-            assert!(text.contains("shine app uninstall sample --force --dry-run"));
+            assert!(text.contains("shine app uninstall --force --dry-run sample"));
             assert_eq!(text.matches("Preview forced uninstall:").count(), 1);
             if mode == 1 {
                 assert!(!text.contains("protected.shine.bak"));

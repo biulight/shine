@@ -620,6 +620,10 @@ import. Import selected modes with repeatable `--mode`:
 shine env workspace init --from-dotenv --mode development --mode production
 ```
 
+Without `--force`, previews say `Would create` and successful writes say `Created`.
+With `--force`, messages describe writing with replacement if a target is present; they do not
+claim that every target is new. `--dry-run` never writes or replaces files.
+
 Mark known sensitive keys for `[secret]`, then configure recipients and seal. Unmarked values are
 imported as plaintext; never accidentally commit credentials as ordinary configuration.
 Imported secrets also remain plaintext until sealing. On Unix, generated workspace and source

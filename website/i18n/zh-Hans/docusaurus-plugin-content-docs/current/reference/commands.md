@@ -55,6 +55,8 @@ shine upgrade app/starship
 App 安装／修复、upgrade、artifact、refresh、卸载、Shell 修复及信任提示中的命令，会对含空格或 Shell
 特殊字符的名称加引号，以保留原始参数边界。Unix 上请在 POSIX shell 中使用这些提示，Windows
 上请使用 PowerShell。
+位置参数名称以 `-` 开头时，这些提示会把选项放在 `--` 前、名称放在其后，
+例如 `shine app uninstall --dry-run -- -demo`。
 
 Security Plan 默认显示用户文件的具体路径，并按用途汇总安装产物、Shine 内部维护及关联的备份/回滚文件，注明访问类型和路径数量。安装、升级、卸载、恢复、App refresh/artifact 和 Sys bootstrap/profile/apply 的审批都支持 `--verbose`，可展开已显示审阅范围中的文件路径、步骤、快照标识和诊断。
 

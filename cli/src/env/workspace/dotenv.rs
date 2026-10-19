@@ -195,7 +195,14 @@ pub(super) async fn init_from_dotenv_at(
     for (path, contents) in &planned {
         let display = path.strip_prefix(root).unwrap_or(path).display();
         if dry_run {
-            println!("Would create {display}");
+            println!(
+                "Would {} {display}",
+                if force {
+                    "write (replace if present)"
+                } else {
+                    "create"
+                }
+            );
         } else {
             let result = if force {
                 atomic_write_private(path, contents.as_bytes()).await
@@ -215,7 +222,14 @@ pub(super) async fn init_from_dotenv_at(
                 }
                 return Err(error);
             }
-            println!("Created {display}");
+            println!(
+                "{} {display}",
+                if force {
+                    "Wrote (replacing if present)"
+                } else {
+                    "Created"
+                }
+            );
         }
     }
     if !requested_secrets.is_empty() {

@@ -170,7 +170,7 @@ pub(super) fn category_updated_text(category: &str, count: usize) -> String {
 }
 
 pub(super) fn artifact_apply_hint_text(category: &str) -> String {
-    let category_arg = crate::shell_quote::command_arg(category);
+    let category_arg = crate::shell_quote::command_positionals(&[category]);
     format!(
         "  {} {category}: managed files changed; run `shine app artifact apply {category_arg}`",
         colors::symbol("!")

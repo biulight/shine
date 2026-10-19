@@ -555,6 +555,10 @@ shine env workspace init --from-dotenv
 shine env workspace init --from-dotenv --mode development --mode production
 ```
 
+未使用 `--force` 时，预览显示 `Would create`，写入成功后显示 `Created`。
+使用 `--force` 时，消息说明会写入并在目标已存在时替换，不会声称所有目标都是新文件。
+`--dry-run` 始终不会写入或替换文件。
+
 导入时可将明确知道的敏感键放进 `[secret]`，之后配置 recipient 并封存。未标记的值会作为明文导入；不要把实际凭据误当作普通配置提交。
 导入的 Secret 在封存前也仍是明文。Unix 上，生成的 workspace 与环境源文件使用仅所有者可读写的
 `0600` 权限，使用 `--force` 替换时同样如此。

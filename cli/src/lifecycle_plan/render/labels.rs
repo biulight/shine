@@ -95,8 +95,9 @@ pub(in crate::lifecycle_plan) fn stale_app_source_guidance(
         return Vec::new();
     }
     let category = step.target.strip_prefix("app/").unwrap_or_default();
+    let category = crate::shell_quote::command_positionals(&[category]);
     vec![
         format!("{indent}Preset source missing; installed content and receipt retained."),
-        format!("{indent}Preview uninstall: shine app uninstall {category} --dry-run"),
+        format!("{indent}Preview uninstall: shine app uninstall --dry-run {category}"),
     ]
 }

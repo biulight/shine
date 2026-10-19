@@ -34,6 +34,135 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn preset_test_text_keeps_control_names_on_one_row_and_preserves_json_and_exit_status() {
+    let fixture = Fixture::new();
+    let category = fixture.0.join("app/demo");
+    fs::create_dir_all(&category).unwrap();
+    let metadata =
+        "metadata_schema_version = 2\ndest = '~/.config/demo'\n[[files]]\nsource = 'config.txt'\n";
+    fs::write(category.join("shine.toml"), metadata).unwrap();
+    fs::write(category.join("config.txt"), "fixture\n").unwrap();
+    for (name, passed) in [
+        ("ordinary name", true),
+        ("case\n  PASS forged\r\t\u{1b}[31m", false),
+    ] {
+        let source = format!(
+            "schema_version = 1\n[[cases]]\nname = {}\nplatform = 'linux'\n[cases.expect]\nvalid = {passed}\n",
+            toml::Value::String(name.into())
+        );
+        fs::write(category.join("shine.test.toml"), &source).unwrap();
+        let run = |json| {
+            let mut command = fixture.command();
+            command
+                .env("NO_COLOR", "1")
+                .args(["preset", "test"])
+                .arg(&category);
+            if json {
+                command.args(["--format", "json"]);
+            }
+            command.output().unwrap()
+        };
+        let text = run(false);
+        let json = run(true);
+        for output in [&text, &json] {
+            assert_eq!(output.status.code(), Some(i32::from(!passed)), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+        }
+        let text = String::from_utf8(text.stdout).unwrap();
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with("  PASS ") || line.starts_with("  FAIL "))
+                .count(),
+            1,
+            "{text}"
+        );
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        if passed {
+            assert!(text.contains("PASS ordinary name (linux)"), "{text}");
+        } else {
+            assert!(
+                text.contains(r"FAIL case\n  PASS forged\r\t\u{1b}[31m"),
+                "{text}"
+            );
+            assert!(text.contains("Summary: 1 cases, 0 passed, 1 failed"));
+        }
+        let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+        assert_eq!(report["cases"].as_array().unwrap().len(), 1);
+        assert_eq!(report["cases"][0]["name"], name);
+        assert_eq!(report["cases"][0]["passed"], passed);
+        assert_eq!(
+            fs::read_to_string(category.join("shine.test.toml")).unwrap(),
+            source
+        );
+        assert_eq!(
+            fs::read_to_string(category.join("shine.toml")).unwrap(),
+            metadata
+        );
+    }
+    assert!(!fixture.0.join("state").exists());
+}
+
+#[test]
+fn dotenv_import_force_reports_writes_and_preserves_preview_and_conflict_boundaries() {
+    let fixture = Fixture::new();
+    let input = fixture.0.join(".env");
+    fs::write(&input, "PUBLIC=original\n").unwrap();
+    let run = |flags: &[&str]| {
+        fixture
+            .command()
+            .args(["env", "workspace", "init", "--from-dotenv"])
+            .args(flags)
+            .output()
+            .unwrap()
+    };
+    let preview = run(&["--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert_eq!(
+        String::from_utf8(preview.stdout).unwrap(),
+        "Would create .env.shine.toml\nWould create shine.workspace.toml\n"
+    );
+    let source = fixture.0.join(".env.shine.toml");
+    let workspace = fixture.0.join("shine.workspace.toml");
+    assert!(!source.exists() && !workspace.exists());
+    let created = run(&[]);
+    assert!(created.status.success(), "{created:?}");
+    assert_eq!(
+        String::from_utf8(created.stdout).unwrap(),
+        "Created .env.shine.toml\nCreated shine.workspace.toml\n"
+    );
+    let original = [fs::read(&source).unwrap(), fs::read(&workspace).unwrap()];
+    fs::write(&input, "PUBLIC=updated\n").unwrap();
+    for flags in [&["--force", "--dry-run"][..], &[][..]] {
+        let output = run(flags);
+        if flags.is_empty() {
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
+        } else {
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                "Would write (replace if present) .env.shine.toml\nWould write (replace if present) shine.workspace.toml\n"
+            );
+        }
+        assert_eq!(
+            [fs::read(&source).unwrap(), fs::read(&workspace).unwrap()],
+            original
+        );
+    }
+    let written = run(&["--force"]);
+    assert!(written.status.success(), "{written:?}");
+    assert_eq!(
+        String::from_utf8(written.stdout).unwrap(),
+        "Wrote (replacing if present) .env.shine.toml\nWrote (replacing if present) shine.workspace.toml\n"
+    );
+    let imported: toml::Value = toml::from_str(&fs::read_to_string(&source).unwrap()).unwrap();
+    assert_eq!(imported["plain"]["PUBLIC"].as_str(), Some("updated"));
+    assert_eq!(fs::read(&workspace).unwrap(), original[1]);
+    assert_eq!(fs::read_to_string(&input).unwrap(), "PUBLIC=updated\n");
+    assert!(!fixture.0.join("state").exists());
+}
+
 #[tokio::test]
 async fn shell_recovery_reports_rollback_and_committed_cleanup_without_reversing_committed_content()
 {
@@ -1441,7 +1570,7 @@ fn self_install_path_hint_preserves_literal_directory_and_existing_path() {
 #[test]
 fn preset_migration_artifact_hint_preserves_category_argument() {
     for (category, posix, powershell) in [
-        ("demo", "demo", "'demo'"),
+        ("demo", "demo", "demo"),
         ("demo space", "'demo space'", "'demo space'"),
         ("it's", "'it'\\''s'", "'it''s'"),
         ("literal$HOME", "'literal$HOME'", "'literal$HOME'"),

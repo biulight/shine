@@ -80,6 +80,8 @@ App 类别或文件会在该操作系统的检查中跳过。
 需要可重复的跨平台预期时，在类别中加入 `shine.test.toml`。测试描述初始条件和预期结果，不会执行
 setup code。`examples/presets` 下提供 App、Shell、Sys 三类可运行示例。`preset test` 只接受单个类别，
 不能传仓库根目录。
+文本报告会转义用例名中的控制字符，让每条结果保持在一行内。JSON 报告保留原始名称；
+两种格式的通过／失败判定和退出码相同。
 
 需要可分发 artifact 时，把已审查类别打包到 source tree 外部：
 
@@ -200,7 +202,10 @@ Snapshot trust 绑定 target、capability 和完整有效类别快照，包括�
 
 Development trust 是对所显示本地来源中、指定 target/capability 的未来代码的长期授权，
 不代表持续代码审阅。来源目录/层变化、新 target 或新 capability 需要重新授权。
-Shell live 部署必须使用此模式。`opaque_code = "unrestricted"` 不会启用开发信任。`trust list`、
+Shell live 部署必须使用此模式。live 部署被阻止时，请先运行 `shine trust inspect <TARGET>`，
+再决定是否执行 `shine trust grant <TARGET> --development`。不愿授权未来代码修改时，
+可设置 `external_shell_mode = "snapshot"` 后重新审阅；普通 snapshot trust 不能授权 live 部署。
+`opaque_code = "unrestricted"` 不会启用开发信任。`trust list`、
 `trust inspect` 与安全 Plan 都会标注当前有效的开发信任。Grant 只保存在本机私有 trust
 store 中，Preset 不能随自身分发或启用它。
 默认的 `trust list` 会把安全范围相同的 capability 合并为一行，并显示每条已存 grant 当前是否有效；

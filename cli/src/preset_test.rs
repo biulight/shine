@@ -28,7 +28,7 @@ fn print_text_report(report: &PresetTestReportV1) {
         println!(
             "  {} {} ({}) · valid={} ready={}",
             if case.passed { "PASS" } else { "FAIL" },
-            case.name,
+            case.name.escape_debug(),
             case.platform,
             case.actual_valid,
             case.actual_ready

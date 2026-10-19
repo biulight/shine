@@ -1,5 +1,20 @@
 # Lessons Learned
 
+## 2026-10-20 — Suggested commands and result rows retain consumer boundaries
+
+- **Symptoms**: Plan/error hints split quoted targets; leading-hyphen categories passed shell
+  parsing but failed Clap parsing. Live Shell blockers suggested snapshot grants, forced dotenv
+  imports called replacements creations, and fixture names could forge extra text result rows.
+- **Fix**: quote at command owners, group final positional operands behind `--` when needed,
+  and put options first. Retain the live trust diagnostic when grouping targets and explain
+  development authorization versus snapshot delivery. Use neutral forced-write wording without
+  adding filesystem observations; escape fixture names only in text rendering.
+- **Coverage**: CLI regressions parse hints through shell and Clap, preview leading-hyphen removals,
+  preserve blocked trust/config/receipts, and compare import preview/conflict/write bytes. Fixture
+  tests retain raw JSON names, pass/fail and exits while keeping control-containing names on one row.
+- **Rule**: shell quoting does not protect option parsing. Display changes must not alter argv,
+  approval/trust policy, atomic publication, report schemas or persisted names.
+
 ## 2026-10-19 — Command displays need position and path boundaries
 
 - **Symptoms**: stale trust-list hints split targets containing spaces; executable names such as

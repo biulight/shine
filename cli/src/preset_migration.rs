@@ -8,7 +8,7 @@ use serde::Serialize;
 use shine_core::runtime::{
     InMemoryHost, PresetDiagnosticSeverity, PresetMigrationBaseline, PresetMigrationDiagnosticV1,
     PresetMigrationEdit, PresetMigrationPlan, PresetMigrationSeverityV1, PresetMigrationStatusV1,
-    PresetSnapshot, PresetSnapshotRequest, PresetSnapshotSource, RealHost, RuntimePlatform,
+    PresetSnapshot, PresetSnapshotRequest, PresetSnapshotSource, RealHost,
     capture_embedded_preset_snapshot, capture_preset_snapshot, plan_preset_migration, sha256,
     validate_preset_path,
 };
@@ -417,20 +417,6 @@ mod tests {
                 assert!(!output.contains("shine preset pull"), "{output}");
             }
         }
-    }
-
-    #[test]
-    fn remediation_command_paths_are_platform_quoted() {
-        let path = Path::new("/preset root/it's/shine.toml");
-
-        assert_eq!(
-            quote_command_arg(path, RuntimePlatform::Linux),
-            "'/preset root/it'\\''s/shine.toml'"
-        );
-        assert_eq!(
-            quote_command_arg(path, RuntimePlatform::Windows),
-            "'/preset root/it''s/shine.toml'"
-        );
     }
 
     #[tokio::test]

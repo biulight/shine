@@ -207,7 +207,7 @@ pub(super) fn render_remediation(
         if diagnostic.code == "recursive_artifact_hook_removed"
             && let Some(category) = diagnostic.target.strip_prefix("app/")
         {
-            let category = quote_command_arg(Path::new(category), RuntimePlatform::current());
+            let category = crate::shell_quote::command_positionals(&[category]);
             let _ = writeln!(
                 output,
                 "    Next: run `shine app artifact apply {category}` after relevant changes."
@@ -225,6 +225,7 @@ pub(super) fn render_remediation(
         .map(|diagnostic| &diagnostic.target)
         .collect::<BTreeSet<_>>();
     for target in trust_targets {
+        let target = crate::shell_quote::command_arg(target);
         let timing = if active_source {
             "After validation"
         } else {
@@ -271,15 +272,6 @@ pub(super) fn metadata_logical_path(snapshot: &PresetSnapshot, target: &str) -> 
 
 pub(super) fn diagnostic_category(target: &str) -> String {
     target.split('/').take(2).collect::<Vec<_>>().join("/")
-}
-
-pub(super) fn quote_command_arg(path: &Path, platform: RuntimePlatform) -> String {
-    let value = path.display().to_string();
-    if platform == RuntimePlatform::Windows {
-        format!("'{}'", value.replace('\'', "''"))
-    } else {
-        crate::shell_quote::quote_if_needed(&value)
-    }
 }
 
 pub(super) fn print_diffs(edits: &[PresetMigrationEdit]) {

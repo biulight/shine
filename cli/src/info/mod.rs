@@ -270,9 +270,12 @@ fn print_shell_update_row(file: &collect::ShellInfoFile) {
         colors::status_label(file.status, symbol)
     );
     if file.attention_required {
-        println!(
-            "    Installed files are preserved. Restore the Preset or inspect the launcher before retrying; use `shine shell uninstall {}/{}` for explicit removal.",
+        let target = crate::shell_quote::command_positionals(&[&format!(
+            "{}/{}",
             file.category.name, file.file.command_name
+        )]);
+        println!(
+            "    Installed files are preserved. Restore the Preset or inspect the launcher before retrying; use `shine shell uninstall {target}` for explicit removal."
         );
     }
 }

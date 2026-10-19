@@ -31,6 +31,21 @@ pub(crate) fn command_arg(value: &str) -> String {
     }
 }
 
+/// Final positional operands in a suggested Shine command. Put options before
+/// this text so `--` can protect leading hyphens without changing their values.
+pub(crate) fn command_positionals(values: &[&str]) -> String {
+    let operands = values
+        .iter()
+        .map(|value| command_arg(value))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if values.iter().any(|value| value.starts_with('-')) {
+        format!("-- {operands}")
+    } else {
+        operands
+    }
+}
+
 /// Characters that never need quoting: alphanumerics plus punctuation that is inert to POSIX
 /// shells and common in paths, URLs, and rsync targets (e.g. `host:/var/www/`).
 fn is_shell_safe(c: char) -> bool {

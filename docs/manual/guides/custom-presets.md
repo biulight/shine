@@ -92,6 +92,8 @@ Add `shine.test.toml` when the category needs repeatable cross-platform expectat
 the starting conditions and expected results without running setup code. Runnable App, Shell, and
 Sys examples are available under `examples/presets`. `preset test` accepts one category, not a
 repository root.
+Text reports escape control characters in case names so each result stays on one row.
+JSON reports preserve the original names; pass/fail results and exit codes are the same in both formats.
 
 When you need a distributable artifact, pack the reviewed category outside its source tree:
 
@@ -227,6 +229,10 @@ downloads, or runtime side effects.
 Development trust is long-term authorization of future code from the displayed local source for the
 specified target and capability. Source directory/layer changes and new targets or capabilities need
 new authorization. It does not mean continuing code review. Shell live deployment requires this mode.
+When live deployment is blocked, review the target with `shine trust inspect <TARGET>` before
+choosing `shine trust grant <TARGET> --development`. If you do not want to authorize future code
+changes, set `external_shell_mode = "snapshot"` and review again; ordinary snapshot trust cannot
+authorize live deployment.
 `opaque_code = "unrestricted"` does not enable development trust. `trust list`,
 `trust inspect`, and the security Plan label active development trust; the private local trust store
 owns the grant, so a Preset cannot distribute or enable it.

@@ -472,18 +472,29 @@ fn blocked_plan_error(
                 )
             })
         })
-        .map(|step| step.target.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
+        .fold(
+            std::collections::BTreeMap::<&str, bool>::new(),
+            |mut targets, step| {
+                *targets.entry(step.target.as_str()).or_default() |= step
+                    .diagnostic_codes
+                    .iter()
+                    .any(|code| code == "shell_live_requires_development_trust");
+                targets
+            },
+        );
 
     let missing = planned
         .iter()
         .flat_map(|(_, plan)| plan.permissions.missing_declarations.iter())
         .map(permission_name)
         .collect::<std::collections::BTreeSet<_>>();
-    for target in external_app_and_shell_targets {
-        reasons.push(format!(
-            "{target}: external Preset code is not trusted; run `shine trust inspect {target}` to review the current scope, then `shine trust grant {target}` if you accept it"
-        ));
+    for (target, development) in external_app_and_shell_targets {
+        let target_arg = crate::shell_quote::command_arg(target);
+        reasons.push(if development {
+            format!("{target}: live Shell deployment requires development trust; run `shine trust inspect {target_arg}` to review the current scope. If you accept long-term authorization of future code from this local source, run `shine trust grant {target_arg} --development`; otherwise set `external_shell_mode = \"snapshot\"` and review again")
+        } else {
+            format!("{target}: external Preset code is not trusted; run `shine trust inspect {target_arg}` to review the current scope, then `shine trust grant {target_arg}` if you accept it")
+        });
     }
     if !missing.is_empty() {
         reasons.push(format!(
@@ -1550,7 +1561,7 @@ mod tests {
         assert!(compact.contains("~ shell/utils/copyfile"));
         assert!(compact.contains("app/docker · daemon.jsonc [app_stale_source_preserved]"));
         assert!(compact.contains("Preset source missing; installed content and receipt retained."));
-        assert!(compact.contains("shine app uninstall docker --dry-run"));
+        assert!(compact.contains("shine app uninstall --dry-run docker"));
         assert!(compact.contains("shell_cache_destination_conflict"));
         assert!(compact.contains("unexpected_cache_diagnostic"));
         assert!(compact.contains("filesystem write"));
@@ -1635,7 +1646,7 @@ mod tests {
         assert!(compact.contains("Warnings"));
         assert!(compact.contains("app/docker · daemon.jsonc [app_stale_source_preserved]"));
         assert!(compact.contains("Preset source missing; installed content and receipt retained."));
-        assert!(compact.contains("shine app uninstall docker --dry-run"));
+        assert!(compact.contains("shine app uninstall --dry-run docker"));
         assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
         let verbose = render_upgrade_detailed_plan_lines(&planned, "config")
             .unwrap()
