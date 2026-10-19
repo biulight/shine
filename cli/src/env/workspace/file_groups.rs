@@ -200,10 +200,10 @@ impl Selection {
                 FileGroupOperation::Run | FileGroupOperation::Export => (source, target),
             };
             output.emit(format!(
-                "Would {} {} -> {}",
+                "Would {} {:?} -> {:?}",
                 operation.verb(),
-                from.display(),
-                to.display()
+                from.to_string_lossy(),
+                to.to_string_lossy()
             ));
         }
     }

@@ -307,7 +307,8 @@ impl RuntimeObserver for InstallObserver<'_> {
                         })
                         .collect::<Vec<_>>()
                         .join(" && ");
-                    self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: post-install hook skipped (run `shine trust grant app/{category}` after review; manual: {sequence})", report::symbol("!"))));
+                    let target_arg = crate::shell_quote::command_arg(&format!("app/{category}"));
+                    self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: post-install hook skipped (run `shine trust grant {target_arg}` after review; manual: {sequence})", report::symbol("!"))));
                 } else {
                     self.reporter.emit(PresentationEvent::stderr(format!(
                         "  {} {category}: post-install hook failed: {detail}",

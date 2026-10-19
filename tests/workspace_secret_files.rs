@@ -413,6 +413,147 @@ fn file_groups_preview_never_calls_backend_or_command() {
 }
 
 #[test]
+fn file_group_previews_escape_paths_without_changing_io_or_streams() {
+    for target in [
+        ".signing/key with space.bin",
+        ".signing/it's.bin",
+        #[cfg(unix)]
+        ".signing/key\nnext\t.bin",
+    ] {
+        let f = Fixture::new();
+        let source = ".secrets/test/key with space.enc";
+        let workspace = f.root.join("shine.workspace.toml");
+        fs::write(&workspace, format!("version=3\n[env]\ndefault_mode='test'\nmodes=['test']\n[env.encryption]\nbackend='gpg'\ngpg_recipients=['test']\n[[file_groups.signing.files]]\nsource={source:?}\ntarget={target:?}\n")).unwrap();
+        let bytes = [0, 255, 10, 13, 128];
+        fs::write(f.root.join(target), bytes).unwrap();
+        let config = fs::read(f.root.join("state/config.toml")).unwrap();
+        let workspace_bytes = fs::read(&workspace).unwrap();
+        let root = fs::canonicalize(&f.root).unwrap();
+        let from = format!("{:?}", root.join(source).to_string_lossy());
+        let to = format!("{:?}", root.join(target).to_string_lossy());
+        let log = f.root.join("backend-log");
+        let seal = f
+            .command()
+            .env("PROBE_BACKEND_LOG", &log)
+            .args([
+                "env",
+                "secret",
+                "seal",
+                "--file-group",
+                "signing",
+                "--dry-run",
+            ])
+            .output()
+            .unwrap();
+        assert!(seal.status.success(), "{seal:?}");
+        let text = String::from_utf8(seal.stdout).unwrap();
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [
+                "File groups for mode test (metadata only)",
+                &format!("Would seal {to} -> {from}")
+            ]
+        );
+        assert!(seal.stderr.is_empty());
+        assert!(!log.exists());
+        assert!(!f.root.join(source).exists());
+        assert_eq!(fs::read(f.root.join(target)).unwrap(), bytes);
+        good(
+            f.command()
+                .args(["env", "secret", "seal", "--file-group", "signing"])
+                .output()
+                .unwrap(),
+        );
+        fs::remove_file(f.root.join(target)).unwrap();
+        for (args, verb) in [
+            (
+                vec![
+                    "env",
+                    "run",
+                    "--file-group",
+                    "signing",
+                    "--dry-run",
+                    "--",
+                    "nonexistent-command",
+                ],
+                "decrypt temporarily",
+            ),
+            (
+                vec![
+                    "env",
+                    "workspace",
+                    "export",
+                    "--format",
+                    "files",
+                    "--mode",
+                    "test",
+                    "--file-group",
+                    "signing",
+                    "--dry-run",
+                ],
+                "export plaintext",
+            ),
+        ] {
+            let preview = f
+                .command()
+                .env("PROBE_BACKEND_LOG", &log)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(preview.status.success(), "{preview:?}");
+            assert_eq!(
+                String::from_utf8(preview.stdout)
+                    .unwrap()
+                    .lines()
+                    .collect::<Vec<_>>(),
+                [
+                    "File groups for mode test (metadata only)",
+                    &format!("Would {verb} {from} -> {to}")
+                ]
+            );
+            assert!(preview.stderr.is_empty());
+            assert!(!log.exists());
+            assert!(!f.root.join(target).exists());
+        }
+        let run = f
+            .command()
+            .args(["env", "run", "--file-group", "signing", "--"])
+            .arg(PROBE_BINARY.0.join(exe("probe")))
+            .arg("output")
+            .env("PROBE_EXIT", "42")
+            .output()
+            .unwrap();
+        assert_eq!(run.status.code(), Some(42), "{run:?}");
+        assert_eq!(run.stdout, bytes);
+        assert!(
+            String::from_utf8_lossy(&run.stderr)
+                .lines()
+                .any(|line| line == format!("Would decrypt temporarily {from} -> {to}"))
+        );
+        assert!(!f.root.join(target).exists());
+        good(
+            f.command()
+                .args([
+                    "env",
+                    "workspace",
+                    "export",
+                    "--format",
+                    "files",
+                    "--mode",
+                    "test",
+                    "--file-group",
+                    "signing",
+                ])
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(fs::read(f.root.join(target)).unwrap(), bytes);
+        assert_eq!(fs::read(f.root.join("state/config.toml")).unwrap(), config);
+        assert_eq!(fs::read(&workspace).unwrap(), workspace_bytes);
+    }
+}
+
+#[test]
 fn file_groups_verification_and_decryption_failures_preserve_plaintext() {
     let f = Fixture::new();
     let out = f

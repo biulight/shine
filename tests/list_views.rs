@@ -86,6 +86,395 @@ fn stdout(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).unwrap()
 }
 
+fn hint<'a>(text: &'a str, prefix: &str, suffix: &str) -> &'a str {
+    text.lines()
+        .find_map(|line| line.split_once(prefix)?.1.strip_suffix(suffix))
+        .unwrap_or_else(|| panic!("missing hint {prefix:?} in {text}"))
+}
+
+fn assert_hint_argv(command: &str, expected: &[&str]) {
+    // Parse the suggested command without invoking Shine or any Preset code.
+    #[cfg(unix)]
+    let parsed = Command::new("/bin/sh")
+        .args(["-c", &format!("set -- {command}; printf '%s\\0' \"$@\"")])
+        .output()
+        .unwrap();
+    #[cfg(windows)]
+    let parsed = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(format!("function shine {{ ConvertTo-Json -Compress -InputObject (@('shine') + @($args)) }}; {command}"))
+        .output()
+        .unwrap();
+    success(&parsed);
+    assert!(parsed.stderr.is_empty(), "{parsed:?}");
+    #[cfg(unix)]
+    assert_eq!(
+        parsed.stdout,
+        format!("{}\0", expected.join("\0")).as_bytes()
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        serde_json::from_slice::<Vec<String>>(&parsed.stdout).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn app_and_trust_hints_preserve_literal_category_arguments() {
+    for category in ["demo", "demo space", "it's", "literal$HOME", "literal`tick"] {
+        let fixture = Fixture::new();
+        fixture.app(false);
+        let preset = fixture.0.join("state/presets/app").join(category);
+        if category != "demo" {
+            fs::rename(fixture.0.join("state/presets/app/demo"), &preset).unwrap();
+        }
+        let metadata = fs::read_to_string(preset.join("shine.toml")).unwrap();
+        fs::write(
+            preset.join("shine.toml"),
+            format!("{metadata}\n[artifact]\nscript = 'build.ts'\nteardown = 'build.ts'\n"),
+        )
+        .unwrap();
+        fs::write(
+            preset.join("build.ts"),
+            format!(
+                "await Bun.write({:?}, 'ran');\n",
+                fixture.0.join("artifact-ran").to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        let target = format!("app/{category}");
+        let info = fixture.run(&["app", "info", category]);
+        success(&info);
+        assert_hint_argv(
+            hint(&stdout(&info), "Not installed. Run `", "` to install."),
+            &["shine", "install", &target],
+        );
+        let inspect = fixture.run(&["trust", "inspect", &target]);
+        success(&inspect);
+        let text = stdout(&inspect);
+        let grant = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("shine trust grant "))
+            .unwrap()
+            .trim();
+        assert_hint_argv(grant, &["shine", "trust", "grant", &target]);
+        let installed = fixture.run(&["app", "install", category, "--yes"]);
+        success(&installed);
+        assert_hint_argv(
+            hint(&stdout(&installed), "managed files changed; run `", "`"),
+            &["shine", "app", "artifact", "apply", category],
+        );
+        let info = fixture.run(&["app", "info", category]);
+        success(&info);
+        assert_hint_argv(
+            hint(
+                &stdout(&info),
+                "Installed. Run `",
+                "` to repair managed files.",
+            ),
+            &["shine", "install", &target, "--replace-managed"],
+        );
+        fs::write(preset.join("config.txt"), "updated source\n").unwrap();
+        let update = fixture.run(&["update"]);
+        success(&update);
+        assert_hint_argv(
+            hint(&stdout(&update), "Run `", "` to apply updates."),
+            &["shine", "upgrade", &target],
+        );
+        fs::write(fixture.0.join("destination/config.txt"), "user edit\n").unwrap();
+        let removed = fixture.run(&["app", "uninstall", category, "--yes"]);
+        assert_eq!(removed.status.code(), Some(1), "{removed:?}");
+        let text = stdout(&removed);
+        assert_hint_argv(
+            hint(&text, "Preview forced uninstall: ", ""),
+            &[
+                "shine",
+                "app",
+                "uninstall",
+                category,
+                "--force",
+                "--dry-run",
+            ],
+        );
+        assert_hint_argv(
+            hint(&text, "manual: ", ")"),
+            &["shine", "app", "artifact", "remove", category],
+        );
+        assert_eq!(
+            fs::read(fixture.0.join("destination/config.txt")).unwrap(),
+            b"user edit\n"
+        );
+        assert!(!fixture.0.join("artifact-ran").exists());
+    }
+}
+
+#[test]
+fn missing_app_source_hints_preserve_arguments_and_installed_state() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    let category = "missing space's";
+    let preset = fixture.0.join("state/presets/app").join(category);
+    fs::rename(fixture.0.join("state/presets/app/demo"), &preset).unwrap();
+    success(&fixture.run(&["app", "install", category, "--yes"]));
+    let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    let metadata = fs::read_to_string(preset.join("shine.toml")).unwrap();
+    fs::write(
+        preset.join("shine.toml"),
+        metadata.replace("[[files]]\nsource = 'config.txt'\n", ""),
+    )
+    .unwrap();
+    for args in [
+        vec!["update"],
+        vec!["list"],
+        vec!["update", "--verbose"],
+        vec!["update", "--verbose", "--diff"],
+    ] {
+        let output = fixture.run(&args);
+        success(&output);
+        let text = stdout(&output);
+        assert!(text.contains("Preset source missing"), "{output:?}");
+        assert_hint_argv(
+            hint(&text, "Preview uninstall: ", ""),
+            &["shine", "app", "uninstall", category, "--dry-run"],
+        );
+        assert_eq!(
+            fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+            receipt
+        );
+        assert_eq!(
+            fs::read(fixture.0.join("destination/config.txt")).unwrap(),
+            b"static-v1\n"
+        );
+    }
+}
+
+#[test]
+fn status_keeps_receipt_only_apps_visible_and_preserves_the_true_empty_state() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    for args in [
+        vec!["update", "--verbose"],
+        vec!["update", "--verbose", "--diff"],
+    ] {
+        let output = fixture.run(&args);
+        success(&output);
+        assert!(
+            stdout(&output).contains("Nothing installed yet."),
+            "{output:?}"
+        );
+        assert!(!stdout(&output).contains("Preset source missing"));
+        assert!(!fixture.0.join("state/app-manifest.toml").exists());
+    }
+
+    let category = "missing space's";
+    let preset = fixture.0.join("state/presets/app").join(category);
+    fs::rename(fixture.0.join("state/presets/app/demo"), &preset).unwrap();
+    success(&fixture.run(&["app", "install", category, "--yes"]));
+    let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    let config = fs::read(fixture.0.join("state/config.toml")).unwrap();
+    fs::write(fixture.0.join("destination/config.txt"), "user edit\n").unwrap();
+    fs::remove_dir_all(&preset).unwrap();
+    for args in [
+        vec!["list"],
+        vec!["update"],
+        vec!["update", "--diff"],
+        vec!["update", "--verbose"],
+        vec!["update", "--verbose", "--diff"],
+        vec!["update", "--verbose", "--run-generators"],
+    ] {
+        let output = fixture.run(&args);
+        success(&output);
+        let text = stdout(&output);
+        assert!(!text.contains("Nothing installed yet"), "{output:?}");
+        assert_eq!(
+            text.matches("Preset source missing").count(),
+            2,
+            "{output:?}"
+        );
+        for resource in ["config.txt", "manual.txt"] {
+            assert!(text.contains(&format!("app/{category} · {resource}: Preset source missing; installed content and receipt retained.")), "{output:?}");
+        }
+        assert_hint_argv(
+            hint(&text, "Preview uninstall: ", ""),
+            &["shine", "app", "uninstall", category, "--dry-run"],
+        );
+        assert!(!text.contains("Run `shine upgrade"), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(
+            fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+            receipt
+        );
+        assert_eq!(
+            fs::read(fixture.0.join("state/config.toml")).unwrap(),
+            config
+        );
+        assert_eq!(
+            fs::read(fixture.0.join("destination/config.txt")).unwrap(),
+            b"user edit\n"
+        );
+        assert_eq!(
+            fs::read(fixture.0.join("destination/manual.txt")).unwrap(),
+            b"manual-v1\n"
+        );
+        assert!(!preset.exists());
+        assert!(!fixture.0.join("generator-ran").exists());
+    }
+}
+
+#[tokio::test]
+async fn sys_all_catalog_limits_guidance_to_current_os_without_changing_lookup() {
+    let fixture = Fixture::new();
+    let os = cli::sys::detect_os_id().await.unwrap();
+    let foreign = if os == "ubuntu" { "macos" } else { "ubuntu" };
+    for (os_id, unique, label) in [
+        (os.as_str(), "local-only", "Local"),
+        (foreign, "foreign-only", "Foreign"),
+    ] {
+        let preset = fixture.0.join("state/presets/sys").join(os_id);
+        fs::create_dir_all(&preset).unwrap();
+        let mut metadata = "version = 2\n".to_string();
+        for id in ["shared", unique] {
+            fs::write(preset.join(format!("{id}.txt")), "source\n").unwrap();
+            metadata.push_str(&format!("[[items]]\nid = {id:?}\nlabel = '{label} {id}'\nmode = 'managed'\ndriver = 'managed-file'\n[items.config]\nsource = '{id}.txt'\ntarget = {:?}\n", fixture.0.join(format!("{os_id}-{id}.txt")).to_str().unwrap()));
+        }
+        fs::write(preset.join("shine.toml"), metadata).unwrap();
+    }
+    let config = fs::read(fixture.0.join("state/config.toml")).unwrap();
+    let all = fixture.run(&["sys", "list", "--all"]);
+    success(&all);
+    let text = stdout(&all);
+    assert!(
+        text.contains(&format!("{foreign} (catalog only)")),
+        "{text}"
+    );
+    assert!(text.contains("Commands use the current OS"), "{text}");
+    assert_eq!(
+        text.matches("Run: shine sys apply shared").count(),
+        1,
+        "{text}"
+    );
+    assert!(text.contains("Run: shine sys apply local-only"), "{text}");
+    assert!(
+        !text.contains("Run: shine sys apply foreign-only"),
+        "{text}"
+    );
+    let local = fixture.run(&["sys", "list"]);
+    success(&local);
+    assert!(!stdout(&local).contains("Foreign"));
+    assert!(!stdout(&local).contains("catalog only"));
+    let info = fixture.run(&["sys", "info", "shared"]);
+    success(&info);
+    assert!(stdout(&info).contains("Local shared"));
+    let info = fixture.run(&["sys", "info", "foreign-only"]);
+    assert_eq!(info.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&info.stderr).contains("unknown sys item"));
+    let apply = fixture.run(&["sys", "apply", "shared", "--dry-run"]);
+    success(&apply);
+    assert!(stdout(&apply).contains("Local shared"), "{apply:?}");
+    let apply = fixture.run(&["sys", "apply", "foreign-only", "--dry-run"]);
+    assert_eq!(apply.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&apply.stderr).contains("unknown sys item"));
+    for os_id in [os.as_str(), foreign] {
+        assert!(!fixture.0.join(format!("{os_id}-shared.txt")).exists());
+    }
+    assert_eq!(
+        fs::read(fixture.0.join("state/config.toml")).unwrap(),
+        config
+    );
+    assert!(!fixture.0.join("state/sys-manifest.toml").exists());
+}
+
+#[test]
+fn refresh_summary_distinguishes_preservation_failure_and_partial_progress() {
+    for mixed in [false, true] {
+        let fixture = Fixture::new();
+        let preset = fixture.0.join("state/presets/app/demo");
+        fs::create_dir_all(&preset).unwrap();
+        let mut metadata = format!(
+            "metadata_schema_version = 2\ndest = {:?}\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n",
+            fixture.0.join("destination").to_str().unwrap()
+        );
+        for id in 0..if mixed { 3 } else { 1 } {
+            metadata.push_str(&format!("[[files]]\nsource = '{id}.txt'\ngenerator = {{ script = '{id}.ts', runtime = 'bun', when_env = 'ENABLE', env = ['ENABLE'], auto = false }}\n"));
+            fs::write(preset.join(format!("{id}.txt")), "fallback\n").unwrap();
+            fs::write(preset.join(format!("{id}.ts")), "console.log('v1');\n").unwrap();
+        }
+        fs::write(preset.join("shine.toml"), metadata).unwrap();
+        success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+        success(&fixture.run(&["app", "install", "demo", "--yes"]));
+        let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+        fs::write(fixture.0.join("destination/0.txt"), "user edit\n").unwrap();
+        if mixed {
+            fs::write(preset.join("1.ts"), "throw new Error('fixture failure');\n").unwrap();
+            fs::write(preset.join("2.ts"), "console.log('v2');\n").unwrap();
+            success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+        }
+        let denied = fixture.run(&["app", "refresh", "demo"]);
+        assert_eq!(denied.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&denied.stderr).contains("approval requires"));
+        assert_eq!(
+            fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+            receipt
+        );
+        let output = fixture.run(&["app", "refresh", "demo", "--yes"]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let text = stdout(&output);
+        let summary = text
+            .lines()
+            .find(|line| line.contains("Refresh incomplete:"))
+            .unwrap();
+        assert!(summary.contains("user-modified (kept)"), "{output:?}");
+        assert_eq!(
+            fs::read(fixture.0.join("destination/0.txt")).unwrap(),
+            b"user edit\n"
+        );
+        if mixed {
+            assert!(
+                summary.contains("1 updated, 1 user-modified (kept), 1 failed"),
+                "{output:?}"
+            );
+            assert_eq!(
+                fs::read(fixture.0.join("destination/1.txt")).unwrap(),
+                b"v1\n"
+            );
+            assert_eq!(
+                fs::read(fixture.0.join("destination/2.txt")).unwrap(),
+                b"v2\n"
+            );
+            let before: shine_core::install::manifest::AppManifest =
+                toml::from_slice(&receipt).unwrap();
+            let after: shine_core::install::manifest::AppManifest =
+                toml::from_slice(&fs::read(fixture.0.join("state/app-manifest.toml")).unwrap())
+                    .unwrap();
+            for file in ["0.txt", "1.txt"] {
+                let destination = fixture.0.join("destination").join(file);
+                assert_eq!(
+                    before
+                        .entries
+                        .iter()
+                        .find(|entry| entry.destination == destination),
+                    after
+                        .entries
+                        .iter()
+                        .find(|entry| entry.destination == destination)
+                );
+            }
+        } else {
+            assert!(!summary.contains("failed"), "{output:?}");
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("failed to refresh"));
+            assert_eq!(
+                fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+                receipt
+            );
+            success(&fixture.run(&["app", "refresh", "demo", "--force", "--yes"]));
+            assert_eq!(
+                fs::read(fixture.0.join("destination/0.txt")).unwrap(),
+                b"v1\n"
+            );
+        }
+    }
+}
+
 #[test]
 fn list_views_keep_deferred_generators_separate_from_upgrade_and_preserve_receipts() {
     let fixture = Fixture::new();

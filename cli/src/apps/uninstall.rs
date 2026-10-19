@@ -239,9 +239,10 @@ async fn handle_uninstall_with_reporter(
             .map(|file| file.category.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         for category in categories {
+            let category_arg = crate::shell_quote::command_arg(category);
             observer.reporter.emit(PresentationEvent::BlankLine);
             observer.reporter.emit(PresentationEvent::stdout(format!(
-                "Preview forced uninstall: shine app uninstall {category} --force --dry-run"
+                "Preview forced uninstall: shine app uninstall {category_arg} --force --dry-run"
             )));
             let files = protected
                 .iter()
@@ -331,7 +332,9 @@ impl shine_core::runtime::RuntimeObserver for UninstallObserver<'_> {
                 .and_then(|value| value.strip_prefix("app/"))
                 .unwrap_or("app");
             if code == "app_artifact_permission_required" {
-                self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: artifact teardown skipped (run `shine trust grant app/{category}` after review; manual: shine app artifact remove {category})", report::symbol("!"))));
+                let target_arg = crate::shell_quote::command_arg(&format!("app/{category}"));
+                let category_arg = crate::shell_quote::command_arg(category);
+                self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: artifact teardown skipped (run `shine trust grant {target_arg}` after review; manual: shine app artifact remove {category_arg})", report::symbol("!"))));
             } else {
                 self.reporter.emit(PresentationEvent::stderr(format!(
                     "  {} {category}: artifact teardown failed: {detail}",

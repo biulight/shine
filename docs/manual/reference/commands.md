@@ -53,6 +53,10 @@ shine upgrade app/starship
 
 Every command accepts the global `--config-dir <PATH>` option.
 
+Suggested App install/repair, upgrade, artifact, refresh, uninstall, Shell repair, and trust commands quote
+names containing spaces or shell punctuation. Use these hints in a POSIX shell on Unix or in
+PowerShell on Windows; the quotes preserve each original argument.
+
 Security Plans show user file paths explicitly and summarize installed files, Shine maintenance,
 and associated backup/recovery files by purpose, with access types and path counts. Installation,
 upgrade, uninstall, recovery, App refresh/artifact, and Sys bootstrap/profile/apply reviews accept
@@ -143,6 +147,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 - `app refresh` runs a generated-file refresh explicitly. `--force` permits replacing a
   user-modified managed destination. The installed receipt must belong to that exact category and
   source file; `--force` cannot refresh a destination owned by another source.
+  Its summary distinguishes `user-modified (kept)` from execution failures. Either leaves the
+  refresh incomplete and returns a nonzero exit status; other selected files may still refresh.
 - `app uninstall --force` may delete user-modified managed content. Always preview it with
   `--dry-run`.
 - Protected App files show the receipt mismatch, followed by one retained-content summary.
@@ -208,6 +214,10 @@ that were not evaluated, require trust, or failed evaluation from user-modified 
 These generator-state counts refer to categories, or individual files with `--diff`, rather than
 the number of generator executions.
 
+If an App category or file entry is removed from the active Preset, `update --verbose` (also with
+`--diff`) still reports its retained installed content and offers an uninstall preview. These checks
+do not remove files or installation records, even when the entire category is gone.
+
 `update` is read-only. `upgrade` displays the planned changes and asks for approval when there is
 an action; a fully unchanged run reports `Nothing to upgrade.` without confirmation. Use `--yes`
 only after reviewing the same scope. `--pull` first updates eligible Git-managed Preset sources.
@@ -240,6 +250,10 @@ shine sys profile disable <ITEM> [--dry-run] [--yes] [--verbose]
 shine sys apply [ITEM] [--dry-run] [--yes] [--verbose]
 shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 ```
+
+`sys list --all` marks other operating systems as `catalog only` and shows apply hints only for
+the current OS. `sys info`, `bootstrap`, `apply`, and `uninstall` always resolve items for the
+current OS, including when another OS has an item with the same name.
 
 Use `bootstrap` to ensure selected software and shell integration are present. Use `apply` and
 `uninstall` for reversible managed system configuration. These operations may request administrator

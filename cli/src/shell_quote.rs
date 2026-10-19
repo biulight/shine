@@ -14,6 +14,23 @@ pub(crate) fn quote_if_needed(value: &str) -> String {
     }
 }
 
+/// One argument in a suggested command: PowerShell on Windows, POSIX elsewhere.
+/// This is display policy; execution continues to use the original argv.
+pub(crate) fn command_arg(value: &str) -> String {
+    if !cfg!(windows) {
+        return quote_if_needed(value);
+    }
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':'))
+    {
+        value.to_owned()
+    } else {
+        shine_core::shell_quote::powershell_single_quote(value)
+    }
+}
+
 /// Characters that never need quoting: alphanumerics plus punctuation that is inert to POSIX
 /// shells and common in paths, URLs, and rsync targets (e.g. `host:/var/www/`).
 fn is_shell_safe(c: char) -> bool {

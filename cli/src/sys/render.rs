@@ -26,12 +26,6 @@ pub(in crate::sys) fn print_available_item(item: &SysItem, entry: Option<&SysRun
     if !item.description.is_empty() {
         println!("      {}", colors::dim(&item.description));
     }
-    if item.mode == SysItemMode::Managed {
-        println!(
-            "      {}",
-            colors::dim(&format!("Run: shine sys apply {}", item.id))
-        );
-    }
 }
 
 pub(in crate::sys) fn item_mode_name(mode: SysItemMode) -> &'static str {

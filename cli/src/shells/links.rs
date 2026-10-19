@@ -75,10 +75,12 @@ fn describe_existing_link(path: &Path, display_path: &str) -> String {
 
 fn reinstall_command(config: &Config, category_hint: Option<&str>, source: &Path) -> String {
     if let Some(category) = category_hint {
-        return format!("shine install shell/{category} --replace-managed");
+        let target_arg = crate::shell_quote::command_arg(&format!("shell/{category}"));
+        return format!("shine install {target_arg} --replace-managed");
     }
     if let Some(category) = infer_shell_category(config, source) {
-        return format!("shine install shell/{category} --replace-managed");
+        let target_arg = crate::shell_quote::command_arg(&format!("shell/{category}"));
+        return format!("shine install {target_arg} --replace-managed");
     }
     "shine shell install --replace-managed".to_string()
 }
@@ -187,22 +189,45 @@ mod category_tests {
     fn conflict_guidance_preserves_category_for_preset_and_rendered_sources() {
         let root = std::env::temp_dir().join("shine-link-guidance-test");
         let config = Config::new_for_test(&root);
-        for source in [
-            config.presets_dir().join("shell/proxy/set_proxy.sh"),
-            config.rendered_dir().join("shell/proxy/set_proxy.sh"),
+        for (category, argument) in [
+            ("proxy", "shell/proxy"),
+            ("demo space", "'shell/demo space'"),
+            (
+                "it's",
+                if cfg!(windows) {
+                    "'shell/it''s'"
+                } else {
+                    "'shell/it'\\''s'"
+                },
+            ),
         ] {
-            let conflict = crate::bin_links::LinkConflict {
-                link_path: config.bin_dir().join("setproxy"),
-                source,
-                kind: crate::bin_links::LinkConflictKind::DuplicateName,
-            };
-            let lines = link_conflict_detail_lines(&config, &conflict, None);
-            assert!(
-                lines[2].contains("shine install shell/proxy --replace-managed"),
-                "{lines:?}"
-            );
-            let hinted = link_conflict_detail_lines(&config, &conflict, Some("explicit"));
-            assert!(hinted[2].contains("shine install shell/explicit --replace-managed"));
+            for source in [
+                config
+                    .presets_dir()
+                    .join("shell")
+                    .join(category)
+                    .join("run.ts"),
+                config
+                    .rendered_dir()
+                    .join("shell")
+                    .join(category)
+                    .join("run.ts"),
+            ] {
+                let conflict = crate::bin_links::LinkConflict {
+                    link_path: config.bin_dir().join("run"),
+                    source,
+                    kind: crate::bin_links::LinkConflictKind::DuplicateName,
+                };
+                for hint in [None, Some(category)] {
+                    let lines = link_conflict_detail_lines(&config, &conflict, hint);
+                    assert!(
+                        lines[2].contains(&format!("shine install {argument} --replace-managed")),
+                        "{lines:?}"
+                    );
+                }
+                let hinted = link_conflict_detail_lines(&config, &conflict, Some("explicit"));
+                assert!(hinted[2].contains("shine install shell/explicit --replace-managed"));
+            }
         }
     }
 

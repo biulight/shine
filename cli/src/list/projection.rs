@@ -21,7 +21,7 @@ pub(super) fn shell_attention_lines(rows: &[&ShellRow]) -> Vec<String> {
             lines.push("    Launcher preserved; resolve its ownership conflict before upgrading this target.".to_string());
         }
         if row.preset_missing {
-            lines.push(format!("    Restore the Preset or review `shine shell uninstall {}` to remove the installed command.", row.selector()));
+            lines.push(format!("    Restore the Preset or review `shine shell uninstall {}` to remove the installed command.", crate::shell_quote::command_arg(&row.selector())));
         }
     }
     lines
@@ -29,7 +29,7 @@ pub(super) fn shell_attention_lines(rows: &[&ShellRow]) -> Vec<String> {
 
 pub(super) fn update_hint_text(targets: &[String]) -> String {
     let command = match targets {
-        [target] => format!("shine upgrade {target}"),
+        [target] => format!("shine upgrade {}", crate::shell_quote::command_arg(target)),
         _ => "shine upgrade".to_string(),
     };
     format!("Run `{command}` to apply updates.")
@@ -62,8 +62,8 @@ pub(super) fn app_refresh_commands(rows: &BTreeMap<&str, Vec<&AppRow>>) -> Vec<S
                 row.refresh_sources.iter().map(move |source| {
                     format!(
                         "shine app refresh {} {}",
-                        crate::shell_quote::quote_if_needed(category),
-                        crate::shell_quote::quote_if_needed(source)
+                        crate::shell_quote::command_arg(category),
+                        crate::shell_quote::command_arg(source)
                     )
                 })
             })

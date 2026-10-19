@@ -44,10 +44,11 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
         if index > 0 {
             println!();
         }
-        let current = if Some(os_id.as_str()) == current_os.as_deref() {
+        let is_current = Some(os_id.as_str()) == current_os.as_deref();
+        let current = if is_current {
             " (current)"
         } else {
-            ""
+            " (catalog only)"
         };
         println!("  {}{}", colors::bold(os_id), colors::dim(current));
         if !manifest.description.is_empty() {
@@ -62,10 +63,22 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
                 .iter()
                 .find(|entry| entry.os_id == *os_id && entry.item_id == item.id);
             print_available_item(item, entry);
+            if is_current && item.mode == SysItemMode::Managed {
+                println!(
+                    "      {}",
+                    colors::dim(&format!("Run: shine sys apply {}", item.id))
+                );
+            }
         }
     }
 
     println!();
+    if all {
+        println!(
+            "{}",
+            colors::dim("Commands use the current OS; other OS entries are catalog-only.")
+        );
+    }
     println!(
         "{}",
         colors::dim("Use `shine sys info <ITEM>` for details.")

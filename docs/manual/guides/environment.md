@@ -920,6 +920,8 @@ Phone-backed age decryption preserves QR authorization and explicitly enabled te
 ordinary captured backend diagnostics remain hidden.
 During execution, mapping previews go to stderr so the command's stdout remains byte-exact.
 Dry-run previews remain on stdout.
+Mapping previews quote each path and escape control characters such as newlines, keeping each
+mapping on one line. These display escapes do not change the paths used for file operations.
 New Unix files use `0600` and directories use `0700`; Windows requires a filesystem supporting
 private current-user ACLs. Cleanup failure returns an error; a failed child retains its exit code.
 The wrapper supervises its process group on Unix and a Job Object on Windows. Do not start detached

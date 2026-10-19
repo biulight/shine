@@ -1,5 +1,42 @@
 # Lessons Learned
 
+## 2026-10-19 — Missing App metadata does not erase installed-resource visibility
+
+- **Symptom**: `update --verbose` claimed nothing was installed after an App category disappeared,
+  while its destination files and receipts remained; ordinary `list/update` still showed them.
+- **Cause/fix**: detailed status considered only active App rows. Include the existing read-only
+  missing-source query in status inputs and reuse retained-content/uninstall-preview notices.
+  Keep these resources out of current/update summary counts and preserve the true empty state,
+  exit status, generator opt-in and raw receipt/destination bytes.
+- **Coverage**: real CLI tests cover a removed file entry alongside active entries, an entirely
+  removed category, verbose/diff/evaluation modes, quoted category arguments and byte preservation.
+
+## 2026-10-19 — Distinguish nextest capture-pipe races from product process leaks
+
+- **Symptom**: old nextest marks unrelated macOS tests `LEAK`, even pure parsing/string tests;
+  isolated reruns pass. This reports unclosed captured output handles, not a heap-leak measurement.
+- **Cause to check**: concurrent spawns can inherit sibling capture pipes on Apple platforms;
+  [nextest 0.9.145 fixes the runner race](https://github.com/nextest-rs/nextest/pull/3553).
+- **Verification**: preserve test names with `--status-level leak`, inspect subprocess ownership,
+  and compare the same binaries with a fixed runner at the same timeout. Do not weaken leak
+  detection or change production code solely to suppress this symptom.
+
+## 2026-10-19 — Command hints and summaries retain argument and outcome boundaries
+
+- **Symptoms**: App/trust/artifact hints split category names containing spaces; refresh counted
+  preserved user modifications as execution failures; `sys list --all` suggested current-OS
+  operations for foreign-OS items; file-group path newlines split metadata previews.
+- **Fix**: encode suggested-command arguments for POSIX/PowerShell without changing execution
+  argv, count preserved refresh files separately while retaining nonzero incomplete exits, and
+  keep current-OS command guidance in the catalog owner. Quote/escape file-group preview paths
+  only; keep actual paths, output streams, crypto, ownership and cleanup unchanged.
+- **Coverage**: CLI hints are parsed without executing them; literal categories retain install,
+  repair, artifact, missing-source and protected-uninstall guidance. Refresh tests cover approval
+  denial, preserved-only and mixed success/failure, receipt preservation and explicit force. Sys
+  catalogs cover current/foreign OSs with shared and unique IDs through info and apply dry-runs.
+  File-group tests cover unusual paths, metadata-only previews, binary output, child exit propagation,
+  cleanup and persistent export.
+
 ## 2026-10-19 — Status summaries must retain observation states
 
 - **Symptoms**: deferred generators appeared as `user-modified` in summaries; verbose status said

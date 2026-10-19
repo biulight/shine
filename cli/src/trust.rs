@@ -354,8 +354,9 @@ fn render_inspect_guidance(
     decisions: &[TrustDecisionV1],
 ) -> String {
     if decisions.iter().any(|decision| !decision.is_trusted()) {
+        let target_arg = crate::shell_quote::command_arg(target);
         return format!(
-            "{}\n  For persistent authorization, review the current code and source, then run:\n    shine trust grant {target}",
+            "{}\n  For persistent authorization, review the current code and source, then run:\n    shine trust grant {target_arg}",
             crate::colors::cyan("Next")
         );
     }

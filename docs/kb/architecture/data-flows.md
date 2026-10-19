@@ -301,8 +301,11 @@ available/installed targets; a receipt can establish installation even when its 
 Managed Sys inventory uses the frontend's OS/managed receipt filter; its former test-only runtime
 query has been removed (ADR 0134). Update retains two Shell captures followed
 by App, Sys and missing-source queries before output; status prints its initial note and Shell
-attention before loading App/Sys. Detailed diff collection remains after the original empty-result
-checks (and after initial update attention output). Renderers still perform the existing per-row
+attention before loading App/Sys, then queries missing App sources through the existing read-only
+frontend. Receipt-only App resources prevent an empty-status result and reuse the retained-content
+notice/uninstall preview; they do not enter active App rows or summary counts. Detailed diff
+collection remains after the original empty-result checks (and after initial update attention
+output). Renderers still perform the existing per-row
 diff display reads. No shared snapshot optimization, new evaluation, approval or mutation is added.
 
 `frontend/review.rs` dispatches typed workspace-local `ReviewRequest` values to existing pure

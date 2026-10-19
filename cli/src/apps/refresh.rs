@@ -66,6 +66,7 @@ pub async fn handle_refresh_approved(
         .map(|file| format!("{category}/{}", file.source.display()));
     let mut updated = 0;
     let mut unchanged = 0;
+    let mut kept = 0;
     let mut failed = 0;
     for file in report.files {
         let label = format!("{category}/{}", file.source.display());
@@ -87,7 +88,7 @@ pub async fn handle_refresh_approved(
                     "  {} {label}: user-modified, kept (use --force to overwrite)",
                     colors::symbol_stderr("!")
                 );
-                failed += 1;
+                kept += 1;
             }
             AppFileAction::Failed => {
                 print_install_error(&label, &anyhow::anyhow!(file.error.unwrap_or_default()));
@@ -106,10 +107,13 @@ pub async fn handle_refresh_approved(
 
     println!(
         "{}",
-        refresh_summary_text(single_label.as_deref(), updated, unchanged, failed)
+        refresh_summary_text(single_label.as_deref(), updated, unchanged, kept, failed)
     );
     if failed > 0 {
         bail!("{failed} generated app file(s) failed to refresh");
+    }
+    if kept > 0 {
+        bail!("{kept} user-modified generated app file(s) kept; use --force to overwrite");
     }
     Ok(())
 }
@@ -118,9 +122,10 @@ fn refresh_summary_text(
     single_label: Option<&str>,
     updated: usize,
     unchanged: usize,
+    kept: usize,
     failed: usize,
 ) -> String {
-    let total = updated + unchanged + failed;
+    let total = updated + unchanged + kept + failed;
     if total == 1
         && let Some(label) = single_label
     {
@@ -129,6 +134,13 @@ fn refresh_summary_text(
                 "{} {}",
                 colors::symbol("!"),
                 colors::yellow(&format!("Refresh incomplete: {label} failed"))
+            );
+        }
+        if kept == 1 {
+            return format!(
+                "{} {}",
+                colors::symbol("!"),
+                colors::yellow(&format!("Refresh incomplete: {label} user-modified (kept)"))
             );
         }
         if updated == 1 {
@@ -148,13 +160,14 @@ fn refresh_summary_text(
     let mut parts = Vec::new();
     crate::output::push_count(&mut parts, updated, colors::green, "updated");
     crate::output::push_count(&mut parts, unchanged, colors::dim, "unchanged");
+    crate::output::push_count(&mut parts, kept, colors::yellow, "user-modified (kept)");
     crate::output::push_count(&mut parts, failed, colors::yellow, "failed");
     let detail = if parts.is_empty() {
         colors::dim("nothing changed")
     } else {
         parts.join(&colors::dim(", "))
     };
-    let (symbol, conclusion) = if failed > 0 {
+    let (symbol, conclusion) = if failed > 0 || kept > 0 {
         ("!", "Refresh incomplete")
     } else {
         ("✓", "Refresh complete")
@@ -289,23 +302,23 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     #[test]
     fn refresh_summary_names_single_files_and_distinguishes_failures() {
         assert_eq!(
-            refresh_summary_text(Some("sample/first.txt"), 1, 0, 0),
+            refresh_summary_text(Some("sample/first.txt"), 1, 0, 0, 0),
             "✓ Refresh complete: sample/first.txt updated"
         );
         assert_eq!(
-            refresh_summary_text(Some("sample/first.txt"), 0, 1, 0),
+            refresh_summary_text(Some("sample/first.txt"), 0, 1, 0, 0),
             "✓ Already up to date: sample/first.txt"
         );
         assert_eq!(
-            refresh_summary_text(Some("sample/first.txt"), 0, 0, 1),
+            refresh_summary_text(Some("sample/first.txt"), 0, 0, 0, 1),
             "! Refresh incomplete: sample/first.txt failed"
         );
         assert_eq!(
-            refresh_summary_text(None, 2, 1, 0),
+            refresh_summary_text(None, 2, 1, 0, 0),
             "✓ Refresh complete: 2 updated, 1 unchanged"
         );
         assert_eq!(
-            refresh_summary_text(None, 1, 0, 1),
+            refresh_summary_text(None, 1, 0, 0, 1),
             "! Refresh incomplete: 1 updated, 1 failed"
         );
     }

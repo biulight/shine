@@ -812,6 +812,8 @@ shine env workspace export --format files --mode production --file-group android
 恢复权限或删除替换后的文件。使用手机 identity 的 age 解密会保留二维码授权提示，以及
 显式开启的终端消息；普通的已捕获后端诊断仍保持隐藏。
 实际执行时，映射预览写入 stderr，子命令的 stdout 保持逐字节原样；dry-run 预览仍写入 stdout。
+映射预览会为每个路径加引号，并转义换行等控制字符，使一条映射保持在同一行；这些显示转义
+不会改变文件操作使用的实际路径。
 Unix 新建明文文件为 `0600`、目录为 `0700`；Windows 要求文件系统支持当前用户私有 ACL。
 清理失败返回错误，子命令失败时保留其退出码。包装器在 Unix 管理进程组，在 Windows 使用
 Job Object。不要启动需要在被包装命令结束后继续运行的脱离后台任务；剩余受管子进程会被终止。

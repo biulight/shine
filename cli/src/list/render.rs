@@ -37,7 +37,8 @@ fn print_missing_app_sources(items: &[(String, String)]) {
                 "! app/{category} · {resource}: Preset source missing; installed content and receipt retained."
             ))
         );
-        println!("  Preview uninstall: shine app uninstall {category} --dry-run");
+        let category_arg = crate::shell_quote::command_arg(category);
+        println!("  Preview uninstall: shine app uninstall {category_arg} --dry-run");
     }
 }
 
@@ -126,15 +127,15 @@ fn app_status_run_hint(row: &AppLifecycleStatus) -> String {
     let mut commands = Vec::new();
     if row.upgrade_available {
         commands.push(format!(
-            "run `shine upgrade app/{}`",
-            crate::shell_quote::quote_if_needed(&row.category)
+            "run `shine upgrade {}`",
+            crate::shell_quote::command_arg(&format!("app/{}", row.category))
         ));
     }
     commands.extend(row.refresh_sources.iter().map(|source| {
         format!(
             "run `shine app refresh {} {}`",
-            crate::shell_quote::quote_if_needed(&row.category),
-            crate::shell_quote::quote_if_needed(source)
+            crate::shell_quote::command_arg(&row.category),
+            crate::shell_quote::command_arg(source)
         )
     }));
     if commands.is_empty() {
@@ -328,6 +329,7 @@ pub(super) async fn status(
         app_rows,
         app_inspections,
         sys,
+        missing_sources,
     } = inputs;
     let update_sys = &sys.updates;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
@@ -337,7 +339,10 @@ pub(super) async fn status(
         .filter(|r| r.file_status != FileStatus::NotInstalled)
         .collect();
     let all_app: Vec<&AppRow> = app_rows.iter().collect();
-    let any = !installed_shell.is_empty() || !installed_app.is_empty() || !sys.installed.is_empty();
+    let any = !installed_shell.is_empty()
+        || !installed_app.is_empty()
+        || !sys.installed.is_empty()
+        || !missing_sources.is_empty();
 
     if !any {
         println!(
@@ -377,6 +382,8 @@ pub(super) async fn status(
     } else {
         app_category_statuses(&all_app)
     };
+
+    print_missing_app_sources(&missing_sources);
 
     // ── Shell Presets ────────────────────────────────────────────────────────
     if !installed_shell.is_empty() {

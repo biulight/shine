@@ -166,18 +166,19 @@ pub async fn handle_info(
     }
 
     println!();
+    let target_arg = crate::shell_quote::command_arg(&format!("app/{category}"));
     if any_installed {
         println!(
             "{}",
             colors::dim(&format!(
-                "Installed. Run `shine install app/{category} --replace-managed` to repair managed files."
+                "Installed. Run `shine install {target_arg} --replace-managed` to repair managed files."
             ))
         );
     } else {
         println!(
             "{}",
             colors::dim(&format!(
-                "Not installed. Run `shine install app/{category}` to install."
+                "Not installed. Run `shine install {target_arg}` to install."
             ))
         );
     }

@@ -20,6 +20,7 @@ with a [`lessons.md`](../lessons.md) entry.
 | `app list` / `app info` shows unexpected presets | An external presets mode is active. Check `SHINE_CONFIG_DIR`, `SHINE_PRESETS`, and `presets_dir`/`presets_overlay_dir` in `config.toml` (priority chain: ADR 0005). |
 | Commands create state in `~/.shine` during ad-hoc verification | Most commands call `Config::load_or_init()`. Isolate with `SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine` (see `AGENTS.md` § Verification boundaries). |
 | Sandbox build permission failures | Use `cargo ... --target-dir target` to keep artifacts repo-local. |
+| Sporadic nextest `LEAK` on macOS, including tests with no subprocesses | Check `cargo nextest --version` and retain names with `--status-level leak`. Older runners can let concurrently spawned tests inherit sibling capture pipes; [nextest 0.9.145 fixed this race](https://nexte.st/changelog/). Compare with a fixed runner at the same leak timeout before changing product code or relaxing detection. See [lessons](../lessons.md#2026-10-19--distinguish-nextest-capture-pipe-races-from-product-process-leaks). |
 
 ## Update / self-upgrade
 

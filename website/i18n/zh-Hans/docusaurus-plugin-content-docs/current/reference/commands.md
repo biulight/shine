@@ -52,6 +52,10 @@ shine upgrade app/starship
 
 所有命令都接受全局选项 `--config-dir <PATH>`。
 
+App 安装／修复、upgrade、artifact、refresh、卸载、Shell 修复及信任提示中的命令，会对含空格或 Shell
+特殊字符的名称加引号，以保留原始参数边界。Unix 上请在 POSIX shell 中使用这些提示，Windows
+上请使用 PowerShell。
+
 Security Plan 默认显示用户文件的具体路径，并按用途汇总安装产物、Shine 内部维护及关联的备份/回滚文件，注明访问类型和路径数量。安装、升级、卸载、恢复、App refresh/artifact 和 Sys bootstrap/profile/apply 的审批都支持 `--verbose`，可展开已显示审阅范围中的文件路径、步骤、快照标识和诊断。
 
 文件系统权限路径使用常见形式：绝对路径显示为 `/etc/docker/daemon.json`，用户主目录下的路径显示为 `~/.zshrc`，已配置的 Shine 状态目录下显示为 `Shine state/...`，平台应用数据目录下显示为 `App data/...`。Windows 盘符和网络共享路径保留根路径。这些显示标签不会扩大所列权限。
@@ -105,6 +109,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 - `app info` 和 `update` 只有在传入 `--run-generators` 时才会运行生成器。
 - `app refresh` 显式刷新生成文件；`--force` 允许替换用户修改过的受管目标。安装收据必须属于
   该类别下的同一个源文件；`--force` 不能刷新由其他来源管理的目标。
+  汇总会区分 `user-modified (kept)`（用户修改已保留）和执行失败；两者都会使刷新结果为未完成，
+  并返回非零退出码，其他选中的文件仍可能刷新成功。
 - `app uninstall --force` 可能删除用户修改过的受管内容，务必先使用 `--dry-run` 预览。
 - 受到保护的 App 文件会说明与安装记录不一致，随后集中显示内容与记录保留的结果。
   强制预览指引按类别汇总，说明删除文件、按备份是否存在恢复配置，或移除受管 JSON 键的影响。
@@ -160,6 +166,10 @@ shine completions <bash|zsh|powershell>
 App 汇总分别说明生成器未评估、需要信任或评估失败，不会将这些状态归为用户修改。
 这些生成器状态按分类计数，使用 `--diff` 时按文件计数，不表示生成器执行次数。
 
+如果 App 类别或文件条目已从当前 Preset 中移除，`update --verbose`（包括同时使用 `--diff`）
+仍会提示已保留的安装内容，并提供卸载预览命令。即使整个类别已不存在，这些检查也不会删除
+文件或安装记录。
+
 `update` 只读检查；`upgrade` 显示计划，并在存在动作时等待确认。全部未变化时只报告 `Nothing to upgrade.`，不要求确认。只有审阅过同一范围后才应使用 `--yes`。
 `--pull` 会先更新符合条件的 Git 预设来源；`--prune-stale` 允许删除预设中已经不存在且未被修改的受管项。
 `trust grant --development` 会让所显示本地来源中的代码修改继续受信任，但 target、capability、
@@ -188,6 +198,10 @@ shine sys profile disable <ITEM> [--dry-run] [--yes] [--verbose]
 shine sys apply [ITEM] [--dry-run] [--yes] [--verbose]
 shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 ```
+
+`sys list --all` 将其他操作系统标记为 `catalog only`（仅供浏览），只为当前系统显示 apply 提示。
+`sys info`、`bootstrap`、`apply` 和 `uninstall` 始终按当前系统查找项目；其他系统存在同名项目时
+也不会切换查找范围。
 
 使用 `bootstrap` 确保选中的软件和 Shell 集成存在；使用 `apply` 与 `uninstall` 管理可撤销的系统配置。
 这些操作可能在计划获批后请求管理员权限。`--force-profile` 可能替换冲突的配置文件内容，请先查看

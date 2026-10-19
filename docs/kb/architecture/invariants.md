@@ -75,6 +75,9 @@ bugs. Check this list before changing the modules named in each entry.
   Generator summary units remain categories by default and files with `--diff`. Shell recovery's
   legacy `rolled_back_actions` report also counts cleanup after commit; CLI wording must not claim
   that committed content was rolled back.
+  Receipt-owned App resources absent from active metadata remain visible even when their entire
+  category is gone; they prevent the empty-installation message and retain uninstall-preview
+  guidance without becoming upgrade candidates or changing files, receipts or exit status.
 - **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
   from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
   `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery
@@ -1083,6 +1086,8 @@ bugs. Check this list before changing the modules named in each entry.
   keys, including deleted working files and aliases in parent directory names. Git discovery errors
   fail closed; exit 128 alone never proves absence.
   Run previews use stderr, preserving exact child stdout; dry-run previews use stdout.
+  Preview paths are quoted with control characters escaped on one line; display strings never
+  replace the raw filesystem paths used for preflight, crypto, locks, writes or cleanup.
   Keep targets inside the workspace.
   Create plaintext privately before bytes are written (Unix 0600/0700, Windows protected current-user
   ACLs), hold shared path locks, and recheck captured inputs before writes/deletion. Cleanup uses
