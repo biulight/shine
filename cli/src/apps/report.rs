@@ -80,20 +80,45 @@ pub(super) fn no_installed_files_text(category: &str) -> String {
     ))
 }
 
-pub(super) fn purge_category_text(category: &str) -> String {
-    format!(
-        "  {}  {}",
-        colors::symbol("✓"),
-        colors::dim(&format!("app/{category} presets directory purged")),
-    )
-}
-
-pub(super) fn purge_all_text() -> String {
-    format!(
-        "  {}  {}",
-        colors::symbol("✓"),
-        colors::dim("app presets directory and manifest purged"),
-    )
+pub(super) fn cache_cleanup_lines(
+    outcome: &shine_core::lifecycle::LifecycleOutcomeV1,
+) -> Vec<String> {
+    use shine_core::lifecycle::LifecycleEffect;
+    if outcome.resource.as_deref() != Some("purge") {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    for (effect, text) in [
+        (
+            LifecycleEffect::CacheRemovePreviewed,
+            format!("would remove {} preset cache", outcome.target),
+        ),
+        (
+            LifecycleEffect::CachePurged,
+            format!("{} preset cache removed", outcome.target),
+        ),
+        (
+            LifecycleEffect::ReceiptRemovePreviewed,
+            "would remove empty App manifest".to_string(),
+        ),
+        (
+            LifecycleEffect::ReceiptRemoved,
+            "empty App manifest removed".to_string(),
+        ),
+    ] {
+        if outcome.effects.contains(&effect) {
+            let preview = matches!(
+                effect,
+                LifecycleEffect::CacheRemovePreviewed | LifecycleEffect::ReceiptRemovePreviewed
+            );
+            lines.push(format!(
+                "  {}  {}",
+                colors::symbol(if preview { "·" } else { "✓" }),
+                colors::dim(&text)
+            ));
+        }
+    }
+    lines
 }
 
 pub(super) fn uninstall_summary_parts(

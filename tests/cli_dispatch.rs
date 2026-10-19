@@ -1646,7 +1646,422 @@ fn sys_status_help_describes_recorded_current_os_results() {
 }
 
 #[test]
-fn shell_uninstall_help_describes_inventory_and_purge_scope() {
+fn uninstall_help_describes_default_cleanup_and_rejects_removed_purge() {
+    let fixture = Fixture::new();
+    for (args, expected) in [
+        (
+            vec!["uninstall"],
+            "App targets remove the entire selected category cache, including extra files",
+        ),
+        (
+            vec!["app", "uninstall"],
+            "Without CATEGORY, remove the entire internal App cache tree; remove the App manifest only when no installation records remain",
+        ),
+        (
+            vec!["shell", "uninstall"],
+            "With TARGET, retain extra cache files and shared files still needed by installed sibling commands",
+        ),
+    ] {
+        for flag in ["--help", "-h"] {
+            let output = fixture.command().args(&args).arg(flag).output().unwrap();
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let help = String::from_utf8(output.stdout).unwrap();
+            let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(help.contains("Internal cleanup is included"), "{help}");
+            assert!(help.contains(expected), "{help}");
+            assert!(help.contains("External preset sources"), "{help}");
+            assert!(!help.contains("--purge"), "{help}");
+        }
+        let output = fixture
+            .command()
+            .args(&args)
+            .args(["demo", "--purge"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--purge'"));
+        assert!(output.stdout.is_empty());
+        assert!(!fixture.0.join("state").exists());
+    }
+}
+
+#[test]
+fn app_uninstall_defaults_to_reviewed_internal_cleanup() {
+    use shine_core::install::{AppEntry, AppInstallStrategy, AppManifest};
+    for args in [
+        vec!["uninstall", "app/git"],
+        vec!["app", "uninstall", "git"],
+        vec!["app", "uninstall"],
+    ] {
+        for external in [false, true] {
+            let fixture = Fixture::new();
+            // A project config without presets_dir selects embedded presets while keeping
+            // SHINE_CONFIG_DIR isolated; SHINE_PRESETS below selects the external variant.
+            fs::write(fixture.0.join("shine.config.toml"), "schema_version = 2\n").unwrap();
+            let state = fixture.0.join("state");
+            let cache = state.join("presets/app/git");
+            let sibling = state.join("presets/app/sibling");
+            fs::create_dir_all(&cache).unwrap();
+            fs::create_dir_all(&sibling).unwrap();
+            fs::write(cache.join("extra.txt"), "extra cache").unwrap();
+            fs::write(sibling.join("extra.txt"), "sibling cache").unwrap();
+            fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+            let manifest = AppManifest {
+                entries: vec![AppEntry {
+                    source: "app/git/gitconfig".to_string(),
+                    destination: fixture.0.join("missing-config"),
+                    backup: None,
+                    content_hash: 1,
+                    install_strategy: AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+                ..AppManifest::default()
+            };
+            let receipt = toml::to_string(&manifest).unwrap();
+            fs::write(state.join("app-manifest.toml"), &receipt).unwrap();
+            let run = |flags: &[&str]| {
+                let mut command = fixture.command();
+                if external {
+                    command.env("SHINE_PRESETS", state.join("presets"));
+                }
+                command.args(&args).args(flags).output().unwrap()
+            };
+            let preview = run(&["--dry-run"]);
+            assert_eq!(
+                preview.status.code(),
+                Some(0),
+                "{args:?} external={external}: {preview:?}"
+            );
+            let preview_text = String::from_utf8_lossy(&preview.stdout);
+            assert!(!preview_text.contains("purged"), "{preview_text}");
+            assert!(
+                !preview_text.contains("preset cache removed"),
+                "{preview_text}"
+            );
+            assert_eq!(
+                preview_text.contains("would remove app"),
+                !external,
+                "{preview_text}"
+            );
+            assert_eq!(
+                fs::read_to_string(state.join("app-manifest.toml")).unwrap(),
+                receipt
+            );
+            assert_eq!(fs::read(cache.join("extra.txt")).unwrap(), b"extra cache");
+            let denied = run(&[]);
+            assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+            assert!(String::from_utf8_lossy(&denied.stderr).contains("approval requires"));
+            assert_eq!(fs::read(cache.join("extra.txt")).unwrap(), b"extra cache");
+            assert_eq!(
+                fs::read_to_string(state.join("app-manifest.toml")).unwrap(),
+                receipt
+            );
+            let removed = run(&["--yes"]);
+            assert_eq!(
+                removed.status.code(),
+                Some(0),
+                "{args:?} external={external}: {removed:?}"
+            );
+            let whole = args.len() == 2 && args[0] == "app";
+            let removed_text = String::from_utf8_lossy(&removed.stdout);
+            assert!(!removed_text.contains("would remove"), "{removed_text}");
+            assert_eq!(
+                removed_text.contains("preset cache removed"),
+                !external,
+                "{removed_text}"
+            );
+            assert_eq!(
+                removed_text.contains("empty App manifest removed"),
+                !external && whole,
+                "{removed_text}"
+            );
+            if external {
+                assert_eq!(fs::read(cache.join("extra.txt")).unwrap(), b"extra cache");
+            } else {
+                assert!(!cache.exists());
+            }
+            if external || !whole {
+                assert_eq!(
+                    fs::read(sibling.join("extra.txt")).unwrap(),
+                    b"sibling cache"
+                );
+                let remaining: AppManifest =
+                    toml::from_str(&fs::read_to_string(state.join("app-manifest.toml")).unwrap())
+                        .unwrap();
+                assert!(remaining.entries.is_empty());
+            } else {
+                assert!(!state.join("presets/app").exists());
+                assert!(!state.join("app-manifest.toml").exists());
+            }
+            assert_eq!(
+                fs::read(state.join("config.toml")).unwrap(),
+                b"schema_version = 2\n"
+            );
+        }
+    }
+}
+
+#[test]
+fn whole_app_cleanup_keeps_protected_receipts_for_forced_retry() {
+    use shine_core::install::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
+    for mixed in [false, true] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        let cache = state.join("presets/app/git");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("extra.txt"), "extra cache").unwrap();
+        fs::write(fixture.0.join("shine.config.toml"), "schema_version = 2\n").unwrap();
+        fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+        let protected = fixture.0.join("protected");
+        let backup = fixture.0.join("protected.shine.bak");
+        let normal = fixture.0.join("normal");
+        fs::write(&protected, "user edit").unwrap();
+        fs::write(&backup, "original").unwrap();
+        let entry = AppEntry {
+            source: "app/git/gitconfig".into(),
+            destination: protected.clone(),
+            backup: Some(backup.clone()),
+            content_hash: hash_content(b"installed"),
+            install_strategy: AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        };
+        let mut manifest = AppManifest {
+            entries: vec![entry.clone()],
+            ..AppManifest::default()
+        };
+        if mixed {
+            fs::write(&normal, "installed").unwrap();
+            manifest.entries.push(AppEntry {
+                source: "app/git/normal".into(),
+                destination: normal.clone(),
+                backup: None,
+                ..entry.clone()
+            });
+        }
+        let manifest_path = state.join("app-manifest.toml");
+        let original_manifest = toml::to_string(&manifest).unwrap();
+        fs::write(&manifest_path, &original_manifest).unwrap();
+        let run = |flags: &[&str]| {
+            fixture
+                .command()
+                .args(["app", "uninstall"])
+                .args(flags)
+                .output()
+                .unwrap()
+        };
+        let preview = run(&["--dry-run"]);
+        assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+        let text = String::from_utf8_lossy(&preview.stdout);
+        assert!(text.contains("would remove app preset cache"), "{text}");
+        assert!(!text.contains("empty App manifest"), "{text}");
+        assert!(!text.contains("purged"), "{text}");
+        assert_eq!(
+            fs::read_to_string(&manifest_path).unwrap(),
+            original_manifest
+        );
+        let removed = run(&["--yes"]);
+        assert_eq!(removed.status.code(), Some(1), "{removed:?}");
+        assert!(removed.stderr.is_empty(), "{removed:?}");
+        let text = String::from_utf8_lossy(&removed.stdout);
+        assert!(text.contains("Uninstall incomplete"), "{text}");
+        assert!(text.contains("installation receipts retained"), "{text}");
+        assert!(text.contains("app preset cache removed"), "{text}");
+        assert!(!text.contains("empty App manifest removed"), "{text}");
+        let remaining: AppManifest =
+            toml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        assert_eq!(remaining.entries, vec![entry]);
+        assert_eq!(fs::read(&protected).unwrap(), b"user edit");
+        assert_eq!(fs::read(&backup).unwrap(), b"original");
+        assert!(!normal.exists());
+        assert!(!state.join("presets/app").exists());
+        let repeated = run(&["--yes"]);
+        assert_eq!(repeated.status.code(), Some(1), "{repeated:?}");
+        assert!(!String::from_utf8_lossy(&repeated.stdout).contains("preset cache removed"));
+        let forced_preview = run(&["--force", "--dry-run"]);
+        assert_eq!(forced_preview.status.code(), Some(0), "{forced_preview:?}");
+        assert!(
+            String::from_utf8_lossy(&forced_preview.stdout)
+                .contains("would remove empty App manifest")
+        );
+        assert!(manifest_path.exists());
+        assert_eq!(fs::read(&protected).unwrap(), b"user edit");
+        let forced = run(&["--force", "--yes"]);
+        assert_eq!(forced.status.code(), Some(0), "{forced:?}");
+        assert!(String::from_utf8_lossy(&forced.stdout).contains("empty App manifest removed"));
+        assert_eq!(fs::read(&protected).unwrap(), b"original");
+        assert!(!backup.exists());
+        assert!(!manifest_path.exists());
+    }
+}
+
+#[test]
+fn shell_category_then_whole_uninstall_cleans_remaining_profile_with_approval() {
+    fn config_files(dir: &std::path::Path, files: &mut Vec<PathBuf>) {
+        for item in fs::read_dir(dir).unwrap() {
+            let item = item.unwrap();
+            if item.file_type().unwrap().is_dir() {
+                config_files(&item.path(), files);
+            } else if fs::read_to_string(item.path())
+                .is_ok_and(|text| text.contains("# >>> shine >>>"))
+            {
+                files.push(item.path());
+            }
+        }
+    }
+    for category_args in [
+        vec!["shell", "uninstall", "proxy"],
+        vec!["uninstall", "shell/proxy"],
+    ] {
+        let fixture = Fixture::new();
+        fs::write(fixture.0.join("shine.config.toml"), "schema_version = 2\n").unwrap();
+        let installed = fixture
+            .command()
+            .args(["shell", "install", "proxy", "--yes"])
+            .output()
+            .unwrap();
+        assert_eq!(installed.status.code(), Some(0), "{installed:?}");
+        let removed = fixture
+            .command()
+            .args(&category_args)
+            .arg("--yes")
+            .output()
+            .unwrap();
+        assert_eq!(removed.status.code(), Some(0), "{removed:?}");
+        let state = fixture.0.join("state");
+        let manifest = state.join("shell-manifest.toml");
+        let manifest_before = fs::read(&manifest).unwrap();
+        let profile = fs::read_dir(state.join("shell"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("profile.")
+            })
+            .unwrap();
+        let profile_before = fs::read(&profile).unwrap();
+        let mut configs = Vec::new();
+        config_files(&fixture.0.join("home"), &mut configs);
+        assert!(!configs.is_empty());
+        let before = configs
+            .iter()
+            .map(|path| {
+                let mut content = fs::read_to_string(path).unwrap();
+                content.push_str("\n# user setting survives\n");
+                fs::write(path, &content).unwrap();
+                content.into_bytes()
+            })
+            .collect::<Vec<_>>();
+        for flags in [vec!["--dry-run"], vec![]] {
+            let output = fixture
+                .command()
+                .args(["shell", "uninstall"])
+                .args(&flags)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(if flags.is_empty() { 1 } else { 0 }),
+                "{output:?}"
+            );
+            if flags.is_empty() {
+                assert!(String::from_utf8_lossy(&output.stderr).contains("approval requires"));
+            }
+            assert_eq!(fs::read(&profile).unwrap(), profile_before);
+            assert_eq!(fs::read(&manifest).unwrap(), manifest_before);
+            for (path, content) in configs.iter().zip(&before) {
+                assert_eq!(fs::read(path).unwrap(), *content);
+            }
+        }
+        let removed = fixture
+            .command()
+            .args(["shell", "uninstall", "--yes"])
+            .output()
+            .unwrap();
+        assert_eq!(removed.status.code(), Some(0), "{removed:?}");
+        assert!(removed.stderr.is_empty(), "{removed:?}");
+        assert!(!profile.exists());
+        assert!(String::from_utf8_lossy(&removed.stdout).contains("Uninstall complete"));
+        for path in &configs {
+            let content = fs::read_to_string(path).unwrap();
+            assert!(content.contains("# user setting survives"));
+            assert!(!content.contains("# >>> shine >>>"));
+        }
+        let repeated = fixture
+            .command()
+            .args(["shell", "uninstall", "--yes"])
+            .output()
+            .unwrap();
+        assert_eq!(repeated.status.code(), Some(0), "{repeated:?}");
+    }
+}
+
+#[test]
+fn shell_uninstall_defaults_to_cleanup_without_widening_target_scope() {
+    for args in [
+        vec!["uninstall", "shell/utils/shine-env-export"],
+        vec!["shell", "uninstall", "utils/shine-env-export"],
+        vec!["shell", "uninstall"],
+    ] {
+        let fixture = Fixture::new();
+        fs::write(fixture.0.join("shine.config.toml"), "schema_version = 2\n").unwrap();
+        for target in ["utils/shine-env-export", "utils/shine-theme-sync"] {
+            let installed = fixture
+                .command()
+                .args(["shell", "install", target, "--yes"])
+                .output()
+                .unwrap();
+            assert_eq!(installed.status.code(), Some(0), "{installed:?}");
+        }
+        let state = fixture.0.join("state");
+        let extra = state.join("presets/shell/utils/extra.txt");
+        fs::write(&extra, "extra cache").unwrap();
+        let selected = cli::bin_links::command_path_for_name(
+            &state.join("bin"),
+            std::ffi::OsStr::new("shine-env-export"),
+        );
+        let sibling = cli::bin_links::command_path_for_name(
+            &state.join("bin"),
+            std::ffi::OsStr::new("shine-theme-sync"),
+        );
+        let preview = fixture
+            .command()
+            .args(&args)
+            .arg("--dry-run")
+            .output()
+            .unwrap();
+        assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+        assert!(selected.exists());
+        assert!(sibling.exists());
+        assert_eq!(fs::read(&extra).unwrap(), b"extra cache");
+        let denied = fixture.command().args(&args).output().unwrap();
+        assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+        assert!(String::from_utf8_lossy(&denied.stderr).contains("approval requires"));
+        assert!(selected.exists());
+        assert_eq!(fs::read(&extra).unwrap(), b"extra cache");
+        let removed = fixture.command().args(&args).arg("--yes").output().unwrap();
+        assert_eq!(removed.status.code(), Some(0), "{removed:?}");
+        assert!(
+            fs::symlink_metadata(&selected)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        );
+        if args.len() == 2 && args[0] == "shell" {
+            assert!(!state.join("presets/shell").exists());
+            assert!(!state.join("bin").exists());
+        } else {
+            assert!(sibling.exists());
+            assert_eq!(fs::read(&extra).unwrap(), b"extra cache");
+        }
+        assert!(state.join("config.toml").exists());
+    }
+}
+
+#[test]
+fn shell_uninstall_help_describes_inventory_and_cleanup_scope() {
     let fixture = Fixture::new();
     for args in [
         vec!["shell", "--help"],
@@ -1673,7 +2088,7 @@ fn shell_uninstall_help_describes_inventory_and_purge_scope() {
                 "{help}"
             );
             for text in [
-                "Without TARGET, purge the entire internal Shell preset cache tree, including extra files",
+                "without TARGET, remove the entire internal Shell preset cache tree, including extra files",
                 "With TARGET, retain extra cache files and shared files still needed by installed sibling commands",
                 "External preset sources and config.toml are preserved",
             ] {

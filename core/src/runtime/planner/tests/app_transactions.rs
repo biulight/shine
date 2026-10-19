@@ -2,6 +2,119 @@
 use super::*;
 
 #[tokio::test]
+async fn whole_app_cleanup_retains_failed_receipts_until_approved_retry() {
+    struct DenyAdmin;
+    impl RuntimeInteraction for DenyAdmin {
+        fn confirm(&mut self, _code: &'static str, default: bool) -> Result<bool> {
+            Ok(default)
+        }
+        fn authorize_admin<'a>(
+            &'a mut self,
+            _count: usize,
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+            Box::pin(async { Ok(false) })
+        }
+        fn select_many(
+            &mut self,
+            _code: &'static str,
+            _choices: &[String],
+            defaults: &[String],
+        ) -> Result<Vec<String>> {
+            Ok(defaults.to_vec())
+        }
+    }
+    let runtime = runtime(privileged_static_copy_app_snapshot());
+    let (destination, backup) =
+        seed_privileged_static_copy_app(&runtime, b"managed", Some(b"original")).await;
+    let backup = backup.unwrap();
+    let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
+    let before = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    let extra = runtime.context().presets_dir.join("app/demo/extra.txt");
+    runtime.host().put_file(&extra, b"extra cache".to_vec());
+    let request = AppPlanRequest {
+        operation: LifecycleOperation::Uninstall,
+        target: None,
+        force: false,
+        purge: true,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let plan = runtime.plan_apps(request.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    let report = runtime
+        .uninstall_apps_approved(
+            request.clone(),
+            &approval,
+            &mut crate::runtime::NullObserver,
+            &mut DenyAdmin,
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.lifecycle.summary().failed, 1);
+    assert_eq!(
+        AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap(),
+        before
+    );
+    assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+    assert_eq!(runtime.host().read(&backup).await.unwrap(), b"original");
+    assert!(runtime.host().read(&extra).await.is_err());
+    assert!(!report.lifecycle.outcomes.iter().any(|row| {
+        row.resource.as_deref() == Some("purge")
+            && row
+                .effects
+                .contains(&crate::lifecycle::LifecycleEffect::ReceiptRemoved)
+    }));
+
+    let stale = runtime
+        .uninstall_apps_approved(
+            request.clone(),
+            &approval,
+            &mut crate::runtime::NullObserver,
+            &mut Interaction,
+        )
+        .await
+        .unwrap_err();
+    assert!(stale.is::<crate::plan::PlanApprovalError>(), "{stale:#}");
+    assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+    assert_eq!(
+        AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap(),
+        before
+    );
+
+    // Re-review the changed cache state; the failed receipt still drives backup restoration.
+    let plan = runtime.plan_apps(request.clone()).await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    let report = runtime
+        .uninstall_apps_approved(
+            request,
+            &approval,
+            &mut crate::runtime::NullObserver,
+            &mut Interaction,
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.lifecycle.summary().failed, 0);
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        b"original"
+    );
+    assert!(runtime.host().read(&backup).await.is_err());
+    assert!(runtime.host().read(&manifest_path).await.is_err());
+    assert!(report.lifecycle.outcomes.iter().any(|row| {
+        row.resource.as_deref() == Some("purge")
+            && row
+                .effects
+                .contains(&crate::lifecycle::LifecycleEffect::ReceiptRemoved)
+    }));
+}
+
+#[tokio::test]
 async fn waiting_app_install_revalidates_approval_before_preparation_effects() {
     let runtime = runtime(static_copy_app_snapshot());
     let request = AppPlanRequest {

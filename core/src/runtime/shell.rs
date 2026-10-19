@@ -1490,12 +1490,18 @@ impl<H: FileSystemHost> CoreRuntime<H> {
                 (None, None) => unreachable!(),
             }
         }
+        let legacy_targets =
+            if remove_all && before.is_empty() && after.is_empty() && legacy_targets.is_empty() {
+                vec![crate::action::SHELL_PROFILE_ONLY_TARGET.to_string()]
+            } else {
+                legacy_targets.to_vec()
+            };
         Ok(vec![ShellProfileReconciliation {
             target: "shell/profile".to_string(),
             files,
             receipt_transitions,
             receipt_removals,
-            legacy_targets: legacy_targets.to_vec(),
+            legacy_targets,
         }])
     }
 

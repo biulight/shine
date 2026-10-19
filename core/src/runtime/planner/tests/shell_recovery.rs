@@ -412,6 +412,146 @@ async fn rendered_shell_marker_failure_restores_previous_output_and_receipt() {
 }
 
 #[tokio::test]
+async fn profile_only_removal_recovery_requires_empty_manifest_and_exact_identities() {
+    let runtime = runtime(shell_launcher_snapshot());
+    let config = runtime.context().shell_config_paths[0].clone();
+    runtime.host().put_file(&config, b"before\n".to_vec());
+    let install = shell_install_request();
+    let approval =
+        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+            .unwrap();
+    runtime
+        .install_shells_approved(install, &approval)
+        .await
+        .unwrap();
+    let original_manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    let targeted = shell_uninstall_request();
+    let approval =
+        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(targeted.clone()).await.unwrap())
+            .unwrap();
+    runtime
+        .uninstall_shells_approved(targeted, &approval)
+        .await
+        .unwrap();
+    let manifest_path = runtime.context().shine_dir.join("shell-manifest.toml");
+    let empty_manifest = runtime.host().read(&manifest_path).await.unwrap();
+    assert!(
+        ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    let profile = crate::runtime::managed_shell_profile_path(
+        &runtime.context().shine_dir,
+        runtime.context().shell,
+    );
+    let previous_profile = runtime.host().read(&profile).await.unwrap();
+    let mut remove = shell_uninstall_request();
+    remove.target = None;
+    let plan = runtime.plan_shells(remove.clone()).await.unwrap();
+    assert!(
+        plan.steps
+            .iter()
+            .any(|step| step.target == "shell/profile" && step.action == PlanActionV1::Remove)
+    );
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    runtime
+        .host()
+        .put_file(&profile, b"changed after review".to_vec());
+    let stale = runtime
+        .uninstall_shells_approved(remove.clone(), &approval)
+        .await
+        .err()
+        .expect("operation must be rejected");
+    assert!(stale.is::<crate::plan::PlanApprovalError>(), "{stale:#}");
+    assert_eq!(
+        runtime.host().read(&manifest_path).await.unwrap(),
+        empty_manifest
+    );
+    runtime.host().put_file(&profile, previous_profile.clone());
+    let approval =
+        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(remove.clone()).await.unwrap())
+            .unwrap();
+    runtime.host().fail_write_after(&manifest_path, 0);
+    runtime
+        .uninstall_shells_approved(remove.clone(), &approval)
+        .await
+        .err()
+        .expect("operation must be rejected");
+    assert!(runtime.host().read(&profile).await.is_err());
+    let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+    assert!(recovery.is_ready(), "{recovery:?}");
+
+    original_manifest
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    let conflict = runtime.plan_shell_operation_recovery().await.unwrap();
+    assert!(
+        !conflict.is_ready(),
+        "profile-only recovery must reject any new command receipt"
+    );
+    runtime
+        .host()
+        .put_file(&manifest_path, empty_manifest.clone());
+    let rollback = crate::action::managed_file_rollback_path(&profile);
+    let rollback_bytes = runtime.host().read(&rollback).await.unwrap();
+    runtime
+        .host()
+        .put_file(&rollback, b"changed rollback".to_vec());
+    assert!(
+        !runtime
+            .plan_shell_operation_recovery()
+            .await
+            .unwrap()
+            .is_ready()
+    );
+    runtime.host().put_file(&rollback, rollback_bytes);
+
+    // Unrelated startup edits survive sentinel recovery, but invalidate an earlier review.
+    let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+    runtime
+        .host()
+        .put_file(&config, b"before\nuser after interruption\n".to_vec());
+    assert!(
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .is_err()
+    );
+    let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+    assert!(recovery.is_ready());
+    let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+    runtime
+        .recover_shell_operation_approved(&approval)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime.host().read(&profile).await.unwrap(),
+        previous_profile
+    );
+    let restored = String::from_utf8(runtime.host().read(&config).await.unwrap()).unwrap();
+    assert!(restored.contains("user after interruption"));
+    assert!(restored.contains(crate::runtime::profile::SHELL_SENTINEL_START));
+    assert_eq!(
+        runtime.host().read(&manifest_path).await.unwrap(),
+        empty_manifest
+    );
+    let approval =
+        PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(remove.clone()).await.unwrap())
+            .unwrap();
+    runtime
+        .uninstall_shells_approved(remove, &approval)
+        .await
+        .unwrap();
+    assert!(runtime.host().read(&profile).await.is_err());
+}
+
+#[tokio::test]
 async fn shell_profile_recovery_preserves_unrelated_post_interruption_edits() {
     let runtime = runtime(shell_launcher_snapshot());
     let config = runtime.context().shell_config_paths[0].clone();

@@ -99,7 +99,6 @@ still apply.
 shine shell uninstall proxy --dry-run
 shine shell uninstall proxy
 shine shell uninstall utils/shine-env-export
-shine shell uninstall proxy --purge
 ```
 
 Non-dry-run install and uninstall, plus `shine upgrade`, show the planned changes and permissions.
@@ -133,13 +132,21 @@ Uninstall and recovery remain available without granting trust to code being rem
 Use `shine list` to inspect installed resources; `shine shell list` shows available Shell presets.
 Command-scoped uninstall preserves other installed commands in the category. Shared preset or
 snapshot files may remain while a sibling command still needs them.
+After uninstalling the last category, `shine shell uninstall` can remove the remaining managed
+profile and startup integration. Other content in your shell configuration is preserved; preview
+the cleanup with `shine shell uninstall --dry-run` before approving it.
 
-`--purge` also removes empty managed directories. Without a target, it purges the entire internal
+Uninstall includes empty managed directory cleanup. Without a target, it removes the entire internal
 Shell preset cache tree, including extra files stored there. With a category or command target,
 extra cache files are preserved, as are shared files still needed by installed sibling commands.
-External preset source directories are preserved even with `--purge`; managed launchers and
+External preset source directories are always preserved; managed launchers and
 installation snapshots are still removed as applicable. Uninstall never removes
 `~/.shine/config.toml`. Review the Plan and use `--dry-run` to inspect the selected scope.
+
+`shine uninstall shell/<category>[/<command>]` uses the same target-limited behavior.
+`--purge` has been removed; omit it from existing commands. Unlike targeted Shell uninstall,
+App category uninstall removes its entire internal category cache, including extra files;
+see [App presets](app-presets.md).
 
 ## Common built-in commands
 

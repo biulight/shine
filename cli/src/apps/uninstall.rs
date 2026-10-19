@@ -14,12 +14,11 @@ pub async fn handle_uninstall_approved(
     config: &Config,
     category: Option<&str>,
     force: bool,
-    purge: bool,
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_uninstall_with_reporter(config, category, force, purge, dry_run, yes, &mut renderer)
+    handle_uninstall_with_reporter(config, category, force, dry_run, yes, &mut renderer)
         .await
         .and_then(|result| crate::uninstall::check_completion(&result, dry_run))
 }
@@ -29,19 +28,16 @@ pub(crate) async fn handle_uninstall_with_result(
     config: &Config,
     category: Option<&str>,
     force: bool,
-    purge: bool,
     dry_run: bool,
 ) -> Result<LifecycleResultV1> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_uninstall_with_reporter(config, category, force, purge, dry_run, true, &mut renderer)
-        .await
+    handle_uninstall_with_reporter(config, category, force, dry_run, true, &mut renderer).await
 }
 
 async fn handle_uninstall_with_reporter(
     config: &Config,
     category: Option<&str>,
     force: bool,
-    purge: bool,
     dry_run: bool,
     yes: bool,
     reporter: &mut dyn LifecycleReporter,
@@ -53,7 +49,7 @@ async fn handle_uninstall_with_reporter(
         operation: LifecycleOperation::Uninstall,
         target: category.map(str::to_string),
         force,
-        purge,
+        purge: true,
         prune_stale: false,
         input_versions: PlanningInputVersions::default(),
     };
@@ -100,7 +96,7 @@ async fn handle_uninstall_with_reporter(
                     target: category.map(str::to_string),
                     dry_run,
                     force,
-                    purge,
+                    purge: true,
                 },
                 &mut observer,
                 &mut interaction,
@@ -206,13 +202,10 @@ async fn handle_uninstall_with_reporter(
             _ => {}
         }
     }
-    if purge && !config.is_external_presets {
-        observer
-            .reporter
-            .emit(PresentationEvent::stdout(match category {
-                Some(category) => report::purge_category_text(category),
-                None => report::purge_all_text(),
-            }));
+    for outcome in &core_report.lifecycle.outcomes {
+        for line in report::cache_cleanup_lines(outcome) {
+            observer.reporter.emit(PresentationEvent::stdout(line));
+        }
     }
     let mut summary_parts = report::uninstall_summary_parts(removed, restored, user_modified, 0);
     if cleared_receipts > 0 {
@@ -432,7 +425,6 @@ mod tests {
                 &config,
                 Some("sample"),
                 false,
-                false,
                 true,
                 true,
                 &mut preview,
@@ -446,7 +438,6 @@ mod tests {
             let result = handle_uninstall_with_reporter(
                 &config,
                 Some("sample"),
-                false,
                 false,
                 false,
                 true,
@@ -470,7 +461,6 @@ mod tests {
                     handle_uninstall_with_reporter(
                         &config,
                         Some("sample"),
-                        false,
                         false,
                         true,
                         true,
@@ -541,10 +531,19 @@ mod tests {
             .unwrap();
         let count_before = manifest_before.entries.len();
 
-        let result = handle_uninstall_with_result(&config, Some("git"), false, false, true)
+        let result = handle_uninstall_with_result(&config, Some("git"), false, true)
             .await
             .unwrap();
         assert!(result.dry_run);
+        assert_eq!(
+            result
+                .outcomes
+                .iter()
+                .find(|outcome| outcome.resource.as_deref() == Some("purge"))
+                .unwrap()
+                .effects,
+            vec![LifecycleEffect::CacheRemovePreviewed]
+        );
         assert_eq!(
             result
                 .outcomes
@@ -565,7 +564,7 @@ mod tests {
                 .iter()
                 .filter(|outcome| {
                     outcome.resource.as_deref() != Some("artifact:teardown")
-                        && outcome.resource.as_deref() != Some("preset-cache")
+                        && outcome.resource.as_deref() != Some("purge")
                 })
                 .all(|outcome| {
                     outcome.effects
@@ -613,7 +612,7 @@ mod tests {
         let dest = dir.join(".config/sample/daemon.json");
         fs::write(&dest, b"{\"debug\": false}\n").await.unwrap();
 
-        let result = handle_uninstall_with_result(&config, Some("sample"), true, false, false)
+        let result = handle_uninstall_with_result(&config, Some("sample"), true, false)
             .await
             .unwrap();
         assert_eq!(result.summary().changed, 1);
@@ -683,10 +682,9 @@ mod tests {
             .count();
 
         // Uninstall only that category
-        let result =
-            handle_uninstall_with_result(&config, Some(&first_category), false, false, false)
-                .await
-                .unwrap();
+        let result = handle_uninstall_with_result(&config, Some(&first_category), false, false)
+            .await
+            .unwrap();
         assert!(
             result
                 .outcomes
@@ -743,11 +741,11 @@ mod tests {
             .await
             .unwrap();
 
-        let preview = handle_uninstall_with_result(&config, Some("sample"), false, false, true)
+        let preview = handle_uninstall_with_result(&config, Some("sample"), false, true)
             .await
             .unwrap();
         assert_eq!(preview.summary().preserved, 1);
-        let result = handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+        let result = handle_uninstall_with_result(&config, Some("sample"), false, false)
             .await
             .unwrap();
 
@@ -791,7 +789,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+        let result = handle_uninstall_with_result(&config, Some("sample"), false, false)
             .await
             .unwrap();
 
@@ -843,7 +841,7 @@ mod tests {
             frontend.missing_app_sources().await.unwrap(),
             [("retired".into(), "config".into())]
         );
-        let preview = handle_uninstall_with_result(&config, Some("retired"), false, false, true)
+        let preview = handle_uninstall_with_result(&config, Some("retired"), false, true)
             .await
             .unwrap();
         assert_eq!(
@@ -860,7 +858,7 @@ mod tests {
                 .len(),
             1
         );
-        let result = handle_uninstall_with_result(&config, Some("retired"), false, false, false)
+        let result = handle_uninstall_with_result(&config, Some("retired"), false, false)
             .await
             .unwrap();
         assert_eq!(result.summary().changed, 1);
@@ -948,15 +946,14 @@ mod tests {
                 [("retired".into(), "config.json".into())]
             );
             let unrelated =
-                handle_uninstall_with_result(&config, Some("replacement"), false, false, false)
+                handle_uninstall_with_result(&config, Some("replacement"), false, false)
                     .await
                     .unwrap();
             assert_eq!(unrelated.summary().changed, 0);
             assert_eq!(fs::read(&destination).await.unwrap(), current);
-            let result =
-                handle_uninstall_with_result(&config, Some("retired"), false, false, false)
-                    .await
-                    .unwrap();
+            let result = handle_uninstall_with_result(&config, Some("retired"), false, false)
+                .await
+                .unwrap();
             assert_eq!(result.summary().changed, 1);
             if json_merge {
                 let remaining: serde_json::Value =
@@ -1002,7 +999,7 @@ mod tests {
             .await
             .unwrap();
 
-        let category = handle_uninstall_with_result(&config, Some("git"), false, true, false)
+        let category = handle_uninstall_with_result(&config, Some("git"), false, false)
             .await
             .unwrap();
         let category_purge = category
@@ -1022,7 +1019,7 @@ mod tests {
         fs::write(global_cache.join("orphan"), b"cache")
             .await
             .unwrap();
-        let global = handle_uninstall_with_result(&config, None, false, true, false)
+        let global = handle_uninstall_with_result(&config, None, false, false)
             .await
             .unwrap();
         let global_purge = global
@@ -1053,7 +1050,7 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         // Nothing installed — uninstalling a specific category should succeed silently
-        handle_uninstall_approved(&config, Some("nonexistent"), false, false, false, true)
+        handle_uninstall_approved(&config, Some("nonexistent"), false, false, true)
             .await
             .unwrap();
 

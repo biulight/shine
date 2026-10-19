@@ -1403,11 +1403,21 @@ fn valid_shell_profile_files(files: &[ShellProfileFileV1]) -> bool {
         && destinations.is_disjoint(&rollbacks)
 }
 
+// Reserved profile-only boundary in legacy_targets. It represents remaining integration
+// files with no command receipts, and requires an empty manifest in execution/recovery.
+pub(crate) const SHELL_PROFILE_ONLY_TARGET: &str = "shell/profile";
+
 fn valid_shell_profile_receipts(
     transitions: &[ShellReceiptTransitionV1],
     removals: &[ShellReceiptRemovalV1],
     legacy_targets: &[String],
 ) -> bool {
+    if legacy_targets
+        .iter()
+        .any(|target| target == SHELL_PROFILE_ONLY_TARGET)
+    {
+        return transitions.is_empty() && removals.is_empty() && legacy_targets.len() == 1;
+    }
     let receipt_targets = transitions
         .iter()
         .map(|transition| transition.target.as_str())
@@ -1540,6 +1550,75 @@ fn valid_managed_json_keys(keys: &[String]) -> bool {
 mod tests {
     use super::*;
     use crate::install::hash_content;
+
+    #[test]
+    fn profile_only_boundary_is_exclusive_and_only_removes_identified_files() {
+        let target = SHELL_PROFILE_ONLY_TARGET.to_string();
+        assert!(!valid_shell_profile_receipts(&[], &[], &[]));
+        assert!(valid_shell_profile_receipts(
+            &[],
+            &[],
+            std::slice::from_ref(&target)
+        ));
+        assert!(!valid_shell_profile_receipts(
+            &[],
+            &[],
+            &[target.clone(), "shell/demo/tool".into()]
+        ));
+        let destination = PathBuf::from("/home/test/.shine/shell/profile.sh");
+        let file = ShellProfileFileV1 {
+            rollback: managed_file_rollback_path(&destination),
+            destination,
+            ownership: ShellProfileFileOwnershipV1::WholeFile,
+            previous: Some(ShellFileIdentityV1 {
+                content_hash: 1,
+                unix_mode: None,
+            }),
+            desired: None,
+            previous_block_hash: None,
+            desired_block_hash: None,
+        };
+        let validate = |file| {
+            ActionIrV1::new(
+                "profile-only",
+                vec![DeclarativeActionV1::reconcile_shell_profile(
+                    "profile",
+                    SHELL_PROFILE_ONLY_TARGET,
+                    "profile",
+                    ShellProfileReconciliationSpecV1 {
+                        files: vec![file],
+                        receipt_transitions: vec![],
+                        receipt_removals: vec![],
+                        legacy_targets: vec![target.clone()],
+                    },
+                )],
+            )
+            .validate()
+        };
+        assert!(validate(file.clone()).is_ok());
+        let mut sentinel = file.clone();
+        sentinel.ownership = ShellProfileFileOwnershipV1::SentinelBlock;
+        sentinel.previous_block_hash = Some(3);
+        assert!(
+            validate(sentinel.clone()).is_err(),
+            "must not delete the whole startup file"
+        );
+        sentinel.desired = Some(ShellFileIdentityV1 {
+            content_hash: 4,
+            unix_mode: None,
+        });
+        assert!(validate(sentinel).is_ok());
+        let mut invalid = file.clone();
+        invalid.previous = None;
+        invalid.desired = Some(ShellFileIdentityV1 {
+            content_hash: 2,
+            unix_mode: None,
+        });
+        assert!(validate(invalid).is_err());
+        let mut invalid = file;
+        invalid.rollback = PathBuf::from("/unrelated/rollback");
+        assert!(validate(invalid).is_err());
+    }
 
     fn ir() -> ActionIrV1 {
         ActionIrV1::new(

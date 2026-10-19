@@ -64,7 +64,6 @@ pub async fn handle_uninstall_shim_approved(
     config: &Config,
     target: &str,
     force: bool,
-    purge: bool,
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
@@ -83,7 +82,6 @@ pub async fn handle_uninstall_shim_approved(
             Box::pin(shells::handle_uninstall_approved(
                 config,
                 Some(category),
-                purge,
                 dry_run,
                 yes,
             ))
@@ -94,7 +92,6 @@ pub async fn handle_uninstall_shim_approved(
                 config,
                 Some(category),
                 force,
-                purge,
                 dry_run,
                 yes,
             ))
@@ -396,16 +393,9 @@ mod tests {
         assert!(selected.exists());
         assert!(!sibling.exists());
 
-        handle_uninstall_shim_approved(
-            &config,
-            "shell/utils/shine-env-export",
-            false,
-            false,
-            false,
-            true,
-        )
-        .await
-        .unwrap();
+        handle_uninstall_shim_approved(&config, "shell/utils/shine-env-export", false, false, true)
+            .await
+            .unwrap();
         assert!(!selected.exists());
 
         fs::remove_dir_all(dir).await.unwrap();

@@ -30,8 +30,13 @@ bugs. Check this list before changing the modules named in each entry.
   golden reports come from the production validator, with only asserted temporary paths normalized.
   Do not retain independent scanners or report aggregation inside tests (ADR 0135).
   Asset copy/export and Config file/global-load tests call their production owners. Removal tests
-  use approved Shell uninstall; extra cache-tree files survive ordinary removal but are included
-  in whole-shell purge. Do not revive the retired asset-name deletion algorithm (ADR 0136).
+  use approved Shell uninstall. CLI uninstall always requests internal cleanup: extra cache-tree
+  files survive targeted Shell removal but are included in whole-shell cleanup. App cleanup removes
+  the selected internal category tree, or the entire App tree without a target. Only an empty App
+  manifest may be deleted; protected/failed receipts remain available for retry.
+  External preset sources remain preserved. Core retains its explicit purge field for Plan binding
+  and existing callers; the CLI no longer accepts `--purge` (ADR 0148). Do not revive the retired
+  asset-name deletion algorithm (ADR 0136).
   Seal and stored-secret process regressions use `handle_seal` and `decrypt_with_config`; profile
   rendering tests live beside their Core owner so CLI test wrappers do not require public helpers.
   Preserve tag-based decrypt routing and legacy source/recipient cases (ADR 0137).
@@ -732,6 +737,10 @@ bugs. Check this list before changing the modules named in each entry.
   affected profile. Recovery re-reads the current file, verifies only the owned-block transition,
   and restores or removes those blocks in place. Unrelated content written before or after the
   interrupted operation is preserved; a changed Shine block blocks recovery.
+  After all command receipts have been removed, full uninstall may remove remaining integration
+  using the reserved `shell/profile` legacy boundary only. It cannot mix with command boundaries
+  or create/replace a whole profile: execution and recovery both require an empty manifest, exact
+  previous file/sentinel identities, canonical rollback paths and a reviewed profile step (ADR 0149).
 - **Managed Sys recovery is receipt-positive and domain-scoped.**
   `sys-operation-journal.toml` precedes managed-file, split-DNS, or explicit profile-sentinel
   mutation and binds the exact previous and desired `SysRunEntry`. `shine sys recover [--yes]`

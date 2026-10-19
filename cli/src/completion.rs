@@ -661,6 +661,19 @@ mod tests {
     }
 
     #[test]
+    fn uninstall_completion_omits_removed_purge_option() {
+        for args in [
+            vec!["shine", "uninstall", "--"],
+            vec!["shine", "app", "uninstall", "--"],
+            vec!["shine", "shell", "uninstall", "--"],
+        ] {
+            let values = complete_values(&args, args.len() - 1);
+            assert!(values.contains("--dry-run"), "{values:?}");
+            assert!(!values.contains("--purge"), "{values:?}");
+        }
+    }
+
+    #[test]
     fn embedded_candidates_include_known_categories() {
         let _guard = env_lock();
         unsafe {

@@ -414,10 +414,9 @@ mod tests {
             .unwrap();
         assert!(no_op_result.summary().unchanged > 0);
 
-        let uninstall_result =
-            handle_uninstall_with_result(&config, Some("git"), false, false, false)
-                .await
-                .unwrap();
+        let uninstall_result = handle_uninstall_with_result(&config, Some("git"), false, false)
+            .await
+            .unwrap();
         assert!(uninstall_result.summary().changed > 0);
         assert!(uninstall_result.outcomes.iter().all(|outcome| {
             outcome.status != LifecycleStatus::Failed
@@ -541,7 +540,7 @@ mod tests {
                 && outcome.effects.contains(&LifecycleEffect::BackupCreated)
         }));
 
-        let uninstall = handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+        let uninstall = handle_uninstall_with_result(&config, Some("sample"), false, false)
             .await
             .unwrap();
         assert_eq!(uninstall.summary().changed, 1);
@@ -892,16 +891,9 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             .await
             .unwrap();
 
-        handle_uninstall_approved(
-            &config,
-            Some("docker-desktop-test"),
-            false,
-            false,
-            false,
-            true,
-        )
-        .await
-        .unwrap();
+        handle_uninstall_approved(&config, Some("docker-desktop-test"), false, false, true)
+            .await
+            .unwrap();
 
         let removed: serde_json::Value =
             serde_json::from_slice(&fs::read(&destination).await.unwrap()).unwrap();

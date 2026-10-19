@@ -202,7 +202,7 @@ mod tests {
         )
         .await
         .unwrap();
-        uninstall::handle_uninstall_approved(&config, Some("sample"), false, false, false, true)
+        uninstall::handle_uninstall_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
 
@@ -591,7 +591,7 @@ mod tests {
         }));
 
         let uninstall =
-            uninstall::handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+            uninstall::handle_uninstall_with_result(&config, Some("sample"), false, false)
                 .await
                 .unwrap();
         assert!(uninstall.outcomes.iter().any(|outcome| {

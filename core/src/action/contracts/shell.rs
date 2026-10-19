@@ -144,7 +144,12 @@ pub(super) fn validate(
                     receipt_transitions,
                     receipt_removals,
                     legacy_targets,
-                ) =>
+                )
+                && (!legacy_targets.iter().any(|target| target == SHELL_PROFILE_ONLY_TARGET)
+                    || files.iter().all(|file| file.previous.is_some() && match file.ownership {
+                        ShellProfileFileOwnershipV1::WholeFile => file.desired.is_none(),
+                        ShellProfileFileOwnershipV1::SentinelBlock => file.desired.is_some() && file.previous_block_hash.is_some() && file.desired_block_hash.is_none(),
+                    })) =>
             {
                 Ok(())
             }

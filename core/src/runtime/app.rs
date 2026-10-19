@@ -857,7 +857,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
     ) -> Result<LifecycleOutcomeV1> {
         let target = request.prefix.trim_end_matches('/');
         let mut changed = false;
-        let mut receipt_removed = false;
         for (logical, bytes) in
             self.presets.files().iter().filter(|(logical, _)| {
                 *logical == target || logical.starts_with(&format!("{target}/"))
@@ -912,30 +911,13 @@ impl<H: FileSystemHost> CoreRuntime<H> {
                 Err(error) if error.is_not_found() => {}
                 Err(error) => return Err(error.into_anyhow("inspecting app preset cache root")),
             }
-            if target == "app" {
-                let manifest = self.context.shine_dir.join("app-manifest.toml");
-                match self.host.metadata(&manifest).await {
-                    Ok(_) => {
-                        changed = true;
-                        receipt_removed = true;
-                        if !request.dry_run {
-                            self.host
-                                .remove_file(&manifest)
-                                .await
-                                .map_err(|error| error.into_anyhow("purging App manifest"))?;
-                        }
-                    }
-                    Err(error) if error.is_not_found() => {}
-                    Err(error) => return Err(error.into_anyhow("inspecting App manifest")),
-                }
-            }
         }
         let status = match (request.dry_run, changed) {
             (true, true) => LifecycleStatus::Previewed,
             (false, true) => LifecycleStatus::Changed,
             _ => LifecycleStatus::Unchanged,
         };
-        let mut effects = match (request.purge, request.remove, request.dry_run, changed) {
+        let effects = match (request.purge, request.remove, request.dry_run, changed) {
             (_, _, _, false) => Vec::new(),
             (true, true, true, true) => vec![LifecycleEffect::CacheRemovePreviewed],
             (true, true, false, true) => vec![LifecycleEffect::CachePurged],
@@ -944,13 +926,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             (_, false, true, true) => vec![LifecycleEffect::CacheWritePreviewed],
             (_, false, false, true) => vec![LifecycleEffect::CacheWritten],
         };
-        if receipt_removed {
-            effects.push(if request.dry_run {
-                LifecycleEffect::ReceiptRemovePreviewed
-            } else {
-                LifecycleEffect::ReceiptRemoved
-            });
-        }
         Ok(LifecycleOutcomeV1::new(
             target.to_string(),
             Some(if request.purge {

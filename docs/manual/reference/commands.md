@@ -110,7 +110,7 @@ shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
 shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed] [--yes] [--verbose]
 shine shell recover [--yes] [--verbose]
-shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes] [--verbose]
+shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--verbose]
 ```
 
 - Preview installation or uninstall with `--dry-run`.
@@ -133,7 +133,7 @@ shine app info <CATEGORY> [--run-generators] [--diff]
 shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes] [--verbose]
 shine app refresh <CATEGORY> [FILE] [--force] [--yes] [--verbose]
 shine app recover [--yes] [--verbose]
-shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes] [--verbose]
+shine app uninstall [CATEGORY] [--force] [--dry-run] [--yes] [--verbose]
 shine app artifact apply <APP_ID> [--yes] [--verbose]
 shine app artifact remove <APP_ID> [--yes] [--verbose]
 ```

@@ -32,7 +32,6 @@ pub(super) async fn dispatch(config: &Config, command: ShellCommands) -> Result<
         }
         ShellCommands::Uninstall {
             target,
-            purge,
             dry_run,
             yes,
             ..
@@ -40,7 +39,6 @@ pub(super) async fn dispatch(config: &Config, command: ShellCommands) -> Result<
             Box::pin(shells::handle_uninstall_approved(
                 config,
                 target.as_deref(),
-                purge,
                 dry_run,
                 yes,
             ))

@@ -80,7 +80,6 @@ shine shell recover
 shine shell uninstall proxy --dry-run
 shine shell uninstall proxy
 shine shell uninstall utils/shine-env-export
-shine shell uninstall proxy --purge
 ```
 
 非 dry-run 的 install、uninstall 以及 `shine upgrade` 会显示计划改动和所需权限。确认默认是 No；
@@ -109,12 +108,18 @@ trust，因为以后调用或 source 会读取可变的受信任来源。Snapsho
 使用 `shine list` 查看已安装资源；`shine shell list` 展示可用 Shell 预设。
 按命令卸载会保留同类别下其他已安装命令；只要兄弟命令仍需要，共享 preset 或 snapshot 文件
 就可能继续保留。
+卸载最后一个类别后，可以用 `shine shell uninstall` 清理剩余的受管 profile 和启动集成。
+Shell 配置中的其他内容会保留；确认前可用 `shine shell uninstall --dry-run` 预览清理范围。
 
-`--purge` 会额外删除空的受管目录。未指定 target 时，它会清理整棵内部 Shell 预设缓存树，
+卸载默认清理空的受管目录。未指定 target 时，它会清理整棵内部 Shell 预设缓存树，
 包括存放在其中的额外文件。指定类别或命令 target 时，会保留额外缓存文件，以及其他已安装
-兄弟命令仍需要的共享文件。即使指定 `--purge`，外部预设源目录也会保留；适用的受管启动器
+兄弟命令仍需要的共享文件。外部预设源目录始终保留；适用的受管启动器
 和安装 snapshot 仍会被移除。卸载不会删除 `~/.shine/config.toml`。
 请审阅 Plan，并用 `--dry-run` 检查所选范围。
+
+`shine uninstall shell/<category>[/<command>]` 使用相同的目标限定行为。`--purge` 已移除；
+旧命令请直接去掉该选项。App 类别卸载会删除整个内部类别缓存（包括额外文件），
+与 Shell 的目标限定行为不同，详见 [App 预设](app-presets.md)。
 
 ## 内置常用命令
 

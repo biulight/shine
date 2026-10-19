@@ -13,12 +13,11 @@ use shine_core::runtime::{PlanningInputVersions, ShellPlanRequest};
 pub async fn handle_uninstall_approved(
     config: &Config,
     target: Option<&str>,
-    purge: bool,
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_uninstall_with_reporter(config, target, purge, dry_run, yes, &mut renderer)
+    handle_uninstall_with_reporter(config, target, dry_run, yes, &mut renderer)
         .await
         .and_then(|result| crate::uninstall::check_completion(&result, dry_run))
 }
@@ -27,17 +26,15 @@ pub async fn handle_uninstall_approved(
 pub(crate) async fn handle_uninstall_with_result(
     config: &Config,
     target: Option<&str>,
-    purge: bool,
     dry_run: bool,
 ) -> Result<LifecycleResultV1> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_uninstall_with_reporter(config, target, purge, dry_run, true, &mut renderer).await
+    handle_uninstall_with_reporter(config, target, dry_run, true, &mut renderer).await
 }
 
 async fn handle_uninstall_with_reporter(
     config: &Config,
     target: Option<&str>,
-    purge: bool,
     dry_run: bool,
     yes: bool,
     reporter: &mut dyn LifecycleReporter,
@@ -60,7 +57,7 @@ async fn handle_uninstall_with_reporter(
                     operation: LifecycleOperation::Uninstall,
                     target: target.map(str::to_string),
                     force: false,
-                    purge,
+                    purge: true,
                     input_versions: PlanningInputVersions::default(),
                 },
                 config,
@@ -95,7 +92,7 @@ async fn handle_uninstall_with_reporter(
             .preview_uninstall_shells(shine_core::runtime::ShellUninstallRequest {
                 target: target.map(str::to_string),
                 dry_run,
-                purge,
+                purge: true,
             })
             .await?
     };
@@ -109,7 +106,7 @@ async fn handle_uninstall_with_reporter(
             &shell_cache_remove_summary_parts(&core_report.cache, dry_run),
         )));
     }
-    if purge && !dry_run && !config.is_external_presets {
+    if !dry_run && !config.is_external_presets {
         reporter.emit(PresentationEvent::stdout(format!(
             "  {}  {}",
             colors::symbol("✓"),
@@ -200,7 +197,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn uninstall_removes_managed_resources_preserves_user_files_and_can_repeat() {
+    async fn whole_uninstall_cleans_cache_preserves_config_and_can_repeat() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         handle_install_approved(&config, Some("proxy"), false, true)
@@ -219,7 +216,7 @@ mod tests {
             .await
             .unwrap();
 
-        handle_uninstall_approved(&config, None, false, false, true)
+        handle_uninstall_approved(&config, None, false, true)
             .await
             .unwrap();
         assert!(!cached.exists());
@@ -232,17 +229,18 @@ mod tests {
                 .await
                 .unwrap();
         assert!(manifest.entries.is_empty());
+        assert!(!user_file.exists());
 
         // Whole-shell removal can repeat. A selected missing command still errors.
-        handle_uninstall_approved(&config, None, false, false, true)
+        handle_uninstall_approved(&config, None, false, true)
             .await
             .unwrap();
-        assert_eq!(fs::read(&user_file).await.unwrap(), b"user-owned content");
+        assert!(!user_file.exists());
         assert_eq!(
             fs::read(config.config_path()).await.unwrap(),
             b"# retain configuration\n"
         );
-        let error = handle_uninstall_approved(&config, Some("proxy/setproxy"), false, false, true)
+        let error = handle_uninstall_approved(&config, Some("proxy/setproxy"), false, true)
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("not installed"));
@@ -254,7 +252,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let root = dir.join("missing");
         let config = Config::new_for_test(&root);
-        handle_uninstall_approved(&config, None, true, true, true)
+        handle_uninstall_approved(&config, None, true, true)
             .await
             .unwrap();
         assert!(!root.exists());
@@ -263,82 +261,75 @@ mod tests {
 
     #[tokio::test]
     async fn command_scoped_uninstall_preserves_installed_sibling() {
-        for purge in [false, true] {
-            let dir = make_temp_dir().await;
-            let config = Config::new_for_test(&dir);
-            fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-            handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
-                .await
-                .unwrap();
-            handle_install_approved(&config, Some("utils/shine-theme-sync"), false, true)
-                .await
-                .unwrap();
-            let extra = config.presets_dir().join("shell/utils/user-note.txt");
-            fs::write(&extra, b"extra cache file").await.unwrap();
-            let before = crate::shells::deployment::ShellManifest::load(
-                &shine_core::runtime::RealHost,
-                &config,
-            )
+        handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
             .await
             .unwrap();
-            let sibling_file = before
-                .find("shell/utils/shine-theme-sync")
-                .unwrap()
-                .source_path
-                .clone();
-            let sibling_bytes = fs::read(&sibling_file).await.unwrap();
-            handle_uninstall_approved(&config, Some("utils/shine-env-export"), purge, false, true)
-                .await
-                .unwrap();
-
-            let removed = crate::bin_links::command_path_for_name(
-                config.bin_dir(),
-                std::ffi::OsStr::new("shine-env-export"),
-            );
-            let sibling = crate::bin_links::command_path_for_name(
-                config.bin_dir(),
-                std::ffi::OsStr::new("shine-theme-sync"),
-            );
-            assert!(!removed.exists());
-            assert!(sibling.exists());
-            assert_eq!(fs::read(&extra).await.unwrap(), b"extra cache file");
-            assert_eq!(fs::read(&sibling_file).await.unwrap(), sibling_bytes);
-
-            let manifest = crate::shells::deployment::ShellManifest::load(
-                &shine_core::runtime::RealHost,
-                &config,
-            )
+        handle_install_approved(&config, Some("utils/shine-theme-sync"), false, true)
             .await
             .unwrap();
-            assert!(manifest.find("shell/utils/shine-env-export").is_none());
-            assert!(manifest.find("shell/utils/shine-theme-sync").is_some());
-
-            let profile = fs::read_to_string(managed_shell_profile_path(&config))
+        let extra = config.presets_dir().join("shell/utils/user-note.txt");
+        fs::write(&extra, b"extra cache file").await.unwrap();
+        let before =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap();
-            assert!(!profile.contains(&wrapper_marker("shine-env-export", &config.shell_type)));
-            assert!(profile.contains(&wrapper_marker("shine-theme-sync", &config.shell_type)));
+        let sibling_file = before
+            .find("shell/utils/shine-theme-sync")
+            .unwrap()
+            .source_path
+            .clone();
+        let sibling_bytes = fs::read(&sibling_file).await.unwrap();
+        handle_uninstall_approved(&config, Some("utils/shine-env-export"), false, true)
+            .await
+            .unwrap();
 
-            fs::remove_dir_all(&dir).await.unwrap();
-        }
+        let removed = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("shine-env-export"),
+        );
+        let sibling = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("shine-theme-sync"),
+        );
+        assert!(!removed.exists());
+        assert!(sibling.exists());
+        assert_eq!(fs::read(&extra).await.unwrap(), b"extra cache file");
+        assert_eq!(fs::read(&sibling_file).await.unwrap(), sibling_bytes);
+
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
+        assert!(manifest.find("shell/utils/shine-env-export").is_none());
+        assert!(manifest.find("shell/utils/shine-theme-sync").is_some());
+
+        let profile = fs::read_to_string(managed_shell_profile_path(&config))
+            .await
+            .unwrap();
+        assert!(!profile.contains(&wrapper_marker("shine-env-export", &config.shell_type)));
+        assert!(profile.contains(&wrapper_marker("shine-theme-sync", &config.shell_type)));
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn command_scoped_uninstall_preserves_shared_rendered_file() {
-        for purge in [false, true] {
-            let dir = make_temp_dir().await;
-            let mut config = Config::new_for_test(&dir);
-            config.is_external_presets = true;
-            let source_extension = if config.shell_type == ShellType::PowerShell {
-                "ps1"
-            } else {
-                "sh"
-            };
-            let source = format!("shared.{source_extension}");
-            let category = dir.join("presets/shell/custom");
-            fs::create_dir_all(&category).await.unwrap();
-            fs::write(
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let source_extension = if config.shell_type == ShellType::PowerShell {
+            "ps1"
+        } else {
+            "sh"
+        };
+        let source = format!("shared.{source_extension}");
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
             category.join("shine.toml"),
             format!(
                 "[[files]]\nsource = \"{source}\"\ntarget = \"one\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"{source}\"\ntarget = \"two\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n"
@@ -346,59 +337,50 @@ mod tests {
         )
         .await
         .unwrap();
-            fs::write(category.join(&source), b"echo shared\n")
-                .await
-                .unwrap();
-            fs::create_dir_all(config.bin_dir()).await.unwrap();
-            crate::trust::grant_current_for_test(&config, "preset").await;
-
-            handle_install_approved(&config, Some("custom/one"), false, true)
-                .await
-                .unwrap();
-            handle_install_approved(&config, Some("custom/two"), false, true)
-                .await
-                .unwrap();
-            let rendered = config.rendered_dir().join("shell/custom").join(source);
-            assert!(rendered.exists());
-            let rendered_bytes = fs::read(&rendered).await.unwrap();
-
-            handle_uninstall_approved(&config, Some("custom/one"), purge, false, true)
-                .await
-                .unwrap();
-
-            assert!(
-                rendered.exists(),
-                "installed sibling still uses rendered file"
-            );
-            assert!(
-                crate::bin_links::command_path_for_name(
-                    config.bin_dir(),
-                    std::ffi::OsStr::new("two")
-                )
-                .exists()
-            );
-            assert_eq!(fs::read(&rendered).await.unwrap(), rendered_bytes);
-            assert!(
-                !crate::bin_links::command_path_for_name(
-                    config.bin_dir(),
-                    std::ffi::OsStr::new("one")
-                )
-                .exists()
-            );
-            let manifest = crate::shells::deployment::ShellManifest::load(
-                &shine_core::runtime::RealHost,
-                &config,
-            )
+        fs::write(category.join(&source), b"echo shared\n")
             .await
             .unwrap();
-            assert!(manifest.find("shell/custom/one").is_none());
-            assert_eq!(
-                manifest.find("shell/custom/two").unwrap().rendered_path,
-                rendered
-            );
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "preset").await;
 
-            fs::remove_dir_all(&dir).await.unwrap();
-        }
+        handle_install_approved(&config, Some("custom/one"), false, true)
+            .await
+            .unwrap();
+        handle_install_approved(&config, Some("custom/two"), false, true)
+            .await
+            .unwrap();
+        let rendered = config.rendered_dir().join("shell/custom").join(source);
+        assert!(rendered.exists());
+        let rendered_bytes = fs::read(&rendered).await.unwrap();
+
+        handle_uninstall_approved(&config, Some("custom/one"), false, true)
+            .await
+            .unwrap();
+
+        assert!(
+            rendered.exists(),
+            "installed sibling still uses rendered file"
+        );
+        assert!(
+            crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("two"))
+                .exists()
+        );
+        assert_eq!(fs::read(&rendered).await.unwrap(), rendered_bytes);
+        assert!(
+            !crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("one"))
+                .exists()
+        );
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
+        assert!(manifest.find("shell/custom/one").is_none());
+        assert_eq!(
+            manifest.find("shell/custom/two").unwrap().rendered_path,
+            rendered
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
@@ -410,10 +392,9 @@ mod tests {
             .await
             .unwrap();
 
-        let result =
-            handle_uninstall_with_result(&config, Some("utils/shine-env-export"), false, true)
-                .await
-                .unwrap();
+        let result = handle_uninstall_with_result(&config, Some("utils/shine-env-export"), true)
+            .await
+            .unwrap();
 
         assert_eq!(result.outcomes[0].status, LifecycleStatus::Previewed);
         assert!(
@@ -488,7 +469,6 @@ mod tests {
         let preview = handle_uninstall_with_reporter(
             &config,
             Some("utils/shine-env-export"),
-            false,
             true,
             true,
             &mut reporter,
@@ -506,7 +486,6 @@ mod tests {
         let result = handle_uninstall_with_reporter(
             &config,
             Some("utils/shine-env-export"),
-            false,
             false,
             true,
             &mut reporter,
@@ -560,7 +539,7 @@ mod tests {
         fs::write(config.config_path(), b"# keep config\n")
             .await
             .unwrap();
-        handle_uninstall_approved(&config, None, true, false, true)
+        handle_uninstall_approved(&config, None, false, true)
             .await
             .unwrap();
         assert!(
@@ -601,7 +580,7 @@ mod tests {
         let profile_path = managed_shell_profile_path(&config);
         let profile_before = fs::read(&profile_path).await.unwrap();
 
-        handle_uninstall_approved(&config, None, true, true, true)
+        handle_uninstall_approved(&config, None, true, true)
             .await
             .unwrap();
 
@@ -620,7 +599,7 @@ mod tests {
         handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
-        handle_uninstall_approved(&config, None, false, false, true)
+        handle_uninstall_approved(&config, None, false, true)
             .await
             .unwrap();
 
@@ -643,7 +622,7 @@ mod tests {
             super::super::get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         assert!(!config_path.exists());
         // No install — config file doesn't exist
-        handle_uninstall_approved(&config, None, false, false, true)
+        handle_uninstall_approved(&config, None, false, true)
             .await
             .unwrap();
         assert!(!config_path.exists());
@@ -668,7 +647,7 @@ mod tests {
         let profile_path = managed_shell_profile_path(&config);
         let profile_before = fs::read_to_string(&profile_path).await.unwrap();
 
-        handle_uninstall_approved(&config, None, false, true, true)
+        handle_uninstall_approved(&config, None, true, true)
             .await
             .unwrap();
 
@@ -685,128 +664,122 @@ mod tests {
 
     #[tokio::test]
     async fn uninstall_category_keeps_agent_launcher_and_prunes_source_wrappers() {
-        for purge in [false, true] {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install_approved(&config, Some("agent"), false, true)
+            .await
+            .unwrap();
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
+
+        let extra = config.presets_dir().join("shell/proxy/user-note.txt");
+        fs::write(&extra, b"extra cache file").await.unwrap();
+        handle_uninstall_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
+
+        let profile = fs::read_to_string(managed_shell_profile_path(&config))
+            .await
+            .unwrap();
+        assert!(!profile.contains(&wrapper_marker("ccenv", &config.shell_type)));
+        assert!(
+            !profile.contains(&wrapper_marker("setproxy", &config.shell_type)),
+            "removed category wrapper should be pruned: {profile}"
+        );
+        assert!(
+            !profile.contains(&wrapper_marker("usetproxy", &config.shell_type)),
+            "removed category wrapper should be pruned: {profile}"
+        );
+        let ccenv = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("ccenv"),
+        );
+        assert!(ccenv.exists(), "remaining Bun launcher should be kept");
+        assert_eq!(fs::read(&extra).await.unwrap(), b"extra cache file");
+        for command in ["setproxy", "usetproxy"] {
+            assert!(
+                !crate::bin_links::command_path_for_name(
+                    config.bin_dir(),
+                    std::ffi::OsStr::new(command)
+                )
+                .exists()
+            );
+        }
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
+        assert!(manifest.find("shell/proxy/setproxy").is_none());
+        assert!(manifest.find("shell/proxy/usetproxy").is_none());
+        assert!(manifest.find("shell/agent/ccenv").is_some());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_presets_uninstall_preserves_disk_scripts() {
+        for target in [None, Some("custom")] {
             let dir = make_temp_dir().await;
-            let config = Config::new_for_test(&dir);
-            fs::create_dir_all(config.presets_dir()).await.unwrap();
+            let cat_dir = dir.join("presets/shell/custom");
+            fs::create_dir_all(&cat_dir).await.unwrap();
+            let script = cat_dir.join("my_tool.sh");
+            fs::write(&script, b"#!/bin/bash\n# My tool.\necho hi\n")
+                .await
+                .unwrap();
+            fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"my_tool.sh\"\ntarget = \"my_tool\"\n[files.permissions]\nschema_version = 1\n",
+        )
+        .await
+        .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&script).await.unwrap().permissions();
+            perms.set_mode(perms.mode() | 0o111);
+            fs::set_permissions(&script, perms).await.unwrap();
+
+            let mut config = Config::new_for_test(&dir);
+            config.is_external_presets = true;
             fs::create_dir_all(config.bin_dir()).await.unwrap();
+            crate::trust::grant_current_for_test(&config, "preset").await;
 
-            handle_install_approved(&config, Some("agent"), false, true)
+            handle_install_approved(&config, Some("custom"), false, true)
                 .await
                 .unwrap();
-            handle_install_approved(&config, Some("proxy"), false, true)
+            assert!(config.bin_dir().join("my_tool").exists());
+
+            let source_bytes = fs::read(&script).await.unwrap();
+            let metadata_path = cat_dir.join("shine.toml");
+            let metadata_bytes = fs::read(&metadata_path).await.unwrap();
+            let extra = cat_dir.join("user-note.txt");
+            fs::write(&extra, b"external note").await.unwrap();
+            handle_uninstall_approved(&config, target, false, true)
                 .await
                 .unwrap();
 
-            let extra = config.presets_dir().join("shell/proxy/user-note.txt");
-            fs::write(&extra, b"extra cache file").await.unwrap();
-            handle_uninstall_approved(&config, Some("proxy"), purge, false, true)
-                .await
-                .unwrap();
-
-            let profile = fs::read_to_string(managed_shell_profile_path(&config))
-                .await
-                .unwrap();
-            assert!(!profile.contains(&wrapper_marker("ccenv", &config.shell_type)));
-            assert!(
-                !profile.contains(&wrapper_marker("setproxy", &config.shell_type)),
-                "removed category wrapper should be pruned: {profile}"
-            );
-            assert!(
-                !profile.contains(&wrapper_marker("usetproxy", &config.shell_type)),
-                "removed category wrapper should be pruned: {profile}"
-            );
-            let ccenv = crate::bin_links::command_path_for_name(
-                config.bin_dir(),
-                std::ffi::OsStr::new("ccenv"),
-            );
-            assert!(ccenv.exists(), "remaining Bun launcher should be kept");
-            assert_eq!(fs::read(&extra).await.unwrap(), b"extra cache file");
-            for command in ["setproxy", "usetproxy"] {
-                assert!(
-                    !crate::bin_links::command_path_for_name(
-                        config.bin_dir(),
-                        std::ffi::OsStr::new(command)
-                    )
-                    .exists()
-                );
-            }
+            // User-owned script must survive uninstall.
+            assert_eq!(fs::read(&script).await.unwrap(), source_bytes);
+            assert_eq!(fs::read(&metadata_path).await.unwrap(), metadata_bytes);
+            assert_eq!(fs::read(&extra).await.unwrap(), b"external note");
             let manifest = crate::shells::deployment::ShellManifest::load(
                 &shine_core::runtime::RealHost,
                 &config,
             )
             .await
             .unwrap();
-            assert!(manifest.find("shell/proxy/setproxy").is_none());
-            assert!(manifest.find("shell/proxy/usetproxy").is_none());
-            assert!(manifest.find("shell/agent/ccenv").is_some());
+            assert!(manifest.find("shell/custom/my_tool").is_none());
+            assert!(!config.shine_dir().join("installed/shell/custom").exists());
+            // Bin symlink should be gone.
+            assert!(
+                !config.bin_dir().join("my_tool").exists(),
+                "bin link should be removed"
+            );
 
             fs::remove_dir_all(&dir).await.unwrap();
-        }
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn external_presets_uninstall_preserves_disk_scripts() {
-        for purge in [false, true] {
-            for target in [None, Some("custom")] {
-                let dir = make_temp_dir().await;
-                let cat_dir = dir.join("presets/shell/custom");
-                fs::create_dir_all(&cat_dir).await.unwrap();
-                let script = cat_dir.join("my_tool.sh");
-                fs::write(&script, b"#!/bin/bash\n# My tool.\necho hi\n")
-                    .await
-                    .unwrap();
-                fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"my_tool.sh\"\ntarget = \"my_tool\"\n[files.permissions]\nschema_version = 1\n",
-        )
-        .await
-        .unwrap();
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = fs::metadata(&script).await.unwrap().permissions();
-                perms.set_mode(perms.mode() | 0o111);
-                fs::set_permissions(&script, perms).await.unwrap();
-
-                let mut config = Config::new_for_test(&dir);
-                config.is_external_presets = true;
-                fs::create_dir_all(config.bin_dir()).await.unwrap();
-                crate::trust::grant_current_for_test(&config, "preset").await;
-
-                handle_install_approved(&config, Some("custom"), false, true)
-                    .await
-                    .unwrap();
-                assert!(config.bin_dir().join("my_tool").exists());
-
-                let source_bytes = fs::read(&script).await.unwrap();
-                let metadata_path = cat_dir.join("shine.toml");
-                let metadata_bytes = fs::read(&metadata_path).await.unwrap();
-                let extra = cat_dir.join("user-note.txt");
-                fs::write(&extra, b"external note").await.unwrap();
-                handle_uninstall_approved(&config, target, purge, false, true)
-                    .await
-                    .unwrap();
-
-                // User-owned script must survive uninstall.
-                assert_eq!(fs::read(&script).await.unwrap(), source_bytes);
-                assert_eq!(fs::read(&metadata_path).await.unwrap(), metadata_bytes);
-                assert_eq!(fs::read(&extra).await.unwrap(), b"external note");
-                let manifest = crate::shells::deployment::ShellManifest::load(
-                    &shine_core::runtime::RealHost,
-                    &config,
-                )
-                .await
-                .unwrap();
-                assert!(manifest.find("shell/custom/my_tool").is_none());
-                assert!(!config.shine_dir().join("installed/shell/custom").exists());
-                // Bin symlink should be gone.
-                assert!(
-                    !config.bin_dir().join("my_tool").exists(),
-                    "bin link should be removed"
-                );
-
-                fs::remove_dir_all(&dir).await.unwrap();
-            }
         }
     }
 }

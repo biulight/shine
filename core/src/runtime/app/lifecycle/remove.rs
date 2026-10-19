@@ -263,7 +263,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
                     LifecycleEffect::ResourceRemovePreviewed,
                     LifecycleEffect::ReceiptRemovePreviewed,
                 ],
-                false,
+                true,
                 AppFileOutcome::PreviewRemove,
             ),
             Err(error) => (
@@ -332,16 +332,43 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
                     .collect()
             };
             for target in cache_targets {
-                report.lifecycle.push(
-                    self.reconcile_app_cache(AppCacheRequest {
-                        prefix: target,
+                let mut outcome = self
+                    .reconcile_app_cache(AppCacheRequest {
+                        prefix: target.clone(),
                         dry_run: request.dry_run,
                         remove: true,
                         purge: request.purge,
                         overwrite: false,
                     })
-                    .await?,
-                );
+                    .await?;
+                // In previews, manifest contains the projected remaining receipts. Never
+                // discard records needed to retry protected or failed removals.
+                if request.purge && target == "app" && manifest.entries.is_empty() {
+                    let path = self.context.shine_dir.join("app-manifest.toml");
+                    match self.host.metadata(&path).await {
+                        Ok(_) => {
+                            if !request.dry_run {
+                                self.host
+                                    .remove_file(&path)
+                                    .await
+                                    .map_err(|error| error.into_anyhow("purging App manifest"))?;
+                            }
+                            outcome.status = if request.dry_run {
+                                LifecycleStatus::Previewed
+                            } else {
+                                LifecycleStatus::Changed
+                            };
+                            outcome.effects.push(if request.dry_run {
+                                LifecycleEffect::ReceiptRemovePreviewed
+                            } else {
+                                LifecycleEffect::ReceiptRemoved
+                            });
+                        }
+                        Err(error) if error.is_not_found() => {}
+                        Err(error) => return Err(error.into_anyhow("inspecting App manifest")),
+                    }
+                }
+                report.lifecycle.push(outcome);
             }
         } else if request.purge {
             report.lifecycle.push(

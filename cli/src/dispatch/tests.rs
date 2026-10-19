@@ -1351,7 +1351,6 @@ fn cli_accepts_top_level_install_and_uninstall_commands() {
         Commands::Uninstall {
             target,
             force: false,
-            purge: false,
             dry_run: false,
             yes: false, .. } if target == "starship"
     ));

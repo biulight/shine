@@ -80,7 +80,6 @@ for the complete author workflow.
 ```bash
 shine app uninstall starship --dry-run
 shine app uninstall starship
-shine app uninstall starship --purge
 ```
 
 Install, upgrade, uninstall, generator refresh, and artifact apply/remove show a Plan before making
@@ -100,7 +99,18 @@ missing while a backup is recorded, resolve that state before retrying. Generate
 remain outside the journaled static-file recovery workflow.
 
 `app uninstall --force` explicitly permits deletion of user-modified managed content. Preview it
-with `--dry-run`. `--purge` also removes the category's installed Preset files. During upgrade,
+with `--dry-run`. Uninstall includes internal cleanup by default. With a category, it removes the
+entire internal category cache, including extra files, and retains the App manifest. Without a
+category, it removes the entire internal App cache tree. The App manifest is deleted only when no
+installation records remain. Protected or failed removals retain their records and recorded backups
+so you can resolve the issue and retry; `--force` still requires explicit approval. Cleanup previews
+say what would be removed, while execution reports only completed cleanup. External preset sources
+are always preserved; managed destinations and manifest records follow normal uninstall rules.
+`shine uninstall app/<category>` uses the same category-limited behavior. `--purge` has been
+removed; omit it from existing commands. Cache cleanup is included in the Plan for approval and
+in the `--dry-run` preview.
+
+During upgrade,
 obsolete managed entries are removed only when `--prune-stale` is part of the approved command;
 modified entries remain preserved.
 

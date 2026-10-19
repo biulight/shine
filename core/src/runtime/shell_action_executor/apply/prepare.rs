@@ -443,11 +443,12 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 .collect::<Vec<_>>();
             let manifest =
                 load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-            if (!receipt_transitions.is_empty()
-                && !shell_receipts_match_previous(&manifest, &receipt_transitions))
-                || (!receipt_removals.is_empty()
-                    && !shell_removal_receipts_match_previous(&manifest, &receipt_removals))
-            {
+            if !shell_profile_receipts_match_previous(
+                &manifest,
+                &receipt_transitions,
+                &receipt_removals,
+                &profile.legacy_targets,
+            ) {
                 bail!("Shell profile receipts changed after Plan approval");
             }
             pending.steps.push(PreparedShellStep {

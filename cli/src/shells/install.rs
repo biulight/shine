@@ -1098,7 +1098,6 @@ mod tests {
             &config,
             Some("custom/one"),
             false,
-            false,
         )
         .await
         .unwrap();
@@ -1188,7 +1187,7 @@ mod tests {
             "managed shell profile should exist after install"
         );
 
-        handle_uninstall_approved(&config, None, false, false, true)
+        handle_uninstall_approved(&config, None, false, true)
             .await
             .unwrap();
         assert!(
@@ -1198,10 +1197,12 @@ mod tests {
                 .exists(),
             "preset should be gone after uninstall"
         );
-        let mut rd = fs::read_dir(config.bin_dir()).await.unwrap();
-        assert!(
-            rd.next_entry().await.unwrap().is_none(),
-            "bin dir should be empty after uninstall"
+        assert_eq!(
+            fs::symlink_metadata(config.bin_dir())
+                .await
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
         );
         assert!(
             !managed_shell_profile_path(&config).exists(),
@@ -1209,7 +1210,7 @@ mod tests {
         );
 
         // Idempotency: second uninstall must not error
-        handle_uninstall_approved(&config, None, false, false, true)
+        handle_uninstall_approved(&config, None, false, true)
             .await
             .unwrap();
 
@@ -2029,7 +2030,7 @@ mod tests {
             "command should use the target rename, not the .ts stem"
         );
 
-        handle_uninstall_approved(&config, Some("custom"), false, false, true)
+        handle_uninstall_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
         assert!(

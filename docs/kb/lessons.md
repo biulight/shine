@@ -2666,3 +2666,26 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Fix**: direct installed-resource inspection to `shine list`; distinguish whole-shell, targeted
   and external-source purge behavior in generated help and both manual locales.
 - **Boundary**: presentation only; keep approval, removal scope, recovery and exit behavior intact.
+
+## 2026-10-19 — Default cleanup must retain incomplete App uninstall receipts
+
+- **Symptom**: whole-App cleanup deleted the manifest after protected removal, while the summary
+  claimed receipts were retained; forced retry could no longer locate backups. Preview also printed
+  completed cleanup messages.
+- **Fix**: lifecycle finalization deletes only an empty remaining manifest. Preview projects receipt
+  removals in memory, and CLI cleanup messages use lifecycle effects. CLI uninstall APIs expose no
+  cleanup toggle; both preview and execution request the same Core cleanup policy.
+- **Regression**: real CLI protected/mixed removal retains receipts and restores backups on forced
+  retry; denied-administrator failure preserves receipts, rejects stale approval and succeeds after
+  fresh review. Default cleanup does not bypass journal or approval boundaries.
+
+## 2026-10-19 — Remaining Shell integration needs its own empty-manifest boundary
+
+- **Symptom**: uninstalling the last category left the managed profile and startup sentinel, but
+  subsequent full uninstall generated a profile action with no receipt boundary and failed validation.
+- **Fix**: represent observed remaining integration with the reserved profile-only boundary;
+  require an empty manifest in preparation, commit and recovery. Include profile-only changes in
+  planning even without cache or launcher changes. Keep all file, sentinel and rollback checks.
+- **Regression**: real CLI category-then-full uninstall checks preview/consent and unrelated startup
+  text. Interrupted removal rejects new receipts, changed rollback content and stale approval;
+  freshly reviewed recovery restores integration without overwriting unrelated edits.
