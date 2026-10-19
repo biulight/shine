@@ -167,6 +167,10 @@ shine env broker policy update \
   --mode development --release DEPLOY_TOKEN -- bun run build
 ```
 
+Adding an existing policy name fails without replacing it. To update it, use `--name` and supply
+the policy parameters again, including any project or remote-workspace constraints; see
+`shine env broker policy update --help`. Changed policies still require review and confirmation.
+
 Concurrent policy changes preserve updates to other policies. If the target policy changes or is
 removed while confirmation is pending, the update fails and requires a fresh review.
 

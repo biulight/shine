@@ -71,7 +71,9 @@ pub async fn handle_policy_add(
         .await?;
     let mut store = load_store(config).await?;
     if store.policies.iter().any(|item| item.name == name) {
-        bail!("policy {name} already exists; use `shine env broker policy update {name}`");
+        bail!(
+            "policy {name} already exists; to replace it, use `shine env broker policy update --name {name}` with the policy parameters supplied again: --ssh-target, --workspace, --mode, --release or --release-all-declared, and the command after `--`. Also repeat any --project and --remote-workspace constraints. Review and confirmation are still required for changes. See `shine env broker policy update --help`."
+        );
     }
     store.policies.push(policy);
     save_store(config, &store).await?;

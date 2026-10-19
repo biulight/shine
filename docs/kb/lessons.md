@@ -2631,3 +2631,19 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Fix**: reuse platform-specific command argument quoting in the migration renderer only.
 - **Regression**: real CLI dry-runs assert the hint and unchanged sources/state; POSIX shell or
   PowerShell parses the arguments without invoking artifact execution.
+
+## 2026-10-19 — Dotenv export previews count non-secret bindings only
+
+- **Symptom**: `--include-secrets --dry-run` labeled a plain-only count as including secrets.
+- **Fix**: qualify the count and explicitly state that secrets are neither decrypted nor counted;
+  preserve compilation, secret shadowing, exit codes and publication boundaries.
+- **Regression**: real CLI previews with/without secret inclusion preserve absent/existing outputs
+  and sources, exclude shadowed plain values, and never print value sentinels.
+
+## 2026-10-19 — Duplicate broker policy guidance must match update arguments
+
+- **Symptom**: duplicate add errors suggested a positional policy name that update does not accept.
+- **Fix**: show `--name`, explain that full policy parameters and optional constraints must be
+  supplied again, and point to generated help without implying approval.
+- **Regression**: real CLI duplicate add retains exit 1, stderr and unchanged policy bytes; help
+  exposes the named options and a changed update still cannot proceed without confirmation.

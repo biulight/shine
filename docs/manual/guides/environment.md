@@ -667,8 +667,10 @@ This writes plaintext secrets. On Unix, a secret-bearing output is created with 
 permissions; keep it out of version control on every platform. Without `--force`, existing outputs
 (including dangling symbolic links) are preserved, even if they appear while the export is waiting
 for decryption. Concurrent exports to the same destination allow only one to succeed. Add `--force`
-to replace an existing output. `--dry-run` reports the mode, destination, and variable count without
-printing values or writing the file.
+to replace an existing output. `--dry-run` reports the mode, destination, and effective non-secret
+variable count without printing values or writing the file. Secrets are not decrypted or counted,
+even with `--include-secrets`; that option is applied only during the actual export. A plain value
+overridden by a secret is excluded from the preview count.
 
 The exported file has no Shine metadata or runtime dependency. To leave Shine env, export and test
 each required mode, add secret-bearing outputs to `.gitignore`, remove `shine env run` wrappers, and

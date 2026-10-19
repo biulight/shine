@@ -1287,3 +1287,185 @@ fn preset_migration_artifact_hint_preserves_category_argument() {
         assert!(!fixture.0.join("state").exists());
     }
 }
+
+#[test]
+fn dotenv_export_preview_counts_only_effective_non_secret_values() {
+    let fixture = Fixture::new();
+    let workspace = fixture.0.join("shine.workspace.toml");
+    let base = fixture.0.join("base.toml");
+    let overlay = fixture.0.join("production.toml");
+    let workspace_text = "version = 2\n[env]\nfiles = ['base.toml', 'production.toml']\n";
+    let base_text = "version = 1\n[plain]\nPUBLIC = 'public-value-sentinel'\nSHADOWED = 'shadowed-value-sentinel'\n[secret]\nTOKEN = 'secret-value-sentinel'\n";
+    let overlay_text = "version = 1\n[secret]\nSHADOWED = true\n";
+    fs::write(&workspace, workspace_text).unwrap();
+    fs::write(&base, base_text).unwrap();
+    fs::write(&overlay, overlay_text).unwrap();
+    // Pending/unsealed secrets would fail if preview tried the secret export path.
+    for include_secrets in [false, true] {
+        for existing in [false, true] {
+            let destination = fixture.0.join("export.env");
+            if existing {
+                fs::write(&destination, "existing-output-sentinel").unwrap();
+            }
+            let mut command = fixture.command();
+            command
+                .env("NO_COLOR", "1")
+                .args([
+                    "env",
+                    "workspace",
+                    "export",
+                    "--format",
+                    "dotenv",
+                    "--mode",
+                    "production",
+                    "--dry-run",
+                    "--output",
+                ])
+                .arg(&destination);
+            if include_secrets {
+                command.arg("--include-secrets");
+            }
+            if existing {
+                command.arg("--force");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let suffix = if include_secrets {
+                "; --include-secrets will be applied during actual export."
+            } else {
+                "."
+            };
+            assert_eq!(
+                stdout.trim(),
+                format!(
+                    "Would export 1 non-secret variable(s) for mode production to {}. Secrets were not decrypted or counted{suffix}",
+                    destination.display()
+                )
+            );
+            for sentinel in [
+                "public-value-sentinel",
+                "shadowed-value-sentinel",
+                "secret-value-sentinel",
+                "existing-output-sentinel",
+            ] {
+                assert!(!stdout.contains(sentinel), "{stdout}");
+            }
+            if existing {
+                assert_eq!(
+                    fs::read_to_string(&destination).unwrap(),
+                    "existing-output-sentinel"
+                );
+                fs::remove_file(&destination).unwrap();
+            } else {
+                assert!(!destination.exists());
+            }
+            for (path, original) in [
+                (&workspace, workspace_text),
+                (&base, base_text),
+                (&overlay, overlay_text),
+            ] {
+                assert_eq!(fs::read_to_string(path).unwrap(), original);
+            }
+        }
+    }
+}
+
+#[test]
+fn broker_duplicate_policy_hint_preserves_policy_and_update_approval() {
+    let fixture = Fixture::new();
+    let workspace = fixture.0.join("shine.workspace.toml");
+    fs::write(&workspace, "version = 2\n[env]\nfiles = ['env.toml']\n").unwrap();
+    fs::write(fixture.0.join("env.toml"), "version = 1\n[secret]\nTOKEN = true\n[payload]\ndata = 'not-decrypted-by-policy-commands'\n").unwrap();
+    let run = |operation: &str, argument: &str| {
+        fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args([
+                "env",
+                "broker",
+                "policy",
+                operation,
+                "--name",
+                "review",
+                "--ssh-target",
+                "example.invalid",
+                "--workspace",
+            ])
+            .arg(&workspace)
+            .args([
+                "--mode",
+                "dev",
+                "--release",
+                "TOKEN",
+                "--",
+                "echo",
+                argument,
+            ])
+            .output()
+            .unwrap()
+    };
+    let added = run("add", "original");
+    assert_eq!(added.status.code(), Some(0), "{added:?}");
+    assert!(added.stderr.is_empty(), "{added:?}");
+    assert!(
+        String::from_utf8_lossy(&added.stdout).contains("added SSH secret broker policy review")
+    );
+    let policy = fixture.0.join("state/ssh-secret-broker.toml");
+    let original = fs::read(&policy).unwrap();
+    let duplicate = run("add", "changed");
+    assert_eq!(duplicate.status.code(), Some(1), "{duplicate:?}");
+    assert!(duplicate.stdout.is_empty(), "{duplicate:?}");
+    let error = String::from_utf8_lossy(&duplicate.stderr);
+    for fragment in [
+        "policy review already exists",
+        "shine env broker policy update --name review",
+        "policy parameters supplied again",
+        "--ssh-target",
+        "--workspace",
+        "--mode",
+        "--release or --release-all-declared",
+        "command after `--`",
+        "--project",
+        "--remote-workspace",
+        "Review and confirmation are still required for changes",
+        "shine env broker policy update --help",
+    ] {
+        assert!(error.contains(fragment), "{error}");
+    }
+    assert!(!error.contains("policy update review"), "{error}");
+    assert_eq!(fs::read(&policy).unwrap(), original);
+    let help = fixture
+        .command()
+        .args(["env", "broker", "policy", "update", "--help"])
+        .output()
+        .unwrap();
+    assert_eq!(help.status.code(), Some(0), "{help:?}");
+    assert!(help.stderr.is_empty(), "{help:?}");
+    let help = String::from_utf8_lossy(&help.stdout);
+    for option in [
+        "--name",
+        "--ssh-target",
+        "--workspace",
+        "--mode",
+        "--release",
+        "--release-all-declared",
+        "--project",
+        "--remote-workspace",
+    ] {
+        assert!(help.contains(option), "{help}");
+    }
+    // Supplying the corrected arguments does not approve a changed policy.
+    let update = run("update", "changed");
+    assert_eq!(update.status.code(), Some(1), "{update:?}");
+    assert!(
+        String::from_utf8_lossy(&update.stdout).contains("changed"),
+        "{update:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&update.stderr).contains("reading policy update confirmation"),
+        "{update:?}"
+    );
+    assert_eq!(fs::read(&policy).unwrap(), original);
+}

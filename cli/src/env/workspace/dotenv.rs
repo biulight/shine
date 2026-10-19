@@ -63,13 +63,13 @@ pub async fn handle_export(
     let contents = render_dotenv(&values)?;
     if dry_run {
         println!(
-            "Would export {} variables for mode {mode} to {}{}",
+            "Would export {} non-secret variable(s) for mode {mode} to {}. Secrets were not decrypted or counted{}",
             values.len(),
             output.display(),
             if include_secrets {
-                " (including secrets)"
+                "; --include-secrets will be applied during actual export."
             } else {
-                ""
+                "."
             }
         );
     } else {
