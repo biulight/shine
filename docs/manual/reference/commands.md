@@ -269,6 +269,8 @@ Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These c
 authoring input without installing it. `migrate --dry-run` previews legacy metadata changes;
 applying a migration requires review and confirmation. A Git-managed overlay is a disposable mirror,
 so edit its upstream checkout rather than the mirror.
+Artifact follow-up commands printed by migration quote category names for POSIX shells on Unix
+and PowerShell on Windows. Migration itself does not run those commands.
 New templates omit empty and speculative capability tables. `--unrestricted` adds the optional
 unrestricted author statement, but all arbitrary code is unisolated with or without it.
 

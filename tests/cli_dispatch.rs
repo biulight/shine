@@ -1208,3 +1208,82 @@ fn self_install_path_hint_preserves_literal_directory_and_existing_path() {
         Some(dest.to_str().unwrap())
     );
 }
+
+#[test]
+fn preset_migration_artifact_hint_preserves_category_argument() {
+    for (category, posix, powershell) in [
+        ("demo", "demo", "'demo'"),
+        ("demo space", "'demo space'", "'demo space'"),
+        ("it's", "'it'\\''s'", "'it''s'"),
+        ("literal$HOME", "'literal$HOME'", "'literal$HOME'"),
+        #[cfg(unix)]
+        ("double\"quote", "'double\"quote'", ""),
+    ] {
+        let fixture = Fixture::new();
+        let root = fixture.0.join("presets");
+        let app = root.join("app").join(category);
+        fs::create_dir_all(&app).unwrap();
+        let quoted = toml::Value::String(category.into()).to_string();
+        let original = format!(
+            "dest = '~/.demo'\npost_install = {{ command = 'shine', args = ['app', 'artifact', 'apply', {quoted}] }}\n[artifact]\nscript = 'build.ts'\n"
+        );
+        fs::write(app.join("shine.toml"), &original).unwrap();
+        let script = "throw new Error('artifact must not run during migration');\n";
+        fs::write(app.join("build.ts"), script).unwrap();
+        let output = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["preset", "migrate"])
+            .arg(&root)
+            .arg("--dry-run")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let command = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("    Next: run `"))
+            .and_then(|line| line.strip_suffix("` after relevant changes."))
+            .unwrap();
+        let expected = if cfg!(windows) { powershell } else { posix };
+        assert_eq!(command, format!("shine app artifact apply {expected}"));
+        #[cfg(unix)]
+        {
+            // Parse only: set positional arguments instead of executing the suggested operation.
+            let parsed = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("set -- {command}; printf '%s\\0' \"$@\""))
+                .env("HOME", fixture.0.join("home"))
+                .output()
+                .unwrap();
+            assert!(parsed.status.success(), "{parsed:?}");
+            assert!(parsed.stderr.is_empty(), "{parsed:?}");
+            assert_eq!(
+                parsed.stdout,
+                format!("shine\0app\0artifact\0apply\0{category}\0").as_bytes()
+            );
+        }
+        #[cfg(windows)]
+        {
+            // A local function captures arguments; no artifact command is invoked.
+            let parsed = Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command"])
+                .arg(format!(
+                    "function shine {{ ConvertTo-Json -Compress -InputObject @($args) }}; {command}"
+                ))
+                .output()
+                .unwrap();
+            assert!(parsed.status.success(), "{parsed:?}");
+            assert!(parsed.stderr.is_empty(), "{parsed:?}");
+            let args: Vec<String> = serde_json::from_slice(&parsed.stdout).unwrap();
+            assert_eq!(args, ["app", "artifact", "apply", category]);
+        }
+        assert_eq!(
+            fs::read_to_string(app.join("shine.toml")).unwrap(),
+            original
+        );
+        assert_eq!(fs::read_to_string(app.join("build.ts")).unwrap(), script);
+        assert!(!fixture.0.join("state").exists());
+    }
+}

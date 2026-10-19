@@ -217,6 +217,8 @@ shine preset pull
 发布预设前使用 `validate`、`lint`、`plan` 和 `test`。这些命令只检查创作输入，不会安装预设。
 `migrate --dry-run` 用于预览旧 metadata 迁移，实际应用前需要审阅并确认。Git 管理的 overlay 是
 可丢弃镜像，应在上游 checkout 中编辑，而不是修改镜像。
+迁移输出的 artifact 后续操作命令会引用分类名：Unix 使用 POSIX shell 语法，Windows 使用
+PowerShell 语法。迁移本身不会执行这些命令。
 新模板不会生成空表或推测性能力清单。`--unrestricted` 会添加可选的 unrestricted 作者说明，
 但无论是否使用，所有任意代码都未隔离。
 

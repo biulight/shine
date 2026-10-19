@@ -2623,3 +2623,11 @@ When cutting a release, always diff against the latest stable `v*` tag
   stderr with their error chain, retaining the Windows elevation hint and best-effort success policy.
 - **Regression**: execute the generated hint in an isolated shell; capture sync stdout/stderr and
   verify preserved files, successful copying and same-path skipping.
+
+## 2026-10-19 — Migration artifact hints must quote category arguments
+
+- **Symptom**: a valid category containing spaces produced an artifact follow-up command that
+  failed argument parsing; quotes and dollar signs could also change shell interpretation.
+- **Fix**: reuse platform-specific command argument quoting in the migration renderer only.
+- **Regression**: real CLI dry-runs assert the hint and unchanged sources/state; POSIX shell or
+  PowerShell parses the arguments without invoking artifact execution.

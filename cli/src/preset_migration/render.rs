@@ -261,6 +261,7 @@ pub(super) fn render_remediation(
         if diagnostic.code == "recursive_artifact_hook_removed"
             && let Some(category) = diagnostic.target.strip_prefix("app/")
         {
+            let category = quote_command_arg(Path::new(category), RuntimePlatform::current());
             let _ = writeln!(
                 output,
                 "    Next: run `shine app artifact apply {category}` after relevant changes."
