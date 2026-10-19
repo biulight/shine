@@ -92,8 +92,8 @@ pub fn path_install_hint(dir: &Path) -> String {
         )
     } else {
         format!(
-            "Add it to PATH, for example: export PATH=\"{}:$PATH\"",
-            dir.display()
+            "Add it to PATH, for example: export PATH={}\":$PATH\"",
+            crate::shell_quote::single_quote(&dir.to_string_lossy())
         )
     }
 }

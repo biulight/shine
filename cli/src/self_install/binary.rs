@@ -19,21 +19,23 @@ pub(super) async fn sync_self_install_dest(config: &Config, src: &std::path::Pat
             colors::green(&format!("Synced system copy at {}", dest.display()))
         ),
         Ok(SelfInstallSync::AlreadyCurrent) => {}
-        // Unix already tried `sudo` automatically inside `install_binary_with_elevation`;
-        // reaching here means it was declined or unavailable non-interactively. Windows has
-        // no such auto-elevation path, so it still needs the manual hint.
-        Err(e) if cfg!(windows) && has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied) => {
-            let hint = format!(
-                "Installed copy at {} needs manual sync; rerun from an elevated terminal if needed.",
-                dest.display()
-            );
-            println!("{}", colors::yellow(&hint));
-        }
         Err(e) => eprintln!(
-            "Warning: failed to sync system copy at {}: {e}",
-            dest.display()
+            "{}",
+            colors::yellow_stderr(&self_install_sync_warning(dest, &e))
         ),
     }
+}
+
+fn self_install_sync_warning(dest: &std::path::Path, error: &anyhow::Error) -> String {
+    let mut warning = format!(
+        "Warning: failed to sync system copy at {}: {error:#}",
+        dest.display()
+    );
+    // Unix already attempted elevation; Windows retains its manual recovery hint.
+    if cfg!(windows) && has_io_error_kind(error, std::io::ErrorKind::PermissionDenied) {
+        warning.push_str(" Rerun from an elevated terminal to sync the installed copy if needed.");
+    }
+    warning
 }
 
 enum SelfInstallSync {

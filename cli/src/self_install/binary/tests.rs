@@ -109,3 +109,80 @@ async fn self_install_errors_when_source_is_destination() {
 
     tokio::fs::remove_dir_all(&dir).await.unwrap();
 }
+
+#[test]
+fn sync_warning_preserves_nested_permission_error_and_platform_hint() {
+    let error = anyhow::Error::new(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "permission sentinel",
+    ))
+    .context("copy context");
+    let warning = self_install_sync_warning(std::path::Path::new("installed-shine"), &error);
+    assert!(warning.starts_with("Warning: failed to sync system copy at installed-shine:"));
+    assert!(
+        warning.contains("copy context: permission sentinel"),
+        "{warning}"
+    );
+    assert_eq!(
+        warning.contains("elevated terminal"),
+        cfg!(windows),
+        "{warning}"
+    );
+}
+
+#[tokio::test]
+async fn sync_output_preserves_warning_stream_and_success_behavior() {
+    const CHILD_ROOT: &str = "SHINE_TEST_SELF_SYNC_OUTPUT_ROOT";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        let root = std::path::PathBuf::from(root);
+        let src = root.join("source");
+        let mut config = config_in(&root);
+        config.self_install_dest = Some(root.join("parent-file/shine"));
+        // A regular file as parent fails without triggering automatic elevation.
+        sync_self_install_dest(&config, &src).await;
+        assert_eq!(
+            std::fs::read(root.join("parent-file")).unwrap(),
+            b"preserved"
+        );
+        config.self_install_dest = Some(root.join("installed-shine"));
+        sync_self_install_dest(&config, &src).await;
+        assert_eq!(
+            std::fs::read(root.join("installed-shine")).unwrap(),
+            b"new binary"
+        );
+        config.self_install_dest = Some(src.clone());
+        sync_self_install_dest(&config, &src).await;
+        return;
+    }
+    let root = make_temp_dir().await;
+    std::fs::write(root.join("source"), b"new binary").unwrap();
+    std::fs::write(root.join("parent-file"), b"preserved").unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "self_install::binary::tests::sync_output_preserves_warning_stream_and_success_behavior", "--nocapture"])
+        .env(CHILD_ROOT, &root).env("NO_COLOR", "1").output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stdout.contains("Warning:"), "{stdout}");
+    assert_eq!(
+        stdout.matches("Synced system copy at").count(),
+        1,
+        "{stdout}"
+    );
+    assert_eq!(
+        stderr
+            .matches("Warning: failed to sync system copy at")
+            .count(),
+        1,
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("failed to create destination dir:"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("parent-file: "),
+        "missing inner OS error: {stderr}"
+    );
+    tokio::fs::remove_dir_all(root).await.unwrap();
+}

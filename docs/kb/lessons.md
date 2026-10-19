@@ -2614,3 +2614,12 @@ When cutting a release, always diff against the latest stable `v*` tag
   sizing and padding. Preserve observation, exit codes, approval and recovery behavior.
 - **Regression**: exercise real CLI mixed/foreign/empty records and unchanged manifest bytes; check
   ASCII, wide and combining labels through the shared outcome renderer.
+
+## 2026-10-19 — Self-install hints preserve literal paths and sync diagnostics
+
+- **Symptom**: the POSIX PATH hint expanded special characters in an installed directory; separate
+  copy synchronization warnings used different streams and omitted inner errors.
+- **Fix**: quote the literal directory separately from PATH expansion and emit sync failures on
+  stderr with their error chain, retaining the Windows elevation hint and best-effort success policy.
+- **Regression**: execute the generated hint in an isolated shell; capture sync stdout/stderr and
+  verify preserved files, successful copying and same-path skipping.

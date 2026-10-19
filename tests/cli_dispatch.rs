@@ -1163,3 +1163,48 @@ async fn sys_status_reports_per_item_records_without_mutating_them() {
         assert_eq!(fs::read_to_string(path).unwrap(), bytes);
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn self_install_path_hint_preserves_literal_directory_and_existing_path() {
+    let fixture = Fixture::new();
+    let dir = fixture
+        .0
+        .join("space ' \" $HOME $(touch sentinel) `touch sentinel` \\ 中文");
+    let dest = dir.join("shine");
+    let output = fixture
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["self", "install", "--dest"])
+        .arg(&dest)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert!(dest.is_file());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let command = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Add it to PATH, for example: "))
+        .unwrap();
+    let output = Command::new("/bin/sh")
+        .current_dir(&fixture.0)
+        .env("PATH", "/usr/bin:/bin")
+        .arg("-c")
+        .arg(format!("{command}; printf '%s' \"$PATH\""))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{}:/usr/bin:/bin", dir.display())
+    );
+    assert!(!fixture.0.join("sentinel").exists());
+    let config: toml::Value =
+        toml::from_str(&fs::read_to_string(fixture.0.join("state/config.toml")).unwrap()).unwrap();
+    assert_eq!(
+        config["self_install_dest"].as_str(),
+        Some(dest.to_str().unwrap())
+    );
+}
