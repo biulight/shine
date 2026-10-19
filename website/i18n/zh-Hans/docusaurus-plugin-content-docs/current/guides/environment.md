@@ -180,6 +180,9 @@ shine env secret identity list
 已有文件需要 `--force` 才能替换。强制替换会先在私有临时目录生成并检查新 identity，再替换旧文件；
 生成或检查失败时保留旧 identity。Unix 上，生成的 identity 文件使用仅所有者可读写的 `0600` 权限。
 
+自定义 `--output` 时，输出的 `age_identity` 配置提示使用绝对路径和 TOML 引用，
+因此切换目录后仍能找到该文件。提示本身不会修改配置。
+
 ### 在 macOS 上使用 Touch ID
 
 如果希望每次解密都需要本机用户授权，macOS 上可以改用由 Secure Enclave 托管的 identity。

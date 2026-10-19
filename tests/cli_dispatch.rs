@@ -1469,3 +1469,154 @@ fn broker_duplicate_policy_hint_preserves_policy_and_update_approval() {
     );
     assert_eq!(fs::read(&policy).unwrap(), original);
 }
+
+#[cfg(unix)]
+#[test]
+fn identity_hint_round_trips_toml_and_survives_changed_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let bin = fixture.0.join("test-bin");
+    fs::create_dir_all(&bin).unwrap();
+    let keygen = bin.join("age-keygen");
+    // Public placeholder only: no real keys, device interaction or external keygen.
+    fs::write(&keygen, "#!/bin/sh\n[ \"$1\" = '-o' ] && [ \"$#\" = 2 ] || exit 91\nprintf '# recipient: age1reviewplaceholder\\n' > \"$2\"\nprintf 'called\\n' >> \"$SHINE_TEST_KEYGEN_LOG\"\n").unwrap();
+    fs::set_permissions(&keygen, fs::Permissions::from_mode(0o755)).unwrap();
+    let log = fixture.0.join("keygen.log");
+    let relative = PathBuf::from("keys/space ' quote\" back\\slash $HOME/identity.txt");
+    let expected = fs::canonicalize(&fixture.0).unwrap().join(&relative);
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    let output = fixture
+        .command()
+        .env("PATH", path)
+        .env("SHINE_TEST_KEYGEN_LOG", &log)
+        .env("NO_COLOR", "1")
+        .args(["env", "secret", "identity", "init", "--output"])
+        .arg(&relative)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let original = fs::read(&expected).unwrap();
+    assert_eq!(original, b"# recipient: age1reviewplaceholder\n");
+    assert_eq!(fs::read_to_string(&log).unwrap(), "called\n");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let assignment = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Set age_identity = "))
+        .and_then(|line| line.strip_suffix(" in config.toml so shine can find this identity."))
+        .unwrap();
+    let snippet = format!("age_identity = {assignment}\n");
+    let parsed: toml::Value = toml::from_str(&snippet).unwrap();
+    let value = parsed["age_identity"].as_str().unwrap();
+    assert!(std::path::Path::new(value).is_absolute());
+    assert_eq!(std::path::Path::new(value), expected);
+    let state = fixture.0.join("state");
+    assert!(
+        !state.join("config.toml").exists(),
+        "init must not apply its config hint"
+    );
+    fs::create_dir_all(&state).unwrap();
+    fs::write(
+        state.join("config.toml"),
+        format!("schema_version = 2\n{snippet}"),
+    )
+    .unwrap();
+    let elsewhere = fixture.0.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    for cwd in [&fixture.0, &elsewhere] {
+        let listed = fixture
+            .command()
+            .current_dir(cwd)
+            .env("NO_COLOR", "1")
+            .args(["env", "secret", "identity", "list"])
+            .output()
+            .unwrap();
+        assert_eq!(listed.status.code(), Some(0), "{listed:?}");
+        assert!(listed.stderr.is_empty(), "{listed:?}");
+        assert!(
+            String::from_utf8_lossy(&listed.stdout).contains("age1reviewplaceholder"),
+            "{listed:?}"
+        );
+    }
+    assert_eq!(fs::read(expected).unwrap(), original);
+    assert_eq!(fs::read_to_string(log).unwrap(), "called\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn identity_hint_survives_working_directory_removed_by_keygen() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let work = fixture.0.join("work");
+    let bin = fixture.0.join("bin");
+    fs::create_dir_all(&work).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    let keygen = bin.join("age-keygen");
+    // Keep the output outside the directory removed by this isolated substitute.
+    fs::write(&keygen, "#!/bin/sh\n[ \"$1\" = '-o' ] && [ \"$2\" = '../identity.txt' ] && [ \"$#\" = 2 ] || exit 91\nprintf '# recipient: age1reviewplaceholder\\n' > \"$2\"\nprintf 'called\\n' >> \"$SHINE_TEST_KEYGEN_LOG\"\n/bin/rmdir \"$SHINE_TEST_CWD\"\n").unwrap();
+    fs::set_permissions(&keygen, fs::Permissions::from_mode(0o755)).unwrap();
+    let log = fixture.0.join("keygen.log");
+    let output = fixture
+        .command()
+        .current_dir(&work)
+        .env("PATH", &bin)
+        .env("SHINE_TEST_CWD", &work)
+        .env("SHINE_TEST_KEYGEN_LOG", &log)
+        .env("NO_COLOR", "1")
+        .args([
+            "env",
+            "secret",
+            "identity",
+            "init",
+            "--output",
+            "../identity.txt",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert!(!work.exists());
+    assert_eq!(fs::read_to_string(&log).unwrap(), "called\n");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("generated age identity at ../identity.txt"),
+        "{stdout}"
+    );
+    let value = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Set age_identity = "))
+        .and_then(|line| line.strip_suffix(" in config.toml so shine can find this identity."))
+        .unwrap();
+    let snippet = format!("age_identity = {value}\n");
+    let parsed: toml::Value = toml::from_str(&snippet).unwrap();
+    let hinted = std::path::Path::new(parsed["age_identity"].as_str().unwrap());
+    assert!(hinted.is_absolute());
+    assert_eq!(
+        hinted,
+        fs::canonicalize(fixture.0.join("identity.txt")).unwrap()
+    );
+    assert_eq!(
+        fs::read(hinted).unwrap(),
+        b"# recipient: age1reviewplaceholder\n"
+    );
+    let state = fixture.0.join("state");
+    assert!(!state.join("config.toml").exists());
+    fs::create_dir_all(&state).unwrap();
+    fs::write(
+        state.join("config.toml"),
+        format!("schema_version = 2\n{snippet}"),
+    )
+    .unwrap();
+    let listed = fixture
+        .command()
+        .args(["env", "secret", "identity", "list"])
+        .output()
+        .unwrap();
+    assert_eq!(listed.status.code(), Some(0), "{listed:?}");
+    assert!(listed.stderr.is_empty(), "{listed:?}");
+    assert!(String::from_utf8_lossy(&listed.stdout).contains("age1reviewplaceholder"));
+    assert_eq!(fs::read_to_string(log).unwrap(), "called\n");
+}

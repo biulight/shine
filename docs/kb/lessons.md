@@ -2647,3 +2647,14 @@ When cutting a release, always diff against the latest stable `v*` tag
   supplied again, and point to generated help without implying approval.
 - **Regression**: real CLI duplicate add retains exit 1, stderr and unchanged policy bytes; help
   exposes the named options and a changed update still cannot proceed without confirmation.
+
+## 2026-10-19 — Identity configuration hints preserve path identity
+
+- **Symptom**: custom identity hints embedded raw paths in TOML quotes; relative paths also
+  depended on the directory used by later commands.
+- **Fix**: render the generated target as an absolute TOML string in the hint only; leave keygen
+  arguments, publication, config loading and device selection unchanged. Capture the hint before
+  keygen, resolving its parent so a disappearing invocation directory cannot cause a late failure
+  or leave a `../` hint dependent on that directory.
+- **Regression**: a real CLI with an isolated placeholder keygen parses the emitted TOML, checks
+  special path characters and reads the same identity from another directory without another keygen.

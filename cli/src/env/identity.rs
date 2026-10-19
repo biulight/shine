@@ -152,6 +152,30 @@ pub async fn handle_identity_init(
             .with_context(|| format!("creating {}", parent.display()))?;
     }
 
+    // Capture presentation data before keygen can change the working directory's
+    // availability. Resolve the parent so `../identity.txt` remains usable too.
+    // Keep the original output_path for generation and publication.
+    let identity_hint =
+        if config.age_identity.is_none() && output_path != default_identity_path(config) {
+            let absolute_output = std::path::absolute(&output_path)
+                .context("resolving identity path for the configuration hint")?;
+            let parent = tokio::fs::canonicalize(
+                absolute_output
+                    .parent()
+                    .context("identity path has no parent")?,
+            )
+            .await
+            .context("resolving identity parent for the configuration hint")?;
+            let target = parent.join(
+                absolute_output
+                    .file_name()
+                    .context("identity path has no file name")?,
+            );
+            Some(toml::Value::String(target.to_string_lossy().into_owned()))
+        } else {
+            None
+        };
+
     let program = if touch_id {
         "age-plugin-se"
     } else {
@@ -185,12 +209,11 @@ pub async fn handle_identity_init(
             )
         );
     }
-    if config.age_identity.is_none() && output_path != default_identity_path(config) {
+    if let Some(identity_value) = identity_hint {
         println!(
             "{}",
             colors::dim(&format!(
-                "Set age_identity = \"{}\" in config.toml so shine can find this identity.",
-                output_path.display()
+                "Set age_identity = {identity_value} in config.toml so shine can find this identity."
             ))
         );
     }

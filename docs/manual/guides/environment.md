@@ -199,6 +199,8 @@ shine env secret identity list
 ```
 
 A normal identity uses `age-keygen` and defaults to `~/.shine/age/identity.txt`.
+For a custom `--output`, any printed `age_identity` configuration hint uses an absolute path and
+TOML quoting, so it remains usable from another directory. The hint does not modify your config.
 Existing files require `--force`. Forced replacement generates and checks the new identity in a
 private temporary directory before replacing the old file; generation or validation failure
 preserves the old identity. On Unix, the resulting identity file has owner-only `0600` permissions.
