@@ -2658,3 +2658,11 @@ When cutting a release, always diff against the latest stable `v*` tag
   or leave a `../` hint dependent on that directory.
 - **Regression**: a real CLI with an isolated placeholder keygen parses the emitted TOML, checks
   special path characters and reads the same identity from another directory without another keygen.
+
+## 2026-10-19 — Shell uninstall guidance distinguishes inventory and purge scope
+
+- **Symptom**: help called `shell list` installed inventory and described purge as empty-directory
+  removal even though whole-shell internal purge includes extra cache-tree files.
+- **Fix**: direct installed-resource inspection to `shine list`; distinguish whole-shell, targeted
+  and external-source purge behavior in generated help and both manual locales.
+- **Boundary**: presentation only; keep approval, removal scope, recovery and exit behavior intact.

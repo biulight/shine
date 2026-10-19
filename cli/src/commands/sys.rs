@@ -53,7 +53,7 @@ pub enum SysCommands {
         #[arg(value_name = "ITEM")]
         item: String,
     },
-    /// Show system bootstrap items previously initialized by shine
+    /// Show recorded results per item for the current OS, not live checks
     Status,
     /// Bootstrap software and shell integration for the current OS
     Bootstrap {

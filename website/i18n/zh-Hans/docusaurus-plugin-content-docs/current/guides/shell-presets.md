@@ -106,9 +106,15 @@ trust，因为以后调用或 source 会读取可变的受信任来源。Snapsho
 未安装兄弟不需要 grant，也不会被安装。升级 Shine 后会保留已有 live launcher，但 `list`/`info`
 会显示 `development trust required`，直到重新审阅。卸载和恢复无需先信任即将移除的代码。
 
+使用 `shine list` 查看已安装资源；`shine shell list` 展示可用 Shell 预设。
 按命令卸载会保留同类别下其他已安装命令；只要兄弟命令仍需要，共享 preset 或 snapshot 文件
-就可能继续保留。`--purge` 会额外删除空的受管预设目录；未指定 target 时会处理整棵 shell
-预设目录。它不会删除 `~/.shine/config.toml`。
+就可能继续保留。
+
+`--purge` 会额外删除空的受管目录。未指定 target 时，它会清理整棵内部 Shell 预设缓存树，
+包括存放在其中的额外文件。指定类别或命令 target 时，会保留额外缓存文件，以及其他已安装
+兄弟命令仍需要的共享文件。即使指定 `--purge`，外部预设源目录也会保留；适用的受管启动器
+和安装 snapshot 仍会被移除。卸载不会删除 `~/.shine/config.toml`。
+请审阅 Plan，并用 `--dry-run` 检查所选范围。
 
 ## 内置常用命令
 

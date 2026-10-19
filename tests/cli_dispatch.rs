@@ -1620,3 +1620,73 @@ fn identity_hint_survives_working_directory_removed_by_keygen() {
     assert!(String::from_utf8_lossy(&listed.stdout).contains("age1reviewplaceholder"));
     assert_eq!(fs::read_to_string(log).unwrap(), "called\n");
 }
+
+#[test]
+fn sys_status_help_describes_recorded_current_os_results() {
+    let fixture = Fixture::new();
+    for args in [vec!["sys", "--help"], vec!["sys", "status", "--help"]] {
+        let output = fixture.command().args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+        let help = String::from_utf8(output.stdout).unwrap();
+        let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            help.contains("Show recorded results per item for the current OS, not live checks"),
+            "{args:?}: {help}"
+        );
+        assert!(
+            !help.contains("Show system bootstrap items previously initialized by shine"),
+            "{args:?}: {help}"
+        );
+        assert!(
+            !fixture.0.join("state").exists(),
+            "{args:?} initialized state"
+        );
+    }
+}
+
+#[test]
+fn shell_uninstall_help_describes_inventory_and_purge_scope() {
+    let fixture = Fixture::new();
+    for args in [
+        vec!["shell", "--help"],
+        vec!["shell", "uninstall", "--help"],
+    ] {
+        let output = fixture.command().args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+        let help = String::from_utf8(output.stdout).unwrap();
+        let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            help.contains("Run 'shine list' to see installed resources"),
+            "{args:?}: {help}"
+        );
+        assert!(
+            !help.contains("Run 'shine shell list' to see installed categories"),
+            "{args:?}: {help}"
+        );
+        if args.contains(&"uninstall") {
+            assert_eq!(
+                help.matches("Run 'shine list' to see installed resources")
+                    .count(),
+                2,
+                "{help}"
+            );
+            for text in [
+                "Without TARGET, purge the entire internal Shell preset cache tree, including extra files",
+                "With TARGET, retain extra cache files and shared files still needed by installed sibling commands",
+                "External preset sources and config.toml are preserved",
+            ] {
+                assert!(help.contains(text), "{help}");
+            }
+            assert!(
+                !help.contains("Also remove empty managed directories after uninstall"),
+                "{help}"
+            );
+        }
+        assert!(
+            !fixture.0.join("state").exists(),
+            "{args:?} initialized state"
+        );
+    }
+}

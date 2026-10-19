@@ -130,10 +130,16 @@ uninstalled siblings do not need a grant and are not installed. Existing live la
 after upgrading Shine, but `list`/`info` reports `development trust required` until they are reviewed.
 Uninstall and recovery remain available without granting trust to code being removed.
 
+Use `shine list` to inspect installed resources; `shine shell list` shows available Shell presets.
 Command-scoped uninstall preserves other installed commands in the category. Shared preset or
-snapshot files may remain while a sibling command still needs them. `--purge` also removes empty
-managed preset directories; without a target, uninstall processes the whole shell preset tree. It
-never removes `~/.shine/config.toml`.
+snapshot files may remain while a sibling command still needs them.
+
+`--purge` also removes empty managed directories. Without a target, it purges the entire internal
+Shell preset cache tree, including extra files stored there. With a category or command target,
+extra cache files are preserved, as are shared files still needed by installed sibling commands.
+External preset source directories are preserved even with `--purge`; managed launchers and
+installation snapshots are still removed as applicable. Uninstall never removes
+`~/.shine/config.toml`. Review the Plan and use `--dry-run` to inspect the selected scope.
 
 ## Common built-in commands
 

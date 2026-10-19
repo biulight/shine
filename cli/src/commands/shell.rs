@@ -40,16 +40,19 @@ pub enum ShellCommands {
         yes: bool,
     },
     /// Uninstall shell presets and remove bin symlinks.
-    /// Run 'shine shell list' to see installed categories.
+    /// Run 'shine list' to see installed resources.
     Uninstall {
         /// Show all security Plan paths, identities, and diagnostics
         #[arg(long)]
         verbose: bool,
         /// Category or category/command to uninstall. Uninstalls all if omitted.
-        /// Run 'shine shell list' to see installed categories.
+        /// Run 'shine list' to see installed resources.
         #[arg(value_name = "TARGET")]
         target: Option<String>,
-        /// Also remove empty managed directories after uninstall
+        /// Also remove empty managed directories. Without TARGET, purge the entire internal
+        /// Shell preset cache tree, including extra files. With TARGET, retain extra cache
+        /// files and shared files still needed by installed sibling commands.
+        /// External preset sources and config.toml are preserved.
         #[arg(long)]
         purge: bool,
         /// Print what would be removed without making any changes
