@@ -227,6 +227,8 @@ target, capability, source directory, and source layer remain unchanged. This is
 authorization, not continuous code review.
 `trust list` groups grants that share one security scope into a compact row and checks them against
 the active Preset; `--verbose` expands capabilities, development-source labels, and review guidance.
+Its review commands preserve the complete target as one argument, including spaces and shell
+punctuation; use POSIX shells on Unix and PowerShell on Windows. Listing never renews a grant.
 Concurrent `trust grant` and `trust revoke` commands preserve changes to other targets; a completed
 revocation cannot be restored by another command saving an older copy of the trust store.
 

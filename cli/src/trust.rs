@@ -272,7 +272,8 @@ fn render_verbose_list_group(group: &TrustListGroup) -> Vec<String> {
     if group.status != GrantListStatus::Current {
         lines.push(format!(
             "  {:<LABEL_WIDTH$}shine trust inspect {}",
-            "Review", group.target
+            "Review",
+            crate::shell_quote::command_arg(&group.target)
         ));
     }
     lines

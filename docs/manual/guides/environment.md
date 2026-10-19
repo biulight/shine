@@ -672,7 +672,9 @@ for decryption. Concurrent exports to the same destination allow only one to suc
 to replace an existing output. `--dry-run` reports the mode, destination, and effective non-secret
 variable count without printing values or writing the file. Secrets are not decrypted or counted,
 even with `--include-secrets`; that option is applied only during the actual export. A plain value
-overridden by a secret is excluded from the preview count.
+overridden by a secret is excluded from the preview count. Destination paths in previews, success
+messages, and existing-output errors are quoted and display-escaped: newlines and tabs appear as
+`\n` and `\t`. This changes only the message; the actual destination and exported bytes are preserved.
 
 The exported file has no Shine metadata or runtime dependency. To leave Shine env, export and test
 each required mode, add secret-bearing outputs to `.gitignore`, remove `shine env run` wrappers, and

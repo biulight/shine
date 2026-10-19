@@ -51,8 +51,8 @@ pub async fn handle_export(
     if !force {
         match tokio::fs::symlink_metadata(&output).await {
             Ok(_) => bail!(
-                "{} already exists; rerun with --force to replace it",
-                output.display()
+                "{:?} already exists; rerun with --force to replace it",
+                output.to_string_lossy()
             ),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error).context("inspecting export destination"),
@@ -63,9 +63,9 @@ pub async fn handle_export(
     let contents = render_dotenv(&values)?;
     if dry_run {
         println!(
-            "Would export {} non-secret variable(s) for mode {mode} to {}. Secrets were not decrypted or counted{}",
+            "Would export {} non-secret variable(s) for mode {mode} to {:?}. Secrets were not decrypted or counted{}",
             values.len(),
-            output.display(),
+            output.to_string_lossy(),
             if include_secrets {
                 "; --include-secrets will be applied during actual export."
             } else {
@@ -86,16 +86,16 @@ pub async fn handle_export(
                     .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
             {
                 bail!(
-                    "{} already exists; rerun with --force to replace it",
-                    output.display()
+                    "{:?} already exists; rerun with --force to replace it",
+                    output.to_string_lossy()
                 );
             }
             return Err(error);
         }
         println!(
-            "Exported {} variables for mode {mode} to {}{}",
+            "Exported {} variables for mode {mode} to {:?}{}",
             values.len(),
-            output.display(),
+            output.to_string_lossy(),
             if include_secrets {
                 " (including secrets)"
             } else {

@@ -8,9 +8,9 @@ use serde::Serialize;
 use shine_core::runtime::{
     InMemoryHost, PresetDiagnosticSeverity, PresetMigrationBaseline, PresetMigrationDiagnosticV1,
     PresetMigrationEdit, PresetMigrationPlan, PresetMigrationSeverityV1, PresetMigrationStatusV1,
-    PresetSnapshot, PresetSnapshotRequest, PresetSnapshotSource, PresetSourceKind, RealHost,
-    RuntimePlatform, capture_embedded_preset_snapshot, capture_preset_snapshot,
-    plan_preset_migration, sha256, validate_preset_path,
+    PresetSnapshot, PresetSnapshotRequest, PresetSnapshotSource, RealHost, RuntimePlatform,
+    capture_embedded_preset_snapshot, capture_preset_snapshot, plan_preset_migration, sha256,
+    validate_preset_path,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -62,7 +62,7 @@ pub async fn handle_migrate(
     }
 
     if format == PresetReportFormat::Text {
-        print_text(&plan, &snapshot, managed_overlay.as_deref(), path.is_none());
+        print_text(&plan, &snapshot, path.is_none());
         print_diffs(&display_edits);
     }
     if dry_run {
@@ -193,6 +193,7 @@ mod tests {
     use crate::commands::{Cli, Commands, PresetCommands};
     use crate::test_support::{env_lock, make_temp_dir};
     use clap::Parser;
+    use shine_core::runtime::PresetSourceKind;
 
     #[test]
     fn migrate_cli_parses_review_flags_and_rejects_yes_with_dry_run() {
@@ -246,7 +247,7 @@ mod tests {
             item.code == "managed_overlay_read_only"
                 && item.source_layer.as_deref() == Some("overlay")
         }));
-        let output = migration_text(&plan, &snapshot, Some(root), true);
+        let output = migration_text(&plan, &snapshot, true);
         assert!(output.contains("upstream checkout"));
         assert!(output.contains("shine preset pull"));
         assert!(!output.contains("Edit: /managed-overlay"));
@@ -284,7 +285,7 @@ mod tests {
         let plan = plan_preset_migration(&snapshot, "active", None, None);
 
         let summary = compatibility_text(&plan);
-        let detailed = migration_text(&plan, &snapshot, None, true);
+        let detailed = migration_text(&plan, &snapshot, true);
 
         assert!(summary.is_empty());
         assert!(!compatibility_required(&plan));
@@ -304,7 +305,7 @@ mod tests {
             .build();
         let plan = plan_preset_migration(&snapshot, "active", None, None);
 
-        let output = migration_text(&plan, &snapshot, None, true);
+        let output = migration_text(&plan, &snapshot, true);
 
         assert!(output.contains("0 blockers · 0 automatic changes · 0 advisories"));
         assert!(!output.contains("shine preset validate"));
@@ -328,7 +329,7 @@ mod tests {
             .build();
         let plan = plan_preset_migration(&snapshot, "active", None, None);
 
-        let output = migration_text(&plan, &snapshot, None, true);
+        let output = migration_text(&plan, &snapshot, true);
 
         assert!(output.contains("0 blockers · 1 automatic change · 0 advisories"));
         assert!(!output.contains("shine trust"));
@@ -352,11 +353,70 @@ mod tests {
             .build();
         let plan = plan_preset_migration(&snapshot, "active", None, None);
 
-        let output = migration_text(&plan, &snapshot, Some(root), true);
+        let output = migration_text(&plan, &snapshot, true);
 
         assert!(output.contains("0 blockers · 0 automatic changes · 0 advisories"));
         assert!(!output.contains("upstream checkout"));
         assert!(!output.contains("shine preset pull"));
+    }
+
+    #[test]
+    fn released_executable_migration_retains_external_trust_guidance() {
+        let logical = "app/demo/shine.toml";
+        let original = b"dest = '~/.demo'\n";
+        let current = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(logical, b"metadata_schema_version = 2\ndest = '~/.demo'\n[permissions]\nschema_version = 1\nfilesystem = [{ base = 'preset', path = 'build.ts', access = ['execute'] }]\n[artifact]\nscript = 'build.ts'\n".to_vec())
+            .file("app/demo/build.ts", b"// never executed".to_vec())
+            .build();
+        let legacy = BTreeMap::from([(logical.to_string(), BTreeSet::from([sha256(original)]))]);
+        for source in [PresetSourceKind::External, PresetSourceKind::Embedded] {
+            let mut builder = PresetSnapshot::builder(source);
+            if source == PresetSourceKind::External {
+                builder = builder.base_root(std::env::temp_dir());
+            }
+            let snapshot = builder
+                .file(logical, original.to_vec())
+                .file("app/demo/build.ts", b"// never executed".to_vec())
+                .build();
+            let plan = plan_preset_migration(
+                &snapshot,
+                "test",
+                None,
+                Some(PresetMigrationBaseline {
+                    current: &current,
+                    legacy_metadata_sha256: &legacy,
+                }),
+            );
+            assert_eq!(
+                plan.edits.len(),
+                usize::from(source == PresetSourceKind::External)
+            );
+            assert_eq!(
+                plan.report.summary.blockers,
+                usize::from(source == PresetSourceKind::Embedded)
+            );
+            for active in [false, true] {
+                let output = migration_text(&plan, &snapshot, active);
+                if source == PresetSourceKind::External {
+                    assert!(
+                        output.contains("`shine trust inspect app/demo`"),
+                        "{output}"
+                    );
+                    assert!(output.contains("`shine trust grant app/demo`"), "{output}");
+                    assert!(
+                        output.contains(if active {
+                            "After validation"
+                        } else {
+                            "After this source becomes active"
+                        }),
+                        "{output}"
+                    );
+                } else {
+                    assert!(!output.contains("shine trust"), "{output}");
+                }
+                assert!(!output.contains("shine preset pull"), "{output}");
+            }
+        }
     }
 
     #[test]

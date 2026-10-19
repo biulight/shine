@@ -74,19 +74,14 @@ pub fn compatibility_failure_message(plan: &PresetMigrationPlan) -> String {
 pub(super) fn print_text(
     plan: &PresetMigrationPlan,
     snapshot: &PresetSnapshot,
-    managed_overlay: Option<&Path>,
     active_source: bool,
 ) {
-    print!(
-        "{}",
-        migration_text(plan, snapshot, managed_overlay, active_source)
-    );
+    print!("{}", migration_text(plan, snapshot, active_source));
 }
 
 pub(super) fn migration_text(
     plan: &PresetMigrationPlan,
     snapshot: &PresetSnapshot,
-    managed_overlay: Option<&Path>,
     active_source: bool,
 ) -> String {
     let mut output = String::new();
@@ -146,14 +141,7 @@ pub(super) fn migration_text(
                 diagnostic.code
             );
         }
-        needs_preset_pull |= render_remediation(
-            &mut output,
-            snapshot,
-            &logical,
-            &diagnostics,
-            managed_overlay,
-            active_source,
-        );
+        needs_preset_pull |= render_remediation(&mut output, &logical, &diagnostics, active_source);
     }
 
     if needs_preset_pull {
@@ -198,25 +186,14 @@ pub(super) fn migration_text(
 
 pub(super) fn render_remediation(
     output: &mut String,
-    snapshot: &PresetSnapshot,
     logical: &str,
     diagnostics: &[&PresetMigrationDiagnosticV1],
-    managed_overlay: Option<&Path>,
     active_source: bool,
 ) -> bool {
-    let manual_permissions = diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "manual_permission_review_required");
     let managed_read_only = diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "managed_overlay_read_only");
-    let manifest = snapshot
-        .origin(logical)
-        .and_then(|origin| origin.physical_path.as_deref());
-    let manifest_is_managed =
-        manifest.is_some_and(|path| managed_overlay.is_some_and(|root| path.starts_with(root)));
-
-    if managed_read_only && !manual_permissions {
+    if managed_read_only {
         let _ = writeln!(output);
         let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
         let _ = writeln!(
@@ -224,37 +201,6 @@ pub(super) fn render_remediation(
             "      Review and update {logical} in the upstream checkout."
         );
         let _ = writeln!(output, "      The managed overlay mirror is read-only.");
-    }
-
-    if manual_permissions {
-        if managed_read_only || manifest_is_managed {
-            let _ = writeln!(output);
-            let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
-            let _ = writeln!(
-                output,
-                "      Review and update {logical} in the upstream checkout."
-            );
-            let _ = writeln!(output, "      The managed overlay mirror is read-only.");
-        } else if let Some(manifest) = manifest {
-            let quoted = quote_command_arg(manifest, RuntimePlatform::current());
-            let _ = writeln!(output);
-            let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
-            let _ = writeln!(output, "      Edit: {}", manifest.display());
-            let _ = writeln!(output, "      Verify:");
-            let _ = writeln!(output, "        shine preset validate {quoted}");
-            let _ = writeln!(
-                output,
-                "        shine preset plan {quoted} --platform {}",
-                RuntimePlatform::current().as_str()
-            );
-        } else {
-            let _ = writeln!(output);
-            let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
-            let _ = writeln!(
-                output,
-                "      Add the target-local permission declaration in {logical}, then validate and plan that manifest."
-            );
-        }
     }
 
     for diagnostic in diagnostics {
@@ -269,7 +215,16 @@ pub(super) fn render_remediation(
         }
     }
 
-    for target in trust_review_targets(snapshot, logical, diagnostics) {
+    let trust_targets = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "external_code_trust_review_required"
+                && diagnostic.target.starts_with("app/")
+                && diagnostic.source_layer.as_deref() != Some("embedded")
+        })
+        .map(|diagnostic| &diagnostic.target)
+        .collect::<BTreeSet<_>>();
+    for target in trust_targets {
         let timing = if active_source {
             "After validation"
         } else {
@@ -283,7 +238,7 @@ pub(super) fn render_remediation(
         );
     }
 
-    managed_read_only || (manual_permissions && manifest_is_managed)
+    managed_read_only
 }
 
 pub(super) fn metadata_logical_path(snapshot: &PresetSnapshot, target: &str) -> Option<String> {
@@ -316,88 +271,6 @@ pub(super) fn metadata_logical_path(snapshot: &PresetSnapshot, target: &str) -> 
 
 pub(super) fn diagnostic_category(target: &str) -> String {
     target.split('/').take(2).collect::<Vec<_>>().join("/")
-}
-
-pub(super) fn trust_review_targets(
-    snapshot: &PresetSnapshot,
-    logical: &str,
-    diagnostics: &[&PresetMigrationDiagnosticV1],
-) -> BTreeSet<String> {
-    diagnostics
-        .iter()
-        .filter_map(|diagnostic| {
-            if diagnostic.source_layer.as_deref() == Some("embedded") {
-                return None;
-            }
-            match diagnostic.target.split_once('/') {
-                Some(("app", _))
-                    if matches!(
-                        diagnostic.code.as_str(),
-                        "manual_permission_review_required" | "external_code_trust_review_required"
-                    ) =>
-                {
-                    Some(diagnostic.target.clone())
-                }
-                Some(("sys", item))
-                    if diagnostic.code == "manual_permission_review_required"
-                        && sys_item_has_executable_code(snapshot, logical, item) =>
-                {
-                    Some(diagnostic.target.clone())
-                }
-                _ => None,
-            }
-        })
-        .collect()
-}
-
-pub(super) fn sys_item_has_executable_code(
-    snapshot: &PresetSnapshot,
-    logical: &str,
-    item_id: &str,
-) -> bool {
-    let Some(value) = snapshot
-        .get(logical)
-        .and_then(|bytes| toml::from_slice::<toml::Value>(bytes).ok())
-    else {
-        return false;
-    };
-    let item_code = value
-        .get("items")
-        .and_then(toml::Value::as_array)
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|item| item.get("id").and_then(toml::Value::as_str) == Some(item_id))
-        })
-        .is_some_and(|item| {
-            let script = item
-                .get("install")
-                .and_then(|install| install.get("kind"))
-                .and_then(toml::Value::as_str)
-                == Some("script");
-            let shell_code = item
-                .get("shell")
-                .and_then(toml::Value::as_array)
-                .into_iter()
-                .flatten()
-                .any(|integration| {
-                    ["eval", "source", "fragment"]
-                        .iter()
-                        .any(|key| integration.get(*key).is_some())
-                });
-            script || shell_code
-        });
-    if item_code {
-        return true;
-    }
-    let category_prefix = logical.trim_end_matches("shine.toml");
-    snapshot.files().keys().any(|path| {
-        path.starts_with(category_prefix)
-            && path.contains("/profile/base.")
-            && snapshot
-                .origin(path)
-                .is_some_and(|origin| origin.source_kind != PresetSourceKind::Embedded)
-    })
 }
 
 pub(super) fn quote_command_arg(path: &Path, platform: RuntimePlatform) -> String {

@@ -27,16 +27,18 @@ Automatic edits are limited to changes that can be proved safe:
 
 - exact released 1.x built-in metadata can rebase to current embedded metadata only when relevant
   executable identity still matches;
-- a legacy App can receive metadata schema v2, lose only an exact same-category recursive artifact
-  hook, and receive an empty permission table only when it contains no opaque code;
+- a legacy App can receive metadata schema v2 and lose only an exact same-category recursive
+  artifact hook; optional author capability tables are not synthesized (ADR 0091);
 - an overlay metadata override can be removed only when the revealed lower layer is already the
   validated current metadata.
 
 The migration never changes payloads, scripts, environment values, runtime manifests, or trust
 grants. It never guesses Shell/App/Sys opaque-code permissions or broad network access and never
-splits a Sys v1 dispatcher. Those cases receive stable blockers plus target-local validation,
-planning, trust, or Sys-v2 authoring instructions. A managed Git overlay is diagnosed but remains
-read-only; its upstream checkout must be migrated explicitly.
+splits a Sys v1 dispatcher. Missing optional capability tables need no migration (ADR 0091); the
+retired `manual_permission_review_required` diagnostic has no producer or CLI remediation branch.
+Sys v1 dispatchers remain blockers; released external executable App metadata retains its separate
+trust-review advisory. A managed Git overlay is diagnosed but remains read-only; its upstream
+checkout must be migrated explicitly.
 
 Before apply, the CLI rechecks every source hash and creates a complete owner-only backup set under
 the Shine private state directory, including a manifest with logical identity, hash, mode, and

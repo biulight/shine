@@ -120,8 +120,9 @@ The migrator shows unified metadata diffs and confirmation defaults to No. It ed
 `shine.toml`, validates the candidate, rechecks source hashes, and creates a complete private backup
 set before writing. Payloads, scripts, values, runtime manifests, and trust grants are untouched.
 Exact released 1.x built-in metadata may be rebased when its executable identity is unchanged;
-safe declarative Apps may receive current metadata. Opaque code and Sys v1 dispatchers remain
-manual blockers instead of receiving guessed or broad capability statements.
+legacy Apps may receive current metadata without adding capability statements. Missing optional
+capability tables do not require migration, including for opaque code; external-code trust remains
+a separate review. Sys v1 dispatchers still require manual migration.
 
 `--yes` is appropriate only after review and still prints text diffs. JSON is a versioned report
 without contents or diffs; use `--format json --dry-run` for inspection or combine JSON apply with

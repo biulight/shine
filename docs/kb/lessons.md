@@ -1,5 +1,21 @@
 # Lessons Learned
 
+## 2026-10-19 — Command displays need position and path boundaries
+
+- **Symptoms**: stale trust-list hints split targets containing spaces; executable names such as
+  `if` or `MODE=test` ran through direct argv but failed when their displayed POSIX command was
+  copied; dotenv export paths containing controls split preview and result lines.
+- **Fix**: reuse suggested-command argument encoding for trust-list review hints, distinguish
+  program position from argument position in Task displays, and quote/escape dotenv destination
+  messages. Preserve argv, child streams/exit status, raw paths and exported bytes.
+- **Maintenance**: remove migration rendering for the retired `manual_permission_review_required`
+  diagnostic and its exclusive Sys-code detector, retaining actual external-code trust advisories
+  and managed-overlay remediation. Author capability tables remain optional (ADR 0091).
+- **Coverage**: CLI tests parse stale/missing-source trust hints without running them, compare saved
+  Task displays with native POSIX execution, and exercise dotenv preview/create/force/conflict
+  messages with unchanged output bytes. Migration tests retain external/embedded trust distinctions,
+  active-source timing and existing read-only overlay/backup boundaries.
+
 ## 2026-10-19 — Missing App metadata does not erase installed-resource visibility
 
 - **Symptom**: `update --verbose` claimed nothing was installed after an App category disappeared,

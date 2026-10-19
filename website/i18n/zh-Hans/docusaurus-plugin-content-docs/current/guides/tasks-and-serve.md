@@ -34,6 +34,10 @@ shine task info kill-port
 
 Shine 按参数数组保存并直接执行命令，不会自动经过 shell。因此普通参数边界会被保留，退出码也会原样传递给调用方。需要管道、重定向、变量展开或通配符时，把 shell 写进任务本身，例如 `sh -c '...'`。Windows 上没有系统自带的 `sh`，这类写法只适合 Unix 环境。
 
+在 Unix 上，保存命令的回显使用 POSIX shell 引号，包括可能被当作 shell 语法的程序名
+（如 `if` 或 `MODE=test`）。引号只用于展示，任务仍按原始参数数组执行。运行提示写入 stderr，
+子进程的 stdout 可继续用于管道。
+
 覆盖或删除任务：
 
 ```bash

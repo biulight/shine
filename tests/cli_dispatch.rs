@@ -856,6 +856,98 @@ fn task_info_aligns_values_with_and_without_working_directory() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn task_displays_execute_reserved_program_names_with_original_argv_and_exit_status() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let bin = fixture.0.join("bin");
+    fs::create_dir_all(&state).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    // Save/list/info run version checks; keep this regression independent of GitHub releases.
+    let update_cache = state.join("update-check.json");
+    let cached_version = serde_json::to_vec(&serde_json::json!({
+        "latest_version": env!("CARGO_PKG_VERSION"),
+        "checked_at_unix_secs": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+    }))
+    .unwrap();
+    fs::write(&update_cache, &cached_version).unwrap();
+    let mut paths = vec![bin.clone()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(paths).unwrap();
+    let args = [
+        "",
+        "two words",
+        "it's",
+        "$HOME",
+        "`literal`",
+        "MODE=test",
+        "if",
+    ];
+    let expected = format!("{}\0", args.join("\0")).into_bytes();
+    for program in ["if", "then", "time", "MODE=test"] {
+        let executable = bin.join(program);
+        fs::write(&executable, "#!/bin/sh\nprintf '%s\\0' \"$@\"\nexit 7\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let saved = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["task", "save", "literal", "--force", "--", program])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(saved.status.success(), "{saved:?}");
+        let saved_text = String::from_utf8(saved.stdout).unwrap();
+        let display = saved_text.lines().nth(1).unwrap();
+        let manifest = fs::read(state.join("tasks.toml")).unwrap();
+        for (command, prefix) in [("info", "Command"), ("list", "literal")] {
+            let mut query = fixture.command();
+            query.env("NO_COLOR", "1").args(["task", command]);
+            if command == "info" {
+                query.arg("literal");
+            }
+            let output = query.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let text = String::from_utf8(output.stdout).unwrap();
+            assert_eq!(
+                text.lines()
+                    .find_map(|line| line.strip_prefix(prefix))
+                    .unwrap()
+                    .trim(),
+                display
+            );
+        }
+        let direct = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .env("PATH", &path)
+            .args(["task", "run", "literal"])
+            .output()
+            .unwrap();
+        assert_eq!(direct.status.code(), Some(7), "{direct:?}");
+        assert_eq!(direct.stdout, expected);
+        assert_eq!(
+            String::from_utf8(direct.stderr).unwrap(),
+            format!("Running literal: {display}\n")
+        );
+        let copied = Command::new("/bin/sh")
+            .env("PATH", &path)
+            .args(["-c", display])
+            .output()
+            .unwrap();
+        assert_eq!(copied.status.code(), Some(7), "{copied:?}");
+        assert_eq!(copied.stdout, expected);
+        assert!(copied.stderr.is_empty(), "{copied:?}");
+        assert_eq!(fs::read(state.join("tasks.toml")).unwrap(), manifest);
+        assert_eq!(fs::read(&update_cache).unwrap(), cached_version);
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn sys_profile_reports_attention_and_noop_without_changing_exit_policy() {
@@ -1477,8 +1569,8 @@ fn dotenv_export_preview_counts_only_effective_non_secret_values() {
             assert_eq!(
                 stdout.trim(),
                 format!(
-                    "Would export 1 non-secret variable(s) for mode production to {}. Secrets were not decrypted or counted{suffix}",
-                    destination.display()
+                    "Would export 1 non-secret variable(s) for mode production to {:?}. Secrets were not decrypted or counted{suffix}",
+                    destination.to_string_lossy()
                 )
             );
             for sentinel in [

@@ -38,6 +38,11 @@ Shine stores and executes an argument array directly without adding a shell. Arg
 the child exit code are preserved. For pipes, redirection, variable expansion, or globs, include the
 shell in the task, such as `sh -c '...'`. Windows does not include `sh`; that form is Unix-only.
 
+On Unix, saved-command displays use POSIX shell quoting, including executable names such as `if` or
+`MODE=test` that would otherwise be parsed as shell syntax. These quotes are for display; task
+execution continues to use the original argument array. The run announcement goes to stderr,
+leaving the child's stdout available for piping.
+
 Replace or delete a task:
 
 ```bash

@@ -209,6 +209,44 @@ fn app_and_trust_hints_preserve_literal_category_arguments() {
 }
 
 #[test]
+fn stale_trust_list_hints_preserve_targets_without_changing_grants() {
+    for category in ["demo", "demo space", "it's", "literal$HOME", "literal`tick"] {
+        let fixture = Fixture::new();
+        fixture.app(true);
+        let preset = fixture.0.join("state/presets/app").join(category);
+        if category != "demo" {
+            fs::rename(fixture.0.join("state/presets/app/demo"), &preset).unwrap();
+        }
+        let target = format!("app/{category}");
+        success(&fixture.run(&["trust", "grant", &target, "--yes"]));
+        let store = fixture.0.join("state/trust.toml");
+        let grants = fs::read(&store).unwrap();
+        let current = fixture.run(&["trust", "list", "--verbose"]);
+        success(&current);
+        assert!(!stdout(&current).contains("Review"), "{current:?}");
+
+        fs::write(preset.join("generate.ts"), "// changed; never executed\n").unwrap();
+        for status in ["code changed", "capability missing"] {
+            if status == "capability missing" {
+                fs::remove_dir_all(&preset).unwrap();
+            }
+            let output = fixture.run(&["trust", "list", "--verbose"]);
+            success(&output);
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let text = stdout(&output);
+            assert!(text.contains(status), "{text}");
+            let review = text
+                .lines()
+                .find_map(|line| line.trim_start().strip_prefix("Review").map(str::trim))
+                .unwrap();
+            assert_hint_argv(review, &["shine", "trust", "inspect", &target]);
+            assert_eq!(fs::read(&store).unwrap(), grants);
+        }
+        assert!(!fixture.0.join("generator-ran").exists());
+    }
+}
+
+#[test]
 fn missing_app_source_hints_preserve_arguments_and_installed_state() {
     let fixture = Fixture::new();
     fixture.app(false);

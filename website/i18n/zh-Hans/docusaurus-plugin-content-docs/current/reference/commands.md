@@ -175,7 +175,8 @@ App 汇总分别说明生成器未评估、需要信任或评估失败，不会�
 `trust grant --development` 会让所显示本地来源中的代码修改继续受信任，但 target、capability、
 来源目录与来源层必须保持不变。这是来源级长期授权，不代表持续代码审阅。
 `trust list` 会将共享同一安全范围的 grant 合并为紧凑行，并对照当前 Preset 检查状态；`--verbose`
-会展开 capability、开发来源标签与复查提示。
+会展开 capability、开发来源标签与复查提示。复查命令会将含空格或 shell 特殊字符的完整 target
+保留为一个参数；Unix 使用 POSIX shell，Windows 使用 PowerShell。列表检查不会续授 grant。
 并发执行 `trust grant` 与 `trust revoke` 会保留对其他 target 的修改；另一条命令保存旧版 trust
 存储时不会恢复已经完成的撤销。
 

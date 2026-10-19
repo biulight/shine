@@ -406,3 +406,90 @@ fn export_without_force_preserves_a_dangling_destination_link() {
     assert!(!target.exists());
     fixture.assert_no_staging();
 }
+
+#[test]
+fn dotenv_export_quotes_display_paths_without_changing_publication() {
+    let fixture = Fixture::new();
+    let home = fixture.0.join("home");
+    fs::create_dir_all(home.join("AppData/Roaming")).unwrap();
+    fs::create_dir_all(home.join("AppData/Local")).unwrap();
+    let mut names = vec!["normal space's.env"];
+    if cfg!(unix) {
+        names.push("out\nline\ttab\u{1b}escape.env");
+    }
+    for name in names {
+        let destination = fixture.0.join(name);
+        let quoted = format!("{:?}", destination.to_string_lossy());
+        let command = || {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+            command
+                .current_dir(&fixture.0)
+                .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
+                .env("SHINE_PRESETS", fixture.0.join("state/presets"))
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .env("APPDATA", home.join("AppData/Roaming"))
+                .env("LOCALAPPDATA", home.join("AppData/Local"))
+                .env("NO_COLOR", "1")
+                .stdin(Stdio::null())
+                .args([
+                    "env",
+                    "workspace",
+                    "export",
+                    "--format",
+                    "dotenv",
+                    "--mode",
+                    "dev",
+                    "--output",
+                ])
+                .arg(&destination);
+            command
+        };
+        let preview = command()
+            .args(["--dry-run", "--include-secrets"])
+            .output()
+            .unwrap();
+        assert!(preview.status.success(), "{preview:?}");
+        assert!(preview.stderr.is_empty(), "{preview:?}");
+        assert_eq!(
+            String::from_utf8(preview.stdout).unwrap(),
+            format!(
+                "Would export 1 non-secret variable(s) for mode dev to {quoted}. Secrets were not decrypted or counted; --include-secrets will be applied during actual export.\n"
+            )
+        );
+        assert!(!destination.exists());
+        for force in [false, true] {
+            if force {
+                fs::write(&destination, b"old\n").unwrap();
+            }
+            let mut export = command();
+            if force {
+                export.arg("--force");
+            }
+            let output = export.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("Exported 1 variables for mode dev to {quoted}\n")
+            );
+            assert_eq!(fs::read(&destination).unwrap(), b"PUBLIC=\"visible\"\n");
+        }
+        for dry_run in [false, true] {
+            let mut blocked = command();
+            if dry_run {
+                blocked.arg("--dry-run");
+            }
+            let output = blocked.output().unwrap();
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert!(
+                String::from_utf8(output.stderr)
+                    .unwrap()
+                    .contains(&format!("{quoted} already exists; rerun with --force"))
+            );
+            assert_eq!(fs::read(&destination).unwrap(), b"PUBLIC=\"visible\"\n");
+        }
+    }
+    fixture.assert_no_staging();
+}

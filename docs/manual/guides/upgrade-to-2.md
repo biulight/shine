@@ -133,11 +133,10 @@ and creates a private complete backup set before writing. It never changes paylo
 environment values, runtime state, or trust grants. A managed Git overlay is read-only: migrate its
 upstream checkout with an explicit path, commit it there, then pull again.
 
-Permissions for opaque App/Shell/Sys code and Sys v1 dispatchers require manual authoring. Follow the
-reported target-local location. In text mode, the migration report resolves writable manifests and
-prints copy-paste-safe `preset validate` and current-platform `preset plan` commands. A managed Git
-overlay remains read-only, so its report points back to the upstream checkout instead of suggesting
-an edit to the mirrored path.
+Sys v1 dispatchers require manual migration. Follow the reported target and validate the updated
+source with `shine preset validate <PATH>` and `shine preset plan <PATH> --platform <PLATFORM>`.
+Missing optional capability tables do not require migration, even for opaque App/Shell/Sys code.
+A managed Git overlay remains read-only; its report points back to the upstream checkout.
 
 Trust enrollment applies to external App hook/generator/artifact code, Sys bootstrap/profile code,
 and every external Shell command, independent of capability-table contents. After validation, use
@@ -151,9 +150,9 @@ single `shine preset migrate --dry-run` entry point; that command groups detaile
 manifest. `shine upgrade` performs the same preflight—including after `--pull`—and stops before any
 lifecycle Plan or mutation when the source is incompatible.
 
-External Presets must declare supported permission schema v1 or v2 for each executable target. A
-missing or invalid declaration is a blocker, not an implicit broad grant. Authors should run the
-static and fixture gates before distribution:
+Permission tables are optional author capability statements. Explicit tables must use supported
+schema v1 or v2 and pass validation; neither a missing table nor a valid declaration grants code
+trust. Authors should run the static and fixture gates before distribution:
 
 ```bash
 shine preset schema

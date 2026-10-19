@@ -243,17 +243,41 @@ fn validate_run_cwd(name: &str, cwd: &Path) -> Result<()> {
     }
 }
 
-/// Render an argv array back into a copy-paste-safe shell command line by
-/// single-quoting any argument that contains characters a shell would interpret.
+/// Render an argv array as a POSIX shell command line. Program position also
+/// recognizes reserved words and assignments, even when every character is inert.
 fn render_command(argv: &[String]) -> String {
     argv.iter()
-        .map(|arg| shell_quote(arg))
+        .enumerate()
+        .map(|(index, arg)| {
+            if index == 0
+                && (arg.contains('=')
+                    || matches!(
+                        arg.as_str(),
+                        "case"
+                            | "do"
+                            | "done"
+                            | "elif"
+                            | "else"
+                            | "esac"
+                            | "fi"
+                            | "for"
+                            | "if"
+                            | "in"
+                            | "then"
+                            | "until"
+                            | "while"
+                            | "function"
+                            | "select"
+                            | "time"
+                    ))
+            {
+                crate::shell_quote::single_quote(arg)
+            } else {
+                crate::shell_quote::quote_if_needed(arg)
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn shell_quote(arg: &str) -> String {
-    crate::shell_quote::quote_if_needed(arg)
 }
 
 fn validate_task_name(name: &str) -> Result<()> {
@@ -374,9 +398,14 @@ mod tests {
     }
 
     #[test]
-    fn shell_quote_escapes_embedded_single_quotes() {
-        assert_eq!(shell_quote("it's"), "'it'\\''s'");
-        assert_eq!(shell_quote(""), "''");
+    fn render_command_preserves_program_position_and_literal_arguments() {
+        for program in ["if", "then", "time", "MODE=test"] {
+            let argv = [program, "if", "MODE=test", "it's", ""].map(str::to_owned);
+            assert_eq!(
+                render_command(&argv),
+                format!("'{program}' if MODE=test 'it'\\''s' ''")
+            );
+        }
     }
 
     #[tokio::test]

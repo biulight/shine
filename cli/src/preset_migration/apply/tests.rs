@@ -1,4 +1,5 @@
 use super::*;
+use shine_core::runtime::PresetSourceKind;
 
 #[tokio::test]
 async fn migration_rechecks_shadowed_sources_after_complete_backup_before_any_edit() {
