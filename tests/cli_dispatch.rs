@@ -36,6 +36,75 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn preset_pack_rejects_file_parent_traversal_in_text_and_json() {
+    let fixture = Fixture::new();
+    let category = fixture.0.join("app/demo");
+    fs::create_dir_all(&category).unwrap();
+    let metadata = "dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.txt'\n";
+    fs::write(category.join("shine.toml"), metadata).unwrap();
+    fs::write(category.join("config.txt"), "demo").unwrap();
+    let blocker = fixture.0.join("file");
+    fs::write(&blocker, "not a directory").unwrap();
+    for format in ["text", "json"] {
+        for force in [false, true] {
+            let name = format!("{format}-{force}.tar.gz");
+            let output = fixture.0.join(&name);
+            if force {
+                fs::write(&output, "preserve").unwrap();
+            }
+            let mut command = fixture.command();
+            command
+                .env("NO_COLOR", "1")
+                .args(["preset", "pack"])
+                .arg(&category)
+                .arg("--output")
+                .arg(blocker.join("..").join(&name))
+                .args(["--format", format]);
+            if force {
+                command.arg("--force");
+            }
+
+            let refused = command.output().unwrap();
+
+            assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+            assert!(refused.stderr.is_empty(), "{refused:?}");
+            let text = String::from_utf8(refused.stdout).unwrap();
+            if format == "json" {
+                let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(report["valid"], false);
+                assert_eq!(
+                    report["diagnostics"],
+                    serde_json::json!(["output_write_failed"])
+                );
+                assert_eq!(report["files"], 0);
+                assert_eq!(report["archive_bytes"], 0);
+                assert!(
+                    report
+                        .get("bundle_sha256")
+                        .is_none_or(|value| value.is_null())
+                );
+            } else {
+                assert!(text.contains("Preset pack: blocked"), "{text}");
+                assert!(text.contains("error[output_write_failed]"), "{text}");
+                assert!(!text.contains("created"), "{text}");
+            }
+            if force {
+                assert_eq!(fs::read(output).unwrap(), b"preserve");
+            } else {
+                assert!(!output.exists());
+            }
+            assert_eq!(fs::read(&blocker).unwrap(), b"not a directory");
+            assert_eq!(
+                fs::read_to_string(category.join("shine.toml")).unwrap(),
+                metadata
+            );
+            assert_eq!(fs::read(category.join("config.txt")).unwrap(), b"demo");
+            assert!(!fixture.0.join("state").exists());
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn preset_pull_preserves_selected_path_and_exit_contract() {

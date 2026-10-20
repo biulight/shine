@@ -93,6 +93,9 @@ fn resolved_output_path(output: &Path) -> std::io::Result<PathBuf> {
                 match std::fs::symlink_metadata(&resolved) {
                     Ok(_) => {
                         resolved = std::fs::canonicalize(&resolved)?;
+                        if !std::fs::metadata(&resolved)?.is_dir() {
+                            return Err(std::io::ErrorKind::NotADirectory.into());
+                        }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error),
@@ -149,6 +152,54 @@ mod tests {
         std::fs::write(category.join("shine.toml"), "dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.txt'\n").unwrap();
         std::fs::write(category.join("config.txt"), "demo").unwrap();
         (root, category)
+    }
+
+    #[tokio::test]
+    async fn pack_rejects_regular_file_ancestors_without_publishing() {
+        let (root, category) = category_fixture();
+        let blocker = root.join("file");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        for force in [false, true] {
+            let output = root.join("bundle.tar.gz");
+            if force {
+                std::fs::write(&output, "preserve").unwrap();
+            }
+            let requested = blocker.join("../bundle.tar.gz");
+
+            assert!(
+                !handle_pack(&category, &requested, force, PresetReportFormat::Json)
+                    .await
+                    .unwrap()
+            );
+
+            if force {
+                assert_eq!(std::fs::read(&output).unwrap(), b"preserve");
+            } else {
+                assert!(!output.exists());
+            }
+            assert_eq!(std::fs::read(&blocker).unwrap(), b"not a directory");
+            assert_eq!(std::fs::read(category.join("config.txt")).unwrap(), b"demo");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_parent_resolution_rejects_symlinks_to_files() {
+        let (root, _) = category_fixture();
+        let file = root.join("file");
+        let alias = root.join("alias");
+        std::fs::write(&file, "preserve").unwrap();
+        std::os::unix::fs::symlink(&file, &alias).unwrap();
+        for parent in [&file, &alias] {
+            for suffix in ["bundle.tar.gz", "../bundle.tar.gz"] {
+                let error = resolved_output_path(&parent.join(suffix)).unwrap_err();
+                assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
+            }
+        }
+        assert_eq!(std::fs::read(file).unwrap(), b"preserve");
+        assert!(alias.is_symlink());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

@@ -109,6 +109,8 @@ The returned hash identifies the bundle. `shine.test.toml` remains author-only a
 A pack-policy failure must be fixed in the source; `--force` only replaces the output file and never
 bypasses validation or policy. The output directory is checked after resolving symbolic links and
 parent components (`..`); it must remain outside the category, even with `--force`.
+Existing ancestors must be directories: a path such as `file/../bundle.tar.gz` fails with
+`output_write_failed` when `file` is a regular file, without creating or replacing a bundle.
 Without `--force`, an output created by another process during packing is preserved and the command
 fails with `output_exists`.
 

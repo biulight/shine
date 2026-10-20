@@ -263,7 +263,8 @@ bugs. Check this list before changing the modules named in each entry.
   content or paths. Descriptions, labels, arguments, and other incidental strings never declare an
   executable payload. Without `--force`, publication must atomically reject any existing output
   entry, including one created by a concurrent writer; an existence check before replacement is
-  insufficient. Force keeps atomic replacement semantics.
+  insufficient. Force keeps atomic replacement semantics. Existing output ancestors must resolve
+  to directories before processing `..`; regular files and links to files cannot be traversed.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, captured executable intent, and each
   file's embedded, external, or overlay origin. It must not include physical source roots: relocating unchanged source is not a

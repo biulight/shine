@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-21 — Pack output normalization must retain directory traversal failures
+
+- **Symptom**: `file/../bundle.tar.gz` was normalized through an existing regular file, so packing
+  reported success and created or force-replaced a sibling bundle although the requested path
+  could not be traversed by the filesystem.
+- **Fix**: require each existing canonical output ancestor to be a directory before processing the
+  next component. Keep virtual missing directories, symlink-directory resolution, pack policy,
+  atomic publication and existing diagnostic codes.
+- **Coverage**: unit tests cover regular-file and symlink-to-file ancestors; real text/JSON CLI
+  regressions check exit 1, `output_write_failed`, preserved source/blocker/bundle bytes and no state
+  initialization with and without force. Existing scope and no-clobber tests remain independent.
+
 ## 2026-10-21 — Task cwd resolution must not select a lossy path alias
 
 - **Symptom**: a missing non-UTF-8 `task save --cwd` operand was accepted when a different directory
