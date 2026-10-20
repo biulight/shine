@@ -44,6 +44,10 @@ over `KEY`; explain and write output point out an existing encrypted key.
 Defaults are runtime fallbacks: queries create no configuration. Setting a value equal to a builtin
 still records an explicit entry.
 
+Configuration TOML parse errors report file or field context without printing configured values
+or source lines. Env reads and writes return exit code 1; correct the input and retry. A failed
+parse does not apply the requested env edit.
+
 Global `~/.shine/config.toml` and project `shine.config.toml` support either a string or a value with
 a description:
 

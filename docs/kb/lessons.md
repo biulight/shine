@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-21 — Configuration type errors can quote supplied values without source snippets
+
+- **Symptom**: ordinary `env get` failed with exit 1 but printed a plaintext test marker from
+  malformed global/project config or env files. An invalid typed field also appeared in the
+  parser's own message, so merely suppressing its source excerpt would still expose it.
+- **Fix**: map TOML and comment-preserving document parse failures to one static CLI config error,
+  then retain caller-owned file/field context. Keep the original parser, precedence, snapshots,
+  locks and persistence. Discovery probes that previously ignored errors still ignore them.
+- **Coverage**: real CLI reads/writes fail safely for syntax and type errors in all five file
+  layers without changing any input; writer/validator entry points check complete Display/Debug
+  error chains. Theme's quiet startup path still reports failure without leaking values.
+
 ## 2026-10-21 — Invalid migration inputs must fail without source excerpts or panics
 
 - **Symptom**: `state migrate` and its dry run returned 1 for a malformed project/workspace file

@@ -40,8 +40,8 @@ pub(super) struct MinimalConfig {
     pub(super) schema_version: u32,
 }
 
-pub(super) fn read_minimal_config(content: &str) -> Result<MinimalConfig, toml::de::Error> {
-    toml::from_str(content)
+pub(super) fn read_minimal_config(content: &str) -> anyhow::Result<MinimalConfig> {
+    toml::from_str(content).map_err(super::config_parse_error)
 }
 
 /// Return the shine root dir implied by `SHINE_CONFIG_DIR`, or `default` if unset.

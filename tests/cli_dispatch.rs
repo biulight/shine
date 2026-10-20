@@ -2939,7 +2939,7 @@ fn theme_quiet_preserves_config_errors_and_keeps_stdout_clean() {
     let fixture = Fixture::new();
     let state = fixture.0.join("state");
     fs::create_dir_all(&state).unwrap();
-    let malformed = "invalid = [";
+    let malformed = "TOKEN = \"PRIVATE_THEME_CONFIG_CANARY_UNCLOSED\n";
     fs::write(state.join("config.toml"), malformed).unwrap();
     let output = fixture
         .command()
@@ -2953,6 +2953,7 @@ fn theme_quiet_preserves_config_errors_and_keeps_stdout_clean() {
         String::from_utf8_lossy(&output.stderr).contains("TOML parse error"),
         "{output:?}"
     );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("PRIVATE_THEME_CONFIG_CANARY"));
     assert_eq!(
         fs::read_to_string(state.join("config.toml")).unwrap(),
         malformed

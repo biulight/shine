@@ -846,6 +846,12 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Config files
 
+- **CLI configuration parser errors discard both source and value-bearing messages.** Minimal,
+  full and layered TOML readers plus comment-preserving writers use one local error mapper.
+  Keep existing file/field context, I/O errors, validation and write order; discard the original
+  parser chain, since type errors can quote values even without source excerpts. Silent metadata
+  probes remain silent, and serde's direct `Config` interface remains unchanged.
+
 - **Runtime migration syntax errors do not retain source values.** The recipient inspection,
   rewrite and final schema-state patch in `state migrate` share a file-only TOML parse diagnostic.
   Drop the original parser error, including its source excerpt, duplicate-key text and Debug chain.

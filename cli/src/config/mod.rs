@@ -25,6 +25,12 @@ const GLOBAL_CONFIG_FILE: &str = "config.toml";
 const PROJECT_CONFIG_FILE: &str = "shine.config.toml";
 const PROJECT_ENV_FILE: &str = "shine.env.toml";
 
+// TOML errors can retain source excerpts and include supplied values in their
+// messages. Keep caller-owned file/field context, but discard the parser chain.
+fn config_parse_error<E>(_: E) -> anyhow::Error {
+    anyhow::anyhow!("TOML parse error in configuration (contents omitted)")
+}
+
 pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 2;
 
 pub const DEFAULT_ENV_VARS: &[(&str, &str)] = &[

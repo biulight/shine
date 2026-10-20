@@ -108,10 +108,22 @@ impl Config {
             .clone()
             .context("project config disappeared; retry")?;
         config.config_inputs.push(project_input);
-        let original: toml::Table =
-            toml::from_str(&contents).context("Failed to parse project config file")?;
-        let overrides: ProjectOverrides =
-            toml::from_str(&contents).context("Failed to parse project config file")?;
+        let original: toml::Table = toml::from_str(&contents)
+            .map_err(super::config_parse_error)
+            .with_context(|| {
+                format!(
+                    "Failed to parse project config file {}",
+                    project_config.path.display()
+                )
+            })?;
+        let overrides: ProjectOverrides = toml::from_str(&contents)
+            .map_err(super::config_parse_error)
+            .with_context(|| {
+                format!(
+                    "Failed to parse project config file {}",
+                    project_config.path.display()
+                )
+            })?;
 
         let project_presets = overrides
             .presets_dir
@@ -216,7 +228,7 @@ impl Config {
             .iter()
             .find(|input| input.path == config.config_path())
             .and_then(|input| input.contents.as_deref())
-            .map(toml::from_str)
+            .map(|contents| toml::from_str(contents).map_err(super::config_parse_error))
             .transpose()?
             .unwrap_or_default();
         let loaded = config.serialize_effective_table()?;
@@ -266,7 +278,10 @@ impl Config {
         let toml_presets = global_input
             .contents
             .as_deref()
-            .map(read_minimal_config)
+            .map(|contents| {
+                read_minimal_config(contents)
+                    .with_context(|| format!("Failed to parse {}", config_path.display()))
+            })
             .transpose()?
             .and_then(|config| config.presets_dir);
         let toml_presets = toml_presets
@@ -282,8 +297,14 @@ impl Config {
         let bin_dir = shine_dir.join("bin");
 
         if let Some(contents) = &global_input.contents {
-            let mut config: Config =
-                toml::from_str(contents).context("Failed to parse global config file")?;
+            let mut config: Config = toml::from_str(contents)
+                .map_err(super::config_parse_error)
+                .with_context(|| {
+                    format!(
+                        "Failed to parse global config file {}",
+                        config_path.display()
+                    )
+                })?;
             if config
                 .secret_backend
                 .as_deref()
@@ -317,7 +338,7 @@ impl Config {
             }
             // Recovery/settings-only loaders also preserve raw unrelated fields.
             config.save_state = Some(ConfigSaveState {
-                original: toml::from_str(contents)?,
+                original: toml::from_str(contents).map_err(super::config_parse_error)?,
                 loaded: config.serialize_effective_table()?,
             });
             Ok((config, true))

@@ -90,6 +90,51 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn configuration_parse_failures_omit_values_without_writing_any_layer() {
+    let paths = [
+        "state/config.toml",
+        "project/shine.config.toml",
+        "overlay/shine.env.toml",
+        "state/shine.env.toml",
+        "project/shine.env.toml",
+    ];
+    for path in paths {
+        for syntax_error in [true, false] {
+            let f = Fixture::new();
+            f.layers();
+            let invalid = if syntax_error {
+                "TOKEN = \"PRIVATE_CONFIG_CANARY_UNCLOSED\n"
+            } else if path.ends_with("config.toml") {
+                "gpg_recipients = 'PRIVATE_CONFIG_CANARY_TYPE'\n"
+            } else {
+                "TOKEN = { value = 'PRIVATE_CONFIG_CANARY_TYPE', description = 7 }\n"
+            };
+            f.write(path, invalid);
+            let before: Vec<_> = paths
+                .iter()
+                .map(|path| fs::read(f.0.join(path)).unwrap())
+                .collect();
+            for args in [vec!["get", "TOKEN"], vec!["set", "NEW_TOKEN", "new"]] {
+                let result = f.run(true, &args);
+                assert_eq!(result.status.code(), Some(1), "{path}: {result:?}");
+                assert!(result.stdout.is_empty(), "{result:?}");
+                let diagnostic = String::from_utf8(result.stderr).unwrap();
+                assert!(diagnostic.contains("TOML parse error"), "{diagnostic}");
+                assert!(
+                    !diagnostic.contains("PRIVATE_CONFIG_CANARY"),
+                    "{diagnostic}"
+                );
+                assert!(!diagnostic.contains("TOKEN ="), "{diagnostic}");
+                for (path, bytes) in paths.iter().zip(&before) {
+                    assert_eq!(fs::read(f.0.join(path)).unwrap(), *bytes);
+                }
+                assert_eq!(fs::read_dir(f.0.join("state")).unwrap().count(), 2);
+            }
+        }
+    }
+}
+
+#[test]
 fn proxy_exec_preserves_normal_status_streams_and_injection_selection() {
     for mode in ["enabled", "disabled", "missing"] {
         let f = Fixture::new();

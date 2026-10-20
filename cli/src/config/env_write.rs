@@ -254,8 +254,9 @@ impl EnvWritePlan {
         let table: toml::Table = target
             .contents
             .as_deref()
-            .map(toml::from_str)
-            .transpose()?
+            .map(|contents| toml::from_str(contents).map_err(super::config_parse_error))
+            .transpose()
+            .with_context(|| format!("parsing {}", path.display()))?
             .unwrap_or_default();
         let entries = if kind.is_config() {
             table.get("env").and_then(toml::Value::as_table)
@@ -299,8 +300,10 @@ impl EnvWritePlan {
         }
         self.target.verify().await?;
         let existing = self.target.contents.as_deref().unwrap_or_default();
-        let mut doc: toml_edit::DocumentMut =
-            existing.parse().context("parsing env write target")?;
+        let mut doc: toml_edit::DocumentMut = existing
+            .parse()
+            .map_err(super::config_parse_error)
+            .context("parsing env write target")?;
         if self.kind == EnvLayerKind::GlobalConfig && self.target.contents.is_none() {
             doc["schema_version"] =
                 toml_edit::value(i64::from(super::CURRENT_RUNTIME_SCHEMA_VERSION));

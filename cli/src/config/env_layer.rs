@@ -116,7 +116,9 @@ pub async fn write_env_override_entry(path: &Path, key: &str, value: Option<&str
     let mut target: toml::Table = if existing.is_empty() {
         toml::Table::new()
     } else {
-        toml::from_str(&existing).with_context(|| format!("parsing {}", path.display()))?
+        toml::from_str(&existing)
+            .map_err(super::config_parse_error)
+            .with_context(|| format!("parsing {}", path.display()))?
     };
 
     match value {
@@ -136,9 +138,11 @@ pub async fn write_env_override_entry(path: &Path, key: &str, value: Option<&str
     let new_content = if existing.is_empty() {
         toml::to_string_pretty(&target).context("serializing env override file")?
     } else {
-        let mut doc: toml_edit::DocumentMut = existing
-            .parse()
-            .context("parsing existing env override file for comment preservation")?;
+        let mut doc: toml_edit::DocumentMut =
+            existing
+                .parse()
+                .map_err(super::config_parse_error)
+                .context("parsing existing env override file for comment preservation")?;
         shine_core::migration::sync_table(doc.as_table_mut(), &target);
         doc.to_string()
     };
@@ -160,11 +164,12 @@ async fn read_env_file(path: &Path) -> Result<Option<EnvOverrides>> {
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
 
-    let table: toml::Table =
-        toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+    let table: toml::Table = toml::from_str(&content)
+        .map_err(super::config_parse_error)
+        .with_context(|| format!("parsing {}", path.display()))?;
     let mut overrides = EnvOverrides::default();
     for (key, value) in table {
-        let parsed: EnvValue = value.try_into().with_context(|| {
+        let parsed: EnvValue = value.try_into().map_err(super::config_parse_error).with_context(|| {
             format!(
                 "invalid env variable `{key}` in {}: expected a string or {{ value, description }}",
                 path.display()

@@ -154,6 +154,7 @@ impl Config {
             let mut descriptions = BTreeMap::new();
             if let Some(contents) = &input.contents {
                 let table: toml::Table = toml::from_str(contents)
+                    .map_err(super::config_parse_error)
                     .with_context(|| format!("parsing {}", path.display()))?;
                 let entries = if kind.is_config() {
                     match table.get("env") {
@@ -164,8 +165,10 @@ impl Config {
                     table
                 };
                 for (key, value) in entries {
-                    let parsed: super::env_layer::EnvValue =
-                        value.try_into().with_context(|| {
+                    let parsed: super::env_layer::EnvValue = value
+                        .try_into()
+                        .map_err(super::config_parse_error)
+                        .with_context(|| {
                             format!("invalid env variable `{key}` in {}", path.display())
                         })?;
                     match parsed {
