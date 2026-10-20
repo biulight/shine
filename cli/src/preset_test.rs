@@ -38,7 +38,9 @@ fn print_text_report(report: &PresetTestReportV1) {
         }
     }
     println!(
-        "Summary: {} cases, {} passed, {} failed",
-        report.summary.cases, report.summary.passed, report.summary.failed
+        "Summary: {}, {} passed, {} failed",
+        crate::preset_report::count_phrase(report.summary.cases, "case", "cases"),
+        report.summary.passed,
+        report.summary.failed
     );
 }

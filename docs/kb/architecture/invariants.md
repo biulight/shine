@@ -414,6 +414,10 @@ bugs. Check this list before changing the modules named in each entry.
   replaceable reporter, but those events are not serializable and must never be copied into
   `LifecycleResultV1`. Confirmation and administrator authorization use the separate interaction
   port so reusable execution does not depend on dialoguer or terminal rendering.
+  Captured App notes retain their declared stdout/stderr stream and use that stream's color
+  support. Shell install dry-run remains a link-selection preview, not a reviewed Plan; its text
+  must not imply that conflicts, replacement effects, trust, permissions or profile changes passed
+  assessment. Presentation changes retain the existing requests, approval and exit policies.
 - **Lifecycle status distinguishes observation from execution.** Read-only `update` uses
   `dry_run = false` and `Pending`; explicit dry-run uses `dry_run = true` and `Previewed`.
   `Changed` means this execution changed Shine-owned state. App hooks/teardown may record execution

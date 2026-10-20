@@ -46,6 +46,24 @@ pub(crate) trait LifecycleReporter {
     fn emit(&mut self, event: PresentationEvent);
 }
 
+/// Render captured notes on their original stream; hook stdout stays stdout.
+pub(crate) fn emit_process_output(reporter: &mut dyn LifecycleReporter, stream: &str, text: &str) {
+    let stderr = stream == "stderr";
+    let color_stream = if stderr {
+        owo_colors::Stream::Stderr
+    } else {
+        owo_colors::Stream::Stdout
+    };
+    for line in text.lines() {
+        let text = format!("     {}", crate::colors::dim_for_stream(line, color_stream));
+        reporter.emit(if stderr {
+            PresentationEvent::stderr(text)
+        } else {
+            PresentationEvent::stdout(text)
+        });
+    }
+}
+
 pub(crate) trait LifecycleInteraction {
     fn confirm(&mut self, prompt: &str, default: bool) -> anyhow::Result<bool>;
 }

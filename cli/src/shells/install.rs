@@ -247,13 +247,19 @@ async fn handle_install_dry_run_with_reporter(
             force: false,
         })
         .await?;
+    reporter.emit(PresentationEvent::stdout(
+        "Shell install preview: link candidates only (not a security Plan).",
+    ));
     for (command, target, source) in &core_report.planned_links {
         reporter.emit(PresentationEvent::stdout(format!(
-            "Would link shell command {command}: {} -> {}",
+            "Link candidate {command}: {} -> {}",
             target.display(),
             source.display()
         )));
     }
+    reporter.emit(PresentationEvent::stdout(
+        "Ownership conflicts, --replace-managed effects, trust, permissions, and profile changes are not evaluated; --verbose does not expand this preview.",
+    ));
     reporter.emit(PresentationEvent::stdout(
         "Dry run: no shell files, links, manifests, or profiles were changed.",
     ));

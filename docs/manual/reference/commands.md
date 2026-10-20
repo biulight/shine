@@ -123,6 +123,9 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
 ```
 
 - Preview installation or uninstall with `--dry-run`.
+- `shell install --dry-run` lists link candidates, not a security Plan. It does not evaluate
+  ownership conflicts, `--replace-managed` effects, trust, permissions, or profile changes;
+  `--verbose` does not expand this preview. Run without `--dry-run` to review the Plan before approval.
 - `shell list` shows the active presets, including overlay additions and overridden descriptions.
 - Installation and repair commands suggested by `shell info` quote literal target names for
   POSIX shells on Unix and PowerShell on Windows, including names containing spaces or quotes.
@@ -152,6 +155,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 ```
 
 - `app info` and `update` do not run generators unless `--run-generators` is present.
+- During installation, upgrade, and refresh, generator diagnostic notes go to stderr;
+  displayed hook stdout notes stay on stdout.
 - `app refresh` runs a generated-file refresh explicitly. `--force` permits replacing a
   user-modified managed destination. The installed receipt must belong to that exact category and
   source file; `--force` cannot refresh a destination owned by another source.
@@ -306,6 +311,8 @@ Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These c
 authoring input without installing it. `migrate --dry-run` previews legacy metadata changes;
 applying a migration requires review and confirmation. A Git-managed overlay is a disposable mirror,
 so edit its upstream checkout rather than the mirror.
+Text summaries use singular or plural counts, such as `1 category` and `1 case`.
+JSON field names and exit rules, including `lint --deny-warnings`, are unchanged.
 If `preset schema` cannot write its output, it reports an error and exits nonzero.
 Artifact follow-up commands printed by migration quote category names for POSIX shells on Unix
 and PowerShell on Windows. Migration itself does not run those commands.

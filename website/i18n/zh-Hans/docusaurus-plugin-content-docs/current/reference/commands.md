@@ -89,6 +89,9 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
 ```
 
 - 使用 `--dry-run` 预览安装或卸载。
+- `shell install --dry-run` 只列出链接候选，并非安全计划；它不评估归属冲突、
+  `--replace-managed` 的替换效果、信任、权限或 profile 变更，`--verbose` 也不会扩展该预览。
+  去掉 `--dry-run` 后，可在批准前审查计划。
 - `shell list` 展示当前可用预设，包括 overlay 新增的命令和覆盖后的描述。
 - `shell info` 建议的安装和修复命令会为目标名称加上必要的引用，包括含空格或引号的名称；
   Unix 使用 POSIX shell 语法，Windows 使用 PowerShell 语法。
@@ -115,6 +118,7 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 ```
 
 - `app info` 和 `update` 只有在传入 `--run-generators` 时才会运行生成器。
+- 安装、升级和刷新时，生成器的诊断提示输出到 stderr；展示的 hook 标准输出提示仍输出到 stdout。
 - `app refresh` 显式刷新生成文件；`--force` 允许替换用户修改过的受管目标。安装收据必须属于
   该类别下的同一个源文件；`--force` 不能刷新由其他来源管理的目标。
   汇总会区分 `user-modified (kept)`（用户修改已保留）和执行失败；两者都会使刷新结果为未完成，
@@ -251,6 +255,8 @@ shine preset pull
 发布预设前使用 `validate`、`lint`、`plan` 和 `test`。这些命令只检查创作输入，不会安装预设。
 `migrate --dry-run` 用于预览旧 metadata 迁移，实际应用前需要审阅并确认。Git 管理的 overlay 是
 可丢弃镜像，应在上游 checkout 中编辑，而不是修改镜像。
+文本汇总按数量使用单复数，例如 `1 category` 和 `1 case`。
+JSON 字段名和退出规则保持不变，包括 `lint --deny-warnings` 的警告退出策略。
 如果 `preset schema` 无法写入输出，它会报告错误并以非零状态退出。
 迁移输出的 artifact 后续操作命令会引用分类名：Unix 使用 POSIX shell 语法，Windows 使用
 PowerShell 语法。迁移本身不会执行这些命令。

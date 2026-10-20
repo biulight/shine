@@ -73,8 +73,11 @@ pub fn bold_cyan(s: &str) -> String {
 }
 
 pub fn dim(s: &str) -> String {
-    s.if_supports_color(Stream::Stdout, |t| t.dimmed())
-        .to_string()
+    dim_for_stream(s, Stream::Stdout)
+}
+
+pub(crate) fn dim_for_stream(s: &str, stream: Stream) -> String {
+    s.if_supports_color(stream, |t| t.dimmed()).to_string()
 }
 
 pub fn cyan(s: &str) -> String {

@@ -36,6 +36,209 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+#[cfg(unix)]
+fn app_generator_notes_keep_stderr_and_hook_notes_keep_stdout() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let preset = state.join("presets/app/demo");
+    let destination = fixture.0.join("destination");
+    fs::create_dir_all(&preset).unwrap();
+    let dest = toml::Value::String(destination.to_string_lossy().into_owned());
+    fs::write(preset.join("shine.toml"), format!(
+        "metadata_schema_version = 2\ndest = {dest}\npost_install = {{ command = '/bin/sh', args = ['-c', 'printf HOOK_STDOUT_NOTE'], show_output = true }}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'printf HOOK_STDOUT_NOTE'], show_output = true }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n"
+    )).unwrap();
+    fs::write(preset.join("config.txt"), "fallback").unwrap();
+    let script = preset.join("generate.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\nprintf '%s' \"$ENABLE\"\nprintf 'GENERATOR_STDERR_NOTE\\nsecond line\\n' >&2\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let config = state.join("config.toml");
+    fs::write(&config, "schema_version = 2\n[env]\nENABLE = '1'\n").unwrap();
+    let trusted = run(&["trust", "grant", "app/demo", "--yes"]);
+    assert!(trusted.status.success(), "{trusted:?}");
+    let trust = fs::read(state.join("trust.toml")).unwrap();
+    for (value, args) in [
+        ("1", vec!["app", "install", "demo", "--yes"]),
+        ("2", vec!["upgrade", "app/demo", "--yes", "--verbose"]),
+        ("3", vec!["app", "refresh", "demo", "config.txt", "--yes"]),
+    ] {
+        let contents = format!("schema_version = 2\n[env]\nENABLE = '{value}'\n");
+        fs::write(&config, &contents).unwrap();
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "     GENERATOR_STDERR_NOTE\n     second line\n"
+        );
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("HOOK_STDOUT_NOTE"), "{output:?}");
+        assert!(!text.contains("GENERATOR_STDERR_NOTE"), "{output:?}");
+        assert_eq!(
+            fs::read(destination.join("config.txt")).unwrap(),
+            value.as_bytes()
+        );
+        assert_eq!(fs::read_to_string(&config).unwrap(), contents);
+        assert_eq!(fs::read(state.join("trust.toml")).unwrap(), trust);
+        assert!(!state.join("app-operation-journal.toml").exists());
+    }
+    // A no-op refresh still renders the note without changing content or receipts.
+    let manifest = fs::read(state.join("app-manifest.toml")).unwrap();
+    let noop = run(&["app", "refresh", "demo", "--yes"]);
+    assert_eq!(noop.status.code(), Some(0), "{noop:?}");
+    assert!(String::from_utf8_lossy(&noop.stdout).contains("Already up to date"));
+    assert_eq!(
+        String::from_utf8_lossy(&noop.stderr),
+        "     GENERATOR_STDERR_NOTE\n     second line\n"
+    );
+    assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), manifest);
+    assert_eq!(fs::read(destination.join("config.txt")).unwrap(), b"3");
+}
+
+#[test]
+fn shell_install_preview_labels_candidates_without_changing_conflict_policy() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let preset = state.join("presets/shell/demo");
+    fs::create_dir_all(&preset).unwrap();
+    let source = if cfg!(windows) { "run.ps1" } else { "run.sh" };
+    fs::write(
+        preset.join("shine.toml"),
+        format!("[[files]]\nsource = '{source}'\ntarget = 'demo-run'\n"),
+    )
+    .unwrap();
+    fs::write(preset.join(source), "# fixture; never executed\n").unwrap();
+    let config = "schema_version = 2\n";
+    fs::write(state.join("config.toml"), config).unwrap();
+    fs::create_dir_all(state.join("bin")).unwrap();
+    let launcher = state.join("bin").join(if cfg!(windows) {
+        "demo-run.ps1"
+    } else {
+        "demo-run"
+    });
+    fs::write(&launcher, "foreign launcher\n").unwrap();
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let trusted = run(&["trust", "grant", "shell/demo/demo-run", "--yes"]);
+    assert_eq!(trusted.status.code(), Some(0), "{trusted:?}");
+    let trust = fs::read(state.join("trust.toml")).unwrap();
+    for flags in [vec![], vec!["--replace-managed"], vec!["--verbose"]] {
+        let mut args = vec!["shell", "install", "demo", "--dry-run"];
+        args.extend(flags);
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains("link candidates only (not a security Plan)"),
+            "{text}"
+        );
+        assert!(text.contains("Link candidate demo-run:"), "{text}");
+        assert!(text.contains("--replace-managed effects"), "{text}");
+        assert!(
+            text.contains("--verbose does not expand this preview"),
+            "{text}"
+        );
+        assert!(!text.contains("Would link"), "{text}");
+    }
+    let blocked = run(&["shell", "install", "demo", "--yes"]);
+    assert_eq!(blocked.status.code(), Some(1), "{blocked:?}");
+    assert!(
+        String::from_utf8_lossy(&blocked.stderr).contains("ownership conflict"),
+        "{blocked:?}"
+    );
+    assert_eq!(fs::read_to_string(&launcher).unwrap(), "foreign launcher\n");
+    assert_eq!(
+        fs::read_to_string(state.join("config.toml")).unwrap(),
+        config
+    );
+    assert_eq!(fs::read(state.join("trust.toml")).unwrap(), trust);
+    for path in [
+        "installed/shell",
+        "shell",
+        "shell-manifest.toml",
+        "shell-operation-journal.toml",
+    ] {
+        assert!(!state.join(path).exists(), "{path}");
+    }
+    assert!(!fixture.0.join("home/.zshrc").exists());
+    assert!(!fixture.0.join("home/Documents/PowerShell").exists());
+}
+
+#[test]
+fn preset_lint_text_counts_preserve_json_and_warning_exits() {
+    let fixture = Fixture::new();
+    let category = fixture.0.join("app/demo");
+    fs::create_dir_all(&category).unwrap();
+    fs::write(category.join("shine.toml"), "metadata_schema_version = 2\ndescription = 'Demo'\ndest = '~/.config/demo'\n[[files]]\nsource = 'config.txt'\n").unwrap();
+    fs::write(category.join("config.txt"), "fixture\n").unwrap();
+    for (missing, expected, exit) in [
+        (false, "Summary: 1 category, 0 errors, 1 warning", 0),
+        (true, "Summary: 0 categories, 1 error, 0 warnings", 1),
+    ] {
+        let path = if missing {
+            fixture.0.join("missing")
+        } else {
+            category.clone()
+        };
+        for deny in [false, true] {
+            let run = |json| {
+                let mut command = fixture.command();
+                command
+                    .env("NO_COLOR", "1")
+                    .args(["preset", "lint"])
+                    .arg(&path);
+                if deny {
+                    command.arg("--deny-warnings");
+                }
+                if json {
+                    command.args(["--format", "json"]);
+                }
+                command.output().unwrap()
+            };
+            let text = run(false);
+            let json = run(true);
+            let expected_exit = if deny { 1 } else { exit };
+            assert_eq!(text.status.code(), Some(expected_exit), "{text:?}");
+            assert_eq!(json.status.code(), text.status.code(), "{json:?}");
+            assert!(text.stderr.is_empty() && json.stderr.is_empty());
+            assert!(
+                String::from_utf8_lossy(&text.stdout).contains(expected),
+                "{text:?}"
+            );
+            let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+            assert_eq!(
+                report["summary"],
+                if missing {
+                    serde_json::json!({"categories": 0, "errors": 1, "warnings": 0})
+                } else {
+                    serde_json::json!({"categories": 1, "errors": 0, "warnings": 1})
+                }
+            );
+        }
+    }
+    assert!(!fixture.0.join("state").exists());
+}
+
 fn sys_output_fixture() -> Fixture {
     let mut fixture = Fixture::new();
     fixture.0 = fs::canonicalize(&fixture.0).unwrap();
@@ -594,12 +797,13 @@ fn preset_test_text_keeps_control_names_on_one_row_and_preserves_json_and_exit_s
         assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
         if passed {
             assert!(text.contains("PASS ordinary name (linux)"), "{text}");
+            assert!(text.contains("Summary: 1 case, 1 passed, 0 failed"));
         } else {
             assert!(
                 text.contains(r"FAIL case\n  PASS forged\r\t\u{1b}[31m"),
                 "{text}"
             );
-            assert!(text.contains("Summary: 1 cases, 0 passed, 1 failed"));
+            assert!(text.contains("Summary: 1 case, 0 passed, 1 failed"));
         }
         let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
         assert_eq!(report["cases"].as_array().unwrap().len(), 1);

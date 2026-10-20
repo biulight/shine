@@ -9,10 +9,6 @@ pub(super) fn symbol(value: &str) -> String {
     colors::symbol(value)
 }
 
-pub(super) fn dim(value: &str) -> String {
-    colors::dim(value)
-}
-
 pub(super) fn transform_label(transforms: &[String]) -> String {
     if transforms.is_empty() {
         String::new()

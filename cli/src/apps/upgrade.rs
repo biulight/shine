@@ -308,13 +308,8 @@ fn render_runtime_event(reporter: &mut dyn LifecycleReporter, event: RuntimeEven
                 target.trim_start_matches("app/")
             )));
         }
-        RuntimeEvent::ProcessOutput { text, .. } => {
-            for line in text.lines() {
-                reporter.emit(PresentationEvent::stdout(format!(
-                    "     {}",
-                    report::dim(line)
-                )));
-            }
+        RuntimeEvent::ProcessOutput { stream, text, .. } => {
+            crate::presentation::emit_process_output(reporter, stream, &text);
         }
         _ => {}
     }

@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-20 — Preserve note streams and distinguish selection from review
+
+- **Symptoms**: App install/upgrade/refresh redirected generator stderr notes to stdout; Shell
+  install preview described link candidates as definite changes despite not assessing conflicts;
+  lint/test summaries used plural nouns for one category, warning or case.
+- **Fix**: share the CLI note renderer over existing presentation events and stream-aware colors,
+  describe the unchanged Shell preview boundary, and reuse Preset `count_phrase`. Keep requests,
+  trust, approval, execution, JSON reports and exits unchanged.
+- **Coverage**: real CLI regressions check generator stderr versus hook stdout across all three
+  App consumers and a no-op refresh, selection-only previews with a conflicting launcher and
+  unchanged blocked installation, plus lint warning/error counts, JSON and warning exit policy.
+  Existing fixture-name regressions retain case identity, pass/fail and single-case summaries.
+
 ## 2026-10-20 — Catalogs and targeted notices retain their query scope
 
 - **Symptoms**: Shell catalog listing bypassed overlays in built-in mode; targeted Shell/static

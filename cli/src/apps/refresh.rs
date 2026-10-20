@@ -183,10 +183,12 @@ impl RuntimeObserver for RefreshObserver {
             RuntimeEvent::Warning { detail, .. } => {
                 eprintln!("  {} {detail}", colors::symbol_stderr("!"))
             }
-            RuntimeEvent::ProcessOutput { text, .. } => {
-                for line in text.lines() {
-                    println!("     {}", colors::dim(line));
-                }
+            RuntimeEvent::ProcessOutput { stream, text, .. } => {
+                crate::presentation::emit_process_output(
+                    &mut crate::presentation::TerminalRenderer::stdio(),
+                    stream,
+                    &text,
+                );
             }
             RuntimeEvent::Progress {
                 code: "app_hook_completed",

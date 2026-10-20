@@ -65,7 +65,9 @@ fn print_text_report(report: &PresetLintReportV1, path: &Path) {
         );
     }
     println!(
-        "Summary: {} categories, {} errors, {} warnings",
-        report.summary.categories, report.summary.errors, report.summary.warnings
+        "Summary: {}, {}, {}",
+        crate::preset_report::count_phrase(report.summary.categories, "category", "categories"),
+        crate::preset_report::count_phrase(report.summary.errors, "error", "errors"),
+        crate::preset_report::count_phrase(report.summary.warnings, "warning", "warnings")
     );
 }

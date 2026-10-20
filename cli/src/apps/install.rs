@@ -326,13 +326,8 @@ impl RuntimeObserver for InstallObserver<'_> {
                     report::symbol("✓")
                 )));
             }
-            RuntimeEvent::ProcessOutput { text, .. } => {
-                for line in text.lines() {
-                    self.reporter.emit(PresentationEvent::stdout(format!(
-                        "     {}",
-                        report::dim(line)
-                    )));
-                }
+            RuntimeEvent::ProcessOutput { stream, text, .. } => {
+                crate::presentation::emit_process_output(self.reporter, stream, &text);
             }
             _ => {}
         }
