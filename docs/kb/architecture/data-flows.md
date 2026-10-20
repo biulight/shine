@@ -1556,7 +1556,10 @@ and calls `secret::encrypt_secret`, which tags age output and leaves GPG output 
 [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md) for the full rationale.
 Shell export resolves `KEY_SECRET` before plaintext `KEY`, decrypts the selected secret through
 that route, then rejects NUL before rendering any shell code. Its diagnostic omits the value;
-normal values keep the existing per-shell quoting, while get/decrypt retain raw output.
+ordinary values keep the existing per-shell quoting, while get/decrypt retain raw output.
+PowerShell values with CR/LF or non-ASCII characters instead render as a single ASCII expression
+that decodes UTF-8 Base64. This keeps native stdout capture compatible with PowerShell 5.1's line
+splitting and legacy console encodings without changing the caller's console or preset helper.
 The Unix `shine-env-export` source helper captures output in a subshell, forwards successful code
 to eval, and substitutes a literal numeric return on failure without evaluating partial output.
 `shine env secret identity init [--touch-id]` generates a local age identity file

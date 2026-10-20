@@ -1191,6 +1191,11 @@ bugs. Check this list before changing the modules named in each entry.
   partial export code, do not fall back from a selected secret, and preserve raw get/decrypt output.
   The Unix source helper evaluates only successful output and returns the producer failure code.
   Keep its capture variable inside command substitution so an exported alias cannot be shadowed.
+- **PowerShell exports survive native pipeline transport.** Windows PowerShell 5.1 splits native
+  stdout into lines and decodes bytes using its console code page. Encode CR/LF or non-ASCII values
+  as a single ASCII UTF-8 Base64 decoding expression, retaining ordinary ASCII literal quoting.
+  Exercise the shipped PowerShell source helper under UTF-8 and a legacy code page, preserving
+  Unicode, exact CR/LF bytes and the caller's encoding. Do not alter stored values or raw output.
 - **A valid nonmatching plugin identity is an ordinary miss within the selected age backend.** The
   plugin must return no file key and no stanza error so reference age can try the next configured
   identity. Malformed supported stanzas, unavailable identity state, cancellation, and final

@@ -432,6 +432,71 @@ exit "$export_status"
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn shell_export_powershell_preset_round_trips_native_pipeline_values() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("presets/shell/utils/shine-env-export.ps1");
+    // PowerShell 5.1 splits native stdout into lines and decodes it using
+    // Console.OutputEncoding. Exercise the shipped source helper at that boundary.
+    for code_page in [65001, 936] {
+        for value in [
+            "",
+            "plain ' quote \" $HOME `tick` \\path",
+            "\nfirst\n",
+            "\rfirst\r",
+            "first\r\nsecond\r\n",
+            "中文😀e\u{301}",
+            "'$(throw 'must-not-run')\r\n中文",
+        ] {
+            let f = Fixture::new();
+            f.write(
+                "state/config.toml",
+                &format!(
+                    "schema_version = 2\nshell_type = 'powershell'\n[env]\nTOKEN = {}\n",
+                    toml::Value::String(value.into())
+                ),
+            );
+            let before = fs::read(f.0.join("state/config.toml")).unwrap();
+            let result = Command::new("powershell.exe")
+                .current_dir(f.0.join("outside"))
+                .env("SHINE_TEST_BINARY", env!("CARGO_BIN_EXE_shine"))
+                .env("SHINE_TEST_CONFIG", f.0.join("state"))
+                .env("SHINE_TEST_PRESET", &source)
+                .env("SHINE_TEST_CODE_PAGE", code_page.to_string())
+                .env_remove("SHINE_PRESETS")
+                .env_remove("SHINE_CONFIG_DIR")
+                .env("API_TOKEN", "parent")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::GetEncoding([int]$env:SHINE_TEST_CODE_PAGE)
+function shine { & $env:SHINE_TEST_BINARY --config-dir $env:SHINE_TEST_CONFIG @args }
+function wrapped { . $env:SHINE_TEST_PRESET @args }
+wrapped TOKEN --as API_TOKEN
+$status = $LASTEXITCODE
+if ([Console]::OutputEncoding.CodePage -ne [int]$env:SHINE_TEST_CODE_PAGE) {
+    throw 'export changed the parent encoding'
+}
+$bytes = [Text.Encoding]::UTF8.GetBytes([string]$env:API_TOKEN)
+[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)
+exit $status
+"#,
+                ])
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(0), "{code_page}: {result:?}");
+            assert!(result.stderr.is_empty(), "{code_page}: {result:?}");
+            assert_eq!(result.stdout, value.as_bytes(), "code page {code_page}");
+            assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+            assert_eq!(fs::read_dir(f.0.join("state")).unwrap().count(), 1);
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn shell_export_checks_the_decrypted_winner_without_changing_decrypt_output() {

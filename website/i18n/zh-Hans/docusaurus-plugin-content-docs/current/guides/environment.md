@@ -162,6 +162,14 @@ export_code="$(shine env secret export MY_TOKEN)" && eval "$export_code"
 export_code="$(shine env secret export MY_TOKEN --as API_TOKEN)" && eval "$export_code"
 ```
 
+在 PowerShell 中，仅在导出成功后执行生成的代码：
+
+```powershell
+$exportCode = shine env secret export MY_TOKEN --as API_TOKEN
+if ($LASTEXITCODE -eq 0) { Invoke-Expression $exportCode }
+```
+
+PowerShell 导出会保留 Unicode 和多行值，包括原始换行符。
 安装 `utils` shell 预设后，也可以使用 `shine-env-export MY_TOKEN --as API_TOKEN`。
 环境变量无法表示含 NUL 的值。`env secret export` 会以退出码 1 拒绝该值，stdout 不输出导出代码；
 `env get` 和 `env secret decrypt` 仍保留原始输出。

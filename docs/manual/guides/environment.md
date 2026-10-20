@@ -182,6 +182,14 @@ export_code="$(shine env secret export MY_TOKEN)" && eval "$export_code"
 export_code="$(shine env secret export MY_TOKEN --as API_TOKEN)" && eval "$export_code"
 ```
 
+In PowerShell, evaluate the generated code only after a successful export:
+
+```powershell
+$exportCode = shine env secret export MY_TOKEN --as API_TOKEN
+if ($LASTEXITCODE -eq 0) { Invoke-Expression $exportCode }
+```
+
+PowerShell exports preserve Unicode and multiline values, including their original line endings.
 After installing the `utils` shell preset, `shine-env-export MY_TOKEN --as API_TOKEN` is equivalent.
 Values containing NUL cannot be represented in environment variables. `env secret export` rejects
 them with exit code 1 and no export code on stdout; `env get` and `env secret decrypt` retain raw output.

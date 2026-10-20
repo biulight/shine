@@ -1,6 +1,7 @@
 //! Handlers for env inspection, directed writes, and secret commands.
 
 use anyhow::{Context, Result, bail};
+use base64::Engine as _;
 use shine_core::shell_quote::posix_single_quote as posix_shell_quote;
 use shine_core::shell_quote::powershell_single_quote as powershell_string_quote;
 
@@ -416,6 +417,15 @@ fn validate_env_export_key(key: &str) -> Result<()> {
 pub(crate) fn format_env_export(shell: &shells::ShellType, key: &str, value: &str) -> String {
     match shell {
         shells::ShellType::Fish => format!("set -gx {key} {}", fish_quote(value)),
+        shells::ShellType::PowerShell if !value.is_ascii() || value.contains(['\r', '\n']) => {
+            // Native PowerShell capture splits lines and may decode UTF-8 using a
+            // legacy console code page. Keep the expression itself ASCII and one line.
+            let encoded = base64::engine::general_purpose::STANDARD.encode(value);
+            format!(
+                "$env:{key} = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String({}))",
+                powershell_string_quote(&encoded)
+            )
+        }
         shells::ShellType::PowerShell => {
             format!("$env:{key} = {}", powershell_string_quote(value))
         }
@@ -794,11 +804,32 @@ mod tests {
 
     #[test]
     fn env_export_formats_powershell_code_safely() {
-        let value = "abc def'ghi$HOME\nnext; Remove-Item /";
+        let value = "abc def'ghi$HOME; Remove-Item /";
         assert_eq!(
             format_env_export(&shells::ShellType::PowerShell, "TOKEN", value),
-            "$env:TOKEN = 'abc def''ghi$HOME\nnext; Remove-Item /'"
+            "$env:TOKEN = 'abc def''ghi$HOME; Remove-Item /'"
         );
+    }
+
+    #[test]
+    fn env_export_powershell_transport_is_ascii_and_single_line() {
+        for (value, encoded) in [
+            ("line\r\nnext", "bGluZQ0KbmV4dA=="),
+            ("line\rnext", "bGluZQ1uZXh0"),
+            ("line\nnext", "bGluZQpuZXh0"),
+            ("中文", "5Lit5paH"),
+        ] {
+            let code = format_env_export(&shells::ShellType::PowerShell, "TOKEN", value);
+            assert_eq!(
+                code,
+                format!(
+                    "$env:TOKEN = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}'))"
+                )
+            );
+            assert!(code.is_ascii());
+            assert_eq!(code.lines().count(), 1);
+            assert!(!code.contains('\r'));
+        }
     }
 
     #[test]

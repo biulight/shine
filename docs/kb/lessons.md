@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-21 — PowerShell exports must cross the native pipeline intact
+
+- **Symptoms**: the shipped PowerShell export helper rejected multiline values as `System.Object[]`
+  instead of code strings; a Unicode value returned success but changed under a legacy console
+  code page. Directly evaluating an already captured Rust string did not cover either failure.
+- **Fix**: render CR/LF or non-ASCII values as one ASCII UTF-8 Base64 decoding expression, using
+  the existing encoder crate and literal quoting. Ordinary ASCII output, helper code, selection,
+  decryption, NUL rejection, configuration and exit policies stay unchanged.
+- **Coverage**: source the actual PowerShell preset under UTF-8 and code page 936, asserting exact
+  empty/quoted/Unicode/CR/LF/CRLF values, inert code-like text, unchanged parent encoding and config.
+
 ## 2026-10-21 — Shell export must reject NUL before reporting success
 
 - **Symptom**: exporting `prefix\0suffix` returned 0 and printed a NUL in shell code; the documented
