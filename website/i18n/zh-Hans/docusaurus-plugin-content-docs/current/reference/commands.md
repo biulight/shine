@@ -275,6 +275,8 @@ shine preset pull
 可丢弃镜像，应在上游 checkout 中编辑，而不是修改镜像。
 文本汇总按数量使用单复数，例如 `1 category` 和 `1 case`。
 JSON 字段名和退出规则保持不变，包括 `lint --deny-warnings` 的警告退出策略。
+`preset pack` 文本报告会转义目标名中的控制字符，将目标保留在同一行。
+JSON 报告和包内容保留原始目标名。
 如果 `preset schema` 无法写入输出，它会报告错误并以非零状态退出。
 迁移输出的 artifact 后续操作命令会引用分类名：Unix 使用 POSIX shell 语法，Windows 使用
 PowerShell 语法。迁移本身不会执行这些命令。

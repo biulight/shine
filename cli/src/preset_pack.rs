@@ -120,7 +120,7 @@ fn print_text_report(report: &PresetPackReportV3) {
         if report.valid { "created" } else { "blocked" }
     );
     if let Some(target) = &report.target {
-        println!("  Target: {target}");
+        println!("  Target: {}", crate::output::escape_controls(target));
     }
     for diagnostic in &report.diagnostics {
         println!("  error[{diagnostic}]");

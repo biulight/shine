@@ -846,6 +846,95 @@ fn authoring_text_escapes_identifiers_without_changing_json_or_warning_policy() 
     assert!(!fixture.0.join("state").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn preset_pack_escapes_text_target_without_changing_bundle_or_force_policy() {
+    let fixture = Fixture::new();
+    let name = "demo\nFORGED=created\r\t\u{1b}[31m";
+    let category = fixture.0.join("app").join(name);
+    fs::create_dir_all(&category).unwrap();
+    let metadata = "dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.txt'\n";
+    fs::write(category.join("shine.toml"), metadata).unwrap();
+    fs::write(category.join("config.txt"), "demo").unwrap();
+    let mut bundle = None;
+    for format in ["text", "json"] {
+        let output = fixture.0.join(format!("{format}.tar.gz"));
+        for mode in ["create", "blocked", "force"] {
+            let mut command = fixture.command();
+            command
+                .env_remove("SUDO_USER")
+                .env("NO_COLOR", "1")
+                .args(["preset", "pack"])
+                .arg(&category)
+                .arg("--output")
+                .arg(&output)
+                .args(["--format", format]);
+            if mode == "blocked" {
+                fs::write(&output, "preserve me").unwrap();
+            }
+            if mode == "force" {
+                fs::write(&output, "replace me").unwrap();
+                command.arg("--force");
+            }
+            let result = command.output().unwrap();
+            let valid = mode != "blocked";
+            assert_eq!(result.status.code(), Some(i32::from(!valid)), "{result:?}");
+            assert!(result.stderr.is_empty(), "{result:?}");
+            let text = String::from_utf8(result.stdout).unwrap();
+            if format == "json" {
+                let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(report["target"], format!("app/{name}"));
+                assert_eq!(report["valid"], valid);
+                if !valid {
+                    assert_eq!(report["diagnostics"], serde_json::json!(["output_exists"]));
+                }
+            } else {
+                assert!(
+                    text.contains("  Target: app/demo\\nFORGED=created\\r\\t\\u{1b}[31m\n"),
+                    "{text:?}"
+                );
+                assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+                assert!(!text.lines().any(|line| line.starts_with("FORGED=")));
+                assert!(text.starts_with(if valid {
+                    "Preset pack: created\n"
+                } else {
+                    "Preset pack: blocked\n"
+                }));
+                assert_eq!(text.contains("error[output_exists]"), !valid);
+                assert_eq!(text.contains("SHA-256:"), valid);
+            }
+            let bytes = fs::read(&output).unwrap();
+            if valid {
+                match &bundle {
+                    Some(expected) => assert_eq!(&bytes, expected),
+                    None => {
+                        let mut archive =
+                            tar::Archive::new(flate2::read::GzDecoder::new(bytes.as_slice()));
+                        let mut entries = archive.entries().unwrap();
+                        let manifest = entries.next().unwrap().unwrap();
+                        assert_eq!(
+                            manifest.path().unwrap(),
+                            std::path::Path::new("shine.bundle.json")
+                        );
+                        let manifest: serde_json::Value =
+                            serde_json::from_reader(manifest).unwrap();
+                        assert_eq!(manifest["target"], format!("app/{name}"));
+                        bundle = Some(bytes);
+                    }
+                }
+            } else {
+                assert_eq!(bytes, b"preserve me");
+            }
+            assert_eq!(
+                fs::read_to_string(category.join("shine.toml")).unwrap(),
+                metadata
+            );
+            assert_eq!(fs::read(category.join("config.txt")).unwrap(), b"demo");
+            assert!(!fixture.0.join("state").exists());
+        }
+    }
+}
+
 #[test]
 fn preset_pack_rejects_file_parent_traversal_in_text_and_json() {
     let fixture = Fixture::new();

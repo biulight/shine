@@ -333,6 +333,8 @@ applying a migration requires review and confirmation. A Git-managed overlay is 
 so edit its upstream checkout rather than the mirror.
 Text summaries use singular or plural counts, such as `1 category` and `1 case`.
 JSON field names and exit rules, including `lint --deny-warnings`, are unchanged.
+`preset pack` text reports escape control characters in target names to keep the target on one
+line. JSON reports and bundle contents retain the original target name.
 If `preset schema` cannot write its output, it reports an error and exits nonzero.
 Artifact follow-up commands printed by migration quote category names for POSIX shells on Unix
 and PowerShell on Windows. Migration itself does not run those commands.

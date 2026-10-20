@@ -129,6 +129,15 @@
   refusal, unchanged source bytes and absent state initialization. Existing non-UTF-8 collision and
   shell-round-trip tests retain independent coverage.
 
+## 2026-10-21 — Pack target text needs its own terminal boundary
+
+- **Symptom**: a successful `preset pack` printed category LF/CR/TAB/ESC bytes as terminal controls,
+  despite validation/lint/Plan text already encoding their own fields.
+- **Fix**: reuse `escape_controls` only for the pack text target. Keep Core/JSON identities,
+  deterministic archives, no-clobber/force publication and exit rules unchanged.
+- **Coverage**: real Unix CLI text/JSON create, existing-output refusal and force replacement retain
+  identical bundle bytes, exact JSON target, original sources and no initialized state.
+
 ## 2026-10-21 — Pack output normalization must retain directory traversal failures
 
 - **Symptom**: `file/../bundle.tar.gz` was normalized through an existing regular file, so packing
