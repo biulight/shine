@@ -59,7 +59,7 @@ pub async fn handle_save(
     if let Some(cwd) = cwd {
         println!(
             "Working dir: {}",
-            path_display::format_home(&cwd, &config.home_dir)
+            crate::output::escape_controls(&path_display::format_home(&cwd, &config.home_dir))
         );
     }
     Ok(())
@@ -81,7 +81,7 @@ pub async fn handle_run(config: &Config, name: &str, extra: &[String]) -> Result
     let cwd_note = entry.cwd.as_deref().map_or_else(String::new, |cwd| {
         format!(
             " (cwd: {})",
-            path_display::format_home(cwd, &config.home_dir)
+            crate::output::escape_controls(&path_display::format_home(cwd, &config.home_dir))
         )
     });
     eprintln!(
@@ -129,7 +129,7 @@ pub async fn handle_info(config: &Config, name: &str) -> Result<()> {
         println!(
             "{:<LABEL_WIDTH$} {}",
             "Working dir",
-            path_display::format_home(cwd, &config.home_dir)
+            crate::output::escape_controls(&path_display::format_home(cwd, &config.home_dir))
         );
     }
     Ok(())

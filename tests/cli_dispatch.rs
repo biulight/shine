@@ -37,6 +37,71 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn task_cwd_display_escapes_controls_while_child_output_and_exit_stay_raw() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    let cwd = fixture.0.join("work\nFORGED=cwd\r\t\u{1b}");
+    let mut manifest = cli::task::manifest::TaskManifest::default();
+    manifest.upsert("probe", vec!["never-run".into()], Some(cwd.clone()));
+    let original = toml::to_string(&manifest).unwrap();
+    fs::write(state.join("tasks.toml"), &original).unwrap();
+    let encoded = "work\\nFORGED=cwd\\r\\t\\u{1b}";
+    let info = fixture
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["task", "info", "probe"])
+        .output()
+        .unwrap();
+    assert_eq!(info.status.code(), Some(0), "{info:?}");
+    assert!(info.stderr.is_empty(), "{info:?}");
+    let text = String::from_utf8(info.stdout).unwrap();
+    assert!(text.contains(encoded), "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert_eq!(
+        fs::read_to_string(state.join("tasks.toml")).unwrap(),
+        original
+    );
+    #[cfg(unix)]
+    {
+        fs::create_dir(&cwd).unwrap();
+        let cwd = fs::canonicalize(&cwd).unwrap();
+        let saved = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["task", "save", "probe", "--force", "--cwd"])
+            .arg(&cwd)
+            .args(["--", "/bin/sh", "-c", "pwd -P; exit 7"])
+            .output()
+            .unwrap();
+        assert_eq!(saved.status.code(), Some(0), "{saved:?}");
+        assert!(saved.stderr.is_empty(), "{saved:?}");
+        let text = String::from_utf8(saved.stdout).unwrap();
+        assert!(text.contains(encoded), "{text:?}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        let before = fs::read(state.join("tasks.toml")).unwrap();
+        let manifest: cli::task::manifest::TaskManifest =
+            toml::from_str(std::str::from_utf8(&before).unwrap()).unwrap();
+        assert_eq!(manifest.get("probe").unwrap().cwd.as_ref(), Some(&cwd));
+        let run = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["task", "run", "probe"])
+            .output()
+            .unwrap();
+        assert_eq!(run.status.code(), Some(7), "{run:?}");
+        let expected = format!("{}\n", cwd.display()).into_bytes();
+        assert_eq!(run.stdout, expected);
+        let stderr = String::from_utf8(run.stderr).unwrap();
+        assert!(stderr.contains(encoded), "{stderr:?}");
+        assert_eq!(stderr.lines().count(), 1, "{stderr:?}");
+        assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+        assert_eq!(fs::read(state.join("tasks.toml")).unwrap(), before);
+    }
+}
+
+#[test]
 fn state_migration_rejects_invalid_documents_before_cleanup_or_writes() {
     for schema in [0, 2] {
         for (name, contents, message) in [
@@ -1932,6 +1997,74 @@ target = "~/.config/plain.txt"
         "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
     })).unwrap()).unwrap();
     fixture
+}
+
+#[test]
+fn sys_catalog_descriptions_encode_controls_without_changing_query_state() {
+    let fixture = sys_output_fixture();
+    let description = "DETAIL\nFORGED=description\r\t\u{1b}[31m\\literal中文";
+    let encoded = "DETAIL\\nFORGED=description\\r\\t\\u{1b}[31m\\literal中文";
+    let mut sources = Vec::new();
+    for os in ["macos", "ubuntu", "windows"] {
+        let path = fixture
+            .0
+            .join("state/presets/sys")
+            .join(os)
+            .join("shine.toml");
+        let mut manifest: toml::Table =
+            toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        manifest.insert(
+            "description".into(),
+            toml::Value::String(description.into()),
+        );
+        for item in manifest["items"].as_array_mut().unwrap() {
+            item.as_table_mut().unwrap().insert(
+                "description".into(),
+                toml::Value::String(description.into()),
+            );
+        }
+        let bytes = toml::to_string(&manifest).unwrap().into_bytes();
+        fs::write(&path, &bytes).unwrap();
+        sources.push((path, bytes));
+    }
+    for path in ["config.toml", "update-check.json"] {
+        let path = fixture.0.join("state").join(path);
+        sources.push((path.clone(), fs::read(path).unwrap()));
+    }
+    for args in [
+        vec!["sys", "list"],
+        vec!["sys", "list", "--all"],
+        vec!["sys", "info", "--", "--help"],
+        vec!["sys", "info", "--", "--version"],
+    ] {
+        let result = fixture
+            .command()
+            .env_remove("SUDO_USER")
+            .env("NO_COLOR", "1")
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(0), "{args:?}: {result:?}");
+        assert!(result.stderr.is_empty(), "{result:?}");
+        let text = String::from_utf8(result.stdout).unwrap();
+        assert!(text.contains(encoded), "{text:?}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(
+            !text.lines().any(|line| line.starts_with("FORGED=")),
+            "{text:?}"
+        );
+        for (path, before) in &sources {
+            assert_eq!(&fs::read(path).unwrap(), before, "{path:?}");
+        }
+        for path in [
+            "trust.toml",
+            "sys-manifest.toml",
+            "app-manifest.toml",
+            "shell-manifest.toml",
+        ] {
+            assert!(!fixture.0.join("state").join(path).exists());
+        }
+    }
 }
 
 #[test]

@@ -129,6 +129,24 @@
   refusal, unchanged source bytes and absent state initialization. Existing non-UTF-8 collision and
   shell-round-trip tests retain independent coverage.
 
+## 2026-10-21 — Task cwd hints are display text, not child output
+
+- **Symptom**: save/info and the stderr run announcement printed LF/CR/TAB/ESC from a valid saved
+  working directory unchanged, allowing the announcement to look like extra terminal rows.
+- **Fix**: encode only home-formatted cwd hints with the existing display helper. Keep the saved
+  cwd, direct argv, locks, streams and numeric/signal exit policy unchanged.
+- **Coverage**: cross-platform info of a stored cwd; Unix real save and exit-7 execution from the
+  control-bearing directory, retaining raw `pwd` stdout and exact task registry bytes on reads.
+
+## 2026-10-21 — Sys catalog descriptions share the label display boundary
+
+- **Symptom**: `sys list` encoded item labels but printed declared manifest/item description
+  LF/CR/TAB/ESC raw, even with `NO_COLOR`. Item info used the same raw description.
+- **Fix**: encode descriptions through the existing display helper before styling; leave stored
+  declarations, current-OS selection, command hints, status inspection and execution unchanged.
+- **Coverage**: real CLI list/current/all and init/managed info queries retain Unicode/backslashes,
+  exact metadata/config/cache bytes and absent trust/installation receipts without running items.
+
 ## 2026-10-21 — Wire transfer hints must not expand home into a lossy sibling
 
 - **Symptom**: a non-UTF-8 HOME made `~/private.txt` resolve to an existing replacement-character

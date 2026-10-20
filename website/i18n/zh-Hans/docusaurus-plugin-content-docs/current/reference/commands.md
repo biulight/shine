@@ -237,6 +237,7 @@ shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 ```
 
 `sys list --all` 将其他操作系统标记为 `catalog only`（仅供浏览），只为当前系统显示 apply 提示。
+目录 list/info 中的描述与条目标签一样，将终端控制字符显示为转义文本；存储的描述和条目选择不变。
 `sys info`、`bootstrap`、`apply` 和 `uninstall` 始终按当前系统查找项目；其他系统存在同名项目时
 也不会切换查找范围。
 

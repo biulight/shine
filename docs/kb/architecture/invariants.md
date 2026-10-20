@@ -96,7 +96,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **Sys display encoding stays at the CLI boundary.** Suggested item operands use the shared
   positional encoder, including `--` for leading hyphens. Detection command displays distinguish
   program position from literal arguments and use POSIX/PowerShell encoding. Escape control
-  characters in Sys labels before rendering or measuring columns, sharing the broker list rule;
+  characters in Sys labels before rendering or measuring columns, sharing the broker list rule.
+  Catalog list/info also encode manifest/item descriptions before styling;
   metadata, receipts, process argv, approval and exit policies retain their original values.
 - **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
   from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
@@ -1051,6 +1052,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **Task cwd resolution preserves filesystem identity.** Expand `~` and canonicalize using native
   paths, without lossy string conversion. Reject a non-UTF-8 canonical cwd before locking or saving
   the TOML registry, including force replacement; never select a replacement-character neighbor.
+- **Task cwd display does not feed execution.** Save/info and the stderr run announcement encode
+  terminal controls after home-relative formatting. Preserve stored native path identity, child
+  stdout/stderr bytes, exit status and the existing lock, validation and direct-argv policy.
 
 ## Embedded presets
 

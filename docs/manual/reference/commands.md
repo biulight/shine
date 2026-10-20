@@ -295,6 +295,8 @@ shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 `sys list --all` marks other operating systems as `catalog only` and shows apply hints only for
 the current OS. `sys info`, `bootstrap`, `apply`, and `uninstall` always resolve items for the
 current OS, including when another OS has an item with the same name.
+Catalog list/info descriptions display terminal control characters as escapes, like item labels;
+the stored descriptions and item selection remain unchanged.
 
 Use `bootstrap` to ensure selected software and shell integration are present. Use `apply` and
 `uninstall` for reversible managed system configuration. These operations may request administrator

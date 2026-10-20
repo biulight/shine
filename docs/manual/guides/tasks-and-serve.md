@@ -32,6 +32,8 @@ there; without it, the task uses the caller's current directory.
 
 `--cwd` expands a leading `~` and saves the resolved absolute directory. If that directory's path
 cannot be represented as UTF-8, saving fails without changing the task list, including with `--force`.
+Working-directory displays in save/info and the run announcement escape terminal controls.
+The saved path, child's output and exit status retain their original values.
 
 Concurrent saves and deletions use a shared process lock to preserve each completed update.
 They wait up to 30 seconds for an active writer, then fail without changing the task list.

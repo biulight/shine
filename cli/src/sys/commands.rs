@@ -53,7 +53,10 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
         };
         println!("  {}{}", colors::bold(os_id), colors::dim(current));
         if !manifest.description.is_empty() {
-            println!("    {}", colors::dim(&manifest.description));
+            println!(
+                "    {}",
+                colors::dim(&escape_controls(&manifest.description))
+            );
         }
         if manifest.items.is_empty() {
             println!("    {}", colors::dim("No items available."));
@@ -137,7 +140,7 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
         colors::dim(&format!("({})", item.id))
     );
     if !item.description.is_empty() {
-        println!("  {}", item.description);
+        println!("  {}", escape_controls(&item.description));
     }
     println!();
     println!("  {:<14} {}", "OS", os_id);
