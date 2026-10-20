@@ -509,6 +509,10 @@ Shine creates a same-name shim in `~/.shine/bin/` and records the real command f
 shim resolves `GH_TOKEN_SECRET` only for its child and falls back to plaintext `GH_TOKEN`. It never
 exports the value back to the parent. `--with` is repeatable and accepts `KEY=ALIAS`.
 
+The proxy forwards child stdout/stderr and preserves its numeric exit code. On Unix, termination
+by a signal returns `128 + signal` (for example, SIGTERM returns 143), including when injection is
+disabled or no rule applies.
+
 The shim retains the absolute runtime directory selected during installation, including a custom
 `--config-dir`. Later calls use that directory even when the caller's `SHINE_CONFIG_DIR` differs.
 Project rules still follow the caller's working directory. Re-run `env proxy install` to update an

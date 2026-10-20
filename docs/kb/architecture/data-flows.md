@@ -1420,6 +1420,11 @@ applicable rules also pass through without injection, so project-only proxies wo
 project. Target discovery compares canonical directory identities to exclude aliases of Shine bin,
 but retains the executable filename for rustup-style dispatch.
 
+After waiting for the child, proxy execution reuses `workspace::finish_command_status`, also used
+by environment commands and live Bun. Numeric exit codes remain unchanged; Unix signal termination
+becomes `128 + signal`. All injection branches share this completion path; spawn errors retain their
+existing context and child streams remain inherited.
+
 ## SSH transfer control channel
 
 The SSH agent listener retains the tracked task set. `agent/connection.rs` performs the unchanged

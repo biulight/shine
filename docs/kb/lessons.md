@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-21 — Transparent proxies must retain signal-derived failure status
+
+- **Symptom**: the same child printed identical stdout/stderr but returned 143/137 through `env run`
+  and 1 through a transparent proxy after SIGTERM/SIGKILL. Ordinary `exit 7` already returned 7.
+- **Fix**: replace the proxy's independent success/code/fallback branch with the existing environment
+  completion helper. Keep injection selection, argv, inherited streams, spawn errors and launcher
+  installation unchanged; add no signal relay or process-group behavior.
+- **Coverage**: real installed Unix shims cover enabled, disabled and project-only-unmatched rules,
+  two terminating signals, ordinary exits, binary streams, literal argv and unchanged configuration,
+  receipts and launchers. Direct CLI regressions cover normal exits, bypassed missing values and
+  spawn errors on all platforms, including Windows `STATUS_CONTROL_C_EXIT` preservation.
+
 ## 2026-10-21 — Preset registration must reject unrepresentable source identities
 
 - **Symptom**: an absent non-UTF-8 operand beside a replacement-character directory made both local

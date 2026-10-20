@@ -251,10 +251,7 @@ async fn run_target(
         .status()
         .await
         .with_context(|| format!("running proxy target {}", target.display()))?;
-    if status.success() {
-        return Ok(());
-    }
-    std::process::exit(status.code().unwrap_or(1));
+    super::workspace::finish_command_status(status)
 }
 
 fn validate_command(command: &str) -> Result<()> {

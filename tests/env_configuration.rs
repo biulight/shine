@@ -90,6 +90,171 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn proxy_exec_preserves_normal_status_streams_and_injection_selection() {
+    for mode in ["enabled", "disabled", "missing"] {
+        let f = Fixture::new();
+        let rule = if mode == "missing" { "other" } else { "probe" };
+        let source = if mode == "enabled" {
+            "CHILD_SOURCE"
+        } else {
+            "UNAVAILABLE_SOURCE"
+        };
+        f.write("state/config.toml", &format!("schema_version = 2\n[[env_proxy]]\ncommand = '{rule}'\nenabled = {}\nwith = ['{source}=CHILD_VALUE']\n[env]\nCHILD_SOURCE = 'injected'\n", mode != "disabled"));
+        let before = fs::read(f.0.join("state/config.toml")).unwrap();
+        #[cfg(unix)]
+        let target = PathBuf::from("/bin/sh");
+        #[cfg(windows)]
+        let target = PathBuf::from(std::env::var_os("COMSPEC").unwrap());
+        for code in [
+            0,
+            7,
+            #[cfg(windows)]
+            -1073741510, // STATUS_CONTROL_C_EXIT remains a native Windows exit code.
+        ] {
+            #[cfg(unix)]
+            let args = vec![
+                "-c".to_string(),
+                "printf 'out:%s:%s\\n' \"$CHILD_VALUE\" \"$1\"; printf 'err\\n' >&2; exit \"$2\""
+                    .into(),
+                "probe".into(),
+                "literal value".into(),
+                code.to_string(),
+            ];
+            #[cfg(windows)]
+            let args = vec![
+                "/d".to_string(),
+                "/c".into(),
+                format!("echo out:%CHILD_VALUE%:literal value&echo err>&2&exit /b {code}"),
+            ];
+            let result = f
+                .command(false)
+                .env("CHILD_VALUE", "parent")
+                .args(["env", "proxy", "exec", "--target"])
+                .arg(&target)
+                .arg("probe")
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(code), "{mode}: {result:?}");
+            let value = if mode == "enabled" {
+                "injected"
+            } else {
+                "parent"
+            };
+            let newline = if cfg!(windows) { "\r\n" } else { "\n" };
+            assert_eq!(
+                result.stdout,
+                format!("out:{value}:literal value{newline}").as_bytes()
+            );
+            assert_eq!(result.stderr, format!("err{newline}").as_bytes());
+            assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+        }
+        // A spawn failure still reports an error rather than becoming a child status.
+        f.write("tools/non-executable", "not a program");
+        let result = f
+            .command(false)
+            .args(["env", "proxy", "exec", "--target"])
+            .arg(f.0.join("tools/non-executable"))
+            .arg("probe")
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        assert!(result.stdout.is_empty(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("running proxy target"),
+            "{result:?}"
+        );
+        assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_proxy_preserves_signal_status_binary_output_and_runtime_state() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    for mode in ["enabled", "disabled", "missing"] {
+        let f = Fixture::new();
+        f.write(
+            "state/config.toml",
+            "schema_version = 2\n[env]\nCHILD_SOURCE = 'injected'\n",
+        );
+        f.write("project/shine.config.toml", "# project-only rule\n");
+        f.write("tools/probe", "#!/bin/sh\nprintf '\\000OUT:%s:%s\\n' \"$CHILD_VALUE\" \"$2\"\nprintf '\\000ERR\\n' >&2\ncase \"$1\" in\nterm) kill -TERM \"$$\";;\nkill) kill -KILL \"$$\";;\nexit7) exit 7;;\nesac\n");
+        fs::set_permissions(f.0.join("tools/probe"), fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(env!("CARGO_BIN_EXE_shine"), f.0.join("tools/shine")).unwrap();
+        let path = std::env::join_paths(
+            std::iter::once(f.0.join("tools"))
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let mut install = f.command(mode == "missing");
+        install.env("PATH", &path).args([
+            "env",
+            "proxy",
+            "install",
+            "probe",
+            "--with",
+            "CHILD_SOURCE=CHILD_VALUE",
+        ]);
+        if mode == "missing" {
+            install.arg("--project");
+        }
+        let result = install.output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        if mode == "disabled" {
+            f.ok(false, &["proxy", "disable", "probe"]);
+        }
+        let launcher = f.0.join("state/bin/probe");
+        let paths = [
+            f.0.join("state/config.toml"),
+            f.0.join("project/shine.config.toml"),
+            f.0.join("state/proxy-manifest.toml"),
+            launcher.clone(),
+        ];
+        let before = paths
+            .iter()
+            .map(|path| fs::read(path).unwrap())
+            .collect::<Vec<_>>();
+        for (operation, code) in [
+            ("term", 128 + libc::SIGTERM),
+            ("kill", 128 + libc::SIGKILL),
+            ("exit7", 7),
+            ("ok", 0),
+        ] {
+            let argument = "literal ' \\\nargument";
+            let result = Command::new(&launcher)
+                .current_dir(f.0.join("outside"))
+                .env("HOME", f.0.join("home"))
+                .env_remove("SUDO_USER")
+                .env_remove("SHINE_PRESETS")
+                .env("PATH", &path)
+                .env("CHILD_VALUE", "parent")
+                .args([operation, argument])
+                .output()
+                .unwrap();
+            assert_eq!(
+                result.status.code(),
+                Some(code),
+                "{mode}/{operation}: {result:?}"
+            );
+            let value = if mode == "enabled" {
+                "injected"
+            } else {
+                "parent"
+            };
+            assert_eq!(
+                result.stdout,
+                format!("\0OUT:{value}:{argument}\n").as_bytes()
+            );
+            assert_eq!(result.stderr, b"\0ERR\n");
+            for (path, bytes) in paths.iter().zip(&before) {
+                assert_eq!(fs::read(path).unwrap(), *bytes);
+            }
+        }
+    }
+}
+
+#[test]
 fn queries_are_read_only_and_defaults_are_not_persisted() {
     let f = Fixture::new();
     fs::remove_dir(f.0.join("state")).unwrap();

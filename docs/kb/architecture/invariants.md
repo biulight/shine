@@ -918,6 +918,11 @@ bugs. Check this list before changing the modules named in each entry.
 - **Project-only proxies remain transparent outside the project.** Missing active rules forward
   directly without environment injection. PATH discovery excludes the actual Shine bin directory,
   including directory aliases, while preserving executable names such as `cargo` for dispatch.
+- **Proxy completion preserves child status and streams.** Enabled, disabled and unmatched rules
+  share the environment runner's completion policy: success returns normally, numeric child exits
+  propagate unchanged, and Unix signal termination maps to `128 + signal`. Forward stdout/stderr
+  bytes unchanged; spawn failures remain contextual command errors. This adds no signal forwarding
+  or process-group policy and changes no injection, lookup, launcher or persistence behavior.
 - **Managed overlay synchronization uses the configured source.** Fetch from the current URL and
   explicit branch or remote HEAD before updating origin/resetting; failed fetches preserve the last
   checkout and origin even during relink. Before fetch and destructive synchronization, require a
