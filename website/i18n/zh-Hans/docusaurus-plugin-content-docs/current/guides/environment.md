@@ -182,6 +182,8 @@ shine env secret identity list
 
 自定义 `--output` 时，输出的 `age_identity` 配置提示使用绝对路径和 TOML 引用，
 因此切换目录后仍能找到该文件。提示本身不会修改配置。
+`identity list` 显示每个已配置 identity 的路径和 recipient。Unix 文件名中的字面反斜杠会
+原样保留；Windows 路径使用正斜杠显示。
 
 ### 在 macOS 上使用 Touch ID
 

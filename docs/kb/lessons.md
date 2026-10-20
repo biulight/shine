@@ -2776,3 +2776,17 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Regression**: real CLI category-then-full uninstall checks preview/consent and unrelated startup
   text. Interrupted removal rejects new receipts, changed rollback content and stale approval;
   freshly reviewed recovery restores integration without overwriting unrelated edits.
+
+## 2026-10-20 — Display fixes must preserve input and stored identities
+
+- **Symptoms**: lint remediation validated the current directory instead of its input; local path
+  display rewrote literal Unix backslashes; broker project control characters forged list rows.
+- **Fix**: the CLI text adapter quotes the original lint operand while leaving Core/JSON unchanged.
+  Non-UTF-8 operands omit the copyable command and require reusing the original argument; lossy
+  conversion can otherwise select a distinct valid input. Do not change validation admission.
+  Native path display converts separators only on Windows; logical permission strings retain their
+  separate normalization. Broker list cells escape controls without altering stored policy values.
+- **Regression**: execute suggested validation commands through the native shell; assert exact Unix
+  identity paths and unchanged key bytes; round-trip broker info and retain policy bytes after list.
+  A raw non-UTF-8 operand beside a valid replacement-character path must retain exit 1 and the
+  original JSON diagnostic without suggesting the other input or initializing runtime state.

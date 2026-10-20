@@ -171,6 +171,10 @@ Adding an existing policy name fails without replacing it. To update it, use `--
 the policy parameters again, including any project or remote-workspace constraints; see
 `shine env broker policy update --help`. Changed policies still require review and confirmation.
 
+`shine env broker policy list` shows one policy per line. Control characters in the SSH target or
+project are displayed as escapes, such as `\n` and `\t`. Use `shine env broker policy info <NAME>`
+for the policy's TOML representation; listing does not change stored values or matching rules.
+
 Concurrent policy changes preserve updates to other policies. If the target policy changes or is
 removed while confirmation is pending, the update fails and requires a fresh review.
 

@@ -148,6 +148,10 @@ shine env broker policy update \
 包括原有的 project 或远端 workspace 限制；详见 `shine env broker policy update --help`。
 策略发生变化时仍需审阅并确认。
 
+`shine env broker policy list` 每行显示一项策略。SSH target 或 project 中的控制字符以
+`\n`、`\t` 等转义形式显示。需要查看策略的 TOML 表示时，使用
+`shine env broker policy info <NAME>`；列表显示不会修改存储值或匹配规则。
+
 并发修改策略会保留对其他策略的更新。如果等待确认期间目标策略被修改或删除，更新会失败，需要重新审阅。
 
 若没有本机 checkout，可使用 inspect 会话查看候选描述。先在本机开启 inspect，再在远端项目目录运行 `describe`；该请求会显示 workspace、source 摘要、mode、完整 argv 与 release 键，并与本机策略比较：

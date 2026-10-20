@@ -15,7 +15,9 @@ impl Fixture {
         Self(root)
     }
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+        self.configure(Command::new(env!("CARGO_BIN_EXE_shine")))
+    }
+    fn configure(&self, mut command: Command) -> Command {
         command
             .current_dir(&self.0)
             .env("HOME", self.0.join("home"))
@@ -31,6 +33,263 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn lint_validation_hints_recheck_the_original_input_without_changing_json() {
+    let fixture = Fixture::new();
+    let good = fixture.0.join("app/good");
+    fs::create_dir_all(&good).unwrap();
+    let metadata =
+        "metadata_schema_version = 2\ndest = '~/.config/good'\n[[files]]\nsource = 'config.txt'\n";
+    fs::write(good.join("shine.toml"), metadata).unwrap();
+    fs::write(good.join("config.txt"), "fixture\n").unwrap();
+    for name in ["bad space", "it's"] {
+        let bad = fixture.0.join("app").join(name);
+        fs::create_dir_all(&bad).unwrap();
+        fs::write(bad.join("shine.toml"), "[[files]\n").unwrap();
+    }
+    let default = fixture
+        .command()
+        .current_dir(&good)
+        .args(["preset", "validate"])
+        .output()
+        .unwrap();
+    assert_eq!(default.status.code(), Some(0), "{default:?}");
+    for (path, missing) in [
+        ("../bad space", false),
+        ("../it's", false),
+        ("-missing", true),
+        ("../missing space", true),
+    ] {
+        let run = |format| {
+            fixture
+                .command()
+                .current_dir(&good)
+                .args(["preset", "lint", "--format", format, "--", path])
+                .output()
+                .unwrap()
+        };
+        let text = run("text");
+        let json = run("json");
+        for output in [&text, &json] {
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+        }
+        let text = String::from_utf8(text.stdout).unwrap();
+        let hint = text
+            .split_once("run `")
+            .unwrap()
+            .1
+            .split('`')
+            .next()
+            .unwrap();
+        #[cfg(unix)]
+        let shell = {
+            let mut command = Command::new("/bin/sh");
+            command.args([
+                "-c",
+                &format!(
+                    "shine() {{ {} \"$@\"; }}; {hint}",
+                    shine_core::shell_quote::posix_single_quote(env!("CARGO_BIN_EXE_shine"))
+                ),
+            ]);
+            command
+        };
+        #[cfg(windows)]
+        let shell = {
+            let mut command = Command::new("powershell.exe");
+            command.args(["-NoProfile", "-NonInteractive", "-Command"]);
+            command.arg(format!(
+                "Set-Alias shine {}; {hint}; exit $LASTEXITCODE",
+                shine_core::shell_quote::powershell_single_quote(env!("CARGO_BIN_EXE_shine"))
+            ));
+            command
+        };
+        let hinted = fixture
+            .configure(shell)
+            .current_dir(&good)
+            .output()
+            .unwrap();
+        let explicit = fixture
+            .command()
+            .current_dir(&good)
+            .args(["preset", "validate", "--", path])
+            .output()
+            .unwrap();
+        assert_eq!(hinted.status.code(), Some(1), "{hinted:?}");
+        // PowerShell may re-emit native stdout with CRLF line endings.
+        assert_eq!(
+            std::str::from_utf8(&hinted.stdout)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            std::str::from_utf8(&explicit.stdout)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            "{hint}"
+        );
+        assert_eq!(hinted.stderr, explicit.stderr, "{hint}");
+        let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+        assert_eq!(report["valid"], false);
+        assert_eq!(
+            report["diagnostics"][0]["message"],
+            if missing {
+                "preset input could not be loaded; run `shine preset validate` for path details"
+            } else {
+                "static validation failed; run `shine preset validate` for details"
+            }
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(good.join("shine.toml")).unwrap(),
+        metadata
+    );
+    assert!(!fixture.0.join("state").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn lint_non_utf8_path_does_not_suggest_a_different_valid_input() {
+    use std::os::unix::ffi::OsStringExt;
+    let fixture = Fixture::new();
+    let original = PathBuf::from(std::ffi::OsString::from_vec(
+        b"checkout-\xff/app/demo".to_vec(),
+    ));
+    let replacement = fixture.0.join("checkout-\u{fffd}/app/demo");
+    fs::create_dir_all(&replacement).unwrap();
+    let metadata =
+        "metadata_schema_version = 2\ndest = '~/.config/demo'\n[[files]]\nsource = 'config.txt'\n";
+    fs::write(replacement.join("shine.toml"), metadata).unwrap();
+    fs::write(replacement.join("config.txt"), "fixture\n").unwrap();
+    // The lossy spelling is a distinct, valid input. Never suggest validating it.
+    let valid = fixture
+        .command()
+        .args(["preset", "validate"])
+        .arg(&replacement)
+        .output()
+        .unwrap();
+    assert_eq!(valid.status.code(), Some(0), "{valid:?}");
+    let run = |format| {
+        fixture
+            .command()
+            .args(["preset", "lint", "--format", format, "--"])
+            .arg(&original)
+            .output()
+            .unwrap()
+    };
+    let text = run("text");
+    let json = run("json");
+    for output in [&text, &json] {
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(
+        text.contains(
+            "preset validate with the original PATH (non-UTF-8; copyable command omitted)"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("`shine preset validate"), "{text}");
+    assert!(!text.contains('\u{fffd}'), "{text}");
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(report["valid"], false);
+    assert_eq!(report["diagnostics"][0]["code"], "invalid_input");
+    assert_eq!(
+        report["diagnostics"][0]["message"],
+        "preset input could not be loaded; run `shine preset validate` for path details"
+    );
+    assert_eq!(
+        fs::read_to_string(replacement.join("shine.toml")).unwrap(),
+        metadata
+    );
+    assert_eq!(
+        fs::read(replacement.join("config.txt")).unwrap(),
+        b"fixture\n"
+    );
+    assert!(!fixture.0.join("state").exists());
+}
+
+#[test]
+fn broker_policy_list_escapes_controls_without_changing_stored_values() {
+    for (project, ssh_target, row) in [
+        (
+            "API's \"build\" \\ path",
+            "example.invalid",
+            "review: example.invalid (API's \"build\" \\ path)\n",
+        ),
+        (
+            "api)\nforged: host (injected\r\t\u{1b}[31m",
+            "example.invalid\talias",
+            r"review: example.invalid\talias (api)\nforged: host (injected\r\t\u{1b}[31m)",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let workspace = fixture.0.join("shine.workspace.toml");
+        fs::write(&workspace, "version = 2\n[env]\nfiles = ['env.toml']\n").unwrap();
+        let source = "version = 1\n[secret]\nTOKEN = true\n[payload]\ndata = 'not-decrypted-by-policy-commands'\n";
+        fs::write(fixture.0.join("env.toml"), source).unwrap();
+        let added = fixture
+            .command()
+            .args([
+                "env",
+                "broker",
+                "policy",
+                "add",
+                "--name",
+                "review",
+                "--project",
+                project,
+                "--ssh-target",
+                ssh_target,
+                "--workspace",
+            ])
+            .arg(&workspace)
+            .args([
+                "--mode",
+                "dev",
+                "--release",
+                "TOKEN",
+                "--",
+                "echo",
+                "never executed",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(added.status.code(), Some(0), "{added:?}");
+        assert!(added.stderr.is_empty(), "{added:?}");
+        let policy = fixture.0.join("state/ssh-secret-broker.toml");
+        let before = fs::read(&policy).unwrap();
+        let listed = fixture
+            .command()
+            .args(["env", "broker", "policy", "list"])
+            .output()
+            .unwrap();
+        assert_eq!(listed.status.code(), Some(0), "{listed:?}");
+        assert!(listed.stderr.is_empty(), "{listed:?}");
+        let text = String::from_utf8(listed.stdout).unwrap();
+        assert_eq!(text.trim_end_matches('\n'), row.trim_end_matches('\n'));
+        assert_eq!(text.lines().count(), 1);
+        assert!(!text.contains(['\r', '\t', '\u{1b}']));
+        let info = fixture
+            .command()
+            .args(["env", "broker", "policy", "info", "review"])
+            .output()
+            .unwrap();
+        assert_eq!(info.status.code(), Some(0), "{info:?}");
+        assert!(info.stderr.is_empty(), "{info:?}");
+        let decoded: toml::Value =
+            toml::from_str(std::str::from_utf8(&info.stdout).unwrap()).unwrap();
+        assert_eq!(decoded["project"].as_str(), Some(project));
+        assert_eq!(decoded["ssh_target"].as_str(), Some(ssh_target));
+        assert_eq!(fs::read(&policy).unwrap(), before);
+        assert_eq!(
+            fs::read_to_string(fixture.0.join("env.toml")).unwrap(),
+            source
+        );
     }
 }
 
@@ -1894,9 +2153,9 @@ fn identity_hint_round_trips_toml_and_survives_changed_directory() {
             .unwrap();
         assert_eq!(listed.status.code(), Some(0), "{listed:?}");
         assert!(listed.stderr.is_empty(), "{listed:?}");
-        assert!(
-            String::from_utf8_lossy(&listed.stdout).contains("age1reviewplaceholder"),
-            "{listed:?}"
+        assert_eq!(
+            String::from_utf8(listed.stdout).unwrap(),
+            format!("{}  age1reviewplaceholder\n", expected.to_string_lossy())
         );
     }
     assert_eq!(fs::read(expected).unwrap(), original);

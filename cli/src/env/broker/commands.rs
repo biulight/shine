@@ -153,10 +153,25 @@ pub async fn handle_policy_list(config: &Config) -> Result<()> {
     for policy in store.policies {
         println!(
             "{}: {} ({})",
-            policy.name, policy.ssh_target, policy.project
+            policy.name,
+            policy_list_cell(&policy.ssh_target),
+            policy_list_cell(&policy.project)
         );
     }
     Ok(())
+}
+
+fn policy_list_cell(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_control() {
+                ch.escape_debug().to_string()
+            } else {
+                ch.to_string()
+            }
+        })
+        .collect()
 }
 
 pub async fn handle_policy_info(config: &Config, name: &str) -> Result<()> {
