@@ -36,6 +36,78 @@ impl Drop for Fixture {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn preset_pull_preserves_selected_path_and_exit_contract() {
+    let fixture = Fixture::new();
+    let source = fixture.0.join("source");
+    let selected = fixture.0.join("selected ");
+    let neighbor = fixture.0.join("selected");
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let output = fixture
+            .configure(Command::new("git"))
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    };
+    git(&fixture.0, &["init", source.to_str().unwrap()]);
+    git(&source, &["config", "user.name", "Shine Tests"]);
+    git(&source, &["config", "user.email", "shine@example.invalid"]);
+    fs::write(source.join("preset.txt"), "one\n").unwrap();
+    git(&source, &["add", "preset.txt"]);
+    git(&source, &["commit", "-m", "initial"]);
+    for dir in [&selected, &neighbor] {
+        git(
+            &fixture.0,
+            &["clone", source.to_str().unwrap(), dir.to_str().unwrap()],
+        );
+    }
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    // SHINE_CONFIG_DIR selects state/presets before SHINE_PRESETS in global mode.
+    std::os::unix::fs::symlink(&selected, state.join("presets")).unwrap();
+    fs::write(state.join("update-check.json"), serde_json::to_vec(&serde_json::json!({
+        "latest_version": env!("CARGO_PKG_VERSION"),
+        "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+    })).unwrap()).unwrap();
+    let pull = || {
+        fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["preset", "pull"])
+            .output()
+            .unwrap()
+    };
+    fs::write(selected.join("preset.txt"), "user changes\n").unwrap();
+
+    let refused = pull();
+
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    let stderr = String::from_utf8(refused.stderr).unwrap();
+    assert!(stderr.contains("uncommitted changes"), "{stderr}");
+    assert!(!selected.join(".git/FETCH_HEAD").exists());
+    assert!(!neighbor.join(".git/FETCH_HEAD").exists());
+    assert_eq!(
+        fs::read(selected.join("preset.txt")).unwrap(),
+        b"user changes\n"
+    );
+    git(&selected, &["checkout", "--", "preset.txt"]);
+    fs::write(source.join("preset.txt"), "two\n").unwrap();
+    git(&source, &["commit", "-am", "update"]);
+
+    let updated = pull();
+
+    assert_eq!(updated.status.code(), Some(0), "{updated:?}");
+    assert!(updated.stderr.is_empty(), "{updated:?}");
+    let stdout = String::from_utf8(updated.stdout).unwrap();
+    assert!(stdout.contains("preset source updated"), "{stdout}");
+    assert_eq!(fs::read(selected.join("preset.txt")).unwrap(), b"two\n");
+    assert_eq!(fs::read(neighbor.join("preset.txt")).unwrap(), b"one\n");
+    assert!(!neighbor.join(".git/FETCH_HEAD").exists());
+}
+
 #[test]
 fn external_overlay_completion_matches_catalog_without_loading_trust_or_writing_state() {
     let fixture = Fixture::new();

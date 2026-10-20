@@ -914,7 +914,8 @@ bugs. Check this list before changing the modules named in each entry.
   checkout and origin even during relink. Before fetch and destructive synchronization, require a
   non-linked standalone checkout whose canonical worktree and Git metadata roots are exactly the
   managed directory and its `.git` directory. Repository-selecting environment variables cannot
-  redirect Git operations. After a successful fetch/reset, clean untracked and ignored files and
+  redirect Git operations. Git path output loses only its record terminator, never whitespace
+  belonging to directory names. After a successful fetch/reset, clean untracked and ignored files and
   nested repositories only inside that verified disposable mirror, including when HEAD is unchanged.
 - **Managed Git overlay configuration is global-only.** Project config does not load Git overlay
   keys, and all projects share `<shine_dir>/overlay`. Reject `overlay link --git` with an active

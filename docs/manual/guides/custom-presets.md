@@ -514,8 +514,9 @@ shine upgrade --pull
 ```
 
 Shine locates the repositories containing the base presets and active overlay. If both sources are in
-one repository it pulls only once; non-Git sources are skipped. `update --pull` and `upgrade --pull`
-reload configuration after pulling, so an updated `shine.config.toml` affects later steps.
+one repository it pulls only once; non-Git sources are skipped. Git repository root detection preserves
+directory-name whitespace, including trailing spaces on systems that support them. `update --pull`
+and `upgrade --pull` reload configuration after pulling, so an updated `shine.config.toml` affects later steps.
 
 Every repository processed must meet these conditions before any pull begins:
 

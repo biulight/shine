@@ -445,7 +445,7 @@ shine update --pull
 shine upgrade --pull
 ```
 
-Shine 会定位基础预设和当前 overlay 所在的 Git 仓库；两个来源属于同一仓库时只拉取一次，非 Git 来源会跳过。`update --pull` 和 `upgrade --pull` 会在拉取后重新加载配置，因此仓库中更新的 `shine.config.toml` 也会在后续步骤生效。
+Shine 会定位基础预设和当前 overlay 所在的 Git 仓库；两个来源属于同一仓库时只拉取一次，非 Git 来源会跳过。解析 Git 仓库根目录时会保留目录名中的空白，包括系统支持的末尾空格。`update --pull` 和 `upgrade --pull` 会在拉取后重新加载配置，因此仓库中更新的 `shine.config.toml` 也会在后续步骤生效。
 
 拉取前，所有待处理仓库都必须满足以下条件：
 

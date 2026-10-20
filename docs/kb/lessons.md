@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-21 — Git path records must preserve directory identity
+
+- **Symptom**: pulling a source whose directory ended in whitespace could update a different sibling
+  repository and report success. Its actual worktree changes were not checked, and managed overlays
+  with such paths were rejected on subsequent synchronization.
+- **Cause**: trimming `rev-parse` path output removed characters belonging to the directory name.
+- **Fix**: share a path-output decoder that removes only Git's record terminator. Keep UTF-8 error
+  boundaries, clean/tracking preflight, fast-forward pulls and managed checkout guards unchanged.
+- **Coverage**: real local repositories cover trailing space, tab, LF, CR and Unicode whitespace;
+  selected-versus-sibling pulls in both verbosity modes; dirty selected worktrees; and managed mirror
+  cleanup confined to the selected checkout. Decoder tests retain invalid UTF-8 rejection.
+
 ## 2026-10-21 — Full-external completion must retain active overlay candidates
 
 - **Symptom**: `shell list` showed overlay-only commands while completion with the same external

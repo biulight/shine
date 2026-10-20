@@ -114,6 +114,17 @@ fn configured_targets(config: &Config) -> Vec<PullTarget> {
     targets
 }
 
+fn git_path_output(stdout: Vec<u8>) -> Result<PathBuf> {
+    let path = String::from_utf8(stdout)?;
+    // Remove only Git's record terminator; whitespace can belong to the path.
+    let Some(path) = path.strip_suffix('\n') else {
+        return Ok(PathBuf::from(path));
+    };
+    #[cfg(windows)]
+    let path = path.strip_suffix('\r').unwrap_or(path);
+    Ok(PathBuf::from(path))
+}
+
 async fn repository_root(path: &Path) -> Result<Option<PathBuf>> {
     let output = git_command()
         .args(["rev-parse", "--show-toplevel"])
@@ -135,15 +146,14 @@ async fn repository_root(path: &Path) -> Result<Option<PathBuf>> {
     }
 
     let root =
-        String::from_utf8(output.stdout).context("git returned a non-UTF-8 repository path")?;
-    let root = root.trim();
-    if root.is_empty() {
+        git_path_output(output.stdout).context("git returned a non-UTF-8 repository path")?;
+    if root.as_os_str().is_empty() {
         bail!(
             "git returned an empty repository root for {}",
             path.display()
         );
     }
-    Ok(Some(PathBuf::from(root)))
+    Ok(Some(root))
 }
 
 async fn ensure_clean(label: &str, root: &Path) -> Result<()> {
@@ -357,9 +367,7 @@ async fn ensure_managed_checkout(dir: &Path) -> Result<()> {
     if !git_dir.status.success()
         || tokio::fs::canonicalize(root).await? != expected
         || tokio::fs::canonicalize(
-            String::from_utf8(git_dir.stdout)
-                .context("Git returned a non-UTF-8 metadata path")?
-                .trim(),
+            git_path_output(git_dir.stdout).context("Git returned a non-UTF-8 metadata path")?,
         )
         .await?
             != expected.join(".git")
@@ -559,6 +567,150 @@ mod tests {
         std::fs::write(dir.join("preset.txt"), "one\n").unwrap();
         git(dir, &["add", "preset.txt"]);
         git(dir, &["commit", "-m", "initial"]);
+    }
+
+    #[test]
+    fn git_path_output_removes_only_the_record_terminator() {
+        for (output, expected) in [
+            ("repo\n", "repo"),
+            ("repo", "repo"),
+            ("repo \t\u{2003}\n", "repo \t\u{2003}"),
+            ("\n", ""),
+        ] {
+            assert_eq!(
+                git_path_output(output.as_bytes().to_vec()).unwrap(),
+                PathBuf::from(expected)
+            );
+        }
+        #[cfg(unix)]
+        for path in ["repo\n", "repo\r", "repo\r\n"] {
+            assert_eq!(
+                git_path_output(format!("{path}\n").into_bytes()).unwrap(),
+                PathBuf::from(path)
+            );
+        }
+        #[cfg(windows)]
+        assert_eq!(
+            git_path_output(b"repo\r\n".to_vec()).unwrap(),
+            PathBuf::from("repo")
+        );
+        assert!(git_path_output(vec![0xff, b'\n']).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn repository_root_preserves_directory_whitespace() {
+        let root = temp_dir("root-whitespace");
+        for suffix in [" ", "\t", "\n", "\r", "\u{2003}"] {
+            let dir = root.join(format!("selected{suffix}"));
+            init_repo(&dir);
+
+            assert_eq!(
+                repository_root(&dir).await.unwrap(),
+                Some(std::fs::canonicalize(&dir).unwrap()),
+                "directory suffix: {suffix:?}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pull_updates_whitespace_path_without_touching_neighbor() {
+        for verbose in [false, true] {
+            let root = temp_dir("pull-whitespace");
+            let source = root.join("source");
+            let selected = root.join("selected ");
+            let neighbor = root.join("selected");
+            init_repo(&source);
+            for dir in [&selected, &neighbor] {
+                git(
+                    &root,
+                    &["clone", source.to_str().unwrap(), dir.to_str().unwrap()],
+                );
+            }
+            let neighbor_head = head_short(&neighbor).await.unwrap();
+            std::fs::write(source.join("preset.txt"), "two\n").unwrap();
+            git(&source, &["commit", "-am", "update"]);
+            let state = root.join("state");
+            std::fs::create_dir_all(state.join("presets")).unwrap();
+            let config = Config::new_for_test(&state)
+                .with_presets_overlay_dir_override(Some(selected.clone()));
+
+            handle_pull(&config, verbose).await.unwrap();
+
+            assert_eq!(read_text(selected.join("preset.txt")), "two\n");
+            assert_eq!(
+                head_short(&selected).await.unwrap(),
+                head_short(&source).await.unwrap()
+            );
+            assert_eq!(read_text(neighbor.join("preset.txt")), "one\n");
+            assert_eq!(head_short(&neighbor).await.unwrap(), neighbor_head);
+            assert!(!neighbor.join(".git/FETCH_HEAD").exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pull_checks_selected_whitespace_path_before_fetch() {
+        let root = temp_dir("dirty-whitespace");
+        let source = root.join("source");
+        let selected = root.join("selected ");
+        let neighbor = root.join("selected");
+        init_repo(&source);
+        for dir in [&selected, &neighbor] {
+            git(
+                &root,
+                &["clone", source.to_str().unwrap(), dir.to_str().unwrap()],
+            );
+        }
+        std::fs::write(selected.join("preset.txt"), "user changes\n").unwrap();
+        let state = root.join("state");
+        std::fs::create_dir_all(state.join("presets")).unwrap();
+        let config =
+            Config::new_for_test(&state).with_presets_overlay_dir_override(Some(selected.clone()));
+
+        let error = handle_pull(&config, false).await.unwrap_err();
+
+        assert!(error.to_string().contains("uncommitted changes"));
+        assert_eq!(read_text(selected.join("preset.txt")), "user changes\n");
+        assert_eq!(read_text(neighbor.join("preset.txt")), "one\n");
+        for dir in [&selected, &neighbor] {
+            assert!(!dir.join(".git/FETCH_HEAD").exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_overlay_preserves_whitespace_checkout_identity() {
+        let root = temp_dir("managed-whitespace");
+        let source = root.join("source");
+        let selected = root.join("selected ");
+        let neighbor = root.join("selected");
+        init_repo(&source);
+        init_repo(&neighbor);
+        sync_managed_overlay(source.to_str().unwrap(), None, &selected, false)
+            .await
+            .unwrap();
+        std::fs::write(source.join("preset.txt"), "two\n").unwrap();
+        git(&source, &["commit", "-am", "update"]);
+        std::fs::write(selected.join("untracked.txt"), "disposable\n").unwrap();
+        std::fs::write(neighbor.join("untracked.txt"), "preserve\n").unwrap();
+        let neighbor_head = head_short(&neighbor).await.unwrap();
+
+        sync_managed_overlay(source.to_str().unwrap(), None, &selected, false)
+            .await
+            .unwrap();
+
+        assert_eq!(read_text(selected.join("preset.txt")), "two\n");
+        assert!(!selected.join("untracked.txt").exists());
+        assert_eq!(read_text(neighbor.join("preset.txt")), "one\n");
+        assert_eq!(read_text(neighbor.join("untracked.txt")), "preserve\n");
+        assert_eq!(head_short(&neighbor).await.unwrap(), neighbor_head);
+        assert!(!neighbor.join(".git/FETCH_HEAD").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
