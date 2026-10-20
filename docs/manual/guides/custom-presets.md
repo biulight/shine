@@ -60,6 +60,8 @@ trust, Plan review, administrator authorization, ownership checks, or explicit e
 Use `shell` or `sys` in `preset new` for the other kinds. To customize an embedded category, enter
 the repository or overlay root and run `shine preset copy <kind>/<name>`; the command creates the
 kind/category path.
+Path progress messages for `preset new`, `preset copy`, and `preset export` escape terminal control
+characters. File locations and the existing `--force` replacement rules are unchanged.
 
 `preset validate` also accepts a repository root, one category directory, or its `shine.toml`. Root
 validation scans only direct category directories below `app/`, `shell/`, and `sys/`; an empty root

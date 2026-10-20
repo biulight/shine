@@ -13,6 +13,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::config::Config;
+use crate::output::escape_controls;
 use crate::proc::ensure_command;
 use crate::{colors, path_display};
 
@@ -189,10 +190,10 @@ pub async fn handle_identity_init(
         "{}",
         colors::green(&format!(
             "generated age identity at {}",
-            path_display::format(&output_path)
+            escape_controls(&path_display::format(&output_path))
         ))
     );
-    println!("  recipient: {recipient}");
+    println!("  recipient: {}", escape_controls(&recipient));
     println!();
     println!(
         "{}",
@@ -246,7 +247,11 @@ pub async fn handle_identity_list(config: &Config) -> Result<()> {
     }
     for identity in &identities {
         let recipient = extract_recipient(identity).await?;
-        println!("{}  {}", path_display::format(identity), recipient);
+        println!(
+            "{}  {}",
+            escape_controls(&path_display::format(identity)),
+            escape_controls(&recipient)
+        );
     }
     Ok(())
 }

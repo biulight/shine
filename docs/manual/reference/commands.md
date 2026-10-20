@@ -56,6 +56,9 @@ shine upgrade app/starship
 
 Every command accepts the global `--config-dir <PATH>` option.
 
+`shine init` escapes terminal control characters in directory prompts and result paths; confirmation
+and the project configuration location are unchanged.
+
 Suggested App install/repair, upgrade, artifact, refresh, uninstall, Shell repair, and trust commands quote
 names containing spaces or shell punctuation. Use these hints in a POSIX shell on Unix or in
 PowerShell on Windows; the quotes preserve each original argument.

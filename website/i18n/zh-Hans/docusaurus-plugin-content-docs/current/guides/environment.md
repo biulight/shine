@@ -199,6 +199,8 @@ Unix 上，`--output` 保留原生文件名的字节。若绝对路径不是有�
 `age_identity` 赋值提示；要通过 TOML 配置该文件，请使用 UTF-8 路径。
 `identity list` 显示每个已配置 identity 的路径和 recipient。Unix 文件名中的字面反斜杠会
 原样保留；Windows 路径使用正斜杠显示。
+identity 列表及软件／Touch ID 生成结果行会转义路径和 recipient 中的终端控制字符。
+可复制的配置提示保留 TOML 引用格式，包括多行值。
 
 ### 在 macOS 上使用 Touch ID
 
@@ -523,6 +525,8 @@ Shine 拒绝代理 `shine` 或 `shine.exe`（不区分大小写），以防止�
 shine env proxy install gh --with GH_TOKEN --project
 shine env proxy list
 ```
+
+代理列表字段会转义终端控制字符，已保存的规则保持原值。
 
 需要临时保留 shim、但禁止任何解密或注入时，可禁用规则。禁用后命令会直接转发给真实程序：
 

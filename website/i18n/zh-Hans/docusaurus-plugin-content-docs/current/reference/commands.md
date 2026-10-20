@@ -55,6 +55,8 @@ shine upgrade app/starship
 
 所有命令都接受全局选项 `--config-dir <PATH>`。
 
+`shine init` 会转义目录确认提示和结果路径中的终端控制字符；确认流程和项目配置位置保持不变。
+
 App 安装／修复、upgrade、artifact、refresh、卸载、Shell 修复及信任提示中的命令，会对含空格或 Shell
 特殊字符的名称加引号，以保留原始参数边界。Unix 上请在 POSIX shell 中使用这些提示，Windows
 上请使用 PowerShell。

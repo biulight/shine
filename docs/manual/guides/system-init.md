@@ -109,6 +109,7 @@ shine sys status
 This view shows the latest recorded result for each item, including bootstrap and managed system
 operations such as `shine sys apply`. Entries can come from different runs. It does not perform
 live checks of software versions or system configuration.
+`sys info` escapes terminal control characters in recorded status details; the stored result is unchanged.
 
 ## Upgrade bootstrap software with its owner
 

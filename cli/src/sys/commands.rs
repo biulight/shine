@@ -193,7 +193,11 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
     if let Some(entry) = entry
         && !entry.detail.is_empty()
     {
-        println!("  {:<14} {}", "Status detail", entry.detail);
+        println!(
+            "  {:<14} {}",
+            "Status detail",
+            escape_controls(&entry.detail)
+        );
     }
     println!(
         "  {:<14} {}",

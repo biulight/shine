@@ -129,6 +129,18 @@
   refusal, unchanged source bytes and absent state initialization. Existing non-UTF-8 collision and
   shell-round-trip tests retain independent coverage.
 
+## 2026-10-21 — Encode result rows without rewriting usable data
+
+- **Symptoms**: identity paths/recipient comments, stored proxy fields, recorded Sys details and
+  project/template/copy/export paths could forge terminal rows with LF/CR/TAB/ESC.
+- **Fix**: reuse `escape_controls` at the owning display sites. Keep recipient parsing, proxy
+  install validation, query exits, initialization consent, template force policy and asset extraction
+  unchanged. A copyable identity assignment is TOML: it may deliberately span lines and must not
+  receive the display encoder, which would name a different file.
+- **Coverage**: real isolated CLI tests preserve identity/config/receipt bytes, public-only keygen
+  argv and multiline-hint round trips, proxy enabled states, recorded failures, init denial/yes,
+  three template create/refuse/force paths, copied user files and export source selection.
+
 ## 2026-10-21 — Local status frames are structured observations, not terminal rows
 
 - **Symptom**: successful status fields, an unavailable socket's path and a rejected status message

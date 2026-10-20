@@ -2,6 +2,7 @@
 
 use super::{EnvConfig, parse_env_specs, resolve_stored_value};
 use crate::config::{Config, EnvProxyRule};
+use crate::output::escape_controls;
 use crate::{persist::atomic_write, secret, shell_quote};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -50,8 +51,8 @@ pub async fn list(config: &Config) -> Result<()> {
     for rule in &config.env_proxy {
         println!(
             "{}: {} ({})",
-            rule.command,
-            rule.with.join(", "),
+            escape_controls(&rule.command),
+            escape_controls(&rule.with.join(", ")),
             if rule.enabled { "enabled" } else { "disabled" }
         );
     }

@@ -10,8 +10,9 @@ pub async fn handle_preset_copy(target: &str, force: bool) -> Result<()> {
 
     let current_dir = std::env::current_dir().context("reading current directory")?;
     println!(
-        "Copying built-in preset {target} to {} ...",
-        current_dir.display()
+        "Copying built-in preset {} to {} ...",
+        crate::output::escape_controls(target),
+        crate::output::escape_controls(&current_dir.display().to_string())
     );
 
     let report = copy_embedded_preset(target, &current_dir, force).await?;
@@ -76,7 +77,7 @@ pub async fn handle_preset_export(
         } else {
             "built-in presets"
         },
-        target.display()
+        crate::output::escape_controls(&target.display().to_string())
     );
 
     let report = presets::PresetAssetReader::new(config.active_presets_overlay_dir())

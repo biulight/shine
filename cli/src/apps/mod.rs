@@ -66,9 +66,15 @@ pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()>
     let (path, overwritten) =
         shine_core::init_template::write_shine_toml_template(&dir, force, &template)?;
     if overwritten {
-        println!("Updated app preset template: {}", path.display());
+        println!(
+            "Updated app preset template: {}",
+            crate::output::escape_controls(&path.display().to_string())
+        );
     } else {
-        println!("Created app preset template: {}", path.display());
+        println!(
+            "Created app preset template: {}",
+            crate::output::escape_controls(&path.display().to_string())
+        );
     }
     Ok(())
 }

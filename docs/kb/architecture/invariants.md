@@ -99,6 +99,7 @@ bugs. Check this list before changing the modules named in each entry.
   characters in Sys labels before rendering or measuring columns, sharing the broker list rule.
   Catalog list/info also encode manifest/item descriptions before styling;
   metadata, receipts, process argv, approval and exit policies retain their original values.
+  `sys info` also encodes recorded status detail, without treating a recorded failure as query failure.
 - **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
   from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
   `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery
@@ -907,6 +908,7 @@ bugs. Check this list before changing the modules named in each entry.
   effective-state inspection is read-only and best-effort: inspection failure warns, but does not
   change the successful write's exit status. Self-upgrade failures preserve the error chain after
   the existing cache invalidation, without changing installation or recovery behavior.
+  Proxy list fields encode stored command/with text without applying install-time validation.
 
 - **Configuration edits preserve comments and unrelated raw definitions.** Whole-table saves use
   `shine_core::sync_table`; directed env and runtime-schema edits patch `toml_edit` entries. Never
@@ -1199,6 +1201,8 @@ bugs. Check this list before changing the modules named in each entry.
   Pass output/staging paths as native OS arguments for both ordinary and Touch ID keygen. A
   configuration hint must not substitute a lossy path: retain absolute TOML quoting for UTF-8
   paths and omit the copyable assignment for unrepresentable paths.
+  Identity list and ordinary/Touch ID generation result rows encode display paths and recipients;
+  native argv, source comments and copyable TOML hints (including multiline values) remain raw.
 
 - **Sealing replaces only regular source files.** Reject symbolic links before capturing any
   sources and recheck before replacement; on Unix require exactly one hard link. Atomic rename

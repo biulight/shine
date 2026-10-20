@@ -37,6 +37,136 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn init_encodes_prompt_and_result_preserving_consent_and_project_path() {
+    use std::io::Write as _;
+    let fixture = Fixture::new();
+    let work = fixture.0.join(if cfg!(unix) {
+        "work\nFORGED=init\r\t\u{1b}\\literal中文"
+    } else {
+        "work中文"
+    });
+    fs::create_dir(&work).unwrap();
+    let mut denied = fixture
+        .command()
+        .current_dir(&work)
+        .env("NO_COLOR", "1")
+        .arg("init")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    denied.stdin.take().unwrap().write_all(b"n\n").unwrap();
+    let denied = denied.wait_with_output().unwrap();
+    assert_eq!(denied.status.code(), Some(0), "{denied:?}");
+    assert!(denied.stderr.is_empty(), "{denied:?}");
+    let prompt = String::from_utf8(denied.stdout).unwrap();
+    assert!(prompt.ends_with("[y/N] Init cancelled.\n"), "{prompt:?}");
+    assert_eq!(prompt.lines().count(), 1, "{prompt:?}");
+    assert!(!work.join("shine.config.toml").exists());
+    let yes = fixture
+        .command()
+        .current_dir(&work)
+        .env("NO_COLOR", "1")
+        .args(["init", "--yes"])
+        .output()
+        .unwrap();
+    assert_eq!(yes.status.code(), Some(0), "{yes:?}");
+    assert!(yes.stderr.is_empty(), "{yes:?}");
+    let text = String::from_utf8(yes.stdout).unwrap();
+    assert_eq!(text.lines().count(), 2, "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    if cfg!(unix) {
+        assert!(
+            prompt.contains("work\\nFORGED=init\\r\\t\\u{1b}\\literal中文"),
+            "{prompt:?}"
+        );
+        assert!(
+            text.contains("work\\nFORGED=init\\r\\t\\u{1b}\\literal中文/shine.config.toml"),
+            "{text:?}"
+        );
+    }
+    let config: toml::Value =
+        toml::from_str(&fs::read_to_string(work.join("shine.config.toml")).unwrap()).unwrap();
+    assert_eq!(config["presets_dir"].as_str(), Some("."));
+    assert!(!fixture.0.join("state/config.toml").exists());
+}
+
+#[test]
+fn preset_new_encodes_paths_preserving_template_and_force_policy() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    for kind in ["app", "shell", "sys"] {
+        let work = fixture.0.join(format!(
+            "{kind}{}",
+            if cfg!(unix) {
+                "\nFORGED=template\r\t\u{1b}\\literal中文"
+            } else {
+                "中文"
+            }
+        ));
+        fs::create_dir(&work).unwrap();
+        let created = fixture
+            .command()
+            .current_dir(&work)
+            .env("NO_COLOR", "1")
+            .args(["preset", "new", kind])
+            .output()
+            .unwrap();
+        assert_eq!(created.status.code(), Some(0), "{created:?}");
+        assert!(created.stderr.is_empty(), "{created:?}");
+        let text = String::from_utf8(created.stdout).unwrap();
+        assert!(
+            text.starts_with(&format!("Created {kind} preset template: ")),
+            "{text:?}"
+        );
+        assert_eq!(text.lines().count(), 1, "{text:?}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        if cfg!(unix) {
+            assert!(
+                text.contains("\\nFORGED=template\\r\\t\\u{1b}\\literal中文/shine.toml"),
+                "{text:?}"
+            );
+        }
+        let path = work.join("shine.toml");
+        let template = fs::read(&path).unwrap();
+        fs::write(&path, b"unrelated user content\n").unwrap();
+        let refused = fixture
+            .command()
+            .current_dir(&work)
+            .args(["preset", "new", kind])
+            .output()
+            .unwrap();
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        assert!(refused.stdout.is_empty(), "{refused:?}");
+        assert_eq!(fs::read(&path).unwrap(), b"unrelated user content\n");
+        let forced = fixture
+            .command()
+            .current_dir(&work)
+            .env("NO_COLOR", "1")
+            .args(["preset", "new", kind, "--force"])
+            .output()
+            .unwrap();
+        assert_eq!(forced.status.code(), Some(0), "{forced:?}");
+        assert!(forced.stderr.is_empty(), "{forced:?}");
+        let text = String::from_utf8(forced.stdout).unwrap();
+        assert!(
+            text.starts_with(&format!("Updated {kind} preset template: ")),
+            "{text:?}"
+        );
+        assert_eq!(text.lines().count(), 1, "{text:?}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert_eq!(fs::read(path).unwrap(), template);
+    }
+    assert_eq!(
+        fs::read(state.join("config.toml")).unwrap(),
+        b"schema_version = 2\n"
+    );
+}
+
+#[test]
 fn task_cwd_display_escapes_controls_while_child_output_and_exit_stay_raw() {
     let fixture = Fixture::new();
     let state = fixture.0.join("state");
@@ -1997,6 +2127,46 @@ target = "~/.config/plain.txt"
         "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
     })).unwrap()).unwrap();
     fixture
+}
+
+#[tokio::test]
+async fn sys_info_encodes_recorded_detail_preserving_failed_status_and_bytes() {
+    let fixture = sys_output_fixture();
+    let state = fixture.0.join("state");
+    let os = cli::sys::detect_os_id().await.unwrap();
+    let mut manifest = shine_core::runtime::SysRunManifest::default();
+    manifest.entries.push(shine_core::runtime::SysRunEntry {
+        os_id: os,
+        item_id: "--help".into(),
+        label: "Bootstrap".into(),
+        status: shine_core::runtime::SysItemStatus::Failed,
+        detail: "detail\nFORGED=status\r\t\u{1b}\\literal中文".into(),
+        updated_at: "fixture".into(),
+        managed: false,
+        profile_enabled: false,
+        receipt: None,
+    });
+    let original = toml::to_string(&manifest).unwrap();
+    fs::write(state.join("sys-manifest.toml"), &original).unwrap();
+    let output = fixture
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["sys", "info", "--", "--help"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Status         failed"), "{text:?}");
+    assert!(
+        text.contains("Status detail  detail\\nFORGED=status\\r\\t\\u{1b}\\literal中文"),
+        "{text:?}"
+    );
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert_eq!(
+        fs::read_to_string(state.join("sys-manifest.toml")).unwrap(),
+        original
+    );
 }
 
 #[test]
@@ -4091,6 +4261,11 @@ fn preset_export_reports_overlay_sources_and_preserves_export_semantics() {
         fs::write(state.join("config.toml"), config).unwrap();
         let out = fixture
             .0
+            .join(if cfg!(unix) {
+                "export\nFORGED=export\r\t\u{1b}"
+            } else {
+                "export"
+            })
             .join(if with_overlay { "merged" } else { "builtin" });
         let output = fixture
             .command()
@@ -4102,6 +4277,17 @@ fn preset_export_reports_overlay_sources_and_preserves_export_semantics() {
         assert!(output.stderr.is_empty(), "{output:?}");
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("Exporting built-in presets"), "{output:?}");
+        assert!(!stdout.contains(['\r', '\t', '\u{1b}']), "{output:?}");
+        if cfg!(unix) {
+            assert!(
+                stdout
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .contains("export\\nFORGED=export\\r\\t\\u{1b}"),
+                "{output:?}"
+            );
+        }
         assert_eq!(
             stdout.contains("with overlay overrides and additions"),
             with_overlay,
@@ -4111,6 +4297,60 @@ fn preset_export_reports_overlay_sources_and_preserves_export_semantics() {
         assert!(out.join("shell/proxy/shine.toml").is_file());
         assert!(!out.join("external-only.txt").exists());
     }
+}
+
+#[test]
+fn preset_copy_encodes_destination_preserving_existing_files_and_config() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    let work = fixture.0.join(if cfg!(unix) {
+        "copy\nFORGED=copy\r\t\u{1b}\\literal中文"
+    } else {
+        "copy中文"
+    });
+    fs::create_dir(&work).unwrap();
+    for existing in [false, true] {
+        let output = fixture
+            .command()
+            .current_dir(&work)
+            .env("NO_COLOR", "1")
+            .args(["preset", "copy", "shell/proxy"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        let header = text.lines().next().unwrap();
+        assert!(
+            header.starts_with("Copying built-in preset shell/proxy to "),
+            "{text:?}"
+        );
+        assert!(header.ends_with(" ..."), "{text:?}");
+        if cfg!(unix) {
+            assert!(
+                header.contains("copy\\nFORGED=copy\\r\\t\\u{1b}\\literal中文"),
+                "{text:?}"
+            );
+        }
+        let path = work.join("shell/proxy/shine.toml");
+        if existing {
+            assert_eq!(fs::read(path).unwrap(), b"unrelated user content\n");
+            assert!(
+                text.contains("skipped (already exist; use --force to overwrite)"),
+                "{text:?}"
+            );
+        } else {
+            assert!(path.is_file());
+            fs::write(path, b"unrelated user content\n").unwrap();
+        }
+    }
+    assert_eq!(
+        fs::read(state.join("config.toml")).unwrap(),
+        b"schema_version = 2\n"
+    );
 }
 
 #[test]
@@ -4757,6 +4997,79 @@ fn identity_generation_passes_native_path_to_failing_backend() {
     }
 }
 
+#[test]
+fn identity_list_encodes_display_fields_preserving_source_and_config() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    let name = if cfg!(unix) {
+        "identity\nFORGED=path\r\t\u{1b}\\literal中文.txt"
+    } else {
+        "identity中文.txt"
+    };
+    let identity = fixture.0.join(name);
+    let original = "# recipient: age1review\u{1b}\\literal中文\n";
+    fs::write(&identity, original).unwrap();
+    let config = format!(
+        "schema_version = 2\nage_identity = {}\n",
+        toml::Value::String(identity.to_str().unwrap().into())
+    );
+    fs::write(state.join("config.toml"), &config).unwrap();
+    let output = fixture
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["env", "secret", "identity", "list"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.ends_with("  age1review\\u{1b}\\literal中文\n"),
+        "{text:?}"
+    );
+    if cfg!(unix) {
+        assert!(
+            text.contains("identity\\nFORGED=path\\r\\t\\u{1b}\\literal中文.txt"),
+            "{text:?}"
+        );
+    }
+    assert_eq!(text.lines().count(), 1, "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert_eq!(fs::read_to_string(identity).unwrap(), original);
+    assert_eq!(
+        fs::read_to_string(state.join("config.toml")).unwrap(),
+        config
+    );
+}
+
+#[test]
+fn proxy_list_encodes_stored_fields_without_revalidating_or_mutating_rules() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    let original = "schema_version = 2\n[[env_proxy]]\ncommand = \"probe\\nFORGED=command\\r\\t\\u001b\\\\literal中文\"\nwith = [\"TOKEN\\nFORGED=with\\u001b\", \"ALIAS=OTHER\"]\nenabled = false\n[[env_proxy]]\ncommand = \"normal\"\nwith = [\"TOKEN\"]\nenabled = true\n";
+    fs::write(state.join("config.toml"), original).unwrap();
+    let output = fixture
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["env", "proxy", "list"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "probe\\nFORGED=command\\r\\t\\u{1b}\\literal中文: TOKEN\\nFORGED=with\\u{1b}, ALIAS=OTHER (disabled)\nnormal: TOKEN (enabled)\n"
+    );
+    assert_eq!(
+        fs::read_to_string(state.join("config.toml")).unwrap(),
+        original
+    );
+    assert!(!state.join("proxy-manifest.toml").exists());
+    assert!(!state.join("bin").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn identity_hint_round_trips_toml_and_survives_changed_directory() {
@@ -4830,6 +5143,67 @@ fn identity_hint_round_trips_toml_and_survives_changed_directory() {
     }
     assert_eq!(fs::read(expected).unwrap(), original);
     assert_eq!(fs::read_to_string(log).unwrap(), "called\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn identity_init_encodes_result_rows_preserving_argv_and_multiline_toml_hint() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let bin = fixture.0.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let keygen = bin.join("age-keygen");
+    // Public comment only; this substitute never creates or accesses a real key.
+    fs::write(&keygen, "#!/bin/sh\n[ \"$1\" = '-o' ] && [ \"$#\" = 2 ] || exit 91\nprintf '%s' \"$2\" > \"$SHINE_TEST_ARGV\"\nprintf '# recipient: age1review\\033\\\\literal中文\\n' > \"$2\"\n").unwrap();
+    fs::set_permissions(&keygen, fs::Permissions::from_mode(0o700)).unwrap();
+    let identity = fixture
+        .0
+        .join("identity\nFORGED=init\r\t\u{1b}\\literal中文.txt");
+    let argv = fixture.0.join("argv");
+    let output = fixture
+        .command()
+        .env("PATH", &bin)
+        .env("SHINE_TEST_ARGV", &argv)
+        .env("NO_COLOR", "1")
+        .args(["env", "secret", "identity", "init", "--output"])
+        .arg(&identity)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(argv).unwrap(),
+        identity.to_str().unwrap()
+    );
+    assert_eq!(
+        fs::read_to_string(&identity).unwrap(),
+        "# recipient: age1review\u{1b}\\literal中文\n"
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let mut rows = text.lines();
+    assert!(
+        rows.next()
+            .unwrap()
+            .ends_with("identity\\nFORGED=init\\r\\t\\u{1b}\\literal中文.txt"),
+        "{text:?}"
+    );
+    assert_eq!(
+        rows.next().unwrap(),
+        "  recipient: age1review\\u{1b}\\literal中文"
+    );
+    // TOML may deliberately span lines; it must still refer to the original file.
+    let assignment = text
+        .split_once("Set age_identity = ")
+        .unwrap()
+        .1
+        .strip_suffix(" in config.toml so shine can find this identity.\n")
+        .unwrap();
+    let config: toml::Value = toml::from_str(&format!("age_identity = {assignment}\n")).unwrap();
+    assert_eq!(
+        PathBuf::from(config["age_identity"].as_str().unwrap()),
+        fs::canonicalize(identity).unwrap()
+    );
+    assert!(!fixture.0.join("state/config.toml").exists());
 }
 
 #[cfg(unix)]

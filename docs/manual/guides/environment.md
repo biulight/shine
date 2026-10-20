@@ -219,6 +219,8 @@ On Unix, `--output` keeps native filename bytes. If the absolute path is not val
 omits the copyable `age_identity` assignment; use a UTF-8 path to configure it in TOML.
 `identity list` shows each configured identity path and recipient. On Unix, literal backslashes in
 filenames are preserved; Windows paths are displayed with forward slashes.
+Identity lists and software/Touch ID generation result rows escape terminal control characters in
+paths and recipients. Copyable configuration hints retain TOML quoting, including multiline values.
 Existing files require `--force`. Forced replacement generates and checks the new identity in a
 private temporary directory before replacing the old file; generation or validation failure
 preserves the old identity. On Unix, the resulting identity file has owner-only `0600` permissions.
@@ -584,6 +586,8 @@ command without injecting values:
 shine env proxy install gh --with GH_TOKEN --project
 shine env proxy list
 ```
+
+Proxy list fields escape terminal control characters without changing the saved rules.
 
 Disable injection temporarily while retaining the shim; the disabled wrapper directly forwards to
 the real program:

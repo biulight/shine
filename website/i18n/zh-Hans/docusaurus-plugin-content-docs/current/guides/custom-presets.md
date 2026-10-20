@@ -53,6 +53,8 @@ shine preset new sys --unrestricted
 
 其它类型把 `preset new` 的参数换成 `shell` 或 `sys`。定制内置类别时，进入仓库或 overlay 根目录
 并运行 `shine preset copy <kind>/<name>`；命令会创建类型与类别路径。
+`preset new`、`preset copy` 和 `preset export` 的路径进度消息会转义终端控制字符。
+文件位置及现有的 `--force` 替换规则保持不变。
 
 `preset validate` 也接受仓库根目录、单个类别目录或其中的 `shine.toml`。根目录模式只扫描
 `app/`、`shell/`、`sys/` 下的直接类别目录；空仓库会失败。无论当前宿主是什么系统，它都会
