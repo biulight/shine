@@ -89,6 +89,7 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
 ```
 
 - 使用 `--dry-run` 预览安装或卸载。
+- `shell list` 展示当前可用预设，包括 overlay 新增的命令和覆盖后的描述。
 - `shell info` 建议的安装和修复命令会为目标名称加上必要的引用，包括含空格或引号的名称；
   Unix 使用 POSIX shell 语法，Windows 使用 PowerShell 语法。
 - `--replace-managed` 可能覆盖安装后被修改的受管内容，请先运行 `shine info <TARGET> --diff`。
@@ -167,6 +168,11 @@ shine completions <bash|zsh|powershell>
 如果 Shine 版本检查未能完成，`update` 会输出警告，并继续报告配置更新。
 没有发现配置更新时，会明确说明版本检查未完成，不会笼统地报告没有更新。
 仅版本检查失败仍不会导致非零退出码。
+
+`info <TARGET>` 和 `update <TARGET>` 仅针对选中的 App 分类或文件提示生成器未评估，
+查询 Shell 目标时不会建议评估生成器。显式传入 `--run-generators` 时，即使目标是单个文件，
+仍会评估其 App 分类中的生成器。信任或评估失败仍以非零状态退出；评估未完成时不会得出
+`No update available` 的结论。
 
 `update --verbose` 也会列出已安装且暂无更新的受管系统配置。
 `up-to-date (recorded)` 表示期望配置与安装记录一致，并非实时系统检查；Preset 来源缺失会单独提示。

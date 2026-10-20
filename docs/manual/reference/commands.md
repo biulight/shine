@@ -123,6 +123,7 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
 ```
 
 - Preview installation or uninstall with `--dry-run`.
+- `shell list` shows the active presets, including overlay additions and overridden descriptions.
 - Installation and repair commands suggested by `shell info` quote literal target names for
   POSIX shells on Unix and PowerShell on Windows, including names containing spaces or quotes.
 - `--replace-managed` may overwrite managed content changed after installation. Inspect the target
@@ -213,6 +214,11 @@ shine completions <bash|zsh|powershell>
 If the Shine release check cannot finish, `update` prints a warning and still reports configuration
 updates. When no configuration updates are found, it explicitly says the version check is incomplete
 instead of claiming there is nothing to update. A release-check failure alone remains non-fatal.
+
+`info <TARGET>` and `update <TARGET>` limit deferred-generator notices to the selected App category
+or file. Shell queries do not suggest generator evaluation. Explicit `--run-generators` evaluation
+still covers the selected App category, even for a single-file target. Trust or evaluation failures
+remain nonzero; an incomplete evaluation does not produce a `No update available` conclusion.
 
 `update --verbose` includes installed managed system configurations even when no update is pending.
 `up-to-date (recorded)` compares the desired configuration with the installation record; it is not a

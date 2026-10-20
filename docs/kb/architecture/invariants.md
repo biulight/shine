@@ -67,6 +67,12 @@ bugs. Check this list before changing the modules named in each entry.
   Preset note and Shell attention before App/Sys queries; later errors cannot erase that output.
   Diff reads stay at their original presentation boundary. Manual refresh and upgrade hints remain
   distinct, generator evaluation stays opt-in, and evaluation failures render before nonzero exit.
+  Available Shell catalogs use the active snapshot, including built-in-plus-overlay sources.
+  Without an external source or active overlay, the embedded catalog retains its state-independent
+  metadata path; an invalid trust store must not block listing or change its successful exit.
+  Targeted deferred-generator notices follow resolved App category/file references, not unrelated
+  Apps or sibling files. Explicit evaluation remains category-scoped with all failures visible and
+  fatal; incomplete or failed assessment cannot produce a targeted no-update footer.
   Inventory listing keeps its distinct missing-App-source error policy (ADR 0129).
   Status retains installed managed Sys rows even without pending updates and labels current
   state as receipt-based, never a live check; missing sources stay explicit. App summary generator

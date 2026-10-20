@@ -54,7 +54,7 @@ impl Fixture {
             .env("APPDATA", self.0.join("home/AppData/Roaming"))
             .env("LOCALAPPDATA", self.0.join("home/AppData/Local"))
             .env("SHINE_CONFIG_DIR", self.0.join("state"))
-            .env("SHINE_PRESETS", self.0.join("state/presets"))
+            .env_remove("SHINE_PRESETS")
             .env("NO_COLOR", "1")
             .stdin(Stdio::null())
             .output()
@@ -1133,6 +1133,326 @@ fn shell_descriptions_align_unicode_names_and_continuations() {
         .collect();
     assert_eq!(widths.len(), 6, "{text}");
     assert!(widths.iter().all(|width| *width == widths[0]), "{text}");
+}
+
+#[test]
+fn shell_catalog_uses_active_overlay_in_both_base_modes() {
+    let extension = if cfg!(windows) { "ps1" } else { "sh" };
+    for external in [false, true] {
+        let fixture = Fixture::new();
+        let config = fixture.0.join(if external {
+            "state/config.toml"
+        } else {
+            "shine.config.toml"
+        });
+        if external {
+            let proxy = fixture.0.join("state/presets/shell/proxy");
+            fs::create_dir_all(&proxy).unwrap();
+            fs::write(
+                proxy.join("shine.toml"),
+                format!("[[files]]\nsource = 'set_proxy.{extension}'\ntarget = 'setproxy'\n"),
+            )
+            .unwrap();
+            fs::write(
+                proxy.join(format!("set_proxy.{extension}")),
+                "# Base description\n",
+            )
+            .unwrap();
+        }
+        let overlay = fixture.0.join("overlay");
+        let proxy = overlay.join("shell/proxy");
+        let extra = overlay.join("shell/review-extra");
+        fs::create_dir_all(&proxy).unwrap();
+        fs::create_dir_all(&extra).unwrap();
+        fs::write(
+            proxy.join(format!("set_proxy.{extension}")),
+            "# Overlay description sentinel\n",
+        )
+        .unwrap();
+        fs::write(
+            extra.join("shine.toml"),
+            format!("[[files]]\nsource = 'extra.{extension}'\ntarget = 'review-extra'\n"),
+        )
+        .unwrap();
+        fs::write(
+            extra.join(format!("extra.{extension}")),
+            "# Overlay addition\n",
+        )
+        .unwrap();
+        for with_overlay in [false, true] {
+            let config_text = format!(
+                "schema_version = 2\n{}",
+                if with_overlay {
+                    format!("presets_overlay_dir = {:?}\n", overlay.to_str().unwrap())
+                } else {
+                    String::new()
+                }
+            );
+            fs::write(&config, &config_text).unwrap();
+            for args in [vec!["shell", "list"], vec!["list", "--available", "shell"]] {
+                let output = fixture.run(&args);
+                success(&output);
+                let text = stdout(&output);
+                assert_eq!(text.contains("review-extra"), with_overlay, "{output:?}");
+                assert_eq!(
+                    text.contains("Overlay description sentinel"),
+                    with_overlay,
+                    "{output:?}"
+                );
+                assert!(text.contains("setproxy"), "{output:?}");
+            }
+            if with_overlay {
+                for args in [
+                    vec!["shell", "info", "proxy"],
+                    vec!["shell", "info", "review-extra"],
+                    vec!["shell", "install", "review-extra", "--dry-run"],
+                ] {
+                    let output = fixture.run(&args);
+                    success(&output);
+                    assert!(
+                        stdout(&output).contains(if args[2] == "proxy" {
+                            "Overlay description sentinel"
+                        } else {
+                            "review-extra"
+                        }),
+                        "{output:?}"
+                    );
+                }
+            }
+            assert_eq!(fs::read_to_string(&config).unwrap(), config_text);
+            assert!(!fixture.0.join("state/shell-manifest.toml").exists());
+        }
+    }
+}
+
+#[test]
+fn embedded_shell_catalog_does_not_read_invalid_trust_but_runtime_paths_still_do() {
+    for (contents, error) in [
+        (Some("not valid [ toml\n"), "parsing trust store"),
+        (
+            Some("schema_version = 999\ngrants = []\n"),
+            "unsupported trust store schema version 999",
+        ),
+        (None, "trust store must be a regular file"),
+    ] {
+        let fixture = Fixture::new();
+        let project = fixture.0.join("shine.config.toml");
+        let project_text = "schema_version = 2\n";
+        fs::write(&project, project_text).unwrap();
+        let commands = [vec!["shell", "list"], vec!["list", "--available", "shell"]];
+        let baseline: Vec<_> = commands.iter().map(|args| fixture.run(args)).collect();
+        for output in &baseline {
+            success(output);
+            assert!(
+                stdout(output).contains("Shell Preset Categories"),
+                "{output:?}"
+            );
+        }
+        let trust = fixture.0.join("state/trust.toml");
+        if let Some(contents) = contents {
+            fs::write(&trust, contents).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&trust, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        } else {
+            fs::create_dir(&trust).unwrap();
+        }
+        for (args, baseline) in commands.iter().zip(baseline) {
+            let output = fixture.run(args);
+            success(&output);
+            assert_eq!(output.stdout, baseline.stdout, "{output:?}");
+            assert_eq!(output.stderr, baseline.stderr, "{output:?}");
+        }
+        assert_eq!(fs::read_to_string(&project).unwrap(), project_text);
+
+        // The exception is only for the pristine embedded catalog, never runtime-backed sources.
+        let overlay = fixture.0.join("overlay");
+        fs::create_dir(&overlay).unwrap();
+        for source in [
+            "presets_overlay_dir = 'overlay'",
+            "presets_dir = 'state/presets'",
+        ] {
+            fs::write(&project, format!("{project_text}{source}\n")).unwrap();
+            for args in &commands {
+                let output = fixture.run(args);
+                assert_eq!(output.status.code(), Some(1), "{output:?}");
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains(error),
+                    "{output:?}"
+                );
+                assert!(
+                    !stdout(&output).contains("Shell Preset Categories"),
+                    "{output:?}"
+                );
+            }
+        }
+        fs::write(&project, project_text).unwrap();
+        let install = fixture.run(&["shell", "install", "proxy", "--yes"]);
+        assert_eq!(install.status.code(), Some(1), "{install:?}");
+        assert!(
+            String::from_utf8_lossy(&install.stderr).contains(error),
+            "{install:?}"
+        );
+        assert!(!fixture.0.join("state/shell-manifest.toml").exists());
+        if let Some(contents) = contents {
+            assert_eq!(fs::read_to_string(&trust).unwrap(), contents);
+        } else {
+            assert!(trust.is_dir());
+            assert_eq!(fs::read_dir(&trust).unwrap().count(), 0);
+        }
+    }
+}
+
+#[test]
+fn targeted_generator_notices_follow_selected_resources() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fixture.app(true);
+    let shell = fixture.0.join("state/presets/shell/tools");
+    fs::create_dir_all(&shell).unwrap();
+    let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+    fs::write(
+        shell.join("shine.toml"),
+        format!("[[files]]\nsource = '{script}'\ntarget = 'review-tool'\n"),
+    )
+    .unwrap();
+    fs::write(shell.join(script), "# Never executed\n").unwrap();
+    success(&fixture.run(&["trust", "grant", "shell/tools/review-tool", "--yes"]));
+    success(&fixture.run(&["shell", "install", "tools", "--yes"]));
+    let paths = [
+        "state/app-manifest.toml",
+        "state/shell-manifest.toml",
+        "destination/config.txt",
+        "destination/manual.txt",
+    ];
+    let before: Vec<_> = paths
+        .iter()
+        .map(|p| fs::read(fixture.0.join(p)).unwrap())
+        .collect();
+    for target in [
+        "shell/tools",
+        "shell/tools/review-tool",
+        "review-tool",
+        "app/demo/config.txt",
+        "config.txt",
+    ] {
+        for command in ["info", "update"] {
+            let output = fixture.run(&[command, target]);
+            success(&output);
+            let text = stdout(&output);
+            assert!(!text.contains("not evaluated"), "{output:?}");
+            assert!(!text.contains("--run-generators"), "{output:?}");
+            if command == "update" {
+                assert!(
+                    text.contains(&format!("No update available for {target}.")),
+                    "{output:?}"
+                );
+            }
+        }
+    }
+    for target in ["app/demo", "app/demo/manual.txt", "manual.txt"] {
+        for command in ["info", "update"] {
+            let output = fixture.run(&[command, target]);
+            success(&output);
+            let text = stdout(&output);
+            assert!(
+                text.contains("Generated configuration was not evaluated"),
+                "{output:?}"
+            );
+            assert!(!text.contains("No update available"), "{output:?}");
+        }
+    }
+    for command in ["info", "update"] {
+        let output = fixture.run(&[command, "shell/tools/review-tool", "--run-generators"]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("--run-generators requires an App target"),
+            "{output:?}"
+        );
+    }
+    assert!(!fixture.0.join("generator-ran").exists());
+    for (path, bytes) in paths.iter().zip(before) {
+        assert_eq!(fs::read(fixture.0.join(path)).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn targeted_update_keeps_generator_failures_out_of_no_update_footer() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fixture.app(true);
+    let preset = fixture.0.join("state/presets/app/demo");
+    fs::write(
+        preset.join("generate.ts"),
+        format!(
+            "await Bun.write({:?}, 'ran'); throw new Error('targeted evaluation failure');\n",
+            fixture.0.join("generator-ran").to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let paths = [
+        "state/app-manifest.toml",
+        "destination/config.txt",
+        "destination/manual.txt",
+    ];
+    let before: Vec<_> = paths
+        .iter()
+        .map(|p| fs::read(fixture.0.join(p)).unwrap())
+        .collect();
+    for trusted in [false, true] {
+        if trusted {
+            success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+        }
+        // Explicit evaluation stays category-scoped, including failures in an unselected sibling.
+        for target in ["app/demo", "app/demo/manual.txt", "app/demo/config.txt"] {
+            for command in ["info", "update"] {
+                let output = fixture.run(&[command, target, "--run-generators"]);
+                assert_eq!(output.status.code(), Some(1), "{output:?}");
+                let text = stdout(&output);
+                assert!(
+                    text.contains(if trusted {
+                        "generator evaluation failed"
+                    } else {
+                        "generator trust required"
+                    }),
+                    "{output:?}"
+                );
+                assert!(!text.contains("No update available"), "{output:?}");
+                assert!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .contains("one or more App generators could not be evaluated"),
+                    "{output:?}"
+                );
+            }
+        }
+        assert_eq!(fixture.0.join("generator-ran").exists(), trusted);
+    }
+    fs::write(preset.join("config.txt"), "static-v2\n").unwrap();
+    success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+    let mixed = fixture.run(&["update", "app/demo", "--run-generators"]);
+    assert_eq!(mixed.status.code(), Some(1), "{mixed:?}");
+    let text = stdout(&mixed);
+    assert!(
+        text.contains("update available") && text.contains("generator evaluation failed"),
+        "{mixed:?}"
+    );
+    fs::write(preset.join("config.txt"), "static-v1\n").unwrap();
+    fs::write(preset.join("generate.ts"), "console.log('manual-v1');\n").unwrap();
+    success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+    let current = fixture.run(&["update", "app/demo", "--run-generators"]);
+    success(&current);
+    assert!(
+        stdout(&current).contains("No update available for app/demo."),
+        "{current:?}"
+    );
+    for (path, bytes) in paths.iter().zip(before) {
+        assert_eq!(fs::read(fixture.0.join(path)).unwrap(), bytes);
+    }
 }
 
 #[test]

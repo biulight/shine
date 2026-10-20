@@ -1,5 +1,21 @@
 # Lessons Learned
 
+## 2026-10-20 — Catalogs and targeted notices retain their query scope
+
+- **Symptoms**: Shell catalog listing bypassed overlays in built-in mode; targeted Shell/static
+  App queries printed unrelated deferred-generator guidance; failed targeted evaluation still
+  concluded that no update was available.
+- **Fix**: reuse active metadata capture and resolved target references for deferred notices.
+  Preserve the embedded-only metadata path when there is no external source or active overlay;
+  constructing a full runtime would make pure built-in listing fail on unrelated trust state.
+  Reuse the notice's incomplete/failure facts for the footer. Explicit generator evaluation stays
+  category-scoped, including visible fatal sibling failures; approval, execution and exits remain.
+- **Coverage**: real CLI tests cover both base sources with/without overlays, additions and
+  overridden descriptions, category/file aliases, default deferral, trust rejection, explicit
+  failure, mixed pending changes and successful no-op evaluation, retaining receipts and content.
+  Malformed/future-schema trust files and a trust-path directory retain identical embedded catalog
+  output and exit 0; runtime-backed catalogs and installation retain their existing rejection.
+
 ## 2026-10-20 — Sys output must retain operand, argument and row boundaries
 
 - **Symptoms**: valid leading-hyphen item IDs became options in suggested commands; detection

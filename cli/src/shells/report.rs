@@ -132,10 +132,12 @@ pub async fn handle_list_with_presets_note(
     if print_presets_note {
         crate::config::print_presets_note(config);
     }
-    let categories = if config.is_external_presets {
-        metadata::load_installed_categories(config, None).await?
-    } else {
+    // A pristine embedded catalog needs no runtime state, including external-code trust.
+    let categories = if !config.is_external_presets && config.active_presets_overlay_dir().is_none()
+    {
         metadata::load_embedded_categories(None)?
+    } else {
+        metadata::load_active_categories(config, None).await?
     };
 
     if categories.is_empty() {
