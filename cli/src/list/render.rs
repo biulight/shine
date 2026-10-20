@@ -278,7 +278,7 @@ pub(super) async fn update(
             println!(
                 "  {}  {}  {}  {}",
                 colors::symbol("↑"),
-                row.label,
+                output::escape_controls(&row.label),
                 colors::dim(&format!("({})", row.item_id)),
                 colors::status_label("update available", "↑"),
             );
@@ -562,7 +562,7 @@ pub(super) async fn status(
             println!(
                 "  {}  {}  {}  {}  {}",
                 colors::symbol("↑"),
-                row.label,
+                output::escape_controls(&row.label),
                 colors::dim(&format!("({})", row.item_id)),
                 colors::status_label("update available", "↑"),
                 colors::dim("run `shine upgrade`"),
@@ -597,7 +597,7 @@ pub(super) async fn status(
             println!(
                 "  {}  {}  {}  {}",
                 colors::symbol(symbol),
-                row.label,
+                output::escape_controls(&row.label),
                 colors::dim(&format!("({})", row.item_id)),
                 colors::status_label(status, symbol)
             );

@@ -375,7 +375,7 @@ fn finish_managed_report(
         .items
         .iter()
         .filter(|outcome| should_print_managed_outcome(show_all, outcome.status))
-        .map(|outcome| console::measure_text_width(&outcome.label))
+        .map(|outcome| console::measure_text_width(&crate::output::escape_controls(&outcome.label)))
         .max()
         .unwrap_or(0)
         .max(14);
@@ -425,8 +425,9 @@ impl shine_core::runtime::RuntimeObserver for ManagedObserver<'_> {
             } if self.show_item_progress => {
                 self.begin();
                 self.reporter.emit(PresentationEvent::stdout(format!(
-                    "  {} {target}",
-                    presentation_symbol("•")
+                    "  {} {}",
+                    presentation_symbol("•"),
+                    crate::output::escape_controls(&target)
                 )));
             }
             shine_core::runtime::RuntimeEvent::Warning { detail, .. } => {
@@ -642,7 +643,7 @@ mod tests {
         ] {
             let items = [
                 ("Short", SysItemStatus::Updated),
-                ("A much longer resource label", SysItemStatus::Updated),
+                ("A much longer resource label\n", SysItemStatus::Updated),
                 ("中文标签", SysItemStatus::Updated),
                 ("e\u{301}", SysItemStatus::Updated),
                 (
@@ -677,6 +678,10 @@ mod tests {
                 &mut observer,
             )
             .unwrap();
+            assert!(reporter.0.iter().any(|event| matches!(
+                event,
+                PresentationEvent::Line { text, .. } if text.contains(r"resource label\n")
+            )));
             let prefixes = reporter
                 .0
                 .iter()
@@ -687,7 +692,7 @@ mod tests {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            let expected_label_width = if mode.is_explicit() { 55 } else { 28 };
+            let expected_label_width = if mode.is_explicit() { 55 } else { 30 };
             assert_eq!(prefixes, vec![expected_label_width + 5; 4]);
         }
     }

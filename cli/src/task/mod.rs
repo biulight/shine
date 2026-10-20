@@ -249,29 +249,8 @@ fn render_command(argv: &[String]) -> String {
     argv.iter()
         .enumerate()
         .map(|(index, arg)| {
-            if index == 0
-                && (arg.contains('=')
-                    || matches!(
-                        arg.as_str(),
-                        "case"
-                            | "do"
-                            | "done"
-                            | "elif"
-                            | "else"
-                            | "esac"
-                            | "fi"
-                            | "for"
-                            | "if"
-                            | "in"
-                            | "then"
-                            | "until"
-                            | "while"
-                            | "function"
-                            | "select"
-                            | "time"
-                    ))
-            {
-                crate::shell_quote::single_quote(arg)
+            if index == 0 {
+                crate::shell_quote::posix_program(arg)
             } else {
                 crate::shell_quote::quote_if_needed(arg)
             }

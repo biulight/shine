@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::colors;
+use crate::output::escape_controls;
 
 use super::{ResolvedSelection, SysItemOutcome, SysItemStatus, selection::format_item_ids};
 
@@ -12,7 +13,7 @@ pub(super) fn sys_item_label_width(
         .item_ids
         .iter()
         .filter_map(|id| labels.get(id.as_str()))
-        .map(|label| console::measure_text_width(label))
+        .map(|label| console::measure_text_width(&escape_controls(label)))
         .chain(std::iter::once("profile".len()))
         .max()
         .unwrap_or(14)
@@ -61,7 +62,10 @@ pub(super) fn item_install_start_line(item_id: &str, label: &str, requires_admin
     format!(
         "  {} {}",
         colors::symbol("•"),
-        colors::dim(&format!("sys/{item_id} ({label}) installing{admin}"))
+        colors::dim(&format!(
+            "sys/{item_id} ({}) installing{admin}",
+            escape_controls(label)
+        ))
     )
 }
 
@@ -86,8 +90,9 @@ pub(super) fn item_outcome_lines_with_status(
     symbol: &str,
     status: &str,
 ) -> Vec<String> {
-    let padding = label_width.saturating_sub(console::measure_text_width(&outcome.label));
-    let label = format!("{}{}", outcome.label, " ".repeat(padding));
+    let label = escape_controls(&outcome.label);
+    let padding = label_width.saturating_sub(console::measure_text_width(&label));
+    let label = format!("{label}{}", " ".repeat(padding));
     let status = format!("{status:<17}");
     let detail = if outcome.detail.is_empty() {
         String::new()

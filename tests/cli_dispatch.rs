@@ -36,6 +36,258 @@ impl Drop for Fixture {
     }
 }
 
+fn sys_output_fixture() -> Fixture {
+    let mut fixture = Fixture::new();
+    fixture.0 = fs::canonicalize(&fixture.0).unwrap();
+    let state = fixture.0.join("state");
+    for os in ["macos", "ubuntu", "windows"] {
+        let preset = state.join("presets/sys").join(os);
+        fs::create_dir_all(&preset).unwrap();
+        let provider = if os == "windows" {
+            "winget"
+        } else {
+            "homebrew"
+        };
+        fs::write(preset.join("shine.toml"), format!(r#"version = 2
+[[items]]
+id = "--help"
+label = "Bootstrap"
+permissions = {{ schema_version = 1 }}
+detect = {{ kind = "command", command = "if", version_args = ["two words", "it's", "$HOME", "a;b", "`literal`", "中文"] }}
+install = {{ kind = "package", provider = "{provider}", package = "tool" }}
+[[items]]
+id = "--version"
+label = "Managed\n\r\t\u001b[2J中文é"
+mode = "managed"
+driver = "managed-file"
+permissions = {{ schema_version = 1 }}
+[items.config]
+source = "managed.txt"
+target = "~/.config/managed.txt"
+[[items]]
+id = "plain"
+label = "Plain"
+mode = "managed"
+driver = "managed-file"
+permissions = {{ schema_version = 1 }}
+[items.config]
+source = "managed.txt"
+target = "~/.config/plain.txt"
+"#)).unwrap();
+        fs::write(preset.join("managed.txt"), "managed fixture\n").unwrap();
+    }
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    fs::write(state.join("update-check.json"), serde_json::to_vec(&serde_json::json!({
+        "latest_version": env!("CARGO_PKG_VERSION"),
+        "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+    })).unwrap()).unwrap();
+    fixture
+}
+
+#[test]
+fn sys_output_hints_preserve_leading_hyphen_ids_through_shell_and_clap() {
+    let fixture = sys_output_fixture();
+    for (id, action) in [
+        ("--help", "bootstrap"),
+        ("--version", "apply"),
+        ("plain", "apply"),
+    ] {
+        let info = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["sys", "info", "--", id])
+            .output()
+            .unwrap();
+        assert_eq!(info.status.code(), Some(0), "{info:?}");
+        let text = String::from_utf8(info.stdout).unwrap();
+        let hint = text
+            .split_once("Next: run `")
+            .unwrap()
+            .1
+            .split('`')
+            .next()
+            .unwrap();
+        let operand = if id.starts_with('-') {
+            format!("-- {id}")
+        } else {
+            id.to_string()
+        };
+        assert_eq!(hint, format!("shine sys {action} {operand}"));
+        let preview = hint.replace(
+            &format!("sys {action} "),
+            &format!("sys {action} --dry-run "),
+        );
+        #[cfg(unix)]
+        let shell = {
+            let mut command = Command::new("/bin/sh");
+            command.args([
+                "-c",
+                &format!(
+                    "shine() {{ {} \"$@\"; }}; {preview}",
+                    shine_core::shell_quote::posix_single_quote(env!("CARGO_BIN_EXE_shine"))
+                ),
+            ]);
+            command
+        };
+        #[cfg(windows)]
+        let shell = {
+            let mut command = Command::new("powershell.exe");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!(
+                    "Set-Alias shine {}; {preview}; exit $LASTEXITCODE",
+                    shine_core::shell_quote::powershell_single_quote(env!("CARGO_BIN_EXE_shine"))
+                ),
+            ]);
+            command
+        };
+        let copied = fixture
+            .configure(shell)
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap();
+        let direct = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["sys", action, "--dry-run", "--", id])
+            .output()
+            .unwrap();
+        assert_eq!(direct.status.code(), Some(0), "{direct:?}");
+        assert_eq!(copied.status.code(), direct.status.code(), "{copied:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&copied.stdout)
+                .lines()
+                .collect::<Vec<_>>(),
+            String::from_utf8_lossy(&direct.stdout)
+                .lines()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(copied.stderr, direct.stderr);
+    }
+    let listed = fixture.command().args(["sys", "list"]).output().unwrap();
+    let text = String::from_utf8(listed.stdout).unwrap();
+    assert!(text.contains("Run: shine sys apply -- --version"), "{text}");
+    assert!(text.contains("Run: shine sys apply plain"), "{text}");
+    assert!(!fixture.0.join("state/sys-manifest.toml").exists());
+    assert!(!fixture.0.join("home/.config/managed.txt").exists());
+}
+
+#[test]
+fn sys_output_labels_escape_controls_without_changing_receipts_or_approval() {
+    let fixture = sys_output_fixture();
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let raw = "Managed\n\r\t\u{1b}[2J中文é";
+    let displayed = r"Managed\n\r\t\u{1b}[2J中文é";
+    for args in [
+        vec!["sys", "list"],
+        vec!["sys", "info", "--", "--version"],
+        vec!["sys", "apply", "--dry-run", "--", "--version"],
+    ] {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains(displayed), "{text}");
+        assert!(
+            !text.contains(raw) && !text.contains(['\r', '\t', '\u{1b}']),
+            "{text:?}"
+        );
+    }
+    let denied = run(&["sys", "apply", "--", "--version"]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("approval requires"));
+    let receipt = fixture.0.join("state/sys-manifest.toml");
+    assert!(!receipt.exists());
+    let destination = fixture.0.join("home/.config/managed.txt");
+    assert!(!destination.exists());
+    let applied = run(&["sys", "apply", "--yes", "--", "--version"]);
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    let text = String::from_utf8(applied.stdout).unwrap();
+    assert!(text.contains(displayed) && !text.contains(raw), "{text}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert_eq!(fs::read(&destination).unwrap(), b"managed fixture\n");
+    let before = fs::read(&receipt).unwrap();
+    let manifest: shine_core::runtime::SysRunManifest =
+        toml::from_str(std::str::from_utf8(&before).unwrap()).unwrap();
+    assert_eq!(manifest.entries[0].label, raw);
+    for args in [
+        vec!["sys", "status"],
+        vec!["update", "--verbose"],
+        vec!["sys", "info", "--", "--version"],
+        vec!["sys", "uninstall", "--dry-run", "--", "--version"],
+    ] {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains(displayed) && !text.contains(raw), "{text}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        if args.contains(&"info") {
+            assert!(text.contains("`shine sys apply -- --version`"), "{text}");
+            assert!(
+                text.contains("`shine sys uninstall -- --version`"),
+                "{text}"
+            );
+        }
+        assert_eq!(fs::read(&receipt).unwrap(), before);
+        assert_eq!(fs::read(&destination).unwrap(), b"managed fixture\n");
+    }
+}
+
+#[test]
+fn sys_output_detection_preserves_literal_argv_in_the_native_shell() {
+    let fixture = sys_output_fixture();
+    let output = fixture
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["sys", "info", "--", "--help"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    let detection = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Detection"))
+        .unwrap()
+        .trim();
+    #[cfg(unix)]
+    let shell = {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = fixture.0.join("bin");
+        fs::create_dir(&bin).unwrap();
+        let program = bin.join("if");
+        fs::write(&program, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut command = Command::new("/bin/sh");
+        command.env("PATH", bin).args(["-c", detection]);
+        command
+    };
+    #[cfg(windows)]
+    let shell = {
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-Command", &format!("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Set-Item -Path Function:if -Value {{ $args | ForEach-Object {{ [Console]::WriteLine($_) }} }}; {detection}")]);
+        command
+    };
+    let copied = fixture.configure(shell).output().unwrap();
+    assert_eq!(copied.status.code(), Some(0), "{copied:?}");
+    assert!(copied.stderr.is_empty(), "{copied:?}");
+    assert_eq!(
+        String::from_utf8(copied.stdout)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        ["two words", "it's", "$HOME", "a;b", "`literal`", "中文"]
+    );
+    assert!(!fixture.0.join("state/sys-manifest.toml").exists());
+}
+
 #[test]
 fn lint_validation_hints_recheck_the_original_input_without_changing_json() {
     let fixture = Fixture::new();

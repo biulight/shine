@@ -3,6 +3,7 @@ use std::io::IsTerminal;
 
 use crate::colors;
 use crate::config::Config;
+use crate::output::escape_controls;
 
 use super::detect::detect_os_id;
 use super::execution::{
@@ -66,7 +67,10 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
             if is_current && item.mode == SysItemMode::Managed {
                 println!(
                     "      {}",
-                    colors::dim(&format!("Run: shine sys apply {}", item.id))
+                    colors::dim(&format!(
+                        "Run: shine sys apply {}",
+                        crate::shell_quote::command_positionals(&[&item.id])
+                    ))
                 );
             }
         }
@@ -129,7 +133,7 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
     println!("{}\n", colors::bold("System Item"));
     println!(
         "  {}  {}",
-        colors::bold(&item.label),
+        colors::bold(&escape_controls(&item.label)),
         colors::dim(&format!("({})", item.id))
     );
     if !item.description.is_empty() {
@@ -210,13 +214,14 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
         }
     }
     println!();
+    let item_arg = crate::shell_quote::command_positionals(&[&item.id]);
     match item.mode {
-        SysItemMode::Init => println!("  Next: run `shine sys bootstrap {}`.", item.id),
+        SysItemMode::Init => println!("  Next: run `shine sys bootstrap {item_arg}`."),
         SysItemMode::Managed if entry.is_some() => {
-            println!("  Apply:     `shine sys apply {}`", item.id);
-            println!("  Uninstall: `shine sys uninstall {}`", item.id);
+            println!("  Apply:     `shine sys apply {item_arg}`");
+            println!("  Uninstall: `shine sys uninstall {item_arg}`");
         }
-        SysItemMode::Managed => println!("  Next: run `shine sys apply {}`.", item.id),
+        SysItemMode::Managed => println!("  Next: run `shine sys apply {item_arg}`."),
     }
     Ok(())
 }
@@ -226,8 +231,12 @@ fn describe_detection(detect: Option<&SysDetection>) -> String {
         Some(SysDetection::Command {
             command,
             version_args,
-        }) => std::iter::once(command.as_str())
-            .chain(version_args.iter().map(String::as_str))
+        }) => std::iter::once(crate::shell_quote::command_program(command))
+            .chain(
+                version_args
+                    .iter()
+                    .map(|arg| crate::shell_quote::command_arg(arg)),
+            )
             .collect::<Vec<_>>()
             .join(" "),
         Some(SysDetection::Path { path }) => format!("path {path}"),
@@ -297,7 +306,7 @@ pub async fn handle_status(config: &Config) -> Result<()> {
 
     let label_width = entries
         .iter()
-        .map(|entry| console::measure_text_width(&entry.label))
+        .map(|entry| console::measure_text_width(&escape_controls(&entry.label)))
         .max()
         .unwrap_or(14)
         .max(14);

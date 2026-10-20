@@ -133,7 +133,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/info/` | Canonical target resolution, installed data collection, and diff rendering |
 | `cli/src/path_display.rs` | Home-relative terminal paths and display-only logical filesystem permission labels |
 | `cli/src/colors.rs` | Terminal color helpers |
-| `cli/src/output.rs` | Shared command output mode and rendering support |
+| `cli/src/output.rs` | Shared command output mode, label control-character escaping and rendering support |
 | `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
 | `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap and Frontend Service construction; tests cover live overlay readers versus captured snapshots and review authority |
 | `cli/src/lifecycle_plan.rs` | Default-No/non-TTY approval policy, input identities and batch prevalidation; retains the public review adapter |
@@ -146,7 +146,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/proc.rs` | Small domain-neutral subprocess helpers |
 | `cli/src/persist.rs` | Compatibility re-export of Core persistence helpers |
 | `core/src/shell_quote.rs` | Internal POSIX and PowerShell literal encoding shared by CLI and runtime; no validation, path expansion or execution policy |
-| `cli/src/shell_quote.rs` | Copy-paste-safe argument display policy over Core literal encoding |
+| `cli/src/shell_quote.rs` | Copy-paste-safe program and argument display policy over Core literal encoding |
 | `cli/src/version.rs` | Version string formatting |
 
 ### Command routing table

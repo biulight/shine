@@ -20,7 +20,7 @@ pub(in crate::sys) fn print_available_item(item: &SysItem, entry: Option<&SysRun
         "    {:<18} {:<9} {}  {}",
         item.id,
         format!("[{kind}]"),
-        colors::bold(&item.label),
+        colors::bold(&crate::output::escape_controls(&item.label)),
         status
     );
     if !item.description.is_empty() {

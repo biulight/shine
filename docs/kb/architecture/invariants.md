@@ -78,6 +78,11 @@ bugs. Check this list before changing the modules named in each entry.
   Receipt-owned App resources absent from active metadata remain visible even when their entire
   category is gone; they prevent the empty-installation message and retain uninstall-preview
   guidance without becoming upgrade candidates or changing files, receipts or exit status.
+- **Sys display encoding stays at the CLI boundary.** Suggested item operands use the shared
+  positional encoder, including `--` for leading hyphens. Detection command displays distinguish
+  program position from literal arguments and use POSIX/PowerShell encoding. Escape control
+  characters in Sys labels before rendering or measuring columns, sharing the broker list rule;
+  metadata, receipts, process argv, approval and exit policies retain their original values.
 - **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
   from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
   `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery

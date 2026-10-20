@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-20 — Sys output must retain operand, argument and row boundaries
+
+- **Symptoms**: valid leading-hyphen item IDs became options in suggested commands; detection
+  arguments were joined without quoting; label newlines and ESC bytes split or controlled rows.
+- **Fix**: reuse positional encoders, share Task's program-position quoting rule, and move the
+  existing broker control-character escape rule to CLI output helpers. Measure escaped labels;
+  retain raw metadata/receipts and all approval, execution and exit behavior.
+- **Coverage**: isolated CLI tests pass hints through the native shell and Clap, preserve literal
+  detection argv, and check catalog/info/preview/recorded rows, aligned columns, approval denial,
+  approved managed-file writes and unchanged raw receipts during later inspection/previews.
+
 ## 2026-10-20 — Test final summaries, suggested arguments and output failures
 
 - **Symptoms**: whole-config upgrade omitted kept Sys files and failed upgrades ended with `Done`;

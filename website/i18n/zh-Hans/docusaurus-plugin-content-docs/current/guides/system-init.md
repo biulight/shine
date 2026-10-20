@@ -24,6 +24,10 @@ shine sys bootstrap --dry-run
 
 `--dry-run` 会显示选择结果、provider/脚本调用，以及每个将持久加载的 item-owned shell 集成，但不执行变更。某些初始化项目需要管理员权限或额外环境变量，`shine sys info <ITEM>` 会列出要求。
 
+建议命令会在以 `-` 开头的 item ID 前添加 `--`；选项须放在该分隔符之前，例如
+`shine sys apply --dry-run -- -custom`。`sys info` 中的检测命令会保留参数所需的引号。
+项目名称中的控制字符会显示为 `\n` 等转义文本，使每条结果保持在一行内。
+
 缺失的 item 即将执行时，Shine 会先显示其 `sys/<ITEM>` 标识和名称，因此后续出现的授权或密码提示会明确对应当前正在安装的软件。
 
 ## 交互选择或应用 Profile

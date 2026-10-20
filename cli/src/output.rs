@@ -19,6 +19,20 @@ const DETAIL_LABEL_WIDTH: usize = 15;
 const DETAIL_STATUS_WIDTH: usize = 13;
 const COLUMN_GAP: usize = 2;
 
+/// Keep untrusted labels on one terminal row without changing their stored values.
+pub(crate) fn escape_controls(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_control() {
+                ch.escape_debug().to_string()
+            } else {
+                ch.to_string()
+            }
+        })
+        .collect()
+}
+
 /// Tracks whether any upgrade section has printed content yet, so a run
 /// covering several optional sections (shell presets, app configs, managed
 /// system configs) can emit exactly one blank-line separator between two

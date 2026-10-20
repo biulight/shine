@@ -31,6 +31,46 @@ pub(crate) fn command_arg(value: &str) -> String {
     }
 }
 
+/// A program in a displayed command, rather than a positional argument.
+pub(crate) fn command_program(value: &str) -> String {
+    if cfg!(windows) {
+        format!(
+            "& {}",
+            shine_core::shell_quote::powershell_single_quote(value)
+        )
+    } else {
+        posix_program(value)
+    }
+}
+
+pub(crate) fn posix_program(value: &str) -> String {
+    if value.contains('=')
+        || matches!(
+            value,
+            "case"
+                | "do"
+                | "done"
+                | "elif"
+                | "else"
+                | "esac"
+                | "fi"
+                | "for"
+                | "if"
+                | "in"
+                | "then"
+                | "until"
+                | "while"
+                | "function"
+                | "select"
+                | "time"
+        )
+    {
+        single_quote(value)
+    } else {
+        quote_if_needed(value)
+    }
+}
+
 /// Final positional operands in a suggested Shine command. Put options before
 /// this text so `--` can protect leading hyphens without changing their values.
 pub(crate) fn command_positionals(values: &[&str]) -> String {

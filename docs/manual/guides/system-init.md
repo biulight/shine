@@ -30,6 +30,11 @@ shine sys bootstrap --dry-run
 shell integration without changing the system. Some items require administrator access or additional environment variables;
 `shine sys info <ITEM>` lists those requirements.
 
+Suggested commands use `--` before item IDs that start with `-`; put options before that separator,
+for example `shine sys apply --dry-run -- -custom`. Detection commands in `sys info` preserve
+quoted arguments. Item labels display control characters as escaped text such as `\n`, keeping
+each result on one line.
+
 When a missing item is about to run, Shine prints its `sys/<ITEM>` identifier and label first, so
 any authorization or password prompt that follows is attributable to the active software.
 
