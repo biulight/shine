@@ -129,6 +129,16 @@
   refusal, unchanged source bytes and absent state initialization. Existing non-UTF-8 collision and
   shell-round-trip tests retain independent coverage.
 
+## 2026-10-21 — App catalog queries must encode metadata before column layout
+
+- **Symptom**: valid metadata descriptions injected LF/ESC rows into `app list`, `app info` and
+  available-target `info`; source paths and file descriptions also exposed LF/CR/TAB controls.
+- **Fix**: use the shared display encoder before styling and width measurement. Keep exact category
+  filtering, observation order, deferred-generator behavior and post-render failure policy. Install
+  hints for control-bearing names request the original target instead of an escaped alias.
+- **Coverage**: real CLI queries cover metadata on all platforms plus Unix category/source/destination
+  controls, wide-character padding, normal install hints and unchanged source/config/install state.
+
 ## 2026-10-21 — Pack target text needs its own terminal boundary
 
 - **Symptom**: a successful `preset pack` printed category LF/CR/TAB/ESC bytes as terminal controls,

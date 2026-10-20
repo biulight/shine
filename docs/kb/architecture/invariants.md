@@ -84,6 +84,9 @@ bugs. Check this list before changing the modules named in each entry.
   Receipt-owned App resources absent from active metadata remain visible even when their entire
   category is gone; they prevent the empty-installation message and retain uninstall-preview
   guidance without becoming upgrade candidates or changing files, receipts or exit status.
+  App catalog list/info encode control-bearing names, descriptions and paths before styling or
+  column measurement. Control-bearing categories get an original-target install notice, never an
+  escaped alias as a copyable operand; Core metadata, selection and inspection remain unchanged.
 - **Sys display encoding stays at the CLI boundary.** Suggested item operands use the shared
   positional encoder, including `--` for leading hyphens. Detection command displays distinguish
   program position from literal arguments and use POSIX/PowerShell encoding. Escape control

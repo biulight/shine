@@ -158,6 +158,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 ```
 
 - `app info` and `update` do not run generators unless `--run-generators` is present.
+- `app list` and `app info` escape control characters in displayed names, descriptions, and paths.
+  Control-bearing category names use an original-target notice instead of a copyable install command.
 - During installation, upgrade, and refresh, generator diagnostic notes go to stderr;
   displayed hook stdout notes stay on stdout.
 - `app refresh` runs a generated-file refresh explicitly. `--force` permits replacing a

@@ -345,6 +345,174 @@ fn preset_links_reject_existing_non_utf8_sources_and_canonical_symlink_targets()
 }
 
 #[test]
+fn app_catalog_queries_escape_metadata_without_changing_source_or_install_state() {
+    for (name, shown_name) in [
+        ("demo", "demo"),
+        #[cfg(unix)]
+        ("demo界\nFORGED=name\u{1b}", "demo界\\nFORGED=name\\u{1b}"),
+    ] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        let category = state.join("presets/app").join(name);
+        fs::create_dir_all(&category).unwrap();
+        let source = if name != shown_name {
+            "config\nFORGED=file\u{1b}.txt"
+        } else {
+            "config.txt"
+        };
+        let dest = if name != shown_name {
+            "~/.config/demo\nFORGED=path\u{1b}"
+        } else {
+            "~/.config/demo"
+        };
+        let description = "DESC\nFORGED=installed\u{1b}[31m";
+        let file_description = "FILE\rFAKE\tVALUE";
+        let metadata = format!(
+            "metadata_schema_version = 2\ndescription = {}\ndest = {}\nlist_mode = 'files'\n[[files]]\nsource = {}\ndescription = {}\n[[files]]\nsource = 'other.txt'\n",
+            serde_json::to_string(description).unwrap(),
+            serde_json::to_string(dest).unwrap(),
+            serde_json::to_string(source).unwrap(),
+            serde_json::to_string(file_description).unwrap(),
+        );
+        fs::write(category.join("shine.toml"), &metadata).unwrap();
+        fs::write(category.join(source), "demo").unwrap();
+        fs::write(category.join("other.txt"), "other").unwrap();
+        let sibling = state.join("presets/app/short");
+        fs::create_dir(&sibling).unwrap();
+        fs::write(sibling.join("shine.toml"), "metadata_schema_version = 2\ndescription = 'sibling'\ndest = '~/.config/short'\n[[files]]\nsource = 'other.txt'\n").unwrap();
+        fs::write(sibling.join("other.txt"), "sibling").unwrap();
+        fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+        let query = |args: &[&str]| {
+            let result = fixture
+                .command()
+                .env_remove("SUDO_USER")
+                .env("NO_COLOR", "1")
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(0), "{args:?}: {result:?}");
+            assert!(result.stderr.is_empty(), "{result:?}");
+            let text = String::from_utf8(result.stdout).unwrap();
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(
+                !text.lines().any(|line| line.starts_with("FORGED=")),
+                "{text:?}"
+            );
+            text
+        };
+        let canonical = format!("app/{name}");
+        for args in [
+            vec!["app", "list"],
+            vec!["app", "info", name],
+            vec!["info", &canonical],
+        ] {
+            let text = query(&args);
+            assert!(
+                text.contains("DESC\\nFORGED=installed\\u{1b}[31m"),
+                "{text:?}"
+            );
+            assert!(text.contains("FILE\\rFAKE\\tVALUE"), "{text:?}");
+            if name != shown_name {
+                assert!(text.contains("config\\nFORGED=file\\u{1b}.txt"), "{text:?}");
+                if args[1] != "list" {
+                    assert!(
+                        text.contains("~/.config/demo\\nFORGED=path\\u{1b}"),
+                        "{text:?}"
+                    );
+                }
+            }
+            if args[1] == "list" {
+                let width = console::measure_text_width(shown_name).max("short".len());
+                assert!(
+                    text.contains(&format!(
+                        "  {shown_name}{}  DESC",
+                        " ".repeat(width - console::measure_text_width(shown_name))
+                    )),
+                    "{text:?}"
+                );
+                assert!(
+                    text.contains(&format!(
+                        "  short{}  sibling",
+                        " ".repeat(width - "short".len())
+                    )),
+                    "{text:?}"
+                );
+            } else {
+                assert!(text.contains(&format!("{shown_name}  DESC")), "{text:?}");
+                if name != shown_name {
+                    assert!(
+                        text.contains(
+                            "original target (control characters; copyable command omitted)"
+                        ),
+                        "{text:?}"
+                    );
+                    assert!(!text.contains("Run `shine install"), "{text:?}");
+                } else {
+                    assert!(
+                        text.contains("Run `shine install app/demo` to install."),
+                        "{text:?}"
+                    );
+                }
+            }
+            assert_eq!(
+                fs::read_to_string(category.join("shine.toml")).unwrap(),
+                metadata
+            );
+            assert_eq!(fs::read(category.join(source)).unwrap(), b"demo");
+            assert_eq!(
+                fs::read(state.join("config.toml")).unwrap(),
+                b"schema_version = 2\n"
+            );
+            assert!(!state.join("app-manifest.toml").exists());
+            assert!(!fixture.0.join("home/.config").exists());
+        }
+        let installed = fixture
+            .command()
+            .env_remove("SUDO_USER")
+            .args(["app", "install", name, "--yes"])
+            .output()
+            .unwrap();
+        if name != shown_name {
+            assert_eq!(installed.status.code(), Some(1), "{installed:?}");
+            assert!(
+                String::from_utf8_lossy(&installed.stderr)
+                    .contains("operation identity must be non-empty and single-line")
+            );
+            assert!(!state.join("app-manifest.toml").exists());
+            assert!(!fixture.0.join("home/.config").exists());
+            continue;
+        }
+        assert!(installed.status.success(), "{installed:?}");
+        let receipt = state.join("app-manifest.toml");
+        let before = fs::read(&receipt).unwrap();
+        let manifest: shine_core::install::AppManifest =
+            toml::from_str(std::str::from_utf8(&before).unwrap()).unwrap();
+        assert!(
+            manifest
+                .find_by_source(&format!("app/{name}/{source}"))
+                .is_some()
+        );
+        let text = query(&["app", "info", name]);
+        assert!(
+            text.contains("DESC\\nFORGED=installed\\u{1b}[31m"),
+            "{text:?}"
+        );
+        assert!(text.contains("FILE\\rFAKE\\tVALUE"), "{text:?}");
+        assert!(text.contains("Installed."), "{text:?}");
+        assert!(text.contains("--replace-managed"), "{text:?}");
+        assert_eq!(
+            text.contains("copyable command omitted"),
+            name != shown_name
+        );
+        assert_eq!(fs::read(receipt).unwrap(), before);
+        assert_eq!(
+            fs::read_to_string(category.join("shine.toml")).unwrap(),
+            metadata
+        );
+    }
+}
+
+#[test]
 fn app_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
     for selected in [
         " demo",

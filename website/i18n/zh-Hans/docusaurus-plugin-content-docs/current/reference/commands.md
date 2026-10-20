@@ -121,6 +121,8 @@ shine app artifact remove <APP_ID> [--yes] [--verbose]
 ```
 
 - `app info` 和 `update` 只有在传入 `--run-generators` 时才会运行生成器。
+- `app list` 和 `app info` 会转义所显示名称、描述与路径中的控制字符。
+  分类名含控制字符时，安装提示会要求使用原始目标参数，不提供可复制命令。
 - 安装、升级和刷新时，生成器的诊断提示输出到 stderr；展示的 hook 标准输出提示仍输出到 stdout。
 - `app refresh` 显式刷新生成文件；`--force` 允许替换用户修改过的受管目标。安装收据必须属于
   该类别下的同一个源文件；`--force` 不能刷新由其他来源管理的目标。
