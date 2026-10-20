@@ -169,8 +169,7 @@ async fn handle_config_target_upgrade(
 ) -> Result<()> {
     use crate::shim::{PresetKind, resolve_preset_kind};
 
-    let target = target.trim();
-    if target.is_empty() {
+    if target.trim().is_empty() {
         bail!("upgrade target must not be empty");
     }
 

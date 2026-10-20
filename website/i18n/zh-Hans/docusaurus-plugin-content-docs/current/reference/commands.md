@@ -18,6 +18,9 @@ sidebar_position: 1
 
 当 App 与 Shell 类别名称不会混淆时，也可以省略类型。单独的 Shell 命令名只用于查看信息。
 
+目标名称按原值匹配。名称包含首尾空白时，请用引号完整引用；Shine 不会去掉这些空白。
+完全由空白组成的目标会被拒绝。
+
 ```bash
 shine list --available
 shine info app/starship

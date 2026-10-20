@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-21 — Selector whitespace belongs to category identity
+
+- **Symptom**: with both `demo` and `demo ` installed, `upgrade 'app/demo ' --yes` exited 0 but
+  updated `demo`; uninstall preview and available inspection likewise selected the trimmed sibling.
+- **Fix**: remove operand trimming from the shared dispatch, upgrade, installed/available info and
+  Core Shell lifecycle parsers. Retain blank-input rejection, canonical suffix normalization,
+  ambiguity checks, authoring command-name validation, trust, approval, execution and exit policy.
+- **Coverage**: parser regressions cover leading/trailing ASCII and Unicode whitespace. Real App
+  and Shell CLI fixtures use distinct adjacent categories, including Windows-valid trailing NBSP;
+  check available/installed inspection, scoped mutation, refusal without approval, read-only previews,
+  and unchanged sibling content/receipts. Fixture scripts are installed but never executed.
+
 ## 2026-10-21 — Trust review text must encode source-controlled fields before styling
 
 - **Symptom**: ESC/newlines in a valid category target or source label reached trust inspection,

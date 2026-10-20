@@ -37,6 +37,202 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn app_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
+    for selected in [
+        " demo",
+        "demo\u{a0}",
+        #[cfg(unix)]
+        "demo ",
+    ] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        for (category, dest) in [("demo", "base"), (selected, "selected")] {
+            let preset = state.join("presets/app").join(category);
+            fs::create_dir_all(&preset).unwrap();
+            fs::write(preset.join("shine.toml"), format!("metadata_schema_version = 2\ndescription = '{dest} description'\ndest = '~/.config/{dest}'\n[[files]]\nsource = 'config.txt'\n")).unwrap();
+            fs::write(preset.join("config.txt"), "v1").unwrap();
+        }
+        // A real whitespace-only category must not bypass the blank-operand guard
+        // through available-info fallback. NBSP is a valid filename on Windows.
+        let blank = state.join("presets/app/\u{a0}");
+        fs::create_dir_all(&blank).unwrap();
+        fs::write(blank.join("shine.toml"), "metadata_schema_version = 2\ndest = '~/.config/blank'\n[[files]]\nsource = 'config.txt'\n").unwrap();
+        fs::write(blank.join("config.txt"), "blank").unwrap();
+        fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+        let run = |args: &[&str], code| {
+            let result = fixture
+                .command()
+                .env("NO_COLOR", "1")
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(code), "{args:?}: {result:?}");
+            result
+        };
+        let canonical = format!("app/{selected}");
+        let check_info = || {
+            run(&["info", "\u{a0}"], 1);
+            for target in [selected, canonical.as_str()] {
+                let result = run(&["info", target], 0);
+                let text = String::from_utf8(result.stdout).unwrap();
+                assert!(text.contains("selected description"), "{text}");
+                assert!(!text.contains("base description"), "{text}");
+            }
+        };
+        check_info(); // Available fallback, before any receipts exist.
+        for category in ["demo", selected] {
+            run(&["app", "install", category, "--yes"], 0);
+        }
+        check_info(); // Installed target and alias lookup.
+        let base = fixture.0.join("home/.config/base/config.txt");
+        let destination = fixture.0.join("home/.config/selected/config.txt");
+        let source = state.join("presets/app").join(selected).join("config.txt");
+        let receipt = state.join("app-manifest.toml");
+        let manifest: shine_core::install::AppManifest =
+            toml::from_str(&fs::read_to_string(&receipt).unwrap()).unwrap();
+        let sibling = manifest
+            .entries
+            .iter()
+            .find(|entry| entry.destination == base)
+            .unwrap()
+            .clone();
+        fs::write(&source, "v2").unwrap();
+        run(&["install", selected, "--yes"], 0);
+        assert_eq!(fs::read(&destination).unwrap(), b"v2");
+        assert_eq!(fs::read(&base).unwrap(), b"v1");
+        fs::write(&source, "v3").unwrap();
+        let before = fs::read(&receipt).unwrap();
+        let denied = run(&["upgrade", &canonical], 1);
+        assert!(String::from_utf8_lossy(&denied.stderr).contains("approval requires"));
+        assert_eq!(fs::read(&receipt).unwrap(), before);
+        assert_eq!(fs::read(&destination).unwrap(), b"v2");
+        run(&["upgrade", &canonical, "--yes"], 0);
+        assert_eq!(fs::read(&destination).unwrap(), b"v3");
+        fs::write(&source, "v4").unwrap();
+        let before = fs::read(&receipt).unwrap();
+        for args in [
+            vec!["update", canonical.as_str()],
+            vec!["uninstall", canonical.as_str(), "--dry-run"],
+        ] {
+            let result = run(&args, 0);
+            let text = String::from_utf8(result.stdout).unwrap().replace('\\', "/");
+            if args[0] == "update" {
+                assert!(text.contains("update available"), "{text}");
+            } else {
+                assert!(text.contains("/selected/config.txt"), "{text}");
+                assert!(!text.contains("/base/config.txt"), "{text}");
+            }
+            assert_eq!(fs::read(&receipt).unwrap(), before);
+            assert_eq!(fs::read(&destination).unwrap(), b"v3");
+            assert_eq!(fs::read(&base).unwrap(), b"v1");
+        }
+        run(&["uninstall", selected, "--yes"], 0);
+        assert!(!destination.exists());
+        assert_eq!(fs::read(&base).unwrap(), b"v1");
+        let manifest: shine_core::install::AppManifest =
+            toml::from_str(&fs::read_to_string(&receipt).unwrap()).unwrap();
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0], sibling);
+    }
+}
+
+#[test]
+fn shell_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
+    for selected in [
+        " demo",
+        "demo\u{a0}",
+        #[cfg(unix)]
+        "demo ",
+    ] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+        for (category, command) in [("demo", "base-tool"), (selected, "selected-tool")] {
+            let preset = state.join("presets/shell").join(category);
+            fs::create_dir_all(&preset).unwrap();
+            fs::write(preset.join("shine.toml"), format!("[[files]]\nsource = '{script}'\ntarget = '{command}'\n[files.permissions]\nschema_version = 1\n")).unwrap();
+            fs::write(preset.join(script), "# fixture; never executed\n").unwrap();
+        }
+        fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+        let run = |args: &[&str], code| {
+            let result = fixture
+                .command()
+                .env("NO_COLOR", "1")
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(code), "{args:?}: {result:?}");
+            result
+        };
+        let canonical = format!("shell/{selected}");
+        for args in [
+            vec!["shell", "info", selected],
+            vec!["info", canonical.as_str()],
+        ] {
+            let result = run(&args, 0);
+            let text = String::from_utf8(result.stdout).unwrap();
+            assert!(text.contains("selected-tool"), "{text}");
+            assert!(!text.contains("base-tool"), "{text}");
+        }
+        for (category, command) in [("demo", "base-tool"), (selected, "selected-tool")] {
+            run(
+                &[
+                    "trust",
+                    "grant",
+                    &format!("shell/{category}/{command}"),
+                    "--yes",
+                ],
+                0,
+            );
+            run(&["shell", "install", category, "--yes"], 0);
+        }
+        let receipt = state.join("shell-manifest.toml");
+        let manifest: shine_core::runtime::ShellManifest =
+            toml::from_str(&fs::read_to_string(&receipt).unwrap()).unwrap();
+        let sibling = manifest
+            .entries
+            .iter()
+            .find(|entry| entry.category == "demo")
+            .unwrap()
+            .clone();
+        assert!(
+            manifest
+                .entries
+                .iter()
+                .any(|entry| entry.category == selected)
+        );
+        let launcher = |command| {
+            shine_core::runtime::command_path_for_name(
+                &state.join("bin"),
+                std::ffi::OsStr::new(command),
+            )
+        };
+        let base_launcher = launcher("base-tool");
+        let selected_launcher = launcher("selected-tool");
+        let base_bytes = fs::read(&base_launcher).unwrap();
+        let selected_bytes = fs::read(&selected_launcher).unwrap();
+        let before = fs::read(&receipt).unwrap();
+        let preview = run(&["shell", "uninstall", selected, "--dry-run"], 0);
+        let text = String::from_utf8(preview.stdout).unwrap();
+        // Shell preview is an aggregate; target isolation is checked on the
+        // launchers and receipts below, rather than assuming per-command rows.
+        let removals = if cfg!(windows) { 2 } else { 1 };
+        assert!(text.contains(&format!("{removals} would remove")), "{text}");
+        let denied = run(&["shell", "uninstall", selected], 1);
+        assert!(String::from_utf8_lossy(&denied.stderr).contains("approval requires"));
+        assert_eq!(fs::read(&receipt).unwrap(), before);
+        assert_eq!(fs::read(&selected_launcher).unwrap(), selected_bytes);
+        assert_eq!(fs::read(&base_launcher).unwrap(), base_bytes);
+        run(&["shell", "uninstall", selected, "--yes"], 0);
+        assert!(!selected_launcher.exists());
+        assert_eq!(fs::read(&base_launcher).unwrap(), base_bytes);
+        let manifest: shine_core::runtime::ShellManifest =
+            toml::from_str(&fs::read_to_string(&receipt).unwrap()).unwrap();
+        assert_eq!(manifest.entries, vec![sibling]);
+    }
+}
+
+#[test]
 fn trust_list_and_revoke_escape_display_without_changing_stored_target_identity() {
     use shine_core::plan::{PermissionSetV1, SnapshotDigestV1};
     use shine_core::trust::{

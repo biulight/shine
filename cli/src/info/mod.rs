@@ -399,7 +399,9 @@ async fn handle_available_info(
     run_generators: bool,
     diff: bool,
 ) -> Result<()> {
-    let target = target.trim();
+    if target.trim().is_empty() {
+        return Err(installed_error);
+    }
     if let Some(rest) = target.strip_prefix("app/") {
         let category = rest.split('/').next().unwrap_or_default();
         if category.is_empty() || rest.contains('/') {

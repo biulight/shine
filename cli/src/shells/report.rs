@@ -225,8 +225,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
 
     crate::config::print_presets_note(config);
     let categories = metadata::load_active_categories(config, None).await?;
-    let target = target.trim();
-    if target.is_empty() {
+    if target.trim().is_empty() {
         bail!("shell info target must not be empty");
     }
 

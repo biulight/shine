@@ -1354,6 +1354,10 @@ bugs. Check this list before changing the modules named in each entry.
   before stale-entry handling, shell filtering happens before link/template reconciliation, and
   managed sys apply receives the selected item. Filtering only the report after a global upgrade
   would violate the command's user-visible scope.
+- **Preset selectors preserve literal identity.** Install, uninstall, upgrade and inspection must
+  retain leading/trailing whitespace in category names rather than selecting a trimmed sibling.
+  Reject entirely blank operands without rewriting nonblank ones. Keep existing canonical suffix
+  normalization, ambiguity checks, metadata command-name validation and approval/execution gates.
 
 ## Tests
 

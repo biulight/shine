@@ -19,6 +19,9 @@ Use complete targets in scripts and documentation:
 A bare app or shell category is accepted when it is unambiguous. Bare shell command names are for
 inspection only.
 
+Target names are matched literally. Quote names containing leading or trailing whitespace;
+Shine does not strip that whitespace. An entirely blank target is rejected.
+
 ```bash
 shine list --available
 shine info app/starship

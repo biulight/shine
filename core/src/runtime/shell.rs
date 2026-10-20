@@ -1622,8 +1622,7 @@ pub struct ShellTarget<'a> {
 }
 
 pub fn parse_shell_lifecycle_target(target: &str) -> Result<ShellTarget<'_>> {
-    let target = target.trim();
-    if target.is_empty() {
+    if target.trim().is_empty() {
         bail!("shell preset target must not be empty");
     }
     let mut parts = target.split('/');
@@ -1745,6 +1744,34 @@ mod tests {
         FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost,
         RuntimeContext, RuntimePlatform,
     };
+
+    #[test]
+    fn shell_target_preserves_whitespace_identity() {
+        for category in [" demo", "demo ", "demo\u{a0}"] {
+            assert_eq!(
+                parse_shell_lifecycle_target(category).unwrap(),
+                ShellTarget {
+                    category,
+                    command: None
+                }
+            );
+            let target = format!("{category}/tool");
+            assert_eq!(
+                parse_shell_lifecycle_target(&target).unwrap(),
+                ShellTarget {
+                    category,
+                    command: Some("tool")
+                }
+            );
+        }
+        assert_eq!(
+            parse_shell_lifecycle_target("demo/tool ").unwrap().command,
+            Some("tool ")
+        );
+        for invalid in ["", " \t\n", "\u{a0}", "demo/", "/tool", "demo/tool/extra"] {
+            assert!(parse_shell_lifecycle_target(invalid).is_err());
+        }
+    }
 
     #[test]
     fn native_cmd_receipts_keep_legacy_format_and_validate_new_format() {

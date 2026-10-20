@@ -120,8 +120,7 @@ pub(crate) async fn resolve_preset_kind(
 }
 
 fn parse_preset_target(target: &str) -> Result<(Option<PresetKind>, &str)> {
-    let target = target.trim();
-    if target.is_empty() {
+    if target.trim().is_empty() {
         bail!("preset target must not be empty");
     }
     let (kind, category) = match target.split_once('/') {
@@ -269,6 +268,21 @@ mod tests {
             classify_shim_resolution(false, false),
             ShimResolution::Missing
         );
+    }
+
+    #[test]
+    fn preset_target_preserves_whitespace_identity() {
+        for category in [" demo", "demo ", "demo\u{a0}"] {
+            assert_eq!(parse_preset_target(category).unwrap(), (None, category));
+            let target = format!("app/{category}");
+            assert_eq!(
+                parse_preset_target(&target).unwrap(),
+                (Some(PresetKind::App), category)
+            );
+        }
+        for blank in ["", " \t\n", "\u{a0}"] {
+            assert!(parse_preset_target(blank).is_err());
+        }
     }
 
     #[test]

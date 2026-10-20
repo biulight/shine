@@ -109,7 +109,9 @@ Update checks (including explicit generator evaluation), release installation an
 publication have separate owners.
 Compatibility checks, env upgrade and Shell/App/Sys review/prevalidation/execution retain their
 existing order. Target routes normalize App/Shell file/command suffixes to categories, reject malformed
-Sys targets and limit stale pruning to App. The private `TargetUpgradeSummary` preserves each domain's
+Sys targets and limit stale pruning to App. Selector parsing preserves literal category whitespace
+before matching; blank-operand rejection does not trim nonblank identities. The private
+`TargetUpgradeSummary` preserves each domain's
 counting units, restart hints and authoritative fatal report total; aggregate counters, lazy no-op
 headings and App-before-Sys failure precedence remain separate (ADR 0127).
 `upgrade --verbose` expands relevant scopes, while `upgrade --verbose --full-plan` displays every planned scope and step. Compact
