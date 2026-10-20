@@ -103,6 +103,11 @@ bugs. Check this list before changing the modules named in each entry.
   or commands and Bun policy failures carry structured kinds at the failing check. Category
   names and human-readable error chains cannot change the code; unclassified metadata failures
   use `invalid_metadata`.
+- **Authoring text encoding does not redefine report values.** Validation, lint and hypothetical
+  Plan text escape controls in source paths, logical identifiers, diagnostics and permission labels
+  with the shared CLI encoder. JSON, source identity, hypothetical planning and exit policies stay
+  unchanged. Lint omits copyable commands for control-bearing paths instead of suggesting an escaped
+  spelling as a different filesystem operand.
 
 - **Path presentation never changes permission identity.** Planners and App/Shell/Sys action
   executors use one root-aware encoder, preserving Unix roots, Windows drive roots and UNC

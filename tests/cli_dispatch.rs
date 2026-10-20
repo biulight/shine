@@ -37,6 +37,117 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn authoring_missing_control_path_preserves_json_and_failure_exits() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("missing\x1b[31m\nFORGED");
+    for name in ["validate", "plan", "lint"] {
+        for format in ["text", "json"] {
+            let mut command = fixture.command();
+            command
+                .env("NO_COLOR", "1")
+                .args(["preset", name])
+                .arg(&path);
+            command.args(["--format", format]);
+            if name == "plan" {
+                command.args(["--platform", "windows"]);
+            }
+            let result = command.output().unwrap();
+            assert_eq!(result.status.code(), Some(1), "{name}: {result:?}");
+            assert!(result.stderr.is_empty(), "{name}: {result:?}");
+            let text = String::from_utf8(result.stdout).unwrap();
+            if format == "json" {
+                let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(report["valid"], false);
+                if name == "validate" {
+                    assert_eq!(report["path"], path.to_str().unwrap());
+                    assert_eq!(report["diagnostics"][0]["code"], "invalid_input");
+                }
+            } else {
+                assert!(!text.contains('\x1b'), "{name}: {text:?}");
+                assert!(!text.lines().any(|line| line == "FORGED"), "{text:?}");
+                if name == "lint" {
+                    assert!(
+                        text.contains(
+                            "original PATH (control characters; copyable command omitted)"
+                        ),
+                        "{text:?}"
+                    );
+                    assert!(!text.contains("`shine preset validate"), "{text:?}");
+                }
+            }
+        }
+    }
+    assert!(!fixture.0.join("state").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn authoring_text_escapes_identifiers_without_changing_json_or_warning_policy() {
+    let fixture = Fixture::new();
+    let name = "demo\x1b[31m\nFORGED";
+    let resource = "config\tfile.txt";
+    let category = fixture.0.join("app").join(name);
+    fs::create_dir_all(&category).unwrap();
+    let metadata = "dest = \"~/.config/de\\u001b[31m\\nFORGED\"\n[permissions]\nschema_version = 1\n[[files]]\nsource = \"config\\tfile.txt\"\n";
+    fs::write(category.join("shine.toml"), metadata).unwrap();
+    fs::write(category.join(resource), "preserve").unwrap();
+    for command_name in ["validate", "plan", "lint"] {
+        for format in ["text", "json"] {
+            let mut command = fixture.command();
+            command
+                .env("NO_COLOR", "1")
+                .args(["preset", command_name])
+                .arg(&category);
+            command.args(["--format", format]);
+            if command_name == "plan" {
+                command.args(["--platform", "linux"]);
+            }
+            let result = command.output().unwrap();
+            assert_eq!(result.status.code(), Some(0), "{command_name}: {result:?}");
+            assert!(result.stderr.is_empty(), "{result:?}");
+            let text = String::from_utf8(result.stdout).unwrap();
+            if format == "json" {
+                let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(report["valid"], true);
+                match command_name {
+                    "validate" => assert_eq!(report["categories"][0]["name"], name),
+                    "plan" => {
+                        assert_eq!(report["target"], format!("app/{name}"));
+                        assert_eq!(report["plans"][0]["steps"][0]["resource"], resource);
+                    }
+                    _ => assert_eq!(report["diagnostics"][0]["target"], format!("app/{name}")),
+                }
+            } else {
+                assert!(!text.contains('\x1b'), "{text:?}");
+                assert!(!text.contains('\t'), "{text:?}");
+                assert!(
+                    !text.lines().any(|line| line.starts_with("FORGED")),
+                    "{text:?}"
+                );
+                assert!(text.contains("demo\\u{1b}[31m\\nFORGED"), "{text:?}");
+                if command_name != "validate" {
+                    assert!(text.contains("config\\tfile.txt"), "{text:?}");
+                }
+            }
+        }
+    }
+    let denied = fixture
+        .command()
+        .args(["preset", "lint"])
+        .arg(&category)
+        .arg("--deny-warnings")
+        .output()
+        .unwrap();
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+    assert_eq!(
+        fs::read_to_string(category.join("shine.toml")).unwrap(),
+        metadata
+    );
+    assert_eq!(fs::read(category.join(resource)).unwrap(), b"preserve");
+    assert!(!fixture.0.join("state").exists());
+}
+
+#[test]
 fn preset_pack_rejects_file_parent_traversal_in_text_and_json() {
     let fixture = Fixture::new();
     let category = fixture.0.join("app/demo");

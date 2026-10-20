@@ -61,6 +61,8 @@ shine preset new sys --unrestricted
 检查更新、写文件、联网或执行预设代码。
 
 默认输出文本；工具和 CI 可以使用 `--format json`。校验错误的退出码为 1，warning 不会导致失败。
+校验、lint 和作者 Plan 的文本报告会转义路径、标识符、诊断消息和权限标签中的控制字符。
+JSON 报告保留原始字段值。
 诊断代码表示未通过的检查，不受类别名称或消息措辞影响。例如，引用文件缺失时报告
 `missing_reference`，Bun 依赖声明不符合策略时报告 `bun_dependency_policy`。
 
@@ -71,7 +73,7 @@ shine preset new sys --unrestricted
 校验后运行 `preset lint`，检查作者质量和可移植性。warning 默认只是建议；CI 可在审阅后
 添加 `--deny-warnings`。
 如果 lint 无法加载输入或校验失败，文本提示会带上原始 `PATH`；请在同一目录执行提示中的
-`preset validate` 命令查看原因。若 `PATH` 不是 UTF-8，文本会说明已省略可复制命令；
+`preset validate` 命令查看原因。若 `PATH` 不是 UTF-8 或包含控制字符，文本会说明已省略可复制命令；
 请将原始参数传给 `preset validate`。JSON 报告仍保留不含输入路径的诊断消息。
 Lint 会检查每个平台适用的资源，包括 Windows 的 PowerShell 命令；明确不适用于某个操作系统的
 App 类别或文件会在该操作系统的检查中跳过。

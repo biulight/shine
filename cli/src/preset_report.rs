@@ -35,7 +35,7 @@ pub(crate) fn write_diagnostic(
         output,
         &message_prefix,
         &continuation_prefix,
-        &diagnostic.message,
+        &crate::output::escape_controls(&diagnostic.message),
     );
     let detail_prefix = format!("{prefix}  ");
     let _ = writeln!(
@@ -49,7 +49,7 @@ pub(crate) fn write_diagnostic(
             output,
             "{detail_prefix}{} {}",
             crate::colors::dim("file:"),
-            path.display()
+            crate::output::escape_controls(&path.display().to_string())
         );
     }
 }
@@ -98,6 +98,27 @@ fn write_wrapped_with_continuation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_fields_escape_controls_before_wrapping() {
+        let diagnostic = PresetDiagnostic {
+            severity: PresetDiagnosticSeverity::Error,
+            code: "stable".into(),
+            message: "bad\x1b[31m\nFORGED\tvalue".into(),
+            path: Some("source\x1b[0m\nFORGED".into()),
+        };
+        let mut output = String::new();
+        write_diagnostic(&mut output, "  ", &diagnostic, true, true);
+        assert!(
+            output.contains("bad\\u{1b}[31m\\nFORGED\\tvalue"),
+            "{output:?}"
+        );
+        assert!(output.contains("source\\u{1b}[0m\\nFORGED"), "{output:?}");
+        assert!(output.contains("code: stable"));
+        assert!(!output.contains('\x1b'));
+        assert!(!output.contains('\t'));
+        assert_eq!(diagnostic.message, "bad\x1b[31m\nFORGED\tvalue");
+    }
 
     #[test]
     fn wrapped_diagnostic_indents_continuations_without_repeating_the_symbol() {

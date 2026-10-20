@@ -42,7 +42,8 @@ fn print_text_report(report: &PresetAuthoringPlanReportV1) {
 
 fn authoring_text(report: &PresetAuthoringPlanReportV1) -> String {
     let mut output = String::new();
-    let target = report.target.as_deref().unwrap_or("invalid input");
+    let target =
+        crate::output::escape_controls(report.target.as_deref().unwrap_or("invalid input"));
     let _ = writeln!(
         output,
         "{} {target} ({})",
@@ -117,7 +118,11 @@ fn authoring_text(report: &PresetAuthoringPlanReportV1) -> String {
             plan.kind,
             plan.operation.as_str()
         );
-        let _ = writeln!(output, "    Target: {}", plan.target);
+        let _ = writeln!(
+            output,
+            "    Target: {}",
+            crate::output::escape_controls(&plan.target)
+        );
         write_plan_blockers(&mut output, &plan.steps, &plan.permissions);
         let _ = writeln!(output);
         let _ = writeln!(
@@ -191,7 +196,7 @@ fn write_plan_blockers(
         let _ = writeln!(
             output,
             "        {}",
-            crate::lifecycle_plan::permission_name(permission)
+            crate::output::escape_controls(&crate::lifecycle_plan::permission_name(permission))
         );
     }
     for code in &permissions.uncomputable_codes {
@@ -223,9 +228,18 @@ fn write_grouped_permissions(output: &mut String, permissions: &PermissionResolu
         grouped.entry(group).or_default().push(value);
     }
     for (group, values) in grouped {
-        let _ = writeln!(output, "      {group} ({})", values.len());
+        let _ = writeln!(
+            output,
+            "      {} ({})",
+            crate::output::escape_controls(&group),
+            values.len()
+        );
         for value in values {
-            let _ = writeln!(output, "        - {value}");
+            let _ = writeln!(
+                output,
+                "        - {}",
+                crate::output::escape_controls(&value)
+            );
         }
     }
 }
@@ -241,7 +255,7 @@ fn step_identity(step: &PlanStepV1) -> String {
     } else {
         format!(" [{}]", step.diagnostic_codes.join(", "))
     };
-    format!("{}{resource}{diagnostics}", step.target)
+    crate::output::escape_controls(&format!("{}{resource}{diagnostics}", step.target))
 }
 
 #[cfg(test)]

@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-21 — Authoring reports need text encoding at each untrusted field
+
+- **Symptom**: valid category names containing ESC and newlines passed static validation and reached
+  validation, lint and hypothetical Plan text unchanged, even with `NO_COLOR=1`. Diagnostic paths
+  and permission labels had the same presentation boundary.
+- **Fix**: reuse `escape_controls` before text wrapping or field rendering. Keep internally styled
+  wrapping, original Core reports, JSON fields, validity/readiness and warning exit policy intact.
+  Control-bearing lint operands get an original-argument notice, never a copyable escaped alias.
+- **Coverage**: shared diagnostic rendering and real CLI regressions cover missing paths on all
+  platforms, Unix control-bearing categories/resources/destinations, exact JSON identities, warning
+  refusal, unchanged source bytes and absent state initialization. Existing non-UTF-8 collision and
+  shell-round-trip tests retain independent coverage.
+
 ## 2026-10-21 — Pack output normalization must retain directory traversal failures
 
 - **Symptom**: `file/../bundle.tar.gz` was normalized through an existing regular file, so packing

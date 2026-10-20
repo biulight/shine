@@ -32,6 +32,10 @@ fn print_text_report(report: &PresetLintReportV1, path: &Path) {
         }
     );
     let validation_hint = match path.to_str() {
+        Some(path) if path.chars().any(char::is_control) => {
+            "preset validate with the original PATH (control characters; copyable command omitted)"
+                .to_string()
+        }
         Some(path) => format!(
             "`shine preset validate {}`",
             crate::shell_quote::command_positionals(&[path])
@@ -47,20 +51,19 @@ fn print_text_report(report: &PresetLintReportV1, path: &Path) {
         let target = diagnostic
             .target
             .as_deref()
-            .map(|target| format!(" {target}"))
+            .map(|target| format!(" {}", crate::output::escape_controls(target)))
             .unwrap_or_default();
         let resource = diagnostic
             .resource
             .as_deref()
-            .map(|resource| format!(" · {resource}"))
+            .map(|resource| format!(" · {}", crate::output::escape_controls(resource)))
             .unwrap_or_default();
         println!(
             "  {severity}[{}]:{}{} {}",
             diagnostic.code,
             target,
             resource,
-            diagnostic
-                .message
+            crate::output::escape_controls(&diagnostic.message)
                 .replace("`shine preset validate`", &validation_hint)
         );
     }

@@ -46,7 +46,7 @@ fn validation_text(report: &PresetValidationReportV1) -> String {
         output,
         "  {} {}",
         crate::colors::dim("Source:"),
-        report.path.display()
+        crate::output::escape_controls(&report.path.display().to_string())
     );
     for diagnostic in &report.diagnostics {
         let _ = writeln!(output);
@@ -69,7 +69,7 @@ fn validation_text(report: &PresetValidationReportV1) -> String {
                 crate::colors::symbol("✗")
             },
             category.kind,
-            category.name
+            crate::output::escape_controls(&category.name)
         );
         for diagnostic in &category.diagnostics {
             crate::preset_report::write_diagnostic(

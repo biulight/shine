@@ -70,6 +70,8 @@ check for updates, write files, access the network, or execute preset code.
 
 The default output is text. `--format json` is available for tools and CI. Validation errors exit
 with status 1; warnings do not.
+Text validation, lint, and authoring-plan reports escape control characters in paths, identifiers,
+diagnostics, and permission labels. JSON reports retain the original field values.
 Diagnostic codes identify the failed check, independently of category names or message wording.
 For example, a missing referenced file reports `missing_reference`, while a rejected Bun dependency
 declaration reports `bun_dependency_policy`.
@@ -81,7 +83,8 @@ check for App, Shell, and Sys metadata.
 Run `preset lint` after validation to find author-quality and portability issues. Warnings are
 advisory by default; CI can add `--deny-warnings` after reviewing them.
 If lint cannot load or validate the input, its text hint includes the original `PATH`; run that
-`preset validate` command from the same directory to inspect the failure. For a non-UTF-8 `PATH`,
+`preset validate` command from the same directory to inspect the failure. For a non-UTF-8 `PATH`
+or one containing control characters,
 the text explains that the copyable command is omitted; reuse the original argument with
 `preset validate`. JSON reports keep their path-independent diagnostic messages.
 Lint checks each platform's applicable resources, including PowerShell commands on Windows;
