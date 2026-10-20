@@ -6,6 +6,7 @@ use crate::commands::PhoneRecipientType;
 use anyhow::{Context, Result, bail};
 use bech32::{FromBase32, Variant};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::AsyncReadExt;
@@ -171,7 +172,7 @@ pub async fn handle_identity_init(
                     .file_name()
                     .context("identity path has no file name")?,
             );
-            Some(toml::Value::String(target.to_string_lossy().into_owned()))
+            Some(target)
         } else {
             None
         };
@@ -209,24 +210,28 @@ pub async fn handle_identity_init(
             )
         );
     }
-    if let Some(identity_value) = identity_hint {
-        println!(
-            "{}",
-            colors::dim(&format!(
-                "Set age_identity = {identity_value} in config.toml so shine can find this identity."
-            ))
-        );
+    if let Some(path) = identity_hint {
+        let hint = match path.to_str() {
+            Some(value) => format!(
+                "Set age_identity = {} in config.toml so shine can find this identity.",
+                toml::Value::String(value.to_owned())
+            ),
+            None => {
+                "Identity path is non-UTF-8; copyable age_identity assignment omitted.".to_string()
+            }
+        };
+        println!("{}", colors::dim(&hint));
     }
     Ok(())
 }
 
-fn touch_id_keygen_args(access_control: &str, output_path: &Path) -> Vec<String> {
+fn touch_id_keygen_args(access_control: &str, output_path: &Path) -> Vec<OsString> {
     vec![
-        "keygen".to_string(),
-        "--recipient-type=tag".to_string(),
-        format!("--access-control={access_control}"),
-        "-o".to_string(),
-        output_path.to_string_lossy().into_owned(),
+        "keygen".into(),
+        "--recipient-type=tag".into(),
+        format!("--access-control={access_control}").into(),
+        "-o".into(),
+        output_path.as_os_str().to_owned(),
     ]
 }
 
@@ -508,7 +513,7 @@ async fn generate_identity(
     let args = if touch_id {
         touch_id_keygen_args(access_control, &generated)
     } else {
-        vec!["-o".to_string(), generated.to_string_lossy().into_owned()]
+        vec!["-o".into(), generated.as_os_str().to_owned()]
     };
     run_keygen(program, &args).await?;
     #[cfg(unix)]
@@ -526,7 +531,7 @@ async fn generate_identity(
     Ok(recipient)
 }
 
-async fn run_keygen(program: &str, args: &[String]) -> Result<()> {
+async fn run_keygen(program: &str, args: &[OsString]) -> Result<()> {
     let status = Command::new(program)
         .args(args)
         .kill_on_drop(true)
@@ -700,6 +705,23 @@ mod tests {
                 "identity.txt",
             ]
         );
+    }
+
+    #[test]
+    fn touch_id_keygen_preserves_native_output_path() {
+        #[cfg(unix)]
+        let output = {
+            use std::os::unix::ffi::OsStringExt;
+            PathBuf::from(OsString::from_vec(b"keys/identity-\xff".to_vec()))
+        };
+        #[cfg(windows)]
+        let output = {
+            use std::os::windows::ffi::OsStringExt;
+            PathBuf::from(OsString::from_wide(&[b'k' as u16, 0xd800]))
+        };
+        let args = touch_id_keygen_args("any-biometry", &output);
+        assert_eq!(args.len(), 5);
+        assert_eq!(args[4], output.as_os_str());
     }
 
     #[tokio::test]

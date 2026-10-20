@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-21 — Identity generation must pass native output paths to keygen
+
+- **Symptom**: non-UTF-8 `--output` failed after keygen wrote a replacement-character sibling;
+  configuration hints could then describe that different UTF-8 identity instead of the real path.
+- **Cause/fix**: keygen argument vectors converted paths through `to_string_lossy`. Retain OS
+  strings in both ordinary and Touch ID keygen, including forced staging paths. Preserve the
+  pre-generation absolute hint snapshot, but omit its copyable TOML assignment if not UTF-8.
+- **Coverage**: Linux CLI substitutes cover raw filenames/parents, absent/existing lossy aliases,
+  ordinary/forced generation, conflicts, backend and recipient-validation failures, 0600 output,
+  unchanged aliases/config and staging cleanup. Unix argument/failure checks include macOS Touch
+  ID; argument tests also retain unpaired Windows UTF-16. UTF-8 hint and removed-cwd tests remain.
+
 ## 2026-10-21 — Transparent proxies must retain signal-derived failure status
 
 - **Symptom**: the same child printed identical stdout/stderr but returned 143/137 through `env run`

@@ -1163,6 +1163,9 @@ bugs. Check this list before changing the modules named in each entry.
   into an absent path inside a same-directory private staging directory, restrict the file to 0600
   on Unix, extract its recipient, then use synced replacement. Never delete the old key before
   invoking keygen. Normal initialization retains keygen's exclusive-create semantics.
+  Pass output/staging paths as native OS arguments for both ordinary and Touch ID keygen. A
+  configuration hint must not substitute a lossy path: retain absolute TOML quoting for UTF-8
+  paths and omit the copyable assignment for unrepresentable paths.
 
 - **Sealing replaces only regular source files.** Reject symbolic links before capturing any
   sources and recheck before replacement; on Unix require exactly one hard link. Atomic rename

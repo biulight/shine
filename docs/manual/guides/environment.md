@@ -201,6 +201,8 @@ shine env secret identity list
 A normal identity uses `age-keygen` and defaults to `~/.shine/age/identity.txt`.
 For a custom `--output`, any printed `age_identity` configuration hint uses an absolute path and
 TOML quoting, so it remains usable from another directory. The hint does not modify your config.
+On Unix, `--output` keeps native filename bytes. If the absolute path is not valid UTF-8, Shine
+omits the copyable `age_identity` assignment; use a UTF-8 path to configure it in TOML.
 `identity list` shows each configured identity path and recipient. On Unix, literal backslashes in
 filenames are preserved; Windows paths are displayed with forward slashes.
 Existing files require `--force`. Forced replacement generates and checks the new identity in a

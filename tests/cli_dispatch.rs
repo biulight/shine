@@ -3733,6 +3733,180 @@ fn broker_duplicate_policy_hint_preserves_policy_and_update_approval() {
     assert_eq!(fs::read(&policy).unwrap(), original);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn identity_generation_preserves_non_utf8_paths_and_replacement_boundaries() {
+    use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
+    for in_parent in [false, true] {
+        for mode in ["create", "conflict", "force", "failed", "invalid"] {
+            for alias_exists in [false, true] {
+                let fixture = Fixture::new();
+                let bin = fixture.0.join("test-bin");
+                fs::create_dir(&bin).unwrap();
+                let program = bin.join("age-keygen");
+                // Only public placeholders; never invoke a real backend or hardware.
+                fs::write(
+                    &program,
+                    r#"#!/bin/sh
+[ "$1" = -o ] && [ "$#" = 2 ] || exit 92
+printf '%s' "$2" > "$SHINE_TEST_ARGV"
+[ "$SHINE_TEST_MODE" != failed ] || exit 7
+set -C
+if [ "$SHINE_TEST_MODE" = invalid ]; then
+    printf 'no recipient\n' > "$2"
+else
+    printf '# recipient: age1reviewplaceholder\n' > "$2"
+fi
+"#,
+                )
+                .unwrap();
+                fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+                let component = std::ffi::OsString::from_vec(b"identity-\xff".to_vec());
+                let raw = if in_parent {
+                    fixture.0.join(&component).join("identity.txt")
+                } else {
+                    fixture.0.join(&component)
+                };
+                let alias = PathBuf::from(raw.to_string_lossy().into_owned());
+                fs::create_dir_all(raw.parent().unwrap()).unwrap();
+                fs::create_dir_all(alias.parent().unwrap()).unwrap();
+                if alias_exists {
+                    fs::write(&alias, b"unrelated sibling").unwrap();
+                }
+                if mode != "create" {
+                    fs::write(&raw, b"old identity").unwrap();
+                }
+                let log = fixture.0.join("argv");
+                let mut command = fixture.command();
+                command
+                    .env("PATH", &bin)
+                    .env("NO_COLOR", "1")
+                    .env("SHINE_TEST_ARGV", &log)
+                    .env("SHINE_TEST_MODE", mode)
+                    .args(["env", "secret", "identity", "init", "--output"])
+                    .arg(&raw);
+                if matches!(mode, "force" | "failed" | "invalid") {
+                    command.arg("--force");
+                }
+                let result = command.output().unwrap();
+                let success = matches!(mode, "create" | "force");
+                assert_eq!(
+                    result.status.code(),
+                    Some(if success { 0 } else { 1 }),
+                    "parent={in_parent} mode={mode} alias={alias_exists}: {result:?}"
+                );
+                if success {
+                    assert!(result.stderr.is_empty(), "{result:?}");
+                    assert_eq!(
+                        fs::read(&raw).unwrap(),
+                        b"# recipient: age1reviewplaceholder\n"
+                    );
+                    assert_eq!(
+                        fs::metadata(&raw).unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
+                    let stdout = String::from_utf8(result.stdout).unwrap();
+                    assert!(
+                        stdout.contains("non-UTF-8; copyable age_identity assignment omitted"),
+                        "{stdout}"
+                    );
+                    assert!(!stdout.contains("Set age_identity = "), "{stdout}");
+                } else {
+                    assert_eq!(fs::read(&raw).unwrap(), b"old identity");
+                    let error = String::from_utf8_lossy(&result.stderr);
+                    let expected = match mode {
+                        "conflict" => "already exists; pass --force",
+                        "failed" => "failed",
+                        _ => "no recipient found",
+                    };
+                    assert!(error.contains(expected), "{error}");
+                }
+                if mode == "conflict" {
+                    assert!(!log.exists(), "conflict must not invoke keygen");
+                } else {
+                    let generated =
+                        PathBuf::from(std::ffi::OsString::from_vec(fs::read(log).unwrap()));
+                    if mode == "create" {
+                        assert_eq!(generated, raw);
+                    } else {
+                        assert_eq!(
+                            generated.parent().unwrap().parent().unwrap(),
+                            raw.parent().unwrap()
+                        );
+                    }
+                }
+                if alias_exists {
+                    assert_eq!(fs::read(&alias).unwrap(), b"unrelated sibling");
+                } else {
+                    assert!(!alias.exists());
+                }
+                for parent in [raw.parent().unwrap(), alias.parent().unwrap()] {
+                    assert!(!fs::read_dir(parent).unwrap().any(|entry| {
+                        entry
+                            .unwrap()
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(".shine-identity-")
+                    }));
+                }
+                assert!(!fixture.0.join("state/config.toml").exists());
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn identity_generation_passes_native_path_to_failing_backend() {
+    use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
+    for touch_id in [false, true] {
+        if touch_id && !cfg!(target_os = "macos") {
+            continue;
+        }
+        let fixture = Fixture::new();
+        let bin = fixture.0.join("test-bin");
+        fs::create_dir(&bin).unwrap();
+        let program = bin.join(if touch_id {
+            "age-plugin-se"
+        } else {
+            "age-keygen"
+        });
+        // A failing substitute records argv without requiring the filesystem to
+        // support raw filename bytes (the local macOS filesystem rejects them).
+        fs::write(&program, "#!/bin/sh\nfor arg do output=$arg; done\nprintf '%s' \"$output\" > \"$SHINE_TEST_ARGV\"\nexit 7\n").unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+        let raw = fixture
+            .0
+            .join(std::ffi::OsString::from_vec(b"identity-\xff".to_vec()));
+        let alias = PathBuf::from(raw.to_string_lossy().into_owned());
+        fs::write(&alias, b"unrelated sibling").unwrap();
+        let log = fixture.0.join("argv");
+        let mut command = fixture.command();
+        command
+            .env("PATH", &bin)
+            .env("SHINE_TEST_ARGV", &log)
+            .args(["env", "secret", "identity", "init", "--output"])
+            .arg(&raw);
+        if touch_id {
+            command.arg("--touch-id");
+        }
+        let result = command.output().unwrap();
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        assert!(result.stdout.is_empty(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("failed"),
+            "{result:?}"
+        );
+        assert_eq!(
+            std::ffi::OsString::from_vec(fs::read(log).unwrap()),
+            raw.as_os_str()
+        );
+        assert!(!raw.exists());
+        assert_eq!(fs::read(alias).unwrap(), b"unrelated sibling");
+        assert!(!fixture.0.join("state/config.toml").exists());
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn identity_hint_round_trips_toml_and_survives_changed_directory() {
