@@ -126,6 +126,134 @@ fn assert_hint_argv(command: &str, expected: &[&str]) {
 }
 
 #[test]
+fn shell_info_hints_preserve_category_arguments_before_and_after_install() {
+    for category in ["team tools", "it's", "-demo"] {
+        let fixture = Fixture::new();
+        let preset = fixture.0.join("state/presets/shell").join(category);
+        fs::create_dir_all(&preset).unwrap();
+        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+        fs::write(
+            preset.join("shine.toml"),
+            format!("[[files]]\nsource = '{script}'\ntarget = 'tool'\n"),
+        )
+        .unwrap();
+        fs::write(preset.join(script), "# never executed\n").unwrap();
+        let selector = format!("{category}/tool");
+        let target = format!("shell/{selector}");
+        let info = fixture.run(&["shell", "info", "--", category]);
+        success(&info);
+        let mut expected = vec!["shine", "shell", "install"];
+        if category.starts_with('-') {
+            expected.push("--");
+        }
+        expected.push(&selector);
+        assert_hint_argv(
+            hint(&stdout(&info), "Run `", "` to install this target."),
+            &expected,
+        );
+
+        success(&fixture.run(&["trust", "grant", &target, "--yes"]));
+        success(&fixture.run(&["shell", "install", "--yes", "--", &selector]));
+        let receipt = fs::read(fixture.0.join("state/shell-manifest.toml")).unwrap();
+        let info = fixture.run(&["shell", "info", "--", category]);
+        success(&info);
+        assert_hint_argv(
+            hint(&stdout(&info), "Run `", "` to repair this target."),
+            &["shine", "install", &target, "--replace-managed"],
+        );
+        assert_eq!(
+            fs::read(fixture.0.join("state/shell-manifest.toml")).unwrap(),
+            receipt
+        );
+    }
+}
+
+#[tokio::test]
+async fn upgrade_summaries_keep_sys_preservation_failures_and_partial_success() {
+    let fixture = Fixture::new();
+    let os_id = cli::sys::detect_os_id().await.unwrap();
+    let preset = fixture.0.join("state/presets/sys").join(os_id);
+    fs::create_dir_all(&preset).unwrap();
+    let mut metadata = "version = 2\n".to_string();
+    for id in ["demo", "other"] {
+        let destination = fixture.0.join("home").join(format!("{id}.txt"));
+        fs::write(preset.join(format!("{id}.txt")), "v1\n").unwrap();
+        metadata.push_str(&format!("[[items]]\nid = {id:?}\nlabel = {id:?}\nmode = 'managed'\ndriver = 'managed-file'\n[items.config]\nsource = '{id}.txt'\ntarget = {:?}\n", destination.to_str().unwrap()));
+    }
+    fs::write(preset.join("shine.toml"), metadata).unwrap();
+    for id in ["demo", "other"] {
+        success(&fixture.run(&["sys", "apply", id, "--yes"]));
+    }
+    let receipt_path = fixture.0.join("state/sys-manifest.toml");
+    let receipt = fs::read(&receipt_path).unwrap();
+    let unchanged = fixture.run(&["upgrade", "--yes"]);
+    success(&unchanged);
+    assert!(
+        stdout(&unchanged).contains("Nothing to upgrade."),
+        "{unchanged:?}"
+    );
+
+    fs::write(fixture.0.join("home/demo.txt"), "user edit\n").unwrap();
+    fs::write(preset.join("demo.txt"), "v2\n").unwrap();
+    for args in [
+        vec!["upgrade", "sys/demo", "--yes"],
+        vec!["upgrade", "--yes"],
+        vec!["upgrade", "--verbose", "--yes"],
+    ] {
+        let output = fixture.run(&args);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let text = stdout(&output);
+        let summary = text
+            .lines()
+            .find(|line| line.starts_with("Upgrade incomplete"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(
+            summary.contains("1 user-modified (kept)") && summary.contains("1 failed"),
+            "{summary}"
+        );
+        assert!(
+            !text.contains("nothing changed") && !text.contains("Nothing to upgrade."),
+            "{text}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("configuration item(s) failed"),
+            "{output:?}"
+        );
+        assert_eq!(fs::read(&receipt_path).unwrap(), receipt);
+        assert_eq!(
+            fs::read(fixture.0.join("home/demo.txt")).unwrap(),
+            b"user edit\n"
+        );
+    }
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fs::write(
+        fixture.0.join("state/presets/app/demo/config.txt"),
+        "static-v2\n",
+    )
+    .unwrap();
+    let partial = fixture.run(&["upgrade", "--yes"]);
+    assert_eq!(partial.status.code(), Some(1), "{partial:?}");
+    let text = stdout(&partial);
+    let summary = text
+        .lines()
+        .find(|line| line.starts_with("Upgrade incomplete"))
+        .unwrap_or_else(|| panic!("{partial:?}"));
+    for expected in ["1 updated", "1 user-modified (kept)", "1 failed"] {
+        assert!(summary.contains(expected), "{summary}");
+    }
+    assert_eq!(
+        fs::read(fixture.0.join("home/demo.txt")).unwrap(),
+        b"user edit\n"
+    );
+    assert_eq!(fs::read(&receipt_path).unwrap(), receipt);
+    assert_eq!(
+        fs::read(fixture.0.join("destination/config.txt")).unwrap(),
+        b"static-v2\n"
+    );
+}
+
+#[test]
 fn app_and_trust_hints_preserve_literal_category_arguments() {
     for category in ["demo", "demo space", "it's", "literal$HOME", "literal`tick"] {
         let fixture = Fixture::new();

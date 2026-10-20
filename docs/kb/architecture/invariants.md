@@ -116,6 +116,13 @@ bugs. Check this list before changing the modules named in each entry.
   CLI failure may suppress the binary's duplicate error; its exit remains nonzero and other
   errors/unknown diagnostics must remain visible.
 
+- **Upgrade footers retain failure and preservation totals.** Aggregate upgrade includes managed
+  Sys preservation/conflicts alongside App and Env preservation. Both aggregate and targeted
+  footers show `Upgrade incomplete` and the authoritative report failure count before returning
+  their existing errors. Hook warnings do not become fatal; approval, execution and Core reports
+  remain unchanged. Schema output write errors propagate through the ordinary nonzero error path,
+  rather than panicking or becoming success.
+
 - **Review layouts remain pure and conservative.** Compact, detailed and bootstrap projections
   preserve their existing formatting and classification rules. Unknown/blocking diagnostics, code
   boundaries, administrator access and uncomputable permissions remain visible. Incomplete or

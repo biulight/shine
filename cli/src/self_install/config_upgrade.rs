@@ -102,7 +102,7 @@ pub async fn handle_config_upgrade(
         ),
     )
     .await?;
-    let (sys_report, _sys_lifecycle) = Box::pin(sys::handle_upgrade_managed_with_result_prepared(
+    let (sys_report, sys_lifecycle) = Box::pin(sys::handle_upgrade_managed_with_result_prepared(
         config,
         verbose,
         prepared.sys,
@@ -115,11 +115,30 @@ pub async fn handle_config_upgrade(
         + usize::from(shell_report.path_changed)
         + changed_app_categories(&app_lifecycle)
         + sys_report.updated;
-    let user_modified = env_report.user_modified + preserved_app_resources(&app_lifecycle);
+    let sys_summary = sys_lifecycle.summary();
+    let user_modified = env_report.user_modified
+        + preserved_app_resources(&app_lifecycle)
+        + sys_summary.preserved
+        + sys_summary.conflicts;
+    let fatal_app_failures = app_upgrade_failure_count(&app_report);
+    let failed = fatal_app_failures + sys_report.failed;
 
-    let summary = config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts);
-    if updated > 0 || user_modified > 0 || shell_report.link_conflicts > 0 || sep.has_printed() {
-        output::footer("Done", &summary);
+    let summary =
+        config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts, failed);
+    if updated > 0
+        || user_modified > 0
+        || shell_report.link_conflicts > 0
+        || failed > 0
+        || sep.has_printed()
+    {
+        output::footer(
+            if failed > 0 {
+                "Upgrade incomplete"
+            } else {
+                "Done"
+            },
+            &summary,
+        );
     } else {
         println!("{}", colors::dim("Nothing to upgrade."));
     }
@@ -127,7 +146,6 @@ pub async fn handle_config_upgrade(
         println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
     }
 
-    let fatal_app_failures = app_upgrade_failure_count(&app_report);
     if fatal_app_failures > 0 {
         bail!("{} app configuration item(s) failed", fatal_app_failures);
     }
@@ -231,9 +249,16 @@ async fn handle_config_target_upgrade(
         }
     };
 
-    let summary = config_upgrade_summary_parts(updated, user_modified, link_conflicts);
-    if updated > 0 || user_modified > 0 || link_conflicts > 0 || sep.has_printed() {
-        output::footer("Done", &summary);
+    let summary = config_upgrade_summary_parts(updated, user_modified, link_conflicts, failed);
+    if updated > 0 || user_modified > 0 || link_conflicts > 0 || failed > 0 || sep.has_printed() {
+        output::footer(
+            if failed > 0 {
+                "Upgrade incomplete"
+            } else {
+                "Done"
+            },
+            &summary,
+        );
     } else {
         println!("{}", colors::dim("Nothing to upgrade."));
     }

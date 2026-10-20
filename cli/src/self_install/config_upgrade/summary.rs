@@ -55,6 +55,7 @@ pub(super) fn config_upgrade_summary_parts(
     updated: usize,
     user_modified: usize,
     link_conflicts: usize,
+    failed: usize,
 ) -> Vec<String> {
     let mut parts = Vec::new();
     output::push_count(&mut parts, updated, colors::green, "updated");
@@ -65,6 +66,7 @@ pub(super) fn config_upgrade_summary_parts(
         "user-modified (kept)",
     );
     output::push_count(&mut parts, link_conflicts, colors::yellow, "link conflicts");
+    output::push_count(&mut parts, failed, colors::red, "failed");
     parts
 }
 

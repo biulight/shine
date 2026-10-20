@@ -70,6 +70,9 @@ Shell 命令安装按命令数合并，Shell 集成单独显示；内部状态�
 默认升级审阅将常规 App 和 Shell 预设缓存写入归入内部维护。这些来源副本不代表应用配置或命令有更新。仅涉及缓存的 App 工作归入内部维护，不再显示于 `App Configs`；旧来源消失的保留提示单独显示在“警告”中。实际 App 变更、代码执行、阻塞、冲突及无法安全归组的影响仍明确展示。使用 `upgrade --verbose` 可查看受影响的分类、各个缓存步骤和具体权限。完整 Plan 仍参与审批绑定。
 
 确认后，`upgrade --verbose` 的执行报告也省略未变化的 App 文件、已安装的受管 Sys 项目及 Shell 已安装分类总数，但仍详细显示实际更新、冲突、警告和失败。`upgrade --verbose --full-plan` 会包含未变化的执行记录。普通模式下全部未变化时报告 `Nothing to upgrade.`。
+定向升级与全量配置升级都会将用户修改过的受管 Sys 文件计入保留项。
+若配置项目失败，末尾汇总显示 `Upgrade incomplete` 和失败数量，命令仍以非零状态退出。
+非致命的 hook 警告维持现有行为。
 
 Shell 升级会在审阅前比较 Shine 管理的 profile 和已配置的 Shell 启动文件。只有确实需要协调的文件才列在 `Shell integration (internal)` 下；未变化的启动文件及其权限不会显示。`shell/profile` 是内部 Plan 标识，不是 Shell 预设类别。
 
@@ -86,6 +89,8 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
 ```
 
 - 使用 `--dry-run` 预览安装或卸载。
+- `shell info` 建议的安装和修复命令会为目标名称加上必要的引用，包括含空格或引号的名称；
+  Unix 使用 POSIX shell 语法，Windows 使用 PowerShell 语法。
 - `--replace-managed` 可能覆盖安装后被修改的受管内容，请先运行 `shine info <TARGET> --diff`。
 - 如果 Shine 报告操作曾被中断，请运行 `shine shell recover`。发生过变化的文件会保留，可能需要人工处理。
   结果按需要回滚或清理的 Shell 资源动作计数；已提交操作的清理会保留其安装内容。
@@ -240,6 +245,7 @@ shine preset pull
 发布预设前使用 `validate`、`lint`、`plan` 和 `test`。这些命令只检查创作输入，不会安装预设。
 `migrate --dry-run` 用于预览旧 metadata 迁移，实际应用前需要审阅并确认。Git 管理的 overlay 是
 可丢弃镜像，应在上游 checkout 中编辑，而不是修改镜像。
+如果 `preset schema` 无法写入输出，它会报告错误并以非零状态退出。
 迁移输出的 artifact 后续操作命令会引用分类名：Unix 使用 POSIX shell 语法，Windows 使用
 PowerShell 语法。迁移本身不会执行这些命令。
 新模板不会生成空表或推测性能力清单。`--unrestricted` 会添加可选的 unrestricted 作者说明，

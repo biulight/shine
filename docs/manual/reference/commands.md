@@ -98,6 +98,9 @@ After approval, `upgrade --verbose` also omits unchanged App files, already-inst
 items, and the total number of installed Shell categories. It still shows changed resources,
 conflicts, warnings, and failures in detail. `upgrade --verbose --full-plan` includes the
 unchanged execution rows. An ordinary fully unchanged run reports `Nothing to upgrade.`
+Both targeted and whole-configuration upgrades count user-modified managed Sys files as kept.
+If configuration items fail, the footer says `Upgrade incomplete` and includes their failure
+count; the command still exits nonzero. Non-fatal hook warnings retain their existing behavior.
 
 During Shell upgrade, the Plan compares the managed profile and configured shell startup files
 before review. It shows changed profile files under `Shell integration (internal)` and omits
@@ -120,6 +123,8 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
 ```
 
 - Preview installation or uninstall with `--dry-run`.
+- Installation and repair commands suggested by `shell info` quote literal target names for
+  POSIX shells on Unix and PowerShell on Windows, including names containing spaces or quotes.
 - `--replace-managed` may overwrite managed content changed after installation. Inspect the target
   with `shine info <TARGET> --diff` first.
 - If Shine reports an interrupted operation, run `shine shell recover`. Changed files are preserved
@@ -295,6 +300,7 @@ Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These c
 authoring input without installing it. `migrate --dry-run` previews legacy metadata changes;
 applying a migration requires review and confirmation. A Git-managed overlay is a disposable mirror,
 so edit its upstream checkout rather than the mirror.
+If `preset schema` cannot write its output, it reports an error and exits nonzero.
 Artifact follow-up commands printed by migration quote category names for POSIX shells on Unix
 and PowerShell on Windows. Migration itself does not run those commands.
 New templates omit empty and speculative capability tables. `--unrestricted` adds the optional

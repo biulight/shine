@@ -586,6 +586,29 @@ fn schema_and_invalid_validation_do_not_initialize_state() {
 }
 
 #[test]
+fn schema_output_errors_use_the_normal_failure_exit_without_initializing_state() {
+    for format in ["text", "json"] {
+        let fixture = Fixture::new();
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let output = fixture
+            .command()
+            .args(["preset", "schema", "--format", format])
+            .stdout(writer)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.starts_with("Error:"), "{stderr}");
+        assert!(
+            !stderr.contains("panicked") && !stderr.contains("RUST_BACKTRACE"),
+            "{stderr}"
+        );
+        assert!(!fixture.0.join("state").exists());
+    }
+}
+
+#[test]
 fn app_mutation_requires_consent_and_preserves_modified_files() {
     let fixture = Fixture::new();
     let state = fixture.0.join("state");
@@ -818,6 +841,12 @@ fn targeted_upgrade_distinguishes_nonfatal_hook_and_generator_failures() {
     assert!(trusted.status.success(), "{trusted:?}");
     let failed = run(&["upgrade", "app/demo", "--yes"]);
     assert_eq!(failed.status.code(), Some(1), "{failed:?}");
+    let text = String::from_utf8_lossy(&failed.stdout);
+    assert!(
+        text.contains("Upgrade incomplete") && text.contains("1 failed"),
+        "{text}"
+    );
+    assert!(!text.contains("nothing changed"), "{text}");
     assert!(
         String::from_utf8_lossy(&failed.stderr).contains("1 managed configuration item(s) failed"),
         "{failed:?}"

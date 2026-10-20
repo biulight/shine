@@ -130,24 +130,25 @@ fn target_sys_summary_keeps_resource_counts_and_authoritative_failure_total() {
 #[test]
 fn config_upgrade_summary_parts_includes_only_nonzero_counts() {
     assert_eq!(
-        config_upgrade_summary_parts(2, 0, 0),
+        config_upgrade_summary_parts(2, 0, 0, 0),
         vec!["2 updated".to_string()]
     );
 }
 
 #[test]
 fn config_upgrade_summary_parts_empty_when_all_zero() {
-    assert!(config_upgrade_summary_parts(0, 0, 0).is_empty());
+    assert!(config_upgrade_summary_parts(0, 0, 0, 0).is_empty());
 }
 
 #[test]
 fn config_upgrade_summary_parts_reports_actionable_counters() {
     assert_eq!(
-        config_upgrade_summary_parts(1, 2, 3),
+        config_upgrade_summary_parts(1, 2, 3, 4),
         vec![
             "1 updated".to_string(),
             "2 user-modified (kept)".to_string(),
             "3 link conflicts".to_string(),
+            "4 failed".to_string(),
         ]
     );
 }

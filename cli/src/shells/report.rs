@@ -339,6 +339,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
             || format!("shell/{}", category.name),
             |command| format!("shell/{}/{command}", category.name),
         );
+        let repair_target = crate::shell_quote::command_arg(&repair_target);
         println!(
             "{}",
             colors::dim(&format!(
@@ -350,6 +351,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
             || category.name.clone(),
             |command| format!("{}/{command}", category.name),
         );
+        let install_target = crate::shell_quote::command_positionals(&[&install_target]);
         println!(
             "{}",
             colors::dim(&format!(

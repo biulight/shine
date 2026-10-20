@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-20 — Test final summaries, suggested arguments and output failures
+
+- **Symptoms**: whole-config upgrade omitted kept Sys files and failed upgrades ended with `Done`;
+  Shell info hints split names containing spaces; schema output panicked on a closed pipe.
+- **Fix**: retain Sys lifecycle preservation totals and authoritative fatal report counts in CLI
+  summaries, reuse command argument encoders, and propagate schema writer errors normally.
+  Preserve approvals, execution, normal exits and non-fatal hook warnings.
+- **Coverage**: production CLI regressions cover unchanged, targeted, aggregate, verbose and mixed
+  App/Sys outcomes with retained bytes/receipts, App generator versus hook failures, shell-and-Clap
+  parsing of install/repair hints, and closed output pipes for both schema formats without state init.
+
 ## 2026-10-20 — Native-shell hint tests need stable cwd paths and launcher counts
 
 - **Symptom**: Windows hint regressions failed on a missing-path report and Shell uninstall preview.
