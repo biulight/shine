@@ -449,15 +449,16 @@ fn render_diff_or_note(
 fn colorize_unified_diff(diff: &str) -> String {
     let mut out = String::with_capacity(diff.len());
     for line in diff.split_inclusive('\n') {
+        let escaped = crate::output::escape_controls(line.trim_end_matches('\n'));
         let colored =
             if line.starts_with("@@") || line.starts_with("---") || line.starts_with("+++") {
-                colors::cyan(line.trim_end_matches('\n'))
+                colors::cyan(&escaped)
             } else if line.starts_with('+') && !line.starts_with("+++") {
-                colors::green(line.trim_end_matches('\n'))
+                colors::green(&escaped)
             } else if line.starts_with('-') && !line.starts_with("---") {
-                colors::red(line.trim_end_matches('\n'))
+                colors::red(&escaped)
             } else {
-                line.trim_end_matches('\n').to_string()
+                escaped
             };
         out.push_str(&colored);
         if line.ends_with('\n') {
@@ -507,6 +508,41 @@ mod tests {
         assert!(diff.contains("expected"));
         assert!(diff.contains("-old"));
         assert!(diff.contains("+new"));
+    }
+
+    #[test]
+    fn diff_escapes_controls_in_headers_and_all_line_kinds() {
+        let diff = render_diff_or_note(
+            "context\u{7}\nold\u{1b}[2J\t\n尾行\n".as_bytes(),
+            "context\u{7}\nnew\u{1b}[H\t\n尾行\n".as_bytes(),
+            "current\u{1b}[2J",
+            "expected\tfile",
+        );
+        for line in [
+            "--- current\\u{1b}[2J",
+            "+++ expected\\tfile",
+            "@@ -1,3 +1,3 @@",
+            " context\\u{7}",
+            "-old\\u{1b}[2J\\t",
+            "+new\\u{1b}[H\\t",
+            " 尾行",
+        ] {
+            assert!(diff.contains(line), "missing {line:?} in {diff:?}");
+        }
+        assert!(!diff.contains('\u{7}'));
+        assert!(!diff.contains('\t'));
+        assert!(!diff.contains("\u{1b}[2J"));
+        assert!(!diff.contains("\u{1b}[H"));
+    }
+
+    #[test]
+    fn diff_escapes_carriage_returns_without_changing_line_separators() {
+        let diff = colorize_unified_diff("-old\r\n+new\rcontent\n unchanged\r");
+        assert!(diff.contains("-old\\r"), "{diff:?}");
+        assert!(diff.contains("+new\\rcontent"), "{diff:?}");
+        assert!(diff.ends_with(" unchanged\\r"), "{diff:?}");
+        assert_eq!(diff.matches('\n').count(), 2);
+        assert!(!diff.contains('\r'));
     }
 
     #[test]

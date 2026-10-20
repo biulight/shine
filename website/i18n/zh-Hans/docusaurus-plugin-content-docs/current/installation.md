@@ -84,6 +84,9 @@ shine self upgrade --channel stable
 shine self upgrade --channel preview
 ```
 
+显式传入 `--channel stable` 也允许重装相同版本或安装较旧的稳定版。
+成功消息会报告安装后和此前的版本，不会一律称为版本升级。
+
 `shine self upgrade` 失败时返回退出码 1，并在 stderr 中保留失败上下文和底层原因，
 便于区分连接、归档文件和安装错误。
 

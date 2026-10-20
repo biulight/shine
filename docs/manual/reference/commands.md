@@ -220,6 +220,9 @@ If the Shine release check cannot finish, `update` prints a warning and still re
 updates. When no configuration updates are found, it explicitly says the version check is incomplete
 instead of claiming there is nothing to update. A release-check failure alone remains non-fatal.
 
+Content diffs shown by `info`, `app info`, and `update` escape control characters within lines
+(for example, a tab appears as `\t`). File contents remain unchanged.
+
 `info <TARGET>` and `update <TARGET>` limit deferred-generator notices to the selected App category
 or file. Shell queries do not suggest generator evaluation. Explicit `--run-generators` evaluation
 still covers the selected App category, even for a single-file target. Trust or evaluation failures

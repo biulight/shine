@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-20 — Diff text and release success messages describe presentation only
+
+- **Symptoms**: inline diffs emitted source-controlled terminal escapes and carriage returns even
+  with `NO_COLOR`; explicit stable-channel reinstalls and downgrades were described as upgrades.
+- **Fix**: reuse `escape_controls` on each rendered diff line before coloring, preserving line
+  separators and the original comparison inputs. Use neutral stable installation wording without
+  version inference. Channel selection, force-install behavior, approval, execution and exits stay
+  unchanged.
+- **Coverage**: renderer regressions cover headers, added/removed/context lines, Unicode and CR;
+  an isolated CLI App info check verifies escaped output, successful exit, unchanged source/destination
+  bytes and absent trust/installation records. Message tests cover increasing, equal, decreasing
+  and preview-to-stable versions while retaining both preview message cases.
+
 ## 2026-10-20 — Preset source messages must follow effective scope
 
 - **Symptoms**: overlay info preferred inherited Git settings over an active project directory;

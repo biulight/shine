@@ -3,8 +3,27 @@ use super::*;
 fn format_self_upgrade_message_handles_stable_channel() {
     assert_eq!(
         format_self_upgrade_message(ReleaseChannel::Stable, "0.21.3", "0.21.4", "v0.21.4",),
-        "Upgraded shine from 0.21.3 to 0.21.4."
+        "Installed shine 0.21.4 over 0.21.3."
     );
+}
+
+#[test]
+fn format_self_upgrade_message_handles_stable_reinstall_and_downgrade() {
+    for (previous, installed) in [
+        ("2.5.0", "2.5.0"),
+        ("2.5.0", "2.4.0"),
+        ("2.6.0-preview+abc123", "2.5.0"),
+    ] {
+        assert_eq!(
+            format_self_upgrade_message(
+                ReleaseChannel::Stable,
+                previous,
+                installed,
+                &format!("v{installed}"),
+            ),
+            format!("Installed shine {installed} over {previous}."),
+        );
+    }
 }
 
 #[test]

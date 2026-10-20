@@ -126,6 +126,42 @@ fn assert_hint_argv(command: &str, expected: &[&str]) {
 }
 
 #[test]
+fn app_info_diff_escapes_terminal_controls_without_mutating_content_or_state() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    let source = fixture.0.join("state/presets/app/demo/config.txt");
+    let destination = fixture.0.join("destination/config.txt");
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    let current = b"context\x07\nold\x1b[2J\t\nend\n";
+    let expected = b"context\x07\nnew\x1b[H\rREPLACED\t\nend\n";
+    fs::write(&source, expected).unwrap();
+    fs::write(&destination, current).unwrap();
+    let config = fs::read(fixture.0.join("state/config.toml")).unwrap();
+
+    let output = fixture.run(&["app", "info", "demo", "--diff"]);
+    success(&output);
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let text = stdout(&output);
+    // Uninstalled App info previews the expected content against an empty file.
+    for escaped in ["+context\\u{7}", "+new\\u{1b}[H", "\\r", "REPLACED\\t"] {
+        assert!(text.contains(escaped), "missing {escaped:?} in {text:?}");
+    }
+    assert!(
+        text.chars().all(|ch| !ch.is_control() || ch == '\n'),
+        "raw control character in {text:?}"
+    );
+    assert_eq!(fs::read(&source).unwrap(), expected);
+    assert_eq!(fs::read(&destination).unwrap(), current);
+    assert_eq!(
+        fs::read(fixture.0.join("state/config.toml")).unwrap(),
+        config
+    );
+    for state in ["app-manifest.toml", "trust.toml"] {
+        assert!(!fixture.0.join("state").join(state).exists());
+    }
+}
+
+#[test]
 fn shell_info_hints_preserve_category_arguments_before_and_after_install() {
     for category in ["team tools", "it's", "-demo"] {
         let fixture = Fixture::new();

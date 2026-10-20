@@ -87,6 +87,10 @@ shine self upgrade --channel stable
 shine self upgrade --channel preview
 ```
 
+Explicit `--channel stable` also permits reinstalling the same version or installing an older
+stable release. Its success message reports the installed and previous versions without claiming
+the version increased.
+
 If `shine self upgrade` fails, it returns exit code 1 and reports the failure context and underlying
 cause on stderr. Use that diagnostic to distinguish connection, archive, and installation errors.
 

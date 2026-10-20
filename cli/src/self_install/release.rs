@@ -61,7 +61,7 @@ fn format_self_upgrade_message(
 ) -> String {
     match channel {
         ReleaseChannel::Stable => {
-            format!("Upgraded shine from {previous_display} to {installed_version}.")
+            format!("Installed shine {installed_version} over {previous_display}.")
         }
         ReleaseChannel::Preview => {
             if previous_display.contains("-preview") {
