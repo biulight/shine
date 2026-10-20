@@ -87,6 +87,106 @@ fn plan(direction: Direction, remote: &str, locals: &[&str], force: bool) -> Tra
     }
 }
 
+#[cfg(unix)]
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Shared process environment, per test_support.
+async fn transfer_tilde_hints_do_not_resolve_a_lossy_home_alias() {
+    use std::os::unix::ffi::OsStringExt;
+    let _guard = crate::test_support::env_lock();
+    let root = std::env::temp_dir().join(format!("shine-transfer-home-{}", uuid::Uuid::new_v4()));
+    let native = root.join(std::ffi::OsString::from_vec(b"home-\xff".to_vec()));
+    let alias = root.join("home-\u{fffd}");
+    std::fs::create_dir_all(&alias).unwrap();
+    std::fs::write(alias.join("private.txt"), b"different directory").unwrap();
+    // SAFETY: the shared environment guard restores HOME and sudo context after this test.
+    unsafe {
+        std::env::set_var("HOME", &native);
+        std::env::remove_var("SUDO_USER");
+    }
+    let ctx = ctx_with("dev", vec![], None);
+    assert_eq!(home::effective_home_dir(), native);
+    let result = resolve_local_sources(&ctx, Some("~/private.txt"));
+    assert!(
+        result.is_err(),
+        "resolved a different directory: {result:?}"
+    );
+    let result = resolve_local_sources(&ctx, Some("~/*.txt"));
+    assert!(result.is_err(), "globbed a different directory: {result:?}");
+    assert_eq!(
+        resolve_local_sources(&ctx, Some("literal-$HOME-${TOKEN}.txt")).unwrap(),
+        vec![ctx.local_dir.join("literal-$HOME-${TOKEN}.txt")]
+    );
+    assert_eq!(
+        expand_hint(&ctx.local_dir, "/absolute").unwrap(),
+        Path::new("/absolute")
+    );
+    assert_eq!(
+        expand_hint(&ctx.local_dir, "~other/file").unwrap(),
+        ctx.local_dir.join("~other/file")
+    );
+    assert!(resolve_local_dest(&ctx, Some("~/private.txt")).is_err());
+    for direction in [Direction::Upload, Direction::Download] {
+        for use_scp in [false, true] {
+            for dry_run in [false, true] {
+                for force in [false, true] {
+                    let (mut server, mut client) = tokio::io::duplex(1024);
+                    handle_transfer(
+                        &mut server,
+                        &ctx,
+                        TransferRequest {
+                            direction,
+                            remote_spec: "/remote/file".into(),
+                            local_spec: Some("~/private.txt".into()),
+                            force,
+                            dry_run,
+                            use_scp,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                    assert!(matches!(
+                        protocol::read_message::<_, ServerMessage>(&mut client).await.unwrap(),
+                        ServerMessage::Error { message } if message.contains("not valid UTF-8")
+                    ));
+                }
+            }
+        }
+    }
+    assert_eq!(
+        std::fs::read(alias.join("private.txt")).unwrap(),
+        b"different directory"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn transfer_argv_rejects_unrepresentable_local_paths() {
+    #[cfg(unix)]
+    let native = {
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(std::ffi::OsString::from_vec(b"local-\xff".to_vec()))
+    };
+    #[cfg(windows)]
+    let native = {
+        use std::os::windows::ffi::OsStringExt;
+        PathBuf::from(std::ffi::OsString::from_wide(&[0xd800]))
+    };
+    let ctx = ctx_with("dev", vec![], None);
+    for tool in [Tool::Rsync, Tool::Scp] {
+        for direction in [Direction::Upload, Direction::Download] {
+            let mut request = plan(direction, "/remote/file", &["normal.txt"], false);
+            request.local_paths.push(native.clone());
+            assert!(build_transfer_argv(tool, &ctx, &request).is_err());
+        }
+    }
+    let mut ctx = ctx;
+    ctx.local_dir = native;
+    assert!(resolve_local_dest(&ctx, None).is_err());
+    assert!(resolve_local_sources(&ctx, Some("relative.txt")).is_err());
+    assert!(resolve_local_sources(&ctx, Some("*.txt")).is_err());
+}
+
 #[test]
 fn scp_ipv6_operands_keep_the_complete_address_and_remote_path() {
     for (host, expected) in [
@@ -573,9 +673,28 @@ fn choose_tool_prefers_rsync_but_falls_back() {
 
 #[test]
 fn expand_hint_is_tilde_only_and_anchors_relative() {
+    let _guard = crate::test_support::env_lock();
+    let home = std::env::current_dir().unwrap().join("transfer-home");
+    // SAFETY: the shared guard restores process state after the expansion assertions.
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("SUDO_USER");
+    }
     let base = Path::new("/home/u/proj");
-    assert_eq!(expand_hint(base, "sub/file"), base.join("sub/file"));
-    assert_eq!(expand_hint(base, "/abs"), PathBuf::from("/abs"));
+    assert_eq!(
+        expand_hint(base, "sub/file").unwrap(),
+        base.join("sub/file")
+    );
+    assert_eq!(expand_hint(base, "/abs").unwrap(), PathBuf::from("/abs"));
+    assert_eq!(
+        expand_hint(base, "$HOME/${TOKEN}").unwrap(),
+        base.join("$HOME/${TOKEN}")
+    );
+    assert_eq!(expand_hint(base, "~").unwrap(), home);
+    assert_eq!(
+        expand_hint(base, "~/sub/file").unwrap(),
+        home.join("sub/file")
+    );
 }
 
 #[test]

@@ -533,6 +533,8 @@ The shim retains the absolute runtime directory selected during installation, in
 `--config-dir`. Later calls use that directory even when the caller's `SHINE_CONFIG_DIR` differs.
 Project rules still follow the caller's working directory. Re-run `env proxy install` to update an
 older shim or move it to another runtime directory.
+Proxy installation requires UTF-8 runtime and target paths; an unrepresentable path is rejected
+before launcher, configuration or receipt files are written.
 
 An installed proxy is command-wide, not subcommand-specific. If you deliberately proxy Cargo,
 disable injection until it is needed:
@@ -776,6 +778,8 @@ precedence.
 For single-backend policy and sources, usable recipients let `env run` store an encrypted,
 mode-specific cache with the selected backend in the system cache directory. It rebuilds automatically when workspace content, source content, or file
 order changes.
+A non-UTF-8 project directory keeps a separate cache from a different directory with its
+replacement-character spelling.
 If the decrypted cache is malformed, Shine warns without showing cached values and rebuilds
 from the workspace sources.
 

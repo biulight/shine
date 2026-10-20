@@ -106,7 +106,10 @@ const PRESETS_NOTE_LABEL_WIDTH: usize = 18; // "◈ Shell Deployment".chars().co
 
 fn presets_note_value(plain_label: &str, styled_label: &str, value: &str) -> String {
     let pad = " ".repeat(PRESETS_NOTE_LABEL_WIDTH.saturating_sub(plain_label.chars().count()) + 2);
-    format!("{styled_label}{pad}{value}")
+    format!(
+        "{styled_label}{pad}{}",
+        crate::output::escape_controls(value)
+    )
 }
 
 fn presets_note(plain_label: &str, styled_label: &str, dir: &std::path::Path) -> String {
@@ -179,5 +182,31 @@ mod tests {
         assert_eq!(source.find("built-in"), external.find("external"));
         assert_eq!(source.find("built-in"), overlay.find("/overlay"));
         assert_eq!(source.find("built-in"), deployment.find("snapshot"));
+    }
+
+    #[test]
+    fn presets_notes_escape_values_but_preserve_label_style_and_literal_backslashes() {
+        let styled = "\u{1b}[36mLabel\u{1b}[0m";
+        let note = presets_note_value("Label", styled, "dir\nFORGED=source\r\t\u{1b}\\literal");
+        assert_eq!(
+            note,
+            format!(
+                "{styled}{}dir\\nFORGED=source\\r\\t\\u{{1b}}\\literal",
+                " ".repeat(15)
+            )
+        );
+        for note in [
+            presets_source_note("external · /dir\nFORGED=source\u{1b}"),
+            external_presets_note(Path::new("/dir\nFORGED=source\u{1b}")),
+            presets_overlay_note(Path::new("/dir\nFORGED=source\u{1b}")),
+        ] {
+            assert!(note.contains("/dir\\nFORGED=source\\u{1b}"), "{note:?}");
+            assert_eq!(note.lines().count(), 1, "{note:?}");
+        }
+        assert!(presets_source_note("built-in").ends_with("built-in"));
+        assert!(
+            shell_deployment_note("snapshot · changes require `shine upgrade`")
+                .ends_with("snapshot · changes require `shine upgrade`")
+        );
     }
 }

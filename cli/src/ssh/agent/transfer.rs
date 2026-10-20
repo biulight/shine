@@ -32,11 +32,14 @@ pub(super) async fn handle_transfer(
 ) -> Result<()> {
     // Resolve the local side of the transfer against the session directory.
     let local_paths = match req.direction {
-        Direction::Download => vec![resolve_local_dest(ctx, req.local_spec.as_deref())],
-        Direction::Upload => match resolve_local_sources(ctx, req.local_spec.as_deref()) {
-            Ok(paths) => paths,
-            Err(error) => return send_error(stream, error.to_string()).await,
-        },
+        Direction::Download => {
+            resolve_local_dest(ctx, req.local_spec.as_deref()).map(|path| vec![path])
+        }
+        Direction::Upload => resolve_local_sources(ctx, req.local_spec.as_deref()),
+    };
+    let local_paths = match local_paths {
+        Ok(paths) => paths,
+        Err(error) => return send_error(stream, error.to_string()).await,
     };
 
     // Pick the tool: honor --scp, else prefer rsync but fall back to scp when
@@ -128,9 +131,14 @@ pub(super) async fn handle_transfer(
 /// Resolves a download destination: an omitted hint defaults to the session's
 /// local directory; otherwise the wire hint is expanded (tilde-only) and
 /// anchored to it.
-fn resolve_local_dest(ctx: &SessionContext, hint: Option<&str>) -> PathBuf {
+fn resolve_local_dest(ctx: &SessionContext, hint: Option<&str>) -> Result<PathBuf> {
     match hint {
-        None => ctx.local_dir.clone(),
+        None => {
+            ctx.local_dir
+                .to_str()
+                .context("local transfer path is not valid UTF-8")?;
+            Ok(ctx.local_dir.clone())
+        }
         Some(raw) => expand_hint(&ctx.local_dir, raw),
     }
 }
@@ -140,13 +148,15 @@ fn resolve_local_dest(ctx: &SessionContext, hint: Option<&str>) -> PathBuf {
 /// nothing is an error rather than a silent no-op.
 fn resolve_local_sources(ctx: &SessionContext, hint: Option<&str>) -> Result<Vec<PathBuf>> {
     let raw = hint.context("upload requires a source path")?;
-    let expanded = expand_hint(&ctx.local_dir, raw);
+    let expanded = expand_hint(&ctx.local_dir, raw)?;
     if !has_glob_metacharacters(raw) {
         return Ok(vec![expanded]);
     }
-    let pattern = expanded.to_string_lossy();
+    let pattern = expanded
+        .to_str()
+        .context("local transfer path is not valid UTF-8")?;
     let mut matches = Vec::new();
-    for entry in glob::glob(&pattern).with_context(|| format!("invalid glob pattern {raw:?}"))? {
+    for entry in glob::glob(pattern).with_context(|| format!("invalid glob pattern {raw:?}"))? {
         matches.push(entry.context("error while matching glob")?);
     }
     if matches.is_empty() {
@@ -161,19 +171,31 @@ fn has_glob_metacharacters(s: &str) -> bool {
 
 /// Expands a wire-supplied hint against `base_dir`.
 ///
-/// Deliberately uses `tilde_expand` (leading `~` only) rather than
+/// Deliberately expands only a leading `~` rather than using
 /// `home::full_expand`: these hints come from the remote peer over the transfer
 /// protocol, and full shell-style `${VAR}` substitution would let a forged
 /// request pull arbitrary values out of the *local* agent process's own
 /// environment into a filesystem path.
-fn expand_hint(base_dir: &Path, raw: &str) -> PathBuf {
-    let expanded = home::tilde_expand(raw);
-    let path = PathBuf::from(expanded);
-    if path.is_absolute() {
+fn expand_hint(base_dir: &Path, raw: &str) -> Result<PathBuf> {
+    let home = home::effective_home_dir();
+    let mut unrepresentable_home = false;
+    let expanded = shellexpand::tilde_with_context(raw, || {
+        let value = home.to_str();
+        unrepresentable_home = value.is_none();
+        value
+    });
+    if unrepresentable_home {
+        bail!("local transfer home directory is not valid UTF-8");
+    }
+    let path = PathBuf::from(expanded.as_ref());
+    let path = if path.is_absolute() {
         path
     } else {
         base_dir.join(path)
-    }
+    };
+    path.to_str()
+        .context("local transfer path is not valid UTF-8")?;
+    Ok(path)
 }
 
 /// Probes whether rsync is runnable locally (deterministic ENOENT check).

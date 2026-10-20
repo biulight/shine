@@ -391,20 +391,22 @@ async fn clone_managed_overlay(
         .with_context(|| format!("failed to create {}", parent.display()))?;
 
     let temp = temp_clone_path(dir)?;
+    let temp_arg = temp
+        .to_str()
+        .context("managed overlay clone path is not valid UTF-8")?;
     if temp.exists() {
         tokio::fs::remove_dir_all(&temp)
             .await
             .with_context(|| format!("failed to remove stale clone dir {}", temp.display()))?;
     }
 
-    let temp_arg = temp.to_string_lossy().into_owned();
     let mut args: Vec<&str> = vec!["clone", "--depth", "1"];
     if let Some(branch) = branch {
         args.push("--branch");
         args.push(branch);
     }
     args.push(url);
-    args.push(&temp_arg);
+    args.push(temp_arg);
 
     if let Err(err) = run_git(parent, &args, verbose, "clone").await {
         let _ = tokio::fs::remove_dir_all(&temp).await;
@@ -847,6 +849,44 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_overlay_clone_rejects_unrepresentable_path_without_alias_writes() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = temp_dir("clone-native-path");
+        std::fs::create_dir_all(&root).unwrap();
+        let parent = root.join(OsString::from_vec(b"state-\xff".to_vec()));
+        if let Err(error) = std::fs::create_dir(&parent) {
+            eprintln!("filesystem cannot create non-UTF-8 fixture: {error}");
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let alias = root.join("state-\u{fffd}");
+        std::fs::create_dir(&alias).unwrap();
+        std::fs::write(alias.join("preserve.txt"), "untouched").unwrap();
+        let remote = root.join("remote");
+        init_repo(&remote);
+        let destination = parent.join("overlay");
+
+        let error = sync_managed_overlay(remote.to_str().unwrap(), None, &destination, false)
+            .await
+            .unwrap_err();
+
+        let children: Vec<_> = std::fs::read_dir(&alias)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(children, vec![OsString::from("preserve.txt")], "{error:#}");
+        assert!(error.to_string().contains("not valid UTF-8"), "{error:#}");
+        assert!(!destination.exists());
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 0);
+        assert_eq!(read_text(alias.join("preserve.txt")), "untouched");
+        assert_eq!(read_text(remote.join("preset.txt")), "one\n");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

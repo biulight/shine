@@ -84,9 +84,15 @@ bugs. Check this list before changing the modules named in each entry.
   Receipt-owned App resources absent from active metadata remain visible even when their entire
   category is gone; they prevent the empty-installation message and retain uninstall-preview
   guidance without becoming upgrade candidates or changing files, receipts or exit status.
-  App catalog list/info encode control-bearing names, descriptions and paths before styling or
+  App/Shell catalog list/info encode control-bearing names, descriptions and paths before styling or
   column measurement. Control-bearing categories get an original-target install notice, never an
   escaped alias as a copyable operand; Core metadata, selection and inspection remain unchanged.
+  Shell description lines keep parsed paragraph/blank-line structure while encoding controls
+  within each line; target lookup, ambiguity and missing-target exits retain their original policy.
+  Installed App/Shell `info` encodes metadata labels/descriptions and path headings after inspection;
+  verbose content keeps the existing lossy UTF-8 decoding and missing-final-newline behavior.
+  Shared source/overlay note values encode controls after source selection; internal label styling,
+  column padding, literal backslashes and the saved physical paths stay independent of encoding.
 - **Sys display encoding stays at the CLI boundary.** Suggested item operands use the shared
   positional encoder, including `--` for leading hyphens. Detection command displays distinguish
   program position from literal arguments and use POSIX/PowerShell encoding. Escape control
@@ -929,6 +935,8 @@ bugs. Check this list before changing the modules named in each entry.
   case, because proxy launchers invoke Shine through PATH and would otherwise recurse.
 - **Proxy launchers bind their installation's runtime directory.** All platform launchers pass
   an absolute `--config-dir`; a caller's environment cannot silently select another trust/env store.
+  Text launchers require UTF-8 runtime and target paths; reject unrepresentable paths during
+  preflight, never render a replacement-character alias into a runnable launcher.
   Project discovery still follows the caller cwd. Reinstallation upgrades legacy launchers.
 - **Sudo home lookup uses the OS account database.** Use reentrant account lookup, including
   macOS Directory Services and Unix NSS, rather than parsing `/etc/passwd`. Copy account strings
@@ -949,6 +957,9 @@ bugs. Check this list before changing the modules named in each entry.
   redirect Git operations. Git path output loses only its record terminator, never whitespace
   belonging to directory names. After a successful fetch/reset, clean untracked and ignored files and
   nested repositories only inside that verified disposable mirror, including when HEAD is unchanged.
+  Initial clone rejects non-UTF-8 staging paths before Git invocation or stale-temp cleanup; it must
+  never convert a native path lossily into a different writable sibling. Keep the existing UTF-8
+  Git path-output boundary, native temp-path construction and valid-path cleanup/mirror policy.
 - **Managed Git overlay configuration is global-only.** Project config does not load Git overlay
   keys, and all projects share `<shine_dir>/overlay`. Reject `overlay link --git` with an active
   project before saving or synchronizing; route through read-only config loading before runtime
@@ -1237,6 +1248,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **Hybrid local caches follow the locally selected backend.** Validate captured source
   structure before cache decryption, and bind source/policy snapshots, backend and workspace
   recipients inside the encrypted cache. Never reuse legacy caches or global recipient fallbacks.
+- **Workspace project cache keys preserve native directory identity.** Hash the canonical native
+  path encoding, including the fallback when canonicalization fails. UTF-8 project keys retain
+  their existing bytes; lossy display aliases must never select another project's cache directory.
   Cache decryption failure/cancellation is terminal. Personal workspace preferences are trusted
   local input; broker requests cannot supply them (ADR 0085).
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
@@ -1287,6 +1301,9 @@ bugs. Check this list before changing the modules named in each entry.
   at consumption, place them only after argv's option separator, and use tilde-only expansion for
   local hints rather than expanding the agent's environment. Reconnection options come only from
   the locally captured session context; tokens never authorize broker decryption.
+  Reject unrepresentable local path/home expansions before tool selection, preview or execution;
+  String argv and glob patterns must never substitute lossy filesystem aliases. An unused native
+  home does not block absolute or literal-relative hints, and `$VAR` stays literal.
 - **Transfer failure and cancellation stop child processes.** Detect a closed control connection
   even while a child is silent or has closed its output pipes. Error paths terminate and reap the
   child; cancellation has a drop guard. On Unix, isolate and terminate the whole process group,

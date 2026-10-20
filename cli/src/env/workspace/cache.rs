@@ -10,7 +10,7 @@ pub(super) fn cache_path(workspace_path: &Path, mode: &str) -> Result<PathBuf> {
         .parent()
         .context("workspace path has no parent directory")?;
     let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let project_id = shine_core::digest::sha256_hex(canonical.to_string_lossy().as_bytes());
+    let project_id = shine_core::digest::sha256_hex(canonical.as_os_str().as_encoded_bytes());
     let base = BaseDirs::new().context("resolving system cache directory")?;
     Ok(base
         .cache_dir()
@@ -87,4 +87,73 @@ pub(super) async fn write_cache(
             .with_context(|| format!("creating {}", parent.display()))?;
     }
     atomic_write(path, contents.as_bytes()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn cache_project_keys_distinguish_unrepresentable_native_paths() {
+        #[cfg(unix)]
+        let raw = {
+            use std::os::unix::ffi::OsStringExt;
+            std::ffi::OsString::from_vec(b"project-\xff".to_vec())
+        };
+        #[cfg(windows)]
+        let raw = {
+            use std::os::windows::ffi::OsStringExt;
+            std::ffi::OsString::from_wide(&[0xd800])
+        };
+        let root = std::env::temp_dir().join(format!("shine-cache-{}", uuid::Uuid::new_v4()));
+        let native = root.join(&raw).join("shine.workspace.toml");
+        let alias = root
+            .join(raw.to_string_lossy().as_ref())
+            .join("shine.workspace.toml");
+        assert_ne!(native, alias);
+        for mode in ["development", "production"] {
+            assert_ne!(
+                cache_path(&native, mode).unwrap(),
+                cache_path(&alias, mode).unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cache_project_keys_keep_utf8_and_canonical_directory_identity() {
+        let root = crate::test_support::make_temp_dir("shine-cache-path").await;
+        let nested = root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let canonical = std::fs::canonicalize(&root).unwrap();
+        let expected_id = shine_core::digest::sha256_hex(canonical.to_str().unwrap().as_bytes());
+        let direct = cache_path(&root.join("shine.workspace.toml"), "development").unwrap();
+        assert_eq!(direct.file_name().unwrap(), "env-development.toml");
+        assert_eq!(
+            direct.parent().unwrap().file_name().unwrap(),
+            expected_id.as_str()
+        );
+        assert_eq!(
+            direct,
+            cache_path(
+                &nested.join("..").join("shine.workspace.toml"),
+                "development"
+            )
+            .unwrap()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let native = root.join(std::ffi::OsString::from_vec(b"project-\xff".to_vec()));
+            if std::fs::create_dir(&native).is_ok() {
+                let alias = root.join("project-\u{fffd}");
+                std::fs::create_dir(&alias).unwrap();
+                assert_ne!(
+                    cache_path(&native.join("shine.workspace.toml"), "development").unwrap(),
+                    cache_path(&alias.join("shine.workspace.toml"), "development").unwrap()
+                );
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -393,12 +393,15 @@ fn prepare_shims(
     shine_dir: &Path,
     windows: bool,
 ) -> Result<Vec<InstallFile>> {
-    let config_string = absolute_path(shine_dir.to_path_buf())?
-        .to_string_lossy()
-        .into_owned();
-    let config_q = shell_quote::single_quote(&config_string);
-    let target_string = target.to_string_lossy().into_owned();
-    let target_q = shell_quote::single_quote(&target_string);
+    let config_path = absolute_path(shine_dir.to_path_buf())?;
+    let config_string = config_path
+        .to_str()
+        .context("proxy configuration path is not valid UTF-8")?;
+    let config_q = shell_quote::single_quote(config_string);
+    let target_string = target
+        .to_str()
+        .context("proxy target path is not valid UTF-8")?;
+    let target_q = shell_quote::single_quote(target_string);
     let command_q = shell_quote::single_quote(command);
     let mut files = vec![InstallFile {
         path: bin_dir.join(command),
@@ -673,6 +676,85 @@ async fn save_manifest(shine_dir: &Path, manifest: &ProxyManifest) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn proxy_launcher_rendering_rejects_unrepresentable_paths() {
+        #[cfg(unix)]
+        let raw = {
+            use std::os::unix::ffi::OsStringExt;
+            PathBuf::from(OsString::from_vec(b"state-\xff".to_vec()))
+        };
+        #[cfg(windows)]
+        let raw = {
+            use std::os::windows::ffi::OsStringExt;
+            PathBuf::from(OsString::from_wide(&[b's' as u16, 0xd800]))
+        };
+        for windows in [false, true] {
+            for (state, target, field) in [
+                (raw.as_path(), Path::new("real-tool"), "configuration"),
+                (Path::new("state"), raw.as_path(), "target"),
+            ] {
+                let result = prepare_shims(Path::new("bin"), "demo", target, state, windows);
+                let error = match result {
+                    Ok(files) => panic!(
+                        "lossy launcher: {:?}",
+                        String::from_utf8_lossy(&files[0].bytes)
+                    ),
+                    Err(error) => error,
+                };
+                assert!(error.to_string().contains(field), "{error:#}");
+                assert!(error.to_string().contains("not valid UTF-8"), "{error:#}");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn proxy_install_rejects_native_runtime_alias_before_writing_installation_files() {
+        use std::os::unix::ffi::OsStringExt;
+        let root = crate::test_support::make_temp_dir("shine-proxy-native-path").await;
+        let state = root.join(OsString::from_vec(b"state-\xff".to_vec()));
+        if let Err(error) = std::fs::create_dir(&state) {
+            eprintln!("filesystem cannot create non-UTF-8 fixture: {error}");
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let alias = root.join("state-\u{fffd}");
+        std::fs::create_dir(&alias).unwrap();
+        std::fs::write(alias.join("preserve.txt"), "untouched").unwrap();
+        let config = Config::new_for_test(&state);
+        let original = "# retain configuration\n[env]\nTOKEN = 'original'\n";
+        std::fs::write(config.config_path(), original).unwrap();
+
+        let result = install_proxy_files(
+            &config,
+            "demo",
+            &["TOKEN".into()],
+            Path::new("/real/demo"),
+            config.config_path(),
+            false,
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "unsupported runtime path published a launcher: {:?}",
+            std::fs::read_to_string(config.bin_dir().join("demo"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(config.config_path()).unwrap(),
+            original
+        );
+        assert!(!config.bin_dir().join("demo").exists());
+        assert!(!manifest_path(&state).exists());
+        assert_eq!(std::fs::read_dir(&alias).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read(alias.join("preserve.txt")).unwrap(),
+            b"untouched"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn proxy_install_commits_requested_mapping_and_preserves_unrelated_config() {

@@ -96,6 +96,8 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
   `--replace-managed` 的替换效果、信任、权限或 profile 变更，`--verbose` 也不会扩展该预览。
   去掉 `--dry-run` 后，可在批准前审查计划。
 - `shell list` 展示当前可用预设，包括 overlay 新增的命令和覆盖后的描述。
+- `shell list` 和 `shell info` 会转义名称、来源路径及描述行中的控制字符，保留注释段落间的
+  空行。目标含控制字符时，安装或修复提示会要求使用原始目标参数，不提供可复制命令。
 - `shell info` 建议的安装和修复命令会为目标名称加上必要的引用，包括含空格或引号的名称；
   Unix 使用 POSIX shell 语法，Windows 使用 PowerShell 语法。
 - `--replace-managed` 可能覆盖安装后被修改的受管内容，请先运行 `shine info <TARGET> --diff`。
@@ -185,6 +187,8 @@ shine completions <bash|zsh|powershell>
 没有发现配置更新时，会明确说明版本检查未完成，不会笼统地报告没有更新。
 仅版本检查失败仍不会导致非零退出码。
 
+`info` 显示已安装 App/Shell 的详情时，会转义标签、描述及路径标题中的控制字符。
+`info --verbose` 所展示的文件内容中的控制字符保持原样。
 `info`、`app info` 和 `update` 显示内容差异时，会转义行内的控制字符
 （例如将制表符显示为 `\t`），文件内容保持不变。
 
@@ -271,6 +275,8 @@ shine preset pull
 存在项目配置时，仅设置 `SHINE_CONFIG_DIR` 不会覆盖 `preset link` 选定的目录；
 `SHINE_PRESETS` 仍具有更高优先级。`preset unlink` 移除保存的设置，但环境覆盖和继承设置
 仍然适用，因此下次运行可能继续使用外部预设目录。
+公共 `Preset Source` 与 `Presets Overlay` 提示会转义所显示路径中的控制字符。
+保存的路径及来源优先级保持原有含义。
 
 发布预设前使用 `validate`、`lint`、`plan` 和 `test`。这些命令只检查创作输入，不会安装预设。
 `migrate --dry-run` 用于预览旧 metadata 迁移，实际应用前需要审阅并确认。Git 管理的 overlay 是

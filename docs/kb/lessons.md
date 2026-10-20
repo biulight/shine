@@ -129,6 +129,79 @@
   refusal, unchanged source bytes and absent state initialization. Existing non-UTF-8 collision and
   shell-round-trip tests retain independent coverage.
 
+## 2026-10-21 — Wire transfer hints must not expand home into a lossy sibling
+
+- **Symptom**: a non-UTF-8 HOME made `~/private.txt` resolve to an existing replacement-character
+  sibling on macOS and Linux; argv construction also accepted lossy native local operands.
+- **Fix**: use checked tilde-only expansion with the existing effective-home resolver and reject
+  unsupported local text operands before globbing, preview or tool selection. Preserve literal
+  environment references, normal argv, tool fallback, overwrite policy and child exit handling.
+- **Coverage**: real alias sentinel, literal variables/other-user tilde and unused malformed home;
+  upload/download error messages with all force/dry-run/tool choices; malformed Unix/Windows argv
+  and default/relative/glob local paths. Existing native tool and child-lifecycle tests remain.
+
+## 2026-10-21 — Per-project caches must hash native path identity
+
+- **Symptom**: two distinct Linux project directories, one with a non-UTF-8 name and one with its
+  replacement-character spelling, selected the same compiled environment cache directory.
+- **Fix**: give the existing SHA-256 helper the canonical native path encoding instead of lossy
+  display bytes. Preserve UTF-8 keys, canonicalization fallback, payload formats and encryption.
+- **Coverage**: malformed Unix/Windows path keys remain distinct; ordinary UTF-8 keys and canonical
+  aliases remain compatible. Linux additionally exercises both existing native directories.
+
+## 2026-10-21 — Proxy launchers must preserve the configured runtime identity
+
+- **Symptom**: Linux proxy installation under a non-UTF-8 runtime root succeeded, but its launcher
+  pinned `--config-dir` to a different replacement-character path.
+- **Fix**: validate runtime/target UTF-8 paths in the existing launcher preflight, before rendering.
+  Preserve platform quoting, lifecycle/config locks, rollback and child execution/exit policy.
+- **Coverage**: malformed Unix bytes and Windows UTF-16 are rejected by the renderer; a native Linux
+  installation regression preserves configuration, absent launcher/receipt and the alias sentinel.
+  Existing installed-launcher tests retain status, signal, binary streams and runtime-state coverage.
+
+## 2026-10-21 — Git clone argv must not target a lossy staging-path alias
+
+- **Symptom**: on Linux, a non-UTF-8 managed root caused a first clone to create
+  `overlay.shine-clone-tmp` inside a different replacement-character directory, then fail the rename.
+- **Cause**: native temp-path construction was followed by `to_string_lossy` for Git argv. Cleanup
+  still used the original native path, leaving the unintended clone behind.
+- **Fix**: reuse the existing UTF-8 Git boundary before clone/stale cleanup. Keep native temp-name
+  construction, valid-path argv/order, clone cleanup, force-mirroring and existing checkout checks.
+- **Coverage**: a real local Git clone regression fails before repair by observing the extra alias
+  child; afterward it retains the sentinel and an empty native parent. Native Linux proves this
+  case; filesystems unable to create non-UTF-8 names cannot establish that runtime boundary.
+
+## 2026-10-21 — Shell catalog encoding must preserve parsed description paragraphs
+
+- **Symptom**: Shell catalog list/info and the available-target info fallback printed declared
+  LF/ESC descriptions and comment-line ESC/TAB bytes as terminal controls. Control-bearing targets
+  also entered install hints and lookup-error choices unchanged.
+- **Fix**: reuse the display encoder per name/path/description line, before styling and width
+  measurement. Preserve parsed blank lines, exact lookup/status identity, normal quoting, repair
+  options and failure exits; control-bearing hints request the original operand.
+- **Coverage**: real CLI category/command/canonical queries cover paragraph layout, missing and
+  ambiguous targets, ordinary installed repair hints, preserved receipts/metadata and Unix names.
+
+## 2026-10-21 — Shared Preset note values need encoding after source selection
+
+- **Symptom**: a valid external/overlay physical root containing LF/ESC forged rows in the public
+  source prefix even after individual query fields encoded their metadata.
+- **Fix**: encode only the shared note value through `escape_controls`; retain styled labels,
+  padding, source composition, saved path identities and stdout timing.
+- **Coverage**: pure note tests preserve explicit ANSI label styles and literal backslashes. Real
+  Unix catalog queries use isolated `SHINE_CONFIG_DIR/presets`, validate base/overlay selection,
+  exact config/resource bytes, exit 0 and absent installation state.
+
+## 2026-10-21 — Installed info has a separate metadata rendering boundary
+
+- **Symptom**: after installation, `info` bypassed the available-catalog renderer and printed raw
+  App display names, file/category descriptions and Shell descriptions as terminal rows/controls.
+- **Fix**: reuse `escape_controls` for installed metadata fields and path headings. Keep inspection,
+  status, manifest data, diff rendering, generator policy and explicit verbose file content unchanged.
+- **Coverage**: real CLI App file/category-description fallback and Shell cases cover ordinary,
+  diff and verbose modes, exact original content and unchanged receipts/source bytes. Unix fixtures
+  include control-bearing physical roots without changing logical installation identities.
+
 ## 2026-10-21 — App catalog queries must encode metadata before column layout
 
 - **Symptom**: valid metadata descriptions injected LF/ESC rows into `app list`, `app info` and

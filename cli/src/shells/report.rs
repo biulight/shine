@@ -1,5 +1,6 @@
 use super::metadata;
 use crate::colors;
+use crate::output::escape_controls;
 
 #[derive(Debug, Default)]
 pub struct ShellUpgradeReport {
@@ -157,11 +158,15 @@ pub async fn handle_list_with_presets_note(
         };
         println!(
             "  {}  {}",
-            cat.name,
+            escape_controls(&cat.name),
             colors::dim(&format!("{} {}", cat.files.len(), word))
         );
 
-        let names: Vec<&str> = cat.files.iter().map(|s| s.command_name.as_str()).collect();
+        let names: Vec<String> = cat
+            .files
+            .iter()
+            .map(|s| escape_controls(&s.command_name))
+            .collect();
         let max_name = names
             .iter()
             .map(|s| console::measure_text_width(s))
@@ -176,11 +181,13 @@ pub async fn handle_list_with_presets_note(
             match script.description.as_slice() {
                 [] => println!("    {name}"),
                 [first, rest @ ..] => {
+                    let first = escape_controls(first);
                     println!("    {name}{padding}{first}");
                     for line in rest {
                         if line.is_empty() {
                             println!();
                         } else {
+                            let line = escape_controls(line);
                             println!("{continuation_indent}{line}");
                         }
                     }
@@ -234,14 +241,20 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
         (category, category.files.iter().collect::<Vec<_>>())
     } else if let Some((category_name, command_name)) = target.split_once('/') {
         let Some(category) = categories.iter().find(|cat| cat.name == category_name) else {
-            bail!("shell preset category not found: {category_name}");
+            bail!(
+                "shell preset category not found: {}",
+                escape_controls(category_name)
+            );
         };
         let Some(file) = category
             .files
             .iter()
             .find(|file| file.command_name == command_name)
         else {
-            bail!("shell preset command not found: {target}");
+            bail!(
+                "shell preset command not found: {}",
+                escape_controls(target)
+            );
         };
         (category, vec![file])
     } else {
@@ -257,25 +270,31 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
             .collect::<Vec<_>>();
         match matches.as_slice() {
             [] => bail!(
-                "shell preset target not found: {target}\n\nRun `shine shell list` to see available presets."
+                "shell preset target not found: {}\n\nRun `shine shell list` to see available presets.",
+                escape_controls(target)
             ),
             [(category, file)] => (*category, vec![*file]),
             _ => {
                 let choices = matches
                     .iter()
-                    .map(|(category, file)| format!("{}/{}", category.name, file.command_name))
+                    .map(|(category, file)| {
+                        escape_controls(&format!("{}/{}", category.name, file.command_name))
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
-                bail!("ambiguous shell preset target `{target}`; use one of: {choices}");
+                bail!(
+                    "ambiguous shell preset target `{}`; use one of: {choices}",
+                    escape_controls(target)
+                );
             }
         }
     };
 
     let rows = crate::status::build_shell_rows(config).await?;
     let selected_command = (files.len() == 1).then(|| files[0].command_name.clone());
-    println!("{}", colors::bold(&category.name));
+    println!("{}", colors::bold(&escape_controls(&category.name)));
     if let Some(description) = &category.description {
-        println!("  {}", colors::dim(description));
+        println!("  {}", colors::dim(&escape_controls(description)));
     }
 
     let bun_available = crate::platform::command_exists_on_path("bun");
@@ -285,12 +304,12 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
         let row = rows.iter().find(|row| row.label == label);
         any_installed |= row.is_some_and(|row| row.status_text != "not installed");
         println!();
-        println!("  {}", colors::bold(&file.command_name));
+        println!("  {}", colors::bold(&escape_controls(&file.command_name)));
         println!(
             "    {:<12} shell/{}/{}",
             "Source",
-            category.name,
-            file.source_rel.display()
+            escape_controls(&category.name),
+            escape_controls(&file.source_rel.display().to_string())
         );
         let runtime = match file.runtime {
             crate::bin_links::LinkRuntime::Native => "native".to_string(),
@@ -329,13 +348,32 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
             println!(
                 "    {:<12} {}",
                 if index == 0 { "Description" } else { "" },
-                line
+                escape_controls(line)
             );
         }
     }
 
     println!();
-    if any_installed {
+    if category.name.chars().any(char::is_control)
+        || selected_command
+            .as_deref()
+            .is_some_and(|command| command.chars().any(char::is_control))
+    {
+        let (command, action) = if any_installed {
+            (
+                "shine install",
+                "and --replace-managed to repair this target",
+            )
+        } else {
+            ("shine shell install", "to install this target")
+        };
+        println!(
+            "{}",
+            colors::dim(&format!(
+                "Use {command} with the original target (control characters; copyable command omitted) {action}."
+            ))
+        );
+    } else if any_installed {
         let repair_target = selected_command.as_ref().map_or_else(
             || format!("shell/{}", category.name),
             |command| format!("shell/{}/{command}", category.name),

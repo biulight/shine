@@ -295,6 +295,9 @@ behavior with `--dry-run`.
 
 SCP dry-run previews quote each path and escape control characters so spaces and line breaks
 remain distinguishable. This display does not change the paths used for transfer.
+Local transfer paths must be valid UTF-8. A `~` hint whose local home cannot be represented is
+rejected before transfer or preview; it never selects a replacement-character directory.
+Local hints expand only a leading `~`; `$VAR` and `${VAR}` remain literal filename text.
 
 ## Inspect connection state
 

@@ -64,7 +64,7 @@ pub(super) fn build_transfer_argv(
         .local_paths
         .iter()
         .map(|path| safe_local_operand(path))
-        .collect();
+        .collect::<Result<_>>()?;
     if local_operands.is_empty() {
         bail!("no local path resolved for the transfer");
     }
@@ -178,12 +178,14 @@ fn escape_rsync_remote_spec(spec: &str) -> String {
 /// normal case, since we anchor to the session dir) pass through; a relative
 /// path that could be mistaken for an option is `./`-prefixed. Always used
 /// after a `--` separator as defense in depth.
-fn safe_local_operand(path: &Path) -> String {
-    let display = path.to_string_lossy().into_owned();
+fn safe_local_operand(path: &Path) -> Result<String> {
+    let display = path
+        .to_str()
+        .context("local transfer path is not valid UTF-8")?;
     if display.starts_with('-') {
-        format!("./{display}")
+        Ok(format!("./{display}"))
     } else {
-        display
+        Ok(display.to_owned())
     }
 }
 

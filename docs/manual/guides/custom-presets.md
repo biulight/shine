@@ -397,6 +397,8 @@ directories, linked checkouts, and linked Git metadata without changing their co
 unexpected directory aside before retrying. After a successful fetch, synchronization discards
 tracked edits, untracked and ignored files, and nested repositories in the managed mirror, even
 when the remote commit is unchanged. Keep local customizations in a manually linked overlay instead.
+Git overlay checkout paths must be representable as UTF-8. Unsupported paths are rejected before
+cloning rather than redirected to a different path containing replacement characters.
 
 To customize one built-in category, copy it at the overlay root instead of exporting everything. For
 example, copy Surge before editing its local proxy, group, and rule files:

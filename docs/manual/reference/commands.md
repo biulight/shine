@@ -130,6 +130,9 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--yes] [--v
   ownership conflicts, `--replace-managed` effects, trust, permissions, or profile changes;
   `--verbose` does not expand this preview. Run without `--dry-run` to review the Plan before approval.
 - `shell list` shows the active presets, including overlay additions and overridden descriptions.
+- `shell list` and `shell info` escape control characters in names, source paths and description
+  lines, preserving comment paragraph breaks. Targets with controls use an original-target notice
+  instead of a copyable installation or repair command.
 - Installation and repair commands suggested by `shell info` quote literal target names for
   POSIX shells on Unix and PowerShell on Windows, including names containing spaces or quotes.
 - `--replace-managed` may overwrite managed content changed after installation. Inspect the target
@@ -233,6 +236,8 @@ If the Shine release check cannot finish, `update` prints a warning and still re
 updates. When no configuration updates are found, it explicitly says the version check is incomplete
 instead of claiming there is nothing to update. A release-check failure alone remains non-fatal.
 
+Installed App/Shell details shown by `info` escape controls in labels, descriptions, and path
+headings. `info --verbose` leaves control characters in the displayed file content unchanged.
 Content diffs shown by `info`, `app info`, and `update` escape control characters within lines
 (for example, a tab appears as `\t`). File contents remain unchanged.
 
@@ -328,6 +333,8 @@ preference to an inherited Git overlay. With a project configuration, `SHINE_CON
 does not override a directory selected by `preset link`; `SHINE_PRESETS` still takes priority.
 `preset unlink` removes the saved setting. Environment overrides and inherited settings still
 apply, so the next run may continue to use an external presets directory.
+Shared `Preset Source` and `Presets Overlay` notes escape control characters in displayed paths.
+Saved paths and source priority retain their original meaning.
 
 Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These commands inspect
 authoring input without installing it. `migrate --dry-run` previews legacy metadata changes;

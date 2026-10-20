@@ -2,6 +2,7 @@ use super::collect::{AppInfoFile, ShellInfoFile};
 use crate::apps::{AppCategory, AppFile};
 use crate::colors;
 use crate::config::Config;
+use crate::output::escape_controls;
 use crate::path_display;
 use crate::status::{FileStatus, UpdateChange};
 use anyhow::{Context, Result};
@@ -14,7 +15,7 @@ pub(super) async fn print_app_file(
     diff: bool,
     verbose: bool,
 ) -> Result<()> {
-    let label = fallback_app_label(&item.category, &item.file);
+    let label = escape_controls(&fallback_app_label(&item.category, &item.file));
     let source_path = config.preset_path(
         Path::new("app")
             .join(&item.category.name)
@@ -23,19 +24,22 @@ pub(super) async fn print_app_file(
 
     println!("{}", colors::bold(&format!("App Config: {label}")));
     if let Some(desc) = &item.file.description {
-        println!("{}  {desc}", colors::dim("Description"));
+        println!("{}  {}", colors::dim("Description"), escape_controls(desc));
     } else if let Some(desc) = &item.category.description {
-        println!("{}  {desc}", colors::dim("Description"));
+        println!("{}  {}", colors::dim("Description"), escape_controls(desc));
     }
     println!(
         "{}       {}",
         colors::dim("Source"),
-        path_display::format_home(&source_path, &config.home_dir)
+        escape_controls(&path_display::format_home(&source_path, &config.home_dir))
     );
     println!(
         "{}  {}",
         colors::dim("Destination"),
-        path_display::format_home(&item.destination, &config.home_dir)
+        escape_controls(&path_display::format_home(
+            &item.destination,
+            &config.home_dir
+        ))
     );
     println!(
         "{}       {}",
@@ -46,7 +50,7 @@ pub(super) async fn print_app_file(
         println!(
             "{}   {}",
             colors::dim("Transforms"),
-            item.file.transforms.join(", ")
+            escape_controls(&item.file.transforms.join(", "))
         );
     }
     if let Some(entry) = &item.manifest_entry {
@@ -55,7 +59,7 @@ pub(super) async fn print_app_file(
             println!(
                 "{}       {}",
                 colors::dim("Backup"),
-                path_display::format_home(backup, &config.home_dir)
+                escape_controls(&path_display::format_home(backup, &config.home_dir))
             );
         }
     }
@@ -80,33 +84,45 @@ pub(super) async fn print_shell_file(
     diff: bool,
     verbose: bool,
 ) -> Result<()> {
-    let label = format!("{}/{}", item.category.name, item.file.command_name);
+    let label = escape_controls(&format!(
+        "{}/{}",
+        item.category.name, item.file.command_name
+    ));
     println!("{}", colors::bold(&format!("Shell Preset: {label}")));
     if let Some(desc) = item.file.description.first() {
-        println!("{}  {desc}", colors::dim("Description"));
+        println!("{}  {}", colors::dim("Description"), escape_controls(desc));
     }
     println!(
         "{}       {}",
         colors::dim("Source"),
-        path_display::format_home(&item.source_path, &config.home_dir)
+        escape_controls(&path_display::format_home(
+            &item.source_path,
+            &config.home_dir
+        ))
     );
     if item.installed_source_path != item.source_path {
         println!(
             "{}     {}",
             colors::dim("Snapshot"),
-            path_display::format_home(&item.installed_source_path, &config.home_dir)
+            escape_controls(&path_display::format_home(
+                &item.installed_source_path,
+                &config.home_dir
+            ))
         );
     }
     println!(
         "{}     {}",
         colors::dim("Bin link"),
-        path_display::format_home(&item.link_path, &config.home_dir)
+        escape_controls(&path_display::format_home(
+            &item.link_path,
+            &config.home_dir
+        ))
     );
     if let Some(target) = &item.link_target {
         println!(
             "{} {}",
             colors::dim("Link target"),
-            path_display::format_home(target, &config.home_dir)
+            escape_controls(&path_display::format_home(target, &config.home_dir))
         );
     }
     println!(
@@ -122,7 +138,10 @@ pub(super) async fn print_shell_file(
         println!(
             "{}     {}",
             colors::dim("Rendered"),
-            path_display::format_home(&item.rendered_path, &config.home_dir)
+            escape_controls(&path_display::format_home(
+                &item.rendered_path,
+                &config.home_dir
+            ))
         );
     }
     if diff {
@@ -252,7 +271,7 @@ fn print_heading(heading: &str, path: &Path) {
         "{}",
         colors::dim(&format!(
             "--- {heading}: {} ---",
-            path_display::format(path)
+            escape_controls(&path_display::format(path))
         ))
     );
 }

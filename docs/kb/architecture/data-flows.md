@@ -1289,7 +1289,9 @@ verbosely.
 A **shine-managed Git overlay** (`presets_overlay_git`) is handled separately, *before* the
 fast-forward loop, by `git_pull::sync_managed_overlay` against `<shine_dir>/overlay`. On first use
 it clones `--depth 1` via a temp sibling dir + atomic rename (a failed clone never leaves a
-half-populated overlay). On subsequent runs it **force-mirrors**: fetch depth 1 from the configured
+half-populated overlay). The staging path must be UTF-8 before stale-temp cleanup or Git invocation;
+no lossy path may select a replacement-character sibling. On subsequent runs it **force-mirrors**:
+fetch depth 1 from the configured
 URL and branch (remote `HEAD` when omitted), update `origin` only after fetch succeeds, then
 `git reset --hard FETCH_HEAD` and `git clean -ffdx`, so the checkout equals the remote tip even
 across rebases/force-pushes, discarding tracked edits, untracked/ignored files and nested repositories

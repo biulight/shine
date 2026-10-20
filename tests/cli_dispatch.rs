@@ -344,6 +344,85 @@ fn preset_links_reject_existing_non_utf8_sources_and_canonical_symlink_targets()
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn preset_source_notes_escape_paths_without_changing_effective_layers_or_state() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("base\nFORGED=source\u{1b}");
+    fs::create_dir(&state).unwrap();
+    let base = state.join("presets");
+    let overlay = fixture.0.join("overlay\nFORGED=overlay\u{1b}");
+    for (root, description) in [(&base, "from-base"), (&overlay, "from-overlay")] {
+        let category = root.join("app/demo");
+        fs::create_dir_all(&category).unwrap();
+        fs::write(category.join("shine.toml"), format!("metadata_schema_version = 2\ndescription = '{description}'\ndest = '~/.config/demo'\n[[files]]\nsource = 'config.txt'\n")).unwrap();
+        fs::write(category.join("config.txt"), description).unwrap();
+    }
+    for use_overlay in [false, true] {
+        let config = if use_overlay {
+            format!(
+                "schema_version = 2\npresets_overlay_dir = {}\n",
+                serde_json::to_string(overlay.to_str().unwrap()).unwrap()
+            )
+        } else {
+            "schema_version = 2\n".to_owned()
+        };
+        fs::write(state.join("config.toml"), &config).unwrap();
+        for args in [vec!["app", "list"], vec!["app", "info", "demo"]] {
+            let result = fixture
+                .command()
+                .env_remove("SUDO_USER")
+                .env("NO_COLOR", "1")
+                .env("SHINE_CONFIG_DIR", &state)
+                .args(&args)
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(0), "{args:?}: {result:?}");
+            assert!(result.stderr.is_empty(), "{result:?}");
+            let text = String::from_utf8(result.stdout).unwrap();
+            assert!(text.contains("base\\nFORGED=source\\u{1b}"), "{text:?}");
+            assert_eq!(
+                text.contains("overlay\\nFORGED=overlay\\u{1b}"),
+                use_overlay,
+                "{text:?}"
+            );
+            assert_eq!(text.contains("◈ Presets Overlay"), use_overlay, "{text:?}");
+            assert!(
+                text.contains("snapshot · changes require `shine upgrade`"),
+                "{text:?}"
+            );
+            assert!(
+                text.contains(if use_overlay {
+                    "from-overlay"
+                } else {
+                    "from-base"
+                }),
+                "{text:?}"
+            );
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(
+                !text.lines().any(|line| line.starts_with("FORGED=")),
+                "{text:?}"
+            );
+            assert_eq!(
+                fs::read_to_string(state.join("config.toml")).unwrap(),
+                config
+            );
+            assert!(!state.join("app-manifest.toml").exists());
+            assert!(!fixture.0.join("home/.config").exists());
+        }
+    }
+    for (root, expected) in [
+        (&base, b"from-base".as_slice()),
+        (&overlay, b"from-overlay".as_slice()),
+    ] {
+        assert_eq!(
+            fs::read(root.join("app/demo/config.txt")).unwrap(),
+            expected
+        );
+    }
+}
+
 #[test]
 fn app_catalog_queries_escape_metadata_without_changing_source_or_install_state() {
     for (name, shown_name) in [
@@ -509,6 +588,292 @@ fn app_catalog_queries_escape_metadata_without_changing_source_or_install_state(
             fs::read_to_string(category.join("shine.toml")).unwrap(),
             metadata
         );
+    }
+}
+
+#[test]
+fn shell_catalog_queries_encode_fields_and_keep_comment_paragraphs_and_target_policy() {
+    for (name, shown_name) in [
+        ("demo", "demo"),
+        #[cfg(unix)]
+        ("demo\nFORGED=name\u{1b}", "demo\\nFORGED=name\\u{1b}"),
+    ] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        let category = state.join("presets/shell").join(name);
+        fs::create_dir_all(&category).unwrap();
+        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+        let comment = if cfg!(windows) {
+            "comment.ps1"
+        } else {
+            "comment.sh"
+        };
+        let metadata = format!(
+            "description = \"CATEGORY\\nFORGED=category\\u001b\"\n[[files]]\nsource = '{script}'\ntarget = 'tool'\ndescription = \"DESC\\nFORGED=record\\u001b\"\n[files.permissions]\nschema_version = 1\n[[files]]\nsource = '{comment}'\ntarget = 'comment'\n[files.permissions]\nschema_version = 1\n"
+        );
+        fs::write(category.join("shine.toml"), &metadata).unwrap();
+        fs::write(category.join(script), "# fixture; never executed\n").unwrap();
+        let comments = "# COMMENT\u{1b}[31m\n#\n# CONTINUED\tliteral\n";
+        fs::write(category.join(comment), comments).unwrap();
+        fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+        let run = |args: &[&str], code| {
+            let result = fixture
+                .command()
+                .env_remove("SUDO_USER")
+                .env("NO_COLOR", "1")
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(code), "{args:?}: {result:?}");
+            if code == 0 {
+                assert!(result.stderr.is_empty(), "{result:?}");
+            }
+            result
+        };
+        let selected = format!("{name}/tool");
+        let canonical = format!("shell/{selected}");
+        for args in [
+            vec!["shell", "list"],
+            vec!["shell", "info", name],
+            vec!["shell", "info", &selected],
+            vec!["info", &canonical],
+        ] {
+            let text = String::from_utf8(run(&args, 0).stdout).unwrap();
+            assert!(text.contains("DESC\\nFORGED=record\\u{1b}"), "{text:?}");
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(
+                !text.lines().any(|line| line.starts_with("FORGED=")),
+                "{text:?}"
+            );
+            if args[1] == "list" {
+                assert!(
+                    text.contains(&format!("  {shown_name}  2 scripts")),
+                    "{text:?}"
+                );
+                assert!(
+                    text.contains(
+                        "comment    COMMENT\\u{1b}[31m\n\n               CONTINUED\\tliteral\n"
+                    ),
+                    "{text:?}"
+                );
+            } else {
+                assert!(
+                    text.contains(&format!(
+                        "{shown_name}\n  CATEGORY\\nFORGED=category\\u{{1b}}"
+                    )),
+                    "{text:?}"
+                );
+                assert!(
+                    text.contains(&format!("shell/{shown_name}/{script}")),
+                    "{text:?}"
+                );
+                if name != shown_name {
+                    assert!(
+                        text.contains(
+                            "original target (control characters; copyable command omitted)"
+                        ),
+                        "{text:?}"
+                    );
+                    assert!(!text.contains("Run `shine"), "{text:?}");
+                } else {
+                    let target = if args.last() == Some(&name) {
+                        "demo"
+                    } else {
+                        "demo/tool"
+                    };
+                    assert!(
+                        text.contains(&format!("Run `shine shell install {target}`")),
+                        "{text:?}"
+                    );
+                }
+            }
+            assert!(!state.join("shell-manifest.toml").exists());
+        }
+        let sibling = state.join("presets/shell/other");
+        fs::create_dir(&sibling).unwrap();
+        fs::write(sibling.join("shine.toml"), format!("[[files]]\nsource = '{script}'\ntarget = 'tool'\n[files.permissions]\nschema_version = 1\n")).unwrap();
+        fs::write(sibling.join(script), "# untouched sibling\n").unwrap();
+        let ambiguous = run(&["shell", "info", "tool"], 1);
+        let error = String::from_utf8(ambiguous.stderr).unwrap();
+        assert!(error.contains("ambiguous shell preset target"), "{error:?}");
+        assert!(error.contains(&format!("{shown_name}/tool")), "{error:?}");
+        assert!(error.contains("other/tool"), "{error:?}");
+        assert!(!error.contains('\u{1b}'), "{error:?}");
+        assert!(
+            !error.lines().any(|line| line.starts_with("FORGED=")),
+            "{error:?}"
+        );
+        for target in [
+            "missing\nFORGED=error\u{1b}".to_owned(),
+            format!("{name}/missing\nFORGED=error\u{1b}"),
+        ] {
+            let result = run(&["shell", "info", &target], 1);
+            let error = String::from_utf8(result.stderr).unwrap();
+            assert!(error.contains("\\nFORGED=error\\u{1b}"), "{error:?}");
+            assert!(!error.contains('\u{1b}'), "{error:?}");
+            assert!(
+                !error.lines().any(|line| line.starts_with("FORGED=")),
+                "{error:?}"
+            );
+        }
+        if name == shown_name {
+            for command in ["tool", "comment"] {
+                run(
+                    &["trust", "grant", &format!("shell/demo/{command}"), "--yes"],
+                    0,
+                );
+            }
+            run(&["shell", "install", "demo", "--yes"], 0);
+            let receipt = state.join("shell-manifest.toml");
+            let before = fs::read(&receipt).unwrap();
+            let text = String::from_utf8(run(&["shell", "info", "demo/tool"], 0).stdout).unwrap();
+            assert!(text.contains("DESC\\nFORGED=record\\u{1b}"), "{text:?}");
+            assert!(
+                text.contains("Run `shine install shell/demo/tool --replace-managed`"),
+                "{text:?}"
+            );
+            assert_eq!(fs::read(receipt).unwrap(), before);
+        }
+        assert_eq!(
+            fs::read_to_string(category.join("shine.toml")).unwrap(),
+            metadata
+        );
+        assert_eq!(
+            fs::read_to_string(category.join(comment)).unwrap(),
+            comments
+        );
+        assert_eq!(
+            fs::read(state.join("config.toml")).unwrap(),
+            b"schema_version = 2\n"
+        );
+    }
+}
+
+#[test]
+fn installed_info_encodes_metadata_but_preserves_explicit_content_and_receipts() {
+    for (kind, file_description) in [("app", true), ("app", false), ("shell", true)] {
+        let fixture = Fixture::new();
+        #[cfg(unix)]
+        let fixture = {
+            let root = fixture.0.with_file_name(format!(
+                "{}-root\nFORGED=path\u{1b}",
+                fixture.0.file_name().unwrap().to_str().unwrap()
+            ));
+            fs::rename(&fixture.0, &root).unwrap();
+            Fixture(root)
+        };
+        let state = fixture.0.join("state");
+        let category = state.join("presets").join(kind).join("demo");
+        fs::create_dir_all(&category).unwrap();
+        let description = "DESC\nFORGED=record\u{1b}[31m";
+        let category_description = "CATEGORY\nFORGED=fallback\u{1b}[31m";
+        let label = "LABEL\nFORGED=name\u{1b}";
+        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+        let source = if kind == "app" { "config.txt" } else { script };
+        let quoted_description = serde_json::to_string(description).unwrap();
+        let metadata = if kind == "app" {
+            format!(
+                "metadata_schema_version = 2\ndest = '~/.config/demo'\ndescription = {}\n[[files]]\nsource = '{source}'\ndisplay_name = {}\n{}",
+                serde_json::to_string(category_description).unwrap(),
+                serde_json::to_string(label).unwrap(),
+                if file_description {
+                    format!("description = {quoted_description}\n")
+                } else {
+                    String::new()
+                }
+            )
+        } else {
+            format!(
+                "[[files]]\nsource = '{source}'\ntarget = 'tool'\ndescription = {quoted_description}\n[files.permissions]\nschema_version = 1\n"
+            )
+        };
+        let content = b"# fixture; never executed\n# RAW_CONTENT\t\x1b[32m\n";
+        fs::write(category.join("shine.toml"), &metadata).unwrap();
+        fs::write(category.join(source), content).unwrap();
+        fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+        let run = |args: &[&str]| {
+            let result = fixture
+                .command()
+                .env_remove("SUDO_USER")
+                .env("NO_COLOR", "1")
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(0), "{args:?}: {result:?}");
+            assert!(result.stderr.is_empty(), "{result:?}");
+            String::from_utf8(result.stdout).unwrap()
+        };
+        if kind == "shell" {
+            run(&["trust", "grant", "shell/demo/tool", "--yes"]);
+        }
+        run(&[kind, "install", "demo", "--yes"]);
+        let receipt = state.join(format!("{kind}-manifest.toml"));
+        let before = fs::read(&receipt).unwrap();
+        let target = if kind == "app" {
+            "app/demo"
+        } else {
+            "shell/demo/tool"
+        };
+        for option in [None, Some("--diff"), Some("--verbose")] {
+            let mut args = vec!["info", target];
+            args.extend(option);
+            let text = run(&args);
+            // Source notes have a separate renderer; inspect the installed-info section.
+            let heading = if kind == "app" {
+                "App Config:"
+            } else {
+                "Shell Preset:"
+            };
+            let report = &text[text.find(heading).unwrap()..];
+            let (metadata_text, body) = if option == Some("--verbose") {
+                report.split_once("--- Content:").unwrap()
+            } else {
+                (report, "")
+            };
+            let expected = if kind == "app" && !file_description {
+                "Description  CATEGORY\\nFORGED=fallback\\u{1b}[31m"
+            } else {
+                "Description  DESC\\nFORGED=record\\u{1b}[31m"
+            };
+            assert!(metadata_text.contains(expected), "{text:?}");
+            if kind == "app" {
+                assert!(
+                    metadata_text.contains("App Config: LABEL\\nFORGED=name\\u{1b}"),
+                    "{text:?}"
+                );
+            } else {
+                assert!(
+                    metadata_text.contains("Shell Preset: demo/tool"),
+                    "{text:?}"
+                );
+            }
+            assert!(!metadata_text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(
+                !metadata_text
+                    .lines()
+                    .any(|line| line.starts_with("FORGED=")),
+                "{text:?}"
+            );
+            if cfg!(unix) {
+                assert!(
+                    metadata_text.contains("-root\\nFORGED=path\\u{1b}"),
+                    "{text:?}"
+                );
+                assert!(!body.contains("-root\nFORGED=path\u{1b}"), "{text:?}");
+            }
+            if option == Some("--verbose") {
+                assert!(
+                    body.ends_with(std::str::from_utf8(content).unwrap()),
+                    "{text:?}"
+                );
+            }
+            assert_eq!(fs::read(&receipt).unwrap(), before);
+            assert_eq!(fs::read(category.join(source)).unwrap(), content);
+            assert_eq!(
+                fs::read_to_string(category.join("shine.toml")).unwrap(),
+                metadata
+            );
+        }
     }
 }
 
