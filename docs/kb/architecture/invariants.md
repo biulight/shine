@@ -1285,6 +1285,8 @@ bugs. Check this list before changing the modules named in each entry.
   Connection errors remain stdout observations with success; post-handshake errors remain command
   failures on stderr. Transfer and broker approval waits retain their own policies. SCP preview
   quoting is presentation-only and never feeds argv or path resolution.
+  Encode status session/host/directory fields, connection observations and rejection messages only
+  at display sites; retain raw socket/token data, configuration startup and timeout/exit boundaries.
 
 - **SSH session resources are owned from the first setup step.** Listener binding, context
   persistence, spawn/wait failures and cancellation must release the listener and session

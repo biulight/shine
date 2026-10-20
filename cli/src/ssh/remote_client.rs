@@ -14,6 +14,7 @@ use tokio::net::UnixStream;
 use super::protocol::{self, ClientMessage, Direction, LogStream, PROTOCOL_VERSION, ServerMessage};
 use crate::env::broker::WorkspaceSnapshot;
 use crate::home;
+use crate::output::escape_controls;
 
 const STATUS_PHASE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -294,20 +295,23 @@ pub async fn handle_status() -> Result<()> {
                     session_local_dir,
                     host,
                 } => {
-                    println!("session:    {}", session.session_id);
+                    println!("session:    {}", escape_controls(&session.session_id));
                     println!("connection: connected");
                     println!("protocol:   v{PROTOCOL_VERSION}");
-                    println!("host:       {host}");
-                    println!("local dir:  {session_local_dir}");
+                    println!("host:       {}", escape_controls(&host));
+                    println!("local dir:  {}", escape_controls(&session_local_dir));
                     Ok(())
                 }
-                ServerMessage::Error { message } => bail!("{message}"),
+                ServerMessage::Error { message } => bail!("{}", escape_controls(&message)),
                 other => bail!("unexpected response: {other:?}"),
             }
         }
         Err(error) => {
-            println!("session:    {}", session.session_id);
-            println!("connection: unreachable ({error:#})");
+            println!("session:    {}", escape_controls(&session.session_id));
+            println!(
+                "connection: unreachable ({})",
+                escape_controls(&format!("{error:#}"))
+            );
             Ok(())
         }
     }

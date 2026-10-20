@@ -186,8 +186,11 @@ fn ssh_cli_preserves_option_order_and_remote_wrapper_boundaries_in_both_modes() 
 async fn local_status_response(mode: &str) -> std::process::Output {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let fixture = Fixture::new();
+    fs::create_dir(fixture.0.join("state")).unwrap();
+    fs::write(fixture.0.join("state/config.toml"), "schema_version = 2\n").unwrap();
     let socket = fixture.0.join("status.sock");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let control_session = mode == "controls";
     let mode = mode.to_string();
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
@@ -210,7 +213,11 @@ async fn local_status_response(mode: &str) -> std::process::Output {
             assert_eq!(request["type"], "Status");
             assert_eq!(request["token"], "fixture-token");
             if mode != "response_timeout" {
-                let response = if mode == "rejected" {
+                let response = if mode == "rejected_controls" {
+                    serde_json::json!({"type": "Error", "message": "denied\nFORGED=error\r\t\u{1b}\\literal中文"})
+                } else if mode == "controls" {
+                    serde_json::json!({"type": "StatusResponse", "host": "host\nFORGED=host\r\t\u{1b}\\literal中文", "session_local_dir": "/dir\nFORGED=cwd\r\t\u{1b}\\literal中文"})
+                } else if mode == "rejected" {
                     serde_json::json!({"type": "Error", "message": "invalid session token"})
                 } else {
                     serde_json::json!({"type": "StatusResponse", "host": "fixture.invalid", "session_local_dir": "/fixture"})
@@ -229,7 +236,14 @@ async fn local_status_response(mode: &str) -> std::process::Output {
             .args(["local", "status"])
             .current_dir(&fixture.0)
             .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
-            .env("SHINE_SSH_SESSION", "fixture-session")
+            .env(
+                "SHINE_SSH_SESSION",
+                if control_session {
+                    "session\nFORGED=id\r\t\u{1b}\\literal中文"
+                } else {
+                    "fixture-session"
+                },
+            )
             .env("SHINE_SSH_TOKEN", "fixture-token")
             .env("SHINE_SSH_REMOTE_SOCK", &socket)
             .stdin(std::process::Stdio::null())
@@ -238,6 +252,10 @@ async fn local_status_response(mode: &str) -> std::process::Output {
             .await
             .unwrap();
         server.await.unwrap();
+        assert_eq!(
+            fs::read(fixture.0.join("state/config.toml")).unwrap(),
+            b"schema_version = 2\n"
+        );
         output
     })
     .await
@@ -283,5 +301,69 @@ async fn local_status_success_and_token_rejection_preserve_output_streams() {
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("invalid session token"),
         "{output:?}"
+    );
+}
+
+#[tokio::test]
+async fn local_status_encodes_fields_without_changing_success_streams() {
+    let output = local_status_response("controls").await;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for expected in [
+        "session:    session\\nFORGED=id\\r\\t\\u{1b}\\literal中文",
+        "host:       host\\nFORGED=host\\r\\t\\u{1b}\\literal中文",
+        "local dir:  /dir\\nFORGED=cwd\\r\\t\\u{1b}\\literal中文",
+    ] {
+        assert!(stdout.contains(expected), "{stdout:?}");
+    }
+    assert_eq!(stdout.lines().count(), 5, "{stdout:?}");
+    assert!(!stdout.contains(['\r', '\t', '\u{1b}']), "{stdout:?}");
+}
+
+#[tokio::test]
+async fn local_status_encodes_rejection_without_changing_error_streams() {
+    let output = local_status_response("rejected_controls").await;
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("denied\\nFORGED=error\\r\\t\\u{1b}\\literal中文"),
+        "{stderr:?}"
+    );
+    assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+}
+
+#[tokio::test]
+async fn local_status_unreachable_encodes_session_and_path_preserving_config() {
+    let fixture = Fixture::new();
+    fs::create_dir(fixture.0.join("state")).unwrap();
+    fs::write(fixture.0.join("state/config.toml"), "schema_version = 2\n").unwrap();
+    let socket = fixture.0.join("missing\nSOCKET\u{1b}");
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_shine"))
+        .args(["local", "status"])
+        .current_dir(&fixture.0)
+        .env("SHINE_CONFIG_DIR", fixture.0.join("state"))
+        .env("SHINE_SSH_SESSION", "session\nFORGED=id\u{1b}")
+        .env("SHINE_SSH_TOKEN", "fixture-token")
+        .env("SHINE_SSH_REMOTE_SOCK", &socket)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("session:    session\\nFORGED=id\\u{1b}"),
+        "{stdout:?}"
+    );
+    assert!(stdout.contains("connection: unreachable"), "{stdout:?}");
+    assert!(stdout.contains("missing\\nSOCKET\\u{1b}"), "{stdout:?}");
+    assert_eq!(stdout.lines().count(), 2, "{stdout:?}");
+    assert!(!stdout.contains('\u{1b}'), "{stdout:?}");
+    assert_eq!(
+        fs::read(fixture.0.join("state/config.toml")).unwrap(),
+        b"schema_version = 2\n"
     );
 }

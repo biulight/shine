@@ -311,6 +311,8 @@ Connection/handshake and the subsequent status request each have a five-second t
 An unreachable connection is reported on stdout with exit code 0; a failed status request
 (including authentication rejection or a response timeout) reports an error on stderr with exit code 1.
 These limits apply only to `local status`.
+Status fields and connection/rejection messages display terminal control characters as escapes;
+the session, authentication and connection paths retain their original values.
 
 ### Hybrid secrets through the broker
 

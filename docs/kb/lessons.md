@@ -129,6 +129,17 @@
   refusal, unchanged source bytes and absent state initialization. Existing non-UTF-8 collision and
   shell-round-trip tests retain independent coverage.
 
+## 2026-10-21 — Local status frames are structured observations, not terminal rows
+
+- **Symptom**: successful status fields, an unavailable socket's path and a rejected status message
+  printed LF/CR/TAB/ESC raw, allowing one field to look like extra status rows.
+- **Fix**: reuse the display encoder at status output/error sites, retaining raw session/token/socket
+  values and both phase deadlines. Connection failures stay stdout/success; later failures stay
+  stderr/exit 1. Keep startup initialization, transfer logs and broker waits unchanged.
+- **Coverage**: real Unix-socket CLI peers cover connected/rejected control-bearing fields, Unicode
+  and literal backslashes; unavailable paths retain two rows. Existing timeout/auth tests remain,
+  and preseeded configuration bytes stay unchanged. This is not live remote SSH validation.
+
 ## 2026-10-21 — Task cwd hints are display text, not child output
 
 - **Symptom**: save/info and the stderr run announcement printed LF/CR/TAB/ESC from a valid saved
