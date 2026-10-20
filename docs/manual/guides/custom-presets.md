@@ -248,6 +248,9 @@ owns the grant, so a Preset cannot distribute or enable it.
 The default `trust list` view groups capabilities with the same security scope into one row and
 shows whether each stored grant is current. Use `trust list --verbose` for capability names, local
 development-source labels, and stale-grant review guidance.
+Trust command output escapes control characters in targets, source labels, and author capability
+statements. Stored identities remain unchanged. For a target containing control characters, review
+hints omit copyable commands; pass the original target argument to `trust inspect` or `trust grant`.
 
 Every external Shell command uses the canonical `shell/<CATEGORY>/<COMMAND>` trust target. Use
 `preset` to inspect or trust every executable target

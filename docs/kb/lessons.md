@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-21 — Trust review text must encode source-controlled fields before styling
+
+- **Symptom**: ESC/newlines in a valid category target or source label reached trust inspection,
+  enrollment review and list rows unchanged with `NO_COLOR=1`, allowing misleading terminal rows.
+- **Fix**: use the shared control encoder on displayed fields and measure escaped list targets.
+  Omit copyable review/grant commands for control-bearing targets; retain normal shell quoting,
+  original target/source identities, trust matching, confirmation, locks and private persistence.
+- **Coverage**: rendering tests retain exact grant serialization while covering target, source and
+  statement fields. Real CLI tests cover list widths, stale hints, exact-target/no-op revocation and
+  untouched sibling grants on all platforms; Unix enrollment checks refusal without `--yes`, both
+  grant modes, matching inspection, unchanged Preset bytes and absent installed content.
+
 ## 2026-10-21 — Authoring reports need text encoding at each untrusted field
 
 - **Symptom**: valid category names containing ESC and newlines passed static validation and reached

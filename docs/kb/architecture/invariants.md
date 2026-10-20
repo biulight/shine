@@ -853,6 +853,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **Trust store mutations serialize the entire read/modify/write cycle.** Grant and revoke acquire
   the persistent `trust.lock` OS lock before reading grants and retain it through private atomic
   persistence. Human review happens before locking; only the reviewed code identities are granted.
+  CLI trust output escapes controls in targets, local source labels and author statements before
+  styling or measuring columns. Control-bearing target hints omit copyable commands rather than
+  turning a display escape into a different operand; matching and persisted identities stay raw.
 
 - **Env precedence is unified and defaults never persist implicitly.** Builtin < overlay baseline <
   global config < global env file < project config < project env file. Keep raw definitions,

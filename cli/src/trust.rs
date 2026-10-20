@@ -1,4 +1,4 @@
-use crate::{config::Config, core_runtime};
+use crate::{config::Config, core_runtime, output::escape_controls};
 use anyhow::{Context, Result, bail};
 use shine_core::persist::atomic_write_private;
 use shine_core::plan::SnapshotDigestV1;
@@ -186,7 +186,7 @@ fn render_list(
         .iter()
         .map(|group| {
             (
-                group.target.clone(),
+                escape_controls(&group.target),
                 group.mode.as_str().to_string(),
                 list_scope(group),
                 list_identity(group, true),
@@ -238,7 +238,7 @@ fn render_list(
 
 fn render_verbose_list_group(group: &TrustListGroup) -> Vec<String> {
     const LABEL_WIDTH: usize = 14;
-    let mut lines = vec![crate::colors::bold(&group.target)];
+    let mut lines = vec![crate::colors::bold(&escape_controls(&group.target))];
     lines.push(format!("  {:<LABEL_WIDTH$}{}", "Mode", group.mode.as_str()));
     lines.push(format!(
         "  {:<LABEL_WIDTH$}{}",
@@ -265,15 +265,15 @@ fn render_verbose_list_group(group: &TrustListGroup) -> Vec<String> {
             lines.push(format!(
                 "  {:<LABEL_WIDTH$}{}",
                 if index == 0 { "Source" } else { "" },
-                label
+                escape_controls(label)
             ));
         }
     }
     if group.status != GrantListStatus::Current {
         lines.push(format!(
-            "  {:<LABEL_WIDTH$}shine trust inspect {}",
+            "  {:<LABEL_WIDTH$}{}",
             "Review",
-            crate::shell_quote::command_arg(&group.target)
+            trust_command_hint("inspect", &group.target)
         ));
     }
     lines
@@ -329,7 +329,10 @@ pub async fn handle_inspect(config: &Config, target: &str) -> Result<()> {
     let runtime = core_runtime::from_config(config).await?;
     let report = runtime.external_code_requirements(target).await?;
     if report.requirements.is_empty() {
-        println!("{target} has no external executable-code requirements.");
+        println!(
+            "{} has no external executable-code requirements.",
+            escape_controls(target)
+        );
         return Ok(());
     }
     let decisions = report
@@ -355,9 +358,9 @@ fn render_inspect_guidance(
     decisions: &[TrustDecisionV1],
 ) -> String {
     if decisions.iter().any(|decision| !decision.is_trusted()) {
-        let target_arg = crate::shell_quote::command_arg(target);
+        let command = trust_command_hint("grant", target);
         return format!(
-            "{}\n  For persistent authorization, review the current code and source, then run:\n    shine trust grant {target_arg}",
+            "{}\n  For persistent authorization, review the current code and source, then run:\n    {command}",
             crate::colors::cyan("Next")
         );
     }
@@ -365,9 +368,23 @@ fn render_inspect_guidance(
         "{} {}",
         crate::colors::symbol("✓"),
         crate::colors::green(&format!(
-            "All current external code for {target} is trusted."
+            "All current external code for {} is trusted.",
+            escape_controls(target)
         ))
     )
+}
+
+fn trust_command_hint(action: &str, target: &str) -> String {
+    if target.chars().any(char::is_control) {
+        format!(
+            "shine trust {action} with the original target (control characters; copyable command omitted)"
+        )
+    } else {
+        format!(
+            "shine trust {action} {}",
+            crate::shell_quote::command_arg(target)
+        )
+    }
 }
 
 pub async fn handle_grant(
@@ -379,7 +396,10 @@ pub async fn handle_grant(
     let runtime = core_runtime::from_config(config).await?;
     let report = runtime.external_code_requirements(target).await?;
     if report.requirements.is_empty() {
-        bail!("{target} has no external executable code to trust");
+        bail!(
+            "{} has no external executable code to trust",
+            escape_controls(target)
+        );
     }
     if development
         && report
@@ -440,9 +460,15 @@ pub async fn handle_grant(
     });
     save_store(config, &store).await?;
     if development {
-        println!("Established development trust for {target}.");
+        println!(
+            "Established development trust for {}.",
+            escape_controls(target)
+        );
     } else {
-        println!("Trusted current external code for {target}.");
+        println!(
+            "Trusted current external code for {}.",
+            escape_controls(target)
+        );
     }
     Ok(())
 }
@@ -460,11 +486,17 @@ pub async fn handle_revoke(config: &Config, target: &str) -> Result<()> {
         store.grants.retain(|grant| grant.target != target);
     }
     if store.grants.len() == before {
-        println!("No external-code trust grants matched {target}.");
+        println!(
+            "No external-code trust grants matched {}.",
+            escape_controls(target)
+        );
         return Ok(());
     }
     save_store(config, &store).await?;
-    println!("Revoked external-code trust for {target}.");
+    println!(
+        "Revoked external-code trust for {}.",
+        escape_controls(target)
+    );
     Ok(())
 }
 
@@ -529,7 +561,8 @@ fn validate_target(target: &str) -> Result<()> {
     };
     if !valid {
         bail!(
-            "trust target must be preset, app/<category>, shell/<category>/<command>, or sys/<item>: {target}"
+            "trust target must be preset, app/<category>, shell/<category>/<command>, or sys/<item>: {}",
+            escape_controls(target)
         );
     }
     Ok(())
@@ -562,7 +595,8 @@ fn render_requirements(
     }
 
     let mut lines = vec![crate::colors::bold(&format!(
-        "External Code Trust · {target}"
+        "External Code Trust · {}",
+        escape_controls(target)
     ))];
     for (scope_index, scope) in scopes.iter().enumerate() {
         let requirement = &requirements[scope[0]];
@@ -577,7 +611,7 @@ fn render_requirements(
             lines.push(format!(
                 "  {}  {}",
                 crate::colors::dim("Target"),
-                requirement.target
+                escape_controls(&requirement.target)
             ));
         }
         if scope
@@ -604,7 +638,7 @@ fn render_requirements(
                 lines.push(format!(
                     "  {}  {}",
                     crate::colors::dim("Local source"),
-                    label
+                    escape_controls(label)
                 ));
             }
         }
@@ -647,9 +681,9 @@ fn render_requirements(
                 grouped.entry(group).or_default().push(value);
             }
             for (group, values) in grouped {
-                lines.push(format!("    {group}"));
+                lines.push(format!("    {}", escape_controls(&group)));
                 for value in values {
-                    lines.push(format!("      - {value}"));
+                    lines.push(format!("      - {}", escape_controls(&value)));
                 }
             }
         }
@@ -791,6 +825,73 @@ mod tests {
             permissions: PermissionSetV1::default(),
             development_source: None,
         }
+    }
+
+    #[test]
+    fn trust_review_escapes_fields_without_changing_grants_or_command_identity() {
+        let mut requirement = requirement(true);
+        requirement.target = "app/demo\x1b[31m\nFORGED".into();
+        requirement.capability = TrustCapabilityV1::AppHook;
+        requirement.permissions = PermissionSetV1::new([PermissionV1::Command {
+            program: "tool\targument".into(),
+        }]);
+        requirement.development_source = Some(TrustSourceV1 {
+            identity: SnapshotDigestV1::builder("source").finish(),
+            labels: vec!["external:/source\x1b[0m\nFORGED".into()],
+        });
+        let grant = TrustGrantV1::for_development_requirement(&requirement).unwrap();
+        let before = toml::to_string(&grant).unwrap();
+        let current = BTreeMap::from([(requirement.target.clone(), None)]);
+        let groups = build_list_groups(std::slice::from_ref(&grant), &current);
+        let requirements = std::slice::from_ref(&requirement);
+        for text in [
+            render_requirements(
+                &requirement.target,
+                requirements,
+                &[TrustDecisionV1::Missing],
+            ),
+            render_requirements("preset", requirements, &[TrustDecisionV1::Missing]),
+            render_list(&groups, 1, 1, false),
+            render_list(&groups, 1, 1, true),
+        ] {
+            assert!(!text.contains('\x1b') && !text.contains('\t'), "{text:?}");
+            assert!(
+                !text.lines().any(|line| line.starts_with("FORGED")),
+                "{text:?}"
+            );
+            assert!(text.contains("app/demo\\u{1b}[31m\\nFORGED"), "{text:?}");
+        }
+        let review = render_requirements(
+            &requirement.target,
+            requirements,
+            &[TrustDecisionV1::Missing],
+        );
+        assert!(review.contains("tool\\targument"), "{review:?}");
+        assert!(
+            review.contains("external:/source\\u{1b}[0m\\nFORGED"),
+            "{review:?}"
+        );
+        let hint = render_inspect_guidance(
+            &requirement.target,
+            requirements,
+            &[TrustDecisionV1::Missing],
+        );
+        assert!(
+            hint.contains("original target (control characters; copyable command omitted)"),
+            "{hint:?}"
+        );
+        assert!(!hint.contains('\x1b') && !hint.contains("grant app/demo\\u"));
+        let trusted = render_inspect_guidance(
+            &requirement.target,
+            requirements,
+            &[TrustDecisionV1::DevelopmentTrusted],
+        );
+        assert!(
+            trusted.contains("app/demo\\u{1b}[31m\\nFORGED"),
+            "{trusted:?}"
+        );
+        assert_eq!(toml::to_string(&grant).unwrap(), before);
+        assert!(validate_target(&requirement.target).is_ok());
     }
 
     #[tokio::test]

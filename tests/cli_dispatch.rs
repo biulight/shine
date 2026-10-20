@@ -37,6 +37,201 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn trust_list_and_revoke_escape_display_without_changing_stored_target_identity() {
+    use shine_core::plan::{PermissionSetV1, SnapshotDigestV1};
+    use shine_core::trust::{
+        TrustCapabilityV1, TrustGrantV1, TrustRequirementV1, TrustSourceV1, TrustStoreV1,
+    };
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(state.join("presets")).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    let target = "app/demo\x1b[31m\nFORGED";
+    let requirement = TrustRequirementV1 {
+        target: target.into(),
+        capability: TrustCapabilityV1::AppHook,
+        code_digest: SnapshotDigestV1::builder("code").finish(),
+        permissions_declared: true,
+        permissions: PermissionSetV1::default(),
+        development_source: Some(TrustSourceV1 {
+            identity: SnapshotDigestV1::builder("source").finish(),
+            labels: vec!["external:/source\x1b[0m\nFORGED".into()],
+        }),
+    };
+    let mut sibling = requirement.clone();
+    sibling.target = "app/sibling".into();
+    let store = TrustStoreV1 {
+        grants: vec![
+            TrustGrantV1::for_development_requirement(&requirement).unwrap(),
+            TrustGrantV1::for_reviewed_requirement(&sibling),
+        ],
+        ..Default::default()
+    };
+    let path = state.join("trust.toml");
+    fs::write(&path, toml::to_string_pretty(&store).unwrap()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let before = fs::read(&path).unwrap();
+    let run = |args: &[&str], code| {
+        let result = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(code), "{result:?}");
+        if code == 0 {
+            assert!(result.stderr.is_empty(), "{result:?}");
+        } else {
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("trust target must be"),
+                "{result:?}"
+            );
+        }
+        let text = String::from_utf8(result.stdout).unwrap();
+        assert!(!text.contains('\x1b'), "{text:?}");
+        assert!(
+            !text.lines().any(|line| line.starts_with("FORGED")),
+            "{text:?}"
+        );
+        text
+    };
+    for args in [vec!["trust", "list"], vec!["trust", "list", "--verbose"]] {
+        let text = run(&args, 0);
+        assert!(text.contains("app/demo\\u{1b}[31m\\nFORGED"), "{text:?}");
+        if args.len() == 3 {
+            assert!(
+                text.contains("external:/source\\u{1b}[0m\\nFORGED"),
+                "{text:?}"
+            );
+            assert!(
+                text.contains("original target (control characters; copyable command omitted)"),
+                "{text:?}"
+            );
+        } else {
+            let target_row = text
+                .lines()
+                .find(|line| line.starts_with("app/demo\\u"))
+                .unwrap();
+            let sibling_row = text
+                .lines()
+                .find(|line| line.starts_with("app/sibling"))
+                .unwrap();
+            assert_eq!(
+                target_row.find("development"),
+                sibling_row.find("snapshot"),
+                "{text}"
+            );
+        }
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+    run(&["trust", "revoke", "app/demo\\u{1b}[31m\\nFORGED"], 1);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let revoked = run(&["trust", "revoke", target], 0);
+    assert!(
+        revoked.contains("Revoked external-code trust for app/demo\\u{1b}[31m\\nFORGED."),
+        "{revoked:?}"
+    );
+    let remaining: TrustStoreV1 = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(remaining.grants.len(), 1);
+    assert_eq!(remaining.grants[0].target, "app/sibling");
+    let after = fs::read(&path).unwrap();
+    let absent = run(&["trust", "revoke", target], 0);
+    assert!(
+        absent.contains("No external-code trust grants matched app/demo\\u{1b}[31m\\nFORGED."),
+        "{absent:?}"
+    );
+    assert_eq!(fs::read(&path).unwrap(), after);
+}
+
+#[cfg(unix)]
+#[test]
+fn trust_enrollment_escapes_review_and_preserves_consent_and_modes() {
+    use shine_core::trust::{TrustModeV1, TrustStoreV1};
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let target = "app/demo\x1b[31m\nFORGED";
+    let category = state.join("presets").join(target);
+    fs::create_dir_all(&category).unwrap();
+    fs::write(state.join("config.toml"), "schema_version = 2\n").unwrap();
+    let metadata = "metadata_schema_version = 2\ndest = '~/.config/demo'\npost_install = { command = 'never-executed', args = [] }\n[[files]]\nsource = 'config.txt'\n";
+    fs::write(category.join("shine.toml"), metadata).unwrap();
+    fs::write(category.join("config.txt"), "preserve").unwrap();
+    let path = state.join("trust.toml");
+    let run = |args: &[&str], code| {
+        let result = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(code), "{result:?}");
+        let text = String::from_utf8(result.stdout).unwrap();
+        assert!(!text.contains('\x1b'), "{text:?}");
+        assert!(
+            !text.lines().any(|line| line.starts_with("FORGED")),
+            "{text:?}"
+        );
+        (text, result.stderr)
+    };
+    assert!(run(&["trust", "inspect", target], 0).1.is_empty());
+    assert!(!path.exists());
+    let denied = run(&["trust", "grant", target], 1);
+    assert!(
+        String::from_utf8(denied.1)
+            .unwrap()
+            .contains("requires an interactive terminal or explicit --yes")
+    );
+    assert!(!path.exists());
+    for development in [false, true] {
+        let mut args = vec!["trust", "grant", target, "--yes"];
+        if development {
+            args.push("--development");
+        }
+        let (granted, stderr) = run(&args, 0);
+        assert!(stderr.is_empty());
+        assert!(
+            granted.contains("app/demo\\u{1b}[31m\\nFORGED"),
+            "{granted:?}"
+        );
+        let store: TrustStoreV1 = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(store.grants.len(), 1);
+        let grant = &store.grants[0];
+        assert_eq!(grant.target, target);
+        assert_eq!(
+            grant.mode,
+            if development {
+                TrustModeV1::Development
+            } else {
+                TrustModeV1::Snapshot
+            }
+        );
+        let before = fs::read(&path).unwrap();
+        let (inspected, stderr) = run(&["trust", "inspect", target], 0);
+        assert!(stderr.is_empty());
+        assert!(inspected.contains(&grant.code_digest.as_hex()));
+        assert!(
+            inspected.contains(if development {
+                "development trusted"
+            } else {
+                "trusted [trusted]"
+            }),
+            "{inspected:?}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+    assert_eq!(
+        fs::read_to_string(category.join("shine.toml")).unwrap(),
+        metadata
+    );
+    assert_eq!(fs::read(category.join("config.txt")).unwrap(), b"preserve");
+    assert!(!fixture.0.join("home/.config/demo/config.txt").exists());
+}
+
+#[test]
 fn authoring_missing_control_path_preserves_json_and_failure_exits() {
     let fixture = Fixture::new();
     let path = fixture.0.join("missing\x1b[31m\nFORGED");

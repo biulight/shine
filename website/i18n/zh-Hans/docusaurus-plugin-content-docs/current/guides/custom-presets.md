@@ -217,6 +217,9 @@ Shell live 部署必须使用此模式。live 部署被阻止时，请先运行 
 store 中，Preset 不能随自身分发或启用它。
 默认的 `trust list` 会把安全范围相同的 capability 合并为一行，并显示每条已存 grant 当前是否有效；
 使用 `trust list --verbose` 可查看 capability 名称、本地开发来源标签与过期 grant 的复查提示。
+Trust 命令输出会转义 target、来源标签及作者 capability 说明中的控制字符，已存身份不变。
+target 含控制字符时，复查提示会省略可复制命令；请将原始 target 参数传给
+`trust inspect` 或 `trust grant`。
 
 每个外部 Shell command 都采用规范 target `shell/<CATEGORY>/<COMMAND>`。使用 `preset` 可以一次审阅或信任当前激活 Preset 快照中的全部可执行
 target；Shine 底层仍会按所选模式为各 target 保存独立的 target-local grant。撤销 `preset` 会清除所有已保存的
