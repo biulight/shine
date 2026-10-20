@@ -252,6 +252,11 @@ shine preset overlay unlink
 shine preset pull
 ```
 
+`preset overlay info` 展示实际生效的 overlay；项目的本地 overlay 优先于继承的 Git overlay。
+存在项目配置时，仅设置 `SHINE_CONFIG_DIR` 不会覆盖 `preset link` 选定的目录；
+`SHINE_PRESETS` 仍具有更高优先级。`preset unlink` 移除保存的设置，但环境覆盖和继承设置
+仍然适用，因此下次运行可能继续使用外部预设目录。
+
 发布预设前使用 `validate`、`lint`、`plan` 和 `test`。这些命令只检查创作输入，不会安装预设。
 `migrate --dry-run` 用于预览旧 metadata 迁移，实际应用前需要审阅并确认。Git 管理的 overlay 是
 可丢弃镜像，应在上游 checkout 中编辑，而不是修改镜像。

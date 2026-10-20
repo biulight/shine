@@ -1310,7 +1310,9 @@ available per project. Inherited global mirrors can still be inspected and pulle
 
 `config/discovery.rs` priority chain (highest first):
 `SHINE_CONFIG_DIR` env → `SHINE_PRESETS` env (presets dir only) → `presets_dir` in
-`config.toml` → default `~/.shine/`. Project-local configs inherit unset keys from the global
+`config.toml` → default `~/.shine/`, without project config. An explicit project `presets_dir`
+overrides `SHINE_CONFIG_DIR`'s presets default; `SHINE_PRESETS` still wins with project config.
+Project-local configs inherit unset keys from the global
 config (see lessons entry 2026-07-04 on inheritance). `Config` saves use
 `shine_core::sync_table`; directed key edits use `toml_edit`. Both preserve TOML comments. CLI runtime assembly makes selected roots
 lexically absolute before snapshot capture and planning; it does not resolve ordinary directory

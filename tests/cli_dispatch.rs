@@ -1987,6 +1987,233 @@ fn self_upgrade_preserves_error_chain_without_printing_credentials() {
 }
 
 #[test]
+fn preset_link_warning_matches_project_and_environment_source_selection() {
+    for (project, env_presets, warns, selected) in [
+        (false, None, true, "state-source"),
+        (true, None, false, "linked-source"),
+        (true, Some(""), false, "linked-source"),
+        (true, Some("env"), true, "env-source"),
+    ] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        let project_dir = fixture.0.join("project");
+        let linked = fixture.0.join("linked");
+        let env_source = fixture.0.join("env-source");
+        fs::create_dir_all(&project_dir).unwrap();
+        let script = if cfg!(windows) { "run.ps1" } else { "run.sh" };
+        for (source, category) in [
+            (state.join("presets"), "state-source"),
+            (linked.clone(), "linked-source"),
+            (env_source.clone(), "env-source"),
+        ] {
+            let category = source.join("shell").join(category);
+            fs::create_dir_all(&category).unwrap();
+            fs::write(
+                category.join("shine.toml"),
+                format!("[[files]]\nsource = '{script}'\n"),
+            )
+            .unwrap();
+            fs::write(category.join(script), "# inspection only\n").unwrap();
+        }
+        let global_config = "schema_version = 2\n# retain global settings\ncustom = 'keep'\n";
+        fs::write(state.join("config.toml"), global_config).unwrap();
+        if project {
+            fs::write(
+                project_dir.join("shine.config.toml"),
+                "# retain project settings\ncustom = 'keep'\npresets_dir = 'old-source'\n",
+            )
+            .unwrap();
+        }
+        let command = || {
+            let mut command = fixture.command();
+            if project {
+                command.current_dir(&project_dir);
+            }
+            if let Some(value) = env_presets {
+                command.env(
+                    "SHINE_PRESETS",
+                    if value.is_empty() {
+                        PathBuf::new()
+                    } else {
+                        env_source.clone()
+                    },
+                );
+            }
+            command
+        };
+        let output = command()
+            .args(["preset", "link", "--live"])
+            .arg(&linked)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(stdout.contains("Warning:"), warns, "{output:?}");
+        assert!(stdout.contains("Shell mode: live"), "{output:?}");
+        let config_path = if project {
+            project_dir.join("shine.config.toml")
+        } else {
+            state.join("config.toml")
+        };
+        let saved = fs::read(&config_path).unwrap();
+        let config: toml::Table = toml::from_str(std::str::from_utf8(&saved).unwrap()).unwrap();
+        assert_eq!(
+            PathBuf::from(config["presets_dir"].as_str().unwrap()),
+            fs::canonicalize(&linked).unwrap()
+        );
+        assert_eq!(config["external_shell_mode"].as_str(), Some("live"));
+        assert_eq!(config["custom"].as_str(), Some("keep"));
+        let list = command().args(["shell", "list"]).output().unwrap();
+        assert_eq!(list.status.code(), Some(0), "{list:?}");
+        assert!(list.stderr.is_empty(), "{list:?}");
+        assert!(
+            String::from_utf8_lossy(&list.stdout).contains(selected),
+            "{list:?}"
+        );
+        assert_eq!(fs::read(config_path).unwrap(), saved);
+        if project {
+            assert_eq!(
+                fs::read(state.join("config.toml")).unwrap(),
+                global_config.as_bytes()
+            );
+        }
+        for (source, category) in [
+            (state.join("presets"), "state-source"),
+            (linked, "linked-source"),
+            (env_source, "env-source"),
+        ] {
+            assert_eq!(
+                fs::read(source.join("shell").join(category).join(script)).unwrap(),
+                b"# inspection only\n"
+            );
+        }
+        assert!(!state.join("shell-manifest.toml").exists());
+        assert!(!state.join("installed").exists());
+        assert!(!state.join("trust.toml").exists());
+    }
+}
+
+#[test]
+fn preset_unlink_reports_saved_scope_without_promising_the_next_source() {
+    for (project, config_env, presets_env, selected) in [
+        (false, true, false, Some("state-source")),
+        (true, true, true, Some("env-source")),
+        (true, false, false, Some("global-source")),
+        (false, false, false, None),
+    ] {
+        let fixture = Fixture::new();
+        let state = fixture
+            .0
+            .join(if config_env { "state" } else { "home/.shine" });
+        let project_dir = fixture.0.join("project");
+        let global_source = fixture.0.join("global-source");
+        let env_source = fixture.0.join("env-source");
+        fs::create_dir_all(&project_dir).unwrap();
+        let script = if cfg!(windows) { "run.ps1" } else { "run.sh" };
+        for (source, category) in [
+            (state.join("presets"), "state-source"),
+            (global_source.clone(), "global-source"),
+            (env_source.clone(), "env-source"),
+        ] {
+            let category = source.join("shell").join(category);
+            fs::create_dir_all(&category).unwrap();
+            fs::write(
+                category.join("shine.toml"),
+                format!("[[files]]\nsource = '{script}'\n"),
+            )
+            .unwrap();
+            fs::write(category.join(script), "# inspection only\n").unwrap();
+        }
+        let global_config = format!(
+            "schema_version = 2\n# retained\ncustom = 'keep'\nexternal_shell_mode = 'live'\npresets_dir = {}\n",
+            toml::Value::String(global_source.to_string_lossy().into_owned())
+        );
+        fs::write(state.join("config.toml"), &global_config).unwrap();
+        if project {
+            fs::write(project_dir.join("shine.config.toml"), "# retained\ncustom = 'keep'\npresets_dir = 'local-source'\nexternal_shell_mode = 'live'\n").unwrap();
+        }
+        let command = || {
+            let mut command = fixture.command();
+            if project {
+                command.current_dir(&project_dir);
+            }
+            if !config_env {
+                command.env_remove("SHINE_CONFIG_DIR");
+            }
+            if presets_env {
+                command.env("SHINE_PRESETS", &env_source);
+            }
+            command
+        };
+        let output = command().args(["preset", "unlink"]).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("removed from the active config"),
+            "{output:?}"
+        );
+        assert!(
+            stdout.contains(
+                "Environment overrides and inherited settings still apply on the next run."
+            ),
+            "{output:?}"
+        );
+        assert!(
+            !stdout.contains("Built-in embedded presets will be used"),
+            "{output:?}"
+        );
+        let config_path = if project {
+            project_dir.join("shine.config.toml")
+        } else {
+            state.join("config.toml")
+        };
+        let saved = fs::read_to_string(&config_path).unwrap();
+        let config: toml::Table = toml::from_str(&saved).unwrap();
+        assert!(!config.contains_key("presets_dir"));
+        assert_eq!(config["custom"].as_str(), Some("keep"));
+        assert!(saved.contains("# retained"));
+        assert_ne!(
+            config
+                .get("external_shell_mode")
+                .and_then(toml::Value::as_str),
+            Some("live")
+        );
+        let list = command().args(["shell", "list"]).output().unwrap();
+        assert_eq!(list.status.code(), Some(0), "{list:?}");
+        assert!(list.stderr.is_empty(), "{list:?}");
+        let stdout = String::from_utf8_lossy(&list.stdout);
+        if let Some(category) = selected {
+            assert!(stdout.contains(category), "{list:?}");
+        } else {
+            assert!(stdout.contains("built-in"), "{list:?}");
+            assert!(!stdout.contains("global-source"), "{list:?}");
+        }
+        assert_eq!(fs::read_to_string(config_path).unwrap(), saved);
+        if project {
+            assert_eq!(
+                fs::read_to_string(state.join("config.toml")).unwrap(),
+                global_config
+            );
+        }
+        for (source, category) in [
+            (state.join("presets"), "state-source"),
+            (global_source, "global-source"),
+            (env_source, "env-source"),
+        ] {
+            assert_eq!(
+                fs::read(source.join("shell").join(category).join(script)).unwrap(),
+                b"# inspection only\n"
+            );
+        }
+        assert!(!state.join("shell-manifest.toml").exists());
+        assert!(!state.join("installed").exists());
+        assert!(!state.join("trust.toml").exists());
+    }
+}
+
+#[test]
 fn overlay_unlink_reports_inheritance_without_removing_global_or_source_files() {
     let fixture = Fixture::new();
     let state = fixture.0.join("state");

@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-20 — Preset source messages must follow effective scope
+
+- **Symptoms**: overlay info preferred inherited Git settings over an active project directory;
+  project link warned that `SHINE_CONFIG_DIR` blocked an already effective setting; base-source
+  unlink promised embedded presets despite environment overrides or global inheritance.
+- **Fix**: reuse effective overlay selection and project-scope detection only in presentation.
+  Keep unlink wording scoped to the saved setting without reloading config or predicting a source.
+  Source resolution, saves, approval, execution and exits remain unchanged.
+- **Coverage**: real CLI tests compare notices with subsequent catalogs and environment reads,
+  covering project/manual versus inherited Git overlays, true and false environment warnings,
+  blank overrides, unlink to environment/global/embedded sources, and retained configuration,
+  source files and absent installation/trust state.
+
 ## 2026-10-20 — Preserve note streams and distinguish selection from review
 
 - **Symptoms**: App install/upgrade/refresh redirected generator stderr notes to stdout; Shell

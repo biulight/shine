@@ -307,6 +307,12 @@ shine preset overlay unlink
 shine preset pull
 ```
 
+`preset overlay info` reports the effective overlay, including a project's local overlay in
+preference to an inherited Git overlay. With a project configuration, `SHINE_CONFIG_DIR` alone
+does not override a directory selected by `preset link`; `SHINE_PRESETS` still takes priority.
+`preset unlink` removes the saved setting. Environment overrides and inherited settings still
+apply, so the next run may continue to use an external presets directory.
+
 Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These commands inspect
 authoring input without installing it. `migrate --dry-run` previews legacy metadata changes;
 applying a migration requires review and confirmation. A Git-managed overlay is a disposable mirror,

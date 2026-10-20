@@ -196,9 +196,11 @@ async fn handle_link(
 
     match kind {
         LinkKind::Presets => {
-            if std::env::var("SHINE_CONFIG_DIR")
-                .map(|v| !v.trim().is_empty())
-                .unwrap_or(false)
+            // An explicit project source survives SHINE_CONFIG_DIR's presets default.
+            if (!config.is_project_config()
+                && std::env::var("SHINE_CONFIG_DIR")
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false))
                 || std::env::var("SHINE_PRESETS")
                     .map(|v| !v.trim().is_empty())
                     .unwrap_or(false)
@@ -273,7 +275,7 @@ pub async fn handle_preset_unlink(config: &Config) -> Result<()> {
     );
     println!(
         "{}",
-        colors::dim("Built-in embedded presets will be used on the next run.")
+        colors::dim("Environment overrides and inherited settings still apply on the next run.")
     );
 
     Ok(())
@@ -372,7 +374,9 @@ pub async fn handle_overlay_unlink(config: &Config) -> Result<()> {
 }
 
 pub fn handle_overlay_info(config: &Config) -> Result<()> {
-    if let Some((url, branch, dir)) = config.overlay_git_source() {
+    if config.presets_overlay_dir_override.is_none()
+        && let Some((url, branch, dir)) = config.overlay_git_source()
+    {
         println!("{}", colors::green(&format!("Overlay Git source: {url}")));
         if let Some(branch) = branch {
             println!("  {} {branch}", colors::dim("branch:"));
@@ -389,7 +393,7 @@ pub fn handle_overlay_info(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(dir) = &config.presets_overlay_dir_override {
+    if let Some(dir) = config.active_presets_overlay_dir() {
         println!("{}", colors::presets_overlay_note(dir));
         println!("{}", colors::green("Active"));
     } else {

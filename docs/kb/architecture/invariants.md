@@ -922,9 +922,13 @@ bugs. Check this list before changing the modules named in each entry.
   initialization or advisory work so refusal cannot initialize global state. Project-specific
   overlays use manual directory links;
   inherited global Git overlays remain readable and pullable from projects.
-- **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
-  key > `~/.shine/` default. Code and
-  [`data-flows.md`](data-flows.md#config-discovery) must agree.
+- **Config discovery priority is fixed.** Without project config, `SHINE_CONFIG_DIR` >
+  `SHINE_PRESETS` > `presets_dir` key > `~/.shine/` default. With project config, an explicit
+  project `presets_dir` can override `SHINE_CONFIG_DIR`'s presets default; `SHINE_PRESETS` still
+  wins. Source notices must respect that scope. Overlay info follows the effective manual
+  directory before inherited Git settings; unlink messages do not promise embedded fallback.
+  Source notices never reload config to predict post-save state or change source resolution.
+  Code and [`data-flows.md`](data-flows.md#config-discovery) must agree.
 - **External app preset hooks and generators require scoped trust.** `post_upgrade`
   runs commands after upgrades, while an automatic file generator may run during an approved
   install/upgrade and supply effective source bytes. Embedded code may run implicitly, but external
