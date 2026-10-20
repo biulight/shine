@@ -261,8 +261,13 @@ async fn migrate_workspace_gpg_recipient(path: &Path) -> Result<bool> {
         if version > 3 {
             bail!("workspace version {version} is newer than this shine supports (3)");
         }
+        workspace_migration_encryption(document)?;
         let mut changed = false;
-        let encryption = document["env"]["encryption"].as_table_mut();
+        let encryption = document
+            .get_mut("env")
+            .and_then(toml_edit::Item::as_table_like_mut)
+            .and_then(|env| env.get_mut("encryption"))
+            .and_then(toml_edit::Item::as_table_mut);
         if let Some(table) = encryption {
             changed |= migrate_table_key(table, "recipient", "gpg_recipients")?;
             changed |= migrate_age_recipients(table)? > 0;
@@ -284,9 +289,7 @@ async fn migrate_recipient_key(
     let contents = input
         .contents
         .context("recipient migration target disappeared; retry")?;
-    let mut document = contents
-        .parse::<toml_edit::DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let mut document = parse_migration_document(&contents, path)?;
     if mutate(&mut document)? {
         crate::persist::atomic_write_private(path, document.to_string().as_bytes())
             .await
@@ -296,23 +299,51 @@ async fn migrate_recipient_key(
     Ok(false)
 }
 
+fn parse_migration_document(contents: &str, path: &Path) -> Result<toml_edit::DocumentMut> {
+    // Parser errors retain source snippets and may echo values or duplicate keys.
+    // Drop that chain, as environment-source parsing does, and keep only the file.
+    contents
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid migration TOML syntax in {}", path.display()))
+}
+
+fn workspace_migration_encryption(
+    document: &toml_edit::DocumentMut,
+) -> Result<Option<&toml_edit::Item>> {
+    let Some(env) = document.get("env") else {
+        return Ok(None);
+    };
+    let env = env
+        .as_table_like()
+        .context("workspace env must be a table")?;
+    let encryption = env.get("encryption");
+    if let Some(encryption) = encryption {
+        anyhow::ensure!(
+            encryption.is_table_like(),
+            "workspace env.encryption must be a table"
+        );
+    }
+    Ok(encryption)
+}
+
 async fn workspace_needs_migration(path: &Path) -> Result<bool> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
-    let document = contents
-        .parse::<toml_edit::DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let document = parse_migration_document(&contents, path)?;
+    let encryption = workspace_migration_encryption(&document)?;
     Ok(document
         .as_table()
         .get("version")
         .and_then(toml_edit::Item::as_integer)
         .unwrap_or(1)
         < 2
-        || document["env"]["encryption"]["recipient"].is_value()
+        || encryption
+            .and_then(|table| table.get("recipient"))
+            .is_some_and(toml_edit::Item::is_value)
         || age_migration_count(
-            document["env"]["encryption"]
-                .as_table()
+            encryption
+                .and_then(toml_edit::Item::as_table)
                 .and_then(|table| table.get("age_recipients")),
         )? > 0)
 }
@@ -321,9 +352,7 @@ async fn config_needs_migration(path: &Path) -> Result<bool> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
-    let document = contents
-        .parse::<toml_edit::DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let document = parse_migration_document(&contents, path)?;
     Ok(document.as_table().contains_key("gpg_key_id")
         || age_migration_count(document.as_table().get("age_recipients"))? > 0)
 }
@@ -332,9 +361,7 @@ async fn config_age_migration_count(path: &Path) -> Result<usize> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
-    let document = contents
-        .parse::<toml_edit::DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let document = parse_migration_document(&contents, path)?;
     age_migration_count(document.as_table().get("age_recipients"))
 }
 
@@ -342,12 +369,11 @@ async fn workspace_age_migration_count(path: &Path) -> Result<usize> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
-    let document = contents
-        .parse::<toml_edit::DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let document = parse_migration_document(&contents, path)?;
+    let encryption = workspace_migration_encryption(&document)?;
     age_migration_count(
-        document["env"]["encryption"]
-            .as_table()
+        encryption
+            .and_then(toml_edit::Item::as_table)
             .and_then(|table| table.get("age_recipients")),
     )
 }
@@ -435,8 +461,8 @@ async fn save_runtime_schema_state(config: &Config) -> Result<()> {
     let path = config.global_config_path();
     let _guard = crate::config::env_write::lock_target(&path).await?;
     let input = crate::config::ConfigInput::capture(&path).await?;
-    let mut document: toml_edit::DocumentMut =
-        input.contents.as_deref().unwrap_or_default().parse()?;
+    let mut document =
+        parse_migration_document(input.contents.as_deref().unwrap_or_default(), &path)?;
     if document
         .get("schema_version")
         .and_then(toml_edit::Item::as_integer)
@@ -459,6 +485,83 @@ mod tests {
 
     async fn make_temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-state-migrate").await
+    }
+
+    #[tokio::test]
+    async fn migration_document_readers_do_not_retain_source_in_errors() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let path = config.config_path();
+        for contents in [
+            "[env]\nTOKEN = \"PRIVATE_MIGRATION_CANARY_UNCLOSED\n",
+            "PRIVATE_MIGRATION_CANARY_KEY = 1\nPRIVATE_MIGRATION_CANARY_KEY = 2\n",
+        ] {
+            fs::write(path, contents).await.unwrap();
+            let errors = [
+                config_needs_migration(path).await.unwrap_err(),
+                workspace_needs_migration(path).await.unwrap_err(),
+                config_age_migration_count(path).await.unwrap_err(),
+                workspace_age_migration_count(path).await.unwrap_err(),
+                migrate_config_gpg_recipient(path).await.unwrap_err(),
+                migrate_workspace_gpg_recipient(path).await.unwrap_err(),
+                save_runtime_schema_state(&config).await.unwrap_err(),
+            ];
+            for error in errors {
+                // Check the complete retained chain and Debug, not just the outer
+                // context: anyhow prints the parser's source snippet on CLI failure.
+                for diagnostic in [format!("{error:#}"), format!("{error:?}")] {
+                    assert!(diagnostic.contains("invalid migration TOML syntax"));
+                    assert!(diagnostic.contains("config.toml"));
+                    assert!(
+                        !diagnostic.contains("PRIVATE_MIGRATION_CANARY"),
+                        "{diagnostic}"
+                    );
+                    assert!(!diagnostic.contains("TOKEN ="), "{diagnostic}");
+                }
+            }
+            assert_eq!(fs::read_to_string(path).await.unwrap(), contents);
+        }
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workspace_migration_readers_validate_table_shapes_without_changing_valid_inputs() {
+        let dir = make_temp_dir().await;
+        let path = dir.join("shine.workspace.toml");
+        for (contents, field) in [
+            ("version=2\nenv=1\n", "env"),
+            ("version=2\nenv=[]\n", "env"),
+            ("version=2\n[[env]]\n", "env"),
+            ("version=2\n[env]\nencryption=1\n", "env.encryption"),
+            ("version=2\n[env]\nencryption=[]\n", "env.encryption"),
+            ("version=2\n[[env.encryption]]\n", "env.encryption"),
+        ] {
+            fs::write(&path, contents).await.unwrap();
+            for error in [
+                workspace_age_migration_count(&path).await.unwrap_err(),
+                workspace_needs_migration(&path).await.unwrap_err(),
+                migrate_workspace_gpg_recipient(&path).await.unwrap_err(),
+            ] {
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("workspace {field} must be a table"))
+                );
+            }
+            assert_eq!(fs::read_to_string(&path).await.unwrap(), contents);
+        }
+        for contents in [
+            "version=2\n",
+            "version=2\n[env.encryption]\n",
+            "version=2\nenv={ encryption={} }\n",
+        ] {
+            fs::write(&path, contents).await.unwrap();
+            assert_eq!(workspace_age_migration_count(&path).await.unwrap(), 0);
+            assert!(!workspace_needs_migration(&path).await.unwrap());
+            assert!(!migrate_workspace_gpg_recipient(&path).await.unwrap());
+            assert_eq!(fs::read_to_string(&path).await.unwrap(), contents);
+        }
+        fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]

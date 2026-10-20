@@ -1,5 +1,23 @@
 # Lessons Learned
 
+## 2026-10-21 — Invalid migration inputs must fail without source excerpts or panics
+
+- **Symptom**: `state migrate` and its dry run returned 1 for a malformed project/workspace file
+  but echoed a plaintext test value in the parser's source excerpt on stderr.
+- **Cause**: adding a file context to a TOML parser error retained the original source-bearing
+  chain; hiding only the outer error would still leak through CLI or Debug formatting.
+- **Related failure**: scalar or array `env`/`env.encryption` values reached nested TOML indexing
+  and panicked with exit 101 instead of returning an ordinary invalid-configuration error.
+  Missing optional tables or recipient keys could also panic during inspection.
+- **Fix**: use one migration-local document parser with a file-only error in all inspection,
+  rewrite and final schema-patch readers. Keep the existing read, lock, validation and write order.
+  Validate table shapes and use optional lookups, without adding encryption tables or expanding
+  inline-table conversion rules.
+- **Coverage**: real CLI cases cover project/workspace files, old/current global schemas and
+  preview/apply, asserting exit 1 and unchanged config/cache bytes. Owner-level cases cover every
+  document reader with invalid strings and duplicate keys, checking Display and Debug chains.
+  Workspace reader tests cover invalid shapes and preserve valid missing, standard and inline tables.
+
 ## 2026-10-21 — PowerShell exports must cross the native pipeline intact
 
 - **Symptoms**: the shipped PowerShell export helper rejected multiline values as `System.Object[]`

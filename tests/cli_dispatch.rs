@@ -37,6 +37,100 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn state_migration_rejects_invalid_documents_before_cleanup_or_writes() {
+    for schema in [0, 2] {
+        for (name, contents, message) in [
+            (
+                "shine.config.toml",
+                "[env]\nTOKEN = \"PRIVATE_MIGRATION_CANARY_UNCLOSED\n",
+                "invalid migration TOML syntax",
+            ),
+            (
+                "shine.workspace.toml",
+                "[env]\nTOKEN = \"PRIVATE_MIGRATION_CANARY_UNCLOSED\n",
+                "invalid migration TOML syntax",
+            ),
+            (
+                "shine.workspace.toml",
+                "version=2\nenv='PRIVATE_MIGRATION_CANARY'\n",
+                "workspace env must be a table",
+            ),
+            (
+                "shine.workspace.toml",
+                "version=2\n[env]\nencryption='PRIVATE_MIGRATION_CANARY'\n",
+                "workspace env.encryption must be a table",
+            ),
+        ] {
+            for dry_run in [false, true] {
+                let fixture = Fixture::new();
+                let state = fixture.0.join("state");
+                fs::create_dir(&state).unwrap();
+                let config = state.join("config.toml");
+                let original =
+                    format!("schema_version = {schema}\ngpg_key_id = 'fixture@example.invalid'\n");
+                fs::write(&config, &original).unwrap();
+                let cache = state.join("update-check.json");
+                fs::write(&cache, b"preserve-cache").unwrap();
+                let malformed = fixture.0.join(name);
+                fs::write(&malformed, contents).unwrap();
+                let mut command = fixture.command();
+                command.env_remove("SUDO_USER").args(["state", "migrate"]);
+                if dry_run {
+                    command.arg("--dry-run");
+                }
+                let result = command.output().unwrap();
+                assert_eq!(result.status.code(), Some(1), "{result:?}");
+                assert!(result.stdout.is_empty(), "{result:?}");
+                let diagnostic = String::from_utf8(result.stderr).unwrap();
+                assert!(diagnostic.contains(name), "{diagnostic}");
+                assert!(diagnostic.contains(message), "{diagnostic}");
+                assert!(
+                    !diagnostic.contains("PRIVATE_MIGRATION_CANARY"),
+                    "{diagnostic}"
+                );
+                assert!(!diagnostic.contains("TOKEN ="), "{diagnostic}");
+                assert_eq!(fs::read(&config).unwrap(), original.as_bytes());
+                assert_eq!(fs::read(&cache).unwrap(), b"preserve-cache");
+                assert_eq!(fs::read(&malformed).unwrap(), contents.as_bytes());
+                assert_eq!(fs::read_dir(&state).unwrap().count(), 2);
+            }
+        }
+    }
+}
+
+#[test]
+fn state_migration_accepts_workspace_without_encryption_settings() {
+    for contents in [
+        "version=2\n",
+        "version=2\n[env]\n",
+        "version=2\n[env.encryption]\n",
+        "version=2\nenv={ encryption={} }\n",
+    ] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        fs::create_dir(&state).unwrap();
+        let original = b"schema_version=2\nlast_cleared_schema_version=2\n";
+        fs::write(state.join("config.toml"), original).unwrap();
+        let workspace = fixture.0.join("shine.workspace.toml");
+        fs::write(&workspace, contents).unwrap();
+        for dry_run in [true, false] {
+            let mut command = fixture.command();
+            command.env_remove("SUDO_USER").args(["state", "migrate"]);
+            if dry_run {
+                command.arg("--dry-run");
+            }
+            let result = command.output().unwrap();
+            assert_eq!(result.status.code(), Some(0), "{result:?}");
+            assert!(result.stderr.is_empty(), "{result:?}");
+            assert!(String::from_utf8_lossy(&result.stdout).contains("already current"));
+            assert_eq!(fs::read(state.join("config.toml")).unwrap(), original);
+            assert_eq!(fs::read(&workspace).unwrap(), contents.as_bytes());
+            assert_eq!(fs::read_dir(&state).unwrap().count(), 1);
+        }
+    }
+}
+
+#[test]
 fn preset_links_reject_unrepresentable_operands_before_alias_selection_or_creation() {
     #[cfg(unix)]
     let component = {

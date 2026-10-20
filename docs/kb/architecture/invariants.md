@@ -846,6 +846,14 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Config files
 
+- **Runtime migration syntax errors do not retain source values.** The recipient inspection,
+  rewrite and final schema-state patch in `state migrate` share a file-only TOML parse diagnostic.
+  Drop the original parser error, including its source excerpt, duplicate-key text and Debug chain.
+  Project/workspace validation still precedes cleanup and writes in both preview and apply modes.
+  Workspace `env` and `env.encryption` must be table-like when present: scalar, array and
+  array-of-tables inputs return ordinary redacted errors, never panics. Use optional lookups for
+  absent settings; do not create encryption tables or expand inline-table recipient conversion.
+
 - **Self-install persists the path it actually writes.** Resolve `--dest` relative to the invocation
   cwd before installation and save the absolute path. Config-relative interpretation on reload must
   not redirect later upgrade synchronization to another binary.

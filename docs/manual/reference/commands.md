@@ -222,6 +222,11 @@ shine completions <bash|zsh|powershell>
 Dynamic completion includes candidates from the selected Preset source and its active overlay.
 Tab completion does not execute Preset code or grant trust.
 
+`state migrate` validates project configuration and workspace files before cleanup or writes.
+Invalid TOML syntax or workspace `env`/`env.encryption` fields that are not tables produce an
+error with the file location and exit code 1, without quoting file contents. Correct the file
+and retry; `--dry-run` uses the same validation.
+
 If the Shine release check cannot finish, `update` prints a warning and still reports configuration
 updates. When no configuration updates are found, it explicitly says the version check is incomplete
 instead of claiming there is nothing to update. A release-check failure alone remains non-fatal.
