@@ -316,6 +316,10 @@ shine preset overlay info
 shine preset overlay unlink
 ```
 
+`preset link` 和 `preset overlay link` 的本地路径（包括解析符号链接后的目标）必须是有效的
+UTF-8。路径无法表示或所需的主目录无法按 UTF-8 展开时，命令会失败，不会链接到拼写不同的
+目录；`--create` 也不会绕过此检查。
+
 解除链接只移除当前配置中的 overlay 设置，不删除源文件。移除项目覆盖设置后，可能重新继承
 全局 overlay；可运行 `shine preset overlay info` 查看之后实际生效的 overlay。
 

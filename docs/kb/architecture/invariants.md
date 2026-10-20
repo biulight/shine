@@ -939,6 +939,11 @@ bugs. Check this list before changing the modules named in each entry.
   directory before inherited Git settings; unlink messages do not promise embedded fallback.
   Source notices never reload config to predict post-save state or change source resolution.
   Code and [`data-flows.md`](data-flows.md#config-discovery) must agree.
+- **Local Preset registration must not select lossy path aliases.** Both link modes reject
+  unrepresentable native operands before `--create` and unrepresentable resolved directory paths
+  before saving UTF-8 configuration. Expand with the captured config home. Shared full expansion
+  rejects an unrepresentable home only when `~` or `$HOME` actually needs it; unrelated absolute
+  and relative paths keep their existing behavior. Keep source modes, config locks and delta saves.
 - **External app preset hooks and generators require scoped trust.** `post_upgrade`
   runs commands after upgrades, while an automatic file generator may run during an approved
   install/upgrade and supply effective source bytes. Embedded code may run implicitly, but external

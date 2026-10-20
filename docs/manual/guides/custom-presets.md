@@ -357,6 +357,10 @@ shine preset overlay info
 shine preset overlay unlink
 ```
 
+Local `preset link` and `preset overlay link` paths, including resolved symlink targets, must be
+valid UTF-8. An invalid path or a required non-UTF-8 home expansion fails instead of linking a
+differently spelled directory; `--create` does not bypass this check.
+
 Unlink removes overlay settings from the active configuration; it does not delete source files.
 Removing a project override can restore an inherited global overlay. Run `shine preset overlay info`
 to inspect the effective overlay afterward.

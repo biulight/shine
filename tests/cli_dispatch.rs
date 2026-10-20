@@ -37,6 +37,220 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn preset_links_reject_unrepresentable_operands_before_alias_selection_or_creation() {
+    #[cfg(unix)]
+    let component = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(b"source-\xff".to_vec())
+    };
+    #[cfg(windows)]
+    let component = {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[b's' as u16, 0xd800])
+    };
+    for args in [vec!["preset", "link"], vec!["preset", "overlay", "link"]] {
+        for create in [false, true] {
+            for alias_exists in [true, false] {
+                let fixture = Fixture::new();
+                let state = fixture.0.join("state");
+                fs::create_dir_all(&state).unwrap();
+                let config = state.join("config.toml");
+                let before = b"schema_version = 2\n# unrelated setting\n[env]\nKEY = 'unchanged'\n";
+                fs::write(&config, before).unwrap();
+                let raw = fixture.0.join(&component);
+                let alias = fixture.0.join(component.to_string_lossy().as_ref());
+                if alias_exists {
+                    fs::create_dir_all(&alias).unwrap();
+                    fs::write(alias.join("marker"), "sibling").unwrap();
+                }
+                let mut command = fixture.command();
+                command.env("NO_COLOR", "1").args(&args).arg(&raw);
+                if create {
+                    command.arg("--create");
+                }
+                let result = command.output().unwrap();
+                assert_eq!(
+                    result.status.code(),
+                    Some(1),
+                    "{args:?} create={create} alias={alias_exists}: {result:?}"
+                );
+                assert!(
+                    String::from_utf8_lossy(&result.stderr).contains("not valid UTF-8"),
+                    "{result:?}"
+                );
+                assert!(
+                    !String::from_utf8_lossy(&result.stdout).contains("Preset Source"),
+                    "{result:?}"
+                );
+                assert!(
+                    !String::from_utf8_lossy(&result.stdout).contains("Presets Overlay"),
+                    "{result:?}"
+                );
+                assert_eq!(fs::read(&config).unwrap(), before);
+                assert!(!raw.exists());
+                assert_eq!(alias.exists(), alias_exists);
+                if alias_exists {
+                    assert_eq!(fs::read(alias.join("marker")).unwrap(), b"sibling");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preset_links_reject_lossy_home_expansion_but_accept_unrelated_absolute_paths() {
+    use std::os::unix::ffi::OsStringExt;
+    for args in [vec!["preset", "link"], vec!["preset", "overlay", "link"]] {
+        for operand in ["~/source", "$HOME/source", "${HOME}/source"] {
+            let fixture = Fixture::new();
+            let raw_home = fixture
+                .0
+                .join(std::ffi::OsString::from_vec(b"home-\xff".to_vec()));
+            let alias = fixture.0.join("home-\u{fffd}/source");
+            fs::create_dir_all(&alias).unwrap();
+            fs::write(alias.join("marker"), "sibling").unwrap();
+            let state = fixture.0.join("state");
+            fs::create_dir_all(&state).unwrap();
+            let config = state.join("config.toml");
+            let before = b"schema_version = 2\n# preserve this config\n";
+            fs::write(&config, before).unwrap();
+            let run = |operand: &std::ffi::OsStr| {
+                fixture
+                    .command()
+                    .env("HOME", &raw_home)
+                    .env_remove("SUDO_USER")
+                    .args(&args)
+                    .arg(operand)
+                    .output()
+                    .unwrap()
+            };
+            let result = run(std::ffi::OsStr::new(operand));
+            assert_eq!(
+                result.status.code(),
+                Some(1),
+                "{args:?} {operand}: {result:?}"
+            );
+            assert_eq!(fs::read(&config).unwrap(), before);
+            assert_eq!(fs::read(alias.join("marker")).unwrap(), b"sibling");
+            let selected = fixture.0.join("absolute-source");
+            fs::create_dir_all(&selected).unwrap();
+            let result = run(selected.as_os_str());
+            assert_eq!(result.status.code(), Some(0), "{result:?}");
+            let saved: toml::Value = toml::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+            let key = if args.len() == 2 {
+                "presets_dir"
+            } else {
+                "presets_overlay_dir"
+            };
+            assert_eq!(
+                saved[key].as_str().unwrap(),
+                fs::canonicalize(selected).unwrap().to_str().unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn preset_links_keep_utf8_expansion_create_modes_and_noop_persistence() {
+    for (args, key, mode) in [
+        (vec!["preset", "link"], "presets_dir", "snapshot"),
+        (vec!["preset", "link", "--live"], "presets_dir", "live"),
+        (
+            vec!["preset", "overlay", "link"],
+            "presets_overlay_dir",
+            "snapshot",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        fs::create_dir_all(&state).unwrap();
+        let config = state.join("config.toml");
+        fs::write(
+            &config,
+            "schema_version = 2\n# preserve comment\n[env]\nKEY = 'unchanged'\n",
+        )
+        .unwrap();
+        let selected = fixture.0.join("home/source ' spaces\u{a0}");
+        let run = |operand| {
+            fixture
+                .command()
+                .env_remove("SUDO_USER")
+                .env("SHINE_LINK_LEAF", "source ' spaces\u{a0}")
+                .args(&args)
+                .arg(operand)
+                .arg("--create")
+                .output()
+                .unwrap()
+        };
+        let result = run("~/$SHINE_LINK_LEAF");
+        assert_eq!(result.status.code(), Some(0), "{result:?}");
+        assert!(selected.is_dir());
+        let before = fs::read(&config).unwrap();
+        let text = std::str::from_utf8(&before).unwrap();
+        assert!(text.contains("# preserve comment"));
+        let saved: toml::Value = toml::from_str(text).unwrap();
+        assert_eq!(
+            saved[key].as_str().unwrap(),
+            fs::canonicalize(&selected).unwrap().to_str().unwrap()
+        );
+        assert_eq!(saved["env"]["KEY"].as_str(), Some("unchanged"));
+        assert_eq!(
+            saved
+                .get("external_shell_mode")
+                .and_then(toml::Value::as_str)
+                .unwrap_or("snapshot"),
+            mode
+        );
+        let result = run("$HOME/$SHINE_LINK_LEAF");
+        assert_eq!(result.status.code(), Some(0), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("already linked"),
+            "{result:?}"
+        );
+        assert_eq!(fs::read(&config).unwrap(), before);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn preset_links_reject_existing_non_utf8_sources_and_canonical_symlink_targets() {
+    use std::os::unix::{ffi::OsStringExt, fs::symlink};
+    for args in [vec!["preset", "link"], vec!["preset", "overlay", "link"]] {
+        let fixture = Fixture::new();
+        let raw = fixture
+            .0
+            .join(std::ffi::OsString::from_vec(b"source-\xff".to_vec()));
+        fs::create_dir_all(&raw).unwrap();
+        fs::write(raw.join("marker"), "original").unwrap();
+        let linked = fixture.0.join("utf8-link");
+        symlink(&raw, &linked).unwrap();
+        let state = fixture.0.join("state");
+        fs::create_dir_all(&state).unwrap();
+        let config = state.join("config.toml");
+        let before = b"schema_version = 2\n# no changes\n";
+        fs::write(&config, before).unwrap();
+        for operand in [&raw, &linked] {
+            let result = fixture
+                .command()
+                .args(&args)
+                .arg(operand)
+                .arg("--create")
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(1), "{result:?}");
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("not valid UTF-8"),
+                "{result:?}"
+            );
+            assert_eq!(fs::read(&config).unwrap(), before);
+            assert_eq!(fs::read(raw.join("marker")).unwrap(), b"original");
+            assert_eq!(fs::read_link(&linked).unwrap(), raw);
+        }
+    }
+}
+
+#[test]
 fn app_targets_preserve_whitespace_identity_across_lifecycle_and_info() {
     for selected in [
         " demo",

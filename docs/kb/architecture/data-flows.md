@@ -1321,6 +1321,11 @@ lexically absolute before snapshot capture and planning; it does not resolve ord
 symlinks or require missing destinations to exist. RealHost metadata rejects special filesystem
 entries, so capture cannot open a FIFO, socket, or device as a regular preset payload.
 
+Local Preset/overlay link commands require representable native operands before optional creation,
+expand through the captured config home, and reject unrepresentable canonical results before the
+existing config save. Full expansion reports an invalid home only when the input actually uses it;
+neither operand nor home conversion can select a replacement-character sibling.
+
 Env resolution captures and validates every selected file, then merges builtin defaults → active
 project-resolved overlay → global `[env]` → global env file → nearest project `[env]` → project env
 file. Strings and detailed entries missing `description` inherit descriptions independently of

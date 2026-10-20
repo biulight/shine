@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-21 — Preset registration must reject unrepresentable source identities
+
+- **Symptom**: an absent non-UTF-8 operand beside a replacement-character directory made both local
+  link commands exit 0 and persist that sibling as the source. `~/source` did the same with a
+  non-UTF-8 home and an existing replacement-character sibling.
+- **Fix**: reject unrepresentable operands before creation and resolved paths before saving. Reuse
+  full expansion with the captured config home; reject an unrepresentable home only if expansion
+  requests it. Keep valid expansion, source modes, no-op detection, configuration locks and saves.
+- **Coverage**: native invalid-byte/UTF-16 operands with and without existing aliases and `--create`;
+  unchanged config/source bytes; Unix home aliases; Linux existing non-UTF-8 directories and UTF-8
+  symlinks to them; valid UTF-8 expansion, snapshot/live modes and no-op saves on all platforms.
+
 ## 2026-10-21 — Selector whitespace belongs to category identity
 
 - **Symptom**: with both `demo` and `demo ` installed, `upgrade 'app/demo ' --yes` exited 0 but

@@ -122,8 +122,11 @@ async fn handle_link(
 ) -> Result<()> {
     use anyhow::Context as _;
 
-    let raw = path.to_string_lossy();
-    let expanded = config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
+    let raw = path
+        .to_str()
+        .context("preset source path is not valid UTF-8")?;
+    let expanded = config::full_expand_with_home(raw, &config.home_dir)
+        .with_context(|| format!("expanding path: {raw}"))?;
     let expanded = PathBuf::from(expanded);
 
     if create {
@@ -148,6 +151,9 @@ async fn handle_link(
     }
 
     let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
+    absolute
+        .to_str()
+        .context("resolved preset source path is not valid UTF-8")?;
 
     if matches!(kind, LinkKind::Overlay) {
         config::validate_env_override_file(&absolute.join("shine.env.toml")).await?;
