@@ -1369,6 +1369,8 @@ failures are tolerated and never break the user's shell.
 Embedded candidate enumeration/metadata reads use pristine APIs, then union candidates from the
 explicitly discovered overlay. Loading another `Config` in the same process cannot change those
 sources. Sys candidates retain baseline IDs even when an overlay replaces the matching manifest.
+Full-external mode also unions its filesystem base with that overlay for category, Shell command,
+App capability and Sys ID candidates; no callback constructs a runtime or loads trust state.
 
 ## Environment command runner
 

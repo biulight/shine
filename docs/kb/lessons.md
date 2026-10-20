@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-21 — Full-external completion must retain active overlay candidates
+
+- **Symptom**: `shell list` showed overlay-only commands while completion with the same external
+  source omitted them. Category, Shell command, App capability and Sys callbacks returned before
+  their overlay union in full-external mode.
+- **Fix**: collect the selected base first, then reuse the existing overlay collectors and sorted
+  candidate union. Keep discovery, best-effort parsing, embedded fallback rules, trust, approval
+  and execution unchanged; completion does not construct a runtime.
+- **Coverage**: all four collectors retain base plus overlay candidates without embedded additions.
+  A real completion-protocol request matches the Shell catalog, tolerates malformed trust state,
+  and preserves config/trust bytes without receipts, installed files or an update cache.
+
 ## 2026-10-20 — Diff text and release success messages describe presentation only
 
 - **Symptoms**: inline diffs emitted source-controlled terminal escapes and carriage returns even

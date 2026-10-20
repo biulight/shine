@@ -37,6 +37,80 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn external_overlay_completion_matches_catalog_without_loading_trust_or_writing_state() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let overlay = fixture.0.join("overlay");
+    let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+    for (root, name) in [(state.join("presets"), "base"), (overlay.clone(), "extra")] {
+        let category = root.join("shell").join(name);
+        fs::create_dir_all(&category).unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            format!("[[files]]\nsource = '{script}'\ntarget = 'tool'\n"),
+        )
+        .unwrap();
+        fs::write(category.join(script), "# never executed\n").unwrap();
+    }
+    let config = format!(
+        "schema_version = 2\npresets_overlay_dir = {:?}\n",
+        overlay.to_str().unwrap()
+    );
+    fs::write(state.join("config.toml"), &config).unwrap();
+    // Keep the catalog comparison offline; completion itself must not recreate this cache.
+    let cache = state.join("update-check.json");
+    fs::write(&cache, serde_json::to_vec(&serde_json::json!({
+        "latest_version": env!("CARGO_PKG_VERSION"),
+        "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+    })).unwrap()).unwrap();
+    let catalog = fixture
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["shell", "list"])
+        .output()
+        .unwrap();
+    assert_eq!(catalog.status.code(), Some(0), "{catalog:?}");
+    assert!(catalog.stderr.is_empty(), "{catalog:?}");
+    let text = String::from_utf8(catalog.stdout).unwrap();
+    assert!(text.contains("base") && text.contains("extra"), "{text}");
+    fs::remove_file(&cache).unwrap();
+
+    // Completion runs before runtime construction, including trust-store parsing.
+    fs::write(state.join("trust.toml"), "malformed [").unwrap();
+    let completed = fixture
+        .command()
+        .env("COMPLETE", "bash")
+        .env("_CLAP_COMPLETE_INDEX", "3")
+        .env("_CLAP_IFS", "\n")
+        .args(["--", "shine", "shell", "install", ""])
+        .output()
+        .unwrap();
+    assert_eq!(completed.status.code(), Some(0), "{completed:?}");
+    assert!(completed.stderr.is_empty(), "{completed:?}");
+    let values = String::from_utf8(completed.stdout).unwrap();
+    for expected in ["base", "base/tool", "extra", "extra/tool"] {
+        assert!(values.lines().any(|line| line == expected), "{values}");
+    }
+    assert!(!values.contains("proxy"), "{values}");
+    assert_eq!(
+        fs::read_to_string(state.join("config.toml")).unwrap(),
+        config
+    );
+    assert_eq!(
+        fs::read_to_string(state.join("trust.toml")).unwrap(),
+        "malformed ["
+    );
+    for absent in [
+        "shell-manifest.toml",
+        "app-manifest.toml",
+        "installed",
+        "update-check.json",
+    ] {
+        assert!(!state.join(absent).exists(), "unexpected {absent}");
+    }
+}
+
+#[test]
 #[cfg(unix)]
 fn app_generator_notes_keep_stderr_and_hook_notes_keep_stdout() {
     use std::os::unix::fs::PermissionsExt;

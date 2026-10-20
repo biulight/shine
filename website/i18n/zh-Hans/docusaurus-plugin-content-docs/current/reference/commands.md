@@ -169,6 +169,9 @@ shine completions install
 shine completions <bash|zsh|powershell>
 ```
 
+动态补全会列出当前预设来源及其生效 overlay 中的候选。
+按 Tab 补全不会执行预设代码或授予信任。
+
 如果 Shine 版本检查未能完成，`update` 会输出警告，并继续报告配置更新。
 没有发现配置更新时，会明确说明版本检查未完成，不会笼统地报告没有更新。
 仅版本检查失败仍不会导致非零退出码。
