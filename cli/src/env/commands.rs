@@ -376,6 +376,9 @@ pub async fn handle_export(config: &Config, key: &str, alias: Option<&str>) -> R
         EnvExportValue::Plaintext(value) => value.to_string(),
     };
     let export_as = alias.unwrap_or(key);
+    if value.contains('\0') {
+        bail!("{export_as} contains a NUL byte and cannot be exported as an environment variable");
+    }
     println!(
         "{}",
         format_env_export(&config.shell_type, export_as, &value)

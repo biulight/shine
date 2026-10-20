@@ -178,11 +178,13 @@ Legacy `gpg_key_id` is deprecated. Preview and apply migration with
 Export a value into the current shell:
 
 ```bash
-eval "$(shine env secret export MY_TOKEN)"
-eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
+export_code="$(shine env secret export MY_TOKEN)" && eval "$export_code"
+export_code="$(shine env secret export MY_TOKEN --as API_TOKEN)" && eval "$export_code"
 ```
 
 After installing the `utils` shell preset, `shine-env-export MY_TOKEN --as API_TOKEN` is equivalent.
+Values containing NUL cannot be represented in environment variables. `env secret export` rejects
+them with exit code 1 and no export code on stdout; `env get` and `env secret decrypt` retain raw output.
 
 ## Use age identities
 

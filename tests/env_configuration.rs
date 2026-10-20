@@ -255,6 +255,236 @@ fn installed_proxy_preserves_signal_status_binary_output_and_runtime_state() {
 }
 
 #[test]
+fn shell_export_rejects_nul_without_altering_raw_values_or_configuration() {
+    for shell in ["bash", "zsh", "fish", "powershell"] {
+        for value in [
+            "\0private-prefix",
+            "private-prefix\0private-suffix",
+            "private-suffix\0",
+        ] {
+            let f = Fixture::new();
+            f.write(
+                "state/config.toml",
+                &format!(
+                    "schema_version = 2\nshell_type = '{shell}'\n[env]\nTOKEN = {}\n",
+                    toml::Value::String(value.into())
+                ),
+            );
+            let before = fs::read(f.0.join("state/config.toml")).unwrap();
+            for alias in ["TOKEN", "API_TOKEN"] {
+                let result = f.run(false, &["secret", "export", "TOKEN", "--as", alias]);
+                assert_eq!(result.status.code(), Some(1), "{shell}: {result:?}");
+                assert!(result.stdout.is_empty(), "{result:?}");
+                let error = String::from_utf8(result.stderr).unwrap();
+                assert!(error.contains("NUL"), "{error}");
+                assert!(!error.contains("private-"), "{error}");
+                assert!(!error.contains('\0'), "{error}");
+            }
+            let raw = f.run(false, &["get", "TOKEN"]);
+            assert_eq!(raw.status.code(), Some(0), "{raw:?}");
+            assert_eq!(raw.stdout, format!("{value}\n").as_bytes());
+            assert!(raw.stderr.is_empty(), "{raw:?}");
+            assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+            assert_eq!(fs::read_dir(f.0.join("state")).unwrap().count(), 1);
+        }
+    }
+}
+
+#[test]
+fn shell_export_valid_literals_round_trip_through_native_shell() {
+    #[cfg(unix)]
+    let shell = "bash";
+    #[cfg(windows)]
+    let shell = "powershell";
+    for value in ["", "plain", "a ' quote \" $HOME `tick` \\path\nnext\t中文"] {
+        let f = Fixture::new();
+        f.write(
+            "state/config.toml",
+            &format!(
+                "schema_version = 2\nshell_type = '{shell}'\n[env]\nTOKEN = {}\n",
+                toml::Value::String(value.into())
+            ),
+        );
+        let before = fs::read(f.0.join("state/config.toml")).unwrap();
+        let result = f.run(false, &["secret", "export", "TOKEN", "--as", "API_TOKEN"]);
+        assert_eq!(result.status.code(), Some(0), "{result:?}");
+        assert!(result.stderr.is_empty(), "{result:?}");
+        let code = String::from_utf8(result.stdout).unwrap();
+        #[cfg(unix)]
+        let mut consumer = {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", &format!("{code}\nprintf '%s' \"$API_TOKEN\"")]);
+            command
+        };
+        #[cfg(windows)]
+        let mut consumer = {
+            let mut command = Command::new("powershell.exe");
+            command.args(["-NoProfile", "-NonInteractive", "-Command", &format!(
+                "{code}\n$bytes = [Text.Encoding]::UTF8.GetBytes([string]$env:API_TOKEN); [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)"
+            )]);
+            command
+        };
+        let consumed = consumer
+            .current_dir(f.0.join("outside"))
+            .env_remove("API_TOKEN")
+            .output()
+            .unwrap();
+        assert_eq!(consumed.status.code(), Some(0), "{consumed:?}");
+        assert!(consumed.stderr.is_empty(), "{consumed:?}");
+        assert_eq!(consumed.stdout, value.as_bytes());
+        assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_export_preset_preserves_failures_and_only_evaluates_success() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("presets/shell/utils/shine-env-export.sh");
+    for shell in [
+        "/bin/bash",
+        #[cfg(target_os = "macos")]
+        "/bin/zsh",
+    ] {
+        for (mode, expected_code, expected_value) in [
+            ("valid", 0, "next\nvalue"),
+            ("collision", 0, "next\nvalue"),
+            ("nul", 1, "parent"),
+            ("missing", 1, "parent"),
+            ("parse-error", 2, "parent"),
+            ("partial-failure", 7, "parent"),
+        ] {
+            let f = Fixture::new();
+            let value = if mode == "nul" {
+                "private\0value"
+            } else {
+                "next\nvalue"
+            };
+            f.write(
+                "state/config.toml",
+                &format!(
+                    "schema_version = 2\nshell_type = 'bash'\n[env]\nTOKEN = {}\n",
+                    toml::Value::String(value.into())
+                ),
+            );
+            let before = fs::read(f.0.join("state/config.toml")).unwrap();
+            // Source the actual needs_source preset inside a function, as the shell
+            // launcher does. A failing producer's partial stdout must never be eval'd.
+            let result = Command::new(shell)
+                .current_dir(f.0.join("outside"))
+                .env("HOME", f.0.join("home"))
+                .env("SHINE_CONFIG_DIR", f.0.join("state"))
+                .env_remove("SHINE_PRESETS")
+                .env_remove("SUDO_USER")
+                .env("SHINE_TEST_BINARY", env!("CARGO_BIN_EXE_shine"))
+                .env("SHINE_TEST_PRESET", &source)
+                .env("SHINE_TEST_MODE", mode)
+                .env("API_TOKEN", "parent")
+                .args([
+                    "-c",
+                    r#"
+shine() {
+    if [ "$SHINE_TEST_MODE" = partial-failure ]; then
+        printf "export API_TOKEN='must-not-run'\n"
+        return 7
+    fi
+    "$SHINE_TEST_BINARY" "$@"
+}
+wrapped() { . "$SHINE_TEST_PRESET"; }
+case "$SHINE_TEST_MODE" in
+    missing) wrapped MISSING_TOKEN --as API_TOKEN;;
+    parse-error) wrapped TOKEN --invalid-option;;
+    collision) wrapped TOKEN --as _shine_export_code;;
+    *) wrapped TOKEN --as API_TOKEN;;
+esac
+export_status=$?
+if [ "$SHINE_TEST_MODE" = collision ]; then
+    printf '%s' "$_shine_export_code"
+else
+    printf '%s' "$API_TOKEN"
+fi
+exit "$export_status"
+"#,
+                ])
+                .output()
+                .unwrap();
+            assert_eq!(
+                result.status.code(),
+                Some(expected_code),
+                "{mode}: {result:?}"
+            );
+            assert_eq!(
+                result.stdout,
+                expected_value.as_bytes(),
+                "{mode}: {result:?}"
+            );
+            if matches!(mode, "valid" | "collision" | "partial-failure") {
+                assert!(result.stderr.is_empty(), "{result:?}");
+            } else {
+                assert!(!result.stderr.is_empty(), "{result:?}");
+                assert!(
+                    !String::from_utf8_lossy(&result.stderr).contains("private"),
+                    "{result:?}"
+                );
+            }
+            assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_export_checks_the_decrypted_winner_without_changing_decrypt_output() {
+    use std::os::unix::fs::PermissionsExt;
+    for value in [
+        b"secret-prefix\0secret-suffix".as_slice(),
+        b"safe-decrypted",
+    ] {
+        let f = Fixture::new();
+        f.write("state/config.toml", "schema_version = 2\nshell_type = 'bash'\nsecret_backend = 'age'\n[env]\nTOKEN = \"plaintext-\\u0000-fallback\"\nTOKEN_SECRET = 'eA=='\n");
+        let before = fs::read(f.0.join("state/config.toml")).unwrap();
+        let payload = f.0.join("payload");
+        fs::write(&payload, value).unwrap();
+        let log = f.0.join("gpg.log");
+        let gpg = f.0.join("tools/gpg");
+        // An isolated substitute returns public test bytes; no real keys or tools.
+        fs::write(&gpg, "#!/bin/sh\n[ \"$1\" = --decrypt ] && [ \"$2\" = --output ] && [ \"$3\" = - ] && [ \"$#\" = 4 ] || exit 91\nprintf 'called\\n' >> \"$SHINE_TEST_GPG_LOG\"\n/bin/cat \"$SHINE_TEST_PLAINTEXT\"\n").unwrap();
+        fs::set_permissions(gpg, fs::Permissions::from_mode(0o700)).unwrap();
+        let run = |args: &[&str]| {
+            f.command(false)
+                .env("PATH", f.0.join("tools"))
+                .env("SHINE_TEST_PLAINTEXT", &payload)
+                .env("SHINE_TEST_GPG_LOG", &log)
+                .arg("env")
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        let result = run(&["secret", "export", "TOKEN", "--as", "API_TOKEN"]);
+        if value.contains(&0) {
+            assert_eq!(result.status.code(), Some(1), "{result:?}");
+            assert!(result.stdout.is_empty(), "{result:?}");
+            let error = String::from_utf8(result.stderr).unwrap();
+            assert!(error.contains("NUL"), "{error}");
+            assert!(!error.contains("secret-prefix"), "{error}");
+            assert!(!error.contains("secret-suffix"), "{error}");
+        } else {
+            assert_eq!(result.status.code(), Some(0), "{result:?}");
+            assert_eq!(result.stdout, b"export API_TOKEN='safe-decrypted'\n");
+            assert!(result.stderr.is_empty(), "{result:?}");
+        }
+        assert_eq!(fs::read(&log).unwrap(), b"called\n");
+        let decrypted = run(&["secret", "decrypt", "TOKEN_SECRET"]);
+        assert_eq!(decrypted.status.code(), Some(0), "{decrypted:?}");
+        assert_eq!(decrypted.stdout, value);
+        assert!(decrypted.stderr.is_empty(), "{decrypted:?}");
+        assert_eq!(fs::read(log).unwrap(), b"called\ncalled\n");
+        assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+        assert_eq!(fs::read_dir(f.0.join("state")).unwrap().count(), 1);
+    }
+}
+
+#[test]
 fn queries_are_read_only_and_defaults_are_not_persisted() {
     let f = Fixture::new();
     fs::remove_dir(f.0.join("state")).unwrap();

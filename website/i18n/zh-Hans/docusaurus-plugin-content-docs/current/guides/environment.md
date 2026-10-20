@@ -158,11 +158,13 @@ shine env secret decrypt MY_TOKEN_SECRET
 需要导出到当前 shell 时：
 
 ```bash
-eval "$(shine env secret export MY_TOKEN)"
-eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
+export_code="$(shine env secret export MY_TOKEN)" && eval "$export_code"
+export_code="$(shine env secret export MY_TOKEN --as API_TOKEN)" && eval "$export_code"
 ```
 
 安装 `utils` shell 预设后，也可以使用 `shine-env-export MY_TOKEN --as API_TOKEN`。
+环境变量无法表示含 NUL 的值。`env secret export` 会以退出码 1 拒绝该值，stdout 不输出导出代码；
+`env get` 和 `env secret decrypt` 仍保留原始输出。
 
 ## 使用 age identity
 

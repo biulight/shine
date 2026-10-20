@@ -1186,6 +1186,11 @@ bugs. Check this list before changing the modules named in each entry.
   decrypts also capture the age client's progress diagnostics; explicit QR and opted-in messages
   stay interactive, and captured diagnostics become visible when decryption fails. A shell may
   independently move its next prompt.
+- **Shell export rejects unrepresentable values before output.** After selecting/decrypting the
+  winning stored value, `env secret export` rejects NUL with an error that omits the value. Print no
+  partial export code, do not fall back from a selected secret, and preserve raw get/decrypt output.
+  The Unix source helper evaluates only successful output and returns the producer failure code.
+  Keep its capture variable inside command substitution so an exported alias cannot be shadowed.
 - **A valid nonmatching plugin identity is an ordinary miss within the selected age backend.** The
   plugin must return no file key and no stanza error so reference age can try the next configured
   identity. Malformed supported stanzas, unavailable identity state, cancellation, and final

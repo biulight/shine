@@ -1,5 +1,20 @@
 # Lessons Learned
 
+## 2026-10-21 — Shell export must reject NUL before reporting success
+
+- **Symptom**: exporting `prefix\0suffix` returned 0 and printed a NUL in shell code; the documented
+  POSIX command-substitution/eval consumer silently produced `prefixsuffix` and also returned 0.
+- **Related failure**: the Unix source helper also returned 0 for missing-key/failed exports because
+  eval of an empty substitution succeeds. Capture code separately inside the subshell and emit only
+  a numeric return for failure; keep temporary variables out of the caller's export scope.
+- **Fix**: reject NUL after stored-value selection/decryption and before shell rendering, without
+  including the value in the diagnostic. Reuse existing lookup, decryption and shell quoting.
+- **Coverage**: CLI tests cover leading/middle/trailing NUL for every configured shell and aliases,
+  unchanged config/raw reads, redacted diagnostics, native POSIX/PowerShell literal round trips,
+  and a controlled GPG winner over NUL-containing plaintext. Direct decrypt remains byte-exact.
+  Actual Bash/Zsh source-helper regressions retain success, failure codes 1/2/7, unchanged caller
+  values, failure-output rejection and aliases matching the capture variable.
+
 ## 2026-10-21 — Identity generation must pass native output paths to keygen
 
 - **Symptom**: non-UTF-8 `--output` failed after keygen wrote a replacement-character sibling;

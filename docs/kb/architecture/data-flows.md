@@ -1554,6 +1554,11 @@ reads `Config::secret_backend` — only the tag decides. Encryption (`env secret
 `env.encryption` > `config.toml` `gpg_recipients`/`age_recipients`/`secret_backend` > GPG default)
 and calls `secret::encrypt_secret`, which tags age output and leaves GPG output untagged. See
 [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md) for the full rationale.
+Shell export resolves `KEY_SECRET` before plaintext `KEY`, decrypts the selected secret through
+that route, then rejects NUL before rendering any shell code. Its diagnostic omits the value;
+normal values keep the existing per-shell quoting, while get/decrypt retain raw output.
+The Unix `shine-env-export` source helper captures output in a subshell, forwards successful code
+to eval, and substitutes a literal numeric return on failure without evaluating partial output.
 `shine env secret identity init [--touch-id]` generates a local age identity file
 (`age-keygen`/`age-plugin-se keygen --recipient-type=tag`), passing native output/staging paths
 without text conversion. Custom-output hints capture the absolute path before keygen runs and
