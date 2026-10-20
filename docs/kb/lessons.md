@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-10-20 — Native-shell hint tests need stable cwd paths and launcher counts
+
+- **Symptom**: Windows hint regressions failed on a missing-path report and Shell uninstall preview.
+- **Cause/fix**: PowerShell expanded an 8.3 cwd alias while the direct process retained it. Canonicalize
+  the existing fixture cwd before both launches, retaining exact report comparison even for absent
+  operands. A Windows command owns both `.ps1` and `.cmd` launchers; derive preview counts from the
+  same platform-specific launcher list whose bytes and links the test verifies remain unchanged.
+- **Rule**: native-shell command regressions must account for cwd alias expansion and physical
+  launcher pairs without weakening argument, exit-status or non-mutation assertions.
+
 ## 2026-10-20 — Suggested commands and result rows retain consumer boundaries
 
 - **Symptoms**: Plan/error hints split quoted targets; leading-hyphen categories passed shell

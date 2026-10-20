@@ -473,7 +473,7 @@ impl IdentityStage {
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
         let path = parent.join(format!(".shine-identity-{}", uuid::Uuid::new_v4()));
-        let mut builder = std::fs::DirBuilder::new();
+        let builder = &mut std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;

@@ -398,11 +398,12 @@ fn missing_shell_hints_preserve_special_names_and_dry_run_state() {
                 .join(category)
                 .join(script),
         ];
-        for launcher in if cfg!(windows) {
+        let launchers = if cfg!(windows) {
             &["tool.ps1", "tool.cmd"][..]
         } else {
             &["tool"][..]
-        } {
+        };
+        for launcher in launchers {
             paths.push(fixture.0.join("state/bin").join(launcher));
         }
         let read_state = || {
@@ -464,7 +465,9 @@ fn missing_shell_hints_preserve_special_names_and_dry_run_state() {
             );
             assert!(
                 text.lines().any(|line| line.starts_with("Bin Links")
-                    && line.trim_end().ends_with("1 would remove")),
+                    && line
+                        .trim_end()
+                        .ends_with(&format!("{} would remove", launchers.len()))),
                 "{text}"
             );
             assert_eq!(read_state(), before, "{category}: {args:?}");

@@ -41,6 +41,9 @@ fn lint_validation_hints_recheck_the_original_input_without_changing_json() {
     let fixture = Fixture::new();
     let good = fixture.0.join("app/good");
     fs::create_dir_all(&good).unwrap();
+    // PowerShell expands Windows 8.3 cwd aliases; give both launches the same spelling,
+    // including when the missing operand cannot itself be canonicalized.
+    let good = fs::canonicalize(good).unwrap();
     let metadata =
         "metadata_schema_version = 2\ndest = '~/.config/good'\n[[files]]\nsource = 'config.txt'\n";
     fs::write(good.join("shine.toml"), metadata).unwrap();
