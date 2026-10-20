@@ -1,5 +1,17 @@
 # Lessons Learned
 
+## 2026-10-21 — Task cwd resolution must not select a lossy path alias
+
+- **Symptom**: a missing non-UTF-8 `task save --cwd` operand was accepted when a different directory
+  with replacement characters existed. The task was persisted and later executed in that directory.
+- **Cause**: both cwd and the home used for tilde expansion were converted with `to_string_lossy`
+  before filesystem resolution.
+- **Fix**: retain native path identity through expansion/canonicalization and reject canonical paths
+  that the UTF-8 TOML registry cannot represent before mutation. Keep argv, locks and child exits.
+- **Coverage**: real CLI saves, including `--force`, preserve existing task/config bytes on rejection;
+  unit tests cover operand/home collisions and unaffected absolute paths. Linux additionally checks
+  existing non-UTF-8 directories and UTF-8 symlinks resolving to them before lock/manifest creation.
+
 ## 2026-10-21 — Git path records must preserve directory identity
 
 - **Symptom**: pulling a source whose directory ended in whitespace could update a different sibling

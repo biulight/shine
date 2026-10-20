@@ -198,10 +198,18 @@ fn resolve_task_cwd(config: &Config, cwd: Option<&Path>) -> Result<Option<PathBu
         return Ok(None);
     };
 
-    let raw = cwd.to_string_lossy();
-    let home = config.home_dir.to_string_lossy().into_owned();
-    let expanded = shellexpand::tilde_with_context(&raw, || Some(home)).into_owned();
-    let expanded = PathBuf::from(expanded);
+    let expanded = match cwd.strip_prefix("~") {
+        Ok(relative) => {
+            // Append literally: a Windows drive-like suffix must not replace the home root.
+            let mut expanded = config.home_dir.clone().into_os_string();
+            if !relative.as_os_str().is_empty() {
+                expanded.push(std::path::MAIN_SEPARATOR_STR);
+                expanded.push(relative);
+            }
+            PathBuf::from(expanded)
+        }
+        Err(_) => cwd.to_path_buf(),
+    };
     let absolute = if expanded.is_absolute() {
         expanded
     } else {
@@ -226,6 +234,9 @@ fn resolve_task_cwd(config: &Config, cwd: Option<&Path>) -> Result<Option<PathBu
             path_display::format(&canonical)
         );
     }
+    canonical
+        .to_str()
+        .context("Failed to save task: working directory path is not valid UTF-8")?;
     Ok(Some(canonical))
 }
 
@@ -460,6 +471,110 @@ mod tests {
         let manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
         assert_eq!(manifest.get("here").unwrap().cwd.as_ref(), Some(&expected));
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn task_cwd_preserves_tilde_expansion_and_literal_absolute_components() {
+        let dir = temp_dir().await;
+        let mut config = config_in(&dir);
+        config.home_dir = dir.join("home");
+        let project = config.home_dir.join("project");
+        let literal = dir.join("~/project");
+        for path in [&project, &literal] {
+            tokio::fs::create_dir_all(path).await.unwrap();
+        }
+        for input in ["~/project", "~//project", "~/./project"] {
+            assert_eq!(
+                resolve_task_cwd(&config, Some(Path::new(input))).unwrap(),
+                Some(std::fs::canonicalize(&project).unwrap()),
+                "{input}"
+            );
+        }
+        for (input, expected) in [(Path::new("~"), &config.home_dir), (&literal, &literal)] {
+            assert_eq!(
+                resolve_task_cwd(&config, Some(input)).unwrap(),
+                Some(std::fs::canonicalize(expected).unwrap())
+            );
+        }
+        #[cfg(windows)]
+        assert!(
+            resolve_task_cwd(&config, Some(Path::new(&format!("~/{}", dir.display())))).is_err()
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn save_cwd_does_not_select_a_lossy_replacement_directory() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = temp_dir().await;
+        let config = config_in(&dir);
+        let raw = dir.join(std::ffi::OsStr::from_bytes(b"project-\xff"));
+        tokio::fs::create_dir(dir.join("project-\u{fffd}"))
+            .await
+            .unwrap();
+        let mut manifest = TaskManifest::default();
+        manifest.upsert("keep", vec!["echo".into(), "original".into()], None);
+        manifest.save(config.shine_dir()).await.unwrap();
+        let before = tokio::fs::read(config.shine_dir().join("tasks.toml"))
+            .await
+            .unwrap();
+
+        for (name, force) in [("new", false), ("keep", true)] {
+            let error = handle_save(&config, name, force, Some(&raw), vec!["echo".into()])
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("does not exist"), "{error:#}");
+            assert_eq!(
+                tokio::fs::read(config.shine_dir().join("tasks.toml"))
+                    .await
+                    .unwrap(),
+                before
+            );
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_cwd_expansion_retains_home_identity_without_affecting_absolute_paths() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = temp_dir().await;
+        let mut config = config_in(&dir);
+        config.home_dir = dir.join(std::ffi::OsStr::from_bytes(b"home-\xff"));
+        let other = dir.join("home-\u{fffd}/project");
+        tokio::fs::create_dir_all(&other).await.unwrap();
+
+        let error = resolve_task_cwd(&config, Some(Path::new("~/project"))).unwrap_err();
+
+        assert!(error.to_string().contains("does not exist"), "{error:#}");
+        assert_eq!(
+            resolve_task_cwd(&config, Some(&other)).unwrap(),
+            Some(std::fs::canonicalize(&other).unwrap())
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn save_rejects_non_utf8_canonical_cwd_before_manifest_mutation() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = temp_dir().await;
+        let config = config_in(&dir);
+        let raw = dir.join(std::ffi::OsStr::from_bytes(b"project-\xff"));
+        tokio::fs::create_dir(&raw).await.unwrap();
+        let alias = dir.join("alias");
+        std::os::unix::fs::symlink(&raw, &alias).unwrap();
+
+        for cwd in [&raw, &alias] {
+            let error = handle_save(&config, "new", false, Some(cwd), vec!["echo".into()])
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("not valid UTF-8"), "{error:#}");
+            assert!(!config.shine_dir().join("tasks.toml").exists());
+            assert!(!config.shine_dir().join("tasks.lock").exists());
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]

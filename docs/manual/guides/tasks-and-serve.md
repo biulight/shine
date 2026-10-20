@@ -30,6 +30,9 @@ Tasks are stored in `tasks.toml` under the active Shine runtime directory. `SHIN
 global `--config-dir` selects the corresponding task list. A task saved with `--cwd` always starts
 there; without it, the task uses the caller's current directory.
 
+`--cwd` expands a leading `~` and saves the resolved absolute directory. If that directory's path
+cannot be represented as UTF-8, saving fails without changing the task list, including with `--force`.
+
 Concurrent saves and deletions use a shared process lock to preserve each completed update.
 They wait up to 30 seconds for an active writer, then fail without changing the task list.
 The `tasks.lock` file may remain in the runtime directory; do not delete it to unlock an active writer.

@@ -608,6 +608,78 @@ fn proxy_uses_install_state_and_still_honors_project_rules() {
 }
 
 #[test]
+fn task_save_rejects_lossy_cwd_without_replacing_existing_tasks() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = Fixture::new();
+    fixture.initialize();
+    let raw = fixture.0.join(std::ffi::OsStr::from_bytes(b"project-\xff"));
+    let replacement = fixture.0.join("project-\u{fffd}");
+    fs::create_dir(&replacement).unwrap();
+    let manifest = fixture.state().join("tasks.toml");
+    let original = b"[tasks.keep]\ncommand = ['/bin/echo', 'original']\n";
+    fs::write(&manifest, original).unwrap();
+    let config = fs::read(fixture.state().join("config.toml")).unwrap();
+
+    for force in [false, true] {
+        let mut command = fixture.shine();
+        command.args(["task", "save", if force { "keep" } else { "new" }]);
+        if force {
+            command.arg("--force");
+        }
+        let refused = command
+            .arg("--cwd")
+            .arg(&raw)
+            .args(["--", "/bin/echo", "changed"])
+            .output()
+            .unwrap();
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("does not exist"),
+            "{refused:?}"
+        );
+        assert!(!String::from_utf8_lossy(&refused.stdout).contains("Saved task"));
+        assert_eq!(fs::read(&manifest).unwrap(), original);
+        assert_eq!(
+            fs::read(fixture.state().join("config.toml")).unwrap(),
+            config
+        );
+        assert!(fs::read_dir(&replacement).unwrap().next().is_none());
+    }
+    let kept = Fixture::assert_ok(
+        fixture
+            .shine()
+            .args(["task", "run", "keep"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(kept.stdout, b"original\n");
+    assert!(String::from_utf8_lossy(&kept.stderr).starts_with("Running keep:"));
+    assert_eq!(fs::read(&manifest).unwrap(), original);
+    let saved = Fixture::assert_ok(
+        fixture
+            .shine()
+            .args(["task", "save", "valid", "--cwd"])
+            .arg(&replacement)
+            .args(["--", "/bin/pwd"])
+            .output()
+            .unwrap(),
+    );
+    assert!(String::from_utf8_lossy(&saved.stdout).contains("Saved task valid"));
+    let valid = Fixture::assert_ok(
+        fixture
+            .shine()
+            .args(["task", "run", "valid"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        valid.stdout,
+        format!("{}\n", replacement.canonicalize().unwrap().display()).as_bytes()
+    );
+    assert!(String::from_utf8_lossy(&valid.stderr).starts_with("Running valid (cwd:"));
+}
+
+#[test]
 fn sudo_home_uses_system_account_instead_of_root_home() {
     let fixture = Fixture::new();
     let account = Fixture::assert_ok(Command::new("/usr/bin/id").arg("-un").output().unwrap());

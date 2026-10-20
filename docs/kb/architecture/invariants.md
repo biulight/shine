@@ -1000,6 +1000,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **A missing task `cwd` means dynamic caller cwd.** Legacy `tasks.toml` entries have no `cwd`, so
   deserialization must default it to `None`; only an explicit `task save --cwd` fixes the working
   directory. Never reinterpret missing `cwd` as the save-time directory.
+- **Task cwd resolution preserves filesystem identity.** Expand `~` and canonicalize using native
+  paths, without lossy string conversion. Reject a non-UTF-8 canonical cwd before locking or saving
+  the TOML registry, including force replacement; never select a replacement-character neighbor.
 
 ## Embedded presets
 
