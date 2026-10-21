@@ -60,7 +60,9 @@ shine install shell/proxy --replace-managed
 `shine info shell/proxy --diff` first so that intentional local changes are not mistaken for damage.
 
 When a command conflicts during a bulk operation, the repair hint identifies its category,
-including for template-rendered scripts. Inspect the reported path before removing or replacing it.
+including for template-rendered scripts. Conflict rows escape control characters in command names
+and paths. For a category containing control characters, the hint requests the original category
+argument instead of providing a copyable command. Inspect the reported path before removing or replacing it.
 
 After switching preset sources, run `shine upgrade shell/<CATEGORY>` to update installed commands.
 Shine uses their installation records to recognize managed commands at the old paths and move them

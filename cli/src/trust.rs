@@ -524,6 +524,7 @@ async fn load_store_path(path: &Path) -> Result<TrustStoreV1> {
     }
     let contents = tokio::fs::read_to_string(path).await?;
     let mut store: TrustStoreV1 = toml::from_str(&contents)
+        .map_err(crate::config::config_parse_error)
         .with_context(|| format!("parsing trust store {}", path.display()))?;
     if !matches!(
         store.schema_version,
@@ -1225,6 +1226,39 @@ mod tests {
 
         let loaded = load_store_path(&path).await.unwrap();
         assert_eq!(loaded.schema_version, TRUST_STORE_SCHEMA_VERSION);
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_trust_document_diagnostics_omit_contents_without_repair() {
+        let dir = crate::test_support::make_temp_dir("shine-trust-document").await;
+        let path = dir.join(TRUST_STORE_FILE);
+        for contents in [
+            "schema_version='TRUST_DOCUMENT_CANARY'\ngrants=[]\n",
+            "schema_version=2\ngrants=[]\nunknown='TRUST_DOCUMENT_CANARY' invalid\n",
+        ] {
+            atomic_write_private(&path, contents.as_bytes())
+                .await
+                .unwrap();
+            let error = load_store_path(&path).await.unwrap_err();
+            let text = format!("{error:#}\n{error:?}");
+            assert!(!text.contains("TRUST_DOCUMENT_CANARY"), "{text}");
+            assert!(
+                text.contains("parsing trust store ") && text.contains("trust.toml"),
+                "{text}"
+            );
+            assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), contents);
+        }
+        atomic_write_private(&path, b"schema_version=999\ngrants=[]\n")
+            .await
+            .unwrap();
+        assert!(
+            load_store_path(&path)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported trust store schema version 999")
+        );
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 }

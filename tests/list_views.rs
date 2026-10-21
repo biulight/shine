@@ -105,11 +105,41 @@ fn assert_hint_argv(command: &str, expected: &[&str]) {
         .output()
         .unwrap();
     #[cfg(windows)]
-    let parsed = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command"])
-        .arg(format!("function shine {{ ConvertTo-Json -Compress -InputObject (@('shine') + @($args)) }}; {command}"))
-        .output()
-        .unwrap();
+    let parsed = {
+        // A PowerShell function consumes `--`; use a native executable like the real CLI.
+        static PROBE: std::sync::LazyLock<Fixture> = std::sync::LazyLock::new(|| {
+            let fixture = Fixture::new();
+            let source = fixture.0.join("argv.rs");
+            fs::write(
+                &source,
+                r#"fn main() {
+                    for arg in std::iter::once("shine".to_owned()).chain(std::env::args().skip(1)) {
+                        for byte in arg.bytes() { print!("{byte:02x}"); }
+                        println!();
+                    }
+                }"#,
+            )
+            .unwrap();
+            let build = Command::new("rustc")
+                .arg(&source)
+                .arg("-o")
+                .arg(fixture.0.join("shine.exe"))
+                .output()
+                .unwrap();
+            success(&build);
+            fixture
+        });
+        let mut paths = vec![PROBE.0.clone()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", command])
+            .current_dir(&PROBE.0)
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .output()
+            .unwrap()
+    };
     success(&parsed);
     assert!(parsed.stderr.is_empty(), "{parsed:?}");
     #[cfg(unix)]
@@ -119,8 +149,17 @@ fn assert_hint_argv(command: &str, expected: &[&str]) {
     );
     #[cfg(windows)]
     assert_eq!(
-        serde_json::from_slice::<Vec<String>>(&parsed.stdout).unwrap(),
+        String::from_utf8(parsed.stdout)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
         expected
+            .iter()
+            .map(|arg| arg
+                .bytes()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>())
+            .collect::<Vec<_>>()
     );
     cli::commands::Cli::try_parse_from(expected).unwrap();
 }
@@ -1264,7 +1303,14 @@ fn shell_catalog_uses_active_overlay_in_both_base_modes() {
 #[test]
 fn embedded_shell_catalog_does_not_read_invalid_trust_but_runtime_paths_still_do() {
     for (contents, error) in [
-        (Some("not valid [ toml\n"), "parsing trust store"),
+        (
+            Some("unknown='TRUST_DOCUMENT_CANARY' invalid\n"),
+            "parsing trust store",
+        ),
+        (
+            Some("schema_version='TRUST_DOCUMENT_CANARY'\ngrants=[]\n"),
+            "parsing trust store",
+        ),
         (
             Some("schema_version = 999\ngrants = []\n"),
             "unsupported trust store schema version 999",
@@ -1319,6 +1365,10 @@ fn embedded_shell_catalog_does_not_read_invalid_trust_but_runtime_paths_still_do
                     "{output:?}"
                 );
                 assert!(
+                    !String::from_utf8_lossy(&output.stderr).contains("TRUST_DOCUMENT_CANARY"),
+                    "{output:?}"
+                );
+                assert!(
                     !stdout(&output).contains("Shell Preset Categories"),
                     "{output:?}"
                 );
@@ -1329,6 +1379,10 @@ fn embedded_shell_catalog_does_not_read_invalid_trust_but_runtime_paths_still_do
         assert_eq!(install.status.code(), Some(1), "{install:?}");
         assert!(
             String::from_utf8_lossy(&install.stderr).contains(error),
+            "{install:?}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&install.stderr).contains("TRUST_DOCUMENT_CANARY"),
             "{install:?}"
         );
         assert!(!fixture.0.join("state/shell-manifest.toml").exists());

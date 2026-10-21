@@ -31,8 +31,9 @@ pub(super) async fn read_valid_cache(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
     };
-    let cache: CacheFile =
-        toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
+    let cache: CacheFile = toml::from_str(&contents)
+        .map_err(crate::config::config_parse_error)
+        .with_context(|| format!("parsing {}", path.display()))?;
     let Some(cached) = cache.modes.get(mode) else {
         return Ok(None);
     };
@@ -92,6 +93,40 @@ pub(super) async fn write_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn malformed_cache_document_diagnostics_omit_contents_without_mutation() {
+        let root = crate::test_support::make_temp_dir("shine-cache-document").await;
+        let config = Config::new_for_test(&root);
+        let path = root.join("cache.toml");
+        for contents in [
+            "version = 'CACHE_DOCUMENT_CANARY'\nproject_root='unused'\n[modes]\n",
+            "version = 1\nproject_root = 'CACHE_DOCUMENT_CANARY' unexpected\n[modes]\n",
+        ] {
+            tokio::fs::write(&path, contents).await.unwrap();
+            let error = read_valid_cache(&path, "test", "snapshot", &config)
+                .await
+                .unwrap_err();
+            let diagnostic = format!("{error:#}\n{error:?}");
+            assert!(
+                !diagnostic.contains("CACHE_DOCUMENT_CANARY"),
+                "{diagnostic}"
+            );
+            assert!(diagnostic.contains("parsing "), "{diagnostic}");
+            assert!(diagnostic.contains("cache.toml"), "{diagnostic}");
+            assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), contents);
+        }
+        tokio::fs::write(&path, "version=1\nproject_root='unchanged'\n[modes]\n")
+            .await
+            .unwrap();
+        assert!(
+            read_valid_cache(&path, "test", "snapshot", &config)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[cfg(any(unix, windows))]
     #[test]

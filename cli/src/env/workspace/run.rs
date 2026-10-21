@@ -136,12 +136,18 @@ pub(super) async fn load_run_values_effective(
                     )
                     .await
                 {
-                    eprintln!("Warning: could not update environment cache: {error:#}");
+                    eprintln!(
+                        "Warning: could not update environment cache: {}",
+                        crate::output::escape_controls(&format!("{error:#}"))
+                    );
                 }
                 values
             }
             Err(error) => {
-                eprintln!("Warning: ignoring unreadable environment cache: {error:#}");
+                eprintln!(
+                    "Warning: ignoring unreadable environment cache: {}",
+                    crate::output::escape_controls(&format!("{error:#}"))
+                );
                 compile_captured_sources(&captured, config).await?
             }
         }

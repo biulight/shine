@@ -49,7 +49,8 @@ still records an explicit entry.
 
 Configuration TOML parse errors report file or field context without printing configured values
 or source lines. Env reads and writes return exit code 1; correct the input and retry. A failed
-parse does not apply the requested env edit.
+parse does not apply the requested env edit. Workspace definitions and personal
+`shine.config.local.toml` preferences also omit document contents from TOML parse errors.
 
 Global `~/.shine/config.toml` and project `shine.config.toml` support either a string or a value with
 a description:
@@ -789,8 +790,9 @@ mode-specific cache with the selected backend in the system cache directory. It 
 order changes.
 A non-UTF-8 project directory keeps a separate cache from a different directory with its
 replacement-character spelling.
-If the decrypted cache is malformed, Shine warns without showing cached values and rebuilds
-from the workspace sources.
+If the cache document or decrypted cache is malformed, Shine warns without showing cached
+values or document contents and rebuilds from the workspace sources. Cache read/write warnings
+escape control characters in paths and error text; child output and exit status are preserved.
 
 Ignore personal overrides:
 

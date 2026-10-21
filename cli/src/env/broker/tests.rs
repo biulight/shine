@@ -342,6 +342,40 @@ async fn policy_store_is_written_with_private_permissions() {
 }
 
 #[tokio::test]
+async fn invalid_policy_document_diagnostics_omit_contents_and_preserve_storage() {
+    let dir = crate::test_support::make_temp_dir("shine-broker-document").await;
+    let config = Config::new_for_test(&dir);
+    let path = policy_path(&config);
+    for contents in [
+        "version='BROKER_DOCUMENT_CANARY'\npolicies=[]\n",
+        "version=1\npolicies=[]\nunknown='BROKER_DOCUMENT_CANARY' invalid\n",
+    ] {
+        crate::persist::atomic_write_private(&path, contents.as_bytes())
+            .await
+            .unwrap();
+        let error = load_store(&config).await.unwrap_err();
+        let text = format!("{error:#}\n{error:?}");
+        assert!(!text.contains("BROKER_DOCUMENT_CANARY"), "{text}");
+        assert!(
+            text.contains("parsing ") && text.contains("ssh-secret-broker.toml"),
+            "{text}"
+        );
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), contents);
+    }
+    crate::persist::atomic_write_private(&path, b"version=999\npolicies=[]\n")
+        .await
+        .unwrap();
+    assert!(
+        load_store(&config)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported SSH secret broker policy version 999")
+    );
+    tokio::fs::remove_dir_all(dir).await.unwrap();
+}
+
+#[tokio::test]
 async fn additional_local_policy_files_are_merged_and_validated() {
     let dir = crate::test_support::make_temp_dir("shine-broker-policy-merge").await;
     let config = Config::new_for_test(&dir);

@@ -859,7 +859,9 @@ bugs. Check this list before changing the modules named in each entry.
 ## Config files
 
 - **CLI configuration parser errors discard both source and value-bearing messages.** Minimal,
-  full and layered TOML readers plus comment-preserving writers use one local error mapper.
+  full and layered TOML readers plus comment-preserving writers use one shared CLI error mapper.
+  Workspace definitions, personal preferences, compiled cache documents, Broker policy and trust
+  stores reuse it before their existing file context.
   Keep existing file/field context, I/O errors, validation and write order; discard the original
   parser chain, since type errors can quote values even without source excerpts. Silent metadata
   probes remain silent, and serde's direct `Config` interface remains unchanged.
@@ -919,7 +921,9 @@ bugs. Check this list before changing the modules named in each entry.
   `detail_line_text` before dim styling; do not encode status ANSI sequences. Activation hints use
   the shared CLI hint owner: control-bearing or non-UTF-8 paths request a new shell instead of
   proposing a display-escaped/lossy source command. Core profile paths and bytes remain unchanged;
-  command-name summaries encode controls without changing stored names or execution.
+  command-name summaries encode controls without changing stored names or execution. Structured
+  link-conflict statuses and continuation rows encode data before styling. Control-bearing categories
+  request the original category argument rather than offering an escaped alias as a repair command.
 
 - **Configuration edits preserve comments and unrelated raw definitions.** Whole-table saves use
   `shine_core::sync_table`; directed env and runtime-schema edits patch `toml_edit` entries. Never

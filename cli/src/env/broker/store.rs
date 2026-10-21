@@ -38,8 +38,9 @@ pub async fn load_store_from(path: &Path) -> Result<PolicyStore> {
         }
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
     };
-    let store: PolicyStore =
-        toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
+    let store: PolicyStore = toml::from_str(&contents)
+        .map_err(crate::config::config_parse_error)
+        .with_context(|| format!("parsing {}", path.display()))?;
     validate_store(&store)?;
     Ok(store)
 }

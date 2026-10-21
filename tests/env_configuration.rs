@@ -102,6 +102,194 @@ fn output_path_fixture() -> Fixture {
 }
 
 #[test]
+fn workspace_readers_omit_invalid_document_contents_before_execution_or_export() {
+    let mut leaks = Vec::new();
+    for (file, invalid) in [
+        (
+            "shine.workspace.toml",
+            "version='WORKSPACE_DOCUMENT_CANARY'\n[env]\nfiles=['values.toml']\n",
+        ),
+        (
+            "shine.workspace.toml",
+            "version=2\n[env]\nfiles=['values.toml']\nunknown='WORKSPACE_DOCUMENT_CANARY' invalid\n",
+        ),
+        (
+            "shine.config.local.toml",
+            "hybrid_decrypt_backend=['WORKSPACE_DOCUMENT_CANARY']\n",
+        ),
+        (
+            "shine.config.local.toml",
+            "hybrid_decrypt_backend='WORKSPACE_DOCUMENT_CANARY' invalid\n",
+        ),
+    ] {
+        let f = Fixture::new();
+        f.write("state/config.toml", "schema_version=2\n");
+        f.write(
+            "outside/shine.workspace.toml",
+            "version=2\n[env]\nfiles=['values.toml']\n",
+        );
+        f.write(
+            "outside/values.toml",
+            "version=1\n[plain]\nPUBLIC='visible'\n",
+        );
+        f.write(&format!("outside/{file}"), invalid);
+        let originals: Vec<_> = [
+            "state/config.toml",
+            "outside/shine.workspace.toml",
+            "outside/values.toml",
+            &format!("outside/{file}"),
+        ]
+        .into_iter()
+        .map(|p| (p.to_owned(), f.read(p)))
+        .collect();
+        for args in [
+            vec![
+                "env",
+                "run",
+                "--mode",
+                "test",
+                "--",
+                "shine-never-start-this-command",
+            ],
+            vec![
+                "env",
+                "workspace",
+                "export",
+                "--mode",
+                "test",
+                "--format",
+                "dotenv",
+                "--output",
+                "out.env",
+            ],
+        ] {
+            let out = f.command(false).args(args).output().unwrap();
+            assert_eq!(out.status.code(), Some(1), "{file}: {out:?}");
+            assert!(out.stdout.is_empty(), "{file}: {out:?}");
+            let stderr = String::from_utf8(out.stderr).unwrap();
+            if stderr.contains("WORKSPACE_DOCUMENT_CANARY") {
+                leaks.push(format!("{file}: {stderr}"));
+            }
+            assert!(
+                stderr.contains("parsing ") && stderr.contains(file),
+                "{file}: {stderr}"
+            );
+            for (path, bytes) in &originals {
+                assert_eq!(&f.read(path), bytes, "{path}");
+            }
+            assert!(!f.0.join("outside/out.env").exists());
+        }
+    }
+    assert!(leaks.is_empty(), "{}", leaks.join("\n"));
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_cache_warnings_preserve_fallback_binary_streams_and_exit_status() {
+    use std::process::Stdio;
+    for case in ["malformed", "directory", "write"] {
+        let f = output_path_fixture();
+        f.write("state/config.toml", "schema_version=2\n");
+        let mut workspace =
+            "version=2\n[env]\nfiles=['values.toml']\noverride_process_env=true\n".to_owned();
+        if case == "write" {
+            workspace.push_str("[env.encryption]\nbackend='gpg'\ngpg_recipients=['test']\n");
+            fake_gpg(&f);
+        }
+        f.write("outside/shine.workspace.toml", &workspace);
+        let source = "version=1\n[plain]\nPUBLIC='visible'\n";
+        f.write("outside/values.toml", source);
+        let root = fs::canonicalize(f.0.join("outside")).unwrap();
+        let id = shine_core::digest::sha256_hex(root.as_os_str().as_encoded_bytes());
+        let cache_base = if cfg!(target_os = "macos") {
+            f.0.join("home/Library/Caches")
+        } else {
+            f.0.join("cache")
+        };
+        let cache = cache_base
+            .join("shine/projects")
+            .join(id)
+            .join("env-test.toml");
+        if case != "write" {
+            fs::create_dir_all(cache.parent().unwrap()).unwrap();
+            if case == "directory" {
+                fs::create_dir(&cache).unwrap();
+            } else {
+                fs::write(&cache, "version='CACHE_WARNING_CANARY'\n").unwrap();
+            }
+        }
+        let signal = f.0.join("signal");
+        let release = f.0.join("release");
+        let mut paths = vec![f.0.join("tools")];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let child = f
+            .command(false)
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env("XDG_CACHE_HOME", f.0.join("cache"))
+            .env("SIGNAL", &signal)
+            .env("RELEASE", &release)
+            .env("PUBLIC", "inherited")
+            .args([
+                "env",
+                "run",
+                "--mode",
+                "test",
+                "--",
+                "/bin/sh",
+                "-c",
+                "printf '%s' \"$PUBLIC\"; printf '\\000\\377\\n\\r\\200'; exit 23",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        if case == "write" {
+            wait_for(&signal);
+            fs::create_dir_all(cache.parent().unwrap().parent().unwrap()).unwrap();
+            fs::write(cache.parent().unwrap(), b"preserved blocker").unwrap();
+            fs::write(&release, b"go").unwrap();
+        }
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(23), "{case}: {out:?}");
+        assert_eq!(out.stdout, b"visible\x00\xff\n\r\x80", "{case}");
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert_eq!(stderr.lines().count(), 1, "{case}: {stderr:?}");
+        assert!(
+            stderr.starts_with(if case == "write" {
+                "Warning: could not update environment cache:"
+            } else {
+                "Warning: ignoring unreadable environment cache:"
+            }),
+            "{case}: {stderr:?}"
+        );
+        assert!(
+            !stderr.contains(['\r', '\t', '\u{1b}']),
+            "{case}: {stderr:?}"
+        );
+        assert!(!stderr.contains("CACHE_WARNING_CANARY"), "{stderr}");
+        assert_eq!(f.read("outside/shine.workspace.toml"), workspace);
+        assert_eq!(f.read("outside/values.toml"), source);
+        assert_eq!(f.read("state/config.toml"), "schema_version=2\n");
+        if case == "write" {
+            assert_eq!(
+                fs::read(cache.parent().unwrap()).unwrap(),
+                b"preserved blocker"
+            );
+        } else if case == "directory" {
+            assert!(cache.is_dir());
+        } else {
+            assert_eq!(
+                fs::read_to_string(&cache).unwrap(),
+                "version='CACHE_WARNING_CANARY'\n"
+            );
+        }
+    }
+}
+
+#[test]
 fn proxy_install_encodes_receipt_without_changing_target_or_rule() {
     let f = output_path_fixture();
     f.write(

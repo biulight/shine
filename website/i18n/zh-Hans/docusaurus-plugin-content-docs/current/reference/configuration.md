@@ -69,6 +69,9 @@ enabled = false
 
 phone recipient 不由 `state migrate` 自动转换。升级并验证插件和手机应用的 tag 支持后，用 `age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag` 导出，替换对应 `age_recipients` 值并重新 seal；保留独立恢复 recipient。
 
+命令读取格式损坏的 `trust.toml` 或 `ssh-secret-broker.toml` 时，TOML 解析错误会指出
+文件，不回显存储内容。解析失败不会自动修复或改写文件。
+
 ## 外部代码信任
 
 外部 App hook、generator、artifact、Sys 安装脚本、可执行 profile 内容，以及每个外部 Shell

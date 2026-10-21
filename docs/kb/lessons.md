@@ -1,5 +1,22 @@
 # Lessons Learned
 
+## 2026-10-21 — Document readers need the same diagnostic boundary as configuration readers
+
+- **Evidence**: typed and syntax errors in workspace, personal preference, compiled cache, Broker
+  and trust documents retained supplied markers in full error chains. Caller-owned path context
+  did not remove the underlying parser content.
+- **Fix**: reuse the existing static config parser-error mapper before adding file context. Preserve
+  validation, read order, cache fallback and future-version refusal; never repair malformed stores.
+- **Coverage**: reader Display/Debug tests and real run/export tests retain paths and exit behavior
+  without exposing document contents or modifying inputs. Embedded catalog queries still bypass
+  invalid trust storage, while runtime-backed queries and installation still reject it.
+- **Presentation**: exercise cache warnings with control-bearing paths, exact binary child output
+  and exit 23. Structured Shell conflicts encode every data row; categories containing controls
+  request their original argument instead of generating an escaped copy command.
+- **Native test boundary**: a PowerShell function consumes the `--` separator that a native CLI
+  receives. Capture hint arguments with a native probe, including a leading-hyphen selector;
+  hexadecimal output avoids adding console encoding behavior to the argument assertion.
+
 ## 2026-10-21 — Configuration type errors can quote supplied values without source snippets
 
 - **Symptom**: ordinary `env get` failed with exit 1 but printed a plaintext test marker from

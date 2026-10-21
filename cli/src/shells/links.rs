@@ -21,11 +21,15 @@ pub(super) fn link_conflict_render_lines(
                 .unwrap_or("unknown");
             rendered.push(output::detail_line_text(
                 "Link Conflict",
-                &colors::yellow(command),
+                &colors::yellow(&output::escape_controls(command)),
                 Some(first.clone()),
             ));
             for line in rest {
-                rendered.push(format!("{}{}", " ".repeat(16), colors::dim(line)));
+                rendered.push(format!(
+                    "{}{}",
+                    " ".repeat(16),
+                    colors::dim(&output::escape_controls(line))
+                ));
             }
         }
     }
@@ -55,8 +59,8 @@ fn link_conflict_detail_lines(
 
     lines.push(format!("wanted:   {wanted}"));
     lines.push(format!(
-        "fix:      remove {link} or run `{}`",
-        reinstall_command(config, category_hint, &conflict.source)
+        "fix:      remove {link} or {}",
+        reinstall_hint(config, category_hint, &conflict.source)
     ));
     lines
 }
@@ -73,16 +77,18 @@ fn describe_existing_link(path: &Path, display_path: &str) -> String {
     }
 }
 
-fn reinstall_command(config: &Config, category_hint: Option<&str>, source: &Path) -> String {
-    if let Some(category) = category_hint {
+fn reinstall_hint(config: &Config, category_hint: Option<&str>, source: &Path) -> String {
+    if let Some(category) = category_hint
+        .map(str::to_owned)
+        .or_else(|| infer_shell_category(config, source))
+    {
+        if category.chars().any(char::is_control) {
+            return "rerun installation with the original category argument".into();
+        }
         let target_arg = crate::shell_quote::command_arg(&format!("shell/{category}"));
-        return format!("shine install {target_arg} --replace-managed");
+        return format!("run `shine install {target_arg} --replace-managed`");
     }
-    if let Some(category) = infer_shell_category(config, source) {
-        let target_arg = crate::shell_quote::command_arg(&format!("shell/{category}"));
-        return format!("shine install {target_arg} --replace-managed");
-    }
-    "shine shell install --replace-managed".to_string()
+    "run `shine shell install --replace-managed`".into()
 }
 
 fn infer_shell_category(config: &Config, source: &Path) -> Option<String> {
@@ -186,6 +192,47 @@ mod category_tests {
     use super::*;
 
     #[test]
+    fn conflict_rows_escape_data_without_offering_control_category_aliases() {
+        let config = Config::new_for_test(&std::env::temp_dir().join("shine-conflict-render"));
+        let category = "demo\nFORGED=category\r\t\u{1b}";
+        let command = "run\nFORGED=command\r\t\u{1b}";
+        let conflict = crate::bin_links::LinkConflict {
+            link_path: config.bin_dir().join(command),
+            source: config
+                .presets_dir()
+                .join("shell")
+                .join(category)
+                .join("run.sh"),
+            kind: crate::bin_links::LinkConflictKind::DuplicateName,
+        };
+        for hint in [None, Some(category)] {
+            let lines = link_conflict_render_lines(&config, std::slice::from_ref(&conflict), hint);
+            assert_eq!(lines.len(), 3);
+            assert!(
+                lines[0].contains("run\\nFORGED=command\\r\\t\\u{1b}"),
+                "{lines:?}"
+            );
+            assert!(
+                lines[1].contains("demo\\nFORGED=category\\r\\t\\u{1b}"),
+                "{lines:?}"
+            );
+            assert!(!lines[2].contains("run `"), "{lines:?}");
+            assert!(lines[2].contains("original category argument"), "{lines:?}");
+            for line in lines {
+                assert!(
+                    !console::strip_ansi_codes(&line).contains(['\n', '\r', '\t', '\u{1b}']),
+                    "{line:?}"
+                );
+            }
+        }
+        assert_eq!(conflict.link_path.file_name().unwrap(), command);
+        assert_eq!(
+            conflict.source.parent().unwrap().file_name().unwrap(),
+            category
+        );
+    }
+
+    #[test]
     fn conflict_guidance_preserves_category_for_preset_and_rendered_sources() {
         let root = std::env::temp_dir().join("shine-link-guidance-test");
         let config = Config::new_for_test(&root);
@@ -242,8 +289,8 @@ mod category_tests {
             config.rendered_dir().join("shell"),
         ] {
             assert_eq!(
-                reinstall_command(&config, None, &source),
-                "shine shell install --replace-managed"
+                reinstall_hint(&config, None, &source),
+                "run `shine shell install --replace-managed`"
             );
         }
     }

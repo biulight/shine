@@ -22,8 +22,9 @@ pub(super) async fn load_config(config: &Config, workspace: &Path) -> Result<Con
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(effective),
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
     };
-    let local: LocalConfig =
-        toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
+    let local: LocalConfig = toml::from_str(&contents)
+        .map_err(crate::config::config_parse_error)
+        .with_context(|| format!("parsing {}", path.display()))?;
     if let Some(preference) = local.hybrid_decrypt_backend {
         let backend: BackendKind = preference.parse()?;
         if backend == BackendKind::Hybrid {
@@ -127,7 +128,10 @@ pub(super) async fn compile(
         BackendKind::Hybrid => unreachable!(),
     };
     if let Err(error) = write_local_cache(&path, &context, &values, &encryption).await {
-        eprintln!("Warning: could not update environment cache: {error:#}");
+        eprintln!(
+            "Warning: could not update environment cache: {}",
+            crate::output::escape_controls(&format!("{error:#}"))
+        );
     }
     Ok(values)
 }

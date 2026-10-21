@@ -111,8 +111,9 @@ pub(super) fn env_source_format_version() -> u32 {
 }
 
 pub(super) fn parse_workspace(path: &Path, contents: &str) -> Result<Workspace> {
-    let workspace: Workspace =
-        toml::from_str(contents).with_context(|| format!("parsing {}", path.display()))?;
+    let workspace: Workspace = toml::from_str(contents)
+        .map_err(crate::config::config_parse_error)
+        .with_context(|| format!("parsing {}", path.display()))?;
     if workspace.version < WORKSPACE_FORMAT_VERSION {
         bail!(
             "workspace version {} in {} is retired; run `shine state migrate`",
