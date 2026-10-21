@@ -4,6 +4,7 @@ mod platform;
 
 use super::*;
 use crate::commands::{EnvRunCommand, EnvSealCommand, EnvWorkspaceExportCommand};
+use crate::output::escape_controls;
 use anyhow::ensure;
 use filesystem::{CapturedFile, Materialized, PathLocks, check_git, check_path};
 use std::fs;
@@ -300,7 +301,7 @@ async fn seal_inner(config: &Config, command: &EnvSealCommand) -> Result<()> {
         }
         .await;
         result.with_context(|| format!("sealing stopped: {index} completed; {} and later files not confirmed; plaintext retained", source.display()))?;
-        println!("Sealed {}", source.display());
+        println!("Sealed {}", escape_controls(&source.display().to_string()));
     }
     if command.remove_plaintext {
         if encrypted.iter().any(|value| value.starts_with("hybrid:"))
@@ -351,7 +352,10 @@ async fn seal_inner(config: &Config, command: &EnvSealCommand) -> Result<()> {
                     file.path.display()
                 )
             })?;
-            println!("Removed plaintext {}", file.path.display());
+            println!(
+                "Removed plaintext {}",
+                escape_controls(&file.path.display().to_string())
+            );
         }
     }
     Ok(())
@@ -385,7 +389,10 @@ async fn export_inner(config: &Config, selected: &Selection) -> Result<()> {
     }
     persist_export(selected, &captured, &plain).await?;
     for (_, target) in &selected.mappings {
-        println!("Exported {}", target.display());
+        println!(
+            "Exported {}",
+            escape_controls(&target.display().to_string())
+        );
     }
     println!(
         "Exported {} files for mode {}",
@@ -470,14 +477,20 @@ pub async fn handle_run(config: &Config, command: &EnvRunCommand) -> Result<()> 
     match result {
         Ok(status) if !status.success() => {
             if let Err(error) = cleanup {
-                eprintln!("File-group cleanup failed: {error:#}");
+                eprintln!(
+                    "File-group cleanup failed: {}",
+                    escape_controls(&format!("{error:#}"))
+                );
             }
             finish_command_status(status)
         }
         Ok(_) => cleanup,
         Err(error) => {
             if let Err(cleanup) = cleanup {
-                eprintln!("File-group cleanup failed: {cleanup:#}");
+                eprintln!(
+                    "File-group cleanup failed: {}",
+                    escape_controls(&format!("{cleanup:#}"))
+                );
             }
             Err(error)
         }
@@ -496,7 +509,10 @@ struct Ready {
 impl Drop for Ready {
     fn drop(&mut self) {
         if let Err(error) = self.materialized.cleanup() {
-            eprintln!("File-group cleanup failed: {error:#}");
+            eprintln!(
+                "File-group cleanup failed: {}",
+                escape_controls(&format!("{error:#}"))
+            );
         }
     }
 }

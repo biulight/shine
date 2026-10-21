@@ -49,6 +49,76 @@ fn display_path_fixture() -> Fixture {
 }
 
 #[test]
+fn completion_install_encodes_paths_preserving_profile_identity_and_idempotence() {
+    for f in [Fixture::new(), display_path_fixture()] {
+        let shell = if cfg!(windows) { "pwsh" } else { "/bin/bash" };
+        let mut profile_bytes = None;
+        for expected in ["updated", "up to date"] {
+            let output = f
+                .command()
+                .env("SHELL", shell)
+                .env("NO_COLOR", "1")
+                .args(["completions", "install"])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let text = String::from_utf8(output.stdout).unwrap();
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert_eq!(text.lines().count(), 3, "{text:?}");
+            if cfg!(unix) && f.0.extension().is_some() {
+                assert!(!text.contains("run `"), "{text:?}");
+            } else {
+                assert!(text.contains("run `"), "{text:?}");
+            }
+            let rows: Vec<_> = text
+                .lines()
+                .filter(|line| {
+                    line.starts_with("Shell Profile") || line.starts_with("Shell Config")
+                })
+                .collect();
+            assert_eq!(rows.len(), 2, "{text:?}");
+            for row in rows {
+                assert!(row.contains(expected), "{row:?}");
+                assert!(!row.contains(['\r', '\t', '\u{1b}']), "{row:?}");
+                if cfg!(unix) && f.0.extension().is_some() {
+                    assert!(
+                        row.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
+                        "{row:?}"
+                    );
+                }
+            }
+            let profile = fs::read(f.0.join(if cfg!(windows) {
+                "state/shell/profile.ps1"
+            } else {
+                "state/shell/profile.sh"
+            }))
+            .unwrap();
+            let config_path = f.0.join(if cfg!(windows) {
+                "home/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"
+            } else {
+                "home/.bashrc"
+            });
+            let shell_config = fs::read_to_string(config_path).unwrap();
+            if cfg!(unix) && f.0.extension().is_some() {
+                assert!(
+                    shell_config.contains("display\nFORGED=path\r\t\u{1b}\\literal中文"),
+                    "{shell_config:?}"
+                );
+                assert!(
+                    !shell_config.contains("display\\nFORGED=path"),
+                    "{shell_config:?}"
+                );
+            }
+            if let Some(previous) = &profile_bytes {
+                assert_eq!(&profile, previous);
+            }
+            profile_bytes = Some(profile);
+        }
+    }
+}
+
+#[test]
 fn managed_overlay_info_encodes_fields_and_reports_directory_presence() {
     let f = display_path_fixture();
     let state = f.0.join("state");

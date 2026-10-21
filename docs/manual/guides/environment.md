@@ -591,7 +591,8 @@ shine env proxy install gh --with GH_TOKEN --project
 shine env proxy list
 ```
 
-Proxy list fields escape terminal control characters without changing the saved rules.
+Proxy list fields, installation target notices, and post-save warning details escape terminal
+control characters without changing saved rules or executable targets.
 
 Disable injection temporarily while retaining the shim; the disabled wrapper directly forwards to
 the real program:
@@ -958,10 +959,11 @@ On Unix, cleanup can still remove an unchanged owned file after the child remove
 permission; it never restores permissions or deletes a replacement to make cleanup succeed.
 Phone-backed age decryption preserves QR authorization and explicitly enabled terminal messages;
 ordinary captured backend diagnostics remain hidden.
-During execution, mapping previews go to stderr so the command's stdout remains byte-exact.
+`env run` and file export put mapping previews on stderr so the command's stdout remains byte-exact.
 Dry-run previews remain on stdout.
 Mapping previews quote each path and escape control characters such as newlines, keeping each
-mapping on one line. These display escapes do not change the paths used for file operations.
+mapping on one line. Seal, plaintext-removal and export result paths, and cleanup warnings also
+escape terminal controls. These display escapes do not change the paths used for file operations.
 New Unix files use `0600` and directories use `0700`; Windows requires a filesystem supporting
 private current-user ACLs. Cleanup failure returns an error; a failed child retains its exit code.
 The wrapper supervises its process group on Unix and a Job Object on Windows. Do not start detached

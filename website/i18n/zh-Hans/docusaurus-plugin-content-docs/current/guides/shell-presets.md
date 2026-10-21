@@ -36,6 +36,10 @@ shine install shell/utils/shine-env-export
 shine completions install
 ```
 
+Profile 结果中的路径会转义终端控制字符。若 shell 配置路径包含控制字符或无法表示为 UTF-8，
+激活提示会要求打开新 shell，不提供可复制的重新加载命令；生成的 profile 仍使用原始路径。
+普通路径继续显示带引号的重新加载命令。
+
 ## 修复安装
 
 当受管脚本、命令入口或 PATH 片段需要按当前预设重建时：

@@ -910,8 +910,16 @@ bugs. Check this list before changing the modules named in each entry.
   the existing cache invalidation, without changing installation or recovery behavior.
   Proxy list fields encode stored command/with text without applying install-time validation.
   List/explain path headings, directed-write receipts and proxy-toggle paths also encode controls
-  only at display. Explain's control-bearing encrypted-key hint requests the original key instead
+  only at display. Proxy installation targets and post-save warnings, plus self-install sync results
+  and warnings, also encode controls before styling without changing original errors or status.
+  Explain's control-bearing encrypted-key hint requests the original key instead
   of offering a display-escaped alias. Raw get/export/injection and save/reload exits remain unchanged.
+
+- **Shell result details are plain data, while statuses may carry styles.** Escape controls in
+  `detail_line_text` before dim styling; do not encode status ANSI sequences. Activation hints use
+  the shared CLI hint owner: control-bearing or non-UTF-8 paths request a new shell instead of
+  proposing a display-escaped/lossy source command. Core profile paths and bytes remain unchanged;
+  command-name summaries encode controls without changing stored names or execution.
 
 - **Configuration edits preserve comments and unrelated raw definitions.** Whole-table saves use
   `shine_core::sync_table`; directed env and runtime-schema edits patch `toml_edit` entries. Never
@@ -1173,7 +1181,9 @@ bugs. Check this list before changing the modules named in each entry.
   keys, including deleted working files and aliases in parent directory names. Git discovery errors
   fail closed; exit 128 alone never proves absence.
   Run previews use stderr, preserving exact child stdout; dry-run previews use stdout.
-  Preview paths are quoted with control characters escaped on one line; display strings never
+  Preview paths are quoted with control characters escaped on one line. Seal/removal/export result
+  paths and cleanup warnings encode controls only when rendered; child stdout remains raw.
+  Display strings never
   replace the raw filesystem paths used for preflight, crypto, locks, writes or cleanup.
   Keep targets inside the workspace.
   Create plaintext privately before bytes are written (Unix 0600/0700, Windows protected current-user

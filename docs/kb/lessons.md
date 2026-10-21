@@ -3200,3 +3200,14 @@ When cutting a release, always diff against the latest stable `v*` tag
   identity paths and unchanged key bytes; round-trip broker info and retain policy bytes after list.
   A raw non-UTF-8 operand beside a valid replacement-character path must retain exit 1 and the
   original JSON diagnostic without suggesting the other input or initializing runtime state.
+
+## 2026-10-21 — Safe previews do not cover completion rows or warnings
+
+- **Symptom**: file-group previews escaped paths, but successful seal/export rows and cleanup
+  warnings still split at path controls. Sync and proxy notices had the same independent gap.
+- **Fix**: encode only human result fields and formatted warning chains at their existing print
+  boundaries. Shell details share plain-data encoding; activation hints omit copyable commands for
+  control-bearing or non-UTF-8 paths instead of turning display escapes into different operands.
+- **Regression**: extend production CLI/child-process capture tests, retaining exact binary stdout,
+  selected raw paths, verified plaintext removal, replacement protection and child exit 42. Keep
+  warning-only save/sync success, nested error causes, ordinary quoting and profile idempotence.

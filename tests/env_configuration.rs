@@ -102,6 +102,45 @@ fn output_path_fixture() -> Fixture {
 }
 
 #[test]
+fn proxy_install_encodes_receipt_without_changing_target_or_rule() {
+    let f = output_path_fixture();
+    f.write(
+        "state/config.toml",
+        "schema_version=2\n# keep comment\n[env]\nOTHER='preserved'\n",
+    );
+    let name = format!("probe{}", std::env::consts::EXE_SUFFIX);
+    let target = f.0.join("tools").join(&name);
+    fs::copy(std::env::current_exe().unwrap(), &target).unwrap();
+    // Installation observes this executable but must never launch it.
+    let out = f
+        .command(false)
+        .env("PATH", f.0.join("tools"))
+        .args(["env", "proxy", "install", "probe", "--with", "TOKEN"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stderr.is_empty(), "{out:?}");
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(text.lines().count(), 1, "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert!(
+        text.starts_with("installed transparent proxy probe -> "),
+        "{text}"
+    );
+    let config = f.read("state/config.toml");
+    assert!(config.contains("# keep comment"));
+    let config: toml::Value = toml::from_str(&config).unwrap();
+    assert_eq!(config["env"]["OTHER"].as_str(), Some("preserved"));
+    assert_eq!(config["env_proxy"][0]["command"].as_str(), Some("probe"));
+    assert_eq!(config["env_proxy"][0]["with"][0].as_str(), Some("TOKEN"));
+    let manifest: toml::Value = toml::from_str(&f.read("state/proxy-manifest.toml")).unwrap();
+    assert_eq!(
+        Path::new(manifest["entries"]["probe"].as_str().unwrap()),
+        target
+    );
+}
+
+#[test]
 fn explain_encodes_local_fields_without_decrypting_or_changing_sources() {
     let f = output_path_fixture();
     f.layers();

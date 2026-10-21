@@ -399,7 +399,10 @@ impl Materialized {
 impl Drop for Materialized {
     fn drop(&mut self) {
         if let Err(error) = self.cleanup() {
-            eprintln!("File-group cleanup failed: {error}");
+            eprintln!(
+                "File-group cleanup failed: {}",
+                crate::output::escape_controls(&error.to_string())
+            );
         }
     }
 }

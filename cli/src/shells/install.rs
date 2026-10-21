@@ -1,6 +1,6 @@
 use super::links::link_conflict_render_lines;
 use super::profile::{
-    managed_shell_profile_path, shell_source_command, source_command_activation_hint_lines,
+    managed_shell_profile_path, source_activation_hint, source_command_activation_hint_lines,
 };
 use super::report::{ShellUpgradeReport, link_report_summary_parts, shell_cache_summary_parts};
 use super::{PathUpdateStatus, get_shell_config_path, metadata};
@@ -643,10 +643,7 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
 
     output::hint_line(
         "Next Step",
-        &format!(
-            "run `{}` once, or open a new shell",
-            shell_source_command(&config.shell_type, &shell_config_path)
-        ),
+        &source_activation_hint(&config.shell_type, &shell_config_path),
     );
     Ok(())
 }

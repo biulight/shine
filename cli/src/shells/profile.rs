@@ -15,8 +15,17 @@ pub(super) fn supports_completion_registration(shell: &ShellType) -> bool {
     shine_core::runtime::supports_completion_registration(*shell)
 }
 
-pub(super) fn shell_source_command(shell: &ShellType, path: &Path) -> String {
-    shine_core::runtime::shell_source_command(*shell, path)
+pub(super) fn source_activation_hint(shell: &ShellType, path: &Path) -> String {
+    if path
+        .to_str()
+        .is_none_or(|value| value.chars().any(char::is_control))
+    {
+        return "open a new shell to load the updated profile".into();
+    }
+    format!(
+        "run `{}` once, or open a new shell",
+        shine_core::runtime::shell_source_command(*shell, path)
+    )
 }
 
 pub(super) fn source_command_activation_hint_lines(
@@ -30,14 +39,14 @@ pub(super) fn source_command_activation_hint_lines(
     vec![
         output::hint_line_text(
             "Next Step",
-            &format!(
-                "run `{}` once, or open a new shell",
-                shell_source_command(&config.shell_type, shell_config_path)
-            ),
+            &source_activation_hint(&config.shell_type, shell_config_path),
         ),
         output::hint_line_text(
             "Commands",
-            &format!("available after reload: {}", source_commands.join(", ")),
+            &format!(
+                "available after reload: {}",
+                output::escape_controls(&source_commands.join(", "))
+            ),
         ),
     ]
 }

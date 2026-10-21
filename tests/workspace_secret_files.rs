@@ -420,7 +420,14 @@ fn file_group_previews_escape_paths_without_changing_io_or_streams() {
         #[cfg(unix)]
         ".signing/key\nnext\t.bin",
     ] {
-        let f = Fixture::new();
+        let mut f = Fixture::new();
+        let root = f.root.with_extension(if cfg!(unix) {
+            "display\nFORGED=path\r\t\u{1b}中文"
+        } else {
+            "display中文"
+        });
+        fs::rename(&f.root, &root).unwrap();
+        f.root = root;
         let source = ".secrets/test/key with space.enc";
         let workspace = f.root.join("shine.workspace.toml");
         fs::write(&workspace, format!("version=3\n[env]\ndefault_mode='test'\nmodes=['test']\n[env.encryption]\nbackend='gpg'\ngpg_recipients=['test']\n[[file_groups.signing.files]]\nsource={source:?}\ntarget={target:?}\n")).unwrap();
@@ -458,13 +465,30 @@ fn file_group_previews_escape_paths_without_changing_io_or_streams() {
         assert!(!log.exists());
         assert!(!f.root.join(source).exists());
         assert_eq!(fs::read(f.root.join(target)).unwrap(), bytes);
-        good(
-            f.command()
-                .args(["env", "secret", "seal", "--file-group", "signing"])
-                .output()
-                .unwrap(),
+        let sealed = f
+            .command()
+            .args([
+                "env",
+                "secret",
+                "seal",
+                "--file-group",
+                "signing",
+                "--remove-plaintext",
+            ])
+            .output()
+            .unwrap();
+        assert!(sealed.status.success(), "{sealed:?}");
+        let text = String::from_utf8(sealed.stdout).unwrap();
+        assert_eq!(text.lines().count(), 4, "{text:?}");
+        assert!(text.lines().nth(2).unwrap().starts_with("Sealed "));
+        assert!(
+            text.lines()
+                .last()
+                .unwrap()
+                .starts_with("Removed plaintext ")
         );
-        fs::remove_file(f.root.join(target)).unwrap();
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(!f.root.join(target).exists());
         for (args, verb) in [
             (
                 vec![
@@ -531,21 +555,31 @@ fn file_group_previews_escape_paths_without_changing_io_or_streams() {
                 .any(|line| line == format!("Would decrypt temporarily {from} -> {to}"))
         );
         assert!(!f.root.join(target).exists());
-        good(
-            f.command()
-                .args([
-                    "env",
-                    "workspace",
-                    "export",
-                    "--format",
-                    "files",
-                    "--mode",
-                    "test",
-                    "--file-group",
-                    "signing",
-                ])
-                .output()
-                .unwrap(),
+        let exported = f
+            .command()
+            .args([
+                "env",
+                "workspace",
+                "export",
+                "--format",
+                "files",
+                "--mode",
+                "test",
+                "--file-group",
+                "signing",
+            ])
+            .output()
+            .unwrap();
+        assert!(exported.status.success(), "{exported:?}");
+        let text = String::from_utf8(exported.stdout).unwrap();
+        assert_eq!(text.lines().count(), 2, "{text:?}");
+        assert!(text.lines().next().unwrap().starts_with("Exported "));
+        assert_eq!(text.lines().last(), Some("Exported 1 files for mode test"));
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(
+            String::from_utf8(exported.stderr)
+                .unwrap()
+                .contains(&format!("Would export plaintext {from} -> {to}"))
         );
         assert_eq!(fs::read(f.root.join(target)).unwrap(), bytes);
         assert_eq!(fs::read(f.root.join("state/config.toml")).unwrap(), config);
@@ -1118,7 +1152,7 @@ fn file_groups_cli_rejects_conflicting_or_unscoped_flags() {
 #[test]
 fn file_groups_roll_back_partial_materialization_and_keep_failed_child_status() {
     use std::os::unix::fs::PermissionsExt;
-    let f = Fixture::new();
+    let mut f = Fixture::new();
     f.prepare();
     fs::create_dir(f.root.join("other")).unwrap();
     fs::set_permissions(f.root.join("other"), fs::Permissions::from_mode(0o500)).unwrap();
@@ -1127,9 +1161,19 @@ fn file_groups_roll_back_partial_materialization_and_keep_failed_child_status() 
     assert!(!output.status.success());
     assert!(!f.root.join(".signing").exists());
     assert!(!f.root.join("other/password").exists());
+    let root = f.root.with_extension("display\nFORGED=path\r\t\u{1b}中文");
+    fs::rename(&f.root, &root).unwrap();
+    f.root = root;
     let output = f.run("replace").env("PROBE_EXIT", "42").output().unwrap();
     assert_eq!(output.status.code(), Some(42));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("cleanup failed"));
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("cleanup failed"));
+    assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+    assert!(
+        !stderr.lines().any(|line| line.starts_with("FORGED=")),
+        "{stderr:?}"
+    );
     assert_eq!(
         fs::read(f.root.join(".signing/key")).unwrap(),
         b"replacement"

@@ -42,6 +42,11 @@ Open a new terminal or reload the shell profile after installation. To install c
 shine completions install
 ```
 
+Profile result paths escape terminal control characters for display. If the shell config path
+contains controls or cannot be represented as UTF-8, the activation hint asks you to open a new
+shell instead of offering a copyable reload command. The generated profile still uses the original
+path. Ordinary paths retain the quoted reload command.
+
 ## Repair an installation
 
 Rebuild managed scripts, command entries, and the `PATH` fragment from the active preset:

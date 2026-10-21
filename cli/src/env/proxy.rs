@@ -39,7 +39,7 @@ pub async fn install(config: &Config, command: &str, with: &[String], project: b
     install_proxy_files(config, command, with, &target, path, cfg!(windows)).await?;
     println!(
         "installed transparent proxy {command} -> {}",
-        target.display()
+        escape_controls(&target.display().to_string())
     );
     Ok(())
 }
@@ -131,7 +131,8 @@ pub async fn set_enabled(
             }
         }
         Err(error) => eprintln!(
-            "Warning: proxy rule was saved, but effective state could not be verified: {error:#}"
+            "Warning: proxy rule was saved, but effective state could not be verified: {}",
+            escape_controls(&format!("{error:#}"))
         ),
     }
     Ok(())
@@ -1371,11 +1372,23 @@ mod tests {
             );
             for stream in [&stdout, &stderr] {
                 assert!(!stream.contains("Current effective state:"), "{output:?}");
+                assert!(!stream.contains(['\r', '\t', '\u{1b}']), "{stream:?}");
+                assert!(
+                    !stream.lines().any(|line| line.starts_with("FORGED=")),
+                    "{stream:?}"
+                );
             }
             return;
         }
         let _guard = crate::test_support::env_lock();
         let dir = crate::test_support::make_temp_dir("shine-proxy-reload").await;
+        let renamed = dir.with_extension(if cfg!(unix) {
+            "display\nFORGED=path\r\t\u{1b}中文"
+        } else {
+            "display中文"
+        });
+        std::fs::rename(&dir, &renamed).unwrap();
+        let dir = renamed;
         let original_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
         // SAFETY: the environment guard restores process state on return or panic.

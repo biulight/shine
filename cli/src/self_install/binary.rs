@@ -16,7 +16,10 @@ pub(super) async fn sync_self_install_dest(config: &Config, src: &std::path::Pat
     match sync_self_install_dest_from(src, dest).await {
         Ok(SelfInstallSync::Synced) => println!(
             "{}",
-            colors::green(&format!("Synced system copy at {}", dest.display()))
+            colors::green(&format!(
+                "Synced system copy at {}",
+                escape_controls(&dest.display().to_string())
+            ))
         ),
         Ok(SelfInstallSync::AlreadyCurrent) => {}
         Err(e) => eprintln!(
@@ -27,10 +30,10 @@ pub(super) async fn sync_self_install_dest(config: &Config, src: &std::path::Pat
 }
 
 fn self_install_sync_warning(dest: &std::path::Path, error: &anyhow::Error) -> String {
-    let mut warning = format!(
+    let mut warning = escape_controls(&format!(
         "Warning: failed to sync system copy at {}: {error:#}",
         dest.display()
-    );
+    ));
     // Unix already attempted elevation; Windows retains its manual recovery hint.
     if cfg!(windows) && has_io_error_kind(error, std::io::ErrorKind::PermissionDenied) {
         warning.push_str(" Rerun from an elevated terminal to sync the installed copy if needed.");

@@ -128,6 +128,22 @@ fn sync_warning_preserves_nested_permission_error_and_platform_hint() {
         cfg!(windows),
         "{warning}"
     );
+    let error = anyhow::Error::new(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "permission\nsentinel\r\t\u{1b}",
+    ))
+    .context("copy context");
+    let warning = self_install_sync_warning(std::path::Path::new("installed\nshine\u{1b}"), &error);
+    assert!(
+        !warning.contains(['\n', '\r', '\t', '\u{1b}']),
+        "{warning:?}"
+    );
+    assert!(warning.contains("installed\\nshine\\u{1b}"), "{warning}");
+    assert!(
+        warning.contains("copy context: permission\\nsentinel\\r\\t\\u{1b}"),
+        "{warning}"
+    );
+    assert_eq!(warning.contains("elevated terminal"), cfg!(windows));
 }
 
 #[tokio::test]
@@ -155,6 +171,13 @@ async fn sync_output_preserves_warning_stream_and_success_behavior() {
         return;
     }
     let root = make_temp_dir().await;
+    let renamed = root.with_extension(if cfg!(unix) {
+        "display\nFORGED=path\r\t\u{1b}中文"
+    } else {
+        "display中文"
+    });
+    std::fs::rename(&root, &renamed).unwrap();
+    let root = renamed;
     std::fs::write(root.join("source"), b"new binary").unwrap();
     std::fs::write(root.join("parent-file"), b"preserved").unwrap();
     let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -163,6 +186,13 @@ async fn sync_output_preserves_warning_stream_and_success_behavior() {
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
+    for stream in [&stdout, &stderr] {
+        assert!(!stream.contains(['\r', '\t', '\u{1b}']), "{stream:?}");
+        assert!(
+            !stream.lines().any(|line| line.starts_with("FORGED=")),
+            "{stream:?}"
+        );
+    }
     assert!(!stdout.contains("Warning:"), "{stdout}");
     assert_eq!(
         stdout.matches("Synced system copy at").count(),

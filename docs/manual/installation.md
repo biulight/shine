@@ -117,7 +117,8 @@ If the directory is not on PATH, the printed POSIX shell example preserves speci
 the directory name. `self install` result paths escape terminal controls; a directory containing
 controls gets a manual PATH instruction using the original directory instead of a copyable example.
 If an upgrade succeeds but syncing this separate copy fails, Shine prints a
-warning with the cause to stderr; the upgrade still returns success.
+warning with the cause to stderr; the upgrade still returns success. Sync result paths and warning
+details escape terminal controls without changing the recorded destination.
 
 On Unix, if `shine self install` copies the binary to a location the current user cannot modify,
 Shine interactively requests authorization and completes the installation through `sudo`. After a

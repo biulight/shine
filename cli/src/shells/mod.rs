@@ -80,18 +80,52 @@ pub(crate) fn shell_config_paths_for_core(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use profile::shell_source_command;
+    use profile::source_activation_hint;
 
     #[test]
     fn source_activation_command_quotes_shell_config_path() {
         let path = PathBuf::from("/home/user/my config/.zshrc");
         assert_eq!(
-            shell_source_command(&ShellType::Zsh, &path),
-            "source '/home/user/my config/.zshrc'"
+            source_activation_hint(&ShellType::Zsh, &path),
+            "run `source '/home/user/my config/.zshrc'` once, or open a new shell"
         );
         assert_eq!(
-            shell_source_command(&ShellType::PowerShell, &path),
-            ". '/home/user/my config/.zshrc'"
+            source_activation_hint(&ShellType::PowerShell, &path),
+            "run `. '/home/user/my config/.zshrc'` once, or open a new shell"
+        );
+    }
+
+    #[test]
+    fn activation_hints_do_not_offer_display_aliases_as_commands() {
+        let mut config = crate::config::Config::new_for_test(Path::new("unused"));
+        config.shell_type = ShellType::Zsh;
+        let path = Path::new("/home/a\nFORGED\r\t\u{1b}/.zshrc");
+        let lines = profile::source_command_activation_hint_lines(
+            &config,
+            path,
+            &["task\nFORGED\u{1b}".into()],
+        );
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("open a new shell"), "{lines:?}");
+        assert!(!lines[0].contains("run `"), "{lines:?}");
+        assert!(lines[1].contains("task\\nFORGED\\u{1b}"), "{lines:?}");
+        for line in &lines {
+            assert!(!line.contains(['\n', '\r', '\t', '\u{1b}']), "{lines:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn activation_hint_omits_non_utf8_path_instead_of_suggesting_lossy_alias() {
+        use std::os::unix::ffi::OsStringExt;
+        let path = PathBuf::from(std::ffi::OsString::from_vec(
+            b"/tmp/invalid\xff/.bashrc".to_vec(),
+        ));
+        let hint = source_activation_hint(&ShellType::Bash, &path);
+        assert_eq!(hint, "open a new shell to load the updated profile");
+        let valid_alias = PathBuf::from(path.to_string_lossy().into_owned());
+        assert!(
+            source_activation_hint(&ShellType::Bash, &valid_alias).starts_with("run `source '")
         );
     }
 

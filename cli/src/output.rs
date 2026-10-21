@@ -186,9 +186,10 @@ pub fn detail_line(label: &str, status: &str, detail: Option<String>) {
 }
 
 pub(crate) fn detail_line_text(label: &str, status: &str, detail: Option<String>) -> String {
+    // Details are plain data; callers may style the status separately.
     let detail = detail
         .filter(|value| !value.is_empty())
-        .map(|value| format!("  {}", colors::dim(&value)))
+        .map(|value| format!("  {}", colors::dim(&escape_controls(&value))))
         .unwrap_or_default();
 
     format!(
@@ -245,6 +246,23 @@ mod tests {
             .map(|status| detail_line_text("Link Conflict", status, Some("detail".into())));
         let widths = rows.map(|row| measure_text_width(row.split_once("detail").unwrap().0));
         assert_eq!(widths, [widths[0]; 4]);
+    }
+
+    #[test]
+    fn detail_data_escapes_controls_preserving_status_styles_and_literal_paths() {
+        let status = "\u{1b}[32mupdated\u{1b}[0m";
+        let row = detail_line_text(
+            "Shell Profile",
+            status,
+            Some("/tmp/a\nFORGED\r\t\u{1b}\\literal中文".into()),
+        );
+        assert!(row.contains(status), "{row:?}");
+        assert!(
+            console::strip_ansi_codes(&row).ends_with("/tmp/a\\nFORGED\\r\\t\\u{1b}\\literal中文"),
+            "{row:?}"
+        );
+        assert_eq!(row.lines().count(), 1);
+        assert!(!row.contains(['\r', '\t']));
     }
 
     #[test]
