@@ -65,7 +65,7 @@ cargo binstall shine-cli --strategies crate-meta-data
 
 ## 从源码安装
 
-已安装 Rust **1.88 或更高版本**时，可从 crates.io 安装：
+已安装 Rust **1.90 或更高版本**时，可从 crates.io 安装：
 
 ```bash
 cargo install shine-cli

@@ -22,7 +22,7 @@ shine-core = { path = "core", version = "2.6.0" }
 name = "shine-cli"
 version.workspace = true
 edition.workspace = true
-rust-version = "1.88"
+rust-version = "1.90"
 license.workspace = true
 description = "Give personal automation a reviewable lifecycle"
 readme = "README.md"

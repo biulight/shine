@@ -52,8 +52,9 @@ approval, without requiring source reparsing.
 
 Use pinned `tree-sitter = 0.25.10` and `tree-sitter-typescript = 0.23.2`, with a JavaScript
 grammar for JavaScript entrypoints. The parser and grammar are MIT licensed. Tree-sitter declares
-Rust 1.76; the TypeScript grammar does not declare an MSRV, so an actual Rust 1.88 build is required
-before completing the core stage. Grammars compile locally with the existing C build toolchain;
+Rust 1.76; the TypeScript grammar does not declare an MSRV, so an actual Rust 1.90 build is required
+before completing the core stage. The maintainer authorized raising the workspace MSRV to
+Rust 1.90 to use the latest `tree-sitter-language` 0.1.9 (MIT, Rust 1.90). Grammars compile locally with the existing C build toolchain;
 analysis itself never launches a compiler, external analyzer or dependency installer.
 
 Tree-sitter exposes byte ranges, row/byte-column locations, error/missing nodes and

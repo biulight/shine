@@ -1,0 +1,805 @@
+use super::*;
+use tree_sitter::{Node, ParseOptions, Parser};
+
+pub(super) fn builtin(spec: &str) -> Option<&str> {
+    match spec.strip_prefix("node:").unwrap_or(spec) {
+        "fs" => Some("fs"),
+        "fs/promises" => Some("fs"),
+        "child_process" => Some("child_process"),
+        "process" => Some("process"),
+        "bun" => Some("Bun"),
+        _ => None,
+    }
+}
+
+struct Binding {
+    name: String,
+    start: usize,
+    end: usize,
+    value: Option<String>,
+}
+
+#[derive(Default)]
+struct Bindings(BTreeMap<String, Vec<Binding>>);
+impl Bindings {
+    fn push(&mut self, binding: Binding) {
+        self.0
+            .entry(binding.name.clone())
+            .or_default()
+            .push(binding);
+    }
+    fn named(&self, name: &str) -> &[Binding] {
+        self.0.get(name).map(Vec::as_slice).unwrap_or(&[])
+    }
+    fn named_mut(&mut self, name: &str) -> &mut [Binding] {
+        self.0
+            .get_mut(name)
+            .map(Vec::as_mut_slice)
+            .unwrap_or(&mut [])
+    }
+}
+
+pub(super) fn parse(
+    session: &mut Session,
+    file: &str,
+    bytes: &[u8],
+) -> Result<Facts, TerminalFailure> {
+    let mut facts = Facts::default();
+    let extension = file.rsplit('.').next().unwrap_or("");
+    let language = match extension {
+        "ts" | "mts" | "cts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT,
+        "tsx" => tree_sitter_typescript::LANGUAGE_TSX,
+        "js" | "jsx" | "mjs" | "cjs" => tree_sitter_javascript::LANGUAGE,
+        _ => {
+            gap(
+                &mut facts,
+                file,
+                None,
+                "code_analysis_language_unsupported",
+                "source",
+            );
+            return Ok(facts);
+        }
+    };
+    if std::str::from_utf8(bytes).is_err() {
+        facts.diagnostics.push(Diagnostic::new(
+            DiagnosticKind::Failure,
+            "code_analysis_encoding",
+            file,
+            1,
+            1,
+            "source",
+        ));
+        return Ok(facts);
+    }
+    let mut parser = Parser::new();
+    parser
+        .set_language(&language.into())
+        .map_err(|_| TerminalFailure::Analyzer)?;
+    let tree = {
+        let mut progress = |_: &tree_sitter::ParseState| {
+            session.parser_steps += 1;
+            session.budget().is_err()
+        };
+        parser.parse_with_options(
+            &mut |offset, _| &bytes[offset..],
+            None,
+            Some(ParseOptions::new().progress_callback(&mut progress)),
+        )
+    };
+    session.check()?;
+    let tree = tree.ok_or(TerminalFailure::Analyzer)?;
+    let mut nodes = Vec::new();
+    let mut pending = vec![tree.root_node()];
+    while let Some(node) = pending.pop() {
+        session.nodes += 1;
+        session.budget()?;
+        if node.is_error() || node.is_missing() {
+            let p = node.start_position();
+            facts.diagnostics.push(Diagnostic::new(
+                DiagnosticKind::Failure,
+                "code_analysis_parse_failure",
+                file,
+                p.row + 1,
+                p.column + 1,
+                "source",
+            ));
+            // No definite behavior is claimed from a recovered/partial tree.
+            return Ok(facts);
+        }
+        nodes.push(node);
+        let mut cursor = node.walk();
+        pending.extend(node.named_children(&mut cursor));
+    }
+    let mut bindings = Bindings::default();
+    for node in &nodes {
+        match node.kind() {
+            "import_statement" => {
+                let Some(source) = node
+                    .child_by_field_name("source")
+                    .and_then(|n| literal(n, bytes))
+                else {
+                    continue;
+                };
+                if text(*node, bytes).starts_with("import type ") {
+                    continue;
+                }
+                let p = node.start_position();
+                facts
+                    .imports
+                    .push((source.clone(), p.row + 1, p.column + 1));
+                let module = builtin(&source);
+                for child in descendants(*node) {
+                    let binding = match child.kind() {
+                        "import_specifier" => {
+                            let name = child.child_by_field_name("name");
+                            let alias = child.child_by_field_name("alias").or(name);
+                            alias.map(|alias| {
+                                (
+                                    text(alias, bytes),
+                                    module
+                                        .zip(name)
+                                        .map(|(m, n)| format!("{m}.{}", text(n, bytes))),
+                                )
+                            })
+                        }
+                        "namespace_import" => child
+                            .named_child(0)
+                            .map(|n| (text(n, bytes), module.map(str::to_string))),
+                        "identifier"
+                            if child.parent().is_some_and(|p| p.kind() == "import_clause") =>
+                        {
+                            Some((text(child, bytes), module.map(str::to_string)))
+                        }
+                        _ => None,
+                    };
+                    if let Some((name, value)) = binding {
+                        bindings.push(Binding {
+                            name: name.into(),
+                            start: 0,
+                            end: bytes.len(),
+                            value,
+                        });
+                    }
+                }
+            }
+            "variable_declarator" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    let scope = if node
+                        .parent()
+                        .is_some_and(|p| p.kind() == "variable_declaration")
+                    {
+                        function_scope(*node)
+                    } else {
+                        scope(*node)
+                    };
+                    for id in pattern_names(name) {
+                        bindings.push(Binding {
+                            name: text(id, bytes).into(),
+                            start: scope.start_byte(),
+                            end: scope.end_byte(),
+                            value: None,
+                        });
+                    }
+                }
+            }
+            "function_expression" | "generator_function" | "class" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    bindings.push(Binding {
+                        name: text(name, bytes).into(),
+                        start: node.start_byte(),
+                        end: node.end_byte(),
+                        value: None,
+                    });
+                }
+            }
+            "function_declaration" | "class_declaration" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    let scope = scope(node.parent().unwrap_or(*node));
+                    bindings.push(Binding {
+                        name: text(name, bytes).into(),
+                        start: scope.start_byte(),
+                        end: scope.end_byte(),
+                        value: None,
+                    });
+                }
+            }
+            "formal_parameters" | "required_parameter" | "optional_parameter" => {
+                if node.parent().is_some_and(|p| {
+                    matches!(
+                        p.kind(),
+                        "formal_parameters" | "required_parameter" | "optional_parameter"
+                    )
+                }) {
+                    continue;
+                }
+                let parent = node.parent().unwrap_or(*node);
+                for id in pattern_names(*node) {
+                    bindings.push(Binding {
+                        name: text(id, bytes).into(),
+                        start: parent.start_byte(),
+                        end: parent.end_byte(),
+                        value: None,
+                    });
+                }
+            }
+            "arrow_function" => {
+                if let Some(id) = node.child_by_field_name("parameter") {
+                    bindings.push(Binding {
+                        name: text(id, bytes).into(),
+                        start: node.start_byte(),
+                        end: node.end_byte(),
+                        value: None,
+                    });
+                }
+            }
+            "for_in_statement" => {
+                if let Some(left) = node.child_by_field_name("left") {
+                    let scope = if text(*node, bytes).starts_with("for (var ") {
+                        function_scope(*node)
+                    } else {
+                        *node
+                    };
+                    for id in pattern_names(left) {
+                        bindings.push(Binding {
+                            name: text(id, bytes).into(),
+                            start: scope.start_byte(),
+                            end: scope.end_byte(),
+                            value: None,
+                        });
+                    }
+                }
+            }
+            "with_statement" => {
+                for name in ["Bun", "process", "fetch", "eval", "require"] {
+                    bindings.push(Binding {
+                        name: name.into(),
+                        start: 0,
+                        end: bytes.len(),
+                        value: None,
+                    });
+                }
+                gap(
+                    &mut facts,
+                    file,
+                    Some(*node),
+                    "code_analysis_binding_unknown",
+                    "code",
+                );
+            }
+            "catch_clause" => {
+                if let Some(parameter) = node.child_by_field_name("parameter") {
+                    for id in pattern_names(parameter) {
+                        bindings.push(Binding {
+                            name: text(id, bytes).into(),
+                            start: node.start_byte(),
+                            end: node.end_byte(),
+                            value: None,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Resolve only immutable, direct aliases. Any assignment to a binding below
+    // invalidates it conservatively, independent of traversal order.
+    for node in &nodes {
+        if node.kind() != "variable_declarator" {
+            continue;
+        }
+        let (Some(name), Some(value)) = (
+            node.child_by_field_name("name"),
+            node.child_by_field_name("value"),
+        ) else {
+            continue;
+        };
+        if name.kind() != "identifier"
+            || !node
+                .parent()
+                .is_some_and(|p| text(p, bytes).starts_with("const "))
+        {
+            continue;
+        }
+        let value = expression(value, bytes, &bindings);
+        let s = scope(*node);
+        if let Some(binding) = bindings
+            .named_mut(text(name, bytes))
+            .iter_mut()
+            .take(128)
+            .find(|b| {
+                b.name == text(name, bytes) && b.start == s.start_byte() && b.end == s.end_byte()
+            })
+        {
+            binding.value = value;
+        }
+    }
+    for node in &nodes {
+        if matches!(
+            node.kind(),
+            "assignment_expression" | "augmented_assignment_expression" | "update_expression"
+        ) {
+            let target = node
+                .child_by_field_name("left")
+                .or_else(|| node.child_by_field_name("argument"));
+            if let Some(target) = target {
+                // Updating a named env slot does not rebind process/Bun or env.
+                if target
+                    .child_by_field_name("object")
+                    .and_then(|n| expression(n, bytes, &bindings))
+                    .is_some_and(|n| matches!(n.as_str(), "process.env" | "Bun.env"))
+                {
+                    continue;
+                }
+                let mut root = target;
+                while let Some(object) = root.child_by_field_name("object") {
+                    root = object;
+                }
+                let name = text(root, bytes);
+                if name == "globalThis" {
+                    for name in ["Bun", "process", "fetch", "eval", "require"] {
+                        bindings.push(Binding {
+                            name: name.into(),
+                            start: 0,
+                            end: bytes.len(),
+                            value: None,
+                        });
+                    }
+                }
+
+                for b in bindings.named_mut(name) {
+                    b.value = None;
+                }
+                if matches!(name, "Bun" | "process" | "fetch" | "eval" | "require") {
+                    bindings.push(Binding {
+                        name: name.into(),
+                        start: 0,
+                        end: bytes.len(),
+                        value: None,
+                    });
+                }
+            }
+        }
+    }
+    for node in nodes {
+        session.check()?;
+        if node.kind() == "call_expression" || node.kind() == "new_expression" {
+            let Some(function) = node
+                .child_by_field_name("function")
+                .or_else(|| node.child_by_field_name("constructor"))
+            else {
+                continue;
+            };
+            let name = expression(function, bytes, &bindings);
+            let args = node.child_by_field_name("arguments");
+            let first = args.and_then(|n| n.named_child(0));
+            match name.as_deref() {
+                Some("fetch") => {
+                    if let Some(host) = first.and_then(|n| literal(n, bytes)).and_then(|s| host(&s))
+                    {
+                        finding(&mut facts, node, Behavior::Network(host));
+                    } else {
+                        gap(
+                            &mut facts,
+                            file,
+                            Some(node),
+                            "code_analysis_dynamic_target",
+                            "network",
+                        );
+                    }
+                }
+                Some(
+                    "Bun.spawn"
+                    | "Bun.spawnSync"
+                    | "child_process.spawn"
+                    | "child_process.spawnSync"
+                    | "child_process.execFile"
+                    | "child_process.execFileSync"
+                    | "child_process.fork",
+                ) => {
+                    let command = first.and_then(|n| {
+                        if n.kind() == "array" {
+                            n.named_child(0).and_then(|n| literal(n, bytes))
+                        } else {
+                            literal(n, bytes)
+                        }
+                    });
+                    let command = if name.as_deref() == Some("child_process.fork")
+                        || (name
+                            .as_deref()
+                            .is_some_and(|n| n.starts_with("child_process."))
+                            && args.is_some_and(|args| {
+                                let mut cursor = args.walk();
+                                args.named_children(&mut cursor).skip(1).any(|n| {
+                                    !matches!(
+                                        n.kind(),
+                                        "array" | "arrow_function" | "function_expression"
+                                    )
+                                })
+                            })) {
+                        // fork's first argument is a module, not an executable.
+                        // Node options may select a shell or another execPath.
+                        None
+                    } else {
+                        command
+                    };
+                    if let Some(command) = command {
+                        finding(&mut facts, node, Behavior::Command(command));
+                    } else {
+                        gap(
+                            &mut facts,
+                            file,
+                            Some(node),
+                            "code_analysis_dynamic_target",
+                            "command",
+                        );
+                    }
+                    gap(
+                        &mut facts,
+                        file,
+                        Some(node),
+                        "code_analysis_subprocess_effects",
+                        "command",
+                    );
+                }
+                Some("require") => {
+                    if let Some(spec) = first.and_then(|n| literal(n, bytes)) {
+                        let p = node.start_position();
+                        facts.imports.push((spec, p.row + 1, p.column + 1));
+                    } else {
+                        gap(
+                            &mut facts,
+                            file,
+                            Some(node),
+                            "code_analysis_dynamic_code",
+                            "dependency",
+                        );
+                    }
+                }
+                Some(
+                    "eval" | "import" | "child_process.exec" | "child_process.execSync" | "Bun.$",
+                ) => {
+                    gap(
+                        &mut facts,
+                        file,
+                        Some(node),
+                        "code_analysis_dynamic_code",
+                        "code",
+                    );
+                    if name
+                        .as_deref()
+                        .is_some_and(|n| n.starts_with("child_process.") || n == "Bun.$")
+                    {
+                        gap(
+                            &mut facts,
+                            file,
+                            Some(node),
+                            "code_analysis_subprocess_effects",
+                            "command",
+                        );
+                    }
+                }
+                Some(name) if file_access(name).is_some() => {
+                    if let Some(path) = first.and_then(|n| literal(n, bytes)) {
+                        finding(
+                            &mut facts,
+                            node,
+                            Behavior::File(file_access(name).unwrap(), path),
+                        );
+                    } else {
+                        gap(
+                            &mut facts,
+                            file,
+                            Some(node),
+                            "code_analysis_dynamic_target",
+                            "filesystem",
+                        );
+                    }
+                }
+                Some("Bun.file") => {
+                    // Constructing a BunFile does not read it. Its supported methods
+                    // are handled by the parent call below.
+                    if !node.parent().is_some_and(|parent| {
+                        parent.kind() == "expression_statement"
+                            || (bun_file_method(parent, bytes, &bindings).is_some()
+                                && parent
+                                    .parent()
+                                    .is_some_and(|call| call.kind() == "call_expression"))
+                    }) {
+                        gap(
+                            &mut facts,
+                            file,
+                            Some(node),
+                            "code_analysis_file_object",
+                            "filesystem",
+                        );
+                    }
+                }
+                _ => {
+                    if let Some((access, path)) = bun_file_method(function, bytes, &bindings) {
+                        if let Some(path) = path {
+                            finding(&mut facts, node, Behavior::File(access, path));
+                        } else {
+                            gap(
+                                &mut facts,
+                                file,
+                                Some(node),
+                                "code_analysis_dynamic_target",
+                                "filesystem",
+                            );
+                        }
+                    } else {
+                        gap(
+                            &mut facts,
+                            file,
+                            Some(node),
+                            "code_analysis_call_unknown",
+                            "code",
+                        );
+                    }
+                }
+            }
+        }
+        if matches!(node.kind(), "member_expression" | "subscript_expression") {
+            let Some(object) = node.child_by_field_name("object") else {
+                continue;
+            };
+            if matches!(
+                expression(object, bytes, &bindings).as_deref(),
+                Some("process.env" | "Bun.env")
+            ) && is_read(node, bytes)
+            {
+                if let Some(name) = member_key(node, bytes) {
+                    finding(&mut facts, node, Behavior::Environment(name));
+                } else {
+                    gap(
+                        &mut facts,
+                        file,
+                        Some(node),
+                        "code_analysis_dynamic_target",
+                        "environment",
+                    );
+                }
+            }
+        }
+        if matches!(
+            expression(node, bytes, &bindings).as_deref(),
+            Some("process.env" | "Bun.env")
+        ) && !node.parent().is_some_and(|p| {
+            matches!(p.kind(), "member_expression" | "subscript_expression")
+                && p.child_by_field_name("object") == Some(node)
+        }) {
+            gap(
+                &mut facts,
+                file,
+                Some(node),
+                "code_analysis_environment_object",
+                "environment",
+            );
+        }
+        if matches!(node.kind(), "export_statement")
+            && let Some(source) = node
+                .child_by_field_name("source")
+                .and_then(|n| literal(n, bytes))
+        {
+            let p = node.start_position();
+            facts.imports.push((source, p.row + 1, p.column + 1));
+        }
+    }
+    Ok(facts)
+}
+
+fn descendants(node: Node<'_>) -> Vec<Node<'_>> {
+    let mut result = Vec::new();
+    let mut pending = vec![node];
+    while let Some(n) = pending.pop() {
+        result.push(n);
+        let mut c = n.walk();
+        pending.extend(n.named_children(&mut c));
+    }
+    result
+}
+fn pattern_names(node: Node<'_>) -> Vec<Node<'_>> {
+    descendants(node)
+        .into_iter()
+        .filter(|n| {
+            matches!(
+                n.kind(),
+                "identifier" | "shorthand_property_identifier_pattern"
+            ) && n.parent().is_none_or(|p| p.kind() != "type_annotation")
+        })
+        .collect()
+}
+fn function_scope(mut node: Node<'_>) -> Node<'_> {
+    while let Some(parent) = node.parent() {
+        node = parent;
+        if matches!(
+            node.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "arrow_function"
+                | "generator_function"
+                | "method_definition"
+                | "program"
+        ) {
+            break;
+        }
+    }
+    node
+}
+fn scope(mut node: Node<'_>) -> Node<'_> {
+    while let Some(parent) = node.parent() {
+        node = parent;
+        if matches!(node.kind(), "statement_block" | "program") {
+            break;
+        }
+    }
+    node
+}
+fn text<'a>(node: Node<'_>, bytes: &'a [u8]) -> &'a str {
+    std::str::from_utf8(&bytes[node.byte_range()]).unwrap_or("")
+}
+fn literal(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    if node.kind() != "string" {
+        return None;
+    }
+    let raw = text(node, bytes);
+    let content = raw.get(1..raw.len().checked_sub(1)?)?;
+    // Escaped literals are deliberately unknown until a complete JS decoder is used.
+    if content.contains('\\') || content.chars().any(char::is_control) {
+        None
+    } else {
+        Some(content.to_string())
+    }
+}
+fn member_key(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    if let Some(property) = node.child_by_field_name("property") {
+        Some(text(property, bytes).to_string())
+    } else {
+        node.child_by_field_name("index")
+            .and_then(|n| literal(n, bytes))
+    }
+}
+fn expression(node: Node<'_>, bytes: &[u8], bindings: &Bindings) -> Option<String> {
+    // Bound recursion independently of hostile expression depth.
+    let mut node = node;
+    let mut keys = Vec::new();
+    for _ in 0..64 {
+        match node.kind() {
+            "member_expression" | "subscript_expression" => {
+                keys.push(member_key(node, bytes)?);
+                node = node.child_by_field_name("object")?;
+            }
+            "call_expression" => {
+                let callee = node.child_by_field_name("function")?;
+                if text(callee, bytes) != "require" || !bindings.named("require").is_empty() {
+                    return None;
+                }
+                let spec = literal(
+                    node.child_by_field_name("arguments")?.named_child(0)?,
+                    bytes,
+                )?;
+                let mut value = builtin(&spec)?.to_string();
+                for key in keys.into_iter().rev() {
+                    value.push('.');
+                    value.push_str(&key);
+                }
+                return Some(value);
+            }
+            "identifier" | "import" => {
+                let name = text(node, bytes);
+                if bindings.named(name).len() > 128 {
+                    return None;
+                }
+                let candidates = bindings
+                    .named(name)
+                    .iter()
+                    .filter(|b| {
+                        b.name == name && b.start <= node.start_byte() && node.end_byte() <= b.end
+                    })
+                    .collect::<Vec<_>>();
+                let mut value = if let Some(min) = candidates.iter().map(|b| b.end - b.start).min()
+                {
+                    let closest = candidates
+                        .into_iter()
+                        .filter(|b| b.end - b.start == min)
+                        .collect::<Vec<_>>();
+                    if closest.len() != 1 {
+                        return None;
+                    }
+                    closest[0].value.clone()?
+                } else if matches!(
+                    name,
+                    "process" | "Bun" | "fetch" | "eval" | "require" | "import"
+                ) {
+                    name.to_string()
+                } else {
+                    return None;
+                };
+                for key in keys.into_iter().rev() {
+                    value.push('.');
+                    value.push_str(&key);
+                }
+                return Some(value);
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+fn finding(facts: &mut Facts, node: Node<'_>, behavior: Behavior) {
+    let p = node.start_position();
+    facts.findings.push(Finding {
+        behavior,
+        line: p.row + 1,
+        column: p.column + 1,
+    });
+}
+fn gap(facts: &mut Facts, file: &str, node: Option<Node<'_>>, code: &str, behavior: &str) {
+    let p = node.map(|n| n.start_position()).unwrap_or_default();
+    facts.diagnostics.push(Diagnostic::new(
+        DiagnosticKind::CoverageGap,
+        code,
+        file,
+        p.row + 1,
+        p.column + 1,
+        behavior,
+    ));
+}
+fn is_read(node: Node<'_>, bytes: &[u8]) -> bool {
+    !node.parent().is_some_and(|p| {
+        (p.kind() == "assignment_expression" && p.child_by_field_name("left") == Some(node))
+            || (p.kind() == "unary_expression" && text(p, bytes).starts_with("delete "))
+    })
+}
+fn host(value: &str) -> Option<String> {
+    let url = url::Url::parse(value).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url.host_str().map(str::to_ascii_lowercase)
+}
+
+fn file_access(name: &str) -> Option<FilesystemAccessV1> {
+    match name {
+        "fs.readFile" | "fs.readFileSync" | "fs.promises.readFile" | "fs.createReadStream" => {
+            Some(FilesystemAccessV1::Read)
+        }
+        "fs.writeFile"
+        | "fs.writeFileSync"
+        | "fs.appendFile"
+        | "fs.appendFileSync"
+        | "fs.promises.writeFile"
+        | "fs.promises.appendFile"
+        | "fs.createWriteStream"
+        | "Bun.write" => Some(FilesystemAccessV1::Write),
+        "fs.unlink" | "fs.unlinkSync" | "fs.rm" | "fs.rmSync" | "fs.rmdir" | "fs.rmdirSync"
+        | "fs.promises.unlink" | "fs.promises.rm" => Some(FilesystemAccessV1::Remove),
+        _ => None,
+    }
+}
+fn bun_file_method(
+    node: Node<'_>,
+    bytes: &[u8],
+    bindings: &Bindings,
+) -> Option<(FilesystemAccessV1, Option<String>)> {
+    let key = member_key(node, bytes)?;
+    let access = match key.as_str() {
+        "text" | "json" | "arrayBuffer" | "bytes" | "stream" | "exists" => FilesystemAccessV1::Read,
+        "delete" => FilesystemAccessV1::Remove,
+        "writer" => FilesystemAccessV1::Write,
+        _ => return None,
+    };
+    let call = node.child_by_field_name("object")?;
+    if call.kind() != "call_expression"
+        || expression(call.child_by_field_name("function")?, bytes, bindings).as_deref()
+            != Some("Bun.file")
+    {
+        return None;
+    }
+    let path = call
+        .child_by_field_name("arguments")
+        .and_then(|n| n.named_child(0))
+        .and_then(|n| literal(n, bytes));
+    Some((access, path))
+}

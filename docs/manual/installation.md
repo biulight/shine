@@ -68,7 +68,7 @@ channel is available through `shine self upgrade --channel preview` instead.
 
 ## Install from source
 
-With **Rust 1.88 or later** installed, you can install from crates.io:
+With **Rust 1.90 or later** installed, you can install from crates.io:
 
 ```bash
 cargo install shine-cli

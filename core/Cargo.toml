@@ -2,7 +2,7 @@
 name = "shine-core"
 version.workspace = true
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.90"
 license.workspace = true
 description = "Reusable lifecycle runtime and domain core for Shine applications"
 readme = "README.md"
@@ -23,6 +23,11 @@ schemars = "1.2.2"
 sha2 = "0.10.9"
 similar = "3.1"
 tar = "0.4.44"
+tree-sitter = "=0.25.10"
+tree-sitter-javascript = "=0.23.1"
+tree-sitter-language = "=0.1.9"
+tree-sitter-typescript = "=0.23.2"
+url = "2.5.8"
 tokio = { version = "1.52.1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }

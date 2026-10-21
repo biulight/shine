@@ -25,7 +25,7 @@ curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh
 irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
-也可以在 Rust 1.88 或更高版本下从 crates.io 安装：
+也可以在 Rust 1.90 或更高版本下从 crates.io 安装：
 
 ```bash
 cargo install shine-cli

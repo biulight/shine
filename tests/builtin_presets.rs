@@ -1,5 +1,7 @@
 //! Contracts for the built-in preset bundle, through production CLI/Core entry points.
 
+#[path = "builtin_presets/analysis.rs"]
+mod analysis;
 #[path = "builtin_presets/app.rs"]
 mod app;
 #[path = "builtin_presets/docs.rs"]

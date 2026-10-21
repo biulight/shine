@@ -5,6 +5,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [Unreleased]
+
+### Breaking Changes
+
+- Building from source now requires Rust 1.90 or later.
+
 ## [2.6.0] — 2026-10-22
 
 ### Breaking Changes

@@ -26,7 +26,7 @@ On Windows PowerShell:
 irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
-Or install from crates.io with Rust 1.88 or later:
+Or install from crates.io with Rust 1.90 or later:
 
 ```bash
 cargo install shine-cli

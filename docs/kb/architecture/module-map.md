@@ -14,6 +14,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/` | Main `shine` binary plus its library crate |
 | `cli/build.rs` | Embedded preset rebuild triggers, build metadata, and Windows MSVC executable stack reserve |
 | `core/` | Reusable `shine-core` package with no CLI/Tauri dependency |
+| `core/src/analysis/` | Read-only JS/TS source facts, bounded command-local cache and entry-specific declaration comparison; runtime integration tracked in [code analysis](code-analysis.md) |
 | `core/src/digest.rs` | Raw SHA-256 and lowercase 32-byte digest encoding; each domain retains its own framing, versions, prefixes and validation |
 | `core/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
