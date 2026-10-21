@@ -102,6 +102,8 @@ Add `shine.test.toml` when the category needs repeatable cross-platform expectat
 the starting conditions and expected results without running setup code. Runnable App, Shell, and
 Sys examples are available under `examples/presets`. `preset test` accepts one category, not a
 repository root.
+Declared files and receipts share the planner's virtual directories on every host, including
+Windows. Use relative file bases and receipt placeholders such as `${HOME}` for portable cases.
 Text reports escape control characters in case names so each result stays on one row.
 JSON reports preserve the original names; pass/fail results and exit codes are the same in both formats.
 

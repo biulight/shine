@@ -261,6 +261,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **Preset fixtures are declarative assertions, never executable setup.** `shine preset test`
   accepts one category-local `shine.test.toml`, rejects unknown fields and unsupported schema
   versions, and runs each unique named case only through the synthetic authoring-report path.
+  Seeded state and planning share a host-native synthetic root, independently of the simulated
+  platform; receipt placeholders use TOML-safe paths under that same root.
   Host state may contain environment-name presence, opaque secret versions, bounded synthetic
   files, command-presence identities, current-version receipt documents, exact derived trust grants,
   and administrator state. Values and receipt contents never enter reports. Expectations compare

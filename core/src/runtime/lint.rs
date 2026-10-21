@@ -10,7 +10,7 @@ use crate::permission::{DeclaredNetworkScopeV1, PermissionDeclarationV1, Permiss
 use schemars::JsonSchema;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const PRESET_LINT_SCHEMA_VERSION: u32 = 1;
 
@@ -88,10 +88,7 @@ pub async fn lint_preset_path(
         return finish(scope.categories.len(), diagnostics);
     }
 
-    #[cfg(windows)]
-    let root = PathBuf::from(r"C:\shine-author");
-    #[cfg(not(windows))]
-    let root = PathBuf::from("/shine-author");
+    let root = super::authoring::synthetic_root();
     let home = root.join("home");
     let shine = home.join(".shine");
     let mut unique = BTreeMap::new();

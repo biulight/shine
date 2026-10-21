@@ -364,7 +364,7 @@ pub async fn test_preset_path(
 fn materialize_host_state(
     fixture: &FixtureHostStateV1,
 ) -> Result<PresetAuthoringSyntheticState, &'static str> {
-    let home = PathBuf::from("/shine-author/home");
+    let home = super::authoring::synthetic_root().join("home");
     let shine = home.join(".shine");
     let data = home.join(".local/share");
     let bin = shine.join("bin");
@@ -494,7 +494,11 @@ fn expand_placeholders(
 ) -> Result<String, &'static str> {
     let mut expanded = document.to_string();
     for (placeholder, path) in placeholders {
-        expanded = expanded.replace(placeholder, &path.to_string_lossy());
+        let path = path.to_string_lossy();
+        // These synthetic paths must work in both TOML basic and literal strings.
+        #[cfg(windows)]
+        let path = path.replace('\\', "/");
+        expanded = expanded.replace(placeholder, &path);
     }
     if expanded.contains("${") {
         return Err("fixture_receipt_placeholder_invalid");
@@ -651,6 +655,50 @@ mod tests {
             .into_bytes(),
         );
         host
+    }
+
+    #[tokio::test]
+    async fn seeded_files_and_receipts_reach_the_authoring_planner() {
+        for platform in ["macos", "linux", "windows"] {
+            for receipt_quote in [None, Some('\''), Some('"')] {
+                let host = fixture(true);
+                let receipt = receipt_quote.map_or_else(String::new, |quote| {
+                    format!(
+                        "[cases.host.receipts]\napp = '''\nschema_version = 1\n[[entries]]\nsource = 'app/demo/config.toml'\ndestination = {quote}${{HOME}}/.config/demo/config.toml{quote}\ncontent_hash = {}\n'''\n",
+                        crate::install::manifest::hash_content(b"value = true\n")
+                    )
+                });
+                host.put_file(
+                    "/repo/app/demo/shine.test.toml",
+                    format!(
+                        "schema_version = 1\n[[cases]]\nname = 'seeded-state'\nplatform = '{platform}'\n[[cases.host.files]]\nbase = 'home'\npath = '.config/demo/config.toml'\ncontent = \"value = true\\n\"\n{receipt}[cases.expect]\nvalid = true\nready = true\n"
+                    )
+                    .into_bytes(),
+                );
+                let report =
+                    test_preset_path(&host, Path::new("/repo"), Path::new("app/demo")).await;
+                assert!(report.valid, "{platform} {receipt_quote:?}: {report:?}");
+                let case = &report.cases[0];
+                let needs_backup = case.actual_required_permissions.iter().any(|permission| {
+                    permission == "filesystem:write:home:.config/demo/config.toml.shine.bak"
+                });
+                assert_eq!(needs_backup, receipt_quote.is_none(), "{case:?}");
+                if receipt_quote.is_some() {
+                    assert!(
+                        !case.actual_actions.contains(&"create".to_string()),
+                        "{case:?}"
+                    );
+                }
+                let encoded = serde_json::to_string(&report).unwrap();
+                assert!(!encoded.contains("shine-author"));
+                assert!(!encoded.contains("value = true"));
+                assert!(
+                    host.operations()
+                        .iter()
+                        .all(|operation| matches!(operation, super::super::HostOperation::Read(_)))
+                );
+            }
+        }
     }
 
     #[tokio::test]

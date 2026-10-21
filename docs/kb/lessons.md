@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-10-21 — Fixture observations must share the planner's native root
+
+- **Evidence**: Windows seeded `/shine-author/home` while planning read `C:\shine-author\home`.
+  A declared existing App file lost its backup permission in the report; empty-state tests passed.
+- **Fix**: share the synthetic root between authoring, fixture seeding and lint. Expand Windows
+  receipt placeholders with forward slashes so both TOML string styles remain valid.
+- **Coverage**: all three simulated platforms check existing-file backup requirements and matching
+  receipts with literal/basic strings, retaining report redaction and observation-only source reads.
+
 ## 2026-10-21 — Failure diagnostics need their own display boundary
 
 - **Evidence**: actual env reads, task cwd failures and missing Broker policy queries split stderr
