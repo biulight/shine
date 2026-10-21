@@ -1,5 +1,7 @@
 //! Shell transaction commit phase.
 use super::*;
+#[cfg(test)]
+mod tests;
 
 impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     pub(crate) async fn mark_shell_launcher_receipt_committed(
@@ -15,8 +17,8 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         let manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         for action in &journal.action_ir.actions {
-            match &action.kind {
-                ActionKindV1::RemoveShellLauncher {
+            match ShellAction::from_kind(&action.kind)? {
+                ShellAction::RemoveShellLauncher {
                     previous_receipt, ..
                 } => {
                     if !journal.applied.contains(&action.action_id)
@@ -31,7 +33,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         journal.receipt_committed.push(action.action_id.clone());
                     }
                 }
-                ActionKindV1::RemoveLegacyShellLauncher { .. } => {
+                ShellAction::RemoveLegacyShellLauncher { .. } => {
                     if !journal.applied.contains(&action.action_id)
                         || manifest.find(&action.target).is_some()
                     {
@@ -43,7 +45,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         journal.receipt_committed.push(action.action_id.clone());
                     }
                 }
-                ActionKindV1::ReconcileShellProfile {
+                ShellAction::ReconcileShellProfile {
                     files,
                     receipt_transitions,
                     receipt_removals,
@@ -77,7 +79,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         journal.receipt_committed.push(action.action_id.clone());
                     }
                 }
-                ActionKindV1::ReplaceShellSnapshot {
+                ShellAction::ReplaceShellSnapshot {
                     destination,
                     desired_files,
                     receipts,
@@ -97,7 +99,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         journal.receipt_committed.push(action.action_id.clone());
                     }
                 }
-                ActionKindV1::ReplaceShellCache { files, receipts } => {
+                ShellAction::ReplaceShellCache { files, receipts } => {
                     let mut files_match = true;
                     for file in files {
                         files_match &= observe_shell_file(self.host(), &file.destination)
@@ -116,7 +118,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         journal.receipt_committed.push(action.action_id.clone());
                     }
                 }
-                ActionKindV1::RemoveShellCache { files, receipts } => {
+                ShellAction::RemoveShellCache { files, receipts } => {
                     let mut files_match = true;
                     for file in files {
                         files_match &= observe_shell_file(self.host(), &file.destination).await?
@@ -137,7 +139,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         journal.receipt_committed.push(action.action_id.clone());
                     }
                 }
-                ActionKindV1::RemoveShellSnapshot {
+                ShellAction::RemoveShellSnapshot {
                     destination,
                     rollback,
                     previous_files,
@@ -159,7 +161,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         journal.receipt_committed.push(action.action_id.clone());
                     }
                 }
-                ActionKindV1::ReplaceShellRenderedFile {
+                ShellAction::ReplaceShellRenderedFile {
                     destination,
                     desired,
                     receipts,
@@ -179,7 +181,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         journal.receipt_committed.push(action.action_id.clone());
                     }
                 }
-                ActionKindV1::RemoveShellRenderedFile {
+                ShellAction::RemoveShellRenderedFile {
                     destination,
                     rollback,
                     previous,
@@ -201,7 +203,8 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         journal.receipt_committed.push(action.action_id.clone());
                     }
                 }
-                _ => {}
+                ShellAction::CreateShellLauncher { .. }
+                | ShellAction::UpdateShellLauncher { .. } => {}
             }
         }
         save_shell_operation_journal(self.host(), &self.context().shine_dir, &journal).await
@@ -222,8 +225,8 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         let manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         for action in &journal.action_ir.actions {
-            match &action.kind {
-                ActionKindV1::CreateShellLauncher { receipt, resources } => {
+            match ShellAction::from_kind(&action.kind)? {
+                ShellAction::CreateShellLauncher { receipt, resources } => {
                     if matching_shell_receipt(&manifest, &action.target, receipt)
                         != ReceiptState::Matching
                     {
@@ -237,7 +240,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         }
                     }
                 }
-                ActionKindV1::UpdateShellLauncher {
+                ShellAction::UpdateShellLauncher {
                     desired_receipt,
                     resources,
                     ..
@@ -262,7 +265,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         }
                     }
                 }
-                ActionKindV1::RemoveShellLauncher {
+                ShellAction::RemoveShellLauncher {
                     previous_receipt,
                     resources,
                 } => {
@@ -289,7 +292,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         }
                     }
                 }
-                ActionKindV1::RemoveLegacyShellLauncher { resources } => {
+                ShellAction::RemoveLegacyShellLauncher { resources } => {
                     if !journal.receipt_committed.contains(&action.action_id)
                         || manifest.find(&action.target).is_some()
                     {
@@ -312,7 +315,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         }
                     }
                 }
-                ActionKindV1::ReplaceShellSnapshot {
+                ShellAction::ReplaceShellSnapshot {
                     destination,
                     stage,
                     rollback,
@@ -339,7 +342,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         bail!("Shell snapshot changed before operation commit");
                     }
                 }
-                ActionKindV1::ReplaceShellCache { files, receipts } => {
+                ShellAction::ReplaceShellCache { files, receipts } => {
                     let mut changed = false;
                     for file in files {
                         changed |= assess_shell_rendered_file_recovery(
@@ -360,7 +363,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         bail!("Shell cache changed before operation commit");
                     }
                 }
-                ActionKindV1::RemoveShellCache { files, receipts } => {
+                ShellAction::RemoveShellCache { files, receipts } => {
                     let mut changed = false;
                     for file in files {
                         changed |= assess_shell_rendered_file_removal_recovery(
@@ -380,7 +383,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         bail!("Shell cache removal changed before operation commit");
                     }
                 }
-                ActionKindV1::RemoveShellSnapshot {
+                ShellAction::RemoveShellSnapshot {
                     destination,
                     rollback,
                     previous_files,
@@ -401,7 +404,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         bail!("Shell snapshot removal changed before operation commit");
                     }
                 }
-                ActionKindV1::ReconcileShellProfile {
+                ShellAction::ReconcileShellProfile {
                     files,
                     receipt_transitions,
                     receipt_removals,
@@ -426,7 +429,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         bail!("Shell profile changed before operation commit");
                     }
                 }
-                ActionKindV1::ReplaceShellRenderedFile {
+                ShellAction::ReplaceShellRenderedFile {
                     destination,
                     rollback,
                     previous,
@@ -449,7 +452,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         bail!("Shell rendered file changed before operation commit");
                     }
                 }
-                ActionKindV1::RemoveShellRenderedFile {
+                ShellAction::RemoveShellRenderedFile {
                     destination,
                     rollback,
                     previous,
@@ -470,106 +473,117 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         bail!("Shell rendered-file removal changed before operation commit");
                     }
                 }
-                _ => unreachable!("validated Shell journal action kind"),
             }
         }
         for action in &journal.action_ir.actions {
-            if let ActionKindV1::UpdateShellLauncher { resources, .. } = &action.kind {
-                for resource in resources {
-                    self.host()
-                        .remove_file(&resource.rollback)
-                        .await
-                        .map_err(|error| error.into_anyhow("cleaning Shell launcher rollback"))?;
-                }
-            }
-            if let ActionKindV1::RemoveShellLauncher { resources, .. }
-            | ActionKindV1::RemoveLegacyShellLauncher { resources } = &action.kind
-            {
-                for resource in resources {
-                    self.host()
-                        .remove_file(&resource.rollback)
-                        .await
-                        .map_err(|error| error.into_anyhow("cleaning Shell launcher rollback"))?;
-                }
-            }
-            if let ActionKindV1::ReplaceShellSnapshot {
-                rollback,
-                previous_present,
-                ..
-            } = &action.kind
-                && *previous_present
-            {
-                match self.host().remove_dir_all(rollback).await {
-                    Ok(()) => {}
-                    Err(error) if error.is_not_found() => {}
-                    Err(error) => {
-                        return Err(error.into_anyhow("cleaning Shell snapshot rollback"));
+            match ShellAction::from_kind(&action.kind)? {
+                ShellAction::CreateShellLauncher { .. } => {}
+                ShellAction::UpdateShellLauncher { resources, .. } => {
+                    for resource in resources {
+                        self.host()
+                            .remove_file(&resource.rollback)
+                            .await
+                            .map_err(|error| {
+                                error.into_anyhow("cleaning Shell launcher rollback")
+                            })?;
                     }
                 }
-            }
-            if let ActionKindV1::ReplaceShellCache { files, .. } = &action.kind {
-                for file in files.iter().filter(|file| file.previous.is_some()) {
-                    match self.host().remove_file(&file.rollback).await {
-                        Ok(()) => {}
-                        Err(error) if error.is_not_found() => {}
-                        Err(error) => {
-                            return Err(error.into_anyhow("cleaning Shell cache rollback"));
+                ShellAction::RemoveShellLauncher { resources, .. }
+                | ShellAction::RemoveLegacyShellLauncher { resources } => {
+                    for resource in resources {
+                        self.host()
+                            .remove_file(&resource.rollback)
+                            .await
+                            .map_err(|error| {
+                                error.into_anyhow("cleaning Shell launcher rollback")
+                            })?;
+                    }
+                }
+                ShellAction::ReplaceShellSnapshot {
+                    rollback,
+                    previous_present,
+                    ..
+                } => {
+                    if *previous_present {
+                        match self.host().remove_dir_all(rollback).await {
+                            Ok(()) => {}
+                            Err(error) if error.is_not_found() => {}
+                            Err(error) => {
+                                return Err(error.into_anyhow("cleaning Shell snapshot rollback"));
+                            }
                         }
                     }
                 }
-            }
-            if let ActionKindV1::RemoveShellCache { files, .. } = &action.kind {
-                for file in files {
-                    match self.host().remove_file(&file.rollback).await {
-                        Ok(()) => {}
-                        Err(error) if error.is_not_found() => {}
-                        Err(error) => {
-                            return Err(error.into_anyhow("cleaning removed Shell cache rollback"));
+                ShellAction::ReplaceShellCache { files, .. } => {
+                    for file in files.iter().filter(|file| file.previous.is_some()) {
+                        match self.host().remove_file(&file.rollback).await {
+                            Ok(()) => {}
+                            Err(error) if error.is_not_found() => {}
+                            Err(error) => {
+                                return Err(error.into_anyhow("cleaning Shell cache rollback"));
+                            }
                         }
                     }
                 }
-            }
-            if let ActionKindV1::RemoveShellSnapshot { rollback, .. } = &action.kind {
-                match self.host().remove_dir_all(rollback).await {
-                    Ok(()) => {}
-                    Err(error) if error.is_not_found() => {}
-                    Err(error) => {
-                        return Err(error.into_anyhow("cleaning removed Shell snapshot rollback"));
-                    }
-                }
-            }
-            if let ActionKindV1::ReconcileShellProfile { files, .. } = &action.kind {
-                for file in files.iter().filter(|file| file.previous.is_some()) {
-                    match self.host().remove_file(&file.rollback).await {
-                        Ok(()) => {}
-                        Err(error) if error.is_not_found() => {}
-                        Err(error) => {
-                            return Err(error.into_anyhow("cleaning Shell profile rollback"));
+                ShellAction::RemoveShellCache { files, .. } => {
+                    for file in files {
+                        match self.host().remove_file(&file.rollback).await {
+                            Ok(()) => {}
+                            Err(error) if error.is_not_found() => {}
+                            Err(error) => {
+                                return Err(
+                                    error.into_anyhow("cleaning removed Shell cache rollback")
+                                );
+                            }
                         }
                     }
                 }
-            }
-            if let ActionKindV1::ReplaceShellRenderedFile {
-                rollback, previous, ..
-            } = &action.kind
-                && previous.is_some()
-            {
-                match self.host().remove_file(rollback).await {
-                    Ok(()) => {}
-                    Err(error) if error.is_not_found() => {}
-                    Err(error) => {
-                        return Err(error.into_anyhow("cleaning Shell rendered-file rollback"));
+                ShellAction::RemoveShellSnapshot { rollback, .. } => {
+                    match self.host().remove_dir_all(rollback).await {
+                        Ok(()) => {}
+                        Err(error) if error.is_not_found() => {}
+                        Err(error) => {
+                            return Err(
+                                error.into_anyhow("cleaning removed Shell snapshot rollback")
+                            );
+                        }
                     }
                 }
-            }
-            if let ActionKindV1::RemoveShellRenderedFile { rollback, .. } = &action.kind {
-                match self.host().remove_file(rollback).await {
-                    Ok(()) => {}
-                    Err(error) if error.is_not_found() => {}
-                    Err(error) => {
-                        return Err(
-                            error.into_anyhow("cleaning removed Shell rendered-file rollback")
-                        );
+                ShellAction::ReconcileShellProfile { files, .. } => {
+                    for file in files.iter().filter(|file| file.previous.is_some()) {
+                        match self.host().remove_file(&file.rollback).await {
+                            Ok(()) => {}
+                            Err(error) if error.is_not_found() => {}
+                            Err(error) => {
+                                return Err(error.into_anyhow("cleaning Shell profile rollback"));
+                            }
+                        }
+                    }
+                }
+                ShellAction::ReplaceShellRenderedFile {
+                    rollback, previous, ..
+                } => {
+                    if previous.is_some() {
+                        match self.host().remove_file(rollback).await {
+                            Ok(()) => {}
+                            Err(error) if error.is_not_found() => {}
+                            Err(error) => {
+                                return Err(
+                                    error.into_anyhow("cleaning Shell rendered-file rollback")
+                                );
+                            }
+                        }
+                    }
+                }
+                ShellAction::RemoveShellRenderedFile { rollback, .. } => {
+                    match self.host().remove_file(rollback).await {
+                        Ok(()) => {}
+                        Err(error) if error.is_not_found() => {}
+                        Err(error) => {
+                            return Err(
+                                error.into_anyhow("cleaning removed Shell rendered-file rollback")
+                            );
+                        }
                     }
                 }
             }

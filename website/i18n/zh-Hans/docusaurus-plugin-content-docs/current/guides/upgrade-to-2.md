@@ -127,10 +127,10 @@ shine preset migrate --yes
 payload、脚本、环境值、运行状态或 trust grant。Git 管理的 overlay 是只读缓存：请对上游 checkout
 显式执行路径迁移，在上游提交后再 pull。
 
-opaque App/Shell/Sys 代码的权限与 Sys v1 dispatcher 必须人工改写。按照报告中的 target-local
-位置补全。文本报告会为可写 manifest 解析实际路径，并给出可直接复制执行的 `preset validate`
-和当前平台 `preset plan` 命令。Git 管理的 overlay 仍是只读镜像，因此报告会指向上游 checkout，
-不会建议直接编辑镜像路径。
+Sys v1 dispatcher 必须人工迁移。根据报告中的 target 更新来源后，运行
+`shine preset validate <PATH>` 和 `shine preset plan <PATH> --platform <PLATFORM>` 校验。
+缺少可选能力表无需迁移，含 opaque App/Shell/Sys 代码时也一样。Git 管理的 overlay 仍为只读镜像，
+报告会指向上游 checkout。
 
 trust enrollment 适用于外部 App hook/generator/artifact 代码、Sys bootstrap/profile 代码，以及
 每个外部 Shell command，与能力表内容无关。验证后使用规范 target，或用 `shine trust inspect preset`
@@ -143,8 +143,8 @@ release 检查，最后再因 blocker 返回非零。最终错误只给出一次
 `shine upgrade` 会在任何生命周期 Plan 或 mutation 前执行同一 preflight；使用 `--pull` 时则在
 拉取并重新加载后检查，不兼容时不会产生部分升级。
 
-外部 Preset 必须为每个可执行 target 声明受支持的 permission schema v1 或 v2。缺失或无效声明
-属于 blocker，不会被解释为隐式宽泛授权。作者应在分发前运行静态和 fixture 检查：
+权限表是可选的作者能力说明。显式提供的表必须使用受支持的 schema v1 或 v2 并通过校验；
+缺表或有效声明都不会授予代码信任。作者应在分发前运行静态和 fixture 检查：
 
 ```bash
 shine preset schema

@@ -30,6 +30,11 @@ shine sys bootstrap --dry-run
 shell integration without changing the system. Some items require administrator access or additional environment variables;
 `shine sys info <ITEM>` lists those requirements.
 
+Suggested commands use `--` before item IDs that start with `-`; put options before that separator,
+for example `shine sys apply --dry-run -- -custom`. Detection commands in `sys info` preserve
+quoted arguments. Item labels display control characters as escaped text such as `\n`, keeping
+each result on one line.
+
 When a missing item is about to run, Shine prints its `sys/<ITEM>` identifier and label first, so
 any authorization or password prompt that follows is attributable to the active software.
 
@@ -101,9 +106,10 @@ After initialization, inspect the recorded state:
 shine sys status
 ```
 
-This view is a run record: `installed`, `already installed`, or `completed` describes what the last
-bootstrap invocation observed. It does not probe whether third-party software is still present or
-current.
+This view shows the latest recorded result for each item, including bootstrap and managed system
+operations such as `shine sys apply`. Entries can come from different runs. It does not perform
+live checks of software versions or system configuration.
+`sys info` escapes terminal control characters in recorded status details; the stored result is unchanged.
 
 ## Upgrade bootstrap software with its owner
 
@@ -137,6 +143,11 @@ is missing. A mutating run displays and freshly validates a snapshot-bound secur
 automation must pass `--yes`, while `--dry-run` remains a separate preview. `shine upgrade` does not
 change or re-render profile enablement implicitly; use these explicit profile commands when that
 state should change.
+
+Profile commands distinguish completed changes, an already enabled/disabled integration, and
+`needs action`. If profile merging needs manual attention, the current profile is preserved and
+the output points to the files to review. This warning alone does not cause a nonzero exit status;
+check the result before assuming the requested integration is active.
 
 `shine update` and `shine upgrade` still manage only Shine configuration and managed system
 resources. They never upgrade this third-party software.

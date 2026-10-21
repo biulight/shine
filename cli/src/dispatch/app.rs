@@ -47,7 +47,6 @@ pub(super) async fn dispatch(config: &Config, command: AppCommands) -> Result<()
         AppCommands::Uninstall {
             category,
             force,
-            purge,
             dry_run,
             yes,
             ..
@@ -56,7 +55,6 @@ pub(super) async fn dispatch(config: &Config, command: AppCommands) -> Result<()
                 config,
                 category.as_deref(),
                 force,
-                purge,
                 dry_run,
                 yes,
             ))

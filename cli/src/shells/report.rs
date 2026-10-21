@@ -1,25 +1,6 @@
 use super::metadata;
 use crate::colors;
-
-pub(super) fn style_dim(value: &str) -> String {
-    colors::dim(value)
-}
-
-pub(super) fn style_green(value: &str) -> String {
-    colors::green(value)
-}
-
-pub(super) fn style_yellow(value: &str) -> String {
-    colors::yellow(value)
-}
-
-pub(super) fn style_bold(value: &str) -> String {
-    colors::bold(value)
-}
-
-pub(super) fn style_symbol(value: &str) -> String {
-    colors::symbol(value)
-}
+use crate::output::escape_controls;
 
 #[derive(Debug, Default)]
 pub struct ShellUpgradeReport {
@@ -135,39 +116,6 @@ pub(super) fn link_report_summary_parts(link_report: &crate::bin_links::LinkRepo
     parts
 }
 
-#[cfg(test)]
-pub(super) fn upgrade_link_report_summary_parts(
-    link_report: &crate::bin_links::LinkReport,
-    verbose: bool,
-) -> Vec<String> {
-    let mut parts: Vec<String> = Vec::new();
-    if !link_report.created.is_empty() {
-        parts.push(colors::green(&format!(
-            "{} created",
-            link_report.created.len()
-        )));
-    }
-    if !link_report.overwritten.is_empty() {
-        parts.push(colors::green(&format!(
-            "{} updated",
-            link_report.overwritten.len()
-        )));
-    }
-    if verbose && !link_report.skipped.is_empty() {
-        parts.push(colors::dim(&format!(
-            "{} up to date",
-            link_report.skipped.len()
-        )));
-    }
-    if !link_report.conflicts.is_empty() {
-        parts.push(colors::yellow(&format!(
-            "{} conflicts",
-            link_report.conflicts.len()
-        )));
-    }
-    parts
-}
-
 fn format_file_action(count: usize, action: &str) -> String {
     let noun = if count == 1 { "file" } else { "files" };
     format!("{count} {noun} {action}")
@@ -185,10 +133,12 @@ pub async fn handle_list_with_presets_note(
     if print_presets_note {
         crate::config::print_presets_note(config);
     }
-    let categories = if config.is_external_presets {
-        metadata::load_installed_categories(config, None).await?
-    } else {
+    // A pristine embedded catalog needs no runtime state, including external-code trust.
+    let categories = if !config.is_external_presets && config.active_presets_overlay_dir().is_none()
+    {
         metadata::load_embedded_categories(None)?
+    } else {
+        metadata::load_active_categories(config, None).await?
     };
 
     if categories.is_empty() {
@@ -208,26 +158,36 @@ pub async fn handle_list_with_presets_note(
         };
         println!(
             "  {}  {}",
-            cat.name,
+            escape_controls(&cat.name),
             colors::dim(&format!("{} {}", cat.files.len(), word))
         );
 
-        let names: Vec<&str> = cat.files.iter().map(|s| s.command_name.as_str()).collect();
-        let max_name = names.iter().map(|s| s.len()).max().unwrap_or(0);
+        let names: Vec<String> = cat
+            .files
+            .iter()
+            .map(|s| escape_controls(&s.command_name))
+            .collect();
+        let max_name = names
+            .iter()
+            .map(|s| console::measure_text_width(s))
+            .max()
+            .unwrap_or(0);
         let gap = 4;
         let desc_col = max_name + gap;
         let continuation_indent = " ".repeat(4 + desc_col);
 
         for (script, name) in cat.files.iter().zip(names.iter()) {
-            let padding = " ".repeat(desc_col - name.len());
+            let padding = " ".repeat(desc_col - console::measure_text_width(name));
             match script.description.as_slice() {
                 [] => println!("    {name}"),
                 [first, rest @ ..] => {
+                    let first = escape_controls(first);
                     println!("    {name}{padding}{first}");
                     for line in rest {
                         if line.is_empty() {
                             println!();
                         } else {
+                            let line = escape_controls(line);
                             println!("{continuation_indent}{line}");
                         }
                     }
@@ -272,8 +232,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
 
     crate::config::print_presets_note(config);
     let categories = metadata::load_active_categories(config, None).await?;
-    let target = target.trim();
-    if target.is_empty() {
+    if target.trim().is_empty() {
         bail!("shell info target must not be empty");
     }
 
@@ -282,14 +241,20 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
         (category, category.files.iter().collect::<Vec<_>>())
     } else if let Some((category_name, command_name)) = target.split_once('/') {
         let Some(category) = categories.iter().find(|cat| cat.name == category_name) else {
-            bail!("shell preset category not found: {category_name}");
+            bail!(
+                "shell preset category not found: {}",
+                escape_controls(category_name)
+            );
         };
         let Some(file) = category
             .files
             .iter()
             .find(|file| file.command_name == command_name)
         else {
-            bail!("shell preset command not found: {target}");
+            bail!(
+                "shell preset command not found: {}",
+                escape_controls(target)
+            );
         };
         (category, vec![file])
     } else {
@@ -305,25 +270,31 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
             .collect::<Vec<_>>();
         match matches.as_slice() {
             [] => bail!(
-                "shell preset target not found: {target}\n\nRun `shine shell list` to see available presets."
+                "shell preset target not found: {}\n\nRun `shine shell list` to see available presets.",
+                escape_controls(target)
             ),
             [(category, file)] => (*category, vec![*file]),
             _ => {
                 let choices = matches
                     .iter()
-                    .map(|(category, file)| format!("{}/{}", category.name, file.command_name))
+                    .map(|(category, file)| {
+                        escape_controls(&format!("{}/{}", category.name, file.command_name))
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
-                bail!("ambiguous shell preset target `{target}`; use one of: {choices}");
+                bail!(
+                    "ambiguous shell preset target `{}`; use one of: {choices}",
+                    escape_controls(target)
+                );
             }
         }
     };
 
     let rows = crate::status::build_shell_rows(config).await?;
     let selected_command = (files.len() == 1).then(|| files[0].command_name.clone());
-    println!("{}", colors::bold(&category.name));
+    println!("{}", colors::bold(&escape_controls(&category.name)));
     if let Some(description) = &category.description {
-        println!("  {}", colors::dim(description));
+        println!("  {}", colors::dim(&escape_controls(description)));
     }
 
     let bun_available = crate::platform::command_exists_on_path("bun");
@@ -333,12 +304,12 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
         let row = rows.iter().find(|row| row.label == label);
         any_installed |= row.is_some_and(|row| row.status_text != "not installed");
         println!();
-        println!("  {}", colors::bold(&file.command_name));
+        println!("  {}", colors::bold(&escape_controls(&file.command_name)));
         println!(
             "    {:<12} shell/{}/{}",
             "Source",
-            category.name,
-            file.source_rel.display()
+            escape_controls(&category.name),
+            escape_controls(&file.source_rel.display().to_string())
         );
         let runtime = match file.runtime {
             crate::bin_links::LinkRuntime::Native => "native".to_string(),
@@ -377,17 +348,37 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
             println!(
                 "    {:<12} {}",
                 if index == 0 { "Description" } else { "" },
-                line
+                escape_controls(line)
             );
         }
     }
 
     println!();
-    if any_installed {
+    if category.name.chars().any(char::is_control)
+        || selected_command
+            .as_deref()
+            .is_some_and(|command| command.chars().any(char::is_control))
+    {
+        let (command, action) = if any_installed {
+            (
+                "shine install",
+                "and --replace-managed to repair this target",
+            )
+        } else {
+            ("shine shell install", "to install this target")
+        };
+        println!(
+            "{}",
+            colors::dim(&format!(
+                "Use {command} with the original target (control characters; copyable command omitted) {action}."
+            ))
+        );
+    } else if any_installed {
         let repair_target = selected_command.as_ref().map_or_else(
             || format!("shell/{}", category.name),
             |command| format!("shell/{}/{command}", category.name),
         );
+        let repair_target = crate::shell_quote::command_arg(&repair_target);
         println!(
             "{}",
             colors::dim(&format!(
@@ -399,6 +390,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
             || category.name.clone(),
             |command| format!("{}/{command}", category.name),
         );
+        let install_target = crate::shell_quote::command_positionals(&[&install_target]);
         println!(
             "{}",
             colors::dim(&format!(
@@ -442,7 +434,7 @@ mod lifecycle_render_tests {
     use super::*;
 
     #[test]
-    fn shell_lifecycle_summary_parts_keep_legacy_wording() {
+    fn shell_install_summary_parts_keep_legacy_wording() {
         let report = crate::bin_links::LinkReport {
             created: vec!["created".into()],
             overwritten: vec!["updated".into()],
@@ -452,10 +444,6 @@ mod lifecycle_render_tests {
         assert_eq!(
             link_report_summary_parts(&report),
             vec!["1 created", "1 updated", "1 up to date"]
-        );
-        assert_eq!(
-            upgrade_link_report_summary_parts(&report, false),
-            vec!["1 created", "1 updated"]
         );
     }
 }

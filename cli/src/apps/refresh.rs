@@ -5,21 +5,13 @@ use std::path::Path;
 
 use crate::colors;
 use crate::config::Config;
+use crate::output::escape_controls;
 use crate::presentation::TerminalInteraction;
 use shine_core::runtime::{
     AppFileAction, AppRefreshPlanRequest, PlanningInputVersions, RuntimeEvent, RuntimeObserver,
 };
 
 use super::report::{print_install_error, print_install_success};
-
-pub async fn handle_refresh(
-    config: &Config,
-    category: &str,
-    file_selector: Option<&str>,
-    force: bool,
-) -> Result<()> {
-    handle_refresh_approved(config, category, file_selector, force, true).await
-}
 
 pub async fn handle_refresh_approved(
     config: &Config,
@@ -51,7 +43,10 @@ pub async fn handle_refresh_approved(
 
     println!(
         "{}",
-        colors::bold(&format!("Refreshing app generators: {category}"))
+        colors::bold(&format!(
+            "Refreshing app generators: {}",
+            escape_controls(category)
+        ))
     );
     let mut observer = RefreshObserver;
     let mut interaction = TerminalInteraction;
@@ -75,6 +70,7 @@ pub async fn handle_refresh_approved(
         .map(|file| format!("{category}/{}", file.source.display()));
     let mut updated = 0;
     let mut unchanged = 0;
+    let mut kept = 0;
     let mut failed = 0;
     for file in report.files {
         let label = format!("{category}/{}", file.source.display());
@@ -84,6 +80,7 @@ pub async fn handle_refresh_approved(
                 updated += 1;
             }
             AppFileAction::Unchanged => {
+                let label = escape_controls(&label);
                 println!(
                     "  {} {label}  {}",
                     colors::dim("-"),
@@ -93,10 +90,13 @@ pub async fn handle_refresh_approved(
             }
             AppFileAction::UserModified => {
                 eprintln!(
-                    "  {} {label}: user-modified, kept (use --force to overwrite)",
-                    colors::symbol("!")
+                    "{}",
+                    super::report::warning_text(
+                        &label,
+                        "user-modified, kept (use --force to overwrite)"
+                    )
                 );
-                failed += 1;
+                kept += 1;
             }
             AppFileAction::Failed => {
                 print_install_error(&label, &anyhow::anyhow!(file.error.unwrap_or_default()));
@@ -115,10 +115,13 @@ pub async fn handle_refresh_approved(
 
     println!(
         "{}",
-        refresh_summary_text(single_label.as_deref(), updated, unchanged, failed)
+        refresh_summary_text(single_label.as_deref(), updated, unchanged, kept, failed)
     );
     if failed > 0 {
         bail!("{failed} generated app file(s) failed to refresh");
+    }
+    if kept > 0 {
+        bail!("{kept} user-modified generated app file(s) kept; use --force to overwrite");
     }
     Ok(())
 }
@@ -127,17 +130,26 @@ fn refresh_summary_text(
     single_label: Option<&str>,
     updated: usize,
     unchanged: usize,
+    kept: usize,
     failed: usize,
 ) -> String {
-    let total = updated + unchanged + failed;
+    let total = updated + unchanged + kept + failed;
     if total == 1
         && let Some(label) = single_label
     {
+        let label = escape_controls(label);
         if failed == 1 {
             return format!(
                 "{} {}",
                 colors::symbol("!"),
                 colors::yellow(&format!("Refresh incomplete: {label} failed"))
+            );
+        }
+        if kept == 1 {
+            return format!(
+                "{} {}",
+                colors::symbol("!"),
+                colors::yellow(&format!("Refresh incomplete: {label} user-modified (kept)"))
             );
         }
         if updated == 1 {
@@ -157,13 +169,14 @@ fn refresh_summary_text(
     let mut parts = Vec::new();
     crate::output::push_count(&mut parts, updated, colors::green, "updated");
     crate::output::push_count(&mut parts, unchanged, colors::dim, "unchanged");
+    crate::output::push_count(&mut parts, kept, colors::yellow, "user-modified (kept)");
     crate::output::push_count(&mut parts, failed, colors::yellow, "failed");
     let detail = if parts.is_empty() {
         colors::dim("nothing changed")
     } else {
         parts.join(&colors::dim(", "))
     };
-    let (symbol, conclusion) = if failed > 0 {
+    let (symbol, conclusion) = if failed > 0 || kept > 0 {
         ("!", "Refresh incomplete")
     } else {
         ("✓", "Refresh complete")
@@ -176,11 +189,19 @@ struct RefreshObserver;
 impl RuntimeObserver for RefreshObserver {
     fn emit(&mut self, event: RuntimeEvent) {
         match event {
-            RuntimeEvent::Warning { detail, .. } => eprintln!("  {} {detail}", colors::symbol("!")),
-            RuntimeEvent::ProcessOutput { text, .. } => {
-                for line in text.lines() {
-                    println!("     {}", colors::dim(line));
-                }
+            RuntimeEvent::Warning { detail, .. } => {
+                eprintln!(
+                    "  {} {}",
+                    colors::symbol_stderr("!"),
+                    escape_controls(&detail)
+                )
+            }
+            RuntimeEvent::ProcessOutput { stream, text, .. } => {
+                crate::presentation::emit_process_output(
+                    &mut crate::presentation::TerminalRenderer::stdio(),
+                    stream,
+                    &text,
+                );
             }
             RuntimeEvent::Progress {
                 code: "app_hook_completed",
@@ -189,7 +210,7 @@ impl RuntimeObserver for RefreshObserver {
                 println!(
                     "  {} {}: post-upgrade hook completed",
                     colors::symbol("✓"),
-                    target.trim_start_matches("app/")
+                    escape_controls(target.trim_start_matches("app/"))
                 );
             }
             _ => {}
@@ -201,9 +222,10 @@ impl RuntimeObserver for RefreshObserver {
 mod tests {
     use super::*;
     use crate::apps::metadata;
-    use crate::apps::{handle_install, handle_upgrade_installed};
-    use crate::install_core::manifest::AppManifest;
-    use crate::status::{FileStatus, app_entry_status};
+    use crate::apps::{
+        handle_install_approved, handle_upgrade_installed_target_with_result_approved,
+    };
+    use crate::status::{FileStatus, build_app_rows_with_lifecycle_options};
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
 
@@ -295,23 +317,23 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     #[test]
     fn refresh_summary_names_single_files_and_distinguishes_failures() {
         assert_eq!(
-            refresh_summary_text(Some("sample/first.txt"), 1, 0, 0),
+            refresh_summary_text(Some("sample/first.txt"), 1, 0, 0, 0),
             "✓ Refresh complete: sample/first.txt updated"
         );
         assert_eq!(
-            refresh_summary_text(Some("sample/first.txt"), 0, 1, 0),
+            refresh_summary_text(Some("sample/first.txt"), 0, 1, 0, 0),
             "✓ Already up to date: sample/first.txt"
         );
         assert_eq!(
-            refresh_summary_text(Some("sample/first.txt"), 0, 0, 1),
+            refresh_summary_text(Some("sample/first.txt"), 0, 0, 0, 1),
             "! Refresh incomplete: sample/first.txt failed"
         );
         assert_eq!(
-            refresh_summary_text(None, 2, 1, 0),
+            refresh_summary_text(None, 2, 1, 0, 0),
             "✓ Refresh complete: 2 updated, 1 unchanged"
         );
         assert_eq!(
-            refresh_summary_text(None, 1, 0, 1),
+            refresh_summary_text(None, 1, 0, 0, 1),
             "! Refresh incomplete: 1 updated, 1 failed"
         );
     }
@@ -320,7 +342,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     async fn manual_generator_skips_status_and_upgrade_but_refreshes_explicitly() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
         let config = write_fixture(&root, false).await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
 
@@ -339,20 +361,22 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         let categories = metadata::load_active_categories(&config, Some("sample"))
             .await
             .unwrap();
-        let cat = &categories[0];
-        let file = &cat.files[0];
-        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+        let (rows, _, _) = build_app_rows_with_lifecycle_options(&config, &categories, false)
             .await
             .unwrap();
-        let entry = manifest.find_by_dest(&dest).unwrap();
-        assert_eq!(
-            app_entry_status(&config, cat, file, entry, &config.env).await,
-            FileStatus::UpToDate
-        );
+        assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
+        assert!(!rows[0].upgrade_available);
         let mut separator = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut separator)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config,
+            None,
+            false,
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.updated, 0);
         assert_eq!(
             fs::read_to_string(app_dir.join("first.runs"))
@@ -363,7 +387,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         assert_eq!(fs::read(&dest).await.unwrap(), b"first-v1\n");
 
         crate::trust::grant_current_for_test(&config, "app/sample").await;
-        handle_refresh(&config, "sample", Some("first.txt"), false)
+        handle_refresh_approved(&config, "sample", Some("first.txt"), false, true)
             .await
             .unwrap();
         assert_eq!(fs::read(&dest).await.unwrap(), b"first-v2\n");
@@ -387,16 +411,17 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
             .replace("auto = false", "auto = true");
         fs::write(&metadata_path, metadata).await.unwrap();
         crate::trust::grant_current_for_test(&config, "app/sample").await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
 
         let categories = metadata::load_active_categories(&config, Some("sample"))
             .await
             .unwrap();
-        let rows = crate::status::build_app_rows(&config, &categories)
-            .await
-            .unwrap();
+        let (rows, _, _) =
+            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, false)
+                .await
+                .unwrap();
         assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
         assert_eq!(
             fs::read_to_string(config.presets_dir().join("app/sample/first.runs"))
@@ -412,8 +437,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     async fn explicit_generator_evaluation_materializes_desired_content_before_install() {
         let root = crate::test_support::make_temp_dir("shine-generator-preview").await;
         let config = write_fixture(&root, false).await;
-        let mut runtime = crate::core_runtime::from_config(&config).await.unwrap();
-        runtime.context_mut_for_cli().env = config.env.clone();
+        let runtime = crate::core_runtime::from_config(&config).await.unwrap();
         let inspections = runtime
             .inspect_apps_with_options(
                 shine_core::runtime::AppInspectionOptions {
@@ -443,7 +467,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         let root = crate::test_support::make_temp_dir("shine-generator-evaluation").await;
         let config = write_fixture(&root, false).await;
         crate::trust::grant_current_for_test(&config, "app/sample").await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let app_dir = config.presets_dir().join("app/sample");
@@ -483,7 +507,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     async fn refresh_selector_and_force_preserve_other_generated_files() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
         let config = write_fixture(&root, true).await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let app_dir = config.presets_dir().join("app/sample");
@@ -499,13 +523,13 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         assert!(
-            handle_refresh(&config, "sample", Some("first.txt"), false)
+            handle_refresh_approved(&config, "sample", Some("first.txt"), false, true)
                 .await
                 .is_err()
         );
         assert_eq!(fs::read(&first_dest).await.unwrap(), b"user edit\n");
         crate::trust::grant_current_for_test(&config, "app/sample").await;
-        handle_refresh(&config, "sample", Some("first.txt"), true)
+        handle_refresh_approved(&config, "sample", Some("first.txt"), true, true)
             .await
             .unwrap();
         assert_eq!(fs::read(&first_dest).await.unwrap(), b"first-v2\n");
@@ -524,7 +548,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     async fn refresh_keeps_last_good_file_and_continues_after_generator_failure() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
         let config = write_fixture(&root, true).await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let app_dir = config.presets_dir().join("app/sample");
@@ -539,7 +563,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         assert!(
-            handle_refresh(&config, "sample", None, false)
+            handle_refresh_approved(&config, "sample", None, false, true)
                 .await
                 .is_err()
         );
@@ -560,18 +584,85 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
     async fn refresh_requires_the_generator_condition_env() {
         let root = crate::test_support::make_temp_dir("shine-refresh").await;
         let mut config = write_fixture(&root, false).await;
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         config.env.remove("SOURCE_URL");
         let dest = root.join("dest/first.txt");
 
         assert!(
-            handle_refresh(&config, "sample", Some("first.txt"), false)
+            handle_refresh_approved(&config, "sample", Some("first.txt"), false, true)
                 .await
                 .is_err()
         );
         assert_eq!(fs::read(&dest).await.unwrap(), b"first-v1\n");
         fs::remove_dir_all(root).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_summary_controls_keep_all_outcome_conclusions() {
+        for (counts, conclusion) in [
+            ([1, 0, 0, 0], "Refresh complete"),
+            ([0, 1, 0, 0], "Already up to date"),
+            ([0, 0, 1, 0], "Refresh incomplete"),
+            ([0, 0, 0, 1], "Refresh incomplete"),
+        ] {
+            let text = refresh_summary_text(
+                Some("item\nFORGED\r\t\u{1b}"),
+                counts[0],
+                counts[1],
+                counts[2],
+                counts[3],
+            );
+            assert!(!text.chars().any(char::is_control), "{text:?}");
+            assert!(text.contains(conclusion) && text.contains(r"item\nFORGED\r\t\u{1b}"));
+        }
+    }
+
+    #[test]
+    fn refresh_observer_encodes_notices_but_preserves_process_streams() {
+        const CHILD: &str = "SHINE_TEST_REFRESH_OBSERVER";
+        let value = "item\nFORGED\r\t\u{1b}";
+        if std::env::var_os(CHILD).is_some() {
+            let mut observer = RefreshObserver;
+            observer.emit(RuntimeEvent::Warning {
+                code: "probe",
+                target: None,
+                detail: value.into(),
+            });
+            observer.emit(RuntimeEvent::Progress {
+                code: "app_hook_completed",
+                target: format!("app/{value}"),
+            });
+            for stream in ["stdout", "stderr"] {
+                observer.emit(RuntimeEvent::ProcessOutput {
+                    code: "probe",
+                    target: "app/demo".into(),
+                    stream,
+                    text: "RAW\r\t\u{1b}\n".into(),
+                });
+            }
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "apps::refresh::display_tests::refresh_observer_encodes_notices_but_preserves_process_streams", "--nocapture"])
+            .env(CHILD, "1").env("NO_COLOR", "1").output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert_eq!(
+            stderr,
+            "  ! item\\nFORGED\\r\\t\\u{1b}\n     RAW\r\t\u{1b}\n"
+        );
+        assert!(
+            stdout.contains("  ✓ item\\nFORGED\\r\\t\\u{1b}: post-upgrade hook completed\n"),
+            "{stdout:?}"
+        );
+        assert!(stdout.contains("RAW\r\t\u{1b}\n"), "{stdout:?}");
     }
 }

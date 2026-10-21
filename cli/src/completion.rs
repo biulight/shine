@@ -116,6 +116,13 @@ pub fn command() -> clap::Command {
                     arg.add(ArgValueCandidates::new(file_group_candidates))
                 })
             })
+            .mut_subcommand("workspace", |cmd| {
+                cmd.mut_subcommand("export", |cmd| {
+                    cmd.mut_arg("file_groups", |arg| {
+                        arg.add(ArgValueCandidates::new(file_group_candidates))
+                    })
+                })
+            })
             .mut_subcommand("secret", |cmd| {
                 cmd.mut_subcommand("seal", |cmd| {
                     cmd.mut_arg("file_groups", |arg| {
@@ -234,26 +241,24 @@ fn shell_command_names() -> Vec<(String, BTreeSet<String>)> {
     let Some(paths) = runtime_paths() else {
         return Vec::new();
     };
-    if paths.is_external_presets {
-        return collect_fs_shell_command_names(&paths.presets_dir.join("shell"))
+    let mut commands = if paths.is_external_presets {
+        collect_fs_shell_command_names(&paths.presets_dir.join("shell"))
+    } else {
+        crate::shells::metadata::load_embedded_categories(None)
+            .unwrap_or_default()
             .into_iter()
-            .collect();
-    }
-
-    let mut commands = crate::shells::metadata::load_embedded_categories(None)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|category| {
-            (
-                category.name,
-                category
-                    .files
-                    .into_iter()
-                    .map(|file| file.command_name)
-                    .collect::<BTreeSet<_>>(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+            .map(|category| {
+                (
+                    category.name,
+                    category
+                        .files
+                        .into_iter()
+                        .map(|file| file.command_name)
+                        .collect::<BTreeSet<_>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
     if let Some(overlay_dir) = paths.presets_overlay_dir {
         for (category, overlay_commands) in
             collect_fs_shell_command_names(&overlay_dir.join("shell"))
@@ -361,23 +366,25 @@ fn app_capability_names(capability: AppCapability) -> BTreeSet<String> {
     let Some(paths) = runtime_paths() else {
         return BTreeSet::new();
     };
-    if paths.is_external_presets {
-        return collect_fs_app_capabilities(&paths.presets_dir.join("app"), capability);
-    }
-
-    let mut names: BTreeSet<String> = crate::apps::load_embedded_categories(None)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|category| match capability {
-            AppCapability::Build => category.artifact.is_some(),
-            AppCapability::Unbuild => category
-                .artifact
-                .as_ref()
-                .is_some_and(|artifact| artifact.teardown.is_some()),
-            AppCapability::Refresh => category.files.iter().any(|file| file.generator.is_some()),
-        })
-        .map(|category| category.name)
-        .collect();
+    let mut names: BTreeSet<String> = if paths.is_external_presets {
+        collect_fs_app_capabilities(&paths.presets_dir.join("app"), capability)
+    } else {
+        crate::apps::load_embedded_categories(None)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|category| match capability {
+                AppCapability::Build => category.artifact.is_some(),
+                AppCapability::Unbuild => category
+                    .artifact
+                    .as_ref()
+                    .is_some_and(|artifact| artifact.teardown.is_some()),
+                AppCapability::Refresh => {
+                    category.files.iter().any(|file| file.generator.is_some())
+                }
+            })
+            .map(|category| category.name)
+            .collect()
+    };
     if let Some(overlay_dir) = paths.presets_overlay_dir {
         names.extend(collect_fs_app_capabilities(
             &overlay_dir.join("app"),
@@ -511,15 +518,14 @@ fn sys_item_names() -> BTreeSet<String> {
     };
     if paths.is_external_presets {
         collect_fs_sys_item_names(&paths.presets_dir.join("sys"), &mut names);
-        return names;
-    }
-
-    for path in crate::presets::asset_paths("sys") {
-        if !path.ends_with("/shine.toml") {
-            continue;
-        }
-        if let Some(bytes) = crate::presets::read_asset_bytes(&path) {
-            collect_toml_sys_item_names(&bytes, &mut names);
+    } else {
+        for path in crate::presets::embedded_asset_paths("sys") {
+            if !path.ends_with("/shine.toml") {
+                continue;
+            }
+            if let Some(bytes) = crate::presets::read_embedded_asset_bytes(&path) {
+                collect_toml_sys_item_names(&bytes, &mut names);
+            }
         }
     }
     if let Some(overlay_dir) = paths.presets_overlay_dir {
@@ -585,10 +591,9 @@ fn category_names(kind: &str) -> BTreeSet<String> {
         && let Some(fs_names) = fs_category_names(&paths.presets_dir.join(kind))
     {
         names.extend(fs_names);
-        return names;
+    } else {
+        names.extend(embedded_category_names(kind));
     }
-
-    names.extend(embedded_category_names(kind));
     if let Some(overlay_dir) = paths.presets_overlay_dir
         && let Some(fs_names) = fs_category_names(&overlay_dir.join(kind))
     {
@@ -620,7 +625,7 @@ fn fs_category_names(root: &Path) -> Option<BTreeSet<String>> {
 
 fn embedded_category_names(kind: &str) -> BTreeSet<String> {
     let prefix = format!("{kind}/");
-    crate::presets::asset_paths(kind)
+    crate::presets::embedded_asset_paths(kind)
         .into_iter()
         .filter_map(|path| {
             let rest = path.strip_prefix(&prefix)?;
@@ -654,10 +659,29 @@ mod tests {
     }
 
     #[test]
+    fn uninstall_completion_omits_removed_purge_option() {
+        for args in [
+            vec!["shine", "uninstall", "--"],
+            vec!["shine", "app", "uninstall", "--"],
+            vec!["shine", "shell", "uninstall", "--"],
+        ] {
+            let values = complete_values(&args, args.len() - 1);
+            assert!(values.contains("--dry-run"), "{values:?}");
+            assert!(!values.contains("--purge"), "{values:?}");
+        }
+    }
+
+    #[test]
     fn embedded_candidates_include_known_categories() {
         let _guard = env_lock();
+        let dir = temp_dir("embedded");
+        std::fs::create_dir_all(&dir).unwrap();
+        // An empty isolated project selects embedded metadata without consulting user presets.
+        std::fs::write(dir.join("shine.config.toml"), "").unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
         unsafe {
-            std::env::remove_var("SHINE_CONFIG_DIR");
+            std::env::set_var("SHINE_CONFIG_DIR", dir.join("state"));
             std::env::remove_var("SHINE_PRESETS");
         }
 
@@ -696,6 +720,13 @@ mod tests {
         assert!(preset_copy.contains("shell/proxy"));
         assert!(preset_copy.contains("sys/macos"));
         assert!(!preset_copy.contains("surge"));
+        assert!(
+            !dir.join("state").exists(),
+            "completion initialized runtime state"
+        );
+        assert_eq!(std::fs::read(dir.join("shine.config.toml")).unwrap(), b"");
+        std::env::set_current_dir(original_dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -755,11 +786,83 @@ mod tests {
     }
 
     #[test]
+    fn external_candidates_include_overlay_without_loading_runtime_state() {
+        let _guard = env_lock();
+        let dir = temp_dir("external-overlay");
+        let overlay = dir.join("overlay");
+        for (root, name) in [(dir.join("presets"), "base"), (overlay.clone(), "extra")] {
+            for kind in ["shell", "app", "sys"] {
+                std::fs::create_dir_all(root.join(kind).join(name)).unwrap();
+            }
+            std::fs::write(
+                root.join(format!("shell/{name}/shine.toml")),
+                "[[files]]\nsource = 'tool.sh'\ntarget = 'tool'\n",
+            )
+            .unwrap();
+            std::fs::write(
+                root.join(format!("app/{name}/shine.toml")),
+                "[artifact]\nscript = 'never.ts'\nteardown = 'never.ts'\n[[files]]\nsource = 'config.txt'\ngenerator = { script = 'never.ts' }\n",
+            )
+            .unwrap();
+            std::fs::write(
+                root.join(format!("sys/{name}/shine.toml")),
+                format!("[[items]]\nid = '{name}-item'\n"),
+            )
+            .unwrap();
+        }
+        let config = format!("presets_overlay_dir = {:?}\n", overlay.to_str().unwrap());
+        std::fs::write(dir.join("config.toml"), &config).unwrap();
+        std::fs::write(dir.join("trust.toml"), "malformed [").unwrap();
+        unsafe {
+            std::env::set_var("SHINE_CONFIG_DIR", &dir);
+            std::env::remove_var("SHINE_PRESETS");
+        }
+        for (args, expected) in [
+            (
+                vec!["shine", "shell", "install", ""],
+                vec!["base/tool", "extra/tool"],
+            ),
+            (vec!["shine", "app", "install", ""], vec!["base", "extra"]),
+            (
+                vec!["shine", "app", "artifact", "apply", ""],
+                vec!["base", "extra"],
+            ),
+            (
+                vec!["shine", "app", "artifact", "remove", ""],
+                vec!["base", "extra"],
+            ),
+            (vec!["shine", "app", "refresh", ""], vec!["base", "extra"]),
+            (
+                vec!["shine", "sys", "apply", ""],
+                vec!["base-item", "extra-item"],
+            ),
+        ] {
+            let values = complete_values(&args, args.len() - 1);
+            for value in expected {
+                assert!(values.contains(value), "{args:?}: {values:?}");
+            }
+            assert!(!values.contains("proxy"), "{values:?}");
+            assert!(!values.contains("starship"), "{values:?}");
+            assert!(!values.contains("split-dns"), "{values:?}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join("config.toml")).unwrap(),
+            config
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("trust.toml")).unwrap(),
+            "malformed ["
+        );
+        assert!(!dir.join("app-manifest.toml").exists());
+        assert!(!dir.join("installed").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn overlay_candidates_extend_embedded_presets() {
         let _guard = env_lock();
         let home = temp_dir("overlay-home");
         let overlay = temp_dir("overlay");
-        let old_home = std::env::var_os("HOME");
         std::fs::create_dir_all(home.join(".shine")).unwrap();
         std::fs::create_dir_all(overlay.join("shell/personal")).unwrap();
         std::fs::write(
@@ -779,17 +882,69 @@ mod tests {
 
         let shell = category_names("shell");
 
-        unsafe {
-            match old_home {
-                Some(value) => std::env::set_var("HOME", value),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        drop(_guard);
         std::fs::remove_dir_all(home).unwrap();
         std::fs::remove_dir_all(overlay).unwrap();
 
         assert!(shell.contains("proxy"), "shell candidates: {shell:?}");
         assert!(shell.contains("personal"), "shell candidates: {shell:?}");
+    }
+
+    #[tokio::test]
+    async fn completion_uses_discovered_overlay_after_loading_another_config() {
+        let _guard = env_lock();
+        let home = temp_dir("completion-config-isolation");
+        let overlay = home.join("active-overlay");
+        let other = home.join("other-config");
+        let other_overlay = home.join("other-overlay");
+        std::fs::create_dir_all(home.join(".shine")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        for (dir, id) in [(&overlay, "active-item"), (&other_overlay, "other-item")] {
+            std::fs::create_dir_all(dir.join("sys/macos")).unwrap();
+            std::fs::create_dir_all(dir.join(format!("shell/{id}"))).unwrap();
+            std::fs::write(
+                dir.join("sys/macos/shine.toml"),
+                format!("[[items]]\nid = \"{id}\"\nlabel = \"test\"\n"),
+            )
+            .unwrap();
+        }
+        for (config_dir, overlay_dir) in [
+            (home.join(".shine"), &overlay),
+            (other.clone(), &other_overlay),
+        ] {
+            std::fs::write(
+                config_dir.join("config.toml"),
+                format!(
+                    "presets_overlay_dir = \"{}\"\n",
+                    overlay_dir.to_string_lossy().replace('\\', "\\\\")
+                ),
+            )
+            .unwrap();
+        }
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::set_var("SHINE_CONFIG_DIR", &other);
+            std::env::remove_var("SHINE_PRESETS");
+        }
+        std::env::set_current_dir(&home).unwrap();
+        let unrelated = crate::config::Config::load_read_only().await.unwrap();
+        assert_eq!(
+            unrelated.active_presets_overlay_dir(),
+            Some(other_overlay.as_path())
+        );
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        let shell = category_names("shell");
+        assert!(shell.contains("proxy"));
+        assert!(shell.contains("active-item"));
+        assert!(!shell.contains("other-item"));
+        let sys = sys_item_names();
+        assert!(sys.contains("active-item"));
+        assert!(!sys.contains("other-item"));
+        // Completion unions baseline IDs with overlay IDs, even for an overridden manifest.
+        assert!(sys.contains("split-dns"));
+        assert!(!other.join("presets").exists());
+        std::env::set_current_dir(home.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

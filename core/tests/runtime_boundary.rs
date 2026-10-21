@@ -2,7 +2,7 @@ use shine_core::runtime::{
     CoreRuntime, InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext, RuntimePlatform,
     validate_preset_path,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[test]
 fn core_manifest_excludes_frontend_and_distribution_dependencies() {
@@ -113,12 +113,21 @@ fn core_domain_sources_do_not_bypass_captured_hosts() {
         );
     }
 
-    let validation = std::fs::read_to_string(core_root.join("src/runtime/validation.rs")).unwrap();
-    for forbidden in ["std::fs::", "std::env::current_dir"] {
-        assert!(
-            !validation.contains(forbidden),
-            "Core validation bypasses its host with `{forbidden}`"
-        );
+    for module in [
+        "validation.rs",
+        "validation/source.rs",
+        "validation/permissions.rs",
+        "validation/destinations.rs",
+        "validation/sys.rs",
+    ] {
+        let validation =
+            std::fs::read_to_string(core_root.join("src/runtime").join(module)).unwrap();
+        for forbidden in ["std::fs::", "std::env::current_dir"] {
+            assert!(
+                !validation.contains(forbidden),
+                "Core {module} bypasses its host with `{forbidden}`"
+            );
+        }
     }
 
     let sys_bootstrap =
@@ -272,29 +281,51 @@ install = { kind = 'script', path = 'install.sh' }
 
 #[tokio::test]
 async fn core_only_harness_uses_explicit_inputs_and_virtual_state() {
+    use shine_core::frontend::{FrontendService, InspectionOperationV1, InspectionStateV1};
+    use shine_core::runtime::{HostOperation, InspectionFileStatus, ShellType};
+
     let host = InMemoryHost::new();
     let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
         .file(
             "shell/tools/shine.toml",
-            b"description = \"tools\"\n".to_vec(),
+            b"description = 'tools'\n[[files]]\nsource = 'tool.sh'\ntarget = 'tool'\n".to_vec(),
         )
+        .file("shell/tools/tool.sh", b"#!/bin/sh\n".to_vec())
         .build();
-    let context = RuntimeContext::isolated(
-        PathBuf::from("/virtual/home"),
-        PathBuf::from("/virtual/home/.shine"),
-        PathBuf::from("/virtual/home/.shine/presets"),
-        PathBuf::from("/virtual/home/.shine/bin"),
+    let root = std::env::temp_dir().join("shine-runtime-boundary-harness");
+    let mut context = RuntimeContext::isolated(
+        root.join("home"),
+        root.join("state"),
+        root.join("presets"),
+        root.join("bin"),
         RuntimePlatform::Linux,
     );
-    let runtime = CoreRuntime::new(host, context, snapshot);
+    // Match the simulated platform and .sh fixture, regardless of the host OS.
+    context.shell = ShellType::Bash;
+    let runtime = CoreRuntime::new(host.clone(), context, snapshot);
 
     assert!(runtime.validate().valid);
-    let inspection = runtime
-        .inspect_snapshot(Path::new("/virtual/installed"))
+    let before = host.operations().len();
+    let inspection = FrontendService::new(runtime)
+        .inspect_shells()
         .await
         .unwrap();
-    assert_eq!(inspection.resources.len(), 1);
-    assert!(!inspection.resources[0].installed);
+    assert_eq!(inspection.files.len(), 1);
+    assert!(!inspection.files[0].installed);
+    assert_eq!(
+        inspection.files[0].status,
+        InspectionFileStatus::NotInstalled
+    );
+    assert_eq!(inspection.report.items.len(), 1);
+    let item = &inspection.report.items[0];
+    assert_eq!(item.target, "shell/tools/tool");
+    assert_eq!(item.state, InspectionStateV1::NotInstalled);
+    assert_eq!(item.operations, [InspectionOperationV1::Install]);
+    assert!(
+        host.operations()[before..]
+            .iter()
+            .all(|op| matches!(op, HostOperation::Read(_)))
+    );
 }
 
 #[tokio::test]

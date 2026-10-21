@@ -248,12 +248,6 @@ pub(crate) async fn decrypt_local_cache(
     }
 }
 
-/// Decrypt stored ciphertext, routing purely on its tag. `age_identities` is
-/// consulted for age ciphertext and the age branch of a hybrid envelope.
-pub async fn decrypt_secret(ciphertext: &str, age_identities: &[PathBuf]) -> Result<String> {
-    decrypt_with_preference(ciphertext, age_identities, None).await
-}
-
 pub async fn decrypt_with_config(
     ciphertext: &str,
     config: &crate::config::Config,
@@ -336,20 +330,6 @@ mod process_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    struct RestorePath(Option<std::ffi::OsString>);
-
-    impl Drop for RestorePath {
-        fn drop(&mut self) {
-            // SAFETY: the environment lock is held until after this guard drops.
-            unsafe {
-                match &self.0 {
-                    Some(path) => std::env::set_var("PATH", path),
-                    None => std::env::remove_var("PATH"),
-                }
-            }
-        }
-    }
-
     #[test]
     fn both_backends_work_without_external_base64() {
         let _guard = crate::test_support::env_lock();
@@ -358,7 +338,6 @@ mod process_tests {
             .build()
             .unwrap();
         let dir = runtime.block_on(crate::test_support::make_temp_dir("shine-secret-process"));
-        let _restore = RestorePath(std::env::var_os("PATH"));
         for tool in ["gpg", "age"] {
             let path = dir.join(tool);
             std::fs::write(
@@ -367,7 +346,7 @@ mod process_tests {
 case "$1" in
     --version) if test "${0##*/}" = age; then echo v1.3.0; else echo 'gpg 2.4.0'; fi ;;
     --encrypt|-e) /bin/cat ;;
-    --decrypt|-d) for arg in "$@"; do file="$arg"; done; /bin/cat "$file" ;;
+    --decrypt|-d) printf '%s\n' "$@" > "$0.decrypt-called"; for arg in "$@"; do file="$arg"; done; /bin/cat "$file" ;;
     *) exit 1 ;;
 esac
 "#,
@@ -375,8 +354,10 @@ esac
             .unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        let identity = dir.join("identity.txt");
+        let identity = dir.join("additional identity.txt");
         std::fs::write(&identity, "test identity").unwrap();
+        let legacy_identity = dir.join("legacy identity.txt");
+        std::fs::write(&legacy_identity, "legacy test identity").unwrap();
         // SAFETY: all environment-mutation tests hold env_lock().
         unsafe { std::env::set_var("PATH", &dir) };
         let result: Result<()> = runtime.block_on(async {
@@ -396,10 +377,49 @@ esac
                         EncryptRecipients::Hybrid(_) => unreachable!(),
                     }
                 );
-                assert_eq!(
-                    decrypt_secret(&encoded, std::slice::from_ref(&identity)).await?,
-                    plaintext
+                let mut config = crate::config::Config::new_for_test(&dir);
+                config.age_identity = Some(legacy_identity.to_str().unwrap().to_string());
+                config.age_identities = vec![
+                    identity.to_str().unwrap().to_string(),
+                    legacy_identity.to_str().unwrap().to_string(),
+                ];
+                // The encryption default must not override the stored ciphertext tag.
+                config.secret_backend = Some(
+                    match recipients {
+                        EncryptRecipients::Gpg(_) => "age",
+                        EncryptRecipients::Age(_) => "gpg",
+                        EncryptRecipients::Hybrid(_) => unreachable!(),
+                    }
+                    .into(),
                 );
+                assert_eq!(decrypt_with_config(&encoded, &config).await?, plaintext);
+                for tool in ["gpg", "age"] {
+                    let called = dir.join(format!("{tool}.decrypt-called"));
+                    assert_eq!(
+                        called.is_file(),
+                        tool.parse::<BackendKind>().unwrap() == recipients.backend(),
+                        "ciphertext tag must select exactly its backend"
+                    );
+                    if called.is_file() {
+                        if tool == "age" {
+                            let arguments = std::fs::read_to_string(&called)?;
+                            let arguments = arguments.lines().collect::<Vec<_>>();
+                            assert_eq!(arguments.len(), 6);
+                            assert_eq!(
+                                &arguments[..5],
+                                [
+                                    "-d",
+                                    "-i",
+                                    legacy_identity.to_str().unwrap(),
+                                    "-i",
+                                    identity.to_str().unwrap(),
+                                ],
+                                "configured legacy and additional identities must reach age once each"
+                            );
+                        }
+                        std::fs::remove_file(called)?;
+                    }
+                }
             }
 
             let legacy = EncryptRecipients::Age(vec!["age1se1legacy".into()]);
@@ -426,7 +446,6 @@ esac
             .unwrap();
         let dir = runtime.block_on(crate::test_support::make_temp_dir("shine-age-version"));
         let age = dir.join("age");
-        let _restore = RestorePath(std::env::var_os("PATH"));
         // SAFETY: all environment-mutation tests hold env_lock().
         unsafe { std::env::set_var("PATH", &dir) };
 

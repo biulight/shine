@@ -28,10 +28,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         let mut projected_previous_receipt_targets = BTreeSet::new();
         let mut shared_receipt_conflicts = BTreeSet::new();
         for action in &journal.action_ir.actions {
-            match &action.kind {
-                ActionKindV1::RemoveShellRenderedFile { receipts, .. }
-                | ActionKindV1::RemoveShellCache { receipts, .. }
-                | ActionKindV1::RemoveShellSnapshot { receipts, .. } => {
+            match ShellAction::from_kind(&action.kind)? {
+                ShellAction::RemoveShellRenderedFile { receipts, .. }
+                | ShellAction::RemoveShellCache { receipts, .. }
+                | ShellAction::RemoveShellSnapshot { receipts, .. } => {
                     if journal.receipt_committed.contains(&action.action_id) {
                         if !shell_removal_receipts_match_missing(&manifest, receipts) {
                             shared_receipt_conflicts.insert(action.action_id.clone());
@@ -46,7 +46,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         shared_receipt_conflicts.insert(action.action_id.clone());
                     }
                 }
-                ActionKindV1::ReconcileShellProfile {
+                ShellAction::ReconcileShellProfile {
                     receipt_transitions,
                     receipt_removals,
                     legacy_targets,
@@ -90,10 +90,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         shared_receipt_conflicts.insert(action.action_id.clone());
                     }
                 }
-                _ => {
-                    let Some(receipts) = shell_shared_receipt_transitions(&action.kind) else {
-                        continue;
-                    };
+                ShellAction::CreateShellLauncher { .. }
+                | ShellAction::UpdateShellLauncher { .. }
+                | ShellAction::RemoveShellLauncher { .. }
+                | ShellAction::RemoveLegacyShellLauncher { .. } => {}
+                ShellAction::ReplaceShellSnapshot { receipts, .. }
+                | ShellAction::ReplaceShellCache { receipts, .. }
+                | ShellAction::ReplaceShellRenderedFile { receipts, .. } => {
                     if journal.receipt_committed.contains(&action.action_id) {
                         if !shell_receipts_match_desired(&manifest, receipts) {
                             shared_receipt_conflicts.insert(action.action_id.clone());
@@ -142,50 +145,49 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 projected_previous_receipt_targets: &projected_previous_receipt_targets,
                 shared_receipt_conflicts: &shared_receipt_conflicts,
             };
-            let (plan_action, code, action_blocked) = match &action.kind {
-                ActionKindV1::CreateShellLauncher { .. } => {
+            let (plan_action, code, action_blocked) = match ShellAction::from_kind(&action.kind)? {
+                ShellAction::CreateShellLauncher { .. } => {
                     self.review_create_shell_launcher(action, &mut review)
                         .await?
                 }
-                ActionKindV1::UpdateShellLauncher { .. } => {
+                ShellAction::UpdateShellLauncher { .. } => {
                     self.review_update_shell_launcher(action, &mut review)
                         .await?
                 }
-                ActionKindV1::RemoveShellLauncher { .. } => {
+                ShellAction::RemoveShellLauncher { .. } => {
                     self.review_remove_shell_launcher(action, &mut review)
                         .await?
                 }
-                ActionKindV1::RemoveLegacyShellLauncher { .. } => {
+                ShellAction::RemoveLegacyShellLauncher { .. } => {
                     self.review_remove_legacy_shell_launcher(action, &mut review)
                         .await?
                 }
-                ActionKindV1::ReplaceShellSnapshot { .. } => {
+                ShellAction::ReplaceShellSnapshot { .. } => {
                     self.review_replace_shell_snapshot(action, &mut review)
                         .await?
                 }
-                ActionKindV1::ReplaceShellCache { .. } => {
+                ShellAction::ReplaceShellCache { .. } => {
                     self.review_replace_shell_cache(action, &mut review).await?
                 }
-                ActionKindV1::RemoveShellCache { .. } => {
+                ShellAction::RemoveShellCache { .. } => {
                     self.review_remove_shell_cache(action, &mut review).await?
                 }
-                ActionKindV1::RemoveShellSnapshot { .. } => {
+                ShellAction::RemoveShellSnapshot { .. } => {
                     self.review_remove_shell_snapshot(action, &mut review)
                         .await?
                 }
-                ActionKindV1::ReconcileShellProfile { .. } => {
+                ShellAction::ReconcileShellProfile { .. } => {
                     self.review_reconcile_shell_profile(action, &mut review)
                         .await?
                 }
-                ActionKindV1::ReplaceShellRenderedFile { .. } => {
+                ShellAction::ReplaceShellRenderedFile { .. } => {
                     self.review_replace_shell_rendered_file(action, &mut review)
                         .await?
                 }
-                ActionKindV1::RemoveShellRenderedFile { .. } => {
+                ShellAction::RemoveShellRenderedFile { .. } => {
                     self.review_remove_shell_rendered_file(action, &mut review)
                         .await?
                 }
-                _ => unreachable!("validated Shell journal action kind"),
             };
             blocked |= action_blocked;
             steps.push(

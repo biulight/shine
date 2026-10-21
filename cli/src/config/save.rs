@@ -1,5 +1,6 @@
 //! Config persistence: coordinated atomic writes and raw-layer delta saves.
 
+use crate::output::escape_controls;
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 #[cfg(test)]
@@ -22,13 +23,14 @@ impl Config {
         {
             bail!(
                 "configuration changed at {}; retry the command",
-                config_path.display()
+                escape_controls(&config_path.display().to_string())
             );
         }
         let new_table = self.serialize_table_for_save()?;
         let toml_str = if let Some(existing) = current.contents.filter(|text| !text.is_empty()) {
             let mut doc: toml_edit::DocumentMut = existing
                 .parse()
+                .map_err(super::config_parse_error)
                 .context("Failed to parse existing config for comment preservation")?;
             shine_core::migration::sync_table(doc.as_table_mut(), &new_table);
             doc.to_string()
@@ -82,7 +84,9 @@ impl Config {
 
     pub(super) fn serialize_effective_table(&self) -> Result<toml::Table> {
         let serialized = toml::to_string_pretty(self).context("Failed to serialize config")?;
-        toml::from_str(&serialized).context("Failed to round-trip serialize config")
+        toml::from_str(&serialized)
+            .map_err(super::config_parse_error)
+            .context("Failed to round-trip serialize config")
     }
 
     async fn resolve_config_path_for_save(&self) -> Result<PathBuf> {
@@ -130,6 +134,40 @@ mod tests {
     use super::*;
     use crate::config::CURRENT_RUNTIME_SCHEMA_VERSION;
     use std::path::Path;
+
+    #[tokio::test]
+    async fn config_writers_discard_source_bearing_parse_error_chains() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+        let path = config.config_path();
+        for contents in [
+            "TOKEN = \"PRIVATE_CONFIG_CANARY_UNCLOSED\n",
+            "PRIVATE_CONFIG_CANARY_KEY = 1\nPRIVATE_CONFIG_CANARY_KEY = 2\n",
+        ] {
+            fs::write(path, contents).await.unwrap();
+            let errors = [
+                config.save().await.unwrap_err(),
+                crate::config::write_env_override_entry(path, "TOKEN", Some("new"))
+                    .await
+                    .unwrap_err(),
+                crate::config::validate_env_override_file(path)
+                    .await
+                    .unwrap_err(),
+            ];
+            for error in errors {
+                for diagnostic in [format!("{error:#}"), format!("{error:?}")] {
+                    assert!(diagnostic.contains("TOML parse error"), "{diagnostic}");
+                    assert!(
+                        !diagnostic.contains("PRIVATE_CONFIG_CANARY"),
+                        "{diagnostic}"
+                    );
+                    assert!(!diagnostic.contains("TOKEN ="), "{diagnostic}");
+                }
+            }
+            assert_eq!(fs::read_to_string(path).await.unwrap(), contents);
+        }
+        fs::remove_dir_all(dir).await.unwrap();
+    }
 
     #[cfg(unix)]
     #[tokio::test]

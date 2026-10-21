@@ -24,6 +24,10 @@ shine sys bootstrap --dry-run
 
 `--dry-run` 会显示选择结果、provider/脚本调用，以及每个将持久加载的 item-owned shell 集成，但不执行变更。某些初始化项目需要管理员权限或额外环境变量，`shine sys info <ITEM>` 会列出要求。
 
+建议命令会在以 `-` 开头的 item ID 前添加 `--`；选项须放在该分隔符之前，例如
+`shine sys apply --dry-run -- -custom`。`sys info` 中的检测命令会保留参数所需的引号。
+项目名称中的控制字符会显示为 `\n` 等转义文本，使每条结果保持在一行内。
+
 缺失的 item 即将执行时，Shine 会先显示其 `sys/<ITEM>` 标识和名称，因此后续出现的授权或密码提示会明确对应当前正在安装的软件。
 
 ## 交互选择或应用 Profile
@@ -83,8 +87,9 @@ winget settings --enable ProxyCommandLineOptions
 shine sys status
 ```
 
-这里展示的是执行记录：`installed`、`already installed` 或 `completed` 描述上一次 bootstrap
-调用观察到的结果，并不会实时探测第三方软件当前是否仍存在或已是最新版。
+这里展示每个条目最新保存的结果，包括 bootstrap 和 `shine sys apply` 等受管系统操作的记录。
+不同条目的记录可能来自不同次运行；此命令不会实时检查软件版本或系统配置。
+`sys info` 会转义已记录状态详情中的终端控制字符，保存的结果保持原值。
 
 ## 用软件自己的工具升级
 
@@ -114,6 +119,10 @@ shine sys profile enable mise
 检测，缺失时提示先 bootstrap。执行变更前会显示并重新校验绑定快照的安全 Plan；自动化调用
 必须添加 `--yes`，`--dry-run` 仍是独立预览。`shine upgrade` 不再隐式修改或重新组合 profile
 启用状态；需要变更该状态时请使用这些显式 profile 命令。
+
+profile 命令会区分改动完成、已经启用或禁用，以及 `needs action`（需要处理）。
+如果 profile 合并需要人工处理，当前文件会保留，输出会指出需要检查的文件。
+此类警告本身不会导致非零退出码；请检查结果后再确认请求的集成是否已生效。
 
 `shine update` 和 `shine upgrade` 仍只处理 Shine 管理的配置和受管系统资源，不会升级这些
 第三方软件。

@@ -144,6 +144,14 @@ shine env broker policy update \
   --mode development --release DEPLOY_TOKEN -- bun run build
 ```
 
+添加已有名称的策略会失败，不会覆盖原策略。更新时应使用 `--name` 并重新提供策略参数，
+包括原有的 project 或远端 workspace 限制；详见 `shine env broker policy update --help`。
+策略发生变化时仍需审阅并确认。
+
+`shine env broker policy list` 每行显示一项策略。SSH target 或 project 中的控制字符以
+`\n`、`\t` 等转义形式显示。需要查看策略的 TOML 表示时，使用
+`shine env broker policy info <NAME>`；列表显示不会修改存储值或匹配规则。
+
 并发修改策略会保留对其他策略的更新。如果等待确认期间目标策略被修改或删除，更新会失败，需要重新审阅。
 
 若没有本机 checkout，可使用 inspect 会话查看候选描述。先在本机开启 inspect，再在远端项目目录运行 `describe`；该请求会显示 workspace、source 摘要、mode、完整 argv 与 release 键，并与本机策略比较：
@@ -248,13 +256,23 @@ shine local upload ./site /tmp/site
 
 上传目录时，Shine 会拒绝把文件覆盖成目录或把目录覆盖成文件。先运行 `--dry-run` 可以确认解析后的两端路径和覆盖结果。
 
+SCP 的 dry-run 预览会为每个路径加引号，并转义控制字符，以便区分路径中的空格和换行。
+这种显示方式不会改变实际传输使用的路径。
+本机传输路径必须是有效 UTF-8。若 `~` 引用的本机 home 无法表示，传输和预览会在开始前拒绝，
+不会选中替换字符目录。本机路径提示只展开开头的 `~`；`$VAR` 和 `${VAR}` 保留为文件名文本。
+
 ## 查看连接状态
+
+状态字段及连接／拒绝消息中的终端控制字符显示为转义文本；会话、认证和连接路径保留原值。
 
 ```bash
 shine local status
 ```
 
 状态输出会显示会话 ID、连接是否可达、协议版本，以及本机端的默认目录。若当前 shell 不是通过 `shine ssh` 进入的，`shine local` 会提示缺少会话环境变量。
+连接/握手和随后的状态请求各有 5 秒超时。连接不可达时在 stdout 报告，退出码为 0；
+状态请求失败（包括认证拒绝或响应超时）时在 stderr 报错，退出码为 1。
+这些等待上限仅适用于 `local status`。
 
 ### 通过 broker 读取混合秘密
 

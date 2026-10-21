@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::{colors, config::Config};
+use crate::{colors, config::Config, output::escape_controls};
 
 pub async fn handle_init(yes: bool) -> Result<()> {
     let current_dir = std::env::current_dir()?;
@@ -16,11 +16,17 @@ pub async fn handle_init(yes: bool) -> Result<()> {
     let path = Config::init_current_dir_config().await?;
     println!(
         "{}",
-        colors::green(&format!("Initialized shine config at {}", path.display()))
+        colors::green(&format!(
+            "Initialized shine config at {}",
+            escape_controls(&path.display().to_string())
+        ))
     );
     println!(
         "{}",
-        colors::dim(&format!("presets_dir = {}", display_dir.display()))
+        colors::dim(&format!(
+            "presets_dir = {}",
+            escape_controls(&display_dir.display().to_string())
+        ))
     );
     Ok(())
 }
@@ -30,7 +36,7 @@ fn confirm_init(dir: &std::path::Path) -> Result<bool> {
 
     print!(
         "Initialize {} as the shine presets directory? [y/N] ",
-        dir.display()
+        escape_controls(&dir.display().to_string())
     );
     std::io::stdout().flush()?;
 

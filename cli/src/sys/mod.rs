@@ -2,8 +2,6 @@ mod commands;
 mod detect;
 mod execution;
 mod managed;
-#[cfg(test)]
-mod manifest;
 mod model;
 mod profile_commands;
 mod recovery;
@@ -11,8 +9,6 @@ mod render;
 mod run_manifest;
 mod selection;
 
-#[cfg(test)]
-use model::SysInstalledRow;
 use model::{
     LoadedSysPreset, ResolvedSelection, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall,
     SysItem, SysItemMode, SysItemOutcome, SysItemStatus, SysPackageProvider, SysUpdateRow,
@@ -23,17 +19,12 @@ use anyhow::{Context, Result};
 
 pub use commands::{BootstrapCliOptions, handle_info, handle_init, handle_list, handle_status};
 pub use detect::detect_os_id;
-pub use managed::{
-    handle_apply, handle_apply_approved, handle_uninstall, handle_uninstall_approved,
-    handle_upgrade_managed, handle_upgrade_managed_target, managed_updates,
-};
+pub use managed::{handle_apply_approved, handle_uninstall_approved, managed_updates};
 pub(crate) use managed::{
-    handle_upgrade_managed_target_with_result_approved, handle_upgrade_managed_with_result_prepared,
+    handle_upgrade_managed_target_with_result_approved,
+    handle_upgrade_managed_with_result_prepared, managed_inspection,
 };
-pub use profile_commands::{
-    handle_profile_disable, handle_profile_disable_approved, handle_profile_enable,
-    handle_profile_enable_approved,
-};
+pub use profile_commands::{handle_profile_disable_approved, handle_profile_enable_approved};
 pub use recovery::handle_recover_approved;
 
 const SYS_TEMPLATE: &str = r#"# System bootstrap preset metadata for shine (schema v2).
@@ -66,9 +57,15 @@ pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()>
     let (path, overwritten) =
         shine_core::init_template::write_shine_toml_template(&dir, force, &template)?;
     if overwritten {
-        println!("Updated sys preset template: {}", path.display());
+        println!(
+            "Updated sys preset template: {}",
+            crate::output::escape_controls(&path.display().to_string())
+        );
     } else {
-        println!("Created sys preset template: {}", path.display());
+        println!(
+            "Created sys preset template: {}",
+            crate::output::escape_controls(&path.display().to_string())
+        );
     }
     Ok(())
 }
@@ -89,7 +86,7 @@ mod tests {
 
     #[test]
     fn init_template_does_not_require_a_permission_declaration() {
-        let manifest = manifest::parse_and_validate_manifest(SYS_TEMPLATE).unwrap();
+        let manifest = shine_core::runtime::parse_sys_manifest(SYS_TEMPLATE).unwrap();
 
         assert_eq!(manifest.items.len(), 1);
         assert!(manifest.items[0].permissions.is_none());
@@ -97,7 +94,7 @@ mod tests {
 
     #[test]
     fn unrestricted_init_template_contains_valid_permission_defaults() {
-        let manifest = manifest::parse_and_validate_manifest(&init_template(true)).unwrap();
+        let manifest = shine_core::runtime::parse_sys_manifest(&init_template(true)).unwrap();
         let permissions = manifest.items[0].permissions.as_ref().unwrap();
         assert_eq!(permissions.schema_version, 2);
         assert!(permissions.opaque_code.is_some());

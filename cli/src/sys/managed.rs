@@ -1,12 +1,9 @@
 use crate::config::Config;
-use crate::env::EnvConfig;
 use crate::presentation::{
     LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
 use anyhow::{Result, bail};
 
-#[cfg(test)]
-use super::SysInstalledRow;
 use super::detect::detect_os_id;
 use super::execution::{
     item_outcome_lines_with_status, presentation_bold, presentation_dim, presentation_symbol,
@@ -51,10 +48,6 @@ impl ManagedOutputMode {
     }
 }
 
-pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) -> Result<()> {
-    handle_apply_approved(config, item, dry_run, true).await
-}
-
 pub async fn handle_apply_approved(
     config: &Config,
     item: Option<&str>,
@@ -89,10 +82,6 @@ pub(crate) async fn handle_apply_with_result_approved(
     .await
 }
 
-pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Result<()> {
-    handle_uninstall_approved(config, item, dry_run, true).await
-}
-
 pub async fn handle_uninstall_approved(
     config: &Config,
     item: &str,
@@ -124,32 +113,10 @@ pub(crate) async fn handle_uninstall_with_result_approved(
     .await
 }
 
-pub async fn handle_upgrade_managed(
-    config: &Config,
-    verbose: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<SysUpgradeReport> {
-    handle_upgrade_managed_with_result_approved(config, verbose, true, sep)
-        .await
-        .map(|(report, _)| report)
-}
-
-pub(crate) async fn handle_upgrade_managed_with_result_approved(
-    config: &Config,
-    verbose: bool,
-    yes: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
-    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
-    let mut interaction = TerminalInteraction;
-    handle_upgrade_managed_with_reporter(config, verbose, yes, &mut renderer, &mut interaction)
-        .await
-}
-
 pub(crate) async fn handle_upgrade_managed_with_result_prepared(
     config: &Config,
     verbose: bool,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedSysUpgrade,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
     let os_id = detect_os_id().await?;
@@ -165,47 +132,11 @@ pub(crate) async fn handle_upgrade_managed_with_result_prepared(
             yes: true,
             output_mode: ManagedOutputMode::Upgrade { verbose },
         },
-        prepared,
+        prepared.into_managed(),
         &mut renderer,
         &mut interaction,
     )
     .await
-}
-
-async fn handle_upgrade_managed_with_reporter(
-    config: &Config,
-    verbose: bool,
-    yes: bool,
-    reporter: &mut dyn LifecycleReporter,
-    interaction: &mut TerminalInteraction,
-) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
-    let os_id = detect_os_id().await?;
-    let (report, lifecycle_result) = run_managed_for_os_with_reporter(
-        ManagedRunRequest {
-            config,
-            os_id: &os_id,
-            requested: None,
-            action: SysAction::Apply,
-            dry_run: false,
-            yes,
-            output_mode: ManagedOutputMode::Upgrade { verbose },
-        },
-        reporter,
-        interaction,
-    )
-    .await?;
-    Ok((report, lifecycle_result))
-}
-
-pub async fn handle_upgrade_managed_target(
-    config: &Config,
-    item: Option<&str>,
-    verbose: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<SysUpgradeReport> {
-    handle_upgrade_managed_target_with_result_approved(config, item, verbose, true, sep)
-        .await
-        .map(|(report, _)| report)
 }
 
 pub(crate) async fn handle_upgrade_managed_target_with_result_approved(
@@ -235,38 +166,27 @@ pub(crate) async fn handle_upgrade_managed_target_with_result_approved(
 }
 
 pub async fn managed_updates(config: &Config) -> Result<Vec<SysUpdateRow>> {
-    managed_updates_with_result(config)
+    managed_inspection(config)
         .await
-        .map(|(rows, _)| rows)
+        .map(|inspection| inspection.updates)
 }
 
-pub(crate) async fn managed_updates_with_result(
+pub(crate) async fn managed_inspection(
     config: &Config,
-) -> Result<(Vec<SysUpdateRow>, LifecycleResultV1)> {
+) -> Result<shine_core::frontend::SysInspection> {
     let os_id = detect_os_id().await?;
-    managed_updates_for_os_with_result(config, &os_id).await
+    managed_inspection_for_os(config, &os_id).await
 }
 
-#[cfg(test)]
-async fn installed_managed_for_os(config: &Config, os_id: &str) -> Result<Vec<SysInstalledRow>> {
-    crate::core_runtime::from_config(config)
-        .await?
-        .installed_managed_sys(os_id)
-        .await
-}
-
-async fn managed_updates_for_os_with_result(
+async fn managed_inspection_for_os(
     config: &Config,
     os_id: &str,
-) -> Result<(Vec<SysUpdateRow>, LifecycleResultV1)> {
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
-    let inspection = shine_core::frontend::FrontendService::new(runtime)
+) -> Result<shine_core::frontend::SysInspection> {
+    let runtime = crate::core_runtime::from_config(config).await?;
+    shine_core::frontend::FrontendService::new(runtime)
         .inspect_sys(os_id)
         .await
-        .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
-    Ok((inspection.updates, inspection.lifecycle))
+        .map_err(shine_core::frontend::FrontendServiceError::into_source)
 }
 
 async fn run_managed_with_result(
@@ -374,19 +294,12 @@ async fn run_managed_for_os_with_reporter(
         .into_iter()
         .next()
         .expect("one reviewed Sys Plan");
-        let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
-        return run_managed_for_os_with_prepared_reporter(
-            request,
-            crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime },
-            reporter,
-            interaction,
-        )
-        .await;
+        let prepared = crate::lifecycle_plan::PreparedSysManaged::prepare(config, reviewed).await?;
+        return run_managed_for_os_with_prepared_reporter(request, prepared, reporter, interaction)
+            .await;
     }
 
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
+    let runtime = crate::core_runtime::from_config(config).await?;
     let mut observer = ManagedObserver {
         reporter,
         action,
@@ -416,7 +329,7 @@ async fn run_managed_for_os_with_reporter(
 
 async fn run_managed_for_os_with_prepared_reporter(
     request: ManagedRunRequest<'_>,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedSysManaged,
     reporter: &mut dyn LifecycleReporter,
     interaction: &mut TerminalInteraction,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
@@ -427,12 +340,6 @@ async fn run_managed_for_os_with_prepared_reporter(
         output_mode,
         ..
     } = request;
-    let crate::lifecycle_plan::PreparedLifecyclePlan {
-        reviewed,
-        mut runtime,
-    } = prepared;
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
     let mut observer = ManagedObserver {
         reporter,
         action,
@@ -440,19 +347,14 @@ async fn run_managed_for_os_with_prepared_reporter(
         started: false,
         show_item_progress: output_mode.show_all_outcomes(),
     };
-    let core = match crate::lifecycle_plan::execute_reviewed(
-        config,
-        runtime,
-        reviewed,
-        shine_core::frontend::ExecutionOptions::default(),
-        &mut observer,
-        interaction,
-    )
-    .await?
-    {
-        shine_core::frontend::OperationDetails::SysManaged(report) => *report,
-        _ => unreachable!("reviewed operation result type"),
-    };
+    let core = prepared
+        .execute(
+            config,
+            shine_core::frontend::ExecutionOptions::default(),
+            &mut observer,
+            interaction,
+        )
+        .await?;
     finish_managed_report(core, output_mode, &mut observer)
 }
 
@@ -469,13 +371,21 @@ fn finish_managed_report(
             )));
     }
     let show_all = output_mode.show_all_outcomes();
+    let label_width = core
+        .items
+        .iter()
+        .filter(|outcome| should_print_managed_outcome(show_all, outcome.status))
+        .map(|outcome| console::measure_text_width(&crate::output::escape_controls(&outcome.label)))
+        .max()
+        .unwrap_or(0)
+        .max(14);
     for outcome in &core.items {
         if should_print_managed_outcome(show_all, outcome.status) {
             observer.begin();
             emit_item_outcome(
                 observer.reporter,
                 outcome,
-                outcome.label.len().max(14),
+                label_width,
                 observer.action,
                 observer.dry_run,
             );
@@ -515,8 +425,9 @@ impl shine_core::runtime::RuntimeObserver for ManagedObserver<'_> {
             } if self.show_item_progress => {
                 self.begin();
                 self.reporter.emit(PresentationEvent::stdout(format!(
-                    "  {} {target}",
-                    presentation_symbol("•")
+                    "  {} {}",
+                    presentation_symbol("•"),
+                    crate::output::escape_controls(&target)
                 )));
             }
             shine_core::runtime::RuntimeEvent::Warning { detail, .. } => {
@@ -633,35 +544,66 @@ mod tests {
             } else {
                 "biulight.internal -> 10.0.0.53"
             };
-            let core = shine_core::runtime::SysManagedReport {
-                items: vec![SysItemOutcome {
-                    item_id: "split-dns".into(),
-                    label: "Private split DNS".into(),
-                    status: SysItemStatus::Updated,
-                    detail: detail.into(),
-                    logs: vec!["detail log".into()],
-                }],
-                summary: SysUpgradeReport::default(),
-                lifecycle: LifecycleResultV1::new(LifecycleOperation::Upgrade, dry_run),
-            };
-            let mut reporter = RecordingReporter::default();
-            let mut observer = ManagedObserver {
-                reporter: &mut reporter,
-                action,
-                dry_run,
-                started: false,
-                show_item_progress: true,
-            };
-            finish_managed_report(core, ManagedOutputMode::Explicit, &mut observer).unwrap();
-            let lines = reporter
-                .0
-                .iter()
-                .filter_map(|event| match event {
-                    PresentationEvent::Line { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(lines, vec![header, expected_row, "    detail log"]);
+            // Explicit padding/columns keep the expectations independent of the renderer.
+            // The combining label has 24 bytes but only eight display columns.
+            for (label, padded_label, status_column) in [
+                ("Private split DNS", "Private split DNS", 22),
+                ("中文标签中文标签", "中文标签中文标签", 21),
+                (
+                    "e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}",
+                    "e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}      ",
+                    19,
+                ),
+            ] {
+                let core = shine_core::runtime::SysManagedReport {
+                    items: vec![SysItemOutcome {
+                        item_id: "split-dns".into(),
+                        label: label.into(),
+                        status: SysItemStatus::Updated,
+                        detail: detail.into(),
+                        logs: vec!["detail log".into()],
+                    }],
+                    summary: SysUpgradeReport::default(),
+                    lifecycle: LifecycleResultV1::new(LifecycleOperation::Upgrade, dry_run),
+                };
+                let mut reporter = RecordingReporter::default();
+                let mut observer = ManagedObserver {
+                    reporter: &mut reporter,
+                    action,
+                    dry_run,
+                    started: false,
+                    show_item_progress: true,
+                };
+                finish_managed_report(core, ManagedOutputMode::Explicit, &mut observer).unwrap();
+                let lines = reporter
+                    .0
+                    .iter()
+                    .filter_map(|event| match event {
+                        PresentationEvent::Line { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let expected_row = expected_row.replace("Private split DNS", padded_label);
+                assert_eq!(lines, vec![header, expected_row.as_str(), "    detail log"]);
+                let status = match (action, dry_run) {
+                    (SysAction::Apply, true) => "would update",
+                    (SysAction::Apply, false) => "updated",
+                    (SysAction::Remove, true) => "would remove",
+                    (SysAction::Remove, false) => "removed",
+                };
+                assert_eq!(
+                    console::measure_text_width(lines[1].split_once(status).unwrap().0),
+                    status_column,
+                    "{label:?}: {}",
+                    lines[1]
+                );
+                assert_eq!(
+                    console::measure_text_width(lines[1].split_once(detail).unwrap().0),
+                    status_column + 18,
+                    "{label:?}: {}",
+                    lines[1]
+                );
+            }
         }
     }
 
@@ -682,6 +624,76 @@ mod tests {
                     ),
                 );
             }
+        }
+    }
+
+    #[test]
+    fn managed_result_rows_share_the_visible_labels_width() {
+        #[derive(Default)]
+        struct RecordingReporter(Vec<PresentationEvent>);
+        impl LifecycleReporter for RecordingReporter {
+            fn emit(&mut self, event: PresentationEvent) {
+                self.0.push(event);
+            }
+        }
+
+        for mode in [
+            ManagedOutputMode::Explicit,
+            ManagedOutputMode::Upgrade { verbose: false },
+        ] {
+            let items = [
+                ("Short", SysItemStatus::Updated),
+                ("A much longer resource label\n", SysItemStatus::Updated),
+                ("中文标签", SysItemStatus::Updated),
+                ("e\u{301}", SysItemStatus::Updated),
+                (
+                    "An unchanged item longer than any visible changed label",
+                    SysItemStatus::AlreadyInstalled,
+                ),
+            ]
+            .into_iter()
+            .map(|(label, status)| SysItemOutcome {
+                item_id: label.into(),
+                label: label.into(),
+                status,
+                detail: "detail".into(),
+                logs: Vec::new(),
+            })
+            .collect();
+            let mut reporter = RecordingReporter::default();
+            let mut observer = ManagedObserver {
+                reporter: &mut reporter,
+                action: SysAction::Apply,
+                dry_run: false,
+                started: false,
+                show_item_progress: false,
+            };
+            finish_managed_report(
+                shine_core::runtime::SysManagedReport {
+                    items,
+                    summary: SysUpgradeReport::default(),
+                    lifecycle: LifecycleResultV1::new(LifecycleOperation::Upgrade, false),
+                },
+                mode,
+                &mut observer,
+            )
+            .unwrap();
+            assert!(reporter.0.iter().any(|event| matches!(
+                event,
+                PresentationEvent::Line { text, .. } if text.contains(r"resource label\n")
+            )));
+            let prefixes = reporter
+                .0
+                .iter()
+                .filter_map(|event| match event {
+                    PresentationEvent::Line { text, .. } => text
+                        .split_once("updated")
+                        .map(|(prefix, _)| console::measure_text_width(prefix)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let expected_label_width = if mode.is_explicit() { 55 } else { 30 };
+            assert_eq!(prefixes, vec![expected_label_width + 5; 4]);
         }
     }
 
@@ -790,9 +802,11 @@ target = {:?}
         fs::write(os_dir.join("first.txt"), "first v2")
             .await
             .unwrap();
-        let (updates, update_lifecycle) = managed_updates_for_os_with_result(&config, "fakeos")
-            .await
-            .unwrap();
+        let shine_core::frontend::SysInspection {
+            updates,
+            lifecycle: update_lifecycle,
+            ..
+        } = managed_inspection_for_os(&config, "fakeos").await.unwrap();
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].item_id, "first");
         assert_eq!(updates[0].details, ["Content: changed"]);
@@ -839,10 +853,11 @@ target = {:?}
             &second_manifest_before
         );
 
-        let (current_updates, current_lifecycle) =
-            managed_updates_for_os_with_result(&config, "fakeos")
-                .await
-                .unwrap();
+        let shine_core::frontend::SysInspection {
+            updates: current_updates,
+            lifecycle: current_lifecycle,
+            ..
+        } = managed_inspection_for_os(&config, "fakeos").await.unwrap();
         assert!(current_updates.is_empty());
         assert!(
             current_lifecycle
@@ -951,9 +966,9 @@ resource = "/etc/resolver/private.example"
             .env
             .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.3".to_string());
 
-        let (updates, lifecycle) = managed_updates_for_os_with_result(&config, "macos")
-            .await
-            .unwrap();
+        let shine_core::frontend::SysInspection {
+            updates, lifecycle, ..
+        } = managed_inspection_for_os(&config, "macos").await.unwrap();
 
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].item_id, "split-dns");
@@ -971,7 +986,7 @@ resource = "/etc/resolver/private.example"
     }
 
     #[tokio::test]
-    async fn installed_managed_lists_only_current_os_managed_entries() {
+    async fn sys_inventory_lists_only_current_os_managed_entries() {
         let dir = make_temp_dir().await;
         fs::write(
             dir.join(SYS_MANIFEST_FILE),
@@ -993,8 +1008,8 @@ updated_at = "1"
 
 [[entries]]
 os_id = "ubuntu"
-item_id = "split-dns"
-label = "Ubuntu split DNS"
+item_id = "ubuntu-only"
+label = "Ubuntu managed item"
 status = "installed"
 updated_at = "1"
 managed = true
@@ -1004,15 +1019,29 @@ managed = true
         .unwrap();
         let config = Config::new_for_test(&dir);
 
-        let rows = installed_managed_for_os(&config, "macos").await.unwrap();
-
-        assert_eq!(
-            rows,
-            [SysInstalledRow {
-                item_id: "split-dns".to_string(),
-                label: "Private split DNS".to_string(),
-            }]
-        );
+        let before = fs::read(dir.join(SYS_MANIFEST_FILE)).await.unwrap();
+        let service = crate::core_runtime::frontend_from_config(&config)
+            .await
+            .unwrap();
+        // Distinct targets prevent inventory deduplication from hiding a broken OS filter.
+        for (os_id, target) in [("macos", "sys/split-dns"), ("ubuntu", "sys/ubuntu-only")] {
+            let inventory = service
+                .inventory(
+                    shine_core::frontend::InventoryRequest::for_kind(
+                        shine_core::frontend::CapabilityKindV1::Sys,
+                    )
+                    .with_sys_os_id(os_id)
+                    .installed_only(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(inventory.items.len(), 1, "{os_id}: {inventory:?}");
+            assert_eq!(inventory.items[0].target, target);
+            assert!(inventory.items[0].installed);
+            assert!(!inventory.items[0].available);
+            assert!(inventory.diagnostics.is_empty());
+        }
+        assert_eq!(fs::read(dir.join(SYS_MANIFEST_FILE)).await.unwrap(), before);
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-09-01
 - **Evidence**: `core/src/action.rs`, `core/src/runtime/planner.rs`,
-  `core/src/runtime/action_executor.rs`, `core/src/runtime/app.rs`
+  `core/src/runtime/action_executor.rs`, `core/src/runtime/app.rs`, `core/src/runtime/managed_json.rs`
 
 ## Context
 

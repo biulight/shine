@@ -76,6 +76,9 @@ recipient. `env run` and `env secret seal` prompt to migrate an old workspace wh
 
 Phone recipients are not converted by `state migrate`. After upgrading and verifying tag support in the plugin and phone app, export with `age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag`, replace the corresponding `age_recipients` value, and reseal while retaining an independent recovery recipient.
 
+When a command reads malformed `trust.toml` or `ssh-secret-broker.toml`, TOML parse errors
+identify the file without printing stored contents. A failed parse does not repair or rewrite it.
+
 ## External-code trust
 
 External App hooks, generators, artifacts, Sys install scripts, executable profile content, and

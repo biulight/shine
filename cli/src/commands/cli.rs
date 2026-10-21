@@ -73,6 +73,9 @@ pub enum Commands {
         yes: bool,
     },
     /// Uninstall one shell or app preset
+    #[command(
+        after_help = "Internal cleanup is included: App targets remove the entire selected category cache, including extra files, while retaining the App manifest. Shell targets remove empty managed directories while preserving extra cache files and shared files needed by installed siblings. External preset sources and config.toml are preserved."
+    )]
     Uninstall {
         /// Show all security Plan paths, identities, and diagnostics
         #[arg(long)]
@@ -83,9 +86,6 @@ pub enum Commands {
         /// Remove managed files even when they were modified after installation (app only)
         #[arg(long)]
         force: bool,
-        /// Also remove empty managed preset directories
-        #[arg(long)]
-        purge: bool,
         /// Print what would be removed without changing anything
         #[arg(long)]
         dry_run: bool,

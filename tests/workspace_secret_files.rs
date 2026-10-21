@@ -2,16 +2,13 @@
 use std::{
     fs,
     path::PathBuf,
-    process::{Command, Output},
+    process::{Child, Command, Output, Stdio},
     sync::LazyLock,
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
-use std::{
-    path::Path,
-    process::Stdio,
-    time::{Duration, Instant},
-};
+use std::path::Path;
 
 const PROBE: &str = r#"
 use std::{env,fs,io::{Read,Write},process::Command,time::Duration};
@@ -21,7 +18,7 @@ fn main() {
   if args.iter().any(|a| a=="--version") { println!("1.3.0"); return; }
   eprintln!("phone-authorization-prompt");
   if env::var_os("PROBE_FAIL_DECRYPT").is_some() { std::process::exit(2); }
-  if args.last().unwrap().to_string_lossy().contains("password") { return; }
+  if fs::read(args.last().unwrap()).unwrap().ends_with(b"empty") { return; }
   std::io::stdout().write_all(&[0,255,10,13,128]).unwrap();
   return;
  }
@@ -29,7 +26,17 @@ fn main() {
   if let Some(log)=env::var_os("PROBE_BACKEND_LOG") { fs::write(log,"called").unwrap(); }
   if let Some(path)=env::var_os("PROBE_MUTATE") { fs::OpenOptions::new().append(true).open(path).unwrap().write_all(b"\n# changed\n").unwrap(); }
   if args.iter().any(|a| a=="--decrypt") {
+   if let Some(ready)=env::var_os("PROBE_READY") {
+    fs::write(ready, "ready").unwrap();
+    let release=env::var_os("PROBE_RELEASE").unwrap();
+    let deadline=std::time::Instant::now()+Duration::from_secs(20);
+    while !std::path::Path::new(&release).exists() { assert!(std::time::Instant::now()<deadline); std::thread::sleep(Duration::from_millis(10)); }
+   }
    if env::var_os("PROBE_FAIL_DECRYPT").is_some() { eprintln!("must-not-leak-plaintext"); std::process::exit(2); }
+   if let Some(path)=env::var_os("PROBE_FAIL_SECOND") {
+    if std::path::Path::new(&path).exists() { std::process::exit(2); }
+    fs::write(path,"first").unwrap();
+   }
    let bytes=fs::read(args.last().unwrap()).unwrap();
    std::io::stdout().write_all(&bytes[19..]).unwrap();
   } else {
@@ -157,6 +164,49 @@ impl Fixture {
         .arg(PROBE_BINARY.0.join(exe("probe")))
         .arg(mode);
         cmd
+    }
+    fn export(&self) -> Command {
+        let mut cmd = self.command();
+        cmd.args([
+            "env",
+            "workspace",
+            "export",
+            "--format",
+            "files",
+            "--mode",
+            "test",
+            "--file-group",
+            "signing",
+            "--file-group",
+            "account",
+        ]);
+        cmd
+    }
+    fn blocked_export(&self) -> Child {
+        self.export()
+            .env("PROBE_READY", self.root.join("export-ready"))
+            .env("PROBE_RELEASE", self.root.join("export-release"))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+    fn await_export(&self, child: &mut Child) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !self.root.join("export-ready").exists() {
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "export exited before backend barrier"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "export never reached backend barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    fn release_export(&self) {
+        fs::write(self.root.join("export-release"), "go").unwrap();
     }
     fn prepare(&self) {
         good(self.seal(&["--remove-plaintext"]));
@@ -363,6 +413,181 @@ fn file_groups_preview_never_calls_backend_or_command() {
 }
 
 #[test]
+fn file_group_previews_escape_paths_without_changing_io_or_streams() {
+    for target in [
+        ".signing/key with space.bin",
+        ".signing/it's.bin",
+        #[cfg(unix)]
+        ".signing/key\nnext\t.bin",
+    ] {
+        let mut f = Fixture::new();
+        let root = f.root.with_extension(if cfg!(unix) {
+            "display\nFORGED=path\r\t\u{1b}中文"
+        } else {
+            "display中文"
+        });
+        fs::rename(&f.root, &root).unwrap();
+        f.root = root;
+        let source = ".secrets/test/key with space.enc";
+        let workspace = f.root.join("shine.workspace.toml");
+        fs::write(&workspace, format!("version=3\n[env]\ndefault_mode='test'\nmodes=['test']\n[env.encryption]\nbackend='gpg'\ngpg_recipients=['test']\n[[file_groups.signing.files]]\nsource={source:?}\ntarget={target:?}\n")).unwrap();
+        let bytes = [0, 255, 10, 13, 128];
+        fs::write(f.root.join(target), bytes).unwrap();
+        let config = fs::read(f.root.join("state/config.toml")).unwrap();
+        let workspace_bytes = fs::read(&workspace).unwrap();
+        let root = fs::canonicalize(&f.root).unwrap();
+        let from = format!("{:?}", root.join(source).to_string_lossy());
+        let to = format!("{:?}", root.join(target).to_string_lossy());
+        let log = f.root.join("backend-log");
+        let seal = f
+            .command()
+            .env("PROBE_BACKEND_LOG", &log)
+            .args([
+                "env",
+                "secret",
+                "seal",
+                "--file-group",
+                "signing",
+                "--dry-run",
+            ])
+            .output()
+            .unwrap();
+        assert!(seal.status.success(), "{seal:?}");
+        let text = String::from_utf8(seal.stdout).unwrap();
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [
+                "File groups for mode test (metadata only)",
+                &format!("Would seal {to} -> {from}")
+            ]
+        );
+        assert!(seal.stderr.is_empty());
+        assert!(!log.exists());
+        assert!(!f.root.join(source).exists());
+        assert_eq!(fs::read(f.root.join(target)).unwrap(), bytes);
+        let sealed = f
+            .command()
+            .args([
+                "env",
+                "secret",
+                "seal",
+                "--file-group",
+                "signing",
+                "--remove-plaintext",
+            ])
+            .output()
+            .unwrap();
+        assert!(sealed.status.success(), "{sealed:?}");
+        let text = String::from_utf8(sealed.stdout).unwrap();
+        assert_eq!(text.lines().count(), 4, "{text:?}");
+        assert!(text.lines().nth(2).unwrap().starts_with("Sealed "));
+        assert!(
+            text.lines()
+                .last()
+                .unwrap()
+                .starts_with("Removed plaintext ")
+        );
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(!f.root.join(target).exists());
+        for (args, verb) in [
+            (
+                vec![
+                    "env",
+                    "run",
+                    "--file-group",
+                    "signing",
+                    "--dry-run",
+                    "--",
+                    "nonexistent-command",
+                ],
+                "decrypt temporarily",
+            ),
+            (
+                vec![
+                    "env",
+                    "workspace",
+                    "export",
+                    "--format",
+                    "files",
+                    "--mode",
+                    "test",
+                    "--file-group",
+                    "signing",
+                    "--dry-run",
+                ],
+                "export plaintext",
+            ),
+        ] {
+            let preview = f
+                .command()
+                .env("PROBE_BACKEND_LOG", &log)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(preview.status.success(), "{preview:?}");
+            assert_eq!(
+                String::from_utf8(preview.stdout)
+                    .unwrap()
+                    .lines()
+                    .collect::<Vec<_>>(),
+                [
+                    "File groups for mode test (metadata only)",
+                    &format!("Would {verb} {from} -> {to}")
+                ]
+            );
+            assert!(preview.stderr.is_empty());
+            assert!(!log.exists());
+            assert!(!f.root.join(target).exists());
+        }
+        let run = f
+            .command()
+            .args(["env", "run", "--file-group", "signing", "--"])
+            .arg(PROBE_BINARY.0.join(exe("probe")))
+            .arg("output")
+            .env("PROBE_EXIT", "42")
+            .output()
+            .unwrap();
+        assert_eq!(run.status.code(), Some(42), "{run:?}");
+        assert_eq!(run.stdout, bytes);
+        assert!(
+            String::from_utf8_lossy(&run.stderr)
+                .lines()
+                .any(|line| line == format!("Would decrypt temporarily {from} -> {to}"))
+        );
+        assert!(!f.root.join(target).exists());
+        let exported = f
+            .command()
+            .args([
+                "env",
+                "workspace",
+                "export",
+                "--format",
+                "files",
+                "--mode",
+                "test",
+                "--file-group",
+                "signing",
+            ])
+            .output()
+            .unwrap();
+        assert!(exported.status.success(), "{exported:?}");
+        let text = String::from_utf8(exported.stdout).unwrap();
+        assert_eq!(text.lines().count(), 2, "{text:?}");
+        assert!(text.lines().next().unwrap().starts_with("Exported "));
+        assert_eq!(text.lines().last(), Some("Exported 1 files for mode test"));
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(
+            String::from_utf8(exported.stderr)
+                .unwrap()
+                .contains(&format!("Would export plaintext {from} -> {to}"))
+        );
+        assert_eq!(fs::read(f.root.join(target)).unwrap(), bytes);
+        assert_eq!(fs::read(f.root.join("state/config.toml")).unwrap(), config);
+        assert_eq!(fs::read(&workspace).unwrap(), workspace_bytes);
+    }
+}
+
+#[test]
 fn file_groups_verification_and_decryption_failures_preserve_plaintext() {
     let f = Fixture::new();
     let out = f
@@ -533,6 +758,15 @@ fn file_groups_reject_unicode_workspace_aliases_before_backend_or_deletion() {
                     cmd.arg("--dry-run");
                 }
                 error(cmd.output().unwrap(), "mapping overlaps workspace file");
+                let mut export = f.export();
+                export
+                    .arg("--workspace")
+                    .arg(&path)
+                    .env("PROBE_BACKEND_LOG", &log);
+                if dry_run {
+                    export.arg("--dry-run");
+                }
+                error(export.output().unwrap(), "mapping overlaps workspace file");
                 assert_eq!(fs::read_to_string(&path).unwrap(), contents);
                 assert!(!log.exists());
                 assert!(!f.root.join(".secrets").exists());
@@ -562,6 +796,7 @@ fn file_groups_reject_unsafe_paths_modes_versions_and_missing_groups() {
         let path = f.root.join("shine.workspace.toml");
         fs::write(&path, fs::read_to_string(&path).unwrap().replace(from, to)).unwrap();
         error(f.seal(&[]), expected);
+        error(f.export().output().unwrap(), expected);
     }
     let f = Fixture::new();
     error(f.seal(&["--mode", "unknown"]), "undeclared");
@@ -653,6 +888,14 @@ fn file_groups_reject_tracked_case_and_unicode_aliases_before_decryption() {
                     .env("PROBE_BACKEND_LOG", &log)
                     .output()
                     .unwrap(),
+                "is tracked",
+            );
+            let mut export = f.export();
+            if dry_run {
+                export.arg("--dry-run");
+            }
+            error(
+                export.env("PROBE_BACKEND_LOG", &log).output().unwrap(),
                 "is tracked",
             );
             assert!(!log.exists());
@@ -909,7 +1152,7 @@ fn file_groups_cli_rejects_conflicting_or_unscoped_flags() {
 #[test]
 fn file_groups_roll_back_partial_materialization_and_keep_failed_child_status() {
     use std::os::unix::fs::PermissionsExt;
-    let f = Fixture::new();
+    let mut f = Fixture::new();
     f.prepare();
     fs::create_dir(f.root.join("other")).unwrap();
     fs::set_permissions(f.root.join("other"), fs::Permissions::from_mode(0o500)).unwrap();
@@ -918,9 +1161,19 @@ fn file_groups_roll_back_partial_materialization_and_keep_failed_child_status() 
     assert!(!output.status.success());
     assert!(!f.root.join(".signing").exists());
     assert!(!f.root.join("other/password").exists());
+    let root = f.root.with_extension("display\nFORGED=path\r\t\u{1b}中文");
+    fs::rename(&f.root, &root).unwrap();
+    f.root = root;
     let output = f.run("replace").env("PROBE_EXIT", "42").output().unwrap();
     assert_eq!(output.status.code(), Some(42));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("cleanup failed"));
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("cleanup failed"));
+    assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+    assert!(
+        !stderr.lines().any(|line| line.starts_with("FORGED=")),
+        "{stderr:?}"
+    );
     assert_eq!(
         fs::read(f.root.join(".signing/key")).unwrap(),
         b"replacement"
@@ -949,4 +1202,447 @@ fn file_groups_recheck_targets_before_plaintext_deletion() {
     assert!(f.root.join(".signing/key").exists());
     assert!(f.root.join("other/password").exists());
     assert!(!f.root.join(".secrets").exists());
+}
+
+#[test]
+fn file_export_persists_binary_and_empty_files_without_changing_inputs() {
+    for mode in ["test", "prod"] {
+        let f = Fixture::new();
+        good(f.seal(&["--mode", mode, "--remove-plaintext"]));
+        let workspace = fs::read(f.root.join("shine.workspace.toml")).unwrap();
+        let source = f.root.join(format!(".secrets/{mode}/key.enc"));
+        let cipher = fs::read(&source).unwrap();
+        let output = f
+            .command()
+            .args([
+                "env",
+                "workspace",
+                "export",
+                "--format",
+                "files",
+                "--mode",
+                mode,
+                "--file-group",
+                "signing",
+                "--file-group",
+                "account",
+                "--file-group",
+                "signing",
+            ])
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Exported 2 files"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("remain on disk"));
+        good(output);
+        assert_eq!(
+            fs::read(f.root.join(".signing/key")).unwrap(),
+            [0, 255, 10, 13, 128]
+        );
+        assert!(fs::read(f.root.join("other/password")).unwrap().is_empty());
+        assert_eq!(fs::read(source).unwrap(), cipher);
+        assert_eq!(
+            fs::read(f.root.join("shine.workspace.toml")).unwrap(),
+            workspace
+        );
+        error(
+            f.command()
+                .args([
+                    "env",
+                    "run",
+                    "--mode",
+                    mode,
+                    "--file-group",
+                    "signing",
+                    "--",
+                    "never-started",
+                ])
+                .output()
+                .unwrap(),
+            "plaintext target already exists",
+        );
+        error(
+            f.command()
+                .args([
+                    "env",
+                    "workspace",
+                    "export",
+                    "--format",
+                    "files",
+                    "--mode",
+                    mode,
+                    "--file-group",
+                    "signing",
+                ])
+                .output()
+                .unwrap(),
+            "plaintext target already exists",
+        );
+    }
+}
+
+#[test]
+fn file_export_preview_and_preflight_never_decrypt_or_compile_env_sources() {
+    let f = Fixture::new();
+    f.prepare();
+    let workspace = f.root.join("shine.workspace.toml");
+    let text = fs::read_to_string(&workspace)
+        .unwrap()
+        .replace("[env]", "[env]\nfiles=['missing-env-source.toml']");
+    fs::write(&workspace, text).unwrap();
+    let log = f.root.join("backend-log");
+    let output = f
+        .export()
+        .arg("--dry-run")
+        .env("PROBE_BACKEND_LOG", &log)
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Would export plaintext"));
+    good(output);
+    assert!(!log.exists());
+    assert!(!f.root.join(".signing").exists());
+    good(f.export().output().unwrap());
+    assert!(f.root.join(".signing/key").exists());
+}
+
+#[test]
+fn file_export_invalid_selection_and_existing_targets_fail_before_backend() {
+    let f = Fixture::new();
+    f.prepare();
+    let log = f.root.join("backend-log");
+    error(
+        f.export()
+            .args(["--file-group", "unknown"])
+            .env("PROBE_BACKEND_LOG", &log)
+            .output()
+            .unwrap(),
+        "unknown file group",
+    );
+    let output = f
+        .command()
+        .args([
+            "env",
+            "workspace",
+            "export",
+            "--format",
+            "files",
+            "--mode",
+            "missing",
+            "--file-group",
+            "signing",
+        ])
+        .env("PROBE_BACKEND_LOG", &log)
+        .output()
+        .unwrap();
+    error(output, "undeclared file-group mode");
+    fs::create_dir(f.root.join("other")).unwrap();
+    fs::write(f.root.join("other/password"), "existing").unwrap();
+    error(
+        f.export().env("PROBE_BACKEND_LOG", &log).output().unwrap(),
+        "plaintext target already exists",
+    );
+    assert!(!log.exists());
+    assert!(!f.root.join(".signing").exists());
+    assert_eq!(
+        fs::read(f.root.join("other/password")).unwrap(),
+        b"existing"
+    );
+}
+
+#[test]
+fn file_export_decrypt_failure_and_snapshot_changes_leave_no_plaintext() {
+    for mutation in ["decrypt", "second-decrypt", "workspace", "ciphertext"] {
+        let f = Fixture::new();
+        f.prepare();
+        let mut cmd = f.export();
+        let expected = match mutation {
+            "decrypt" => {
+                cmd.env("PROBE_FAIL_DECRYPT", "1");
+                "file decryption failed"
+            }
+            "second-decrypt" => {
+                cmd.env("PROBE_FAIL_SECOND", f.root.join("counter"));
+                "file decryption failed"
+            }
+            "workspace" => {
+                cmd.env("PROBE_MUTATE", "shine.workspace.toml");
+                "workspace changed"
+            }
+            _ => {
+                cmd.env("PROBE_MUTATE", ".secrets/test/key.enc");
+                "file changed during operation"
+            }
+        };
+        let output = cmd.output().unwrap();
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("must-not-leak-plaintext"));
+        error(output, expected);
+        assert!(!f.root.join(".signing").exists());
+        assert!(!f.root.join("other").exists());
+    }
+}
+
+#[test]
+fn file_export_rechecks_late_targets_and_shares_locks_across_config_scopes() {
+    let f = Fixture::new();
+    f.prepare();
+    let mut first = f.blocked_export();
+    f.await_export(&mut first);
+    let second_state = f.root.join("second-state");
+    fs::create_dir(&second_state).unwrap();
+    fs::write(second_state.join("config.toml"), "schema_version=2\n").unwrap();
+    error(
+        f.export()
+            .env("SHINE_CONFIG_DIR", &second_state)
+            .output()
+            .unwrap(),
+        "another Shine file-group operation is active",
+    );
+    error(
+        f.run("check").output().unwrap(),
+        "another Shine file-group operation is active",
+    );
+    fs::create_dir(f.root.join("other")).unwrap();
+    fs::write(f.root.join("other/password"), "late winner").unwrap();
+    f.release_export();
+    error(
+        first.wait_with_output().unwrap(),
+        "plaintext target already exists",
+    );
+    assert!(!f.root.join(".signing").exists());
+    assert_eq!(
+        fs::read(f.root.join("other/password")).unwrap(),
+        b"late winner"
+    );
+}
+
+#[test]
+fn file_export_git_policy_follows_nested_targets_and_fails_closed() {
+    for policy in ["ignored", "unignored", "tracked", "broken"] {
+        let f = Fixture::new();
+        f.prepare();
+        fixture_git(&f.root, &["init"]);
+        fs::write(f.root.join(".gitignore"), ".signing/\nother/\n").unwrap();
+        fs::create_dir(f.root.join("other")).unwrap();
+        fixture_git(&f.root.join("other"), &["init"]);
+        if policy == "ignored" {
+            fs::write(f.root.join("other/.gitignore"), "password\n").unwrap();
+        }
+        if policy == "tracked" {
+            fs::write(f.root.join("other/password"), "tracked").unwrap();
+            fixture_git(&f.root.join("other"), &["add", "password"]);
+            fs::remove_file(f.root.join("other/password")).unwrap();
+            fs::write(f.root.join("other/.gitignore"), "password\n").unwrap();
+        }
+        if policy == "broken" {
+            fs::write(f.root.join("other/.git/config"), "[broken\n").unwrap();
+        }
+        let log = f.root.join("backend-log");
+        let output = f.export().env("PROBE_BACKEND_LOG", &log).output().unwrap();
+        if policy == "ignored" {
+            good(output);
+        } else {
+            error(
+                output,
+                match policy {
+                    "tracked" => "is tracked",
+                    "broken" => "cannot inspect Git repository",
+                    _ => "must be ignored",
+                },
+            );
+            assert!(!log.exists());
+            assert!(!f.root.join(".signing").exists());
+            assert!(!f.root.join("other/password").exists());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn file_export_uses_private_permissions_and_rejects_links() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let f = Fixture::new();
+    f.prepare();
+    symlink("missing", f.root.join("other")).unwrap();
+    error(f.export().output().unwrap(), "linked file-group path");
+    fs::remove_file(f.root.join("other")).unwrap();
+    good(f.export().output().unwrap());
+    for target in [".signing/key", "other/password"] {
+        assert_eq!(
+            fs::metadata(f.root.join(target))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    for directory in [".signing", "other"] {
+        assert_eq!(
+            fs::metadata(f.root.join(directory))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn file_export_interrupt_during_authorization_releases_locks() {
+    let f = Fixture::new();
+    f.prepare();
+    let mut child = f.blocked_export();
+    f.await_export(&mut child);
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGINT);
+    }
+    error(
+        child.wait_with_output().unwrap(),
+        "file-group preparation interrupted",
+    );
+    assert!(!f.root.join(".signing").exists());
+    assert!(!f.root.join("other").exists());
+    good(f.export().output().unwrap());
+}
+
+#[test]
+fn file_export_age_preserves_binary_files_and_phone_authorization() {
+    use base64::{Engine, engine::general_purpose::STANDARD as B64};
+    let f = Fixture::new();
+    f.prepare();
+    let identity = f.root.join("identity.txt");
+    fs::write(&identity, "AGE-PLUGIN-PHONE-1EXAMPLE\n").unwrap();
+    let mut config: toml::Table = toml::from_str("schema_version=2").unwrap();
+    config.insert(
+        "age_identity".into(),
+        identity.to_string_lossy().as_ref().into(),
+    );
+    fs::write(
+        f.root.join("state/config.toml"),
+        toml::to_string(&config).unwrap(),
+    )
+    .unwrap();
+    for (name, payload) in [("key", &b"fixture"[..]), ("password", &b"empty"[..])] {
+        let bytes = [b"age-encryption.org/v1\n".as_slice(), payload].concat();
+        let cipher = format!("age:{}", B64.encode(bytes));
+        fs::write(f.root.join(format!(".secrets/test/{name}.enc")), &cipher).unwrap();
+    }
+    let output = f
+        .export()
+        .env("AGE_PLUGIN_PHONE_TRANSPORT", "qr")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&output.stderr).contains("phone-authorization-prompt"));
+    assert!(!output.stdout.contains(&255));
+    good(output);
+    assert_eq!(
+        fs::read(f.root.join(".signing/key")).unwrap(),
+        [0, 255, 10, 13, 128]
+    );
+    assert!(fs::read(f.root.join("other/password")).unwrap().is_empty());
+}
+
+// Frozen hybrid wire fixture: the stand-in GPG wrapper transports the data key;
+// the real in-process AEAD still authenticates the envelope and binary plaintext.
+fn hybrid_file_fixture(plaintext: &[u8]) -> String {
+    use base64::{Engine, engine::general_purpose::STANDARD as B64};
+    use chacha20poly1305::{
+        KeyInit, XChaCha20Poly1305, XNonce,
+        aead::{Aead, Payload},
+    };
+    let nonce = [9u8; 24];
+    let key = [7u8; 32];
+    let material: Vec<u8> = nonce.into_iter().chain(key).collect();
+    let wrapped = format!("shine-hybrid-key-v1:{}", B64.encode(material));
+    let mut gpg = vec![0xc1, 10, 3, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xd2, 0xff];
+    gpg.extend_from_slice(&((wrapped.len() + 1) as u32).to_be_bytes());
+    gpg.push(1);
+    gpg.extend_from_slice(wrapped.as_bytes());
+    let age = b"age-encryption.org/v1\nfixture";
+    let mut bytes = vec![1, 1];
+    bytes.extend_from_slice(&nonce);
+    for length in [gpg.len(), age.len(), plaintext.len() + 16] {
+        bytes.extend_from_slice(&(length as u32).to_be_bytes());
+    }
+    bytes.extend_from_slice(&gpg);
+    bytes.extend_from_slice(age);
+    let cipher = XChaCha20Poly1305::new_from_slice(&key).unwrap();
+    let data = cipher
+        .encrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: plaintext,
+                aad: &bytes,
+            },
+        )
+        .unwrap();
+    bytes.extend_from_slice(&data);
+    format!("hybrid:{}", B64.encode(bytes))
+}
+
+#[test]
+fn file_export_hybrid_honors_local_preference_and_never_falls_back_on_failure() {
+    for fail in [false, true] {
+        let f = Fixture::new();
+        f.prepare();
+        fs::write(
+            f.root.join("state/config.toml"),
+            "schema_version=2\nhybrid_decrypt_backend='age'\n",
+        )
+        .unwrap();
+        fs::write(
+            f.root.join("shine.config.local.toml"),
+            "hybrid_decrypt_backend='gpg'\n",
+        )
+        .unwrap();
+        for (name, plain) in [("key", &[0, 255, 10, 13, 128][..]), ("password", &[][..])] {
+            fs::write(
+                f.root.join(format!(".secrets/test/{name}.enc")),
+                hybrid_file_fixture(plain),
+            )
+            .unwrap();
+        }
+        let mut cmd = f.export();
+        if fail {
+            cmd.env("PROBE_FAIL_DECRYPT", "1");
+        }
+        let output = cmd.output().unwrap();
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("must-not-leak-plaintext"));
+        if fail {
+            error(output, "file decryption failed");
+            assert!(!f.root.join(".signing").exists());
+            assert!(!f.root.join("other").exists());
+        } else {
+            good(output);
+            assert_eq!(
+                fs::read(f.root.join(".signing/key")).unwrap(),
+                [0, 255, 10, 13, 128]
+            );
+            assert!(fs::read(f.root.join("other/password")).unwrap().is_empty());
+        }
+    }
+}
+
+#[test]
+fn file_export_concurrent_invocations_have_one_successful_owner() {
+    let f = Fixture::new();
+    f.prepare();
+    let mut first = f.blocked_export();
+    f.await_export(&mut first);
+    error(
+        f.export().output().unwrap(),
+        "another Shine file-group operation is active",
+    );
+    f.release_export();
+    good(first.wait_with_output().unwrap());
+    error(
+        f.export().output().unwrap(),
+        "plaintext target already exists",
+    );
+    assert_eq!(
+        fs::read(f.root.join(".signing/key")).unwrap(),
+        [0, 255, 10, 13, 128]
+    );
+    assert!(fs::read(f.root.join("other/password")).unwrap().is_empty());
 }

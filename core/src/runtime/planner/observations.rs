@@ -57,7 +57,7 @@ pub(super) fn add_sys_bootstrap_install_permissions<H>(
             );
         }
     }
-    if crate::runtime::sys_install_requires_admin(os_id, install, item)? {
+    if crate::runtime::sys_bootstrap::sys_install_requires_admin(os_id, install, item)? {
         permissions.implicit(PermissionV1::Administrator);
     }
     for name in runtime.context().proxy_env.keys() {
@@ -299,13 +299,7 @@ pub(super) async fn load_app_manifest(
         .map(toml::from_slice)
         .transpose()?
         .unwrap_or_default();
-    match manifest.schema_version {
-        0 => manifest.schema_version = APP_MANIFEST_SCHEMA_VERSION,
-        APP_MANIFEST_SCHEMA_VERSION => {}
-        version => bail!(
-            "app manifest schema version {version} is newer than this Shine supports ({APP_MANIFEST_SCHEMA_VERSION})"
-        ),
-    }
+    manifest.normalize_schema_version()?;
     Ok((manifest, bytes))
 }
 
@@ -333,14 +327,7 @@ pub(super) async fn load_sys_manifest(
         .map(toml::from_slice)
         .transpose()?
         .unwrap_or_default();
-    match manifest.schema_version {
-        0 => manifest.schema_version = crate::runtime::SYS_MANIFEST_SCHEMA_VERSION,
-        crate::runtime::SYS_MANIFEST_SCHEMA_VERSION => {}
-        version => bail!(
-            "sys manifest schema version {version} is newer than this Shine supports ({})",
-            crate::runtime::SYS_MANIFEST_SCHEMA_VERSION
-        ),
-    }
+    manifest.normalize_schema_version()?;
     Ok((manifest, bytes))
 }
 
@@ -373,7 +360,153 @@ pub(super) fn operation_name(operation: PlanOperationV1) -> &'static str {
     operation.as_str()
 }
 
-pub(super) fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+#[cfg(test)]
+mod manifest_reader_tests {
+    use super::*;
+    use crate::runtime::{HostOperation, InMemoryHost};
+
+    #[tokio::test]
+    async fn planned_manifest_reader_compatibility() {
+        for domain in ["app", "sys"] {
+            let legacy = if domain == "app" {
+                "[[entries]]\nsource = 'app/demo/config'\ndestination = '/old/config'\ncontent_hash = 7\n[[entries]]\nsource = 'app/demo/config'\ndestination = '/new/config'\ncontent_hash = 8\n"
+            } else {
+                "[[entries]]\nos_id = 'test'\nitem_id = 'demo'\nlabel = 'Demo'\nstatus = 'completed'\nupdated_at = 'old'\n[entries.receipt]\ndriver = 'script'\nversion = 99\n"
+            };
+            for input in [
+                None,
+                Some("# legacy\nentries = []\n"),
+                Some(legacy),
+                Some("schema_version = 0\n"),
+                Some("schema_version = 1\n"),
+                Some("schema_version = 2\n"),
+                Some("schema_version = -1\n"),
+                Some("["),
+            ] {
+                let host = InMemoryHost::new();
+                let root = Path::new("/state");
+                let path = root.join(format!("{domain}-manifest.toml"));
+                if let Some(input) = input {
+                    host.put_file(&path, input.as_bytes().to_vec());
+                }
+                let loaded = if domain == "app" {
+                    load_app_manifest(&host, root)
+                        .await
+                        .map(|(manifest, bytes)| {
+                            (
+                                manifest.schema_version,
+                                serde_json::to_value(manifest.entries).unwrap(),
+                                bytes,
+                            )
+                        })
+                } else {
+                    load_sys_manifest(&host, root)
+                        .await
+                        .map(|(manifest, bytes)| {
+                            (
+                                manifest.schema_version,
+                                serde_json::to_value(manifest.entries).unwrap(),
+                                bytes,
+                            )
+                        })
+                };
+                assert_eq!(host.operations(), vec![HostOperation::Read(path.clone())]);
+                match input {
+                    Some("schema_version = 2\n") => assert_eq!(
+                        loaded.unwrap_err().to_string(),
+                        format!(
+                            "{domain} manifest schema version 2 is newer than this Shine supports (1)"
+                        )
+                    ),
+                    Some("schema_version = -1\n" | "[") => {
+                        let error = if domain == "app" {
+                            toml::from_str::<AppManifest>(input.unwrap()).unwrap_err()
+                        } else {
+                            toml::from_str::<SysRunManifest>(input.unwrap()).unwrap_err()
+                        };
+                        assert_eq!(loaded.unwrap_err().to_string(), error.to_string());
+                    }
+                    _ => {
+                        let (version, entries, bytes) = loaded.unwrap();
+                        assert_eq!(version, 1);
+                        assert_eq!(bytes.as_deref(), input.map(str::as_bytes));
+                        let expected_entries = if domain == "app" {
+                            serde_json::to_value(
+                                toml::from_str::<AppManifest>(input.unwrap_or(""))
+                                    .unwrap()
+                                    .entries,
+                            )
+                            .unwrap()
+                        } else {
+                            serde_json::to_value(
+                                toml::from_str::<SysRunManifest>(input.unwrap_or(""))
+                                    .unwrap()
+                                    .entries,
+                            )
+                            .unwrap()
+                        };
+                        assert_eq!(entries, expected_entries);
+                    }
+                }
+                if domain == "sys" {
+                    let direct = SysRunManifest::load(&host, root).await;
+                    match input {
+                        Some("schema_version = 2\n") => assert_eq!(
+                            direct.unwrap_err().to_string(),
+                            "sys manifest schema version 2 is newer than this Shine supports (1)"
+                        ),
+                        Some("schema_version = -1\n" | "[") => assert_eq!(
+                            direct.unwrap_err().to_string(),
+                            "failed to parse sys manifest"
+                        ),
+                        _ => {
+                            let manifest = direct.unwrap();
+                            assert_eq!(manifest.schema_version, 1);
+                            assert_eq!(
+                                manifest.entries,
+                                toml::from_str::<SysRunManifest>(input.unwrap_or(""))
+                                    .unwrap()
+                                    .entries
+                            );
+                        }
+                    }
+                }
+                assert!(
+                    host.operations()
+                        .iter()
+                        .all(|op| matches!(op, HostOperation::Read(_)))
+                );
+                assert_eq!(
+                    host.read(&path).await.ok().as_deref(),
+                    input.map(str::as_bytes)
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn planned_manifest_reader_preserves_io_errors() {
+        let host = crate::runtime::RealHost;
+        let root = std::env::temp_dir().join(format!(
+            "shine-planned-manifest-read-error-{}",
+            uuid::Uuid::new_v4()
+        ));
+        for domain in ["app", "sys"] {
+            let path = root.join(format!("{domain}-manifest.toml"));
+            tokio::fs::create_dir_all(&path).await.unwrap();
+            let error = if domain == "app" {
+                load_app_manifest(&host, &root).await.unwrap_err()
+            } else {
+                load_sys_manifest(&host, &root).await.unwrap_err()
+            };
+            assert_eq!(error.to_string(), "reading planned state");
+            assert!(error.downcast_ref::<std::io::Error>().is_some());
+            if domain == "sys" {
+                let error = SysRunManifest::load(&host, &root).await.unwrap_err();
+                assert_eq!(error.to_string(), "failed to read sys manifest");
+            }
+            assert!(path.is_dir());
+        }
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
 }

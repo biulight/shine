@@ -15,17 +15,6 @@ pub(super) fn matching_shell_receipt(
     }
 }
 
-pub(super) fn shell_shared_receipt_transitions(
-    kind: &ActionKindV1,
-) -> Option<&[ShellReceiptTransitionV1]> {
-    match kind {
-        ActionKindV1::ReplaceShellSnapshot { receipts, .. }
-        | ActionKindV1::ReplaceShellCache { receipts, .. }
-        | ActionKindV1::ReplaceShellRenderedFile { receipts, .. } => Some(receipts),
-        _ => None,
-    }
-}
-
 pub(super) fn shell_receipts_match_previous(
     manifest: &ShellManifest,
     transitions: &[ShellReceiptTransitionV1],
@@ -78,9 +67,13 @@ pub(super) fn shell_profile_receipts_match_previous(
 ) -> bool {
     shell_receipts_match_previous(manifest, transitions)
         && shell_removal_receipts_match_previous(manifest, removals)
-        && legacy_targets
-            .iter()
-            .all(|target| manifest.find(target).is_none())
+        && legacy_targets.iter().all(|target| {
+            if target == crate::action::SHELL_PROFILE_ONLY_TARGET {
+                manifest.entries.is_empty()
+            } else {
+                manifest.find(target).is_none()
+            }
+        })
 }
 
 pub(super) fn shell_profile_receipts_match_desired(
@@ -91,9 +84,13 @@ pub(super) fn shell_profile_receipts_match_desired(
 ) -> bool {
     shell_receipts_match_desired(manifest, transitions)
         && shell_removal_receipts_match_missing(manifest, removals)
-        && legacy_targets
-            .iter()
-            .all(|target| manifest.find(target).is_none())
+        && legacy_targets.iter().all(|target| {
+            if target == crate::action::SHELL_PROFILE_ONLY_TARGET {
+                manifest.entries.is_empty()
+            } else {
+                manifest.find(target).is_none()
+            }
+        })
 }
 
 pub(super) fn restore_shell_previous_receipts(

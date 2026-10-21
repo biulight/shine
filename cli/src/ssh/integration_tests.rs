@@ -142,7 +142,6 @@ async fn download_relays_child_output_and_zero_exit_code() {
     .unwrap();
 
     let (logs, code) = drain(&mut stream).await;
-    unsafe { std::env::remove_var("SHINE_TEST_RSYNC") };
     assert!(logs.contains("STUB-OUT"), "stdout not relayed: {logs:?}");
     assert!(logs.contains("STUB-ERR"), "stderr not relayed: {logs:?}");
     assert_eq!(code, Some(0));
@@ -173,7 +172,6 @@ async fn nonzero_child_exit_code_is_reported() {
     .unwrap();
 
     let (_logs, code) = drain(&mut stream).await;
-    unsafe { std::env::remove_var("SHINE_TEST_RSYNC") };
     assert_eq!(code, Some(7));
 }
 
@@ -203,7 +201,16 @@ async fn invalid_token_is_rejected_without_running_anything() {
 
 #[tokio::test]
 async fn scp_dry_run_synthesizes_a_preview_without_spawning() {
+    let _env = test_support::env_lock();
     let work = TempDir::new();
+    let marker = work.path().join("spawned");
+    let stub = write_stub(work.path(), 17);
+    std::fs::write(
+        &stub,
+        format!("#!/bin/sh\ntouch '{}'\nexit 17\n", marker.display()),
+    )
+    .unwrap();
+    unsafe { std::env::set_var("SHINE_TEST_SCP", &stub) };
     let sock = start_agent("tok", context_in(work.path())).await;
     let mut stream = handshake(&sock).await;
     protocol::write_message(
@@ -211,8 +218,8 @@ async fn scp_dry_run_synthesizes_a_preview_without_spawning() {
         &ClientMessage::Transfer {
             token: "tok".to_string(),
             direction: Direction::Download,
-            remote_spec: "/abs/file".to_string(),
-            local_spec: None,
+            remote_spec: "/abs/a b".to_string(),
+            local_spec: Some("destination \"quoted\"\nnext".to_string()),
             force: false,
             dry_run: true,
             use_scp: true,
@@ -221,9 +228,40 @@ async fn scp_dry_run_synthesizes_a_preview_without_spawning() {
     .await
     .unwrap();
 
-    let (logs, code) = drain(&mut stream).await;
-    assert!(logs.contains("Would copy"), "no preview line: {logs:?}");
-    assert_eq!(code, Some(0));
+    let starting: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(
+        matches!(
+            starting,
+            ServerMessage::Starting {
+                tool: protocol::Tool::Scp,
+                ..
+            }
+        ),
+        "{starting:?}"
+    );
+    let preview: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    let ServerMessage::Log {
+        stream: protocol::LogStream::Stdout,
+        chunk: logs,
+    } = preview
+    else {
+        panic!("expected stdout preview, got {preview:?}");
+    };
+    let done: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    unsafe { std::env::remove_var("SHINE_TEST_SCP") };
+    assert!(logs.starts_with("Would copy "), "{logs:?}");
+    assert!(
+        logs.ends_with(" via scp (no byte-accurate preview)\n"),
+        "{logs:?}"
+    );
+    assert!(logs.contains(r#""dev:/abs/a b" -> "#), "{logs:?}");
+    assert!(
+        logs.contains(r#"destination \"quoted\"\nnext""#),
+        "{logs:?}"
+    );
+    assert_eq!(logs.lines().count(), 1, "{logs:?}");
+    assert!(!marker.exists(), "dry-run spawned scp");
+    assert!(matches!(done, ServerMessage::Done { code: 0 }), "{done:?}");
 }
 
 #[tokio::test]

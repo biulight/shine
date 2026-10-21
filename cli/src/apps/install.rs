@@ -1,7 +1,6 @@
 use super::metadata;
 use super::report;
 use crate::config::Config;
-use crate::env::EnvConfig;
 use crate::presentation::{
     LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
@@ -15,15 +14,6 @@ use shine_core::runtime::{
     RuntimeObserver,
 };
 use std::collections::BTreeSet;
-
-pub async fn handle_install(
-    config: &Config,
-    category: Option<&str>,
-    dry_run: bool,
-    force: bool,
-) -> Result<()> {
-    handle_install_approved(config, category, dry_run, force, true).await
-}
 
 pub async fn handle_install_approved(
     config: &Config,
@@ -87,13 +77,11 @@ async fn handle_install_with_reporter(
         .into_iter()
         .next()
     };
-    let mut runtime = if let Some(reviewed) = &reviewed {
+    let runtime = if let Some(reviewed) = &reviewed {
         crate::lifecycle_plan::prepare_runtime(config, reviewed).await?
     } else {
         crate::core_runtime::from_config(config).await?
     };
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
     let categories = runtime.app_categories(category)?;
     let total_available = categories.iter().map(|value| value.files.len()).sum();
     reporter.emit(PresentationEvent::stdout(report::app_configs_summary_text(
@@ -134,6 +122,8 @@ async fn handle_install_with_reporter(
     let mut installed = 0usize;
     let mut skipped = 0usize;
     let mut backed_up = 0usize;
+    let mut previewed = 0usize;
+    let mut failed = 0usize;
     let mut restart_hints = BTreeSet::new();
     for file in &core_report.files {
         let label = file.source.display().to_string();
@@ -177,7 +167,7 @@ async fn handle_install_with_reporter(
                     )));
             }
             AppFileAction::PreviewInstall => {
-                skipped += 1;
+                previewed += 1;
                 observer
                     .reporter
                     .emit(PresentationEvent::stdout(report::dry_run_install_text(
@@ -202,17 +192,18 @@ async fn handle_install_with_reporter(
                     .emit(PresentationEvent::stderr(report::user_modified_kept_text(
                         config,
                         &file.destination,
+                        owo_colors::Stream::Stderr,
                     )));
             }
             AppFileAction::Failed => {
-                if let Some(error) = &file.error {
-                    observer
-                        .reporter
-                        .emit(PresentationEvent::stderr(report::install_error_text(
-                            &display_name,
-                            &anyhow!(error.clone()),
-                        )));
-                }
+                failed += 1;
+                let error = file.error.as_deref().unwrap_or("installation failed");
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stderr(report::install_error_text(
+                        &display_name,
+                        &anyhow!(error.to_string()),
+                    )));
             }
             AppFileAction::Removed
             | AppFileAction::Restored
@@ -222,11 +213,19 @@ async fn handle_install_with_reporter(
             | AppFileAction::PreviewRemove => skipped += 1,
         }
     }
-    let summary_parts = report::install_summary_parts(installed, backed_up, skipped);
+    let summary_parts =
+        report::install_summary_parts(installed, backed_up, skipped, previewed, failed);
     observer.reporter.emit(PresentationEvent::BlankLine);
     observer
         .reporter
-        .emit(PresentationEvent::stdout(report::done_summary_text(
+        .emit(PresentationEvent::stdout(crate::output::summary_line_text(
+            if failed > 0 {
+                "Install incomplete"
+            } else if dry_run {
+                "Preview"
+            } else {
+                "Done"
+            },
             &summary_parts,
         )));
     for hint in restart_hints {
@@ -256,6 +255,11 @@ async fn handle_install_with_reporter(
             .emit(PresentationEvent::stdout(report::artifact_apply_hint_text(
                 &category,
             )));
+    }
+    // File failures are fatal only after the complete report and hints are rendered.
+    // Hook failures retain their existing non-fatal policy.
+    if failed > 0 {
+        return Err(crate::output::ReportedCommandFailure.into());
     }
     Ok(core_report.lifecycle)
 }
@@ -303,11 +307,12 @@ impl RuntimeObserver for InstallObserver<'_> {
                         })
                         .collect::<Vec<_>>()
                         .join(" && ");
-                    self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: post-install hook skipped (run `shine trust grant app/{category}` after review; manual: {sequence})", report::symbol("!"))));
+                    let target_arg = crate::shell_quote::command_arg(&format!("app/{category}"));
+                    self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: post-install hook skipped (run `shine trust grant {target_arg}` after review; manual: {sequence})", report::symbol("!"))));
                 } else {
                     self.reporter.emit(PresentationEvent::stderr(format!(
                         "  {} {category}: post-install hook failed: {detail}",
-                        report::symbol("!")
+                        crate::colors::symbol_stderr("!")
                     )));
                 }
             }
@@ -321,13 +326,8 @@ impl RuntimeObserver for InstallObserver<'_> {
                     report::symbol("✓")
                 )));
             }
-            RuntimeEvent::ProcessOutput { text, .. } => {
-                for line in text.lines() {
-                    self.reporter.emit(PresentationEvent::stdout(format!(
-                        "     {}",
-                        report::dim(line)
-                    )));
-                }
+            RuntimeEvent::ProcessOutput { stream, text, .. } => {
+                crate::presentation::emit_process_output(self.reporter, stream, &text);
             }
             _ => {}
         }
@@ -338,10 +338,9 @@ impl RuntimeObserver for InstallObserver<'_> {
 mod tests {
     #![allow(clippy::await_holding_lock)]
     #[cfg(windows)]
-    use super::super::uninstall::handle_uninstall;
+    use super::super::uninstall::handle_uninstall_approved;
     use super::super::uninstall::handle_uninstall_with_result;
     use super::*;
-    use crate::apps::resolve_install_destination;
     use crate::config::Config;
     use crate::install_core::manifest::AppManifest;
     #[cfg(unix)]
@@ -411,10 +410,9 @@ mod tests {
             .unwrap();
         assert!(no_op_result.summary().unchanged > 0);
 
-        let uninstall_result =
-            handle_uninstall_with_result(&config, Some("git"), false, false, false)
-                .await
-                .unwrap();
+        let uninstall_result = handle_uninstall_with_result(&config, Some("git"), false, false)
+            .await
+            .unwrap();
         assert!(uninstall_result.summary().changed > 0);
         assert!(uninstall_result.outcomes.iter().all(|outcome| {
             outcome.status != LifecycleStatus::Failed
@@ -432,8 +430,6 @@ mod tests {
             "manifest should be empty after uninstall"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -540,7 +536,7 @@ mod tests {
                 && outcome.effects.contains(&LifecycleEffect::BackupCreated)
         }));
 
-        let uninstall = handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+        let uninstall = handle_uninstall_with_result(&config, Some("sample"), false, false)
             .await
             .unwrap();
         assert_eq!(uninstall.summary().changed, 1);
@@ -646,7 +642,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("git"), false, false)
+        handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
         let manifest_first = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
@@ -654,7 +650,7 @@ mod tests {
             .unwrap();
         let count_first = manifest_first.entries.len();
 
-        handle_install(&config, Some("git"), false, false)
+        handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
         let manifest_second = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
@@ -667,8 +663,6 @@ mod tests {
             "re-install must not duplicate manifest entries"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -706,14 +700,14 @@ source = \"file.conf\"\n",
         crate::trust::grant_current_for_test(&config, "app/hooktest").await;
 
         // First install writes the file → post_install fires.
-        handle_install(&config, Some("hooktest"), false, false)
+        handle_install_approved(&config, Some("hooktest"), false, false, true)
             .await
             .unwrap();
         assert!(marker.exists(), "post_install must run on first install");
 
         // Second install changes nothing → hook must not fire again.
         fs::remove_file(&marker).await.unwrap();
-        handle_install(&config, Some("hooktest"), false, false)
+        handle_install_approved(&config, Some("hooktest"), false, false, true)
             .await
             .unwrap();
         assert!(
@@ -722,7 +716,7 @@ source = \"file.conf\"\n",
         );
 
         // Replacement install (force) rewrites the file → post_install fires again.
-        handle_install(&config, Some("hooktest"), false, true)
+        handle_install_approved(&config, Some("hooktest"), false, true, true)
             .await
             .unwrap();
         assert!(
@@ -796,7 +790,13 @@ source = \"file.conf\"\n",
             .enable_all()
             .build()
             .unwrap()
-            .block_on(handle_install(&config, Some("docker"), true, false))
+            .block_on(handle_install_approved(
+                &config,
+                Some("docker"),
+                true,
+                false,
+                true,
+            ))
             .unwrap_err();
 
         assert!(
@@ -868,7 +868,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         .await
         .unwrap();
 
-        handle_install(&config, Some("docker-desktop-test"), false, false)
+        handle_install_approved(&config, Some("docker-desktop-test"), false, false, true)
             .await
             .unwrap();
 
@@ -887,7 +887,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             .await
             .unwrap();
 
-        handle_uninstall(&config, Some("docker-desktop-test"), false, false, false)
+        handle_uninstall_approved(&config, Some("docker-desktop-test"), false, false, true)
             .await
             .unwrap();
 
@@ -923,24 +923,32 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
-        presets::extract_prefix("app/vim", config.presets_dir(), false)
+        presets::extract_embedded_prefix("app/vim", config.presets_dir(), false)
             .await
             .unwrap();
 
-        let categories = metadata::load_installed_categories(&config, Some("vim"))
+        let installed_bytes = b"# installed vim fixture\n";
+        fs::write(config.presets_dir().join("app/vim/vimrc"), installed_bytes)
             .await
             .unwrap();
+
+        let runtime = crate::core_runtime::from_installed_presets(&config)
+            .await
+            .unwrap();
+        let categories = runtime.app_categories(Some("vim")).unwrap();
         let vim = categories.iter().find(|c| c.name == "vim").unwrap();
         let vimrc = vim
             .files
             .iter()
             .find(|f| f.source_rel == std::path::Path::new("vimrc"))
             .unwrap();
-        let destination = resolve_install_destination(vim, vimrc, &config).unwrap();
+        assert!(
+            runtime.app_source_bytes("vim", vimrc).unwrap() == installed_bytes,
+            "destination tests must read the installed fixture, not an embedded fallback"
+        );
+        let destination = runtime.app_destination(vim, vimrc).unwrap();
         assert_eq!(destination, dir.join(".vim").join("vimrc"));
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -955,20 +963,33 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
-        presets::extract_prefix("app/ghostty", config.presets_dir(), false)
+        presets::extract_embedded_prefix("app/ghostty", config.presets_dir(), false)
             .await
             .unwrap();
 
-        let categories = metadata::load_installed_categories(&config, Some("ghostty"))
+        let installed_bytes = b"# installed ghostty fixture\n";
+        fs::write(
+            config.presets_dir().join("app/ghostty/config.ghostty"),
+            installed_bytes,
+        )
+        .await
+        .unwrap();
+
+        let runtime = crate::core_runtime::from_installed_presets(&config)
             .await
             .unwrap();
+        let categories = runtime.app_categories(Some("ghostty")).unwrap();
         let ghostty = categories.iter().find(|c| c.name == "ghostty").unwrap();
         let config_file = ghostty
             .files
             .iter()
             .find(|f| f.source_rel == std::path::Path::new("config.ghostty"))
             .unwrap();
-        let destination = resolve_install_destination(ghostty, config_file, &config).unwrap();
+        assert!(
+            runtime.app_source_bytes("ghostty", config_file).unwrap() == installed_bytes,
+            "destination tests must read the installed fixture, not an embedded fallback"
+        );
+        let destination = runtime.app_destination(ghostty, config_file).unwrap();
         assert_eq!(
             destination,
             dir.join(".config/ghostty").join("config.ghostty")
@@ -979,15 +1000,13 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             .iter()
             .find(|f| f.source_rel == std::path::Path::new("themes/iTerm2 Solarized Light"))
             .unwrap();
-        let light_destination = resolve_install_destination(ghostty, light_theme, &config).unwrap();
+        let light_destination = runtime.app_destination(ghostty, light_theme).unwrap();
         assert_eq!(
             light_destination,
             dir.join(".config/ghostty")
                 .join("themes/light_iTerm2 Solarized Light")
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1011,7 +1030,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("ghostty"), false, false)
+        handle_install_approved(&config, Some("ghostty"), false, false, true)
             .await
             .unwrap();
 
@@ -1043,8 +1062,6 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         assert!(dark_theme.contains("cursor-color = #73fa91"));
         assert!(dark_theme.contains("background-image = /tmp/shine-dark-wallpaper.png"));
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }

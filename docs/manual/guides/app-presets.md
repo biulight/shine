@@ -22,7 +22,8 @@ shine app install starship --dry-run
 ```
 
 Presets that target system directories may need additional permissions. Use `--dry-run` first to
-confirm destinations and scope.
+confirm destinations and scope. The preview summary counts files that would be installed separately
+from files that are skipped; it does not write application files.
 
 ## Install and update
 
@@ -35,6 +36,10 @@ shine upgrade
 
 `shine update` compares installed results with presets and reports status without applying it.
 `shine upgrade` updates managed shell and application configuration to current preset content.
+
+An `Install incomplete` summary means one or more files failed to install, and the command exits
+with a nonzero status. Errors that stop installation early are reported directly, without this summary. Files successfully installed in the same run remain installed;
+check the reported results before retrying. Post-install hook warnings retain their non-fatal behavior.
 
 Reinstalling a category preserves files changed since installation, including managed JSON keys.
 Shine also skips the generator for a file that the reviewed Plan marks for preservation. To
@@ -75,7 +80,6 @@ for the complete author workflow.
 ```bash
 shine app uninstall starship --dry-run
 shine app uninstall starship
-shine app uninstall starship --purge
 ```
 
 Install, upgrade, uninstall, generator refresh, and artifact apply/remove show a Plan before making
@@ -95,7 +99,18 @@ missing while a backup is recorded, resolve that state before retrying. Generate
 remain outside the journaled static-file recovery workflow.
 
 `app uninstall --force` explicitly permits deletion of user-modified managed content. Preview it
-with `--dry-run`. `--purge` also removes the category's installed Preset files. During upgrade,
+with `--dry-run`. Uninstall includes internal cleanup by default. With a category, it removes the
+entire internal category cache, including extra files, and retains the App manifest. Without a
+category, it removes the entire internal App cache tree. The App manifest is deleted only when no
+installation records remain. Protected or failed removals retain their records and recorded backups
+so you can resolve the issue and retry; `--force` still requires explicit approval. Cleanup previews
+say what would be removed, while execution reports only completed cleanup. External preset sources
+are always preserved; managed destinations and manifest records follow normal uninstall rules.
+`shine uninstall app/<category>` uses the same category-limited behavior. `--purge` has been
+removed; omit it from existing commands. Cache cleanup is included in the Plan for approval and
+in the `--dry-run` preview.
+
+During upgrade,
 obsolete managed entries are removed only when `--prune-stale` is part of the approved command;
 modified entries remain preserved.
 

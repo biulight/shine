@@ -2,8 +2,6 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::install::eol_eq;
-#[cfg(test)]
-use crate::runtime::RealHost;
 use crate::runtime::{
     FileSystemHost, SYS_PROFILE_PHASES, ShellProfileBlockPosition, ShellType, SysProfilePhase,
 };
@@ -108,15 +106,6 @@ async fn update_windows_shell_profile(
         unsupported_shell: false,
         detail: "PowerShell profiles".to_string(),
     })
-}
-
-#[cfg(test)]
-pub(super) async fn update_sys_shell_profile_blocks(
-    path: &Path,
-    os_id: &str,
-    shell_name: Option<&str>,
-) -> Result<bool> {
-    update_sys_shell_profile_blocks_with_host(&RealHost, path, os_id, shell_name).await
 }
 
 async fn update_sys_shell_profile_blocks_with_host(
@@ -404,6 +393,7 @@ fn sys_loader_display(os_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::RealHost;
 
     async fn make_temp_dir(label: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("{label}-{}", uuid::Uuid::new_v4()));
@@ -532,16 +522,32 @@ mod tests {
         ));
     }
 
+    fn profile_config(home: &Path, shell: ShellType) -> SysProfileRuntimeConfig {
+        SysProfileRuntimeConfig {
+            home_dir: home.to_path_buf(),
+            presets_dir: home.join("presets"),
+            overlay_dir: None,
+            shell_type: shell,
+            is_external_presets: false,
+            external_code_trusted: false,
+            snapshot: crate::runtime::PresetSnapshot::builder(
+                crate::runtime::PresetSourceKind::Embedded,
+            )
+            .build(),
+        }
+    }
+
     #[tokio::test]
     async fn update_sys_shell_profile_blocks_inserts_pre_and_post_on_empty_file() {
         let dir = make_temp_dir("shine-sys-profile").await;
-        let path = dir.join("profile.sh");
+        let config = profile_config(&dir, ShellType::Bash);
+        let path = dir.join(".bashrc");
 
-        let updated = update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+        let updated = update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
             .await
             .unwrap();
 
-        assert!(updated);
+        assert!(updated.updated);
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(content.contains("shine ubuntu sys pre"));
         assert!(content.contains("shine ubuntu sys post"));
@@ -554,30 +560,35 @@ mod tests {
     #[tokio::test]
     async fn update_sys_shell_profile_blocks_is_idempotent_when_already_up_to_date() {
         let dir = make_temp_dir("shine-sys-profile").await;
-        let path = dir.join("profile.sh");
+        let config = profile_config(&dir, ShellType::Bash);
+        let path = dir.join(".bashrc");
 
         assert!(
-            update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+            update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
                 .await
                 .unwrap()
+                .updated
         );
         // Second call against the now-converged file must report no change.
         assert!(
-            !update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+            !update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
                 .await
                 .unwrap()
+                .updated
         );
 
+        assert!(path.is_file());
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
     async fn update_sys_shell_profile_blocks_ignores_crlf_and_preserves_endings() {
         let dir = make_temp_dir("shine-sys-profile").await;
-        let path = dir.join("profile.sh");
+        let config = profile_config(&dir, ShellType::Bash);
+        let path = dir.join(".bashrc");
 
         // Install (writes the block LF).
-        update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+        update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
             .await
             .unwrap();
 
@@ -588,9 +599,10 @@ mod tests {
 
         // Only the endings differ, so this must report no change...
         assert!(
-            !update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+            !update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
                 .await
                 .unwrap()
+                .updated
         );
         // ...and leave the user's CRLF file untouched (no silent LF rewrite).
         let after = tokio::fs::read_to_string(&path).await.unwrap();
@@ -602,12 +614,16 @@ mod tests {
     #[tokio::test]
     async fn update_sys_shell_profile_blocks_preserves_leading_bom() {
         let dir = make_temp_dir("shine-sys-profile").await;
-        let path = dir.join("profile.ps1");
+        let config = profile_config(&dir, ShellType::PowerShell);
+        let path = dir.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1");
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
         tokio::fs::write(&path, "\u{feff}# existing content\n")
             .await
             .unwrap();
 
-        update_sys_shell_profile_blocks(&path, "windows", None)
+        update_sys_shell_profiles(&RealHost, &config, "windows", "powershell")
             .await
             .unwrap();
 
@@ -628,17 +644,18 @@ mod tests {
     #[tokio::test]
     async fn update_sys_shell_profile_blocks_migrates_legacy_sentinel() {
         let dir = make_temp_dir("shine-sys-profile").await;
-        let path = dir.join("profile.sh");
+        let config = profile_config(&dir, ShellType::Bash);
+        let path = dir.join(".bashrc");
         let (legacy_start, legacy_end) = legacy_sys_sentinel("ubuntu");
         tokio::fs::write(&path, format!("{legacy_start}\nold body\n{legacy_end}\n"))
             .await
             .unwrap();
 
-        let updated = update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+        let updated = update_sys_shell_profiles(&RealHost, &config, "ubuntu", "bash")
             .await
             .unwrap();
 
-        assert!(updated);
+        assert!(updated.updated);
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(
             !content.contains(legacy_start),

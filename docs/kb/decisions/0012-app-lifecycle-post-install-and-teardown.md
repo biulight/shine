@@ -2,7 +2,7 @@
 
 - **Status**: accepted
 - **Evidence**: `core/src/runtime/app.rs`, `cli/src/apps/build.rs`
-  (`handle_unbuild`, `run_teardown_for_uninstall`), `cli/src/apps/install.rs`,
+  (`handle_unbuild_approved`, `run_teardown_for_uninstall`), `cli/src/apps/install.rs`,
   `cli/src/apps/uninstall.rs`, `core/src/runtime/app_metadata.rs` (`AppCategory.post_install`,
   `AppArtifact.teardown`), `shine app artifact remove <app-id>`, `presets/app/surge/unbuild.ts`
 - **Supersedes**: the "not auto-reversed" consequence of
@@ -52,8 +52,8 @@ config key.
 - `AppArtifact` gains `teardown: Option<String>` — a companion script, run with the **same** full
   `SHINE_APP_*` + `[env]` contract as `build` (so it can read the same `SURGE_PROFILE` etc.).
 - Two entry points with deliberately different semantics:
-  - **`shine app artifact remove <id>`** (`handle_unbuild`) — explicit, symmetric to `build`: **not** gated
-    by `allow_app_hooks`, and a nonzero exit propagates as a real error.
+  - **`shine app artifact remove <id>`** (`handle_unbuild_approved`) — explicit, symmetric to `build`:
+    **not** gated by `allow_app_hooks`, and a nonzero exit propagates as a real error.
   - **during `shine app uninstall`** (`run_teardown_for_uninstall`) — implicit, so like the hooks:
     **gated** by `allow_app_hooks` for external presets, and **non-fatal** (a broken teardown must
     never block file removal). It runs *before* the file-removal loop so the script sees the same

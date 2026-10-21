@@ -1,14 +1,10 @@
 use super::links::link_conflict_render_lines;
-#[cfg(test)]
-use super::profile::append_path_to_shell_config;
 use super::profile::{
-    managed_shell_profile_path, shell_source_command, source_command_activation_hint_lines,
+    managed_shell_profile_path, source_activation_hint, source_command_activation_hint_lines,
 };
-use super::report::{
-    ShellUpgradeReport, link_report_summary_parts, shell_cache_summary_parts, style_bold,
-    style_dim, style_green, style_symbol, style_yellow,
-};
+use super::report::{ShellUpgradeReport, link_report_summary_parts, shell_cache_summary_parts};
 use super::{PathUpdateStatus, get_shell_config_path, metadata};
+use crate::colors;
 use crate::config::Config;
 use crate::output;
 use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
@@ -59,9 +55,15 @@ pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()>
     let (path, overwritten) =
         shine_core::init_template::write_shine_toml_template(&dir, force, &template)?;
     if overwritten {
-        println!("Updated shell preset template: {}", path.display());
+        println!(
+            "Updated shell preset template: {}",
+            crate::output::escape_controls(&path.display().to_string())
+        );
     } else {
-        println!("Created shell preset template: {}", path.display());
+        println!(
+            "Created shell preset template: {}",
+            crate::output::escape_controls(&path.display().to_string())
+        );
     }
     Ok(())
 }
@@ -91,10 +93,6 @@ fn unrestricted_init_template_uses_valid_category_defaults() {
         defaults.get("opaque_code").and_then(toml::Value::as_str),
         Some("unrestricted")
     );
-}
-
-pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) -> Result<()> {
-    handle_install_approved(config, target, force, true).await
 }
 
 pub async fn handle_install_approved(
@@ -173,9 +171,9 @@ async fn handle_install_with_reporter(
         && config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
     {
         let summary = if core_report.snapshots_updated > 0 {
-            style_green(&format!("{} updated", core_report.snapshots_updated))
+            colors::green(&format!("{} updated", core_report.snapshots_updated))
         } else {
-            style_dim("up to date")
+            colors::dim("up to date")
         };
         reporter.emit(PresentationEvent::stdout(output::summary_line_text(
             "Shell Snapshots",
@@ -198,7 +196,7 @@ async fn handle_install_with_reporter(
     if shell_update.profile_updated {
         reporter.emit(PresentationEvent::stdout(output::detail_line_text(
             "Shell Profile",
-            &style_green("updated"),
+            &colors::green("updated"),
             Some(profile_path.display().to_string()),
         )));
     }
@@ -206,14 +204,14 @@ async fn handle_install_with_reporter(
         PathUpdateStatus::AlreadyConfigured => {
             reporter.emit(PresentationEvent::stdout(output::detail_line_text(
                 "Shell Config",
-                &style_dim("up to date"),
+                &colors::dim("up to date"),
                 Some(shell_config_path.display().to_string()),
             )));
         }
         PathUpdateStatus::Updated(path) => {
             reporter.emit(PresentationEvent::stdout(output::detail_line_text(
                 "Shell Config",
-                &style_green("updated"),
+                &colors::green("updated"),
                 Some(path.display().to_string()),
             )));
         }
@@ -255,42 +253,29 @@ async fn handle_install_dry_run_with_reporter(
             force: false,
         })
         .await?;
+    reporter.emit(PresentationEvent::stdout(
+        "Shell install preview: link candidates only (not a security Plan).",
+    ));
     for (command, target, source) in &core_report.planned_links {
         reporter.emit(PresentationEvent::stdout(format!(
-            "Would link shell command {command}: {} -> {}",
+            "Link candidate {command}: {} -> {}",
             target.display(),
             source.display()
         )));
     }
+    reporter.emit(PresentationEvent::stdout(
+        "Ownership conflicts, --replace-managed effects, trust, permissions, and profile changes are not evaluated; --verbose does not expand this preview.",
+    ));
     reporter.emit(PresentationEvent::stdout(
         "Dry run: no shell files, links, manifests, or profiles were changed.",
     ));
     Ok(core_report.lifecycle)
 }
 
-pub async fn handle_upgrade_installed(
-    config: &Config,
-    verbose: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<ShellUpgradeReport> {
-    handle_upgrade_installed_with_result_approved(config, verbose, true, sep)
-        .await
-        .map(|(report, _)| report)
-}
-
-pub(crate) async fn handle_upgrade_installed_with_result_approved(
-    config: &Config,
-    verbose: bool,
-    yes: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
-    handle_upgrade_installed_target_with_result_approved(config, None, verbose, yes, sep).await
-}
-
 pub(crate) async fn handle_upgrade_installed_with_result_prepared(
     config: &Config,
     verbose: bool,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedShellUpgrade,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
     let mut renderer = TerminalRenderer::stdio_with_separator(sep);
@@ -302,23 +287,6 @@ pub(crate) async fn handle_upgrade_installed_with_result_prepared(
         &mut renderer,
     )
     .await
-}
-
-pub async fn handle_upgrade_installed_target(
-    config: &Config,
-    category_filter: Option<&str>,
-    verbose: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<ShellUpgradeReport> {
-    handle_upgrade_installed_target_with_result_approved(
-        config,
-        category_filter,
-        verbose,
-        true,
-        sep,
-    )
-    .await
-    .map(|(report, _)| report)
 }
 
 #[cfg(test)]
@@ -382,12 +350,12 @@ async fn handle_upgrade_installed_target_with_reporter(
     .into_iter()
     .next()
     .expect("one reviewed Shell Plan");
-    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    let prepared = crate::lifecycle_plan::PreparedShellUpgrade::prepare(config, reviewed).await?;
     handle_upgrade_installed_target_with_prepared_reporter(
         config,
         category_filter,
         verbose,
-        crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime },
+        prepared,
         reporter,
     )
     .await
@@ -397,26 +365,20 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
     config: &Config,
     category_filter: Option<&str>,
     verbose: bool,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedShellUpgrade,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
-    let crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime } = prepared;
-    let core = match crate::lifecycle_plan::execute_reviewed(
-        config,
-        runtime,
-        reviewed,
-        shine_core::frontend::ExecutionOptions::default(),
-        &mut shine_core::runtime::NullObserver,
-        &mut crate::presentation::TerminalInteraction,
-    )
-    .await?
-    {
-        shine_core::frontend::OperationDetails::ShellUpgrade(report) => *report,
-        _ => unreachable!("reviewed operation result type"),
-    };
+    let core = prepared
+        .execute(
+            config,
+            shine_core::frontend::ExecutionOptions::default(),
+            &mut shine_core::runtime::NullObserver,
+            &mut crate::presentation::TerminalInteraction,
+        )
+        .await?;
     if core.runs.is_empty() {
         if verbose {
-            reporter.emit(PresentationEvent::stdout(style_dim(
+            reporter.emit(PresentationEvent::stdout(colors::dim(
                 "No installed shell presets found.",
             )));
         }
@@ -463,17 +425,17 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
                 .len();
             reporter.emit(PresentationEvent::stdout(output::summary_line_text(
                 "Shell Presets",
-                &[style_dim(&format!(
+                &[colors::dim(&format!(
                     "{installed_categories} installed categories"
                 ))],
             )));
         } else {
-            reporter.emit(PresentationEvent::stdout(style_bold("Shell Presets")));
+            reporter.emit(PresentationEvent::stdout(colors::bold("Shell Presets")));
         }
         for category in &core.updated_categories {
             reporter.emit(PresentationEvent::stdout(format!(
                 "  {} {category}",
-                style_symbol("✓")
+                colors::symbol("✓")
             )));
         }
         if snapshots_updated > 0 && (verbose || core.updated_categories.is_empty()) {
@@ -484,21 +446,22 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
             };
             reporter.emit(PresentationEvent::stdout(format!(
                 "  {} {}",
-                style_symbol("✓"),
-                style_green(&format!("{snapshots_updated} {noun} updated"))
+                colors::symbol("✓"),
+                colors::green(&format!("{snapshots_updated} {noun} updated"))
             )));
         }
         if templates_updated > 0 && (verbose || core.updated_categories.is_empty()) {
             reporter.emit(PresentationEvent::stdout(output::summary_line_text(
                 "Templates",
-                &[style_green(&format!("{templates_updated} rendered"))],
+                &[colors::green(&format!("{templates_updated} rendered"))],
             )));
         }
         if should_print_link_summary(verbose, links_created + links_updated, link_conflicts) {
             let parts = vec![
-                (links_created > 0).then(|| style_green(&format!("{links_created} created"))),
-                (links_updated > 0).then(|| style_green(&format!("{links_updated} updated"))),
-                (link_conflicts > 0).then(|| style_yellow(&format!("{link_conflicts} conflicts"))),
+                (links_created > 0).then(|| colors::green(&format!("{links_created} created"))),
+                (links_updated > 0).then(|| colors::green(&format!("{links_updated} updated"))),
+                (link_conflicts > 0)
+                    .then(|| colors::yellow(&format!("{link_conflicts} conflicts"))),
             ]
             .into_iter()
             .flatten()
@@ -527,7 +490,7 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
         {
             reporter.emit(PresentationEvent::stdout(output::detail_line_text(
                 "Shell Config",
-                &style_green("updated"),
+                &colors::green("updated"),
                 Some(path.display().to_string()),
             )));
         }
@@ -560,12 +523,16 @@ fn should_print_link_summary(verbose: bool, changed_count: usize, conflict_count
 }
 
 pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<LifecycleResultV1> {
+    Ok(shell_update_lifecycle_from_rows(
+        crate::status::build_shell_rows(config).await?,
+    ))
+}
+
+fn shell_update_lifecycle_from_rows(
+    rows: impl IntoIterator<Item = crate::status::ShellRow>,
+) -> LifecycleResultV1 {
     let mut result = LifecycleResultV1::new(LifecycleOperation::Update, false);
-    for row in crate::status::build_shell_rows(config)
-        .await?
-        .into_iter()
-        .filter(|row| row.is_installed)
-    {
+    for row in rows.into_iter().filter(|row| row.is_installed) {
         let mut effects = Vec::new();
         if row.changes.iter().any(|change| {
             matches!(
@@ -597,17 +564,13 @@ pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<L
             effects.push(LifecycleEffect::ResourceWritePreviewed);
         }
         let outcome = LifecycleOutcomeV1::new(
-            format!(
-                "shell/{}/{}",
-                row.category,
-                row.label.split('/').next_back().unwrap_or(&row.label)
-            ),
+            row.target(),
             None::<String>,
             if row.link_conflict {
                 LifecycleStatus::Conflict
             } else if row.preset_missing {
                 LifecycleStatus::Preserved
-            } else if row.status_sym == "↑" {
+            } else if row.status() == crate::status::ShellRowStatus::UpdateAvail {
                 LifecycleStatus::Pending
             } else {
                 LifecycleStatus::Unchanged
@@ -626,7 +589,7 @@ pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<L
             outcome
         });
     }
-    Ok(result)
+    result
 }
 
 pub async fn handle_completion_install(config: &Config) -> Result<()> {
@@ -641,13 +604,13 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
     if shell_update.profile_updated {
         output::detail_line(
             "Shell Profile",
-            &style_green("updated"),
+            &colors::green("updated"),
             Some(profile_path.display().to_string()),
         );
     } else {
         output::detail_line(
             "Shell Profile",
-            &style_dim("up to date"),
+            &colors::dim("up to date"),
             Some(profile_path.display().to_string()),
         );
     }
@@ -656,14 +619,14 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
         PathUpdateStatus::AlreadyConfigured => {
             output::detail_line(
                 "Shell Config",
-                &style_dim("up to date"),
+                &colors::dim("up to date"),
                 Some(shell_config_path.display().to_string()),
             );
         }
         PathUpdateStatus::Updated(path) => {
             output::detail_line(
                 "Shell Config",
-                &style_green("updated"),
+                &colors::green("updated"),
                 Some(path.display().to_string()),
             );
         }
@@ -673,17 +636,14 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
         let shell: &'static str = config.shell_type.into();
         output::detail_line(
             "Completion",
-            &style_yellow("unsupported"),
+            &colors::yellow("unsupported"),
             Some(format!("{shell}; PATH setup was installed")),
         );
     }
 
     output::hint_line(
         "Next Step",
-        &format!(
-            "run `{}` once, or open a new shell",
-            shell_source_command(&config.shell_type, &shell_config_path)
-        ),
+        &source_activation_hint(&config.shell_type, &shell_config_path),
     );
     Ok(())
 }
@@ -692,11 +652,96 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
 mod tests {
     use super::super::ShellType;
     #[cfg(unix)]
-    use super::super::uninstall::handle_uninstall;
+    use super::super::uninstall::handle_uninstall_approved;
     use super::*;
     use crate::config::Config;
     use std::path::PathBuf;
     use tokio::fs;
+
+    #[tokio::test]
+    async fn shell_update_outcomes_keep_core_identity_conflicts_and_missing_receipts_read_only() {
+        use shine_core::runtime::{
+            CoreRuntime, FileSystemObservationHost, HostOperation, PresetSnapshot,
+            PresetSourceKind, command_path_for_name,
+        };
+        for state in ["current", "update", "conflict", "missing"] {
+            let installed = crate::test_support::installed_shell_runtime().await;
+            let mut snapshot = installed.presets().clone();
+            if state == "update" {
+                let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
+                for (logical, bytes) in snapshot.files() {
+                    builder = builder.file(
+                        logical,
+                        if logical == "shell/demo/run.ts" {
+                            b"console.log('changed');\n".to_vec()
+                        } else {
+                            bytes.clone()
+                        },
+                    );
+                }
+                snapshot = builder.build();
+            } else if state == "conflict" {
+                installed.host().put_file(
+                    command_path_for_name(&installed.context().bin_dir, "run".as_ref()),
+                    b"foreign launcher".to_vec(),
+                );
+            } else if state == "missing" {
+                snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded).build();
+            }
+            let runtime = CoreRuntime::new(
+                installed.host().clone(),
+                installed.context().clone(),
+                snapshot,
+            );
+            let manifest_path = runtime.context().shine_dir.join("shell-manifest.toml");
+            let manifest = runtime.host().read(&manifest_path).await.unwrap();
+            let before = runtime.host().operations().len();
+            let rows = runtime
+                .inspect_shells()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|file| {
+                    let mut row = crate::status::ShellRow::from(file);
+                    row.label = "friendly label/other".into();
+                    row.status_sym = "✗";
+                    row
+                });
+            let result = shell_update_lifecycle_from_rows(rows);
+            assert_eq!(result.outcomes.len(), 1, "{state}: {result:?}");
+            let outcome = &result.outcomes[0];
+            assert_eq!(outcome.target, "shell/demo/run");
+            let (status, codes) = match state {
+                "current" => (LifecycleStatus::Unchanged, vec![]),
+                "update" => (LifecycleStatus::Pending, vec![]),
+                "conflict" => (LifecycleStatus::Conflict, vec!["shell_command_conflict"]),
+                "missing" => (LifecycleStatus::Preserved, vec!["shell_preset_missing"]),
+                _ => unreachable!(),
+            };
+            assert_eq!(outcome.status, status);
+            assert_eq!(outcome.diagnostic_codes, codes);
+            if state == "conflict" {
+                assert_eq!(
+                    outcome.effects,
+                    vec![LifecycleEffect::UserResourcePreserved]
+                );
+            } else if state == "update" {
+                assert_eq!(
+                    outcome.effects,
+                    vec![
+                        LifecycleEffect::CacheWritePreviewed,
+                        LifecycleEffect::ResourceWritePreviewed
+                    ]
+                );
+            }
+            assert!(
+                runtime.host().operations()[before..]
+                    .iter()
+                    .all(|op| matches!(op, HostOperation::Read(_)))
+            );
+            assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), manifest);
+        }
+    }
 
     #[test]
     fn upgrade_section_hides_no_op_without_full_output_and_shows_changes() {
@@ -801,10 +846,10 @@ mod tests {
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("utils/shine-env-export"), false)
+        handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
             .await
             .unwrap();
-        handle_install(&config, Some("utils/shine-theme-sync"), false)
+        handle_install_approved(&config, Some("utils/shine-theme-sync"), false, true)
             .await
             .unwrap();
 
@@ -823,7 +868,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        let error = handle_install(&config, Some("utils/not-a-command"), false)
+        let error = handle_install_approved(&config, Some("utils/not-a-command"), false, true)
             .await
             .unwrap_err()
             .to_string();
@@ -846,7 +891,7 @@ mod tests {
         .await
         .unwrap();
 
-        let error = handle_install(&config, Some("utils/shine-env-export"), false)
+        let error = handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
             .await
             .unwrap_err();
 
@@ -862,7 +907,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
-        handle_install(&config, Some("utils/shine-env-export"), false)
+        handle_install_approved(&config, Some("utils/shine-env-export"), false, true)
             .await
             .unwrap();
         let selected = crate::bin_links::command_path_for_name(
@@ -897,9 +942,16 @@ mod tests {
         );
 
         let mut separator = crate::output::SectionSeparator::new();
-        handle_upgrade_installed_target(&config, Some("utils"), false, &mut separator)
-            .await
-            .unwrap();
+        handle_upgrade_installed_target_with_result_approved(
+            &config,
+            Some("utils"),
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .map(|(report, _)| report)
+        .unwrap();
 
         assert!(selected.exists());
         assert!(!sibling.exists());
@@ -938,7 +990,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "shell/custom/one").await;
 
-        handle_install(&config, Some("custom/one"), false)
+        handle_install_approved(&config, Some("custom/one"), false, true)
             .await
             .unwrap();
 
@@ -1055,7 +1107,6 @@ mod tests {
             &config,
             Some("custom/one"),
             false,
-            false,
         )
         .await
         .unwrap();
@@ -1114,7 +1165,9 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, None, false).await.unwrap();
+        handle_install_approved(&config, None, false, true)
+            .await
+            .unwrap();
         assert!(
             config
                 .presets_dir()
@@ -1143,7 +1196,9 @@ mod tests {
             "managed shell profile should exist after install"
         );
 
-        handle_uninstall(&config, None, false, false).await.unwrap();
+        handle_uninstall_approved(&config, None, false, true)
+            .await
+            .unwrap();
         assert!(
             !config
                 .presets_dir()
@@ -1151,10 +1206,12 @@ mod tests {
                 .exists(),
             "preset should be gone after uninstall"
         );
-        let mut rd = fs::read_dir(config.bin_dir()).await.unwrap();
-        assert!(
-            rd.next_entry().await.unwrap().is_none(),
-            "bin dir should be empty after uninstall"
+        assert_eq!(
+            fs::symlink_metadata(config.bin_dir())
+                .await
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
         );
         assert!(
             !managed_shell_profile_path(&config).exists(),
@@ -1162,19 +1219,19 @@ mod tests {
         );
 
         // Idempotency: second uninstall must not error
-        handle_uninstall(&config, None, false, false).await.unwrap();
+        handle_uninstall_approved(&config, None, false, true)
+            .await
+            .unwrap();
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn append_writes_snippet_to_shell_config() {
+    async fn completion_install_writes_snippet_to_shell_config() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config, false, &[])
-            .await
-            .unwrap();
+        handle_completion_install(&config).await.unwrap();
 
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let content = fs::read_to_string(&config_path).await.unwrap();
@@ -1182,6 +1239,7 @@ mod tests {
             content.contains(super::super::SENTINEL_START),
             "sentinel should be present"
         );
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
@@ -1213,33 +1271,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_is_idempotent() {
+    async fn completion_install_is_idempotent() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config, false, &[])
-            .await
-            .unwrap();
-        append_path_to_shell_config(&config, false, &[])
-            .await
-            .unwrap();
+        handle_completion_install(&config).await.unwrap();
+        handle_completion_install(&config).await.unwrap();
 
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let content = fs::read_to_string(&config_path).await.unwrap();
         let count = content.matches(super::super::SENTINEL_START).count();
         assert_eq!(count, 1, "sentinel should appear exactly once");
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn append_is_idempotent_with_source_wrappers() {
+    async fn approved_install_is_idempotent_with_source_wrappers() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
-        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
 
-        append_path_to_shell_config(&config, false, &source_commands)
+        handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
-        append_path_to_shell_config(&config, false, &source_commands)
+        handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
 
@@ -1275,12 +1329,11 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn append_writes_source_entry_and_managed_profile() {
+    async fn approved_install_writes_source_entry_and_managed_profile() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
-        let source_commands = vec!["setproxy".to_string()];
 
-        append_path_to_shell_config(&config, false, &source_commands)
+        handle_install_approved(&config, Some("proxy/setproxy"), false, true)
             .await
             .unwrap();
 
@@ -1316,13 +1369,12 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn append_writes_both_windows_powershell_profiles() {
+    async fn approved_install_writes_both_windows_powershell_profiles() {
         let dir = make_temp_dir().await;
         let mut config = Config::new_for_test(&dir);
         config.shell_type = ShellType::PowerShell;
-        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
 
-        append_path_to_shell_config(&config, false, &source_commands)
+        handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .unwrap();
 
@@ -1353,9 +1405,19 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn append_refreshes_stale_sentinel_with_managed_profile_source() {
+    async fn completion_install_refreshes_stale_sentinel_with_installed_source_commands() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
+        let manifest_path = config.shine_dir().join("shell-manifest.toml");
+        let manifest_before = fs::read(&manifest_path).await.unwrap();
+        // Keep real receipts/launchers, but model the legacy layout with no managed profile.
+        // The completion entry itself must recreate the profile and its source wrappers.
+        let profile_path = managed_shell_profile_path(&config);
+        fs::remove_file(&profile_path).await.unwrap();
+        assert!(!profile_path.exists());
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent).await.unwrap();
@@ -1371,13 +1433,18 @@ mod tests {
         .await
         .unwrap();
 
-        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
-        let update = append_path_to_shell_config(&config, false, &source_commands)
+        let completion = crate::core_runtime::from_config(&config)
+            .await
+            .unwrap()
+            .install_shell_completion(false)
             .await
             .unwrap();
+        assert_eq!(completion.source_commands, ["setproxy", "usetproxy"]);
+        assert!(completion.profile.profile_updated);
+        assert_eq!(fs::read(&manifest_path).await.unwrap(), manifest_before);
 
         assert!(
-            matches!(update.config_status, PathUpdateStatus::Updated(_)),
+            completion.profile.config_status == PathUpdateStatus::Updated(config_path.clone()),
             "stale sentinel should be refreshed"
         );
         let content = fs::read_to_string(&config_path).await.unwrap();
@@ -1401,9 +1468,7 @@ mod tests {
             content.contains("after"),
             "non-managed content should be preserved"
         );
-        let profile = fs::read_to_string(managed_shell_profile_path(&config))
-            .await
-            .unwrap();
+        let profile = fs::read_to_string(&profile_path).await.unwrap();
         let setproxy_marker = wrapper_marker("setproxy", &config.shell_type);
         let usetproxy_marker = wrapper_marker("usetproxy", &config.shell_type);
         assert!(
@@ -1425,8 +1490,12 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("agent"), false).await.unwrap();
-        handle_install(&config, Some("proxy"), false).await.unwrap();
+        handle_install_approved(&config, Some("agent"), false, true)
+            .await
+            .unwrap();
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
 
         let commands = crate::core_runtime::from_config(&config)
             .await
@@ -1472,7 +1541,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "shell/custom/my_tool").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -1521,7 +1590,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "shell/custom/setproxy").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -1562,7 +1631,9 @@ mod tests {
         crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
         crate::trust::grant_current_for_test(&config, "shell/proxy/usetproxy").await;
 
-        handle_install(&config, Some("proxy"), false).await.unwrap();
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
 
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(config.bin_dir().join("usetproxy").exists());
@@ -1661,7 +1732,7 @@ mod tests {
             .await
             .unwrap();
 
-        let err = handle_install(&config, Some("proxy"), false)
+        let err = handle_install_approved(&config, Some("proxy"), false, true)
             .await
             .expect_err("install should fail when rendered_dir cannot be created");
 
@@ -1685,7 +1756,9 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("agent"), false).await.unwrap();
+        handle_install_approved(&config, Some("agent"), false, true)
+            .await
+            .unwrap();
 
         let source = config.presets_dir().join("shell/agent/cc.ts");
         assert!(source.exists());
@@ -1719,12 +1792,99 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn upgrade_link_summary_uses_production_reporter() {
+        #[derive(Default)]
+        struct Reporter(Vec<PresentationEvent>);
+        impl LifecycleReporter for Reporter {
+            fn emit(&mut self, event: PresentationEvent) {
+                self.0.push(event);
+            }
+        }
+        for verbose in [false, true] {
+            let dir = make_temp_dir().await;
+            let config = Config::new_for_test(&dir);
+            handle_install_approved(&config, Some("utils"), false, true)
+                .await
+                .unwrap();
+            let stale = dir.join("stale-copyfile.sh");
+            fs::write(&stale, b"#!/bin/sh\necho stale\n").await.unwrap();
+            make_executable(&stale).await;
+            let copyfile = config.bin_dir().join("copyfile");
+            fs::remove_file(&copyfile).await.unwrap();
+            fs::symlink(&stale, &copyfile).await.unwrap();
+            fs::remove_file(config.bin_dir().join("shine-env-export"))
+                .await
+                .unwrap();
+            let mut reporter = Reporter::default();
+            let (report, _) = handle_upgrade_installed_target_with_reporter(
+                &config,
+                Some("utils"),
+                verbose,
+                true,
+                &mut reporter,
+            )
+            .await
+            .unwrap();
+            assert_eq!(report.links_created, 1);
+            assert_eq!(report.links_updated, 1);
+            let lines = reporter
+                .0
+                .iter()
+                .filter_map(|event| match event {
+                    PresentationEvent::Line { text, .. } if text.contains("Bin Links") => {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                lines,
+                vec![output::summary_line_text(
+                    "Bin Links",
+                    &["1 created".into(), "1 updated".into()]
+                )]
+            );
+            assert!(!lines[0].contains("up to date"));
+
+            let manifest = fs::read(config.shine_dir().join("shell-manifest.toml"))
+                .await
+                .unwrap();
+            let mut unchanged = Reporter::default();
+            crate::presentation::with_full_upgrade_plan(true, async {
+                handle_upgrade_installed_target_with_reporter(
+                    &config,
+                    Some("utils"),
+                    verbose,
+                    true,
+                    &mut unchanged,
+                )
+                .await
+                .unwrap();
+            })
+            .await;
+            assert!(!unchanged.0.iter().any(|event| matches!(event,
+                PresentationEvent::Line { text, .. } if text.contains("Bin Links")
+            )));
+            assert_eq!(
+                fs::read(config.shine_dir().join("shell-manifest.toml"))
+                    .await
+                    .unwrap(),
+                manifest
+            );
+            fs::remove_dir_all(dir).await.unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn embedded_source_and_link_upgrade_report_target_once() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
-        handle_install(&config, Some("utils"), false).await.unwrap();
+        handle_install_approved(&config, Some("utils"), false, true)
+            .await
+            .unwrap();
 
         let source = config.presets_dir().join("shell/utils/copyfile.sh");
         fs::write(&source, b"#!/bin/sh\necho stale\n")
@@ -1742,9 +1902,15 @@ mod tests {
         fs::symlink(&stale_source, &link).await.unwrap();
 
         let mut separator = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut separator)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config,
+            None,
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated_targets, vec!["utils/copyfile"]);
         assert_eq!(report.updated_categories, vec!["utils"]);
@@ -1788,7 +1954,9 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
 
-        handle_install(&config, Some("proxy"), false).await.unwrap();
+        handle_install_approved(&config, Some("proxy"), false, true)
+            .await
+            .unwrap();
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(
             !config.bin_dir().join("extra_tool").exists(),
@@ -1805,9 +1973,11 @@ mod tests {
         crate::trust::grant_current_for_test(&config, "shell/proxy/setproxy").await;
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             report.templates_updated, 1,
@@ -1846,7 +2016,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -1869,7 +2039,7 @@ mod tests {
             "command should use the target rename, not the .ts stem"
         );
 
-        handle_uninstall(&config, Some("custom"), false, false)
+        handle_uninstall_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
         assert!(
@@ -1905,7 +2075,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -1955,7 +2125,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -2004,7 +2174,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
 
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -2056,7 +2226,7 @@ mod tests {
             .insert("PROXY_HOST".into(), "first.example".into());
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_development_for_test(&config, "custom").await;
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
@@ -2123,7 +2293,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
         let installed = config.installed_shell_dir().join("custom/tool.sh");
@@ -2139,9 +2309,15 @@ mod tests {
             .unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
         let mut separator = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut separator)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config,
+            None,
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.snapshots_updated, 1);
         assert_eq!(report.updated_targets, vec!["custom/mytool"]);
         assert_eq!(report.updated_categories, vec!["custom"]);
@@ -2185,9 +2361,15 @@ mod tests {
             .unwrap();
 
         let mut separator = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut separator)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config,
+            None,
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.snapshots_updated, 1);
         assert_eq!(
             fs::read_link(config.bin_dir().join("mytool"))
@@ -2223,16 +2405,23 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.bin_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "custom").await;
-        handle_install(&config, Some("custom"), false)
+        handle_install_approved(&config, Some("custom"), false, true)
             .await
             .unwrap();
 
         config.external_shell_mode = crate::config::ExternalShellMode::Live;
         crate::trust::grant_development_for_test(&config, "custom").await;
         let mut separator = crate::output::SectionSeparator::new();
-        handle_upgrade_installed(&config, false, &mut separator)
-            .await
-            .unwrap();
+        handle_upgrade_installed_target_with_result_approved(
+            &config,
+            None,
+            false,
+            true,
+            &mut separator,
+        )
+        .await
+        .map(|(report, _)| report)
+        .unwrap();
         assert_eq!(
             fs::read_link(config.bin_dir().join("mytool"))
                 .await

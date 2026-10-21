@@ -4,6 +4,7 @@
 use anyhow::{Result, bail};
 
 use crate::config::Config;
+use crate::output::escape_controls;
 use crate::{apps, shells};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -17,14 +18,6 @@ enum ShimResolution {
     Found(PresetKind),
     Conflict,
     Missing,
-}
-
-pub async fn handle_install_shim(
-    config: &Config,
-    target: &str,
-    replace_managed: bool,
-) -> Result<()> {
-    handle_install_shim_approved(config, target, replace_managed, true).await
 }
 
 pub async fn handle_install_shim_approved(
@@ -68,21 +61,10 @@ pub async fn handle_install_shim_approved(
     }
 }
 
-pub async fn handle_uninstall_shim(
-    config: &Config,
-    target: &str,
-    force: bool,
-    purge: bool,
-    dry_run: bool,
-) -> Result<()> {
-    handle_uninstall_shim_approved(config, target, force, purge, dry_run, true).await
-}
-
 pub async fn handle_uninstall_shim_approved(
     config: &Config,
     target: &str,
     force: bool,
-    purge: bool,
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
@@ -101,7 +83,6 @@ pub async fn handle_uninstall_shim_approved(
             Box::pin(shells::handle_uninstall_approved(
                 config,
                 Some(category),
-                purge,
                 dry_run,
                 yes,
             ))
@@ -112,7 +93,6 @@ pub async fn handle_uninstall_shim_approved(
                 config,
                 Some(category),
                 force,
-                purge,
                 dry_run,
                 yes,
             ))
@@ -141,15 +121,15 @@ pub(crate) async fn resolve_preset_kind(
 }
 
 fn parse_preset_target(target: &str) -> Result<(Option<PresetKind>, &str)> {
-    let target = target.trim();
-    if target.is_empty() {
+    if target.trim().is_empty() {
         bail!("preset target must not be empty");
     }
     let (kind, category) = match target.split_once('/') {
         Some(("app", category)) => (Some(PresetKind::App), category),
         Some(("shell", category)) => (Some(PresetKind::Shell), category),
         Some((kind, _)) => bail!(
-            "unsupported preset target kind `{kind}`; expected app/<category> or shell/<category>[/<command>]"
+            "unsupported preset target kind `{}`; expected app/<category> or shell/<category>[/<command>]",
+            escape_controls(kind)
         ),
         None => (None, target),
     };
@@ -163,6 +143,7 @@ fn parse_preset_target(target: &str) -> Result<(Option<PresetKind>, &str)> {
         Some(PresetKind::App) | None => !category.is_empty() && !category.contains('/'),
     };
     if !valid {
+        let target = escape_controls(target);
         bail!(
             "invalid preset target `{target}`; expected app/<category>, shell/<category>[/<command>], or a unique category name"
         );
@@ -250,10 +231,17 @@ fn classify_shim_resolution(shell_matches: bool, app_matches: bool) -> ShimResol
 }
 
 fn bail_ambiguous<T>(category: &str) -> Result<T> {
+    if category.chars().any(char::is_control) {
+        bail!(
+            "ambiguous preset target `{}`; select app or shell with the original category argument (copyable target omitted)",
+            escape_controls(category)
+        );
+    }
     bail!("ambiguous preset target `{category}`; use `app/{category}` or `shell/{category}`")
 }
 
 fn bail_shim_missing<T>(category: &str) -> Result<T> {
+    let category = escape_controls(category);
     bail!(
         "preset category not found in shell or app presets: {category}\nRun `shine shell list` or `shine app list` to see available categories."
     )
@@ -270,6 +258,47 @@ mod tests {
 
     fn config_in(dir: &std::path::Path) -> Config {
         crate::test_support::test_config(dir)
+    }
+
+    #[test]
+    fn shim_diagnostics_encode_controls_without_changing_target_parsing() {
+        let category = "demo\nFORGED\r\t\u{1b}";
+        let target = format!("app/{category}");
+        assert_eq!(
+            parse_preset_target(&target).unwrap(),
+            (Some(PresetKind::App), category)
+        );
+        let missing = bail_shim_missing::<()>(category).unwrap_err().to_string();
+        assert_eq!(missing.lines().count(), 2);
+        assert!(missing.contains(r"demo\nFORGED\r\t\u{1b}"));
+        assert!(
+            missing.ends_with(
+                "Run `shine shell list` or `shine app list` to see available categories."
+            )
+        );
+        let ambiguous = bail_ambiguous::<()>(category).unwrap_err().to_string();
+        assert!(ambiguous.contains("original category argument"));
+        assert!(!ambiguous.contains(r"app/demo\n"));
+        for error in [
+            missing,
+            ambiguous,
+            parse_preset_target(&format!("{category}/demo"))
+                .unwrap_err()
+                .to_string(),
+            parse_preset_target(&format!("app/{category}/extra"))
+                .unwrap_err()
+                .to_string(),
+        ] {
+            assert!(!error.contains(['\r', '\t', '\u{1b}']), "{error:?}");
+            assert!(
+                !error.lines().any(|line| line.starts_with("FORGED")),
+                "{error:?}"
+            );
+        }
+        assert_eq!(
+            bail_ambiguous::<()>("demo").unwrap_err().to_string(),
+            "ambiguous preset target `demo`; use `app/demo` or `shell/demo`"
+        );
     }
 
     #[test]
@@ -290,6 +319,21 @@ mod tests {
             classify_shim_resolution(false, false),
             ShimResolution::Missing
         );
+    }
+
+    #[test]
+    fn preset_target_preserves_whitespace_identity() {
+        for category in [" demo", "demo ", "demo\u{a0}"] {
+            assert_eq!(parse_preset_target(category).unwrap(), (None, category));
+            let target = format!("app/{category}");
+            assert_eq!(
+                parse_preset_target(&target).unwrap(),
+                (Some(PresetKind::App), category)
+            );
+        }
+        for blank in ["", " \t\n", "\u{a0}"] {
+            assert!(parse_preset_target(blank).is_err());
+        }
     }
 
     #[test]
@@ -400,7 +444,7 @@ mod tests {
         let config = config_in(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install_shim(&config, "shell/utils/shine-env-export", false)
+        handle_install_shim_approved(&config, "shell/utils/shine-env-export", false, true)
             .await
             .unwrap();
         let selected = crate::bin_links::command_path_for_name(
@@ -414,7 +458,7 @@ mod tests {
         assert!(selected.exists());
         assert!(!sibling.exists());
 
-        handle_uninstall_shim(&config, "shell/utils/shine-env-export", false, false, false)
+        handle_uninstall_shim_approved(&config, "shell/utils/shine-env-export", false, false, true)
             .await
             .unwrap();
         assert!(!selected.exists());

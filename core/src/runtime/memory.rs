@@ -25,6 +25,8 @@ struct MemoryState {
     operations: Vec<HostOperation>,
     process_outputs: VecDeque<anyhow::Result<ProcessOutput>>,
     #[cfg(test)]
+    process_requests: Vec<ProcessRequest>,
+    #[cfg(test)]
     write_failures: BTreeMap<PathBuf, usize>,
     #[cfg(test)]
     rename_failures: BTreeMap<(PathBuf, PathBuf), usize>,
@@ -62,6 +64,15 @@ impl InMemoryHost {
             .expect("in-memory host lock")
             .process_outputs
             .push_back(output);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn process_requests(&self) -> Vec<ProcessRequest> {
+        self.state
+            .lock()
+            .expect("in-memory host lock")
+            .process_requests
+            .clone()
     }
 
     pub fn operations(&self) -> Vec<HostOperation> {
@@ -611,6 +622,8 @@ impl ProcessHost for InMemoryHost {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProcessOutput>> + Send + 'a>> {
         Box::pin(async move {
             let mut state = self.state.lock().expect("in-memory host lock");
+            #[cfg(test)]
+            state.process_requests.push(request.clone());
             state.operations.push(HostOperation::Run {
                 program: request.program,
                 args: request.args,

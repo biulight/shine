@@ -1,21 +1,22 @@
 //! Local, session-scoped SSH secret broker authorization and decryption.
 
 use crate::config::Config;
+use crate::env::RESERVED_REMOTE_ENV;
 use crate::env::broker::{self, PolicyStore, WorkspaceSnapshot};
 use crate::env::{EnvConfig, parse_env_specs, secret_key};
 use crate::secret;
 use anyhow::{Context, Result, bail};
-use sha2::{Digest, Sha256};
+use shine_core::digest::sha256_hex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+mod interaction;
+#[cfg(test)]
+use interaction::confirmation_approved;
+use interaction::{BrokerInteraction, LocalConfirmation, TtyInteraction, raw_tty_safe_log};
+#[cfg(test)]
+mod tests;
 
-const RESERVED_TARGETS: &[&str] = &[
-    "SHINE_SSH_SESSION",
-    "SHINE_SSH_TOKEN",
-    "SHINE_SSH_REMOTE_SOCK",
-    "SHINE_TERMINAL_THEME",
-];
 const MAX_BROKER_REQUESTS_PER_SESSION: usize = 1024;
 
 #[derive(Clone)]
@@ -36,9 +37,7 @@ pub struct BrokerSession {
     enroll_update_policy: Option<String>,
     used_nonces: tokio::sync::Mutex<BTreeSet<String>>,
     operation_lock: tokio::sync::Mutex<()>,
-    ssh_pid: Mutex<Option<u32>>,
-    #[cfg(unix)]
-    original_termios: Option<libc::termios>,
+    interaction: Arc<dyn BrokerInteraction>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,7 +86,7 @@ impl BrokerSession {
         } else {
             BrokerMode::Serve
         };
-        let env = EnvConfig::load_or_init(config).await?;
+        let env = EnvConfig::from_config(config);
         let mut direct = Vec::new();
         for spec in parse_env_specs(allow_secret)? {
             if spec.source.ends_with("_SECRET") {
@@ -96,7 +95,7 @@ impl BrokerSession {
                     spec.source
                 );
             }
-            if RESERVED_TARGETS.contains(&spec.target.as_str()) {
+            if RESERVED_REMOTE_ENV.contains(&spec.target.as_str()) {
                 bail!("cannot override shine-managed SSH variable {}", spec.target);
             }
             let storage_key = secret_key(&spec.source);
@@ -104,7 +103,7 @@ impl BrokerSession {
                 .get(&storage_key)
                 .with_context(|| format!("{storage_key} is not set in the active config [env]"))?
                 .to_string();
-            let ciphertext_sha256 = format!("{:x}", Sha256::digest(ciphertext.as_bytes()));
+            let ciphertext_sha256 = sha256_hex(ciphertext.as_bytes());
             direct.push(DirectSecret {
                 source: spec.source,
                 target: spec.target,
@@ -118,8 +117,7 @@ impl BrokerSession {
                 "Warning: --trust-remote-session trusts the entire remote SSH session and same-account processes; workspace hashes do not authenticate the caller."
             );
         }
-        #[cfg(unix)]
-        let original_termios = capture_tty_termios();
+        let interaction = Arc::new(TtyInteraction::capture());
         Ok(Some(Arc::new(Self {
             config: config.clone(),
             ssh_target: ssh_target.to_string(),
@@ -130,14 +128,12 @@ impl BrokerSession {
             enroll_update_policy: enroll_update_policy.map(str::to_string),
             used_nonces: tokio::sync::Mutex::new(BTreeSet::new()),
             operation_lock: tokio::sync::Mutex::new(()),
-            ssh_pid: Mutex::new(None),
-            #[cfg(unix)]
-            original_termios,
+            interaction,
         })))
     }
 
     pub fn set_ssh_pid(&self, pid: Option<u32>) {
-        *self.ssh_pid.lock().expect("ssh pid mutex poisoned") = pid;
+        self.interaction.set_ssh_pid(pid);
     }
 
     async fn claim_nonce(&self, nonce: &str) -> Result<()> {
@@ -237,7 +233,7 @@ impl BrokerSession {
         };
         let values =
             broker::decrypt_workspace_snapshot(&self.config, snapshot, &matched.release).await?;
-        let argv_sha256 = format!("{:x}", Sha256::digest(argv.join("\0").as_bytes()));
+        let argv_sha256 = sha256_hex(argv.join("\0").as_bytes());
         let audit = format!(
             "shine ssh broker: released policy {} project={} argv_sha256={} approval={}",
             matched.policy_name,
@@ -271,7 +267,7 @@ impl BrokerSession {
         }
         broker::validate_snapshot(snapshot)?;
         let allow = broker::allow_from_snapshot(snapshot, release, argv)?;
-        let argv_sha256 = format!("{:x}", Sha256::digest(argv.join("\0").as_bytes()));
+        let argv_sha256 = sha256_hex(argv.join("\0").as_bytes());
         let summary = format!(
             "workspace={} mode={} argv_sha256={} sources={} release={}",
             broker::sha256(snapshot.workspace_contents.as_bytes()),
@@ -378,39 +374,10 @@ impl BrokerSession {
     }
 
     async fn confirm_prompt(&self, prompt: String) -> Result<LocalConfirmation> {
-        let pid = *self.ssh_pid.lock().expect("ssh pid mutex poisoned");
-        #[cfg(unix)]
-        {
-            let original = self
-                .original_termios
-                .context("local TTY confirmation is unavailable; use a TTY or a matching workspace policy with --trust-remote-session")?;
-            tokio::task::spawn_blocking(move || confirm_on_tty(pid, original, &prompt))
-                .await
-                .context("joining local broker confirmation")?
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (pid, prompt);
-            bail!("interactive SSH secret confirmation is not supported on this platform")
-        }
+        self.interaction.confirm_prompt(prompt).await
     }
-
     async fn display_local(&self, contents: String) -> Result<()> {
-        let pid = *self.ssh_pid.lock().expect("ssh pid mutex poisoned");
-        #[cfg(unix)]
-        {
-            let original = self.original_termios.context(
-                "local TTY display is unavailable; run inspect from an interactive terminal",
-            )?;
-            tokio::task::spawn_blocking(move || display_on_tty(pid, original, &contents))
-                .await
-                .context("joining local broker display")?
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (pid, contents);
-            bail!("interactive SSH broker display is not supported on this platform")
-        }
+        self.interaction.display_local(contents).await
     }
 }
 
@@ -493,32 +460,6 @@ fn indent_lines(value: &str, spaces: usize) -> String {
         .join("\n")
 }
 
-#[cfg(unix)]
-struct LocalConfirmation {
-    _restore: TtyRestore,
-}
-
-#[cfg(not(unix))]
-struct LocalConfirmation;
-
-#[cfg(unix)]
-struct TtyRestore {
-    tty: std::fs::File,
-    pid: u32,
-    termios: libc::termios,
-}
-
-#[cfg(unix)]
-impl Drop for TtyRestore {
-    fn drop(&mut self) {
-        use std::os::fd::AsRawFd;
-        unsafe {
-            libc::tcsetattr(self.tty.as_raw_fd(), libc::TCSANOW, &self.termios);
-            libc::kill(self.pid as i32, libc::SIGCONT);
-        }
-    }
-}
-
 fn sanitize_label(value: &str) -> String {
     escape_display(value).chars().take(256).collect()
 }
@@ -544,148 +485,4 @@ fn escape_multiline(value: &str) -> String {
         .map(escape_display)
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-#[cfg(unix)]
-fn capture_tty_termios() -> Option<libc::termios> {
-    use std::os::fd::AsRawFd;
-    let tty = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .ok()?;
-    let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
-    let rc = unsafe { libc::tcgetattr(tty.as_raw_fd(), termios.as_mut_ptr()) };
-    (rc == 0).then(|| unsafe { termios.assume_init() })
-}
-
-#[cfg(unix)]
-fn confirm_on_tty(
-    pid: Option<u32>,
-    original: libc::termios,
-    prompt: &str,
-) -> Result<LocalConfirmation> {
-    use std::io::{BufRead, Write};
-    let mut restore = enter_local_tty(pid, original)?;
-    restore.tty.write_all(prompt.as_bytes())?;
-    restore.tty.flush()?;
-    let mut answer = String::new();
-    std::io::BufReader::new(restore.tty.try_clone()?).read_line(&mut answer)?;
-    if !confirmation_approved(&answer) {
-        bail!("secret request rejected by the local user");
-    }
-    Ok(LocalConfirmation { _restore: restore })
-}
-
-#[cfg(unix)]
-fn display_on_tty(pid: Option<u32>, original: libc::termios, contents: &str) -> Result<()> {
-    use std::io::Write;
-    let mut restore = enter_local_tty(pid, original)?;
-    restore.tty.write_all(contents.as_bytes())?;
-    restore.tty.flush()?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn enter_local_tty(pid: Option<u32>, original: libc::termios) -> Result<TtyRestore> {
-    use std::os::fd::AsRawFd;
-    let pid = pid.context("SSH child is not running")?;
-    let tty = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .context("opening /dev/tty for local broker interaction")?;
-    let fd = tty.as_raw_fd();
-    let mut ssh_termios = std::mem::MaybeUninit::<libc::termios>::uninit();
-    if unsafe { libc::tcgetattr(fd, ssh_termios.as_mut_ptr()) } != 0 {
-        bail!("reading current TTY state");
-    }
-    let ssh_termios = unsafe { ssh_termios.assume_init() };
-    if unsafe { libc::kill(pid as i32, libc::SIGSTOP) } != 0 {
-        bail!("pausing SSH for local broker interaction");
-    }
-    let restore = TtyRestore {
-        tty,
-        pid,
-        termios: ssh_termios,
-    };
-    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) } != 0 {
-        bail!("restoring canonical TTY state for local broker interaction");
-    }
-    Ok(restore)
-}
-
-#[cfg(any(unix, test))]
-fn confirmation_approved(answer: &str) -> bool {
-    const PASTE_START: &str = "\u{1b}[200~";
-    const PASTE_END: &str = "\u{1b}[201~";
-
-    let answer = answer.trim();
-    let answer = if let Some(pasted) = answer.strip_prefix(PASTE_START) {
-        let Some(pasted) = pasted.strip_suffix(PASTE_END) else {
-            return false;
-        };
-        pasted.trim()
-    } else {
-        answer
-    };
-    matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes")
-}
-
-fn raw_tty_safe_log(message: &str) {
-    use std::io::{IsTerminal, Write};
-    let mut stderr = std::io::stderr();
-    if stderr.is_terminal() {
-        let _ = write!(stderr, "\r{message}\r\n");
-    } else {
-        let _ = writeln!(stderr, "{message}");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn confirmation_accepts_plain_and_bracketed_paste_yes() {
-        assert!(confirmation_approved("y\n"));
-        assert!(confirmation_approved(" YES \r\n"));
-        assert!(confirmation_approved("\u{1b}[200~y\u{1b}[201~\n"));
-    }
-
-    #[test]
-    fn confirmation_rejects_other_or_decorated_input() {
-        assert!(!confirmation_approved(""));
-        assert!(!confirmation_approved("n\n"));
-        assert!(!confirmation_approved("y please\n"));
-        assert!(!confirmation_approved("\u{1b}[200~yes\n"));
-        assert!(!confirmation_approved("\u{1b}[31my\u{1b}[0m\n"));
-    }
-
-    #[test]
-    fn enrollment_details_use_bounded_vertical_lists() {
-        let snapshot = WorkspaceSnapshot {
-            workspace_path: "/srv/api/shine.workspace.toml".into(),
-            workspace_contents: "version = 1".into(),
-            mode: "production".into(),
-            override_process_env: false,
-            sources: vec![],
-        };
-        let allow = broker::BrokerAllow {
-            mode: "production".into(),
-            argv: vec!["bun".into(), "start".into()],
-            release: vec!["FIRST_SECRET".into(), "SECOND_SECRET".into()],
-            sources: vec![broker::BrokerSource {
-                path: ".env.shine.toml".into(),
-                sha256: "a".repeat(64),
-                declared_secrets: vec!["FIRST_SECRET".into(), "SECOND_SECRET".into()],
-            }],
-        };
-
-        let rendered = format_description_details("dev", &snapshot, &allow, "no exact match");
-        assert!(rendered.contains("Command argv:\n  [0] bun\n  [1] start"));
-        assert!(rendered.contains("Release secrets (2):\n  - FIRST_SECRET\n  - SECOND_SECRET"));
-        assert!(rendered.contains("Declared secrets (2):\n      - FIRST_SECRET"));
-        assert!(!rendered.contains("FIRST_SECRET, SECOND_SECRET"));
-    }
 }

@@ -60,6 +60,9 @@ trust, Plan review, administrator authorization, ownership checks, or explicit e
 Use `shell` or `sys` in `preset new` for the other kinds. To customize an embedded category, enter
 the repository or overlay root and run `shine preset copy <kind>/<name>`; the command creates the
 kind/category path.
+Path progress messages for `preset new`, `preset copy`, and `preset export` escape terminal control
+characters. File locations and the existing `--force` replacement rules are unchanged.
+Repeated-link notices also escape controls in the source path; they keep the existing link unchanged.
 
 `preset validate` also accepts a repository root, one category directory, or its `shine.toml`. Root
 validation scans only direct category directories below `app/`, `shell/`, and `sys/`; an empty root
@@ -70,6 +73,8 @@ check for updates, write files, access the network, or execute preset code.
 
 The default output is text. `--format json` is available for tools and CI. Validation errors exit
 with status 1; warnings do not.
+Text validation, lint, and authoring-plan reports escape control characters in paths, identifiers,
+diagnostics, and permission labels. JSON reports retain the original field values.
 Diagnostic codes identify the failed check, independently of category names or message wording.
 For example, a missing referenced file reports `missing_reference`, while a rejected Bun dependency
 declaration reports `bun_dependency_policy`.
@@ -80,6 +85,11 @@ check for App, Shell, and Sys metadata.
 
 Run `preset lint` after validation to find author-quality and portability issues. Warnings are
 advisory by default; CI can add `--deny-warnings` after reviewing them.
+If lint cannot load or validate the input, its text hint includes the original `PATH`; run that
+`preset validate` command from the same directory to inspect the failure. For a non-UTF-8 `PATH`
+or one containing control characters,
+the text explains that the copyable command is omitted; reuse the original argument with
+`preset validate`. JSON reports keep their path-independent diagnostic messages.
 Lint checks each platform's applicable resources, including PowerShell commands on Windows;
 App categories or files intentionally unavailable on an OS are skipped for that OS.
 
@@ -92,6 +102,10 @@ Add `shine.test.toml` when the category needs repeatable cross-platform expectat
 the starting conditions and expected results without running setup code. Runnable App, Shell, and
 Sys examples are available under `examples/presets`. `preset test` accepts one category, not a
 repository root.
+Declared files and receipts share the planner's virtual directories on every host, including
+Windows. Use relative file bases and receipt placeholders such as `${HOME}` for portable cases.
+Text reports escape control characters in case names so each result stays on one row.
+JSON reports preserve the original names; pass/fail results and exit codes are the same in both formats.
 
 When you need a distributable artifact, pack the reviewed category outside its source tree:
 
@@ -103,6 +117,8 @@ The returned hash identifies the bundle. `shine.test.toml` remains author-only a
 A pack-policy failure must be fixed in the source; `--force` only replaces the output file and never
 bypasses validation or policy. The output directory is checked after resolving symbolic links and
 parent components (`..`); it must remain outside the category, even with `--force`.
+Existing ancestors must be directories: a path such as `file/../bundle.tar.gz` fails with
+`output_write_failed` when `file` is a regular file, without creating or replacing a bundle.
 Without `--force`, an output created by another process during packing is preserved and the command
 fails with `output_exists`.
 
@@ -119,9 +135,11 @@ shine preset migrate ./my-presets
 The migrator shows unified metadata diffs and confirmation defaults to No. It edits only
 `shine.toml`, validates the candidate, rechecks source hashes, and creates a complete private backup
 set before writing. Payloads, scripts, values, runtime manifests, and trust grants are untouched.
+Text backup paths escape terminal controls; backup contents and JSON report identifiers are unchanged.
 Exact released 1.x built-in metadata may be rebased when its executable identity is unchanged;
-safe declarative Apps may receive current metadata. Opaque code and Sys v1 dispatchers remain
-manual blockers instead of receiving guessed or broad capability statements.
+legacy Apps may receive current metadata without adding capability statements. Missing optional
+capability tables do not require migration, including for opaque code; external-code trust remains
+a separate review. Sys v1 dispatchers still require manual migration.
 
 `--yes` is appropriate only after review and still prints text diffs. JSON is a versioned report
 without contents or diffs; use `--format json --dry-run` for inspection or combine JSON apply with
@@ -226,12 +244,19 @@ downloads, or runtime side effects.
 Development trust is long-term authorization of future code from the displayed local source for the
 specified target and capability. Source directory/layer changes and new targets or capabilities need
 new authorization. It does not mean continuing code review. Shell live deployment requires this mode.
+When live deployment is blocked, review the target with `shine trust inspect <TARGET>` before
+choosing `shine trust grant <TARGET> --development`. If you do not want to authorize future code
+changes, set `external_shell_mode = "snapshot"` and review again; ordinary snapshot trust cannot
+authorize live deployment.
 `opaque_code = "unrestricted"` does not enable development trust. `trust list`,
 `trust inspect`, and the security Plan label active development trust; the private local trust store
 owns the grant, so a Preset cannot distribute or enable it.
 The default `trust list` view groups capabilities with the same security scope into one row and
 shows whether each stored grant is current. Use `trust list --verbose` for capability names, local
 development-source labels, and stale-grant review guidance.
+Trust command output escapes control characters in targets, source labels, and author capability
+statements. Stored identities remain unchanged. For a target containing control characters, review
+hints omit copyable commands; pass the original target argument to `trust inspect` or `trust grant`.
 
 Every external Shell command uses the canonical `shell/<CATEGORY>/<COMMAND>` trust target. Use
 `preset` to inspect or trust every executable target
@@ -338,6 +363,14 @@ shine preset overlay info
 shine preset overlay unlink
 ```
 
+Local `preset link` and `preset overlay link` paths, including resolved symlink targets, must be
+valid UTF-8. An invalid path or a required non-UTF-8 home expansion fails instead of linking a
+differently spelled directory; `--create` does not bypass this check.
+
+Unlink removes overlay settings from the active configuration; it does not delete source files.
+Removing a project override can restore an inherited global overlay. Run `shine preset overlay info`
+to inspect the effective overlay afterward.
+
 For example, `app/starship/starship.toml` overrides the file at the same path in the base source;
 other presets continue to use the base source.
 
@@ -358,7 +391,10 @@ shine preset overlay info
 ```
 
 The link command shallow-clones the repository under `~/.shine/overlay/`. Later pulls
-mirror that directory to the latest state of the remote branch. It is a disposable cache: the next
+mirror that directory to the latest state of the remote branch. `overlay info` reports managed
+directory presence. Git source, branch, directory and retained-checkout messages escape terminal
+control characters.
+It is a disposable cache: the next
 pull discards local edits. Make changes and push them in an upstream checkout, then synchronize each
 device with `shine preset pull`, `shine update --pull`, or `shine upgrade --pull`.
 Relinking with a different Git URL switches the existing mirror to that repository. Without
@@ -370,6 +406,8 @@ directories, linked checkouts, and linked Git metadata without changing their co
 unexpected directory aside before retrying. After a successful fetch, synchronization discards
 tracked edits, untracked and ignored files, and nested repositories in the managed mirror, even
 when the remote commit is unchanged. Keep local customizations in a manually linked overlay instead.
+Git overlay checkout paths must be representable as UTF-8. Unsupported paths are rejected before
+cloning rather than redirected to a different path containing replacement characters.
 
 To customize one built-in category, copy it at the overlay root instead of exporting everything. For
 example, copy Surge before editing its local proxy, group, and rule files:
@@ -391,6 +429,14 @@ steps.
 shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
+
+Export includes built-in presets plus overrides and additions from the active overlay. It does not
+copy files that exist only in the external base directory; the progress message identifies whether
+an overlay is included. Copy still extracts the pristine built-in category.
+
+Activation hints use a `<PATH>` placeholder and show the destination separately with display escapes.
+Supply the actual path as one argument, quoting it for your shell; the escaped display is not a
+ready-to-run shell argument.
 
 Both `preset copy` and `preset export` reject linked or special output files and linked
 subdirectories, including with `--force`. Choose an ordinary directory tree for the output.
@@ -491,8 +537,9 @@ shine upgrade --pull
 ```
 
 Shine locates the repositories containing the base presets and active overlay. If both sources are in
-one repository it pulls only once; non-Git sources are skipped. `update --pull` and `upgrade --pull`
-reload configuration after pulling, so an updated `shine.config.toml` affects later steps.
+one repository it pulls only once; non-Git sources are skipped. Git repository root detection preserves
+directory-name whitespace, including trailing spaces on systems that support them. `update --pull`
+and `upgrade --pull` reload configuration after pulling, so an updated `shine.config.toml` affects later steps.
 
 Every repository processed must meet these conditions before any pull begins:
 
@@ -545,6 +592,10 @@ combine them with OR semantics, and must not be empty. The structured `data-dir`
 and resolves the platform's user
 application-data root: `%APPDATA%` on Windows, Application Support on macOS, and `XDG_DATA_HOME`
 (or `~/.local/share`) on Linux. `path` and `target` must be relative and cannot contain `..`.
+
+Legacy App presets without `shine.toml` still support a `# shine-dest:` full destination path
+on the first line, or immediately after a shebang. The path must be absolute after home expansion
+and cannot contain `..`. Replace parent components with an explicit destination before retrying.
 
 Shine rejects two entries that resolve to the same destination before writing anything. If a later
 metadata revision moves an already managed source, `shine upgrade` moves it only when the old copy

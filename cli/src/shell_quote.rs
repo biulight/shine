@@ -1,14 +1,8 @@
-//! Shared POSIX shell-quoting helpers for rendering commands back into copy-paste-safe or
-//! sourceable shell syntax. Display-only: `task::mod` and `apps::upgrade` never execute the
-//! quoted string itself, they always run the underlying argv directly via
-//! `std::process::Command`/`tokio::process::Command`, so this module has no injection surface
-//! of its own.
+//! CLI display policy over the shared literal encoders.
 
 /// Single-quotes `value` for POSIX shells. The only character a single-quoted string cannot
 /// contain is `'`, which is closed, escaped, and reopened as `'\''`.
-pub(crate) fn single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
+pub(crate) use shine_core::shell_quote::posix_single_quote as single_quote;
 
 /// Renders `value` back into a copy-paste-safe shell argument: left bare when every character
 /// is inert to POSIX shells, single-quoted otherwise.
@@ -17,6 +11,78 @@ pub(crate) fn quote_if_needed(value: &str) -> String {
         value.to_string()
     } else {
         single_quote(value)
+    }
+}
+
+/// One argument in a suggested command: PowerShell on Windows, POSIX elsewhere.
+/// This is display policy; execution continues to use the original argv.
+pub(crate) fn command_arg(value: &str) -> String {
+    if !cfg!(windows) {
+        return quote_if_needed(value);
+    }
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':'))
+    {
+        value.to_owned()
+    } else {
+        shine_core::shell_quote::powershell_single_quote(value)
+    }
+}
+
+/// A program in a displayed command, rather than a positional argument.
+pub(crate) fn command_program(value: &str) -> String {
+    if cfg!(windows) {
+        format!(
+            "& {}",
+            shine_core::shell_quote::powershell_single_quote(value)
+        )
+    } else {
+        posix_program(value)
+    }
+}
+
+pub(crate) fn posix_program(value: &str) -> String {
+    if value.contains('=')
+        || matches!(
+            value,
+            "case"
+                | "do"
+                | "done"
+                | "elif"
+                | "else"
+                | "esac"
+                | "fi"
+                | "for"
+                | "if"
+                | "in"
+                | "then"
+                | "until"
+                | "while"
+                | "function"
+                | "select"
+                | "time"
+        )
+    {
+        single_quote(value)
+    } else {
+        quote_if_needed(value)
+    }
+}
+
+/// Final positional operands in a suggested Shine command. Put options before
+/// this text so `--` can protect leading hyphens without changing their values.
+pub(crate) fn command_positionals(values: &[&str]) -> String {
+    let operands = values
+        .iter()
+        .map(|value| command_arg(value))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if values.iter().any(|value| value.starts_with('-')) {
+        format!("-- {operands}")
+    } else {
+        operands
     }
 }
 
@@ -42,11 +108,5 @@ mod tests {
         assert_eq!(quote_if_needed(""), "''");
         assert_eq!(quote_if_needed("it's"), "'it'\\''s'");
         assert_eq!(quote_if_needed("a b"), "'a b'");
-    }
-
-    #[test]
-    fn single_quote_escapes_embedded_quotes() {
-        assert_eq!(single_quote("it's"), "'it'\\''s'");
-        assert_eq!(single_quote(""), "''");
     }
 }

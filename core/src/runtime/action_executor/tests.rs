@@ -12,6 +12,8 @@ use crate::runtime::{
 };
 use std::path::PathBuf;
 
+mod recovery_observations;
+
 fn runtime() -> CoreRuntime<InMemoryHost> {
     let home = PathBuf::from("/home/test");
     let shine = home.join(".shine");

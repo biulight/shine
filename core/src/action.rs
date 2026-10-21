@@ -6,6 +6,9 @@
 //! content identities, but never managed file bytes, environment values,
 //! secret plaintext, or raw command arguments.
 
+mod contracts;
+pub(crate) mod shell_receipt;
+
 use crate::plan::{FilesystemAccessV1, PermissionSetV1, PermissionV1};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -61,421 +64,12 @@ impl ActionIrV1 {
         let mut required = PermissionSetV1::default();
         let mut uncomputable_codes = BTreeSet::new();
         for action in &self.actions {
-            match &action.kind {
-                ActionKindV1::CreateManagedFile {
-                    destination,
-                    requires_admin,
-                    ..
-                } => {
-                    required.insert(PermissionV1::Filesystem {
-                        access: FilesystemAccessV1::Write,
-                        path: path_identity(destination),
-                    });
-                    if *requires_admin {
-                        required.insert(PermissionV1::Administrator);
-                    }
-                }
-                ActionKindV1::CreateManagedFileWithBackup {
-                    destination,
-                    backup,
-                    requires_admin,
-                    ..
-                } => {
-                    required.insert(PermissionV1::Filesystem {
-                        access: FilesystemAccessV1::Write,
-                        path: path_identity(destination),
-                    });
-                    required.insert(PermissionV1::Filesystem {
-                        access: FilesystemAccessV1::Remove,
-                        path: path_identity(destination),
-                    });
-                    required.insert(PermissionV1::Filesystem {
-                        access: FilesystemAccessV1::Write,
-                        path: path_identity(backup),
-                    });
-                    if *requires_admin {
-                        required.insert(PermissionV1::Administrator);
-                    }
-                }
-                ActionKindV1::UpdateManagedFile {
-                    destination,
-                    rollback,
-                    requires_admin,
-                    ..
-                } => {
-                    for (access, path) in [
-                        (FilesystemAccessV1::Write, destination.as_path()),
-                        (FilesystemAccessV1::Remove, destination.as_path()),
-                        (FilesystemAccessV1::Write, rollback.as_path()),
-                        (FilesystemAccessV1::Remove, rollback.as_path()),
-                    ] {
-                        required.insert(PermissionV1::Filesystem {
-                            access,
-                            path: path_identity(path),
-                        });
-                    }
-                    if *requires_admin {
-                        required.insert(PermissionV1::Administrator);
-                    }
-                }
-                ActionKindV1::RelocateManagedFile {
-                    previous_destination,
-                    previous_backup,
-                    previous_rollback,
-                    desired_destination,
-                    previous_present,
-                    previous_requires_admin,
-                    desired_requires_admin,
-                    ..
-                } => {
-                    required.insert(PermissionV1::Filesystem {
-                        access: FilesystemAccessV1::Write,
-                        path: path_identity(desired_destination),
-                    });
-                    if *previous_present {
-                        required.insert(PermissionV1::Filesystem {
-                            access: FilesystemAccessV1::Remove,
-                            path: path_identity(previous_destination),
-                        });
-                        required.insert(PermissionV1::Filesystem {
-                            access: FilesystemAccessV1::Write,
-                            path: path_identity(previous_rollback),
-                        });
-                        required.insert(PermissionV1::Filesystem {
-                            access: FilesystemAccessV1::Remove,
-                            path: path_identity(previous_rollback),
-                        });
-                    }
-                    if let Some(backup) = previous_backup {
-                        required.insert(PermissionV1::Filesystem {
-                            access: FilesystemAccessV1::Write,
-                            path: path_identity(previous_destination),
-                        });
-                        required.insert(PermissionV1::Filesystem {
-                            access: FilesystemAccessV1::Remove,
-                            path: path_identity(&backup.path),
-                        });
-                    }
-                    if (*previous_present && *previous_requires_admin) || *desired_requires_admin {
-                        required.insert(PermissionV1::Administrator);
-                    }
-                }
-                ActionKindV1::RemoveManagedFile {
-                    destination,
-                    rollback,
-                    requires_admin,
-                    ..
-                } => {
-                    for (access, path) in [
-                        (FilesystemAccessV1::Remove, destination.as_path()),
-                        (FilesystemAccessV1::Write, rollback.as_path()),
-                        (FilesystemAccessV1::Remove, rollback.as_path()),
-                    ] {
-                        required.insert(PermissionV1::Filesystem {
-                            access,
-                            path: path_identity(path),
-                        });
-                    }
-                    if *requires_admin {
-                        required.insert(PermissionV1::Administrator);
-                    }
-                }
-                ActionKindV1::RemoveManagedFileWithBackup {
-                    destination,
-                    backup,
-                    rollback,
-                    requires_admin,
-                    ..
-                } => {
-                    for (access, path) in [
-                        (FilesystemAccessV1::Write, destination.as_path()),
-                        (FilesystemAccessV1::Remove, destination.as_path()),
-                        (FilesystemAccessV1::Remove, backup.as_path()),
-                        (FilesystemAccessV1::Write, rollback.as_path()),
-                        (FilesystemAccessV1::Remove, rollback.as_path()),
-                    ] {
-                        required.insert(PermissionV1::Filesystem {
-                            access,
-                            path: path_identity(path),
-                        });
-                    }
-                    if *requires_admin {
-                        required.insert(PermissionV1::Administrator);
-                    }
-                }
-                ActionKindV1::ForceRemoveManagedFile {
-                    destination,
-                    persistent_backup,
-                    rollback,
-                    requires_admin,
-                    ..
-                } => {
-                    for (access, path) in [
-                        (FilesystemAccessV1::Remove, destination.as_path()),
-                        (FilesystemAccessV1::Write, rollback.as_path()),
-                        (FilesystemAccessV1::Remove, rollback.as_path()),
-                    ] {
-                        required.insert(PermissionV1::Filesystem {
-                            access,
-                            path: path_identity(path),
-                        });
-                    }
-                    if let Some(backup) = persistent_backup {
-                        required.insert(PermissionV1::Filesystem {
-                            access: FilesystemAccessV1::Write,
-                            path: path_identity(destination),
-                        });
-                        required.insert(PermissionV1::Filesystem {
-                            access: FilesystemAccessV1::Remove,
-                            path: path_identity(&backup.path),
-                        });
-                    }
-                    if *requires_admin {
-                        required.insert(PermissionV1::Administrator);
-                    }
-                }
-                ActionKindV1::MergeManagedJson {
-                    destination,
-                    rollback,
-                    original_hash,
-                    ..
-                } => {
-                    for (access, path) in [
-                        (FilesystemAccessV1::Write, destination.as_path()),
-                        (FilesystemAccessV1::Remove, destination.as_path()),
-                    ] {
-                        required.insert(PermissionV1::Filesystem {
-                            access,
-                            path: path_identity(path),
-                        });
-                    }
-                    if original_hash.is_some() {
-                        for (access, path) in [
-                            (FilesystemAccessV1::Write, rollback.as_path()),
-                            (FilesystemAccessV1::Remove, rollback.as_path()),
-                        ] {
-                            required.insert(PermissionV1::Filesystem {
-                                access,
-                                path: path_identity(path),
-                            });
-                        }
-                    }
-                }
-                ActionKindV1::RelocateManagedJson {
-                    previous_destination,
-                    previous_rollback,
-                    desired_destination,
-                    previous_present,
-                    ..
-                } => {
-                    required.insert(PermissionV1::Filesystem {
-                        access: FilesystemAccessV1::Write,
-                        path: path_identity(desired_destination),
-                    });
-                    if *previous_present {
-                        for (access, path) in [
-                            (FilesystemAccessV1::Write, previous_destination.as_path()),
-                            (FilesystemAccessV1::Remove, previous_destination.as_path()),
-                            (FilesystemAccessV1::Write, previous_rollback.as_path()),
-                            (FilesystemAccessV1::Remove, previous_rollback.as_path()),
-                        ] {
-                            required.insert(PermissionV1::Filesystem {
-                                access,
-                                path: path_identity(path),
-                            });
-                        }
-                    }
-                }
-                ActionKindV1::RemoveManagedJson {
-                    destination,
-                    rollback,
-                    ..
-                } => {
-                    for (access, path) in [
-                        (FilesystemAccessV1::Write, destination.as_path()),
-                        (FilesystemAccessV1::Remove, destination.as_path()),
-                        (FilesystemAccessV1::Write, rollback.as_path()),
-                        (FilesystemAccessV1::Remove, rollback.as_path()),
-                    ] {
-                        required.insert(PermissionV1::Filesystem {
-                            access,
-                            path: path_identity(path),
-                        });
-                    }
-                }
-                ActionKindV1::CreateShellLauncher { resources, .. } => {
-                    for resource in resources {
-                        required.insert(PermissionV1::Filesystem {
-                            access: FilesystemAccessV1::Write,
-                            path: path_identity(resource.destination()),
-                        });
-                    }
-                }
-                ActionKindV1::UpdateShellLauncher { resources, .. } => {
-                    for resource in resources {
-                        for (access, path) in [
-                            (FilesystemAccessV1::Write, resource.previous.destination()),
-                            (FilesystemAccessV1::Remove, resource.previous.destination()),
-                            (FilesystemAccessV1::Write, resource.rollback.as_path()),
-                            (FilesystemAccessV1::Remove, resource.rollback.as_path()),
-                        ] {
-                            required.insert(PermissionV1::Filesystem {
-                                access,
-                                path: path_identity(path),
-                            });
-                        }
-                    }
-                }
-                ActionKindV1::RemoveShellLauncher { resources, .. }
-                | ActionKindV1::RemoveLegacyShellLauncher { resources } => {
-                    for resource in resources {
-                        for (access, path) in [
-                            (FilesystemAccessV1::Remove, resource.previous.destination()),
-                            (FilesystemAccessV1::Write, resource.rollback.as_path()),
-                            (FilesystemAccessV1::Remove, resource.rollback.as_path()),
-                        ] {
-                            required.insert(PermissionV1::Filesystem {
-                                access,
-                                path: path_identity(path),
-                            });
-                        }
-                    }
-                }
-                ActionKindV1::ReplaceShellSnapshot {
-                    destination,
-                    stage,
-                    rollback,
-                    ..
-                } => {
-                    for (access, path) in [
-                        (FilesystemAccessV1::Write, destination.as_path()),
-                        (FilesystemAccessV1::Remove, destination.as_path()),
-                        (FilesystemAccessV1::Write, stage.as_path()),
-                        (FilesystemAccessV1::Remove, stage.as_path()),
-                        (FilesystemAccessV1::Write, rollback.as_path()),
-                        (FilesystemAccessV1::Remove, rollback.as_path()),
-                    ] {
-                        required.insert(PermissionV1::Filesystem {
-                            access,
-                            path: path_identity(path),
-                        });
-                    }
-                }
-                ActionKindV1::ReplaceShellCache { files, .. } => {
-                    for file in files {
-                        for (access, path) in [
-                            (FilesystemAccessV1::Write, file.destination.as_path()),
-                            (FilesystemAccessV1::Remove, file.destination.as_path()),
-                            (FilesystemAccessV1::Write, file.rollback.as_path()),
-                            (FilesystemAccessV1::Remove, file.rollback.as_path()),
-                        ] {
-                            required.insert(PermissionV1::Filesystem {
-                                access,
-                                path: path_identity(path),
-                            });
-                        }
-                    }
-                }
-                ActionKindV1::RemoveShellCache { files, .. } => {
-                    for file in files {
-                        for (access, path) in [
-                            (FilesystemAccessV1::Remove, file.destination.as_path()),
-                            (FilesystemAccessV1::Write, file.rollback.as_path()),
-                            (FilesystemAccessV1::Remove, file.rollback.as_path()),
-                        ] {
-                            required.insert(PermissionV1::Filesystem {
-                                access,
-                                path: path_identity(path),
-                            });
-                        }
-                    }
-                }
-                ActionKindV1::RemoveShellSnapshot {
-                    destination,
-                    rollback,
-                    ..
-                } => {
-                    for (access, path) in [
-                        (FilesystemAccessV1::Remove, destination.as_path()),
-                        (FilesystemAccessV1::Write, rollback.as_path()),
-                        (FilesystemAccessV1::Remove, rollback.as_path()),
-                    ] {
-                        required.insert(PermissionV1::Filesystem {
-                            access,
-                            path: path_identity(path),
-                        });
-                    }
-                }
-                ActionKindV1::ReconcileShellProfile { files, .. } => {
-                    for file in files {
-                        for (access, path) in [
-                            (FilesystemAccessV1::Write, file.destination.as_path()),
-                            (FilesystemAccessV1::Remove, file.destination.as_path()),
-                            (FilesystemAccessV1::Write, file.rollback.as_path()),
-                            (FilesystemAccessV1::Remove, file.rollback.as_path()),
-                        ] {
-                            required.insert(PermissionV1::Filesystem {
-                                access,
-                                path: path_identity(path),
-                            });
-                        }
-                    }
-                }
-                ActionKindV1::ReconcileSysSplitDns { .. } => {
-                    required.insert(PermissionV1::Administrator);
-                }
-                ActionKindV1::ReconcileSysProfileBlocks { files, .. } => {
-                    for file in files {
-                        for (access, path) in [
-                            (FilesystemAccessV1::Write, file.destination.as_path()),
-                            (FilesystemAccessV1::Remove, file.destination.as_path()),
-                            (FilesystemAccessV1::Write, file.rollback.as_path()),
-                            (FilesystemAccessV1::Remove, file.rollback.as_path()),
-                        ] {
-                            required.insert(PermissionV1::Filesystem {
-                                access,
-                                path: path_identity(path),
-                            });
-                        }
-                    }
-                }
-                ActionKindV1::ReplaceShellRenderedFile {
-                    destination,
-                    rollback,
-                    ..
-                } => {
-                    for (access, path) in [
-                        (FilesystemAccessV1::Write, destination.as_path()),
-                        (FilesystemAccessV1::Remove, destination.as_path()),
-                        (FilesystemAccessV1::Write, rollback.as_path()),
-                        (FilesystemAccessV1::Remove, rollback.as_path()),
-                    ] {
-                        required.insert(PermissionV1::Filesystem {
-                            access,
-                            path: path_identity(path),
-                        });
-                    }
-                }
-                ActionKindV1::RemoveShellRenderedFile {
-                    destination,
-                    rollback,
-                    ..
-                } => {
-                    for (access, path) in [
-                        (FilesystemAccessV1::Remove, destination.as_path()),
-                        (FilesystemAccessV1::Write, rollback.as_path()),
-                        (FilesystemAccessV1::Remove, rollback.as_path()),
-                    ] {
-                        required.insert(PermissionV1::Filesystem {
-                            access,
-                            path: path_identity(path),
-                        });
-                    }
-                }
-                ActionKindV1::OpaqueExecution { .. } => {
-                    uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
-                }
-            }
+            contracts::permissions(
+                &action.kind,
+                &path_identity,
+                &mut required,
+                &mut uncomputable_codes,
+            );
         }
         ActionPermissionRequirementsV1 {
             required,
@@ -997,428 +591,7 @@ impl DeclarativeActionV1 {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
         validate_identity("resource", &self.resource)?;
-        match (&self.kind, &self.rollback) {
-            (
-                ActionKindV1::CreateManagedFile { destination, .. },
-                RollbackSupportV1::RemoveCreatedIfUnchanged,
-            ) if !destination.as_os_str().is_empty() => Ok(()),
-            (ActionKindV1::CreateManagedFile { destination, .. }, _)
-                if destination.as_os_str().is_empty() =>
-            {
-                Err(ActionIrError::Invalid(
-                    "managed-file destination must not be empty".to_string(),
-                ))
-            }
-            (ActionKindV1::CreateManagedFile { .. }, _) => Err(ActionIrError::Invalid(
-                "managed-file creation must use remove-created-if-unchanged rollback".to_string(),
-            )),
-            (
-                ActionKindV1::CreateManagedFileWithBackup {
-                    destination,
-                    backup,
-                    ..
-                },
-                RollbackSupportV1::RestoreBackupIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && !backup.as_os_str().is_empty()
-                && destination != backup =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::CreateManagedFileWithBackup { .. }, _) => Err(
-                ActionIrError::Invalid(
-                    "backup-aware managed-file creation requires distinct non-empty paths and restore-backup-if-unchanged rollback"
-                        .to_string(),
-                ),
-            ),
-            (
-                ActionKindV1::UpdateManagedFile {
-                    destination,
-                    rollback,
-                    previous_backup,
-                    ..
-                },
-                RollbackSupportV1::RestorePreviousIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && *rollback == managed_file_rollback_path(destination)
-                && previous_backup.as_ref() != Some(rollback) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::UpdateManagedFile { .. }, _) => Err(ActionIrError::Invalid(
-                "managed-file update requires its canonical rollback path and restore-previous-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::RelocateManagedFile {
-                    previous_destination,
-                    previous_backup,
-                    previous_rollback,
-                    desired_destination,
-                    previous_present,
-                    ..
-                },
-                RollbackSupportV1::RestoreRelocatedPreviousIfUnchanged,
-            ) if !previous_destination.as_os_str().is_empty()
-                && !desired_destination.as_os_str().is_empty()
-                && previous_destination != desired_destination
-                && *previous_rollback == managed_file_rollback_path(previous_destination)
-                && previous_rollback != desired_destination
-                && previous_backup.as_ref().is_none_or(|backup| {
-                    *previous_present
-                        && backup.path == crate::install::backup_path(previous_destination)
-                        && backup.path != *previous_rollback
-                        && backup.path != *desired_destination
-                }) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::RelocateManagedFile { .. }, _) => Err(ActionIrError::Invalid(
-                "managed-file relocation requires distinct old/new destinations, canonical rollback and optional backup paths, and restore-relocated-previous-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::RemoveManagedFile {
-                    destination,
-                    rollback,
-                    ..
-                },
-                RollbackSupportV1::RestorePreviousIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && *rollback == managed_file_rollback_path(destination) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::RemoveManagedFile { .. }, _) => Err(ActionIrError::Invalid(
-                "managed-file removal requires its canonical rollback path and restore-previous-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::RemoveManagedFileWithBackup {
-                    destination,
-                    backup,
-                    rollback,
-                    ..
-                },
-                RollbackSupportV1::RestorePreviousWithBackupIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && *backup == crate::install::backup_path(destination)
-                && *rollback == managed_file_rollback_path(destination)
-                && backup != rollback =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::RemoveManagedFileWithBackup { .. }, _) => Err(
-                ActionIrError::Invalid(
-                    "backup-restoring managed-file removal requires canonical distinct backup and rollback paths and restore-previous-with-backup-if-unchanged rollback"
-                        .to_string(),
-                ),
-            ),
-            (
-                ActionKindV1::ForceRemoveManagedFile {
-                    destination,
-                    persistent_backup,
-                    rollback,
-                    receipt_hash,
-                    current_hash,
-                    ..
-                },
-                RollbackSupportV1::RestoreForcedPreviousIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && *rollback == managed_file_rollback_path(destination)
-                && receipt_hash != current_hash
-                && persistent_backup.as_ref().is_none_or(|backup| {
-                    backup.path == crate::install::backup_path(destination)
-                        && backup.path != *rollback
-                }) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::ForceRemoveManagedFile { .. }, _) => Err(ActionIrError::Invalid(
-                "forced managed-file removal requires changed current content, its canonical rollback path, an optional canonical persistent backup, and restore-forced-previous-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::MergeManagedJson {
-                    destination,
-                    rollback,
-                    original_mode,
-                    original_hash,
-                    previous_receipt_hash,
-                    managed_keys,
-                    ..
-                },
-                RollbackSupportV1::RestoreJsonKeysIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && *rollback == managed_file_rollback_path(destination)
-                && (original_hash.is_some() || original_mode.is_none())
-                && (previous_receipt_hash.is_none() || original_hash.is_some())
-                && valid_managed_json_keys(managed_keys) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::MergeManagedJson { .. }, _) => Err(ActionIrError::Invalid(
-                "managed JSON merge requires canonical rollback, paired original identity, non-empty unique top-level keys, and restore-json-keys-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::RelocateManagedJson {
-                    previous_destination,
-                    previous_rollback,
-                    desired_destination,
-                    previous_present,
-                    previous_mode,
-                    previous_original_hash,
-                    previous_managed_keys,
-                    desired_managed_keys,
-                    ..
-                },
-                RollbackSupportV1::RestoreRelocatedJsonKeysIfUnchanged,
-            ) if !previous_destination.as_os_str().is_empty()
-                && !desired_destination.as_os_str().is_empty()
-                && previous_destination != desired_destination
-                && *previous_rollback == managed_file_rollback_path(previous_destination)
-                && previous_rollback != desired_destination
-                && *previous_present == previous_original_hash.is_some()
-                && (*previous_present || previous_mode.is_none())
-                && valid_managed_json_keys(previous_managed_keys)
-                && valid_managed_json_keys(desired_managed_keys) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::RelocateManagedJson { .. }, _) => Err(ActionIrError::Invalid(
-                "managed JSON relocation requires distinct old/new destinations, canonical rollback, paired previous whole-file identity, non-empty unique key sets, and restore-relocated-json-keys-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::RemoveManagedJson {
-                    destination,
-                    rollback,
-                    managed_keys,
-                    ..
-                },
-                RollbackSupportV1::RestoreRemovedJsonKeysIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && *rollback == managed_file_rollback_path(destination)
-                && valid_managed_json_keys(managed_keys) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::RemoveManagedJson { .. }, _) => Err(ActionIrError::Invalid(
-                "managed JSON removal requires its canonical rollback path, non-empty unique top-level keys, and restore-removed-json-keys-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::CreateShellLauncher { receipt, resources },
-                RollbackSupportV1::RemoveCreatedLauncherIfUnchanged,
-            ) if receipt.is_valid() && valid_shell_launcher_resources(resources) => Ok(()),
-            (ActionKindV1::CreateShellLauncher { .. }, _) => Err(ActionIrError::Invalid(
-                "Shell launcher creation requires a valid receipt, non-empty unique resources, and remove-created-launcher-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::UpdateShellLauncher {
-                    previous_receipt,
-                    desired_receipt,
-                    resources,
-                },
-                RollbackSupportV1::RestorePreviousLauncherIfUnchanged,
-            ) if previous_receipt.is_valid()
-                && desired_receipt.is_valid()
-                && previous_receipt.category == desired_receipt.category
-                && previous_receipt.command == desired_receipt.command
-                && previous_receipt != desired_receipt
-                && valid_shell_launcher_update_resources(resources) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::UpdateShellLauncher { .. }, _) => Err(ActionIrError::Invalid(
-                "Shell launcher update requires distinct valid receipts for one command, exact previous/desired resource pairs, canonical rollback paths, and restore-previous-launcher-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::RemoveShellLauncher {
-                    previous_receipt,
-                    resources,
-                },
-                RollbackSupportV1::RestoreRemovedLauncherIfUnchanged,
-            ) if previous_receipt.is_valid()
-                && valid_shell_launcher_removal_resources(resources) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::RemoveShellLauncher { .. }, _) => Err(ActionIrError::Invalid(
-                "Shell launcher removal requires a valid previous receipt, exact previous resources, canonical rollback paths, and restore-removed-launcher-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::RemoveLegacyShellLauncher { resources },
-                RollbackSupportV1::RestoreRemovedLauncherIfUnchanged,
-            ) if valid_shell_launcher_removal_resources(resources) => Ok(()),
-            (ActionKindV1::RemoveLegacyShellLauncher { .. }, _) => {
-                Err(ActionIrError::Invalid(
-                    "Legacy Shell launcher removal requires exact previous resources, canonical rollback paths, and restore-removed-launcher-if-unchanged rollback"
-                        .to_string(),
-                ))
-            }
-            (
-                ActionKindV1::ReplaceShellSnapshot {
-                    destination,
-                    stage,
-                    rollback,
-                    previous_present,
-                    previous_files,
-                    desired_files,
-                    receipts,
-                },
-                RollbackSupportV1::RestorePreviousShellSnapshotIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && *stage == shell_snapshot_stage_path(destination)
-                && *rollback == shell_snapshot_rollback_path(destination)
-                && stage != rollback
-                && valid_shell_tree_files(previous_files, true)
-                && valid_shell_tree_files(desired_files, false)
-                && (*previous_present || previous_files.is_empty())
-                && valid_shell_receipt_transitions(receipts) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::ReplaceShellSnapshot { receipts, .. }, _) if receipts.is_empty() => {
-                Err(ActionIrError::Invalid(
-                    "Shell snapshot replacement has no command receipt transitions; resolve launcher ownership before replacing the snapshot".to_string(),
-                ))
-            }
-            (ActionKindV1::ReplaceShellSnapshot { .. }, _) => Err(ActionIrError::Invalid(
-                "Shell snapshot replacement requires canonical stage/rollback paths, valid tree identities and receipt transitions, and restore-previous-shell-snapshot-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::ReplaceShellCache { files, receipts },
-                RollbackSupportV1::RestorePreviousShellCacheIfUnchanged,
-            ) if valid_shell_cache_files(files) && valid_shell_receipt_transitions(receipts) => {
-                Ok(())
-            }
-            (ActionKindV1::ReplaceShellCache { .. }, _) => Err(ActionIrError::Invalid(
-                "Shell cache replacement requires distinct previous/desired file identities, canonical rollback paths, valid receipt transitions, and restore-previous-shell-cache-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::RemoveShellCache { files, receipts },
-                RollbackSupportV1::RestoreRemovedShellCacheIfUnchanged,
-            ) if valid_shell_cache_removal_files(files)
-                && valid_shell_receipt_removal_set(receipts) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::RemoveShellCache { .. }, _) => Err(ActionIrError::Invalid(
-                "Shell cache removal requires exact file identities, canonical rollback paths, valid previous receipts, and restore-removed-shell-cache-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::RemoveShellSnapshot {
-                    destination,
-                    rollback,
-                    previous_files,
-                    receipts,
-                },
-                RollbackSupportV1::RestoreRemovedShellSnapshotIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && *rollback == shell_snapshot_rollback_path(destination)
-                && valid_shell_tree_files(previous_files, true)
-                && valid_shell_receipt_removal_set(receipts) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::RemoveShellSnapshot { .. }, _) => Err(ActionIrError::Invalid(
-                "Shell snapshot removal requires an exact tree identity, canonical rollback path, valid previous receipts, and restore-removed-shell-snapshot-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::ReconcileShellProfile {
-                    files,
-                    receipt_transitions,
-                    receipt_removals,
-                    legacy_targets,
-                },
-                RollbackSupportV1::RestorePreviousShellProfileIfUnchanged,
-            ) if valid_shell_profile_files(files)
-                && valid_shell_profile_receipts(
-                    receipt_transitions,
-                    receipt_removals,
-                    legacy_targets,
-                ) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::ReconcileShellProfile { .. }, _) => Err(ActionIrError::Invalid(
-                "Shell profile reconciliation requires valid whole-file or sentinel identities, canonical rollback paths, one receipt-boundary kind, and restore-previous-shell-profile-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::ReconcileSysSplitDns { previous, desired },
-                RollbackSupportV1::RestorePreviousSysSplitDnsIfUnchanged,
-            ) if valid_sys_split_dns_transition(previous.as_ref(), desired.as_ref()) => Ok(()),
-            (ActionKindV1::ReconcileSysSplitDns { .. }, _) => Err(ActionIrError::Invalid(
-                "Sys split-DNS reconciliation requires one distinct previous/desired owned state and restore-previous-sys-split-dns-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::ReconcileSysProfileBlocks { os_id, files },
-                RollbackSupportV1::RestorePreviousSysProfileBlocksIfUnchanged,
-            ) if !os_id.trim().is_empty() && valid_sys_profile_block_files(files) => Ok(()),
-            (ActionKindV1::ReconcileSysProfileBlocks { .. }, _) => Err(ActionIrError::Invalid(
-                "Sys profile block reconciliation requires distinct owned-block identities, canonical rollback paths, and restore-previous-sys-profile-blocks-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::ReplaceShellRenderedFile {
-                    destination,
-                    rollback,
-                    previous,
-                    desired,
-                    receipts,
-                },
-                RollbackSupportV1::RestorePreviousShellRenderedFileIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && *rollback == managed_file_rollback_path(destination)
-                && previous.as_ref() != Some(desired)
-                && valid_shell_receipt_transitions(receipts) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::ReplaceShellRenderedFile { .. }, _) => Err(ActionIrError::Invalid(
-                "Shell rendered-file replacement requires a distinct previous/desired identity, canonical rollback path, valid receipt transitions, and restore-previous-shell-rendered-file-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::RemoveShellRenderedFile {
-                    destination,
-                    rollback,
-                    receipts,
-                    ..
-                },
-                RollbackSupportV1::RestoreRemovedShellRenderedFileIfUnchanged,
-            ) if !destination.as_os_str().is_empty()
-                && *rollback == managed_file_rollback_path(destination)
-                && valid_shell_receipt_removals(receipts, destination) =>
-            {
-                Ok(())
-            }
-            (ActionKindV1::RemoveShellRenderedFile { .. }, _) => Err(ActionIrError::Invalid(
-                "Shell rendered-file removal requires a previous file identity, canonical rollback path, valid previous receipts, and restore-removed-shell-rendered-file-if-unchanged rollback"
-                    .to_string(),
-            )),
-            (
-                ActionKindV1::OpaqueExecution { capability, .. },
-                RollbackSupportV1::Unsupported { reason_code },
-            ) => {
-                validate_identity("opaque capability", capability)?;
-                validate_identity("rollback reason", reason_code)
-            }
-            (ActionKindV1::OpaqueExecution { .. }, _) => Err(ActionIrError::Invalid(
-                "opaque execution must declare rollback as unsupported".to_string(),
-            )),
-        }
+        contracts::validate(&self.kind, &self.rollback)
     }
 }
 
@@ -1973,34 +1146,27 @@ pub struct ShellLauncherReceiptV1 {
 }
 
 impl ShellLauncherReceiptV1 {
+    pub(crate) fn validated_configuration(
+        &self,
+    ) -> anyhow::Result<shell_receipt::ValidatedShellConfiguration<'_>> {
+        shell_receipt::ShellReceiptConfiguration {
+            format: self.launcher_format.as_deref(),
+            config_dir: self.launcher_config_dir.as_deref(),
+            mode: &self.mode,
+            runtime: &self.runtime,
+            source: &self.source_path,
+            transforms: &self.transforms,
+            needs_source: self.needs_source,
+            dependencies: self.bun_dependencies.as_deref(),
+        }
+        .validate()
+    }
     fn is_valid(&self) -> bool {
-        let format_valid = match (&self.launcher_format, &self.launcher_config_dir) {
-            (None, None) => true,
-            (Some(format), None) => {
-                format == "native-cmd-v2"
-                    && self.runtime == "native"
-                    && self.source_path.extension() == Some(std::ffi::OsStr::new("ps1"))
-            }
-            (Some(format), Some(root)) => {
-                format == "live-bun-v2"
-                    && root.is_absolute()
-                    && !root
-                        .components()
-                        .any(|part| part == std::path::Component::ParentDir)
-                    && self.mode == "live"
-                    && self.runtime == "bun"
-                    && !self.transforms.is_empty()
-                    && !self.needs_source
-            }
-            _ => false,
-        };
-        format_valid
+        self.validated_configuration().is_ok()
             && !self.category.is_empty()
             && !self.command.is_empty()
-            && matches!(self.mode.as_str(), "snapshot" | "live")
             && !self.source_path.as_os_str().is_empty()
             && !self.rendered_path.as_os_str().is_empty()
-            && matches!(self.runtime.as_str(), "native" | "bun")
             && !self.category.chars().any(char::is_control)
             && !self.command.chars().any(char::is_control)
     }
@@ -2237,11 +1403,21 @@ fn valid_shell_profile_files(files: &[ShellProfileFileV1]) -> bool {
         && destinations.is_disjoint(&rollbacks)
 }
 
+// Reserved profile-only boundary in legacy_targets. It represents remaining integration
+// files with no command receipts, and requires an empty manifest in execution/recovery.
+pub(crate) const SHELL_PROFILE_ONLY_TARGET: &str = "shell/profile";
+
 fn valid_shell_profile_receipts(
     transitions: &[ShellReceiptTransitionV1],
     removals: &[ShellReceiptRemovalV1],
     legacy_targets: &[String],
 ) -> bool {
+    if legacy_targets
+        .iter()
+        .any(|target| target == SHELL_PROFILE_ONLY_TARGET)
+    {
+        return transitions.is_empty() && removals.is_empty() && legacy_targets.len() == 1;
+    }
     let receipt_targets = transitions
         .iter()
         .map(|transition| transition.target.as_str())
@@ -2374,6 +1550,75 @@ fn valid_managed_json_keys(keys: &[String]) -> bool {
 mod tests {
     use super::*;
     use crate::install::hash_content;
+
+    #[test]
+    fn profile_only_boundary_is_exclusive_and_only_removes_identified_files() {
+        let target = SHELL_PROFILE_ONLY_TARGET.to_string();
+        assert!(!valid_shell_profile_receipts(&[], &[], &[]));
+        assert!(valid_shell_profile_receipts(
+            &[],
+            &[],
+            std::slice::from_ref(&target)
+        ));
+        assert!(!valid_shell_profile_receipts(
+            &[],
+            &[],
+            &[target.clone(), "shell/demo/tool".into()]
+        ));
+        let destination = PathBuf::from("/home/test/.shine/shell/profile.sh");
+        let file = ShellProfileFileV1 {
+            rollback: managed_file_rollback_path(&destination),
+            destination,
+            ownership: ShellProfileFileOwnershipV1::WholeFile,
+            previous: Some(ShellFileIdentityV1 {
+                content_hash: 1,
+                unix_mode: None,
+            }),
+            desired: None,
+            previous_block_hash: None,
+            desired_block_hash: None,
+        };
+        let validate = |file| {
+            ActionIrV1::new(
+                "profile-only",
+                vec![DeclarativeActionV1::reconcile_shell_profile(
+                    "profile",
+                    SHELL_PROFILE_ONLY_TARGET,
+                    "profile",
+                    ShellProfileReconciliationSpecV1 {
+                        files: vec![file],
+                        receipt_transitions: vec![],
+                        receipt_removals: vec![],
+                        legacy_targets: vec![target.clone()],
+                    },
+                )],
+            )
+            .validate()
+        };
+        assert!(validate(file.clone()).is_ok());
+        let mut sentinel = file.clone();
+        sentinel.ownership = ShellProfileFileOwnershipV1::SentinelBlock;
+        sentinel.previous_block_hash = Some(3);
+        assert!(
+            validate(sentinel.clone()).is_err(),
+            "must not delete the whole startup file"
+        );
+        sentinel.desired = Some(ShellFileIdentityV1 {
+            content_hash: 4,
+            unix_mode: None,
+        });
+        assert!(validate(sentinel).is_ok());
+        let mut invalid = file.clone();
+        invalid.previous = None;
+        invalid.desired = Some(ShellFileIdentityV1 {
+            content_hash: 2,
+            unix_mode: None,
+        });
+        assert!(validate(invalid).is_err());
+        let mut invalid = file;
+        invalid.rollback = PathBuf::from("/unrelated/rollback");
+        assert!(validate(invalid).is_err());
+    }
 
     fn ir() -> ActionIrV1 {
         ActionIrV1::new(
@@ -3179,32 +2424,5 @@ mod tests {
                 path: format!("absolute:{}", path.display()),
             }));
         }
-    }
-
-    #[test]
-    fn opaque_execution_fails_permission_derivation_closed() {
-        let value = ActionIrV1::new(
-            "operation-opaque",
-            vec![DeclarativeActionV1 {
-                action_id: "opaque-1".to_string(),
-                target: "app/demo".to_string(),
-                resource: "hook:0".to_string(),
-                kind: ActionKindV1::OpaqueExecution {
-                    capability: "app-hook".to_string(),
-                    provenance: ActionProvenanceV1::External,
-                    requires_administrator: false,
-                },
-                rollback: RollbackSupportV1::Unsupported {
-                    reason_code: "opaque_action_not_reversible".to_string(),
-                },
-            }],
-        );
-        value.validate().unwrap();
-        assert_eq!(
-            value
-                .permission_requirements(|_| "unused".to_string())
-                .uncomputable_codes,
-            BTreeSet::from(["opaque_action_permissions_uncomputable".to_string()])
-        );
     }
 }

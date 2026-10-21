@@ -482,16 +482,18 @@ async fn shell_snapshots_preserve_captured_executables_and_repair_mode_only_chan
         context.is_external_presets = true;
         context.external_shell_mode = ExternalShellMode::Snapshot;
         context.shell = ShellType::Bash;
-        let mut runtime = CoreRuntime::new(RealHost, context, snapshot);
+        let runtime = CoreRuntime::new(RealHost, context, snapshot);
         let requirements = runtime
             .external_code_requirements("shell/demo/demo")
             .await
             .unwrap()
             .requirements;
-        runtime.context_mut_for_cli().trust_grants = requirements
+        let mut context = runtime.context().clone();
+        context.trust_grants = requirements
             .iter()
             .map(shine_core::trust::TrustGrantV1::for_reviewed_requirement)
             .collect();
+        let runtime = CoreRuntime::new(RealHost, context, runtime.presets().clone());
         let mut request = ShellPlanRequest {
             operation: LifecycleOperation::Install,
             target: Some("demo".into()),

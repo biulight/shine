@@ -2,6 +2,7 @@
 
 use super::{EnvConfig, parse_env_specs, resolve_stored_value};
 use crate::config::{Config, EnvProxyRule};
+use crate::output::escape_controls;
 use crate::{persist::atomic_write, secret, shell_quote};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,7 @@ pub async fn install(config: &Config, command: &str, with: &[String], project: b
     install_proxy_files(config, command, with, &target, path, cfg!(windows)).await?;
     println!(
         "installed transparent proxy {command} -> {}",
-        target.display()
+        escape_controls(&target.display().to_string())
     );
     Ok(())
 }
@@ -50,8 +51,8 @@ pub async fn list(config: &Config) -> Result<()> {
     for rule in &config.env_proxy {
         println!(
             "{}: {} ({})",
-            rule.command,
-            rule.with.join(", "),
+            escape_controls(&rule.command),
+            escape_controls(&rule.with.join(", ")),
             if rule.enabled { "enabled" } else { "disabled" }
         );
     }
@@ -98,9 +99,42 @@ pub async fn set_enabled(
     })
     .await?;
     println!(
-        "{} transparent proxy {command}",
-        if enabled { "enabled" } else { "disabled" }
+        "{} transparent proxy {command} in {} ({})",
+        if enabled { "enabled" } else { "disabled" },
+        if project {
+            "project config"
+        } else {
+            "global config"
+        },
+        escape_controls(&path.display().to_string()),
     );
+    // Observational only: a successful save must not become a failed command
+    // because a subsequent read races another editor or encounters invalid config.
+    match Config::load_read_only().await {
+        Ok(current) => {
+            let effective = current
+                .env_proxy
+                .iter()
+                .find(|rule| rule.command == command);
+            println!(
+                "Current effective state: {}",
+                match effective {
+                    Some(rule) if rule.enabled => "enabled",
+                    Some(_) => "disabled",
+                    None => "not configured",
+                }
+            );
+            if !project && current.is_project_config() {
+                println!(
+                    "Project rules can override the global rule; use --project to change this project's rule."
+                );
+            }
+        }
+        Err(error) => eprintln!(
+            "Warning: proxy rule was saved, but effective state could not be verified: {}",
+            escape_controls(&format!("{error:#}"))
+        ),
+    }
     Ok(())
 }
 
@@ -194,7 +228,7 @@ pub async fn exec(config: &Config, target: &Path, command: &str, args: &[OsStrin
     let Some(rule) = rule.filter(|rule| rule.enabled) else {
         return run_target(target, args, BTreeMap::new()).await;
     };
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     let mut injected = BTreeMap::new();
     for spec in parse_env_specs(&rule.with)? {
         let value = match resolve_stored_value(&env, &spec.source)? {
@@ -219,10 +253,7 @@ async fn run_target(
         .status()
         .await
         .with_context(|| format!("running proxy target {}", target.display()))?;
-    if status.success() {
-        return Ok(());
-    }
-    std::process::exit(status.code().unwrap_or(1));
+    super::workspace::finish_command_status(status)
 }
 
 fn validate_command(command: &str) -> Result<()> {
@@ -364,12 +395,15 @@ fn prepare_shims(
     shine_dir: &Path,
     windows: bool,
 ) -> Result<Vec<InstallFile>> {
-    let config_string = absolute_path(shine_dir.to_path_buf())?
-        .to_string_lossy()
-        .into_owned();
-    let config_q = shell_quote::single_quote(&config_string);
-    let target_string = target.to_string_lossy().into_owned();
-    let target_q = shell_quote::single_quote(&target_string);
+    let config_path = absolute_path(shine_dir.to_path_buf())?;
+    let config_string = config_path
+        .to_str()
+        .context("proxy configuration path is not valid UTF-8")?;
+    let config_q = shell_quote::single_quote(config_string);
+    let target_string = target
+        .to_str()
+        .context("proxy target path is not valid UTF-8")?;
+    let target_q = shell_quote::single_quote(target_string);
     let command_q = shell_quote::single_quote(command);
     let mut files = vec![InstallFile {
         path: bin_dir.join(command),
@@ -461,7 +495,9 @@ async fn install_proxy_files(
         .transpose()?
         .unwrap_or_default();
     let mut manifest: ProxyManifest = if snapshots[launcher_count + 1].is_some() {
-        toml::from_str(manifest_text).context("parsing env proxy manifest")?
+        toml::from_str(manifest_text)
+            .map_err(crate::config::config_parse_error)
+            .context("parsing env proxy manifest")?
     } else {
         ProxyManifest::default()
     };
@@ -582,39 +618,6 @@ async fn restore_install_file(file: &InstallFile, snapshot: Option<&FileSnapshot
     }
 }
 
-#[cfg(test)]
-async fn install_shims_for_platform(
-    bin_dir: &Path,
-    command: &str,
-    target: &Path,
-    shine_dir: &Path,
-    windows: bool,
-) -> Result<()> {
-    let files = prepare_shims(bin_dir, command, target, shine_dir, windows)?;
-    let snapshots = capture_install_files(&files, files.len()).await?;
-    apply_install_files(&files, &snapshots, |file| {
-        Box::pin(write_install_file(file))
-    })
-    .await
-}
-
-#[cfg(test)]
-async fn upsert_rule(path: &Path, rule: EnvProxyRule) -> Result<()> {
-    mutate_rules(path, |rules| {
-        rules.retain(|r| r.command != rule.command);
-        rules.push(rule);
-        Ok(())
-    })
-    .await
-}
-#[cfg(test)]
-async fn remove_rule(path: &Path, command: &str) -> Result<()> {
-    mutate_rules(path, |rules| {
-        rules.retain(|r| r.command != command);
-        Ok(())
-    })
-    .await
-}
 async fn mutate_rules(
     path: &Path,
     change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
@@ -637,11 +640,15 @@ fn render_rules(
     text: &str,
     change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
 ) -> Result<String> {
-    let mut table: toml::Table = toml::from_str(text).context("parsing env proxy rules")?;
+    let mut table: toml::Table = toml::from_str(text)
+        .map_err(crate::config::config_parse_error)
+        .context("parsing env proxy rules")?;
     let mut rules: Vec<EnvProxyRule> = table
         .get("env_proxy")
         .map(|v| v.clone().try_into())
-        .transpose()?
+        .transpose()
+        .map_err(crate::config::config_parse_error)
+        .context("parsing env proxy rules")?
         .unwrap_or_default();
     change(&mut rules)?;
     if rules.is_empty() {
@@ -649,7 +656,10 @@ fn render_rules(
     } else {
         table.insert("env_proxy".into(), toml::Value::try_from(rules)?);
     }
-    let mut doc: toml_edit::DocumentMut = text.parse().context("parsing env proxy rules")?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(crate::config::config_parse_error)
+        .context("parsing env proxy rules")?;
     shine_core::migration::sync_table(doc.as_table_mut(), &table);
     Ok(doc.to_string())
 }
@@ -661,9 +671,9 @@ fn manifest_path(shine_dir: &Path) -> PathBuf {
 async fn load_manifest(shine_dir: &Path) -> Result<ProxyManifest> {
     let path = manifest_path(shine_dir);
     match tokio::fs::read_to_string(&path).await {
-        Ok(contents) => {
-            toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))
-        }
+        Ok(contents) => toml::from_str(&contents)
+            .map_err(crate::config::config_parse_error)
+            .with_context(|| format!("parsing {}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ProxyManifest::default()),
         Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
     }
@@ -677,6 +687,85 @@ async fn save_manifest(shine_dir: &Path, manifest: &ProxyManifest) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn proxy_launcher_rendering_rejects_unrepresentable_paths() {
+        #[cfg(unix)]
+        let raw = {
+            use std::os::unix::ffi::OsStringExt;
+            PathBuf::from(OsString::from_vec(b"state-\xff".to_vec()))
+        };
+        #[cfg(windows)]
+        let raw = {
+            use std::os::windows::ffi::OsStringExt;
+            PathBuf::from(OsString::from_wide(&[b's' as u16, 0xd800]))
+        };
+        for windows in [false, true] {
+            for (state, target, field) in [
+                (raw.as_path(), Path::new("real-tool"), "configuration"),
+                (Path::new("state"), raw.as_path(), "target"),
+            ] {
+                let result = prepare_shims(Path::new("bin"), "demo", target, state, windows);
+                let error = match result {
+                    Ok(files) => panic!(
+                        "lossy launcher: {:?}",
+                        String::from_utf8_lossy(&files[0].bytes)
+                    ),
+                    Err(error) => error,
+                };
+                assert!(error.to_string().contains(field), "{error:#}");
+                assert!(error.to_string().contains("not valid UTF-8"), "{error:#}");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn proxy_install_rejects_native_runtime_alias_before_writing_installation_files() {
+        use std::os::unix::ffi::OsStringExt;
+        let root = crate::test_support::make_temp_dir("shine-proxy-native-path").await;
+        let state = root.join(OsString::from_vec(b"state-\xff".to_vec()));
+        if let Err(error) = std::fs::create_dir(&state) {
+            eprintln!("filesystem cannot create non-UTF-8 fixture: {error}");
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let alias = root.join("state-\u{fffd}");
+        std::fs::create_dir(&alias).unwrap();
+        std::fs::write(alias.join("preserve.txt"), "untouched").unwrap();
+        let config = Config::new_for_test(&state);
+        let original = "# retain configuration\n[env]\nTOKEN = 'original'\n";
+        std::fs::write(config.config_path(), original).unwrap();
+
+        let result = install_proxy_files(
+            &config,
+            "demo",
+            &["TOKEN".into()],
+            Path::new("/real/demo"),
+            config.config_path(),
+            false,
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "unsupported runtime path published a launcher: {:?}",
+            std::fs::read_to_string(config.bin_dir().join("demo"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(config.config_path()).unwrap(),
+            original
+        );
+        assert!(!config.bin_dir().join("demo").exists());
+        assert!(!manifest_path(&state).exists());
+        assert_eq!(std::fs::read_dir(&alias).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read(alias.join("preserve.txt")).unwrap(),
+            b"untouched"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn proxy_install_commits_requested_mapping_and_preserves_unrelated_config() {
@@ -731,7 +820,15 @@ mod tests {
     #[tokio::test]
     async fn invalid_proxy_state_preserves_all_installation_files() {
         for windows in [false, true] {
-            for corrupt_manifest in [false, true] {
+            for (rules, manifest) in [
+                ("unknown='PROXY_DOCUMENT_CANARY' invalid\n", "[entries]\n"),
+                ("env_proxy='PROXY_DOCUMENT_CANARY'\n", "[entries]\n"),
+                ("[env]\nKEY='value'\n", "entries='PROXY_DOCUMENT_CANARY'\n"),
+                (
+                    "[env]\nKEY='value'\n",
+                    "unknown='PROXY_DOCUMENT_CANARY' invalid\n",
+                ),
+            ] {
                 let dir = crate::test_support::make_temp_dir("shine-proxy-invalid-state").await;
                 let config = Config::new_for_test(&dir);
                 let rule_path = config.shine_dir().join("config.toml");
@@ -740,26 +837,10 @@ mod tests {
                 tokio::fs::write(&launcher, format!("# {MARKER} original"))
                     .await
                     .unwrap();
-                tokio::fs::write(
-                    &rule_path,
-                    if corrupt_manifest {
-                        "# private config\n[env]\nKEY = 'value'\n"
-                    } else {
-                        "invalid ["
-                    },
-                )
-                .await
-                .unwrap();
-                tokio::fs::write(
-                    manifest_path(config.shine_dir()),
-                    if corrupt_manifest {
-                        "invalid ["
-                    } else {
-                        "[entries]\n"
-                    },
-                )
-                .await
-                .unwrap();
+                tokio::fs::write(&rule_path, rules).await.unwrap();
+                tokio::fs::write(manifest_path(config.shine_dir()), manifest)
+                    .await
+                    .unwrap();
                 let paths = [
                     launcher.clone(),
                     rule_path.clone(),
@@ -769,18 +850,27 @@ mod tests {
                 for path in &paths {
                     before.push(capture_file(path).await.unwrap());
                 }
-                assert!(
-                    install_proxy_files(
-                        &config,
-                        "demo",
-                        &["KEY".into()],
-                        Path::new("/real/demo"),
-                        &rule_path,
-                        windows
-                    )
-                    .await
-                    .is_err()
-                );
+                let error = install_proxy_files(
+                    &config,
+                    "demo",
+                    &["KEY".into()],
+                    Path::new("/real/demo"),
+                    &rule_path,
+                    windows,
+                )
+                .await
+                .unwrap_err();
+                let text = format!("{error:#}\n{error:?}");
+                assert!(!text.contains("PROXY_DOCUMENT_CANARY"), "{text}");
+                assert!(text.contains("parsing env proxy"), "{text}");
+                if manifest != "[entries]\n" {
+                    let error = uninstall_for_platform(&config, "demo", windows)
+                        .await
+                        .unwrap_err();
+                    let text = format!("{error:#}\n{error:?}");
+                    assert!(!text.contains("PROXY_DOCUMENT_CANARY"), "{text}");
+                    assert!(text.contains("proxy-manifest.toml"), "{text}");
+                }
                 for (path, previous) in paths.iter().zip(before) {
                     assert!(capture_file(path).await.unwrap() == previous);
                 }
@@ -956,24 +1046,12 @@ mod tests {
 
     async fn uninstall_fixture(dir: &Path) -> Config {
         let config = Config::new_for_test(dir);
-        upsert_rule(
-            config.config_path(),
-            EnvProxyRule {
-                command: "demo".into(),
-                with: vec!["TOKEN".into()],
-                enabled: true,
-            },
-        )
-        .await
-        .unwrap();
-        let mut manifest = ProxyManifest::default();
-        manifest.entries.insert("demo".into(), dir.join("real"));
-        save_manifest(config.shine_dir(), &manifest).await.unwrap();
-        install_shims_for_platform(
-            config.bin_dir(),
+        install_proxy_files(
+            &config,
             "demo",
+            &["TOKEN".into()],
             &dir.join("real"),
-            config.shine_dir(),
+            config.config_path(),
             true,
         )
         .await
@@ -1271,28 +1349,112 @@ mod tests {
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn toggle_save_stays_successful_when_effective_state_reload_fails() {
+        const CHILD: &str = "SHINE_TEST_PROXY_RELOAD_OUTPUT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // A separate test process captures the real println!/eprintln! streams
+            // without changing production output plumbing or racing global descriptors.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "env::proxy::tests::toggle_save_stays_successful_when_effective_state_reload_fails",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let warning =
+                "Warning: proxy rule was saved, but effective state could not be verified:";
+            assert!(stderr.contains(warning), "{output:?}");
+            assert!(!stdout.contains(warning), "{output:?}");
+            assert!(
+                stdout.contains("disabled transparent proxy demo in global config"),
+                "{output:?}"
+            );
+            assert!(
+                !stderr.contains("disabled transparent proxy demo"),
+                "{output:?}"
+            );
+            for stream in [&stdout, &stderr] {
+                assert!(!stream.contains("Current effective state:"), "{output:?}");
+                assert!(!stream.contains(['\r', '\t', '\u{1b}']), "{stream:?}");
+                assert!(
+                    !stream.lines().any(|line| line.starts_with("FORGED=")),
+                    "{stream:?}"
+                );
+            }
+            return;
+        }
+        let _guard = crate::test_support::env_lock();
+        let dir = crate::test_support::make_temp_dir("shine-proxy-reload").await;
+        let renamed = dir.with_extension(if cfg!(unix) {
+            "display\nFORGED=path\r\t\u{1b}中文"
+        } else {
+            "display中文"
+        });
+        std::fs::rename(&dir, &renamed).unwrap();
+        let dir = renamed;
+        let original_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        // SAFETY: the environment guard restores process state on return or panic.
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", &dir) };
+        let config = Config::new_for_test(&dir);
+        tokio::fs::write(
+            config.config_path(),
+            "[[env_proxy]]\ncommand = 'demo'\nwith = ['DEMO']\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(dir.join("shine.env.toml"), "invalid = [")
+            .await
+            .unwrap();
+        assert!(Config::load_read_only().await.is_err());
+        set_enabled(&config, "demo", false, false).await.unwrap();
+        let document: toml::Value = toml::from_str(
+            &tokio::fs::read_to_string(config.config_path())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(document["env_proxy"][0]["enabled"].as_bool(), Some(false));
+        assert_eq!(
+            tokio::fs::read_to_string(dir.join("shine.env.toml"))
+                .await
+                .unwrap(),
+            "invalid = ["
+        );
+        std::env::set_current_dir(original_cwd).unwrap();
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
     #[tokio::test]
     async fn rule_mutation_replaces_only_matching_command() {
         let dir = crate::test_support::make_temp_dir("shine-env-proxy").await;
-        let path = dir.join("config.toml");
+        let config = Config::new_for_test(&dir);
+        let path = config.config_path();
         tokio::fs::write(
-            &path,
+            path,
             "[[env_proxy]]\ncommand = \"gh\"\nwith = [\"OLD\"]\n\n[[env_proxy]]\ncommand = \"docker\"\nwith = [\"DOCKER_TOKEN\"]\n",
         )
         .await
         .unwrap();
-        upsert_rule(
-            &path,
-            EnvProxyRule {
-                command: "gh".into(),
-                with: vec!["GH_TOKEN".into()],
-                enabled: true,
-            },
+        install_proxy_files(
+            &config,
+            "gh",
+            &["GH_TOKEN".into()],
+            &dir.join("real-gh"),
+            path,
+            true,
         )
         .await
         .unwrap();
         let parsed: toml::Table =
-            toml::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+            toml::from_str(&tokio::fs::read_to_string(path).await.unwrap()).unwrap();
         let rules: Vec<EnvProxyRule> = parsed["env_proxy"].clone().try_into().unwrap();
         assert_eq!(rules.len(), 2);
         assert_eq!(
@@ -1308,24 +1470,25 @@ mod tests {
         let dir = crate::test_support::make_temp_dir("shine-proxy-config").await;
         let state = dir.join("state with 'quotes' and %NAME%");
         let target = dir.join("real tool");
-        install_shims_for_platform(&dir.join("bin"), "demo", &target, &state, true)
+        let config = Config::new_for_test(&state);
+        install_proxy_files(&config, "demo", &[], &target, config.config_path(), true)
             .await
             .unwrap();
-        let sh = tokio::fs::read_to_string(dir.join("bin/demo"))
+        let sh = tokio::fs::read_to_string(config.bin_dir().join("demo"))
             .await
             .unwrap();
         assert!(sh.contains(&format!(
             "--config-dir {} env proxy",
             shell_quote::single_quote(&state.display().to_string())
         )));
-        let cmd = tokio::fs::read_to_string(dir.join("bin/demo.cmd"))
+        let cmd = tokio::fs::read_to_string(config.bin_dir().join("demo.cmd"))
             .await
             .unwrap();
         assert!(cmd.contains(&format!(
             "--config-dir \"{}\" env proxy",
             state.display().to_string().replace('%', "%%")
         )));
-        let ps = tokio::fs::read_to_string(dir.join("bin/demo.ps1"))
+        let ps = tokio::fs::read_to_string(config.bin_dir().join("demo.ps1"))
             .await
             .unwrap();
         assert!(ps.contains(&format!(
@@ -1343,37 +1506,53 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
     async fn proxy_rule_mutations_keep_config_private_and_preserve_env() {
         use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::test_support::env_lock();
         let dir = crate::test_support::make_temp_dir("shine-proxy-private").await;
-        for name in ["config.toml", "shine.config.toml"] {
-            let path = dir.join(name);
+        let dir = tokio::fs::canonicalize(dir).await.unwrap();
+        for project in [false, true] {
+            let root = dir.join(if project { "project" } else { "global" });
+            let state = root.join("state");
+            tokio::fs::create_dir_all(&state).await.unwrap();
+            std::env::set_current_dir(&root).unwrap();
+            // SAFETY: env_lock holds and restores the process environment and cwd.
+            unsafe { std::env::set_var("SHINE_CONFIG_DIR", &state) };
+            let path = if project {
+                root.join("shine.config.toml")
+            } else {
+                state.join("config.toml")
+            };
             crate::persist::atomic_write_private(
                 &path,
                 b"# retained\n[env]\nTOKEN = 'synthetic-value'\n",
             )
             .await
             .unwrap();
+            let config = Config::load_read_only().await.unwrap();
+            assert_eq!(config.is_project_config(), project);
+            assert_eq!(config.config_path(), path);
+            let mut before_uninstall = Vec::new();
             for action in 0..3 {
                 match action {
-                    0 => upsert_rule(
+                    0 => install_proxy_files(
+                        &config,
+                        "demo",
+                        &["TOKEN".into()],
+                        &root.join("real-demo"),
                         &path,
-                        EnvProxyRule {
-                            command: "demo".into(),
-                            with: vec!["TOKEN".into()],
-                            enabled: true,
-                        },
+                        true,
                     )
                     .await
                     .unwrap(),
-                    1 => mutate_rules(&path, |rules| {
-                        rules[0].enabled = false;
-                        Ok(())
-                    })
-                    .await
-                    .unwrap(),
-                    _ => remove_rule(&path, "demo").await.unwrap(),
+                    1 => {
+                        let config = Config::load_read_only().await.unwrap();
+                        set_enabled(&config, "demo", false, project).await.unwrap();
+                        before_uninstall = tokio::fs::read(&path).await.unwrap();
+                    }
+                    _ => uninstall_for_platform(&config, "demo", true).await.unwrap(),
                 }
                 assert_eq!(
                     tokio::fs::metadata(&path)
@@ -1382,14 +1561,36 @@ mod tests {
                         .permissions()
                         .mode()
                         & 0o777,
-                    0o600,
+                    0o600
                 );
                 let contents = tokio::fs::read_to_string(&path).await.unwrap();
                 assert!(contents.contains("# retained"));
                 let table: toml::Table = toml::from_str(&contents).unwrap();
                 assert_eq!(table["env"]["TOKEN"].as_str(), Some("synthetic-value"));
+                if action < 2 || project {
+                    let rules: Vec<EnvProxyRule> = table["env_proxy"].clone().try_into().unwrap();
+                    assert_eq!(rules.len(), 1);
+                    assert_eq!(rules[0].enabled, action == 0);
+                } else {
+                    assert!(!table.contains_key("env_proxy"));
+                }
+            }
+            // Uninstall owns global rules and launchers; a project override remains intact.
+            if project {
+                assert_eq!(tokio::fs::read(&path).await.unwrap(), before_uninstall);
+            }
+            assert!(
+                load_manifest(config.shine_dir())
+                    .await
+                    .unwrap()
+                    .entries
+                    .is_empty()
+            );
+            for name in ["demo", "demo.cmd", "demo.ps1"] {
+                assert!(!config.bin_dir().join(name).exists());
             }
         }
+        drop(_guard);
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
@@ -1397,38 +1598,84 @@ mod tests {
     async fn windows_proxy_preflights_all_launchers_before_writing() {
         let dir = crate::test_support::make_temp_dir("shine-proxy-conflict").await;
         for occupied in ["demo", "demo.cmd", "demo.ps1"] {
-            let bin = dir.join(occupied);
-            tokio::fs::create_dir_all(&bin).await.unwrap();
+            let config = Config::new_for_test(&dir.join(occupied));
+            let bin = config.bin_dir();
+            tokio::fs::create_dir_all(bin).await.unwrap();
             let foreign = bin.join(occupied);
             tokio::fs::write(&foreign, b"user launcher").await.unwrap();
             assert!(
-                install_shims_for_platform(&bin, "demo", &dir.join("real-demo"), &dir, true)
-                    .await
-                    .is_err()
+                install_proxy_files(
+                    &config,
+                    "demo",
+                    &[],
+                    &dir.join("real-demo"),
+                    config.config_path(),
+                    true
+                )
+                .await
+                .is_err()
             );
             assert_eq!(tokio::fs::read(&foreign).await.unwrap(), b"user launcher");
+            assert!(!config.config_path().exists());
+            assert!(!manifest_path(config.shine_dir()).exists());
             for candidate in ["demo", "demo.cmd", "demo.ps1"] {
                 assert_eq!(bin.join(candidate).exists(), candidate == occupied);
             }
         }
-        let bin = dir.join("owned");
-        install_shims_for_platform(&bin, "demo", &dir.join("first"), &dir, true)
+        let config = Config::new_for_test(&dir.join("owned"));
+        let bin = config.bin_dir();
+        install_proxy_files(
+            &config,
+            "demo",
+            &[],
+            &dir.join("first"),
+            config.config_path(),
+            true,
+        )
+        .await
+        .unwrap();
+        let before = tokio::fs::read(bin.join("demo")).await.unwrap();
+        let rules_before = tokio::fs::read(config.config_path()).await.unwrap();
+        let receipt_before = tokio::fs::read(manifest_path(config.shine_dir()))
             .await
             .unwrap();
-        let before = tokio::fs::read(bin.join("demo")).await.unwrap();
         tokio::fs::write(bin.join("demo.ps1"), b"user replacement")
             .await
             .unwrap();
         assert!(
-            install_shims_for_platform(&bin, "demo", &dir.join("second"), &dir, true)
-                .await
-                .is_err()
+            install_proxy_files(
+                &config,
+                "demo",
+                &[],
+                &dir.join("second"),
+                config.config_path(),
+                true
+            )
+            .await
+            .is_err()
         );
         assert_eq!(tokio::fs::read(bin.join("demo")).await.unwrap(), before);
+        assert_eq!(
+            tokio::fs::read(config.config_path()).await.unwrap(),
+            rules_before
+        );
+        assert_eq!(
+            tokio::fs::read(manifest_path(config.shine_dir()))
+                .await
+                .unwrap(),
+            receipt_before
+        );
         tokio::fs::remove_file(bin.join("demo.ps1")).await.unwrap();
-        install_shims_for_platform(&bin, "demo", &dir.join("second"), &dir, true)
-            .await
-            .unwrap();
+        install_proxy_files(
+            &config,
+            "demo",
+            &[],
+            &dir.join("second"),
+            config.config_path(),
+            true,
+        )
+        .await
+        .unwrap();
         for name in ["demo", "demo.cmd", "demo.ps1"] {
             assert!(
                 tokio::fs::read_to_string(bin.join(name))
@@ -1444,20 +1691,33 @@ mod tests {
     #[tokio::test]
     async fn proxy_refuses_dangling_launcher_links() {
         let dir = crate::test_support::make_temp_dir("shine-proxy-link").await;
+        let config = Config::new_for_test(&dir);
+        tokio::fs::create_dir_all(config.bin_dir()).await.unwrap();
         let missing = dir.join("missing");
-        tokio::fs::symlink(&missing, dir.join("demo.cmd"))
+        tokio::fs::symlink(&missing, config.bin_dir().join("demo.cmd"))
             .await
             .unwrap();
         assert!(
-            install_shims_for_platform(&dir, "demo", &dir.join("real"), &dir, true)
-                .await
-                .is_err()
+            install_proxy_files(
+                &config,
+                "demo",
+                &[],
+                &dir.join("real"),
+                config.config_path(),
+                true
+            )
+            .await
+            .is_err()
         );
         assert_eq!(
-            tokio::fs::read_link(dir.join("demo.cmd")).await.unwrap(),
+            tokio::fs::read_link(config.bin_dir().join("demo.cmd"))
+                .await
+                .unwrap(),
             missing
         );
-        assert!(!dir.join("demo").exists());
+        assert!(!config.bin_dir().join("demo").exists());
+        assert!(!config.config_path().exists());
+        assert!(!manifest_path(config.shine_dir()).exists());
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 }

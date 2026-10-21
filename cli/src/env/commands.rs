@@ -1,19 +1,23 @@
 //! Handlers for env inspection, directed writes, and secret commands.
 
 use anyhow::{Context, Result, bail};
+use base64::Engine as _;
+use shine_core::shell_quote::posix_single_quote as posix_shell_quote;
+use shine_core::shell_quote::powershell_single_quote as powershell_string_quote;
 
 use super::{EnvConfig, StoredValue, resolve_stored_value, secret_key};
 use crate::config::{Config, EnvLayerKind, EnvWriteOptions, EnvWritePlan};
+use crate::output::escape_controls;
 use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{colors, path_display, secret, shells};
 
 pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     let catalog = super::catalog::load(config).await?;
     let terminal_width = usize::from(console::Term::stdout().size().1).max(40);
     let key_width = env
         .iter()
-        .map(|(key, _)| key.chars().count())
+        .map(|(key, _)| console::measure_text_width(&escape_env_cell(key)))
         .max()
         .unwrap_or(0);
 
@@ -27,7 +31,7 @@ pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
     if config.is_project_config() {
         println!(
             "Project root: {}",
-            config.config_path().parent().unwrap().display()
+            escape_controls(&config.config_path().parent().unwrap().display().to_string())
         );
     } else {
         println!("Scope: global (no active project)");
@@ -51,7 +55,7 @@ pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
             layer
                 .path
                 .as_ref()
-                .map(|p| path_display::format(p))
+                .map(|p| escape_controls(&path_display::format(p)))
                 .unwrap_or_default()
         );
         for k in keys {
@@ -65,17 +69,28 @@ pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
             let display_value = display_env_value(v, sensitive, reveal);
             let (display_value, description) =
                 fit_env_row(&display_value, description, key_width, terminal_width);
-            let key_padding = " ".repeat(key_width.saturating_sub(k.chars().count()));
+            let display_key = escape_env_cell(k);
+            let key_padding =
+                " ".repeat(key_width.saturating_sub(console::measure_text_width(&display_key)));
             if description.is_empty() {
-                println!("  {}{}  {}", colors::cyan(k), key_padding, display_value);
-            } else {
                 println!(
-                    "  {}{}  {:<value_width$}  {}",
-                    colors::cyan(k),
+                    "  {}{}  {}",
+                    colors::cyan(&display_key),
+                    key_padding,
+                    display_value
+                );
+            } else {
+                let value_padding = " ".repeat(
+                    env_value_width(key_width, terminal_width)
+                        .saturating_sub(console::measure_text_width(&display_value)),
+                );
+                println!(
+                    "  {}{}  {}{}  {}",
+                    colors::cyan(&display_key),
                     key_padding,
                     display_value,
+                    value_padding,
                     colors::dim(&description),
-                    value_width = env_value_width(key_width, terminal_width),
                 );
             }
         }
@@ -85,7 +100,9 @@ pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
     println!(
         "  {}  {}",
         colors::dim("Config"),
-        colors::dim(&path_display::format(config.config_path()))
+        colors::dim(&escape_controls(&path_display::format(
+            config.config_path()
+        )))
     );
     println!(
         "  {}",
@@ -141,20 +158,25 @@ fn fit_env_row(
     (value, description)
 }
 
+// Escape only presentation cells; raw values used by get/export/children stay untouched.
+fn escape_env_cell(value: &str) -> String {
+    let mut output = String::new();
+    for ch in value.chars() {
+        if ch.is_control() || ch == '\\' {
+            output.extend(ch.escape_debug());
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
 fn truncate_text(value: &str, max_width: usize) -> String {
-    if value.chars().count() <= max_width {
-        return value.to_string();
-    }
-    if max_width <= 1 {
-        return "…".to_string();
-    }
-    let mut result = value.chars().take(max_width - 1).collect::<String>();
-    result.push('…');
-    result
+    console::truncate_str(&escape_env_cell(value), max_width, "…").into_owned()
 }
 
 pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<()> {
-    println!("Key: {key}");
+    println!("Key: {}", escape_controls(key));
     let winner = config.env_value_layer(key).map(|l| l.kind);
     for kind in [
         EnvLayerKind::Builtin,
@@ -178,7 +200,7 @@ pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<
         let path = layer
             .path
             .as_ref()
-            .map(|p| path_display::format(p))
+            .map(|p| escape_controls(&path_display::format(p)))
             .unwrap_or_default();
         println!("  {:<18} {}  {status}", layer.kind.label(), path);
         if reveal && let Some(value) = layer.values.get(key) {
@@ -195,7 +217,8 @@ pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<
         println!(
             "Description source: {} {}",
             kind.label(),
-            path.map(|p| path_display::format(p)).unwrap_or_default()
+            path.map(|p| escape_controls(&path_display::format(p)))
+                .unwrap_or_default()
         );
     } else {
         let catalog = super::catalog::load(config).await?;
@@ -219,12 +242,12 @@ pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<
         } else {
             "global config"
         },
-        config.config_path().display()
+        escape_controls(&config.config_path().display().to_string())
     );
     if config.is_project_config() {
         println!(
             "Project root: {}",
-            config.config_path().parent().unwrap().display()
+            escape_controls(&config.config_path().parent().unwrap().display().to_string())
         );
     } else {
         println!("Scope: global (no active project)");
@@ -236,8 +259,16 @@ pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<
 fn print_secret_preference(config: &Config, key: &str) {
     let encrypted = secret_key(key);
     if config.env.contains_key(&encrypted) {
+        if encrypted.chars().any(char::is_control) {
+            println!(
+                "Explicit injection prefers {}; inspect it with `shine env explain` using the original key.",
+                escape_controls(&encrypted)
+            );
+            return;
+        }
         println!(
-            "Explicit injection prefers {encrypted}; run `shine env explain {encrypted}` to inspect its source."
+            "Explicit injection prefers {encrypted}; run `shine env explain {}` to inspect its source.",
+            crate::shell_quote::command_positionals(&[&encrypted])
         );
     }
 }
@@ -249,9 +280,10 @@ async fn report_saved(
     deleted: bool,
 ) -> Result<()> {
     println!(
-        "{} {key} in {} ({})",
+        "{} {} in {} ({})",
         if deleted { "Deleted" } else { "Saved" },
-        plan.target.path.display(),
+        escape_controls(key),
+        escape_controls(&plan.target.path.display().to_string()),
         plan.kind.label()
     );
     let current = Config::load_read_only()
@@ -264,7 +296,7 @@ async fn report_saved(
             layer
                 .path
                 .as_ref()
-                .map(|p| path_display::format(p))
+                .map(|p| escape_controls(&path_display::format(p)))
                 .unwrap_or_default(),
             if layer.kind > plan.kind {
                 "; selected layer remains shadowed"
@@ -309,13 +341,16 @@ pub async fn handle_delete(config: &Config, key: &str, target: &EnvWriteOptions)
 }
 
 pub async fn handle_get(config: &Config, key: &str) -> Result<()> {
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     match env.get(key) {
         Some(v) => println!("{v}"),
         None => {
             eprintln!(
                 "{}",
-                colors::yellow(&format!("{key} is not set in the active config [env]"))
+                colors::yellow_stderr(&format!(
+                    "{} is not set in the active config [env]",
+                    escape_controls(key)
+                ))
             );
             std::process::exit(1);
         }
@@ -324,13 +359,16 @@ pub async fn handle_get(config: &Config, key: &str) -> Result<()> {
 }
 
 pub async fn handle_decrypt(config: &Config, key: &str) -> Result<()> {
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     let Some(value) = env.get(key) else {
-        bail!("{key} is not set in the active config [env]");
+        bail!(
+            "{} is not set in the active config [env]",
+            escape_controls(key)
+        );
     };
     let plaintext = secret::decrypt_with_config(value, config)
         .await
-        .with_context(|| format!("decrypting {key}"))?;
+        .with_context(|| format!("decrypting {}", escape_controls(key)))?;
     write_decrypted_plaintext(std::io::stdout().lock(), &plaintext)?;
     Ok(())
 }
@@ -347,7 +385,7 @@ pub async fn handle_export(config: &Config, key: &str, alias: Option<&str>) -> R
     if let Some(alias) = alias {
         validate_env_export_key(alias)?;
     }
-    let env = EnvConfig::load_or_init(config).await?;
+    let env = EnvConfig::from_config(config);
     let value = match resolve_env_export_value(&env, key)? {
         EnvExportValue::Secret {
             key: secret_key,
@@ -358,6 +396,9 @@ pub async fn handle_export(config: &Config, key: &str, alias: Option<&str>) -> R
         EnvExportValue::Plaintext(value) => value.to_string(),
     };
     let export_as = alias.unwrap_or(key);
+    if value.contains('\0') {
+        bail!("{export_as} contains a NUL byte and cannot be exported as an environment variable");
+    }
     println!(
         "{}",
         format_env_export(&config.shell_type, export_as, &value)
@@ -395,6 +436,15 @@ fn validate_env_export_key(key: &str) -> Result<()> {
 pub(crate) fn format_env_export(shell: &shells::ShellType, key: &str, value: &str) -> String {
     match shell {
         shells::ShellType::Fish => format!("set -gx {key} {}", fish_quote(value)),
+        shells::ShellType::PowerShell if !value.is_ascii() || value.contains(['\r', '\n']) => {
+            // Native PowerShell capture splits lines and may decode UTF-8 using a
+            // legacy console code page. Keep the expression itself ASCII and one line.
+            let encoded = base64::engine::general_purpose::STANDARD.encode(value);
+            format!(
+                "$env:{key} = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String({}))",
+                powershell_string_quote(&encoded)
+            )
+        }
         shells::ShellType::PowerShell => {
             format!("$env:{key} = {}", powershell_string_quote(value))
         }
@@ -402,16 +452,8 @@ pub(crate) fn format_env_export(shell: &shells::ShellType, key: &str, value: &st
     }
 }
 
-fn posix_shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 fn fish_quote(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
-}
-
-fn powershell_string_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -535,7 +577,7 @@ pub async fn handle_encrypt(
     let backend = resolve_encrypt_backend(config, backend)?;
     let recipients = resolve_encrypt_recipients(backend, recipients, config)?;
     let plaintext = if let Some(key) = from_key {
-        let env = EnvConfig::load_or_init(config).await?;
+        let env = EnvConfig::from_config(config);
         let Some(value) = env.get(key) else {
             bail!("{key} is not set in the active config [env]");
         };
@@ -635,6 +677,20 @@ mod tests {
         output.clear();
         write_decrypted_plaintext(&mut output, "abc\n").unwrap();
         assert_eq!(output, b"abc\n");
+    }
+
+    #[test]
+    fn env_show_truncates_by_display_width_and_escapes_controls() {
+        assert_eq!(truncate_text("中文中文", 5), "中文…");
+        assert_eq!(truncate_text("e\u{301}e\u{301}", 2), "e\u{301}e\u{301}");
+        assert_eq!(truncate_text("a\nb\tc\r\u{1b}", 40), r"a\nb\tc\r\u{1b}");
+        assert_eq!(truncate_text(r"a\nb", 40), r"a\\nb");
+        for width in 8..48 {
+            let (value, description) =
+                fit_env_row(&"中文".repeat(30), &"说明".repeat(30), 8, width);
+            assert!(console::measure_text_width(&value) <= env_value_width(8, width));
+            assert!(console::measure_text_width(&description) <= width);
+        }
     }
 
     #[test]
@@ -767,11 +823,32 @@ mod tests {
 
     #[test]
     fn env_export_formats_powershell_code_safely() {
-        let value = "abc def'ghi$HOME\nnext; Remove-Item /";
+        let value = "abc def'ghi$HOME; Remove-Item /";
         assert_eq!(
             format_env_export(&shells::ShellType::PowerShell, "TOKEN", value),
-            "$env:TOKEN = 'abc def''ghi$HOME\nnext; Remove-Item /'"
+            "$env:TOKEN = 'abc def''ghi$HOME; Remove-Item /'"
         );
+    }
+
+    #[test]
+    fn env_export_powershell_transport_is_ascii_and_single_line() {
+        for (value, encoded) in [
+            ("line\r\nnext", "bGluZQ0KbmV4dA=="),
+            ("line\rnext", "bGluZQ1uZXh0"),
+            ("line\nnext", "bGluZQpuZXh0"),
+            ("中文", "5Lit5paH"),
+        ] {
+            let code = format_env_export(&shells::ShellType::PowerShell, "TOKEN", value);
+            assert_eq!(
+                code,
+                format!(
+                    "$env:TOKEN = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}'))"
+                )
+            );
+            assert!(code.is_ascii());
+            assert_eq!(code.lines().count(), 1);
+            assert!(!code.contains('\r'));
+        }
     }
 
     #[test]

@@ -1,6 +1,5 @@
 use crate::apps::{AppCategory, AppFile};
 use crate::config::Config;
-use crate::env::EnvConfig;
 use crate::shells::metadata::ShellCategory;
 use crate::status::{FileStatus, UpdateChange};
 use anyhow::Result;
@@ -42,11 +41,7 @@ pub(super) async fn collect_app_files(
     run_generators: bool,
     categories: Vec<String>,
 ) -> Result<Vec<AppInfoFile>> {
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    let env = EnvConfig::load_or_init(config).await.ok();
-    if let Some(env) = env {
-        runtime.context_mut_for_cli().env = env.as_map().clone();
-    }
+    let runtime = crate::core_runtime::from_config(config).await?;
     let inspections = shine_core::frontend::FrontendService::new(runtime)
         .inspect_apps_with_options(
             shine_core::runtime::AppInspectionOptions {
@@ -89,10 +84,7 @@ pub(crate) fn app_info_file_from_inspection(
 }
 
 pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfoFile>> {
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    if let Ok(env) = EnvConfig::load_or_init(config).await {
-        runtime.context_mut_for_cli().env = env.as_map().clone();
-    }
+    let runtime = crate::core_runtime::from_config(config).await?;
     Ok(shine_core::frontend::FrontendService::new(runtime)
         .inspect_shells()
         .await
@@ -120,7 +112,7 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shells::handle_install;
+    use crate::shells::handle_install_approved;
     use tokio::fs;
 
     #[cfg(windows)]
@@ -169,7 +161,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
         crate::trust::grant_current_for_test(&config, "shell/custom/one").await;
-        handle_install(&config, Some("custom/one"), false)
+        handle_install_approved(&config, Some("custom/one"), false, true)
             .await
             .unwrap();
 

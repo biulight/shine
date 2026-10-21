@@ -89,6 +89,858 @@ impl Drop for Fixture {
     }
 }
 
+fn output_path_fixture() -> Fixture {
+    let mut fixture = Fixture::new();
+    let root = fixture.0.with_extension(if cfg!(unix) {
+        "display\nFORGED=path\r\t\u{1b}\\literal中文"
+    } else {
+        "display中文"
+    });
+    fs::rename(&fixture.0, &root).unwrap();
+    fixture.0 = root;
+    fixture
+}
+
+#[test]
+fn proxy_uninstall_omits_invalid_manifest_contents_without_mutating_rules_or_launchers() {
+    let f = Fixture::new();
+    let config = "schema_version=2\n[[env_proxy]]\ncommand='demo'\nwith=['TOKEN']\n";
+    f.write("state/config.toml", config);
+    fs::create_dir_all(f.0.join("state/bin")).unwrap();
+    f.write("state/bin/demo", "# shine-env-proxy original\n");
+    for contents in [
+        "entries='PROXY_DOCUMENT_CANARY'\n",
+        "unknown='PROXY_DOCUMENT_CANARY' invalid\n",
+    ] {
+        f.write("state/proxy-manifest.toml", contents);
+        let out = f.run(false, &["proxy", "uninstall", "demo"]);
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(out.stdout.is_empty(), "{out:?}");
+        let error = String::from_utf8(out.stderr).unwrap();
+        assert!(!error.contains("PROXY_DOCUMENT_CANARY"), "{error}");
+        assert!(
+            error.contains("parsing ") && error.contains("proxy-manifest.toml"),
+            "{error}"
+        );
+        assert_eq!(f.read("state/config.toml"), config);
+        assert_eq!(f.read("state/proxy-manifest.toml"), contents);
+        assert_eq!(f.read("state/bin/demo"), "# shine-env-proxy original\n");
+    }
+}
+
+#[test]
+fn workspace_readers_omit_invalid_document_contents_before_execution_or_export() {
+    let mut leaks = Vec::new();
+    for (file, invalid) in [
+        (
+            "shine.workspace.toml",
+            "version='WORKSPACE_DOCUMENT_CANARY'\n[env]\nfiles=['values.toml']\n",
+        ),
+        (
+            "shine.workspace.toml",
+            "version=2\n[env]\nfiles=['values.toml']\nunknown='WORKSPACE_DOCUMENT_CANARY' invalid\n",
+        ),
+        (
+            "shine.config.local.toml",
+            "hybrid_decrypt_backend=['WORKSPACE_DOCUMENT_CANARY']\n",
+        ),
+        (
+            "shine.config.local.toml",
+            "hybrid_decrypt_backend='WORKSPACE_DOCUMENT_CANARY' invalid\n",
+        ),
+    ] {
+        let f = Fixture::new();
+        f.write("state/config.toml", "schema_version=2\n");
+        f.write(
+            "outside/shine.workspace.toml",
+            "version=2\n[env]\nfiles=['values.toml']\n",
+        );
+        f.write(
+            "outside/values.toml",
+            "version=1\n[plain]\nPUBLIC='visible'\n",
+        );
+        f.write(&format!("outside/{file}"), invalid);
+        let originals: Vec<_> = [
+            "state/config.toml",
+            "outside/shine.workspace.toml",
+            "outside/values.toml",
+            &format!("outside/{file}"),
+        ]
+        .into_iter()
+        .map(|p| (p.to_owned(), f.read(p)))
+        .collect();
+        for args in [
+            vec![
+                "env",
+                "run",
+                "--mode",
+                "test",
+                "--",
+                "shine-never-start-this-command",
+            ],
+            vec![
+                "env",
+                "workspace",
+                "export",
+                "--mode",
+                "test",
+                "--format",
+                "dotenv",
+                "--output",
+                "out.env",
+            ],
+        ] {
+            let out = f.command(false).args(args).output().unwrap();
+            assert_eq!(out.status.code(), Some(1), "{file}: {out:?}");
+            assert!(out.stdout.is_empty(), "{file}: {out:?}");
+            let stderr = String::from_utf8(out.stderr).unwrap();
+            if stderr.contains("WORKSPACE_DOCUMENT_CANARY") {
+                leaks.push(format!("{file}: {stderr}"));
+            }
+            assert!(
+                stderr.contains("parsing ") && stderr.contains(file),
+                "{file}: {stderr}"
+            );
+            for (path, bytes) in &originals {
+                assert_eq!(&f.read(path), bytes, "{path}");
+            }
+            assert!(!f.0.join("outside/out.env").exists());
+        }
+    }
+    assert!(leaks.is_empty(), "{}", leaks.join("\n"));
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_cache_warnings_preserve_fallback_binary_streams_and_exit_status() {
+    use std::process::Stdio;
+    for case in ["malformed", "directory", "write"] {
+        let f = output_path_fixture();
+        f.write("state/config.toml", "schema_version=2\n");
+        let mut workspace =
+            "version=2\n[env]\nfiles=['values.toml']\noverride_process_env=true\n".to_owned();
+        if case == "write" {
+            workspace.push_str("[env.encryption]\nbackend='gpg'\ngpg_recipients=['test']\n");
+            fake_gpg(&f);
+        }
+        f.write("outside/shine.workspace.toml", &workspace);
+        let source = "version=1\n[plain]\nPUBLIC='visible'\n";
+        f.write("outside/values.toml", source);
+        let root = fs::canonicalize(f.0.join("outside")).unwrap();
+        let id = shine_core::digest::sha256_hex(root.as_os_str().as_encoded_bytes());
+        let cache_base = if cfg!(target_os = "macos") {
+            f.0.join("home/Library/Caches")
+        } else {
+            f.0.join("cache")
+        };
+        let cache = cache_base
+            .join("shine/projects")
+            .join(id)
+            .join("env-test.toml");
+        if case != "write" {
+            fs::create_dir_all(cache.parent().unwrap()).unwrap();
+            if case == "directory" {
+                fs::create_dir(&cache).unwrap();
+            } else {
+                fs::write(&cache, "version='CACHE_WARNING_CANARY'\n").unwrap();
+            }
+        }
+        let signal = f.0.join("signal");
+        let release = f.0.join("release");
+        let mut paths = vec![f.0.join("tools")];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let child = f
+            .command(false)
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env("XDG_CACHE_HOME", f.0.join("cache"))
+            .env("SIGNAL", &signal)
+            .env("RELEASE", &release)
+            .env("PUBLIC", "inherited")
+            .args([
+                "env",
+                "run",
+                "--mode",
+                "test",
+                "--",
+                "/bin/sh",
+                "-c",
+                "printf '%s' \"$PUBLIC\"; printf '\\000\\377\\n\\r\\200'; exit 23",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        if case == "write" {
+            wait_for(&signal);
+            fs::create_dir_all(cache.parent().unwrap().parent().unwrap()).unwrap();
+            fs::write(cache.parent().unwrap(), b"preserved blocker").unwrap();
+            fs::write(&release, b"go").unwrap();
+        }
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(23), "{case}: {out:?}");
+        assert_eq!(out.stdout, b"visible\x00\xff\n\r\x80", "{case}");
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert_eq!(stderr.lines().count(), 1, "{case}: {stderr:?}");
+        assert!(
+            stderr.starts_with(if case == "write" {
+                "Warning: could not update environment cache:"
+            } else {
+                "Warning: ignoring unreadable environment cache:"
+            }),
+            "{case}: {stderr:?}"
+        );
+        assert!(
+            !stderr.contains(['\r', '\t', '\u{1b}']),
+            "{case}: {stderr:?}"
+        );
+        assert!(!stderr.contains("CACHE_WARNING_CANARY"), "{stderr}");
+        assert_eq!(f.read("outside/shine.workspace.toml"), workspace);
+        assert_eq!(f.read("outside/values.toml"), source);
+        assert_eq!(f.read("state/config.toml"), "schema_version=2\n");
+        if case == "write" {
+            assert_eq!(
+                fs::read(cache.parent().unwrap()).unwrap(),
+                b"preserved blocker"
+            );
+        } else if case == "directory" {
+            assert!(cache.is_dir());
+        } else {
+            assert_eq!(
+                fs::read_to_string(&cache).unwrap(),
+                "version='CACHE_WARNING_CANARY'\n"
+            );
+        }
+    }
+}
+
+#[test]
+fn proxy_install_encodes_receipt_without_changing_target_or_rule() {
+    let f = output_path_fixture();
+    f.write(
+        "state/config.toml",
+        "schema_version=2\n# keep comment\n[env]\nOTHER='preserved'\n",
+    );
+    let name = format!("probe{}", std::env::consts::EXE_SUFFIX);
+    let target = f.0.join("tools").join(&name);
+    fs::copy(std::env::current_exe().unwrap(), &target).unwrap();
+    // Installation observes this executable but must never launch it.
+    let out = f
+        .command(false)
+        .env("PATH", f.0.join("tools"))
+        .args(["env", "proxy", "install", "probe", "--with", "TOKEN"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stderr.is_empty(), "{out:?}");
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(text.lines().count(), 1, "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert!(
+        text.starts_with("installed transparent proxy probe -> "),
+        "{text}"
+    );
+    let config = f.read("state/config.toml");
+    assert!(config.contains("# keep comment"));
+    let config: toml::Value = toml::from_str(&config).unwrap();
+    assert_eq!(config["env"]["OTHER"].as_str(), Some("preserved"));
+    assert_eq!(config["env_proxy"][0]["command"].as_str(), Some("probe"));
+    assert_eq!(config["env_proxy"][0]["with"][0].as_str(), Some("TOKEN"));
+    let manifest: toml::Value = toml::from_str(&f.read("state/proxy-manifest.toml")).unwrap();
+    assert_eq!(
+        Path::new(manifest["entries"]["probe"].as_str().unwrap()),
+        target
+    );
+}
+
+#[test]
+fn explain_encodes_local_fields_without_decrypting_or_changing_sources() {
+    let f = output_path_fixture();
+    f.layers();
+    let key = "missing\nFORGED=key\r\t\u{1b}\\literal中文";
+    let mut table: toml::Table = toml::from_str(&f.read("state/config.toml")).unwrap();
+    let values = table["env"].as_table_mut().unwrap();
+    values.insert(key.into(), toml::Value::String("plain".into()));
+    values.insert(
+        format!("{key}_SECRET"),
+        toml::Value::String("gpg:PRIVATE_EXPLAIN_CANARY".into()),
+    );
+    let config = toml::to_string(&table).unwrap();
+    f.write("state/config.toml", &config);
+    for selected in ["HTTP_PROXY_PORT", key] {
+        for reveal in [false, true] {
+            let mut args = vec!["explain", selected];
+            if reveal {
+                args.push("--reveal");
+            }
+            let output = f.run(true, &args);
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let text = String::from_utf8(output.stdout).unwrap();
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(!text.contains("PRIVATE_EXPLAIN_CANARY"), "{text:?}");
+            assert_eq!(text.contains("    value:"), reveal, "{text:?}");
+            if selected == key {
+                assert!(
+                    text.starts_with("Key: missing\\nFORGED=key\\r\\t\\u{1b}\\literal中文\n"),
+                    "{text:?}"
+                );
+                assert!(!text.contains("run `shine env explain missing"), "{text:?}");
+                assert!(text.contains("original key"), "{text:?}");
+            }
+            if cfg!(unix) {
+                assert!(
+                    text.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
+                    "{text:?}"
+                );
+            }
+        }
+    }
+    assert_eq!(f.read("state/config.toml"), config);
+    assert!(!f.0.join("state/update-check.json").exists());
+}
+
+#[test]
+fn env_write_receipts_encode_paths_preserving_explicit_target_and_inheritance() {
+    let f = output_path_fixture();
+    f.layers();
+    let project = f.read("project/shine.env.toml");
+    for args in [
+        vec!["set", "HTTP_PROXY_PORT", "new-global", "--global"],
+        vec!["delete", "HTTP_PROXY_PORT", "--global"],
+    ] {
+        let output = f.run(true, &args);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        if cfg!(unix) {
+            assert!(
+                text.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
+                "{text:?}"
+            );
+        }
+        assert!(text.contains("selected layer remains shadowed"), "{text:?}");
+        assert!(text.contains("Current value unchanged."), "{text:?}");
+        assert_eq!(f.read("project/shine.env.toml"), project);
+        assert_eq!(f.ok(true, &["get", "HTTP_PROXY_PORT"]), "project-env\n");
+    }
+    assert!(f.read("state/config.toml").contains("# global comment"));
+    assert!(!f.0.join("state/update-check.json").exists());
+}
+
+#[test]
+fn configuration_parse_failures_omit_values_without_writing_any_layer() {
+    let paths = [
+        "state/config.toml",
+        "project/shine.config.toml",
+        "overlay/shine.env.toml",
+        "state/shine.env.toml",
+        "project/shine.env.toml",
+    ];
+    for path in paths {
+        for syntax_error in [true, false] {
+            let f = output_path_fixture();
+            f.layers();
+            let invalid = if syntax_error {
+                "TOKEN = \"PRIVATE_CONFIG_CANARY_UNCLOSED\n"
+            } else if path.ends_with("config.toml") {
+                "gpg_recipients = 'PRIVATE_CONFIG_CANARY_TYPE'\n"
+            } else {
+                "TOKEN = { value = 'PRIVATE_CONFIG_CANARY_TYPE', description = 7 }\n"
+            };
+            f.write(path, invalid);
+            let before: Vec<_> = paths
+                .iter()
+                .map(|path| fs::read(f.0.join(path)).unwrap())
+                .collect();
+            for args in [vec!["get", "TOKEN"], vec!["set", "NEW_TOKEN", "new"]] {
+                let result = f.run(true, &args);
+                assert_eq!(result.status.code(), Some(1), "{path}: {result:?}");
+                assert!(result.stdout.is_empty(), "{result:?}");
+                let diagnostic = String::from_utf8(result.stderr).unwrap();
+                assert!(diagnostic.contains("TOML parse error"), "{diagnostic}");
+                assert!(
+                    !diagnostic.contains(['\r', '\t', '\u{1b}'])
+                        && !diagnostic.contains("\nFORGED"),
+                    "{diagnostic:?}"
+                );
+                assert!(
+                    !diagnostic.contains("PRIVATE_CONFIG_CANARY"),
+                    "{diagnostic}"
+                );
+                assert!(!diagnostic.contains("TOKEN ="), "{diagnostic}");
+                for (path, bytes) in paths.iter().zip(&before) {
+                    assert_eq!(fs::read(f.0.join(path)).unwrap(), *bytes);
+                }
+                assert_eq!(fs::read_dir(f.0.join("state")).unwrap().count(), 2);
+            }
+        }
+    }
+}
+
+#[test]
+fn proxy_exec_preserves_normal_status_streams_and_injection_selection() {
+    for mode in ["enabled", "disabled", "missing"] {
+        let f = Fixture::new();
+        let rule = if mode == "missing" { "other" } else { "probe" };
+        let source = if mode == "enabled" {
+            "CHILD_SOURCE"
+        } else {
+            "UNAVAILABLE_SOURCE"
+        };
+        f.write("state/config.toml", &format!("schema_version = 2\n[[env_proxy]]\ncommand = '{rule}'\nenabled = {}\nwith = ['{source}=CHILD_VALUE']\n[env]\nCHILD_SOURCE = 'injected'\n", mode != "disabled"));
+        let before = fs::read(f.0.join("state/config.toml")).unwrap();
+        #[cfg(unix)]
+        let target = PathBuf::from("/bin/sh");
+        #[cfg(windows)]
+        let target = PathBuf::from(std::env::var_os("COMSPEC").unwrap());
+        for code in [
+            0,
+            7,
+            #[cfg(windows)]
+            -1073741510, // STATUS_CONTROL_C_EXIT remains a native Windows exit code.
+        ] {
+            #[cfg(unix)]
+            let args = vec![
+                "-c".to_string(),
+                "printf 'out:%s:%s\\n' \"$CHILD_VALUE\" \"$1\"; printf 'err\\n' >&2; exit \"$2\""
+                    .into(),
+                "probe".into(),
+                "literal value".into(),
+                code.to_string(),
+            ];
+            #[cfg(windows)]
+            let args = vec![
+                "/d".to_string(),
+                "/c".into(),
+                format!("echo out:%CHILD_VALUE%:literal value&echo err>&2&exit /b {code}"),
+            ];
+            let result = f
+                .command(false)
+                .env("CHILD_VALUE", "parent")
+                .args(["env", "proxy", "exec", "--target"])
+                .arg(&target)
+                .arg("probe")
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(code), "{mode}: {result:?}");
+            let value = if mode == "enabled" {
+                "injected"
+            } else {
+                "parent"
+            };
+            let newline = if cfg!(windows) { "\r\n" } else { "\n" };
+            assert_eq!(
+                result.stdout,
+                format!("out:{value}:literal value{newline}").as_bytes()
+            );
+            assert_eq!(result.stderr, format!("err{newline}").as_bytes());
+            assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+        }
+        // A spawn failure still reports an error rather than becoming a child status.
+        f.write("tools/non-executable", "not a program");
+        let result = f
+            .command(false)
+            .args(["env", "proxy", "exec", "--target"])
+            .arg(f.0.join("tools/non-executable"))
+            .arg("probe")
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        assert!(result.stdout.is_empty(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("running proxy target"),
+            "{result:?}"
+        );
+        assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_proxy_preserves_signal_status_binary_output_and_runtime_state() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    for mode in ["enabled", "disabled", "missing"] {
+        let f = Fixture::new();
+        f.write(
+            "state/config.toml",
+            "schema_version = 2\n[env]\nCHILD_SOURCE = 'injected'\n",
+        );
+        f.write("project/shine.config.toml", "# project-only rule\n");
+        f.write("tools/probe", "#!/bin/sh\nprintf '\\000OUT:%s:%s\\n' \"$CHILD_VALUE\" \"$2\"\nprintf '\\000ERR\\n' >&2\ncase \"$1\" in\nterm) kill -TERM \"$$\";;\nkill) kill -KILL \"$$\";;\nexit7) exit 7;;\nesac\n");
+        fs::set_permissions(f.0.join("tools/probe"), fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(env!("CARGO_BIN_EXE_shine"), f.0.join("tools/shine")).unwrap();
+        let path = std::env::join_paths(
+            std::iter::once(f.0.join("tools"))
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let mut install = f.command(mode == "missing");
+        install.env("PATH", &path).args([
+            "env",
+            "proxy",
+            "install",
+            "probe",
+            "--with",
+            "CHILD_SOURCE=CHILD_VALUE",
+        ]);
+        if mode == "missing" {
+            install.arg("--project");
+        }
+        let result = install.output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        if mode == "disabled" {
+            f.ok(false, &["proxy", "disable", "probe"]);
+        }
+        let launcher = f.0.join("state/bin/probe");
+        let paths = [
+            f.0.join("state/config.toml"),
+            f.0.join("project/shine.config.toml"),
+            f.0.join("state/proxy-manifest.toml"),
+            launcher.clone(),
+        ];
+        let before = paths
+            .iter()
+            .map(|path| fs::read(path).unwrap())
+            .collect::<Vec<_>>();
+        for (operation, code) in [
+            ("term", 128 + libc::SIGTERM),
+            ("kill", 128 + libc::SIGKILL),
+            ("exit7", 7),
+            ("ok", 0),
+        ] {
+            let argument = "literal ' \\\nargument";
+            let result = Command::new(&launcher)
+                .current_dir(f.0.join("outside"))
+                .env("HOME", f.0.join("home"))
+                .env_remove("SUDO_USER")
+                .env_remove("SHINE_PRESETS")
+                .env("PATH", &path)
+                .env("CHILD_VALUE", "parent")
+                .args([operation, argument])
+                .output()
+                .unwrap();
+            assert_eq!(
+                result.status.code(),
+                Some(code),
+                "{mode}/{operation}: {result:?}"
+            );
+            let value = if mode == "enabled" {
+                "injected"
+            } else {
+                "parent"
+            };
+            assert_eq!(
+                result.stdout,
+                format!("\0OUT:{value}:{argument}\n").as_bytes()
+            );
+            assert_eq!(result.stderr, b"\0ERR\n");
+            for (path, bytes) in paths.iter().zip(&before) {
+                assert_eq!(fs::read(path).unwrap(), *bytes);
+            }
+        }
+    }
+}
+
+#[test]
+fn shell_export_rejects_nul_without_altering_raw_values_or_configuration() {
+    for shell in ["bash", "zsh", "fish", "powershell"] {
+        for value in [
+            "\0private-prefix",
+            "private-prefix\0private-suffix",
+            "private-suffix\0",
+        ] {
+            let f = Fixture::new();
+            f.write(
+                "state/config.toml",
+                &format!(
+                    "schema_version = 2\nshell_type = '{shell}'\n[env]\nTOKEN = {}\n",
+                    toml::Value::String(value.into())
+                ),
+            );
+            let before = fs::read(f.0.join("state/config.toml")).unwrap();
+            for alias in ["TOKEN", "API_TOKEN"] {
+                let result = f.run(false, &["secret", "export", "TOKEN", "--as", alias]);
+                assert_eq!(result.status.code(), Some(1), "{shell}: {result:?}");
+                assert!(result.stdout.is_empty(), "{result:?}");
+                let error = String::from_utf8(result.stderr).unwrap();
+                assert!(error.contains("NUL"), "{error}");
+                assert!(!error.contains("private-"), "{error}");
+                assert!(!error.contains('\0'), "{error}");
+            }
+            let raw = f.run(false, &["get", "TOKEN"]);
+            assert_eq!(raw.status.code(), Some(0), "{raw:?}");
+            assert_eq!(raw.stdout, format!("{value}\n").as_bytes());
+            assert!(raw.stderr.is_empty(), "{raw:?}");
+            assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+            assert_eq!(fs::read_dir(f.0.join("state")).unwrap().count(), 1);
+        }
+    }
+}
+
+#[test]
+fn shell_export_valid_literals_round_trip_through_native_shell() {
+    #[cfg(unix)]
+    let shell = "bash";
+    #[cfg(windows)]
+    let shell = "powershell";
+    for value in ["", "plain", "a ' quote \" $HOME `tick` \\path\nnext\t中文"] {
+        let f = Fixture::new();
+        f.write(
+            "state/config.toml",
+            &format!(
+                "schema_version = 2\nshell_type = '{shell}'\n[env]\nTOKEN = {}\n",
+                toml::Value::String(value.into())
+            ),
+        );
+        let before = fs::read(f.0.join("state/config.toml")).unwrap();
+        let result = f.run(false, &["secret", "export", "TOKEN", "--as", "API_TOKEN"]);
+        assert_eq!(result.status.code(), Some(0), "{result:?}");
+        assert!(result.stderr.is_empty(), "{result:?}");
+        let code = String::from_utf8(result.stdout).unwrap();
+        #[cfg(unix)]
+        let mut consumer = {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", &format!("{code}\nprintf '%s' \"$API_TOKEN\"")]);
+            command
+        };
+        #[cfg(windows)]
+        let mut consumer = {
+            let mut command = Command::new("powershell.exe");
+            command.args(["-NoProfile", "-NonInteractive", "-Command", &format!(
+                "{code}\n$bytes = [Text.Encoding]::UTF8.GetBytes([string]$env:API_TOKEN); [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)"
+            )]);
+            command
+        };
+        let consumed = consumer
+            .current_dir(f.0.join("outside"))
+            .env_remove("API_TOKEN")
+            .output()
+            .unwrap();
+        assert_eq!(consumed.status.code(), Some(0), "{consumed:?}");
+        assert!(consumed.stderr.is_empty(), "{consumed:?}");
+        assert_eq!(consumed.stdout, value.as_bytes());
+        assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_export_preset_preserves_failures_and_only_evaluates_success() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("presets/shell/utils/shine-env-export.sh");
+    for shell in [
+        "/bin/bash",
+        #[cfg(target_os = "macos")]
+        "/bin/zsh",
+    ] {
+        for (mode, expected_code, expected_value) in [
+            ("valid", 0, "next\nvalue"),
+            ("collision", 0, "next\nvalue"),
+            ("nul", 1, "parent"),
+            ("missing", 1, "parent"),
+            ("parse-error", 2, "parent"),
+            ("partial-failure", 7, "parent"),
+        ] {
+            let f = Fixture::new();
+            let value = if mode == "nul" {
+                "private\0value"
+            } else {
+                "next\nvalue"
+            };
+            f.write(
+                "state/config.toml",
+                &format!(
+                    "schema_version = 2\nshell_type = 'bash'\n[env]\nTOKEN = {}\n",
+                    toml::Value::String(value.into())
+                ),
+            );
+            let before = fs::read(f.0.join("state/config.toml")).unwrap();
+            // Source the actual needs_source preset inside a function, as the shell
+            // launcher does. A failing producer's partial stdout must never be eval'd.
+            let result = Command::new(shell)
+                .current_dir(f.0.join("outside"))
+                .env("HOME", f.0.join("home"))
+                .env("SHINE_CONFIG_DIR", f.0.join("state"))
+                .env_remove("SHINE_PRESETS")
+                .env_remove("SUDO_USER")
+                .env("SHINE_TEST_BINARY", env!("CARGO_BIN_EXE_shine"))
+                .env("SHINE_TEST_PRESET", &source)
+                .env("SHINE_TEST_MODE", mode)
+                .env("API_TOKEN", "parent")
+                .args([
+                    "-c",
+                    r#"
+shine() {
+    if [ "$SHINE_TEST_MODE" = partial-failure ]; then
+        printf "export API_TOKEN='must-not-run'\n"
+        return 7
+    fi
+    "$SHINE_TEST_BINARY" "$@"
+}
+wrapped() { . "$SHINE_TEST_PRESET"; }
+case "$SHINE_TEST_MODE" in
+    missing) wrapped MISSING_TOKEN --as API_TOKEN;;
+    parse-error) wrapped TOKEN --invalid-option;;
+    collision) wrapped TOKEN --as _shine_export_code;;
+    *) wrapped TOKEN --as API_TOKEN;;
+esac
+export_status=$?
+if [ "$SHINE_TEST_MODE" = collision ]; then
+    printf '%s' "$_shine_export_code"
+else
+    printf '%s' "$API_TOKEN"
+fi
+exit "$export_status"
+"#,
+                ])
+                .output()
+                .unwrap();
+            assert_eq!(
+                result.status.code(),
+                Some(expected_code),
+                "{mode}: {result:?}"
+            );
+            assert_eq!(
+                result.stdout,
+                expected_value.as_bytes(),
+                "{mode}: {result:?}"
+            );
+            if matches!(mode, "valid" | "collision" | "partial-failure") {
+                assert!(result.stderr.is_empty(), "{result:?}");
+            } else {
+                assert!(!result.stderr.is_empty(), "{result:?}");
+                assert!(
+                    !String::from_utf8_lossy(&result.stderr).contains("private"),
+                    "{result:?}"
+                );
+            }
+            assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn shell_export_powershell_preset_round_trips_native_pipeline_values() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("presets/shell/utils/shine-env-export.ps1");
+    // PowerShell 5.1 splits native stdout into lines and decodes it using
+    // Console.OutputEncoding. Exercise the shipped source helper at that boundary.
+    for code_page in [65001, 936] {
+        for value in [
+            "",
+            "plain ' quote \" $HOME `tick` \\path",
+            "\nfirst\n",
+            "\rfirst\r",
+            "first\r\nsecond\r\n",
+            "中文😀e\u{301}",
+            "'$(throw 'must-not-run')\r\n中文",
+        ] {
+            let f = Fixture::new();
+            f.write(
+                "state/config.toml",
+                &format!(
+                    "schema_version = 2\nshell_type = 'powershell'\n[env]\nTOKEN = {}\n",
+                    toml::Value::String(value.into())
+                ),
+            );
+            let before = fs::read(f.0.join("state/config.toml")).unwrap();
+            let result = Command::new("powershell.exe")
+                .current_dir(f.0.join("outside"))
+                .env("SHINE_TEST_BINARY", env!("CARGO_BIN_EXE_shine"))
+                .env("SHINE_TEST_CONFIG", f.0.join("state"))
+                .env("SHINE_TEST_PRESET", &source)
+                .env("SHINE_TEST_CODE_PAGE", code_page.to_string())
+                .env_remove("SHINE_PRESETS")
+                .env_remove("SHINE_CONFIG_DIR")
+                .env("API_TOKEN", "parent")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::GetEncoding([int]$env:SHINE_TEST_CODE_PAGE)
+function shine { & $env:SHINE_TEST_BINARY --config-dir $env:SHINE_TEST_CONFIG @args }
+function wrapped { . $env:SHINE_TEST_PRESET @args }
+wrapped TOKEN --as API_TOKEN
+$status = $LASTEXITCODE
+if ([Console]::OutputEncoding.CodePage -ne [int]$env:SHINE_TEST_CODE_PAGE) {
+    throw 'export changed the parent encoding'
+}
+$bytes = [Text.Encoding]::UTF8.GetBytes([string]$env:API_TOKEN)
+[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)
+exit $status
+"#,
+                ])
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(0), "{code_page}: {result:?}");
+            assert!(result.stderr.is_empty(), "{code_page}: {result:?}");
+            assert_eq!(result.stdout, value.as_bytes(), "code page {code_page}");
+            assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+            assert_eq!(fs::read_dir(f.0.join("state")).unwrap().count(), 1);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_export_checks_the_decrypted_winner_without_changing_decrypt_output() {
+    use std::os::unix::fs::PermissionsExt;
+    for value in [
+        b"secret-prefix\0secret-suffix".as_slice(),
+        b"safe-decrypted",
+    ] {
+        let f = Fixture::new();
+        f.write("state/config.toml", "schema_version = 2\nshell_type = 'bash'\nsecret_backend = 'age'\n[env]\nTOKEN = \"plaintext-\\u0000-fallback\"\nTOKEN_SECRET = 'eA=='\n");
+        let before = fs::read(f.0.join("state/config.toml")).unwrap();
+        let payload = f.0.join("payload");
+        fs::write(&payload, value).unwrap();
+        let log = f.0.join("gpg.log");
+        let gpg = f.0.join("tools/gpg");
+        // An isolated substitute returns public test bytes; no real keys or tools.
+        fs::write(&gpg, "#!/bin/sh\n[ \"$1\" = --decrypt ] && [ \"$2\" = --output ] && [ \"$3\" = - ] && [ \"$#\" = 4 ] || exit 91\nprintf 'called\\n' >> \"$SHINE_TEST_GPG_LOG\"\n/bin/cat \"$SHINE_TEST_PLAINTEXT\"\n").unwrap();
+        fs::set_permissions(gpg, fs::Permissions::from_mode(0o700)).unwrap();
+        let run = |args: &[&str]| {
+            f.command(false)
+                .env("PATH", f.0.join("tools"))
+                .env("SHINE_TEST_PLAINTEXT", &payload)
+                .env("SHINE_TEST_GPG_LOG", &log)
+                .arg("env")
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        let result = run(&["secret", "export", "TOKEN", "--as", "API_TOKEN"]);
+        if value.contains(&0) {
+            assert_eq!(result.status.code(), Some(1), "{result:?}");
+            assert!(result.stdout.is_empty(), "{result:?}");
+            let error = String::from_utf8(result.stderr).unwrap();
+            assert!(error.contains("NUL"), "{error}");
+            assert!(!error.contains("secret-prefix"), "{error}");
+            assert!(!error.contains("secret-suffix"), "{error}");
+        } else {
+            assert_eq!(result.status.code(), Some(0), "{result:?}");
+            assert_eq!(result.stdout, b"export API_TOKEN='safe-decrypted'\n");
+            assert!(result.stderr.is_empty(), "{result:?}");
+        }
+        assert_eq!(fs::read(&log).unwrap(), b"called\n");
+        let decrypted = run(&["secret", "decrypt", "TOKEN_SECRET"]);
+        assert_eq!(decrypted.status.code(), Some(0), "{decrypted:?}");
+        assert_eq!(decrypted.stdout, value);
+        assert!(decrypted.stderr.is_empty(), "{decrypted:?}");
+        assert_eq!(fs::read(log).unwrap(), b"called\ncalled\n");
+        assert_eq!(fs::read(f.0.join("state/config.toml")).unwrap(), before);
+        assert_eq!(fs::read_dir(f.0.join("state")).unwrap().count(), 1);
+    }
+}
+
 #[test]
 fn queries_are_read_only_and_defaults_are_not_persisted() {
     let f = Fixture::new();
@@ -541,4 +1393,287 @@ fn linked_and_special_targets_are_rejected_and_saved_files_are_private() {
             & 0o777,
         0o600
     );
+}
+
+#[test]
+fn proxy_toggle_reports_write_scope_and_effective_project_override() {
+    for (action, global_enabled, project_enabled) in
+        [("disable", false, true), ("enable", true, false)]
+    {
+        let f = output_path_fixture();
+        f.write("state/config.toml", &format!("schema_version = 2\n[[env_proxy]]\ncommand = 'demo'\nwith = ['DEMO']\nenabled = {}\n", !global_enabled));
+        let project = format!(
+            "schema_version = 2\n[[env_proxy]]\ncommand = 'demo'\nwith = ['DEMO']\nenabled = {project_enabled}\n"
+        );
+        f.write("project/shine.config.toml", &project);
+        let output = f.run(true, &["proxy", action, "demo"]);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("in global config"), "{text}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        if cfg!(unix) {
+            assert!(
+                text.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
+                "{text:?}"
+            );
+        }
+        let effective = if project_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        assert!(
+            text.contains(&format!("Current effective state: {effective}")),
+            "{text}"
+        );
+        assert_eq!(f.read("project/shine.config.toml"), project);
+        let global: toml::Value = toml::from_str(&f.read("state/config.toml")).unwrap();
+        // enabled=true can be represented by the default, so decode through the value's default.
+        assert_eq!(
+            global["env_proxy"][0]
+                .get("enabled")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(true),
+            global_enabled
+        );
+        let global_bytes = f.read("state/config.toml");
+        let text = f.ok(true, &["proxy", action, "demo", "--project"]);
+        assert!(text.contains("in project config"), "{text}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        let effective = if global_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        assert!(
+            text.contains(&format!("Current effective state: {effective}")),
+            "{text}"
+        );
+        assert_eq!(f.read("state/config.toml"), global_bytes);
+        let list = f.ok(true, &["proxy", "list"]);
+        assert!(
+            list.contains(&format!("demo: DEMO ({effective})")),
+            "{list}"
+        );
+    }
+}
+
+#[test]
+fn env_list_escapes_cells_aligns_display_columns_and_preserves_raw_values() {
+    let f = output_path_fixture();
+    f.write(
+        "state/config.toml",
+        r#"schema_version = 2
+[env]
+ASCII = { value = "abc", description = "marker-ascii" }
+WIDE = { value = "中文中文", description = "marker-wide" }
+COMBINING = { value = "éé", description = "marker-combining" }
+MULTILINE = { value = "first\nsecond\tend", description = "marker-multi\nnext" }
+API_TOKEN = { value = "hidden\nvalue", description = "marker-secret" }
+"#,
+    );
+    let before = f.read("state/config.toml");
+    let output = f.ok(false, &["list"]);
+    assert!(!output.contains(['\r', '\t', '\u{1b}']), "{output:?}");
+    if cfg!(unix) {
+        assert!(
+            output.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
+            "{output:?}"
+        );
+    }
+    let rows: Vec<_> = output
+        .lines()
+        .filter(|line| line.contains("marker-"))
+        .collect();
+    assert_eq!(rows.len(), 5, "{output}");
+    let columns: Vec<_> = rows
+        .iter()
+        .map(|line| console::measure_text_width(line.split_once("marker-").unwrap().0))
+        .collect();
+    assert!(
+        columns.iter().all(|column| *column == columns[0]),
+        "{columns:?}\n{output}"
+    );
+    assert!(output.contains(r"first\nsecond\tend"), "{output}");
+    assert!(output.contains(r"marker-multi\nnext"), "{output}");
+    assert!(output.contains("<redacted>"), "{output}");
+    assert!(!output.contains("hidden"), "{output}");
+    let revealed = f.ok(false, &["list", "--reveal"]);
+    assert!(revealed.contains(r"hidden\nvalue"), "{revealed}");
+    assert_eq!(f.ok(false, &["get", "MULTILINE"]), "first\nsecond\tend\n");
+    assert_eq!(f.read("state/config.toml"), before);
+    let project = "schema_version=2\n[env]\nPROJECT='public'\n";
+    f.write("project/shine.config.toml", project);
+    let listed = f.ok(true, &["list"]);
+    assert!(listed.contains("Project root:"), "{listed:?}");
+    assert!(!listed.contains(['\r', '\t', '\u{1b}']), "{listed:?}");
+    assert_eq!(f.read("project/shine.config.toml"), project);
+    assert_eq!(f.read("state/config.toml"), before);
+}
+
+#[test]
+fn env_read_errors_encode_key_labels_without_changing_lookup_or_plain_output() {
+    let f = Fixture::new();
+    let key = "key\nFORGED\r\t\u{1b}";
+    let value = "value\nRAW\r\t\u{1b}";
+    let original = format!(
+        "schema_version=2\n[env]\n{}={}\n",
+        serde_json::to_string(key).unwrap(),
+        serde_json::to_string(value).unwrap()
+    );
+    f.write("state/config.toml", &original);
+    let found = f.run(false, &["get", key]);
+    assert_eq!(found.status.code(), Some(0), "{found:?}");
+    assert_eq!(found.stdout, format!("{value}\n").as_bytes());
+    assert!(found.stderr.is_empty());
+    let missing = "missing\nFORGED\r\t\u{1b}";
+    for args in [
+        vec!["get", missing],
+        vec!["secret", "decrypt", missing],
+        vec!["secret", "decrypt", key],
+    ] {
+        let output = f
+            .command(false)
+            .env("NO_COLOR", "1")
+            .env("PATH", f.0.join("tools"))
+            .arg("env")
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+        assert!(
+            !stderr.lines().any(|line| line.starts_with("FORGED")),
+            "{stderr:?}"
+        );
+        assert!(stderr.contains(r"\nFORGED\r\t\u{1b}"), "{stderr:?}");
+        assert_eq!(f.read("state/config.toml"), original);
+    }
+}
+
+#[test]
+fn directed_write_messages_encode_keys_without_changing_storage_or_shadowing() {
+    let f = output_path_fixture();
+    let key = "KEY\nFORGED\r\t\u{1b}";
+    let config = "schema_version=2\n";
+    f.write("state/config.toml", config);
+    let sidecar = format!("{}='PRIVATE_VALUE'\n", serde_json::to_string(key).unwrap());
+    f.write("state/shine.env.toml", &sidecar);
+    for args in [
+        vec!["set", key, "new"],
+        vec!["set", key, "new", "--force"],
+        vec!["delete", key, "--global"],
+    ] {
+        let out = f.run(false, &args);
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(out.stdout.is_empty());
+        let text = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !text.contains(['\r', '\t', '\u{1b}']) && !text.contains("\nFORGED"),
+            "{text:?}"
+        );
+        assert!(!text.contains("PRIVATE_VALUE"));
+        assert_eq!(f.read("state/config.toml"), config);
+        assert_eq!(f.read("state/shine.env.toml"), sidecar);
+        if args[0] == "set" {
+            assert!(
+                text.contains(
+                    "original storage key (control characters; copyable command omitted)"
+                ),
+                "{text}"
+            );
+            assert!(!text.contains("shine env set KEY\\n"));
+        }
+    }
+    let text = f.ok(false, &["set", key, "new", "--global"]);
+    assert!(
+        text.starts_with(r"Saved KEY\nFORGED\r\t\u{1b} in "),
+        "{text}"
+    );
+    let saved: toml::Table = f.read("state/config.toml").parse().unwrap();
+    assert_eq!(saved["env"][key].as_str(), Some("new"));
+    assert!(text.contains("selected layer remains shadowed"));
+    let text = f.ok(false, &["delete", key, "--global"]);
+    assert!(
+        text.starts_with(r"Deleted KEY\nFORGED\r\t\u{1b} in "),
+        "{text}"
+    );
+    assert_eq!(f.read("state/shine.env.toml"), sidecar);
+}
+
+#[test]
+fn directed_delete_hint_round_trips_special_keys_through_native_shell() {
+    for key in ["TEAM KEY", "-LEADING", "KEY'$(echo INJECTED);&"] {
+        let f = Fixture::new();
+        let entry = format!("{}='retain'\n", serde_json::to_string(key).unwrap());
+        f.write(
+            "state/config.toml",
+            &format!("schema_version=2\n[env]\n{entry}"),
+        );
+        f.write("state/shine.env.toml", &entry);
+        let refused = f.run(false, &["delete", "--", key]);
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let error = String::from_utf8(refused.stderr).unwrap();
+        let hint = error
+            .split("Alternative: `")
+            .nth(1)
+            .unwrap()
+            .split('`')
+            .next()
+            .unwrap();
+        let program = if cfg!(windows) {
+            format!(
+                "& {}",
+                shine_core::shell_quote::powershell_single_quote(env!("CARGO_BIN_EXE_shine"))
+            )
+        } else {
+            shine_core::shell_quote::posix_single_quote(env!("CARGO_BIN_EXE_shine"))
+        };
+        let script = format!(
+            "{program} --config-dir {} {}{}",
+            if cfg!(windows) {
+                shine_core::shell_quote::powershell_single_quote(
+                    f.0.join("state").to_str().unwrap(),
+                )
+            } else {
+                shine_core::shell_quote::posix_single_quote(f.0.join("state").to_str().unwrap())
+            },
+            hint.strip_prefix("shine ").unwrap(),
+            if cfg!(windows) {
+                "; exit $LASTEXITCODE"
+            } else {
+                ""
+            }
+        );
+        let configured = f.command(false);
+        let mut cmd = Command::new(if cfg!(windows) {
+            "powershell.exe"
+        } else {
+            "sh"
+        });
+        cmd.current_dir(configured.get_current_dir().unwrap());
+        for (name, value) in configured.get_envs() {
+            match value {
+                Some(value) => {
+                    cmd.env(name, value);
+                }
+                None => {
+                    cmd.env_remove(name);
+                }
+            }
+        }
+        if cfg!(windows) {
+            cmd.args(["-NoProfile", "-NonInteractive", "-Command"]);
+        } else {
+            cmd.arg("-c");
+        }
+        let out = cmd.arg(&script).output().unwrap();
+        assert!(out.status.success(), "{hint}: {out:?}");
+        let saved: toml::Table = f.read("state/config.toml").parse().unwrap();
+        assert!(!saved["env"].as_table().unwrap().contains_key(key));
+        assert_eq!(f.read("state/shine.env.toml"), entry);
+    }
 }

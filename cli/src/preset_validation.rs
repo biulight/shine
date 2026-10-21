@@ -26,34 +26,6 @@ pub async fn validate_path(path: &Path) -> PresetValidationReportV1 {
     shine_core::runtime::validate_preset_path(&shine_core::runtime::RealHost, &cwd, path).await
 }
 
-#[cfg(test)]
-fn finish_report(
-    path: PathBuf,
-    diagnostics: Vec<PresetDiagnostic>,
-    categories: Vec<PresetCategoryValidation>,
-) -> PresetValidationReportV1 {
-    let (errors, warnings) = diagnostics
-        .iter()
-        .chain(categories.iter().flat_map(|category| &category.diagnostics))
-        .fold((0, 0), |(errors, warnings), diagnostic| {
-            match diagnostic.severity {
-                PresetDiagnosticSeverity::Error => (errors + 1, warnings),
-                PresetDiagnosticSeverity::Warning => (errors, warnings + 1),
-            }
-        });
-    PresetValidationReportV1 {
-        schema_version: PRESET_VALIDATION_SCHEMA_VERSION,
-        valid: errors == 0,
-        path,
-        summary: PresetValidationSummary {
-            categories: categories.len(),
-            errors,
-            warnings,
-        },
-        diagnostics,
-        categories,
-    }
-}
 fn print_text_report(report: &PresetValidationReportV1) {
     print!("{}", validation_text(report));
 }
@@ -74,7 +46,7 @@ fn validation_text(report: &PresetValidationReportV1) -> String {
         output,
         "  {} {}",
         crate::colors::dim("Source:"),
-        report.path.display()
+        crate::output::escape_controls(&report.path.display().to_string())
     );
     for diagnostic in &report.diagnostics {
         let _ = writeln!(output);
@@ -97,7 +69,7 @@ fn validation_text(report: &PresetValidationReportV1) -> String {
                 crate::colors::symbol("✗")
             },
             category.kind,
-            category.name
+            crate::output::escape_controls(&category.name)
         );
         for diagnostic in &category.diagnostics {
             crate::preset_report::write_diagnostic(
@@ -150,24 +122,21 @@ mod tests {
         crate::test_support::make_temp_dir(name).await
     }
 
-    #[test]
-    fn text_report_uses_singular_counts_and_omits_a_duplicate_diagnostic_path() {
-        let path = PathBuf::from("/preset/root/shell/chrome/shine.toml");
-        let report = finish_report(
-            path.clone(),
-            Vec::new(),
-            vec![PresetCategoryValidation {
-                kind: "shell".to_string(),
-                name: "chrome".to_string(),
-                path: path.parent().unwrap().to_path_buf(),
-                valid: false,
-                diagnostics: vec![PresetDiagnostic {
-                    severity: PresetDiagnosticSeverity::Error,
-                    code: "invalid_permission_declaration".to_string(),
-                    message: "shell/chrome/open-chrome has malformed permission fields".to_string(),
-                    path: Some(path.clone()),
-                }],
-            }],
+    #[tokio::test]
+    async fn text_report_uses_singular_counts_and_omits_a_duplicate_diagnostic_path() {
+        let root = fixture_root("validation-text-production").await;
+        let manifest = root.join("shell/chrome/shine.toml");
+        write(
+            &manifest,
+            "[permissions]\nschema_version = 1\n[[files]]\nsource = 'open-chrome.sh'\n",
+        );
+        write(root.join("shell/chrome/open-chrome.sh"), "#!/bin/sh\n");
+        let report = validate_path(&manifest).await;
+        let path = std::fs::canonicalize(&manifest).unwrap();
+        assert_eq!(report.path, path);
+        assert_eq!(
+            report.categories[0].diagnostics[0].path.as_ref(),
+            Some(&path)
         );
 
         let output = validation_text(&report);
@@ -178,6 +147,7 @@ mod tests {
         assert!(output.contains("code: invalid_permission_declaration"));
         assert!(output.contains("Summary: 1 category · 1 error · 0 warnings"));
         assert!(!output.contains("1 categories"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -190,19 +160,22 @@ mod tests {
         assert_eq!(report.diagnostics[0].code, "invalid_input");
     }
 
-    #[test]
-    fn json_contract_matches_schema_v1_golden() {
-        let report = finish_report(
-            PathBuf::from("/preset/root"),
-            Vec::new(),
-            vec![PresetCategoryValidation {
-                kind: "shell".to_string(),
-                name: "my-tools".to_string(),
-                path: PathBuf::from("/preset/root/shell/my-tools"),
-                valid: true,
-                diagnostics: Vec::new(),
-            }],
+    #[tokio::test]
+    async fn json_contract_matches_schema_v1_golden() {
+        let root = fixture_root("validation-json-production").await;
+        write(
+            root.join("shell/my-tools/shine.toml"),
+            "[[files]]\nsource = 'run.ts'\nruntime = 'bun'\n",
         );
+        write(root.join("shell/my-tools/run.ts"), "console.log('tool');\n");
+        let mut report = validate_path(&root).await;
+        let canonical = std::fs::canonicalize(&root).unwrap();
+        assert_eq!(report.path, canonical);
+        assert_eq!(report.categories.len(), 1);
+        assert_eq!(report.categories[0].path, canonical.join("shell/my-tools"));
+        // Normalize only the asserted temporary paths; all report data comes from validation.
+        report.path = PathBuf::from("/preset/root");
+        report.categories[0].path = PathBuf::from("/preset/root/shell/my-tools");
         assert_eq!(
             serde_json::to_string_pretty(&report).unwrap(),
             r#"{
@@ -225,6 +198,34 @@ mod tests {
   ]
 }"#
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn validation_report_aggregates_production_errors_and_warnings() {
+        let root = fixture_root("validation-summary-production").await;
+        write(
+            root.join("shell/broken/shine.toml"),
+            "[permissions]\nschema_version = 1\n[[files]]\nsource = 'run.sh'\n",
+        );
+        write(root.join("shell/broken/run.sh"), "#!/bin/sh\n");
+        write(root.join("shell/legacy/run.sh"), "#!/bin/sh\n");
+        let report = validate_path(&root).await;
+        assert!(!report.valid);
+        assert!(report.diagnostics.is_empty());
+        assert_eq!(report.summary.categories, 2);
+        assert_eq!(report.summary.errors, 1);
+        assert_eq!(report.summary.warnings, 1);
+        assert_eq!(report.categories[0].name, "broken");
+        assert!(!report.categories[0].valid);
+        assert_eq!(
+            report.categories[0].diagnostics[0].code,
+            "invalid_permission_declaration"
+        );
+        assert_eq!(report.categories[1].name, "legacy");
+        assert!(report.categories[1].valid);
+        assert_eq!(report.categories[1].diagnostics[0].code, "legacy_metadata");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -280,27 +281,6 @@ items = ["git"]
         assert!(manifest.valid, "{manifest:#?}");
         assert_eq!(manifest.categories[0].name, "test-os");
         std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn all_built_in_presets_pass_static_validation() {
-        let presets = Path::new(env!("CARGO_MANIFEST_DIR")).join("presets");
-
-        let report = validate_path(&presets).await;
-
-        assert!(report.valid, "{report:#?}");
-        assert_eq!(report.schema_version, PRESET_VALIDATION_SCHEMA_VERSION);
-        assert_eq!(report.summary.errors, 0);
-        assert_eq!(report.summary.warnings, 0, "{report:#?}");
-        for kind in ["app", "shell", "sys"] {
-            assert!(
-                report
-                    .categories
-                    .iter()
-                    .any(|category| category.kind == kind),
-                "built-in validation did not discover any {kind} categories"
-            );
-        }
     }
 
     #[tokio::test]

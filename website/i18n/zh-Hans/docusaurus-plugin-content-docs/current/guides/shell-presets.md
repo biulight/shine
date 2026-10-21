@@ -36,6 +36,10 @@ shine install shell/utils/shine-env-export
 shine completions install
 ```
 
+Profile 结果中的路径会转义终端控制字符。若 shell 配置路径包含控制字符或无法表示为 UTF-8，
+激活提示会要求打开新 shell，不提供可复制的重新加载命令；生成的 profile 仍使用原始路径。
+普通路径继续显示带引号的重新加载命令。
+
 ## 修复安装
 
 当受管脚本、命令入口或 PATH 片段需要按当前预设重建时：
@@ -47,11 +51,15 @@ shine install shell/proxy --replace-managed
 
 `--replace-managed` 会覆盖 Shine 管理的对应内容。先用 `shine info shell/proxy --diff` 检查状态，避免把有意的本地修改当作损坏处理。
 
+批量操作遇到命令冲突时，修复提示会指出所属类别，模板生成的脚本也一样。冲突输出会转义命令名
+和路径中的控制字符。类别含控制字符时，提示会要求使用原类别参数，不提供可复制命令。
+删除或替换前，请先检查提示中的路径。
+
 切换预设来源后，可运行 `shine upgrade shell/<CATEGORY>` 更新已安装命令。Shine 会根据安装记录识别旧路径上的受管命令，再迁移到当前部署位置；不会因此接管无关命令文件。外部代码仍需按当前计划审阅和确认。
 
 在 Windows 上，从 CMD 启动原生 PowerShell 命令时，脚本路径中的单引号会被原样保留
 （例如用户名目录 `O'Connor`）。运行 `shine upgrade shell/<CATEGORY>` 更新已有启动器；
-原有安装记录仍可用于恢复。
+原有安装记录仍可用于恢复。更新完成后，后续升级审阅会将未发生变化的启动器识别为最新状态。
 
 ## 安装、升级或卸载中断后怎么办 {#恢复中断的-shell-事务}
 
@@ -78,7 +86,6 @@ shine shell recover
 shine shell uninstall proxy --dry-run
 shine shell uninstall proxy
 shine shell uninstall utils/shine-env-export
-shine shell uninstall proxy --purge
 ```
 
 非 dry-run 的 install、uninstall 以及 `shine upgrade` 会显示计划改动和所需权限。确认默认是 No；
@@ -104,9 +111,21 @@ trust，因为以后调用或 source 会读取可变的受信任来源。Snapsho
 未安装兄弟不需要 grant，也不会被安装。升级 Shine 后会保留已有 live launcher，但 `list`/`info`
 会显示 `development trust required`，直到重新审阅。卸载和恢复无需先信任即将移除的代码。
 
+使用 `shine list` 查看已安装资源；`shine shell list` 展示可用 Shell 预设。
 按命令卸载会保留同类别下其他已安装命令；只要兄弟命令仍需要，共享 preset 或 snapshot 文件
-就可能继续保留。`--purge` 会额外删除空的受管预设目录；未指定 target 时会处理整棵 shell
-预设目录。它不会删除 `~/.shine/config.toml`。
+就可能继续保留。
+卸载最后一个类别后，可以用 `shine shell uninstall` 清理剩余的受管 profile 和启动集成。
+Shell 配置中的其他内容会保留；确认前可用 `shine shell uninstall --dry-run` 预览清理范围。
+
+卸载默认清理空的受管目录。未指定 target 时，它会清理整棵内部 Shell 预设缓存树，
+包括存放在其中的额外文件。指定类别或命令 target 时，会保留额外缓存文件，以及其他已安装
+兄弟命令仍需要的共享文件。外部预设源目录始终保留；适用的受管启动器
+和安装 snapshot 仍会被移除。卸载不会删除 `~/.shine/config.toml`。
+请审阅 Plan，并用 `--dry-run` 检查所选范围。
+
+`shine uninstall shell/<category>[/<command>]` 使用相同的目标限定行为。`--purge` 已移除；
+旧命令请直接去掉该选项。App 类别卸载会删除整个内部类别缓存（包括额外文件），
+与 Shell 的目标限定行为不同，详见 [App 预设](app-presets.md)。
 
 ## 内置常用命令
 

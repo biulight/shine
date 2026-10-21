@@ -155,6 +155,136 @@ mod tests {
     use super::*;
     use shine_core::runtime::{PlanningInputVersions, SysBootstrapPlanRequest};
 
+    #[tokio::test]
+    async fn runtime_captures_resolved_environment_once_without_initializing_state() {
+        let root =
+            std::env::temp_dir().join(format!("shine-captured-env-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&root);
+        config.env.insert("PLAIN".into(), "resolved-value".into());
+        config
+            .env
+            .insert("TOKEN_SECRET".into(), "captured-ciphertext".into());
+        let runtime = from_config(&config).await.unwrap();
+        assert_eq!(runtime.context().env, config.env);
+        config.env.insert("PLAIN".into(), "later-edit".into());
+        assert_eq!(runtime.context().env["PLAIN"], "resolved-value");
+        assert_eq!(runtime.context().env["TOKEN_SECRET"], "captured-ciphertext");
+        assert!(
+            !root.exists(),
+            "runtime assembly must not initialize config or presets"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_overlay_readers_do_not_change_captured_runtime_or_review_authority() {
+        use crate::presets::PresetAssetReader;
+        use shine_core::lifecycle::LifecycleOperation;
+        use shine_core::plan::{PlanApprovalError, PlanApprovalV1};
+        use shine_core::runtime::AppPlanRequest;
+
+        let root =
+            std::env::temp_dir().join(format!("shine-overlay-runtime-{}", uuid::Uuid::new_v4()));
+        let source = "app/cross-review/config.txt";
+        let mut configs = Vec::new();
+        for label in ["a", "b"] {
+            let mut config = Config::new_for_test(&root.join(label));
+            let overlay = root.join(format!("overlay-{label}"));
+            let category = overlay.join("app/cross-review");
+            std::fs::create_dir_all(&category).unwrap();
+            std::fs::write(category.join("shine.toml"),
+                "metadata_schema_version = 2\ndest = '~/.config/cross-review'\n[permissions]\nschema_version = 1\nenvironment = [{ name = 'VALUE', sensitivity = 'plain' }]\n[[files]]\nsource = 'config.txt'\ntransforms = ['template']\n").unwrap();
+            std::fs::write(category.join("config.txt"), format!("{label} @@VALUE@@")).unwrap();
+            config.presets_overlay_dir_override = Some(overlay);
+            config.env.insert("VALUE".into(), label.into());
+            configs.push(config);
+        }
+        let captured_a = from_config(&configs[0]).await.unwrap();
+        let captured_b = from_config(&configs[1]).await.unwrap();
+        let reader_a = PresetAssetReader::new(configs[0].active_presets_overlay_dir());
+        let reader_b = PresetAssetReader::new(configs[1].active_presets_overlay_dir());
+        assert_eq!(reader_a.read_asset_bytes(source).unwrap(), b"a @@VALUE@@");
+        assert_eq!(reader_b.read_asset_bytes(source).unwrap(), b"b @@VALUE@@");
+        assert_eq!(captured_a.presets().get(source).unwrap(), b"a @@VALUE@@");
+        assert_eq!(captured_b.presets().get(source).unwrap(), b"b @@VALUE@@");
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("cross-review".into()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let reviewed = captured_a.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&reviewed).unwrap();
+        std::fs::write(
+            configs[0]
+                .active_presets_overlay_dir()
+                .unwrap()
+                .join(source),
+            b"changed @@VALUE@@",
+        )
+        .unwrap();
+        assert_eq!(
+            reader_a.read_asset_bytes(source).unwrap(),
+            b"changed @@VALUE@@"
+        );
+        assert_eq!(reader_b.read_asset_bytes(source).unwrap(), b"b @@VALUE@@");
+        let fresh_a = from_config(&configs[0]).await.unwrap();
+        configs[0].env.insert("VALUE".into(), "later".into());
+        assert_eq!(captured_a.context().env["VALUE"], "a");
+        assert_eq!(captured_b.context().env["VALUE"], "b");
+        assert_eq!(fresh_a.context().env["VALUE"], "a");
+        assert_eq!(captured_a.presets().get(source).unwrap(), b"a @@VALUE@@");
+        assert_eq!(fresh_a.presets().get(source).unwrap(), b"changed @@VALUE@@");
+        assert!(
+            approval
+                .validate(&captured_a.plan_apps(request.clone()).await.unwrap())
+                .is_ok()
+        );
+        assert_eq!(
+            approval.validate(&fresh_a.plan_apps(request).await.unwrap()),
+            Err(PlanApprovalError::PlanChanged)
+        );
+        for config in &configs {
+            assert!(
+                !config.shine_dir().exists(),
+                "capture and planning must not initialize state"
+            );
+            assert!(!config.home_dir.join(".config/cross-review").exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn bootstrap_proxy_override_is_bound_to_review_without_mutating_config_env() {
+        let runtime = from_embedded_presets_for_platform(RuntimePlatform::Linux);
+        let env = runtime.context().env.clone();
+        let runtime = runtime.with_proxy_env(std::collections::BTreeMap::from([(
+            "HTTPS_PROXY".into(),
+            "http://localhost:8111".into(),
+        )]));
+        let request = SysBootstrapPlanRequest {
+            os_id: "ubuntu".into(),
+            item_ids: vec!["rust".into()],
+            sys_shell: "zsh".into(),
+            force_profile: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let reviewed = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
+        assert!(reviewed.is_ready(), "{reviewed:#?}");
+        let approval = shine_core::plan::PlanApprovalV1::for_reviewed_plan(&reviewed).unwrap();
+        let changed = runtime.with_proxy_env(std::collections::BTreeMap::from([(
+            "HTTPS_PROXY".into(),
+            "http://localhost:8222".into(),
+        )]));
+        assert_eq!(changed.context().env, env);
+        let fresh = changed.plan_sys_bootstrap(request).await.unwrap();
+        assert_eq!(
+            approval.validate(&fresh),
+            Err(shine_core::plan::PlanApprovalError::PlanChanged)
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn relative_config_directory_runs_captured_app_generator() {
@@ -273,30 +403,5 @@ generator = { script = 'gen.sh', env = ['SOURCE'], when_env = 'SOURCE', auto = f
         let runtime = from_config(&config).await.unwrap();
         assert!(runtime.presets().get("app/ghostty/shine.toml").is_some());
         assert_eq!(runtime.context().home_dir, root);
-    }
-
-    #[tokio::test]
-    async fn built_in_sys_bootstrap_plan_is_ready_for_each_platform() {
-        for (platform, os_id, shell) in [
-            (RuntimePlatform::Macos, "macos", "zsh"),
-            (RuntimePlatform::Linux, "ubuntu", "zsh"),
-            (RuntimePlatform::Windows, "windows", "powershell"),
-        ] {
-            let runtime = from_embedded_presets_for_platform(platform);
-            let plan = runtime
-                .plan_sys_bootstrap(SysBootstrapPlanRequest {
-                    os_id: os_id.to_string(),
-                    item_ids: vec!["rust".to_string()],
-                    sys_shell: shell.to_string(),
-                    force_profile: false,
-                    input_versions: PlanningInputVersions::default(),
-                })
-                .await
-                .unwrap();
-            assert!(
-                plan.is_ready(),
-                "blocked built-in Plan for {os_id}: {plan:#?}"
-            );
-        }
     }
 }

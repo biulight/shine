@@ -6,12 +6,14 @@ use crate::commands::PhoneRecipientType;
 use anyhow::{Context, Result, bail};
 use bech32::{FromBase32, Variant};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::config::Config;
+use crate::output::escape_controls;
 use crate::proc::ensure_command;
 use crate::{colors, path_display};
 
@@ -85,7 +87,7 @@ pub async fn handle_phone_identity_init(
         .unwrap_or_else(|_| "age_identities = [\"<phone identity path>\"]\n".to_string());
         eprintln!(
             "Phone pairing succeeded, but Shine could not update {}. The pairing remains active; do not start another setup. Add this to the global config manually:\n\n{}",
-            path_display::format(global.config_path()),
+            escape_controls(&path_display::format(global.config_path())),
             manual.trim_end()
         );
         return Err(error).context("saving the phone identity in global Shine config");
@@ -95,13 +97,13 @@ pub async fn handle_phone_identity_init(
         "{}",
         colors::green(&format!(
             "configured phone-backed age identity at {}",
-            path_display::format(&result.identity_path)
+            escape_controls(&path_display::format(&result.identity_path))
         ))
     );
     println!("  recipient: {}", result.recipient);
     println!(
         "  global config: {}",
-        path_display::format(global.config_path())
+        escape_controls(&path_display::format(global.config_path()))
     );
     println!();
     println!(
@@ -143,14 +145,41 @@ pub async fn handle_identity_init(
     if output_path.exists() && !force {
         bail!(
             "{} already exists; pass --force to overwrite",
-            output_path.display()
+            escape_controls(&output_path.display().to_string())
         );
     }
     if let Some(parent) = output_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("creating {}", parent.display()))?;
+        tokio::fs::create_dir_all(parent).await.with_context(|| {
+            format!(
+                "creating {}",
+                escape_controls(&parent.display().to_string())
+            )
+        })?;
     }
+
+    // Capture presentation data before keygen can change the working directory's
+    // availability. Resolve the parent so `../identity.txt` remains usable too.
+    // Keep the original output_path for generation and publication.
+    let identity_hint =
+        if config.age_identity.is_none() && output_path != default_identity_path(config) {
+            let absolute_output = std::path::absolute(&output_path)
+                .context("resolving identity path for the configuration hint")?;
+            let parent = tokio::fs::canonicalize(
+                absolute_output
+                    .parent()
+                    .context("identity path has no parent")?,
+            )
+            .await
+            .context("resolving identity parent for the configuration hint")?;
+            let target = parent.join(
+                absolute_output
+                    .file_name()
+                    .context("identity path has no file name")?,
+            );
+            Some(target)
+        } else {
+            None
+        };
 
     let program = if touch_id {
         "age-plugin-se"
@@ -164,10 +193,10 @@ pub async fn handle_identity_init(
         "{}",
         colors::green(&format!(
             "generated age identity at {}",
-            path_display::format(&output_path)
+            escape_controls(&path_display::format(&output_path))
         ))
     );
-    println!("  recipient: {recipient}");
+    println!("  recipient: {}", escape_controls(&recipient));
     println!();
     println!(
         "{}",
@@ -185,25 +214,28 @@ pub async fn handle_identity_init(
             )
         );
     }
-    if config.age_identity.is_none() && output_path != default_identity_path(config) {
-        println!(
-            "{}",
-            colors::dim(&format!(
-                "Set age_identity = \"{}\" in config.toml so shine can find this identity.",
-                output_path.display()
-            ))
-        );
+    if let Some(path) = identity_hint {
+        let hint = match path.to_str() {
+            Some(value) => format!(
+                "Set age_identity = {} in config.toml so shine can find this identity.",
+                toml::Value::String(value.to_owned())
+            ),
+            None => {
+                "Identity path is non-UTF-8; copyable age_identity assignment omitted.".to_string()
+            }
+        };
+        println!("{}", colors::dim(&hint));
     }
     Ok(())
 }
 
-fn touch_id_keygen_args(access_control: &str, output_path: &Path) -> Vec<String> {
+fn touch_id_keygen_args(access_control: &str, output_path: &Path) -> Vec<OsString> {
     vec![
-        "keygen".to_string(),
-        "--recipient-type=tag".to_string(),
-        format!("--access-control={access_control}"),
-        "-o".to_string(),
-        output_path.to_string_lossy().into_owned(),
+        "keygen".into(),
+        "--recipient-type=tag".into(),
+        format!("--access-control={access_control}").into(),
+        "-o".into(),
+        output_path.as_os_str().to_owned(),
     ]
 }
 
@@ -218,7 +250,11 @@ pub async fn handle_identity_list(config: &Config) -> Result<()> {
     }
     for identity in &identities {
         let recipient = extract_recipient(identity).await?;
-        println!("{}  {}", path_display::format(identity), recipient);
+        println!(
+            "{}  {}",
+            escape_controls(&path_display::format(identity)),
+            escape_controls(&recipient)
+        );
     }
     Ok(())
 }
@@ -353,13 +389,23 @@ async fn validate_phone_setup_result(
     }
     let metadata = tokio::fs::symlink_metadata(&result.identity_path)
         .await
-        .with_context(|| format!("reading {}", result.identity_path.display()))?;
+        .with_context(|| {
+            format!(
+                "reading {}",
+                escape_controls(&result.identity_path.display().to_string())
+            )
+        })?;
     if !metadata.file_type().is_file() {
         bail!("age-plugin-phone identity stub is not a regular file");
     }
     let contents = tokio::fs::read_to_string(&result.identity_path)
         .await
-        .with_context(|| format!("reading {}", result.identity_path.display()))?;
+        .with_context(|| {
+            format!(
+                "reading {}",
+                escape_controls(&result.identity_path.display().to_string())
+            )
+        })?;
     if !contents
         .lines()
         .map(str::trim)
@@ -428,7 +474,8 @@ fn ensure_touch_id_supported(touch_id: bool, os: &str) -> Result<()> {
 fn validate_access_control(value: &str) -> Result<()> {
     if !VALID_ACCESS_CONTROLS.contains(&value) {
         bail!(
-            "unknown --access-control \"{value}\"; expected one of: {}",
+            "unknown --access-control \"{}\"; expected one of: {}",
+            escape_controls(value),
             VALID_ACCESS_CONTROLS.join(", ")
         );
     }
@@ -450,7 +497,7 @@ impl IdentityStage {
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
         let path = parent.join(format!(".shine-identity-{}", uuid::Uuid::new_v4()));
-        let mut builder = std::fs::DirBuilder::new();
+        let builder = &mut std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
@@ -485,7 +532,7 @@ async fn generate_identity(
     let args = if touch_id {
         touch_id_keygen_args(access_control, &generated)
     } else {
-        vec!["-o".to_string(), generated.to_string_lossy().into_owned()]
+        vec!["-o".into(), generated.as_os_str().to_owned()]
     };
     run_keygen(program, &args).await?;
     #[cfg(unix)]
@@ -503,7 +550,7 @@ async fn generate_identity(
     Ok(recipient)
 }
 
-async fn run_keygen(program: &str, args: &[String]) -> Result<()> {
+async fn run_keygen(program: &str, args: &[OsString]) -> Result<()> {
     let status = Command::new(program)
         .args(args)
         .kill_on_drop(true)
@@ -522,7 +569,12 @@ async fn set_owner_only_permissions(path: &Path) -> Result<()> {
     let permissions = std::fs::Permissions::from_mode(0o600);
     tokio::fs::set_permissions(path, permissions)
         .await
-        .with_context(|| format!("setting permissions on {}", path.display()))
+        .with_context(|| {
+            format!(
+                "setting permissions on {}",
+                escape_controls(&path.display().to_string())
+            )
+        })
 }
 
 /// Extract an `age1...` recipient from an identity file's leading comment, as
@@ -530,7 +582,7 @@ async fn set_owner_only_permissions(path: &Path) -> Result<()> {
 async fn extract_recipient(path: &Path) -> Result<String> {
     let contents = tokio::fs::read_to_string(path)
         .await
-        .with_context(|| format!("reading {}", path.display()))?;
+        .with_context(|| format!("reading {}", escape_controls(&path.display().to_string())))?;
     contents
         .lines()
         .filter_map(|line| line.strip_prefix('#'))
@@ -540,7 +592,12 @@ async fn extract_recipient(path: &Path) -> Result<String> {
                 .find(|token| token.starts_with("age1"))
         })
         .map(str::to_string)
-        .with_context(|| format!("no recipient found in {}", path.display()))
+        .with_context(|| {
+            format!(
+                "no recipient found in {}",
+                escape_controls(&path.display().to_string())
+            )
+        })
 }
 
 #[cfg(test)]
@@ -652,16 +709,62 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn identity_read_diagnostics_encode_paths_without_leaking_or_mutating_contents() {
+        let root =
+            std::env::temp_dir().join(format!("shine-identity-errors-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir(&root).await.unwrap();
+        let missing = root.join("missing\nFORGED\r\t\u{1b}");
+        let result = PhoneSetupResult {
+            schema_version: PHONE_SETUP_RESULT_VERSION,
+            identity_path: missing.clone(),
+            recipient: PHONE.to_string(),
+        };
+        for error in [
+            extract_recipient(&missing).await.unwrap_err(),
+            validate_phone_setup_result(&result, PhoneRecipientType::Phone)
+                .await
+                .unwrap_err(),
+        ] {
+            assert!(
+                error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+            );
+            let message = format!("{error:#}");
+            assert!(!message.contains(['\r', '\t', '\u{1b}']), "{message:?}");
+            assert!(
+                message.contains(r"missing\nFORGED\r\t\u{1b}"),
+                "{message:?}"
+            );
+        }
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        let path = root.join(if cfg!(unix) {
+            "invalid\nFORGED\r\t\u{1b}"
+        } else {
+            "invalid中文"
+        });
+        let contents = "PRIVATE_IDENTITY_CONTENT\n";
+        tokio::fs::write(&path, contents).await.unwrap();
+        let error = extract_recipient(&path).await.unwrap_err().to_string();
+        assert!(error.contains("no recipient found"));
+        assert!(!error.contains(['\r', '\t', '\u{1b}']), "{error:?}");
+        assert!(!error.contains("\nFORGED") && !error.contains("PRIVATE_IDENTITY_CONTENT"));
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), contents);
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
     #[test]
     fn access_control_validates_known_values() {
         for value in VALID_ACCESS_CONTROLS {
             assert!(validate_access_control(value).is_ok());
         }
-        let err = validate_access_control("bogus").unwrap_err();
-        assert!(
-            err.to_string().contains("unknown --access-control"),
-            "{err:#}"
-        );
+        for value in ["bogus", "bad\nFORGED\r\t\u{1b}"] {
+            let err = validate_access_control(value).unwrap_err().to_string();
+            assert!(err.contains("unknown --access-control"), "{err}");
+            assert!(!err.contains(['\r', '\t', '\u{1b}']), "{err:?}");
+            assert!(!err.contains("\nFORGED"), "{err:?}");
+        }
     }
 
     #[test]
@@ -677,6 +780,23 @@ mod tests {
                 "identity.txt",
             ]
         );
+    }
+
+    #[test]
+    fn touch_id_keygen_preserves_native_output_path() {
+        #[cfg(unix)]
+        let output = {
+            use std::os::unix::ffi::OsStringExt;
+            PathBuf::from(OsString::from_vec(b"keys/identity-\xff".to_vec()))
+        };
+        #[cfg(windows)]
+        let output = {
+            use std::os::windows::ffi::OsStringExt;
+            PathBuf::from(OsString::from_wide(&[b'k' as u16, 0xd800]))
+        };
+        let args = touch_id_keygen_args("any-biometry", &output);
+        assert_eq!(args.len(), 5);
+        assert_eq!(args[4], output.as_os_str());
     }
 
     #[tokio::test]

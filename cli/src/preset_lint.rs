@@ -14,13 +14,13 @@ pub async fn handle_lint(
     let report =
         shine_core::runtime::lint_preset_path(&shine_core::runtime::RealHost, &cwd, path).await;
     match format {
-        PresetReportFormat::Text => print_text_report(&report),
+        PresetReportFormat::Text => print_text_report(&report, path),
         PresetReportFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
     }
     Ok(report.valid && (!deny_warnings || report.clean))
 }
 
-fn print_text_report(report: &PresetLintReportV1) {
+fn print_text_report(report: &PresetLintReportV1, path: &Path) {
     println!(
         "Preset lint: {}",
         if !report.valid {
@@ -31,6 +31,18 @@ fn print_text_report(report: &PresetLintReportV1) {
             "warnings"
         }
     );
+    let validation_hint = match path.to_str() {
+        Some(path) if path.chars().any(char::is_control) => {
+            "preset validate with the original PATH (control characters; copyable command omitted)"
+                .to_string()
+        }
+        Some(path) => format!(
+            "`shine preset validate {}`",
+            crate::shell_quote::command_positionals(&[path])
+        ),
+        None => "preset validate with the original PATH (non-UTF-8; copyable command omitted)"
+            .to_string(),
+    };
     for diagnostic in &report.diagnostics {
         let severity = match diagnostic.severity {
             PresetLintSeverity::Error => "error",
@@ -39,20 +51,26 @@ fn print_text_report(report: &PresetLintReportV1) {
         let target = diagnostic
             .target
             .as_deref()
-            .map(|target| format!(" {target}"))
+            .map(|target| format!(" {}", crate::output::escape_controls(target)))
             .unwrap_or_default();
         let resource = diagnostic
             .resource
             .as_deref()
-            .map(|resource| format!(" · {resource}"))
+            .map(|resource| format!(" · {}", crate::output::escape_controls(resource)))
             .unwrap_or_default();
         println!(
             "  {severity}[{}]:{}{} {}",
-            diagnostic.code, target, resource, diagnostic.message
+            diagnostic.code,
+            target,
+            resource,
+            crate::output::escape_controls(&diagnostic.message)
+                .replace("`shine preset validate`", &validation_hint)
         );
     }
     println!(
-        "Summary: {} categories, {} errors, {} warnings",
-        report.summary.categories, report.summary.errors, report.summary.warnings
+        "Summary: {}, {}, {}",
+        crate::preset_report::count_phrase(report.summary.categories, "category", "categories"),
+        crate::preset_report::count_phrase(report.summary.errors, "error", "errors"),
+        crate::preset_report::count_phrase(report.summary.warnings, "warning", "warnings")
     );
 }

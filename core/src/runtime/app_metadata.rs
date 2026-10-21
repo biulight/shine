@@ -1,4 +1,5 @@
 use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind};
+use super::path_text::preset_path as logical;
 use super::{
     AppArtifact, AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppHookAction,
     AppListMode, ArtifactRuntime, CoreRuntime, RuntimePlatform,
@@ -352,17 +353,24 @@ impl<H> CoreRuntime<H> {
             },
             |root| Some(root.clone()),
         );
-        let base = match root {
-            Some(AppDestinationRoot::DataDir(relative)) => self.context().data_dir.join(relative),
-            Some(AppDestinationRoot::Path(raw)) => expand_path(&raw, self.context())?,
-            None => {
-                if let Some(annotation) = &file.legacy_dest_annotation {
-                    return expand_path(annotation, self.context());
-                }
-                self.context().app_default_dest_root.join(&category.name)
+        let destination = match root {
+            Some(AppDestinationRoot::DataDir(relative)) => self
+                .context()
+                .data_dir
+                .join(relative)
+                .join(&file.target_rel),
+            Some(AppDestinationRoot::Path(raw)) => {
+                expand_path(&raw, self.context())?.join(&file.target_rel)
             }
+            None => match &file.legacy_dest_annotation {
+                Some(annotation) => expand_path(annotation, self.context())?,
+                None => self
+                    .context()
+                    .app_default_dest_root
+                    .join(&category.name)
+                    .join(&file.target_rel),
+            },
         };
-        let destination = base.join(&file.target_rel);
         if destination
             .components()
             .any(|component| component == Component::ParentDir)
@@ -401,13 +409,6 @@ fn collect_category_files<'a>(
         .filter(|relative| !relative.is_empty() && *relative != "shine.toml")
         .map(PathBuf::from)
         .collect()
-}
-
-fn logical(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 fn normalize_relative(value: &str) -> Result<PathBuf> {
@@ -768,6 +769,146 @@ fn legacy_description(content: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
     use crate::runtime::{InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext};
+
+    fn destination_runtime(snapshot: PresetSnapshot) -> CoreRuntime<InMemoryHost> {
+        let home = std::env::temp_dir().join("shine-app-destination-test");
+        CoreRuntime::new(
+            InMemoryHost::new(),
+            RuntimeContext::isolated(
+                home.clone(),
+                home.join(".shine"),
+                home.join("presets"),
+                home.join("bin"),
+                RuntimePlatform::current(),
+            ),
+            snapshot,
+        )
+    }
+
+    fn legacy_destination(annotation: Option<&str>, relative: &str) -> Result<PathBuf> {
+        let content = annotation.map_or_else(
+            || b"value = true\n".to_vec(),
+            |value| format!("#!/bin/sh\n# shine-dest: {value}\n").into_bytes(),
+        );
+        let runtime = destination_runtime(
+            PresetSnapshot::builder(PresetSourceKind::External)
+                .file(format!("app/demo/{relative}"), content)
+                .build(),
+        );
+        let categories = runtime.app_categories(Some("demo"))?;
+        runtime.app_destination(&categories[0], &categories[0].files[0])
+    }
+
+    #[test]
+    fn resolves_annotation_with_tilde() {
+        let home = std::env::temp_dir().join("shine-app-destination-test");
+        assert_eq!(
+            legacy_destination(Some("~/.config/foo/bar.toml"), "config.toml").unwrap(),
+            home.join(".config/foo/bar.toml")
+        );
+    }
+
+    #[test]
+    fn resolves_absolute_annotation() {
+        let target = std::env::temp_dir().join("myapp/config.toml");
+        assert_eq!(
+            legacy_destination(Some(target.to_str().unwrap()), "source.toml").unwrap(),
+            target
+        );
+    }
+
+    #[test]
+    fn falls_back_to_default_dest_root_when_no_annotation() {
+        let runtime =
+            destination_runtime(PresetSnapshot::builder(PresetSourceKind::External).build());
+        assert_eq!(
+            legacy_destination(None, "config.toml").unwrap(),
+            runtime
+                .context()
+                .app_default_dest_root
+                .join("demo/config.toml")
+        );
+    }
+
+    #[test]
+    fn fallback_keeps_nested_relative_path() {
+        let runtime =
+            destination_runtime(PresetSnapshot::builder(PresetSourceKind::External).build());
+        assert_eq!(
+            legacy_destination(None, "colors/theme.vim").unwrap(),
+            runtime
+                .context()
+                .app_default_dest_root
+                .join("demo/colors/theme.vim")
+        );
+    }
+
+    #[test]
+    fn rejects_path_with_parent_dir_component() {
+        let target = std::env::temp_dir().join("../etc/passwd");
+        let error = legacy_destination(Some(target.to_str().unwrap()), "config.toml").unwrap_err();
+        assert!(error.to_string().contains("must not contain '..'"));
+    }
+
+    #[tokio::test]
+    async fn legacy_parent_destination_cannot_produce_an_install_plan() {
+        let runtime = destination_runtime(
+            PresetSnapshot::builder(PresetSourceKind::External)
+                .file(
+                    "app/demo/config.toml",
+                    b"# shine-dest: ~/../outside/config.toml\n".to_vec(),
+                )
+                .build(),
+        );
+        let error = runtime
+            .plan_apps(crate::runtime::AppPlanRequest {
+                operation: crate::lifecycle::LifecycleOperation::Install,
+                target: Some("demo".into()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: crate::runtime::PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("must not contain '..'"));
+    }
+
+    #[test]
+    fn rejects_non_absolute_path_after_expansion() {
+        let error = legacy_destination(Some("relative/path"), "config.toml").unwrap_err();
+        assert!(error.to_string().contains("must be absolute"));
+    }
+
+    #[test]
+    fn duplicate_effective_destinations_are_rejected() {
+        let runtime = destination_runtime(
+            PresetSnapshot::builder(PresetSourceKind::External)
+                .file(
+                    "app/demo/shine.toml",
+                    br#"
+metadata_schema_version = 2
+dest = '~/.config/demo'
+[[files]]
+source = 'first.toml'
+dest = '~/shared'
+target = 'nested/same.toml'
+[[files]]
+source = 'second.toml'
+dest = '~/shared/nested'
+target = 'same.toml'
+"#
+                    .to_vec(),
+                )
+                .file("app/demo/first.toml", b"first".to_vec())
+                .file("app/demo/second.toml", b"second".to_vec())
+                .build(),
+        );
+        let error = runtime.validate_app_category_snapshot("demo").unwrap_err();
+        let diagnostic = error.downcast_ref::<MetadataDiagnosticError>().unwrap();
+        assert_eq!(diagnostic.kind, MetadataDiagnosticKind::DuplicateTarget);
+        assert!(error.to_string().contains("app destinations conflict"));
+    }
 
     fn hook_toml(
         command: Option<&str>,

@@ -5,8 +5,7 @@
 //! through a host.
 
 use super::app::{
-    desired_app_hash, generated_file_not_installed_message, installed_app_entry_hash,
-    installed_app_hash, installed_json_hash,
+    SelectedRefreshFile, desired_app_hash, installed_strategy_hash, select_refresh_files,
 };
 use super::app_change::{StaticAppRelocation, static_app_relocation};
 use super::command_detection::{command_candidates, observe_command_candidate};
@@ -14,6 +13,7 @@ use super::launcher::{
     prepare_launcher_resources, prepared_launcher_resource_is_exact,
     probe_managed_command_with_host,
 };
+use super::managed_json::installed_json_hash;
 use super::review_path::{logical_path, review_path};
 use super::shell::has_template_annotation;
 use super::shell::shell_link_spec_from_manifest_entry;
@@ -21,23 +21,23 @@ use super::{
     AppArtifactAction, AppArtifactRequest, AppCategory, AppFile, AppLifecycleReport,
     AppLifecycleRequest, AppRefreshRequest, AppUninstallLifecycleRequest,
     AppUpgradeLifecycleReport, AppUpgradeRequest, ArtifactRuntime, CoreRuntime, ExternalShellMode,
-    FileKind, FileSystemHost, FileSystemObservationHost, LinkRuntime, LinkSpec,
-    PrivilegedFileSystemHost, ProcessHost, RuntimeInteraction, RuntimeObserver, ShellFile,
-    ShellLifecycleReport, ShellLifecycleRequest, ShellManifest, ShellManifestEntry,
-    ShellUninstallReport, ShellUninstallRequest, ShellUpgradeLifecycleReport, ShellUpgradeRequest,
-    SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SysBootstrapBatchReport,
-    SysBootstrapBatchRequest, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall, SysItem,
-    SysItemMode, SysManagedAction, SysManagedReport, SysManagedRequest, SysManifest,
-    SysPackageProvider, SysProfileStateReport, SysProfileStateRequest, SysRunEntry, SysRunManifest,
-    SystemReceipt, command_path_for_name, parse_shell_lifecycle_target, split_dns_receipt,
+    FileKind, FileSystemHost, FileSystemObservationHost, PrivilegedFileSystemHost, ProcessHost,
+    RuntimeInteraction, RuntimeObserver, ShellFile, ShellLifecycleReport, ShellLifecycleRequest,
+    ShellManifest, ShellManifestEntry, ShellUninstallReport, ShellUninstallRequest,
+    ShellUpgradeLifecycleReport, ShellUpgradeRequest, SplitDnsHost, SplitDnsObservationHost,
+    SplitDnsRequest, SysBootstrapBatchReport, SysBootstrapBatchRequest, SysDetection,
+    SysDetectionProbe, SysDriverKind, SysInstall, SysItem, SysItemMode, SysManagedAction,
+    SysManagedReport, SysManagedRequest, SysManifest, SysPackageProvider, SysProfileStateReport,
+    SysProfileStateRequest, SysRunEntry, SysRunManifest, SystemReceipt, command_path_for_name,
+    parse_shell_lifecycle_target, split_dns_receipt,
 };
 use crate::action::{
     ActionIrV1, DeclarativeActionV1, ForcedManagedFileBackupV1, ForcedManagedFileRemoveSpecV1,
-    ManagedFileRelocationBackupV1, ManagedFileRelocationSpecV1, ManagedFileRemoveSpecV1,
-    ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1, ManagedJsonMergeSpecV1,
-    ManagedJsonRelocationSpecV1, ManagedJsonRemoveSpecV1, managed_file_rollback_path,
-    shell_snapshot_rollback_path, shell_snapshot_stage_path,
+    ManagedFileRemoveSpecV1, ManagedFileRemoveWithBackupSpecV1, ManagedJsonRemoveSpecV1,
+    managed_file_rollback_path, shell_snapshot_rollback_path, shell_snapshot_stage_path,
 };
+use crate::digest::sha256_hex;
+#[cfg(test)]
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::transforms::MissingTemplateVariables;
 use crate::install::{AppEntry, AppManifest};
@@ -52,7 +52,6 @@ use crate::plan::{
 };
 use crate::trust::{TRUST_GRANT_SCHEMA_VERSION, TrustCapabilityV1, TrustDecisionV1, TrustModeV1};
 use anyhow::{Context, Result, bail};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 

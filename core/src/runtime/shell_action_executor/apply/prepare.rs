@@ -7,7 +7,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellCacheReplacement],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for cache in resources {
             let mut action_files = Vec::new();
             let mut prepared_files = Vec::new();
@@ -58,23 +57,21 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = cache
                 .receipt_transitions
                 .iter()
-                .map(|(target, previous, desired)| ShellReceiptTransitionV1 {
-                    target: target.clone(),
-                    previous: previous.as_ref().map(receipt_contract).map(Box::new),
-                    desired: Box::new(receipt_contract(desired)),
-                })
+                .map(ShellReceiptTransition::contract)
                 .collect();
-            actions.push(DeclarativeActionV1::replace_shell_cache(
-                format!("replace-cache:{}", cache.target),
-                &cache.target,
-                "preset-cache",
-                ShellCacheReplacementSpecV1 {
-                    files: action_files,
-                    receipts,
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::replace_shell_cache(
+                    format!("replace-cache:{}", cache.target),
+                    &cache.target,
+                    "preset-cache",
+                    ShellCacheReplacementSpecV1 {
+                        files: action_files,
+                        receipts,
+                    },
+                ),
+                prepared: PreparedShellAction::Cache {
+                    files: prepared_files,
                 },
-            ));
-            prepared.push(PreparedShellAction::Cache {
-                files: prepared_files,
             });
         }
         Ok(())
@@ -84,7 +81,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellSnapshotReplacement],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for snapshot in resources {
             let stage = shell_snapshot_stage_path(&snapshot.destination);
             let rollback = shell_snapshot_rollback_path(&snapshot.destination);
@@ -107,30 +103,28 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = snapshot
                 .receipt_transitions
                 .iter()
-                .map(|(target, previous, desired)| ShellReceiptTransitionV1 {
-                    target: target.clone(),
-                    previous: previous.as_ref().map(receipt_contract).map(Box::new),
-                    desired: Box::new(receipt_contract(desired)),
-                })
+                .map(ShellReceiptTransition::contract)
                 .collect();
-            actions.push(DeclarativeActionV1::replace_shell_snapshot(
-                format!("replace-snapshot:{}", snapshot.target),
-                &snapshot.target,
-                "shared-snapshot",
-                ShellSnapshotReplacementSpecV1 {
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::replace_shell_snapshot(
+                    format!("replace-snapshot:{}", snapshot.target),
+                    &snapshot.target,
+                    "shared-snapshot",
+                    ShellSnapshotReplacementSpecV1 {
+                        destination: snapshot.destination.clone(),
+                        previous_present: previous.is_some(),
+                        previous_files: previous.unwrap_or_default(),
+                        desired_files,
+                        receipts,
+                    },
+                ),
+                prepared: PreparedShellAction::Snapshot {
                     destination: snapshot.destination.clone(),
-                    previous_present: previous.is_some(),
-                    previous_files: previous.unwrap_or_default(),
-                    desired_files,
-                    receipts,
+                    stage,
+                    rollback,
+                    previous_present: self.host().metadata(&snapshot.destination).await.is_ok(),
+                    files: snapshot.files.clone(),
                 },
-            ));
-            prepared.push(PreparedShellAction::Snapshot {
-                destination: snapshot.destination.clone(),
-                stage,
-                rollback,
-                previous_present: self.host().metadata(&snapshot.destination).await.is_ok(),
-                files: snapshot.files.clone(),
             });
         }
         Ok(())
@@ -140,7 +134,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellRenderedFileReplacement],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for rendered in resources {
             let rollback = managed_file_rollback_path(&rendered.destination);
             match self.host().metadata(&rollback).await {
@@ -174,29 +167,27 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = rendered
                 .receipt_transitions
                 .iter()
-                .map(|(target, previous, desired)| ShellReceiptTransitionV1 {
-                    target: target.clone(),
-                    previous: previous.as_ref().map(receipt_contract).map(Box::new),
-                    desired: Box::new(receipt_contract(desired)),
-                })
+                .map(ShellReceiptTransition::contract)
                 .collect();
-            actions.push(DeclarativeActionV1::replace_shell_rendered_file(
-                format!("replace-rendered:{}", rendered.target),
-                &rendered.target,
-                "rendered-output",
-                ShellRenderedFileReplacementSpecV1 {
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::replace_shell_rendered_file(
+                    format!("replace-rendered:{}", rendered.target),
+                    &rendered.target,
+                    "rendered-output",
+                    ShellRenderedFileReplacementSpecV1 {
+                        destination: rendered.destination.clone(),
+                        previous: previous_identity.clone(),
+                        desired,
+                        receipts,
+                    },
+                ),
+                prepared: PreparedShellAction::RenderedFile {
                     destination: rendered.destination.clone(),
-                    previous: previous_identity.clone(),
-                    desired,
-                    receipts,
+                    rollback,
+                    previous_present: previous_identity.is_some(),
+                    bytes: rendered.bytes.clone(),
+                    unix_mode: rendered.unix_mode,
                 },
-            ));
-            prepared.push(PreparedShellAction::RenderedFile {
-                destination: rendered.destination.clone(),
-                rollback,
-                previous_present: previous_identity.is_some(),
-                bytes: rendered.bytes.clone(),
-                unix_mode: rendered.unix_mode,
             });
         }
         Ok(())
@@ -206,7 +197,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellRenderedFileRemoval],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for removal in resources {
             let rollback = managed_file_rollback_path(&removal.destination);
             match self.host().metadata(&rollback).await {
@@ -232,27 +222,26 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = removal
                 .previous_receipts
                 .iter()
-                .map(|(target, entry)| ShellReceiptRemovalV1 {
-                    target: target.clone(),
-                    previous: Box::new(receipt_contract(entry)),
-                })
+                .map(ShellReceiptRemoval::contract)
                 .collect::<Vec<_>>();
             if !shell_removal_receipts_match_previous(&manifest, &receipts) {
                 bail!("Shell rendered-file receipts changed after Plan approval");
             }
-            actions.push(DeclarativeActionV1::remove_shell_rendered_file(
-                format!("remove-rendered:{}", removal.target),
-                &removal.target,
-                "rendered-output",
-                ShellRenderedFileRemovalSpecV1 {
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::remove_shell_rendered_file(
+                    format!("remove-rendered:{}", removal.target),
+                    &removal.target,
+                    "rendered-output",
+                    ShellRenderedFileRemovalSpecV1 {
+                        destination: removal.destination.clone(),
+                        previous: removal.previous.clone(),
+                        receipts,
+                    },
+                ),
+                prepared: PreparedShellAction::RemoveRenderedFile {
                     destination: removal.destination.clone(),
-                    previous: removal.previous.clone(),
-                    receipts,
+                    rollback,
                 },
-            ));
-            prepared.push(PreparedShellAction::RemoveRenderedFile {
-                destination: removal.destination.clone(),
-                rollback,
             });
         }
         Ok(())
@@ -262,7 +251,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellCacheRemoval],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for removal in resources {
             let mut files = Vec::new();
             let mut prepared_files = Vec::new();
@@ -296,24 +284,23 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = removal
                 .previous_receipts
                 .iter()
-                .map(|(target, entry)| ShellReceiptRemovalV1 {
-                    target: target.clone(),
-                    previous: Box::new(receipt_contract(entry)),
-                })
+                .map(ShellReceiptRemoval::contract)
                 .collect::<Vec<_>>();
             let manifest =
                 load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
             if !shell_removal_receipts_match_previous(&manifest, &receipts) {
                 bail!("Shell cache receipts changed after Plan approval");
             }
-            actions.push(DeclarativeActionV1::remove_shell_cache(
-                format!("remove-cache:{}", removal.target),
-                &removal.target,
-                "preset-cache",
-                ShellCacheRemovalSpecV1 { files, receipts },
-            ));
-            prepared.push(PreparedShellAction::RemoveCache {
-                files: prepared_files,
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::remove_shell_cache(
+                    format!("remove-cache:{}", removal.target),
+                    &removal.target,
+                    "preset-cache",
+                    ShellCacheRemovalSpecV1 { files, receipts },
+                ),
+                prepared: PreparedShellAction::RemoveCache {
+                    files: prepared_files,
+                },
             });
         }
         Ok(())
@@ -323,7 +310,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellSnapshotRemoval],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for removal in resources {
             let rollback = shell_snapshot_rollback_path(&removal.destination);
             match self.host().metadata(&rollback).await {
@@ -352,29 +338,28 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipts = removal
                 .previous_receipts
                 .iter()
-                .map(|(target, entry)| ShellReceiptRemovalV1 {
-                    target: target.clone(),
-                    previous: Box::new(receipt_contract(entry)),
-                })
+                .map(ShellReceiptRemoval::contract)
                 .collect::<Vec<_>>();
             let manifest =
                 load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
             if !shell_removal_receipts_match_previous(&manifest, &receipts) {
                 bail!("Shell snapshot receipts changed after Plan approval");
             }
-            actions.push(DeclarativeActionV1::remove_shell_snapshot(
-                format!("remove-snapshot:{}", removal.target),
-                &removal.target,
-                "shared-snapshot",
-                ShellSnapshotRemovalSpecV1 {
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::remove_shell_snapshot(
+                    format!("remove-snapshot:{}", removal.target),
+                    &removal.target,
+                    "shared-snapshot",
+                    ShellSnapshotRemovalSpecV1 {
+                        destination: removal.destination.clone(),
+                        previous_files: removal.previous_files.clone(),
+                        receipts,
+                    },
+                ),
+                prepared: PreparedShellAction::RemoveSnapshot {
                     destination: removal.destination.clone(),
-                    previous_files: removal.previous_files.clone(),
-                    receipts,
+                    rollback,
                 },
-            ));
-            prepared.push(PreparedShellAction::RemoveSnapshot {
-                destination: removal.destination.clone(),
-                rollback,
             });
         }
         Ok(())
@@ -384,7 +369,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellProfileReconciliation],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for profile in resources {
             let mut action_files = Vec::new();
             let mut prepared_files = Vec::new();
@@ -450,42 +434,38 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             let receipt_transitions = profile
                 .receipt_transitions
                 .iter()
-                .map(|(target, previous, desired)| ShellReceiptTransitionV1 {
-                    target: target.clone(),
-                    previous: previous.as_ref().map(receipt_contract).map(Box::new),
-                    desired: Box::new(receipt_contract(desired)),
-                })
+                .map(ShellReceiptTransition::contract)
                 .collect::<Vec<_>>();
             let receipt_removals = profile
                 .receipt_removals
                 .iter()
-                .map(|(target, previous)| ShellReceiptRemovalV1 {
-                    target: target.clone(),
-                    previous: Box::new(receipt_contract(previous)),
-                })
+                .map(ShellReceiptRemoval::contract)
                 .collect::<Vec<_>>();
             let manifest =
                 load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-            if (!receipt_transitions.is_empty()
-                && !shell_receipts_match_previous(&manifest, &receipt_transitions))
-                || (!receipt_removals.is_empty()
-                    && !shell_removal_receipts_match_previous(&manifest, &receipt_removals))
-            {
+            if !shell_profile_receipts_match_previous(
+                &manifest,
+                &receipt_transitions,
+                &receipt_removals,
+                &profile.legacy_targets,
+            ) {
                 bail!("Shell profile receipts changed after Plan approval");
             }
-            actions.push(DeclarativeActionV1::reconcile_shell_profile(
-                format!("reconcile-profile:{}", profile.target),
-                &profile.target,
-                "profile",
-                ShellProfileReconciliationSpecV1 {
-                    files: action_files,
-                    receipt_transitions,
-                    receipt_removals,
-                    legacy_targets: profile.legacy_targets.clone(),
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::reconcile_shell_profile(
+                    format!("reconcile-profile:{}", profile.target),
+                    &profile.target,
+                    "profile",
+                    ShellProfileReconciliationSpecV1 {
+                        files: action_files,
+                        receipt_transitions,
+                        receipt_removals,
+                        legacy_targets: profile.legacy_targets.clone(),
+                    },
+                ),
+                prepared: PreparedShellAction::Profile {
+                    files: prepared_files,
                 },
-            ));
-            prepared.push(PreparedShellAction::Profile {
-                files: prepared_files,
             });
         }
         Ok(())
@@ -495,7 +475,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellLauncherCreation<'_>],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for creation in resources {
             let resources = prepare_launcher_resources(&self.context().bin_dir, creation.spec);
             for resource in &resources {
@@ -510,14 +489,16 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     }
                 }
             }
-            actions.push(DeclarativeActionV1::create_shell_launcher(
-                format!("create-launcher:{}", creation.target),
-                &creation.target,
-                "launcher",
-                receipt_contract(&creation.receipt),
-                resources.iter().map(resource_contract).collect(),
-            ));
-            prepared.push(PreparedShellAction::Create(resources));
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::create_shell_launcher(
+                    format!("create-launcher:{}", creation.target),
+                    &creation.target,
+                    "launcher",
+                    receipt_contract(&creation.receipt),
+                    resources.iter().map(resource_contract).collect(),
+                ),
+                prepared: PreparedShellAction::Create(resources),
+            });
         }
         Ok(())
     }
@@ -526,7 +507,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellLauncherUpdate<'_>],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for update in resources {
             let previous_spec = shell_link_spec_from_manifest_entry(&update.previous_receipt)?;
             let previous_resources =
@@ -584,15 +564,17 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             if action_resources.is_empty() {
                 bail!("Shell launcher update contains no changed launcher resource");
             }
-            actions.push(DeclarativeActionV1::update_shell_launcher(
-                format!("update-launcher:{}", update.target),
-                &update.target,
-                "launcher",
-                receipt_contract(&update.previous_receipt),
-                receipt_contract(&update.desired_receipt),
-                action_resources,
-            ));
-            prepared.push(PreparedShellAction::Update(prepared_resources));
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::update_shell_launcher(
+                    format!("update-launcher:{}", update.target),
+                    &update.target,
+                    "launcher",
+                    receipt_contract(&update.previous_receipt),
+                    receipt_contract(&update.desired_receipt),
+                    action_resources,
+                ),
+                prepared: PreparedShellAction::Update(prepared_resources),
+            });
         }
         Ok(())
     }
@@ -601,7 +583,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellLauncherRemoval],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for removal in resources {
             let previous_spec = shell_link_spec_from_manifest_entry(&removal.previous_receipt)?;
             let previous_resources =
@@ -630,14 +611,16 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 }
                 action_resources.push(ShellLauncherRemovalResourceV1 { previous, rollback });
             }
-            actions.push(DeclarativeActionV1::remove_shell_launcher(
-                format!("remove-launcher:{}", removal.target),
-                &removal.target,
-                "launcher",
-                receipt_contract(&removal.previous_receipt),
-                action_resources.clone(),
-            ));
-            prepared.push(PreparedShellAction::Remove(action_resources));
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::remove_shell_launcher(
+                    format!("remove-launcher:{}", removal.target),
+                    &removal.target,
+                    "launcher",
+                    receipt_contract(&removal.previous_receipt),
+                    action_resources.clone(),
+                ),
+                prepared: PreparedShellAction::Remove(action_resources),
+            });
         }
         Ok(())
     }
@@ -646,7 +629,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         resources: &[ShellLegacyLauncherRemoval],
         pending: &mut PreparedOperation,
     ) -> Result<()> {
-        let PreparedOperation { actions, prepared } = pending;
         for removal in resources {
             let mut action_resources = Vec::new();
             for previous in &removal.resources {
@@ -674,13 +656,15 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 }
                 action_resources.push(ShellLauncherRemovalResourceV1 { previous, rollback });
             }
-            actions.push(DeclarativeActionV1::remove_legacy_shell_launcher(
-                format!("remove-legacy-launcher:{}", removal.target),
-                &removal.target,
-                "launcher",
-                action_resources.clone(),
-            ));
-            prepared.push(PreparedShellAction::Remove(action_resources));
+            pending.steps.push(PreparedShellStep {
+                action: DeclarativeActionV1::remove_legacy_shell_launcher(
+                    format!("remove-legacy-launcher:{}", removal.target),
+                    &removal.target,
+                    "launcher",
+                    action_resources.clone(),
+                ),
+                prepared: PreparedShellAction::Remove(action_resources),
+            });
         }
         Ok(())
     }

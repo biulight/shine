@@ -3,6 +3,7 @@ mod render;
 mod resolve;
 
 use crate::config::Config;
+use crate::output::escape_controls;
 use crate::status::FileStatus;
 use crate::{apps, colors, path_display, shells};
 use anyhow::{Context, Result, bail};
@@ -91,16 +92,26 @@ fn app_categories_for_refs(refs: &[InfoRef]) -> Vec<String> {
 
 fn print_generator_notice(
     files: &[collect::AppInfoFile],
-    categories: &[String],
+    refs: &[InfoRef],
     run_generators: bool,
-) -> bool {
+) -> (bool, bool) {
+    let categories = app_categories_for_refs(refs);
     let relevant = files
         .iter()
         .filter(|file| categories.is_empty() || categories.contains(&file.category.name))
         .collect::<Vec<_>>();
-    let not_evaluated = relevant
-        .iter()
-        .any(|file| file.assessment_diagnostic == Some("app_generator_not_evaluated"));
+    let not_evaluated = relevant.iter().any(|file| {
+        file.assessment_diagnostic == Some("app_generator_not_evaluated")
+            && refs.iter().any(|item| match item {
+                InfoRef::AppCategory(category) => &file.category.name == category,
+                InfoRef::AppFile { category, source } => {
+                    &file.category.name == category && &file.file.source_rel == source
+                }
+                InfoRef::ShellCategory(_) | InfoRef::ShellFile { .. } => false,
+            })
+    });
+    // Explicit evaluation remains category-scoped. Keep all its failures visible and fatal,
+    // including an evaluated sibling outside the selected file's deferred notice scope.
     let failures = relevant
         .iter()
         .filter(|file| {
@@ -135,15 +146,15 @@ fn print_generator_notice(
             "{}",
             colors::yellow(&format!(
                 "! {}/{}: {reason}",
-                file.category.name,
-                file.file.source_rel.display()
+                escape_controls(&file.category.name),
+                escape_controls(&file.file.source_rel.display().to_string())
             ))
         );
         if let Some(error) = &file.assessment_error {
-            println!("{}", colors::dim(&format!("  {error}")));
+            println!("{}", colors::dim(&format!("  {}", escape_controls(error))));
         }
     }
-    !failures.is_empty()
+    (!failures.is_empty(), not_evaluated)
 }
 
 pub async fn handle_update_target(
@@ -167,17 +178,16 @@ pub async fn handle_update_target(
         }
         diffs.app_files = collect::collect_app_files(config, true, categories).await?;
     }
-    let generator_categories = app_categories_for_refs(&refs);
     let mut printed = false;
 
-    for item in refs {
+    for item in &refs {
         match item {
             InfoRef::AppCategory(category) => {
                 let mut files = diffs
                     .app_files
                     .iter()
                     .filter(|file| {
-                        file.category.name == category && file.status == FileStatus::UpdateAvail
+                        &file.category.name == category && file.status == FileStatus::UpdateAvail
                     })
                     .collect::<Vec<_>>();
                 files.sort_by_key(|file| file.file.source_rel.clone());
@@ -190,8 +200,8 @@ pub async fn handle_update_target(
             }
             InfoRef::AppFile { category, source } => {
                 if let Some(file) = diffs.app_files.iter().find(|file| {
-                    file.category.name == category
-                        && file.file.source_rel == source
+                    &file.category.name == category
+                        && &file.file.source_rel == source
                         && file.status == FileStatus::UpdateAvail
                 }) {
                     print_app_update_row(config, file);
@@ -204,7 +214,7 @@ pub async fn handle_update_target(
                     .shell_files
                     .iter()
                     .filter(|file| {
-                        file.category.name == category
+                        &file.category.name == category
                             && (file.status == "update available" || file.attention_required)
                     })
                     .collect::<Vec<_>>();
@@ -220,8 +230,8 @@ pub async fn handle_update_target(
             }
             InfoRef::ShellFile { category, command } => {
                 if let Some(file) = diffs.shell_files.iter().find(|file| {
-                    file.category.name == category
-                        && file.file.command_name == command
+                    &file.category.name == category
+                        && &file.file.command_name == command
                         && (file.status == "update available" || file.attention_required)
                 }) {
                     print_shell_update_row(file);
@@ -234,17 +244,16 @@ pub async fn handle_update_target(
         }
     }
 
-    let generator_failed =
-        print_generator_notice(&diffs.app_files, &generator_categories, run_generators);
-    let generator_incomplete = diffs.app_files.iter().any(|file| {
-        generator_categories.contains(&file.category.name)
-            && file.assessment_diagnostic == Some("app_generator_not_evaluated")
-    });
+    let (generator_failed, generator_incomplete) =
+        print_generator_notice(&diffs.app_files, &refs, run_generators);
 
-    if !printed && !generator_incomplete {
+    if !printed && !generator_incomplete && !generator_failed {
         println!(
             "{}",
-            colors::dim(&format!("No update available for {target}."))
+            colors::dim(&format!(
+                "No update available for {}.",
+                escape_controls(target)
+            ))
         );
     }
 
@@ -265,14 +274,22 @@ fn print_shell_update_row(file: &collect::ShellInfoFile) {
     println!(
         "  {}  {}/{}  {}",
         colors::symbol(symbol),
-        file.category.name,
-        file.file.command_name,
+        escape_controls(&file.category.name),
+        escape_controls(&file.file.command_name),
         colors::status_label(file.status, symbol)
     );
     if file.attention_required {
+        let target = format!("{}/{}", file.category.name, file.file.command_name);
+        let removal = if target.chars().any(char::is_control) {
+            "shine shell uninstall with the original target (control characters; copyable command omitted)".to_string()
+        } else {
+            format!(
+                "`shine shell uninstall {}`",
+                crate::shell_quote::command_positionals(&[&target])
+            )
+        };
         println!(
-            "    Installed files are preserved. Restore the Preset or inspect the launcher before retrying; use `shine shell uninstall {}/{}` for explicit removal.",
-            file.category.name, file.file.command_name
+            "    Installed files are preserved. Restore the Preset or inspect the launcher before retrying; use {removal} for explicit removal."
         );
     }
 }
@@ -281,12 +298,12 @@ fn print_app_update_row(config: &Config, file: &collect::AppInfoFile) {
     println!(
         "  {}  {}  {}  {}  {}",
         colors::symbol("↑"),
-        app_file_label(file),
+        escape_controls(&app_file_label(file)),
         colors::dim("→"),
-        colors::dim(&path_display::format_home(
+        colors::dim(&escape_controls(&path_display::format_home(
             &file.destination,
             &config.home_dir
-        )),
+        ))),
         colors::status_label("update available", "↑"),
     );
 }
@@ -322,12 +339,10 @@ pub async fn handle_info(
         }
         app_files = collect::collect_app_files(config, true, categories).await?;
     }
-    let generator_categories = app_categories_for_refs(&refs);
-
     crate::config::print_presets_note(config);
 
     let mut first = true;
-    for item in refs {
+    for item in &refs {
         if !first {
             println!();
         }
@@ -336,7 +351,7 @@ pub async fn handle_info(
             InfoRef::AppCategory(category) => {
                 let mut files: Vec<_> = app_files
                     .iter()
-                    .filter(|f| f.category.name == category)
+                    .filter(|f| &f.category.name == category)
                     .cloned()
                     .collect();
                 files.sort_by_key(|f| f.file.source_rel.clone());
@@ -350,14 +365,14 @@ pub async fn handle_info(
             InfoRef::AppFile { category, source } => {
                 let file = app_files
                     .iter()
-                    .find(|f| f.category.name == category && f.file.source_rel == source)
+                    .find(|f| &f.category.name == category && &f.file.source_rel == source)
                     .ok_or_else(|| anyhow::anyhow!("installed app config not found"))?;
                 render::print_app_file(config, file, diff, verbose).await?;
             }
             InfoRef::ShellCategory(category) => {
                 let mut files: Vec<_> = shell_files
                     .iter()
-                    .filter(|f| f.category.name == category)
+                    .filter(|f| &f.category.name == category)
                     .cloned()
                     .collect();
                 files.sort_by_key(|f| f.file.command_name.clone());
@@ -371,15 +386,14 @@ pub async fn handle_info(
             InfoRef::ShellFile { category, command } => {
                 let file = shell_files
                     .iter()
-                    .find(|f| f.category.name == category && f.file.command_name == command)
+                    .find(|f| &f.category.name == category && &f.file.command_name == command)
                     .ok_or_else(|| anyhow::anyhow!("installed shell preset not found"))?;
                 render::print_shell_file(config, file, diff, verbose).await?;
             }
         }
     }
 
-    let generator_failed =
-        print_generator_notice(&app_files, &generator_categories, run_generators);
+    let (generator_failed, _) = print_generator_notice(&app_files, &refs, run_generators);
     if generator_failed {
         bail!("one or more App generators could not be evaluated");
     }
@@ -394,7 +408,9 @@ async fn handle_available_info(
     run_generators: bool,
     diff: bool,
 ) -> Result<()> {
-    let target = target.trim();
+    if target.trim().is_empty() {
+        return Err(installed_error);
+    }
     if let Some(rest) = target.strip_prefix("app/") {
         let category = rest.split('/').next().unwrap_or_default();
         if category.is_empty() || rest.contains('/') {

@@ -1,0 +1,99 @@
+---
+title: Tasks and application artifacts
+sidebar_position: 6
+---
+
+# Tasks and application artifacts
+
+This guide shows how to save personal command shortcuts and run application artifact scripts.
+
+## Save common commands
+
+Save a complete command as a task:
+
+```bash
+shine task save logs -- tail -f /var/log/example.log
+shine task save kill-port -- sh -c 'lsof -ti :3000 | xargs kill'
+shine task save project-check --cwd ~/src/example -- bun run check
+```
+
+Run it later from any directory:
+
+```bash
+shine task run logs
+shine run logs
+shine task list
+shine task info kill-port
+```
+
+Tasks are stored in `tasks.toml` under the active Shine runtime directory. `SHINE_CONFIG_DIR` or the
+global `--config-dir` selects the corresponding task list. Malformed task TOML reports a parse
+error without printing stored commands; the failed operation leaves the list unchanged.
+A task saved with `--cwd` always starts
+there; without it, the task uses the caller's current directory.
+
+`--cwd` expands a leading `~` and saves the resolved absolute directory. If that directory's path
+cannot be represented as UTF-8, saving fails without changing the task list, including with `--force`.
+Working-directory displays in save/info and the run announcement escape terminal controls.
+The saved path, child's output and exit status retain their original values.
+
+Concurrent saves and deletions use a shared process lock to preserve each completed update.
+They wait up to 30 seconds for an active writer, then fail without changing the task list.
+The `tasks.lock` file may remain in the runtime directory; do not delete it to unlock an active writer.
+
+Shine stores and executes an argument array directly without adding a shell. Argument boundaries and
+the child exit code are preserved. For pipes, redirection, variable expansion, or globs, include the
+shell in the task, such as `sh -c '...'`. Windows does not include `sh`; that form is Unix-only.
+
+On Unix, saved-command displays use POSIX shell quoting, including executable names such as `if` or
+`MODE=test` that would otherwise be parsed as shell syntax. These quotes are for display; task
+execution continues to use the original argument array. The run announcement goes to stderr,
+leaving the child's stdout available for piping. On Windows, these displays use PowerShell quoting
+and its `&` invocation operator. Stored task names escape controls in human output, and list
+columns use terminal display widths; lookup and deletion still use the original name.
+
+Replace or delete a task:
+
+```bash
+shine task save logs --force -- journalctl -f
+shine task delete logs
+```
+
+Task names may contain letters, numbers, dots, hyphens, and underscores and must start with a letter
+or number.
+
+## Generate application helper resources
+
+Some application presets declare an artifact script that generates extra files from current
+configuration:
+
+```bash
+shine app artifact apply surge
+```
+
+`app artifact apply` is explicit. `shine app install`, `shine update`, and `shine upgrade` do not
+implicitly run artifact scripts. It displays a security Plan; non-interactive callers must add
+`--yes`. A script failure fails the command and its output is shown directly.
+
+Artifact scripts receive configured `[artifact].env` sources only, plus Shine-provided path
+variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `SHINE_APP_ID` | Current application preset ID |
+| `SHINE_APP_DIR` | Temporary App snapshot for this invocation, containing effective base and overlay files |
+| `SHINE_APP_SOURCE_DIR` | Same effective source snapshot directory as `SHINE_APP_DIR` |
+| `SHINE_APP_OVERLAY_DIR` | Captured effective overlay files for this invocation; explicitly empty without an overlay, overriding inherited values |
+| `SHINE_CONFIG_DIR` | Current Shine runtime directory |
+| `SHINE_CACHE_DIR` | Current application cache directory |
+| `SHINE_STATE_DIR` | Current application state directory |
+
+Each environment source must also appear in `[permissions].environment`; missing optional sources
+are omitted. Values are passed as stored. Secret-classified inputs are Plan-bound by an opaque
+version but are not decrypted automatically and do not trigger GPG, age, or Touch ID prompts.
+
+App generators, script hooks, and artifacts (including teardown) execute from the captured category
+snapshot, with relative helper files from that same snapshot. Source edits after capture do not
+change the code used by the invocation. These directories are cleaned after execution; write persistent
+output to `SHINE_STATE_DIR` or `SHINE_CACHE_DIR` instead of modifying the
+execution snapshot. Scripts still run with the process's existing access and are not sandboxed.

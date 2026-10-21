@@ -84,12 +84,6 @@ pub struct ShellFileInspection {
     pub changes: Vec<InspectionChange>,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct DomainInspectionReport {
-    pub app_files: Vec<AppFileInspection>,
-    pub shell_files: Vec<ShellFileInspection>,
-}
-
 /// Validated local journal observation. Raw journal content never leaves its owning domain.
 pub(crate) struct JournalInspection {
     pub operation_id: String,

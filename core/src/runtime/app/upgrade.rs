@@ -14,6 +14,14 @@ struct PreparedUpgrade {
     assessments: BTreeMap<String, AssessedAppFile>,
 }
 
+/// Holds the transaction capability until the receipt is durable and commit finishes.
+/// Relocation transactions already own source cleanup; other paths retain legacy cleanup.
+enum FileUpgradeCompletion {
+    Unjournaled,
+    JournaledUpdate(crate::runtime::AppOperationExecutionV1),
+    JournaledRelocation(crate::runtime::AppOperationExecutionV1),
+}
+
 impl<H> CoreRuntime<H>
 where
     H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost,
@@ -218,10 +226,7 @@ where
         let assessments = self
             .assess_app_files(
                 &categories,
-                AppAssessmentOptions {
-                    run_generators: true,
-                    ..AppAssessmentOptions::default()
-                },
+                AppAssessmentPolicy::Upgrade,
                 &manifest,
                 observer,
             )
@@ -297,29 +302,28 @@ where
             );
             return Ok(());
         }
-        if let Some(error) = assessment.generator_error.clone() {
-            report.failed += 1;
-            report.lifecycle.push(
-                LifecycleOutcomeV1::new(
-                    format!("app/{category_name}"),
-                    Some(file_rel.to_string()),
-                    LifecycleStatus::Failed,
-                    [LifecycleEffect::ManagedResourcePreserved],
-                )
-                .with_diagnostic_code("app_generator_unavailable"),
-            );
-            report.files.push(app_upgrade_file_report(
-                &assessment,
-                LifecycleStatus::Failed,
-                AppFileAction::GeneratorPreserved,
-                Some(error),
-            ));
-            return Ok(());
-        }
-        let content = assessment
-            .content
-            .as_deref()
-            .context("missing App upgrade content")?;
+        let content = match &assessment.content {
+            AppContentAssessment::Ready(content) => content.as_slice(),
+            AppContentAssessment::NotEvaluated => bail!("missing App upgrade content"),
+            AppContentAssessment::TrustRequired { error }
+            | AppContentAssessment::EvaluationFailed { error } => {
+                report.failed += 1;
+                report.lifecycle.push(
+                    LifecycleOutcomeV1::new(
+                        format!("app/{category_name}"),
+                        Some(file_rel.to_string()),
+                        LifecycleStatus::Failed,
+                        [LifecycleEffect::ManagedResourcePreserved],
+                    )
+                    .with_diagnostic_code("app_generator_unavailable"),
+                );
+                report.files.push(app_upgrade_file_report(
+                    &assessment,
+                    AppFileOutcome::GeneratorFailed(error.clone()),
+                ));
+                return Ok(());
+            }
+        };
         let desired_hash = desired_app_hash(&assessment.file, content)?;
         let desired_destination = assessment.destination.clone();
         let relocated = desired_destination != entry.destination;
@@ -341,7 +345,7 @@ where
             return Ok(());
         }
         let current_hash = match self.host.read(&entry.destination).await {
-            Ok(bytes) => installed_app_entry_hash(&entry, &bytes)?,
+            Ok(bytes) => installed_strategy_hash(&entry.install_strategy, &bytes)?,
             Err(error) if error.is_not_found() => None,
             Err(error) => return Err(error.into_anyhow("reading installed App file")),
         };
@@ -356,9 +360,7 @@ where
             ));
             report.files.push(app_upgrade_file_report(
                 &assessment,
-                LifecycleStatus::Preserved,
-                AppFileAction::UserModified,
-                None,
+                AppFileOutcome::UserModified,
             ));
             return Ok(());
         }
@@ -375,9 +377,7 @@ where
             ));
             report.files.push(app_upgrade_file_report(
                 &assessment,
-                LifecycleStatus::Unchanged,
-                AppFileAction::Unchanged,
-                None,
+                AppFileOutcome::Unchanged,
             ));
             return Ok(());
         }
@@ -386,8 +386,7 @@ where
         let action_index = approved.action_irs.iter().position(|ir| {
                 matches!(ir.actions.as_slice(), [action] if action.target == target && action.resource == resource)
             });
-        let mut journal_execution = None;
-        let mut journaled_relocation = false;
+        let mut completion = FileUpgradeCompletion::Unjournaled;
         let installed = if let Some(index) = action_index {
             let action_ir = approved.action_irs.remove(index);
             let is_json = matches!(
@@ -403,7 +402,6 @@ where
                 )
             );
             let execution = if is_relocation {
-                journaled_relocation = true;
                 if matches!(
                     action_ir.actions.as_slice(),
                     [action] if matches!(
@@ -444,7 +442,11 @@ where
                 )
                 .await?
             };
-            journal_execution = Some(execution);
+            completion = if is_relocation {
+                FileUpgradeCompletion::JournaledRelocation(execution)
+            } else {
+                FileUpgradeCompletion::JournaledUpdate(execution)
+            };
             Ok(InstallOutcome::Installed { hash: desired_hash })
         } else {
             self.install_app_content(
@@ -475,14 +477,12 @@ where
                 );
                 report.files.push(app_upgrade_file_report(
                     &assessment,
-                    LifecycleStatus::Failed,
-                    AppFileAction::Failed,
-                    Some(format!("{error:#}")),
+                    AppFileOutcome::Failed(format!("{error:#}")),
                 ));
                 return Ok(());
             }
         };
-        if relocated && !journaled_relocation {
+        if relocated && !matches!(&completion, FileUpgradeCompletion::JournaledRelocation(_)) {
             match self.uninstall_app_entry(&entry, false, false).await {
                 Ok(UninstallOutcome::Removed)
                 | Ok(UninstallOutcome::RestoredBackup { .. })
@@ -523,9 +523,13 @@ where
                 entry.backup.clone()
             },
         ));
-        if let Some(execution) = journal_execution {
-            save_manifest(&self.host, &self.context.shine_dir, manifest).await?;
-            self.commit_app_managed_file_operation(&execution).await?;
+        match completion {
+            FileUpgradeCompletion::Unjournaled => {}
+            FileUpgradeCompletion::JournaledUpdate(execution)
+            | FileUpgradeCompletion::JournaledRelocation(execution) => {
+                save_manifest(&self.host, &self.context.shine_dir, manifest).await?;
+                self.commit_app_managed_file_operation(&execution).await?;
+            }
         }
         changed.insert(category_name.to_string());
         if let Some(hint) = &assessment.file.restart_hint {
@@ -546,9 +550,7 @@ where
         ));
         report.files.push(app_upgrade_file_report(
             &assessment,
-            LifecycleStatus::Changed,
-            AppFileAction::Installed,
-            None,
+            AppFileOutcome::Installed,
         ));
         Ok(())
     }
@@ -591,7 +593,7 @@ where
                 );
                 continue;
             }
-            let Some(content) = assessment.content.as_deref() else {
+            let Some(content) = assessment.content.bytes() else {
                 report.failed += 1;
                 continue;
             };
@@ -624,9 +626,7 @@ where
                     ));
                     report.files.push(app_upgrade_file_report(
                         &assessment,
-                        LifecycleStatus::Changed,
-                        AppFileAction::Installed,
-                        None,
+                        AppFileOutcome::Installed,
                     ));
                 }
                 Ok(InstallOutcome::AlreadyManaged | InstallOutcome::DryRun) => {
@@ -645,9 +645,7 @@ where
                     );
                     report.files.push(app_upgrade_file_report(
                         &assessment,
-                        LifecycleStatus::Failed,
-                        AppFileAction::Failed,
-                        Some(format!("{error:#}")),
+                        AppFileOutcome::Failed(format!("{error:#}")),
                     ));
                 }
             }
@@ -739,42 +737,39 @@ where
         } else {
             self.uninstall_app_entry(&entry, false, false).await?
         };
-        let (status, effects, remove, action) = match outcome {
+        let (effects, remove, file_outcome) = match outcome {
             UninstallOutcome::Removed => (
-                LifecycleStatus::Changed,
                 vec![
                     LifecycleEffect::ResourceRemoved,
                     LifecycleEffect::ReceiptRemoved,
                 ],
                 true,
-                AppFileAction::Removed,
+                AppFileOutcome::Removed,
             ),
             UninstallOutcome::RestoredBackup { .. } => (
-                LifecycleStatus::Changed,
                 vec![
                     LifecycleEffect::BackupRestored,
                     LifecycleEffect::ReceiptRemoved,
                 ],
                 true,
-                AppFileAction::Restored,
+                AppFileOutcome::Restored,
             ),
             UninstallOutcome::NotFound => (
-                LifecycleStatus::Changed,
                 vec![LifecycleEffect::ReceiptRemoved],
                 true,
-                AppFileAction::Missing,
+                AppFileOutcome::Missing,
             ),
             UninstallOutcome::UserModified => (
-                LifecycleStatus::Preserved,
                 vec![LifecycleEffect::UserResourcePreserved],
                 false,
-                AppFileAction::UserModified,
+                AppFileOutcome::UserModified,
             ),
             UninstallOutcome::ForceRemoved | UninstallOutcome::ForceRestoredBackup { .. } => {
                 unreachable!()
             }
             UninstallOutcome::DryRun => unreachable!(),
         };
+        let status = file_outcome.status();
         if remove {
             manifest.remove_by_dest(&entry.destination);
             if let Some(execution) = journal_execution {
@@ -792,19 +787,18 @@ where
             status,
             effects,
         ));
-        report.files.push(AppFileLifecycleReport {
-            category: category_name.to_string(),
-            source: PathBuf::from(file_rel),
-            destination: entry.destination,
-            transforms: Vec::new(),
-            backup: entry.backup,
-            uninstall_strategy: None,
-            restart_hint: None,
-            generator_error: None,
-            error: None,
-            status,
-            action,
-        });
+        report.files.push(
+            AppFileReportContext {
+                category: category_name.to_string(),
+                source: PathBuf::from(file_rel),
+                destination: entry.destination,
+                transforms: Vec::new(),
+                backup: entry.backup,
+                uninstall_strategy: None,
+                restart_hint: None,
+            }
+            .finish(file_outcome),
+        );
         Ok(())
     }
 }

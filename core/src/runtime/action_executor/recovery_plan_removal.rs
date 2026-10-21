@@ -28,16 +28,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             blocked,
             ..
         } = planning;
-        let current = observe_recovery_file(self.host(), destination).await?;
-        let rollback_current = observe_recovery_file(self.host(), rollback).await?;
-        state.add_observation(
-            format!("destination:{}", action.action_id),
-            current.identity(),
-        )?;
-        state.add_observation(
-            format!("rollback:{}", action.action_id),
-            rollback_current.identity(),
-        )?;
+        let (current, rollback_current) =
+            observe_recovery_pair(self.host(), state, &action.action_id, destination, rollback)
+                .await?;
         let committed = action_state == JournalActionStateV1::ReceiptCommitted;
         let previous_receipt_present = matching_previous_app_receipt(manifest, action);
         let (plan_action, code) = if committed {
@@ -317,16 +310,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             blocked,
             ..
         } = planning;
-        let current = observe_recovery_file(self.host(), destination).await?;
-        let rollback_current = observe_recovery_file(self.host(), rollback).await?;
-        state.add_observation(
-            format!("destination:{}", action.action_id),
-            current.identity(),
-        )?;
-        state.add_observation(
-            format!("rollback:{}", action.action_id),
-            rollback_current.identity(),
-        )?;
+        let (current, rollback_current) =
+            observe_recovery_pair(self.host(), state, &action.action_id, destination, rollback)
+                .await?;
         let backup_current = if let Some(backup) = persistent_backup {
             let observed = observe_recovery_file(self.host(), &backup.path).await?;
             state.add_observation(format!("backup:{}", action.action_id), observed.identity())?;

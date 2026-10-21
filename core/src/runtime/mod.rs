@@ -16,13 +16,16 @@ mod host;
 mod inspection;
 mod launcher;
 mod lint;
+mod managed_json;
 mod memory;
 mod metadata_diagnostic;
 mod operation_lock;
 mod pack;
+mod path_text;
 mod planner;
 mod preset;
 mod preset_migration;
+mod privileged_files;
 mod process_scope;
 mod profile;
 mod review_path;
@@ -42,7 +45,7 @@ mod trust;
 mod validation;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub use action_executor::{
     APP_OPERATION_JOURNAL_FILE, AppOperationExecutionV1, AppRecoveryReportV1,
@@ -64,13 +67,11 @@ pub use host::{
 };
 pub(crate) use inspection::JournalInspection;
 pub use inspection::{
-    AppFileInspection, DomainInspectionReport, InspectionChange, InspectionFileStatus,
-    ShellFileInspection,
+    AppFileInspection, InspectionChange, InspectionFileStatus, ShellFileInspection,
 };
 pub use launcher::{
     LinkConflict, LinkConflictKind, LinkReport, LinkSpec, UnlinkReport, command_path_for_name,
-    link_executables_with_host, link_is_current_with_host, link_stem,
-    unlink_managed_command_with_host,
+    link_executables_with_host, link_stem, unlink_managed_command_with_host,
 };
 pub use lint::{
     PRESET_LINT_SCHEMA_VERSION, PresetLintDiagnosticV1, PresetLintReportV1, PresetLintSeverity,
@@ -98,9 +99,8 @@ pub use preset_migration::{
 };
 pub use profile::{
     PathUpdateStatus, SHELL_SENTINEL_END, SHELL_SENTINEL_START, ShellConfigUpdate,
-    ShellProfileRemoval, managed_profile_snippet, managed_shell_profile_path,
-    powershell_bin_assignment, powershell_quote, remove_shell_sentinel, shell_config_snippet,
-    shell_source_command, supports_completion_registration,
+    ShellProfileRemoval, managed_shell_profile_path, shell_source_command,
+    supports_completion_registration,
 };
 pub use schema::{
     PRESET_SCHEMA_REFERENCE_VERSION, PresetSchemaReferenceV1, PresetSchemaReferenceV2,
@@ -117,22 +117,21 @@ pub use shell::{
 pub use shell_action_executor::{
     SHELL_OPERATION_JOURNAL_FILE, ShellOperationExecutionV1, ShellRecoveryReportV1,
 };
-pub use shell_launch::{LiveBunLaunch, validate_live_shell_target};
+pub use shell_launch::LiveBunLaunch;
+use sys::split_dns_receipt;
 pub use sys::{
-    ManagedFileReceipt, ManagedFileRemoveRequest, ManagedFileRequest, RECEIPT_VERSION,
-    ResourceConflict, ResourceOutcome, ResourcePlan, SYS_MANIFEST_FILE,
+    ManagedFileReceipt, RECEIPT_VERSION, ResourceConflict, ResourceOutcome, SYS_MANIFEST_FILE,
     SYS_MANIFEST_SCHEMA_VERSION, SplitDnsDomainRequest, SplitDnsReceipt, SysDriverKind,
     SysItemStatus, SysManagedAction, SysManagedReport, SysManagedRequest, SysRunEntry,
-    SysRunManifest, SystemReceipt, remove_split_dns_with_host, split_dns_receipt,
+    SysRunManifest, SystemReceipt,
 };
 pub use sys_action_executor::{
     SYS_OPERATION_JOURNAL_FILE, SysOperationExecutionV1, SysRecoveryReportV1,
 };
 pub use sys_bootstrap::{
     SysBootstrapBatchReport, SysBootstrapBatchRequest, SysBootstrapReport, SysBootstrapRequest,
-    sys_install_requires_admin,
 };
-pub use sys_manifest::{parse_sys_manifest, validate_sys_manifest};
+pub use sys_manifest::parse_sys_manifest;
 pub use sys_model::{
     LoadedSysPreset, ResolvedSelection, SYS_PROFILE_PHASES, SelectionSource,
     ShellProfileBlockPosition, SysDetection, SysDetectionProbe, SysInstall, SysInstalledRow,
@@ -241,27 +240,6 @@ impl RuntimePlatform {
     }
 }
 
-/// Existing lifecycle request inputs. This is deliberately not a Phase 3
-/// reviewable Plan.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct LifecycleRequest {
-    pub target: Option<String>,
-    pub dry_run: bool,
-    pub force: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResourceInspection {
-    pub logical_path: String,
-    pub installed: bool,
-    pub matches_snapshot: bool,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct RuntimeInspection {
-    pub resources: Vec<ResourceInspection>,
-}
-
 /// Frontend-neutral runtime facade. Domain executors are added behind this
 /// facade as their Phase 2 slices migrate.
 pub struct CoreRuntime<H> {
@@ -285,9 +263,15 @@ impl<H> CoreRuntime<H> {
         &self.context
     }
 
-    /// Frontend adapter hook used while legacy configuration loading is being
-    /// collapsed into one captured context. Domain executors never call this.
-    pub fn context_mut_for_cli(&mut self) -> &mut RuntimeContext {
+    /// Supply explicit Sys bootstrap proxy inputs before review or execution.
+    /// Approval validation still binds the resulting captured inputs.
+    pub fn with_proxy_env(mut self, proxy_env: BTreeMap<String, String>) -> Self {
+        self.context.proxy_env = proxy_env;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn context_mut_for_test(&mut self) -> &mut RuntimeContext {
         &mut self.context
     }
 
@@ -299,38 +283,8 @@ impl<H> CoreRuntime<H> {
         &self.host
     }
 
-    pub fn into_host(self) -> H {
-        self.host
-    }
-
     pub fn validate(&self) -> PresetValidationReport {
         self.presets.validate()
-    }
-}
-
-impl<H: FileSystemHost> CoreRuntime<H> {
-    /// Inspect snapshot resources against a Shine-owned root. This generic
-    /// harness seam is used without loading CLI configuration or real HOME.
-    pub async fn inspect_snapshot(
-        &self,
-        installed_root: &Path,
-    ) -> anyhow::Result<RuntimeInspection> {
-        let mut inspection = RuntimeInspection::default();
-        for (logical_path, expected) in self.presets.files() {
-            let installed_path = installed_root.join(logical_path);
-            let current = self.host.read(&installed_path).await;
-            let (installed, matches_snapshot) = match current {
-                Ok(current) => (true, current == *expected),
-                Err(error) if error.is_not_found() => (false, false),
-                Err(error) => return Err(error.into_anyhow("reading snapshot resource")),
-            };
-            inspection.resources.push(ResourceInspection {
-                logical_path: logical_path.clone(),
-                installed,
-                matches_snapshot,
-            });
-        }
-        Ok(inspection)
     }
 }
 

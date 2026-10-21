@@ -2,44 +2,6 @@
 
 use super::*;
 
-pub(super) fn select_refresh_files(
-    category: &AppCategory,
-    selector: Option<&Path>,
-) -> Result<Vec<AppFile>> {
-    let candidates = if let Some(selector) = selector {
-        let file = category
-            .files
-            .iter()
-            .find(|file| file.source_rel == selector)
-            .with_context(|| {
-                format!(
-                    "app '{}' file not found: {}",
-                    category.name,
-                    selector.display()
-                )
-            })?;
-        if file.generator.is_none() {
-            bail!(
-                "app '{}' file is not generated: {}",
-                category.name,
-                selector.display()
-            );
-        }
-        vec![file.clone()]
-    } else {
-        category
-            .files
-            .iter()
-            .filter(|file| file.generator.is_some())
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    if candidates.is_empty() {
-        bail!("app '{}' has no generated files", category.name);
-    }
-    Ok(candidates)
-}
-
 pub(super) async fn plan_app_hooks<H: FileSystemObservationHost>(
     runtime: &CoreRuntime<H>,
     category: &AppCategory,

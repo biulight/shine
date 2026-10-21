@@ -114,11 +114,10 @@ async fn run_command(cli: Cli) -> Result<()> {
         Commands::Uninstall {
             target,
             force,
-            purge,
             dry_run,
             yes,
             ..
-        } => handle_uninstall_shim_approved(&config, &target, force, purge, dry_run, yes).await,
+        } => handle_uninstall_shim_approved(&config, &target, force, dry_run, yes).await,
         Commands::App { command } => app::dispatch(&config, command).await,
         Commands::Update(cmd) => {
             let config = if cmd.pull {

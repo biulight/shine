@@ -33,14 +33,24 @@ The built-in image commands use `IMAGE_QUALITY=80`, `IMAGE_MAX_WIDTH=1920`, and
 `--height`, or keep different machine-local defaults with `shine env set`.
 
 `shine env list` hides sensitive values by default; use `--reveal` only in a trusted terminal.
+List cells escape line breaks, tabs, other control characters and backslashes, and truncate to
+terminal display width. These display changes do not alter stored values or `env get` output.
 It groups effective values by builtin, overlay, global config, global env file, project config,
 and project env file, with actual file paths and the current project root. `env explain KEY` shows
 that storage key's definitions from low to high, its winning layer and description source, hiding
 all values by default. `--reveal` never decrypts. Explicit injection still prefers `KEY_SECRET`
 over `KEY`; explain and write output point out an existing encrypted key.
+List/explain paths and env-write/proxy-toggle receipts escape terminal control characters while
+preserving stored paths. For control-bearing keys, explain requests the original key instead of
+printing a copyable command with a different spelling.
 
 Defaults are runtime fallbacks: queries create no configuration. Setting a value equal to a builtin
 still records an explicit entry.
+
+Configuration TOML parse errors report file or field context without printing configured values
+or source lines. Env reads and writes return exit code 1; correct the input and retry. A failed
+parse does not apply the requested env edit. Workspace definitions and personal
+`shine.config.local.toml` preferences also omit document contents from TOML parse errors.
 
 Global `~/.shine/config.toml` and project `shine.config.toml` support either a string or a value with
 a description:
@@ -176,11 +186,21 @@ Legacy `gpg_key_id` is deprecated. Preview and apply migration with
 Export a value into the current shell:
 
 ```bash
-eval "$(shine env secret export MY_TOKEN)"
-eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
+export_code="$(shine env secret export MY_TOKEN)" && eval "$export_code"
+export_code="$(shine env secret export MY_TOKEN --as API_TOKEN)" && eval "$export_code"
 ```
 
+In PowerShell, evaluate the generated code only after a successful export:
+
+```powershell
+$exportCode = shine env secret export MY_TOKEN --as API_TOKEN
+if ($LASTEXITCODE -eq 0) { Invoke-Expression $exportCode }
+```
+
+PowerShell exports preserve Unicode and multiline values, including their original line endings.
 After installing the `utils` shell preset, `shine-env-export MY_TOKEN --as API_TOKEN` is equivalent.
+Values containing NUL cannot be represented in environment variables. `env secret export` rejects
+them with exit code 1 and no export code on stdout; `env get` and `env secret decrypt` retain raw output.
 
 ## Use age identities
 
@@ -197,6 +217,14 @@ shine env secret identity list
 ```
 
 A normal identity uses `age-keygen` and defaults to `~/.shine/age/identity.txt`.
+For a custom `--output`, any printed `age_identity` configuration hint uses an absolute path and
+TOML quoting, so it remains usable from another directory. The hint does not modify your config.
+On Unix, `--output` keeps native filename bytes. If the absolute path is not valid UTF-8, Shine
+omits the copyable `age_identity` assignment; use a UTF-8 path to configure it in TOML.
+`identity list` shows each configured identity path and recipient. On Unix, literal backslashes in
+filenames are preserved; Windows paths are displayed with forward slashes.
+Identity lists and software/Touch ID generation result rows escape terminal control characters in
+paths and recipients. Copyable configuration hints retain TOML quoting, including multiline values.
 Existing files require `--force`. Forced replacement generates and checks the new identity in a
 private temporary directory before replacing the old file; generation or validation failure
 preserves the old identity. On Unix, the resulting identity file has owner-only `0600` permissions.
@@ -299,6 +327,7 @@ Without a file argument, `seal` processes existing sources referenced by the wor
 configured modes, including `default_mode`. Use `shine env secret seal <FILE>` to process only one
 source. If sealing stops with an error, some files may already be updated; resolve the reported
 error and rerun it before sharing the result.
+Completed source paths in ordinary `seal` output display terminal control characters as escapes.
 
 Commit the updated workspace configuration together with the resealed shared source files. Each
 listed recipient can independently decrypt the new ciphertext; have new members verify access on
@@ -503,10 +532,16 @@ Shine creates a same-name shim in `~/.shine/bin/` and records the real command f
 shim resolves `GH_TOKEN_SECRET` only for its child and falls back to plaintext `GH_TOKEN`. It never
 exports the value back to the parent. `--with` is repeatable and accepts `KEY=ALIAS`.
 
+The proxy forwards child stdout/stderr and preserves its numeric exit code. On Unix, termination
+by a signal returns `128 + signal` (for example, SIGTERM returns 143), including when injection is
+disabled or no rule applies.
+
 The shim retains the absolute runtime directory selected during installation, including a custom
 `--config-dir`. Later calls use that directory even when the caller's `SHINE_CONFIG_DIR` differs.
 Project rules still follow the caller's working directory. Re-run `env proxy install` to update an
 older shim or move it to another runtime directory.
+Proxy installation requires UTF-8 runtime and target paths; an unrepresentable path is rejected
+before launcher, configuration or receipt files are written.
 
 An installed proxy is command-wide, not subcommand-specific. If you deliberately proxy Cargo,
 disable injection until it is needed:
@@ -545,7 +580,9 @@ If a launcher changes while uninstall is running, Shine preserves the changed fi
 Installation validates the rule file, manifest, and complete launcher set before writing. If a
 write fails, Shine attempts to restore previous file contents and Unix permissions and removes new
 files. Concurrent edits are preserved; an incomplete rollback is reported explicitly. This rollback
-covers reported write failures, not abrupt process termination.
+covers reported write failures, not abrupt process termination. TOML parse errors in captured
+proxy rules or the proxy manifest omit document contents; invalid input still blocks the
+operation before launcher, rule, or manifest changes.
 
 Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
 `--project` to scope the rule; a project rule for the same command overrides the global one.
@@ -557,6 +594,9 @@ shine env proxy install gh --with GH_TOKEN --project
 shine env proxy list
 ```
 
+Proxy list fields, installation target notices, and post-save warning details escape terminal
+control characters without changing saved rules or executable targets.
+
 Disable injection temporarily while retaining the shim; the disabled wrapper directly forwards to
 the real program:
 
@@ -565,6 +605,12 @@ shine env proxy disable gh
 shine env proxy enable gh
 shine env proxy disable gh --project
 ```
+
+Enable/disable output identifies the configuration file that was saved and separately reports the
+current effective state. Without `--project`, the global rule changes even inside a project;
+a project override can therefore keep a different state. If the subsequent state check fails,
+Shine warns that the rule was saved but its effective state could not be verified; the successful
+save still returns exit code 0.
 
 Remove the managed shim and user-level rule when no longer needed:
 
@@ -609,6 +655,10 @@ import. Import selected modes with repeatable `--mode`:
 ```bash
 shine env workspace init --from-dotenv --mode development --mode production
 ```
+
+Without `--force`, previews say `Would create` and successful writes say `Created`.
+With `--force`, messages describe writing with replacement if a target is present; they do not
+claim that every target is new. `--dry-run` never writes or replaces files.
 
 Mark known sensitive keys for `[secret]`, then configure recipients and seal. Unmarked values are
 imported as plaintext; never accidentally commit credentials as ordinary configuration.
@@ -659,8 +709,12 @@ This writes plaintext secrets. On Unix, a secret-bearing output is created with 
 permissions; keep it out of version control on every platform. Without `--force`, existing outputs
 (including dangling symbolic links) are preserved, even if they appear while the export is waiting
 for decryption. Concurrent exports to the same destination allow only one to succeed. Add `--force`
-to replace an existing output. `--dry-run` reports the mode, destination, and variable count without
-printing values or writing the file.
+to replace an existing output. `--dry-run` reports the mode, destination, and effective non-secret
+variable count without printing values or writing the file. Secrets are not decrypted or counted,
+even with `--include-secrets`; that option is applied only during the actual export. A plain value
+overridden by a secret is excluded from the preview count. Destination paths in previews, success
+messages, and existing-output errors are quoted and display-escaped: newlines and tabs appear as
+`\n` and `\t`. This changes only the message; the actual destination and exported bytes are preserved.
 
 The exported file has no Shine metadata or runtime dependency. To leave Shine env, export and test
 each required mode, add secret-bearing outputs to `.gitignore`, remove `shine env run` wrappers, and
@@ -736,6 +790,11 @@ precedence.
 For single-backend policy and sources, usable recipients let `env run` store an encrypted,
 mode-specific cache with the selected backend in the system cache directory. It rebuilds automatically when workspace content, source content, or file
 order changes.
+A non-UTF-8 project directory keeps a separate cache from a different directory with its
+replacement-character spelling.
+If the cache document or decrypted cache is malformed, Shine warns without showing cached
+values or document contents and rebuilds from the workspace sources. Cache read/write warnings
+escape control characters in paths and error text; child output and exit status are preserved.
 
 Ignore personal overrides:
 
@@ -874,6 +933,26 @@ cancellation before deletion retains all original plaintext. Multi-file writes a
 one transaction; failures report completed and remaining files. There is no ciphertext-only
 recipient rotation workflow in this first version.
 
+To keep decrypted files for ordinary tools without wrapping each command in Shine, export the
+selected groups to their configured `target` paths:
+
+```bash
+shine env workspace export --format files --mode production --file-group android-signing --file-group service-account --dry-run
+shine env workspace export --format files --mode production --file-group android-signing --file-group service-account
+```
+
+`--mode` is required. This exports only the selected groups; it does not export environment variables.
+All files must decrypt successfully before target creation starts. Existing targets are always
+rejected, including during concurrent writes; inspect and move them before retrying. There is no
+`--force`, `--output`, or `--include-secrets` option for the `files` format. Workspace and ciphertext
+files remain unchanged. The same path, Git exclusion, size, and private-permission requirements apply.
+
+Successful exports remain on disk until you manage or remove them yourself. `env run --file-group`
+will refuse these existing targets and will not clean them up. If export fails or is interrupted,
+Shine attempts to remove files and empty directories created by that export, preserves replacements,
+and reports cleanup failures and possible leftovers. Multi-file export is not an atomic transaction;
+force-killing Shine or losing power can leave files behind. Do not commit the plaintext.
+
 `env run --file-group` decrypts all selected files before preparing targets, starts the command
 only after every target is ready, and cleans up its files on success, failure, or controlled
 interruption. Existing targets are never overwritten. Replaced targets are retained and reported.
@@ -884,8 +963,11 @@ On Unix, cleanup can still remove an unchanged owned file after the child remove
 permission; it never restores permissions or deletes a replacement to make cleanup succeed.
 Phone-backed age decryption preserves QR authorization and explicitly enabled terminal messages;
 ordinary captured backend diagnostics remain hidden.
-During execution, mapping previews go to stderr so the command's stdout remains byte-exact.
+`env run` and file export put mapping previews on stderr so the command's stdout remains byte-exact.
 Dry-run previews remain on stdout.
+Mapping previews quote each path and escape control characters such as newlines, keeping each
+mapping on one line. Seal, plaintext-removal and export result paths, and cleanup warnings also
+escape terminal controls. These display escapes do not change the paths used for file operations.
 New Unix files use `0600` and directories use `0700`; Windows requires a filesystem supporting
 private current-user ACLs. Cleanup failure returns an error; a failed child retains its exit code.
 The wrapper supervises its process group on Unix and a Job Object on Windows. Do not start detached

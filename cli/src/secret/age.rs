@@ -15,7 +15,7 @@ use tokio::process::Command;
 use super::exec::{
     TempFile, decode_base64_to_file, encode_base64_single_line, write_stdin_and_wait,
 };
-use crate::proc::ensure_command;
+use crate::{output::escape_controls, proc::ensure_command};
 
 const MINIMUM_AGE_VERSION: &str = "1.3.0";
 
@@ -258,7 +258,10 @@ fn validate_recipients(recipients: &[String]) -> Result<Vec<&str>> {
             bail!("recipient is empty");
         }
         if trimmed.chars().any(char::is_whitespace) {
-            bail!("recipient must not contain whitespace: {trimmed}");
+            bail!(
+                "recipient must not contain whitespace: {}",
+                escape_controls(trimmed)
+            );
         }
         cleaned.push(trimmed);
     }
@@ -284,11 +287,17 @@ async fn inspect_identity_plugins(identities: &[PathBuf]) -> Result<IdentityPlug
     let mut phone_identity_count = 0;
     for identity in identities {
         if !identity.is_file() {
-            bail!("age identity file not found: {}", identity.display());
+            bail!(
+                "age identity file not found: {}",
+                escape_controls(&identity.display().to_string())
+            );
         }
-        let contents = tokio::fs::read_to_string(identity)
-            .await
-            .with_context(|| format!("reading age identity {}", identity.display()))?;
+        let contents = tokio::fs::read_to_string(identity).await.with_context(|| {
+            format!(
+                "reading age identity {}",
+                escape_controls(&identity.display().to_string())
+            )
+        })?;
         for line in contents.lines().map(str::trim) {
             if line.starts_with("AGE-PLUGIN-PHONE-") {
                 phone_identity_count += 1;
@@ -452,7 +461,6 @@ mod tests {
     #[test]
     fn missing_known_recipient_plugins_have_actionable_errors() {
         let _guard = crate::test_support::env_lock();
-        let old_path = std::env::var_os("PATH");
         // SAFETY: env_lock serializes process-environment mutation tests.
         unsafe {
             std::env::set_var(
@@ -464,13 +472,6 @@ mod tests {
         let se = preflight_recipient_plugins(&["age1se1example"]).unwrap_err();
         let phone = preflight_recipient_plugins(&["age1phone1example"]).unwrap_err();
 
-        // SAFETY: same env_lock guard as above.
-        unsafe {
-            match old_path {
-                Some(value) => std::env::set_var("PATH", value),
-                None => std::env::remove_var("PATH"),
-            }
-        }
         assert!(se.to_string().contains("shine state migrate --dry-run"));
         assert!(phone.to_string().contains("every computer that seals"));
     }
@@ -478,7 +479,6 @@ mod tests {
     #[test]
     fn missing_legacy_identity_plugin_has_migration_guidance() {
         let _guard = crate::test_support::env_lock();
-        let old_path = std::env::var_os("PATH");
         // SAFETY: env_lock serializes process-environment mutation tests.
         unsafe {
             std::env::set_var(
@@ -489,13 +489,6 @@ mod tests {
 
         let err = ensure_identity_plugin("age-plugin-se").unwrap_err();
 
-        // SAFETY: same env_lock guard as above.
-        unsafe {
-            match old_path {
-                Some(value) => std::env::set_var("PATH", value),
-                None => std::env::remove_var("PATH"),
-            }
-        }
         assert!(err.to_string().contains("requires age-plugin-se"));
         assert!(err.to_string().contains("shine state migrate --dry-run"));
         assert!(err.to_string().contains("before resealing"));
@@ -578,6 +571,36 @@ mod tests {
             err.to_string().contains("age identity file not found"),
             "{err:#}"
         );
+    }
+
+    #[tokio::test]
+    async fn unreadable_identity_diagnostic_encodes_path_and_retains_io_cause() {
+        let dir = std::env::temp_dir().join(format!("shine-age-read-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir(&dir).await.unwrap();
+        let path = dir.join(if cfg!(unix) {
+            "invalid\nFORGED\r\t\u{1b}"
+        } else {
+            "invalid中文"
+        });
+        let content = b"PRIVATE_IDENTITY\xff";
+        tokio::fs::write(&path, content).await.unwrap();
+        let error = inspect_identity_plugins(std::slice::from_ref(&path))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+        );
+        let text = format!("{error:#}");
+        assert!(text.contains("reading age identity"));
+        assert!(
+            !text.contains(['\r', '\t', '\u{1b}']) && !text.contains("\nFORGED"),
+            "{text:?}"
+        );
+        assert!(!text.contains("PRIVATE_IDENTITY"));
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), content);
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]

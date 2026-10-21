@@ -23,7 +23,7 @@ shine --version
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.5.0 sh install.sh
+SHINE_VERSION=2.6.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -36,8 +36,32 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.5.0"; .\install.ps1
+$env:SHINE_VERSION = "2.6.0"; .\install.ps1
 ```
+
+## 使用 cargo-binstall 安装
+
+已安装 [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 时，可从官方 GitHub Releases
+下载预编译的 Shine 二进制文件：
+
+```bash
+cargo binstall shine-cli
+shine --version
+```
+
+包名是 `shine-cli`，安装后的命令是 `shine`。默认安装到 `$CARGO_HOME/bin`
+（通常为 `~/.cargo/bin`），请确认该目录已加入 `PATH`。
+
+官方二进制文件覆盖 macOS、使用 glibc 的 Linux 和 Windows（MSVC 构建），均提供 x86_64 和
+aarch64 两种架构。暂不提供 Linux musl 二进制文件。找不到适用的二进制文件时，cargo-binstall
+可能尝试第三方二进制文件或从源码编译。如需限定为官方预编译二进制文件，使用：
+
+```bash
+cargo binstall shine-cli --strategies crate-meta-data
+```
+
+再次运行 `cargo binstall shine-cli` 可通过 cargo-binstall 升级。滚动的 `preview` 通道请使用
+`shine self upgrade --channel preview`。
 
 ## 从源码安装
 
@@ -60,6 +84,12 @@ shine self upgrade --channel stable
 shine self upgrade --channel preview
 ```
 
+显式传入 `--channel stable` 也允许重装相同版本或安装较旧的稳定版。
+成功消息会报告安装后和此前的版本，不会一律称为版本升级。
+
+`shine self upgrade` 失败时返回退出码 1，并在 stderr 中保留失败上下文和底层原因，
+便于区分连接、归档文件和安装错误。
+
 `preview` 是持续滚动的预发布通道，不参与日常自动更新检查。运行 `shine update` 可以同时检查已安装配置和稳定版程序更新。
 
 稳定版通过 `latest` 和 stable 通道提供。从既有 1.x 安装升级前，请先阅读
@@ -75,8 +105,25 @@ Shine 2.5 或更高版本；旧客户端会拒绝新格式。Windows 上新建�
 请保留私有备份，并在重要项目中运行 `shine env explain KEY` 检查实际来源。
 
 `shine self install --dest <PATH>` 按当前目录解析相对路径，并记录绝对目标路径，因此之后从任何目录升级时都会同步同一份已安装副本。
+若安装目录不在 PATH 中，输出的 POSIX shell 示例会保留目录名中的特殊字符。
+`self install` 的结果路径会转义终端控制字符；目录包含控制字符时，会要求使用原目录手动设置 PATH，
+不生成可复制示例。若升级成功但同步另一份安装副本失败，Shine 会向 stderr 输出包含原因的警告；升级仍返回成功。
+同步结果路径和警告详情会转义终端控制字符，已记录的目标保持不变。
 
 在 Unix 系统上，如果 `shine self install` 要把二进制文件复制到当前用户不可写的位置，Shine 会交互式请求授权，并通过 `sudo` 完成安装。`shine self upgrade` 成功后同步另一个已记录的安装目标时，也会采用相同方式。不过，如果当前运行的 Shine 本身位于受保护目录，Shine 暂时无法自动提权替换该二进制文件；请改为安装并运行用户可写位置中的 Shine。Windows 在受保护位置安装或升级时，仍需使用具备相应权限的终端。
+
+## 升级到 Shine 2.6
+
+Shine 2.6 从 `uninstall`、`app uninstall` 和 `shell uninstall` 中移除了 `--purge`。
+请从脚本中删除该选项；仍含此选项的命令会在加载配置前失败。
+卸载现在默认将内部缓存清理纳入待审批的 Plan。先用 `--dry-run` 预览，尤其是在删除整个
+App 分类或所有 Shell 预设前。外部预设源会保留。清理范围和文件保留规则见
+[App 卸载](./guides/app-presets.md)和 [Shell 卸载](./guides/shell-presets.md)。
+
+Shine 2.6 还新增了持久化机密文件导出：
+`shine env workspace export --format files --mode <MODE> --file-group <GROUP>`。
+与 `env run` 提供的临时文件不同，导出的明文会留在磁盘上，直到你自行删除。
+使用前请阅读[机密文件指南](./guides/environment.md#workspace-secret-files)。
 
 ## 清理旧版本的本地 HTTP 服务
 

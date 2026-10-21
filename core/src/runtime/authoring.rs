@@ -20,6 +20,15 @@ use super::validation::{PresetDiagnostic, PresetDiagnosticSeverity};
 
 pub const PRESET_AUTHORING_PLAN_SCHEMA_VERSION: u32 = 2;
 
+pub(super) fn synthetic_root() -> PathBuf {
+    // Path semantics follow the compiling host, independently of the simulated platform.
+    #[cfg(windows)]
+    let root = PathBuf::from(r"C:\shine-author");
+    #[cfg(not(windows))]
+    let root = PathBuf::from("/shine-author");
+    root
+}
+
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetAuthoringPlanAssumptionsV1 {
     pub lifecycle_state: String,
@@ -248,11 +257,7 @@ pub(super) async fn plan_preset_source_scope_with_state(
             }),
     );
 
-    // Synthetic planning still uses the compiling host's native Path semantics.
-    #[cfg(windows)]
-    let root = PathBuf::from(r"C:\shine-author");
-    #[cfg(not(windows))]
-    let root = PathBuf::from("/shine-author");
+    let root = synthetic_root();
     let home = root.join("home");
     let shine = home.join(".shine");
     let mut context = RuntimeContext::isolated(

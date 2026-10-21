@@ -8,14 +8,24 @@ use serde::Serialize;
 use shine_core::runtime::{
     InMemoryHost, PresetDiagnosticSeverity, PresetMigrationBaseline, PresetMigrationDiagnosticV1,
     PresetMigrationEdit, PresetMigrationPlan, PresetMigrationSeverityV1, PresetMigrationStatusV1,
-    PresetSnapshot, PresetSnapshotRequest, PresetSnapshotSource, PresetSourceKind, RealHost,
-    RuntimePlatform, capture_embedded_preset_snapshot, capture_preset_snapshot,
-    plan_preset_migration, sha256, validate_preset_path,
+    PresetSnapshot, PresetSnapshotRequest, PresetSnapshotSource, RealHost,
+    capture_embedded_preset_snapshot, capture_preset_snapshot, plan_preset_migration, sha256,
+    validate_preset_path,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+
+mod apply;
+mod assessment;
+mod discovery;
+mod render;
+use apply::*;
+use assessment::*;
+use discovery::*;
+use render::*;
+pub use render::{compatibility_failure_message, compatibility_required, print_compatibility};
 
 pub async fn handle_migrate(
     path: Option<&Path>,
@@ -27,7 +37,13 @@ pub async fn handle_migrate(
         bail!("`shine preset migrate --format json` requires --dry-run or --yes");
     }
 
-    let (snapshot, scope, selected, shine_dir, managed_overlay) = migration_inputs(path).await?;
+    let MigrationInputs {
+        snapshot,
+        scope,
+        selected,
+        shine_dir,
+        managed_overlay,
+    } = migration_inputs(path).await?;
     let current = capture_embedded_preset_snapshot(core_runtime::embedded_preset_files());
     let legacy = legacy_metadata_hashes();
     let mut plan = plan_preset_migration(
@@ -46,7 +62,7 @@ pub async fn handle_migrate(
     }
 
     if format == PresetReportFormat::Text {
-        print_text(&plan, &snapshot, managed_overlay.as_deref(), path.is_none());
+        print_text(&plan, &snapshot, path.is_none());
         print_diffs(&display_edits);
     }
     if dry_run {
@@ -97,7 +113,10 @@ pub async fn handle_migrate(
     } else {
         println!();
         println!("Migrated {} Preset metadata file(s).", plan.edits.len());
-        println!("Backup: {}", backup.display());
+        println!(
+            "Backup: {}",
+            crate::output::escape_controls(&backup.display().to_string())
+        );
         if plan.report.summary.blockers > 0 {
             println!(
                 "Manual migration is still required for {} blocker(s).",
@@ -109,7 +128,13 @@ pub async fn handle_migrate(
 }
 
 pub async fn active_compatibility_plan(target: Option<&str>) -> Result<PresetMigrationPlan> {
-    let (snapshot, scope, mut selected, _, managed_overlay) = migration_inputs(None).await?;
+    let MigrationInputs {
+        snapshot,
+        scope,
+        mut selected,
+        managed_overlay,
+        ..
+    } = migration_inputs(None).await?;
     if let Some(target) = target {
         let canonical = if let Some(item) = target.strip_prefix("sys/") {
             let mut categories = sys_categories_for_item(&snapshot, item);
@@ -165,946 +190,48 @@ pub async fn active_compatibility_plan(target: Option<&str>) -> Result<PresetMig
     Ok(plan)
 }
 
-fn sys_categories_for_item(snapshot: &PresetSnapshot, item: &str) -> BTreeSet<String> {
-    snapshot
-        .files()
-        .iter()
-        .filter_map(|(logical, bytes)| {
-            let category = logical.strip_prefix("sys/")?.strip_suffix("/shine.toml")?;
-            if category == item {
-                return Some(format!("sys/{category}"));
-            }
-            let value = toml::from_slice::<toml::Value>(bytes).ok()?;
-            value
-                .get("items")
-                .and_then(toml::Value::as_array)
-                .is_some_and(|items| {
-                    items
-                        .iter()
-                        .any(|entry| entry.get("id").and_then(toml::Value::as_str) == Some(item))
-                })
-                .then(|| format!("sys/{category}"))
-        })
-        .collect()
-}
-
-pub fn print_compatibility(plan: &PresetMigrationPlan) {
-    print!("{}", compatibility_text(plan));
-}
-
-fn compatibility_text(plan: &PresetMigrationPlan) -> String {
-    if plan.edits.is_empty() && plan.report.diagnostics.is_empty() {
-        return String::new();
-    }
-    let mut output = format!("{}\n", crate::colors::bold("Preset compatibility"));
-    for file in &plan.report.files {
-        let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "  {} migrate {} ({})",
-            crate::colors::symbol("~"),
-            file.target,
-            file.source_layer
-        );
-    }
-    for diagnostic in &plan.report.diagnostics {
-        let marker = if diagnostic.severity == PresetMigrationSeverityV1::Blocker {
-            crate::colors::symbol("✗")
-        } else {
-            crate::colors::yellow("!")
-        };
-        let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "  {marker} {}{}",
-            diagnostic.target,
-            diagnostic
-                .source_layer
-                .as_deref()
-                .map(|layer| format!(" ({layer})"))
-                .unwrap_or_default()
-        );
-        crate::preset_report::write_wrapped(&mut output, "    ", &diagnostic.message);
-        let _ = writeln!(
-            output,
-            "    {} {}",
-            crate::colors::dim("code:"),
-            diagnostic.code
-        );
-    }
-    let _ = writeln!(output);
-    output
-}
-
-pub fn compatibility_required(plan: &PresetMigrationPlan) -> bool {
-    !plan.edits.is_empty() || plan.report.summary.blockers > 0
-}
-
-pub fn compatibility_failure_message(plan: &PresetMigrationPlan) -> String {
-    let blockers = plan.report.summary.blockers;
-    let changes = plan.edits.len();
-    let reason = match (blockers, changes) {
-        (0, changes) => count_phrase(changes, "automatic change", "automatic changes"),
-        (blockers, 0) => count_phrase(blockers, "blocker", "blockers"),
-        (blockers, changes) => format!(
-            "{} and {}",
-            count_phrase(blockers, "blocker", "blockers"),
-            count_phrase(changes, "automatic change", "automatic changes")
-        ),
-    };
-    format!(
-        "Preset compatibility requires attention ({reason})\n\nNext:\n  shine preset migrate --dry-run"
-    )
-}
-
-async fn migration_inputs(
-    path: Option<&Path>,
-) -> Result<(
-    PresetSnapshot,
-    String,
-    Option<BTreeSet<String>>,
-    PathBuf,
-    Option<PathBuf>,
-)> {
-    let runtime = discover_runtime_paths_read_only().context("resolving active Preset paths")?;
-    if let Some(path) = path {
-        let canonical = tokio::fs::canonicalize(path)
-            .await
-            .with_context(|| format!("resolving Preset path {}", path.display()))?;
-        let (root, selected) = explicit_scope(&canonical)?;
-        let snapshot = capture_preset_snapshot(
-            &RealHost,
-            PresetSnapshotRequest {
-                source: PresetSnapshotSource::External(root.clone()),
-                overlay_root: None,
-            },
-        )
-        .await?;
-        let managed = runtime
-            .managed_overlay
-            .then_some(runtime.presets_overlay_dir)
-            .flatten()
-            .filter(|overlay| canonical.starts_with(overlay));
-        let scope = selected
-            .as_ref()
-            .and_then(|targets| targets.iter().next())
-            .cloned()
-            .unwrap_or_else(|| "explicit-repository".to_string());
-        return Ok((snapshot, scope, selected, runtime.shine_dir, managed));
-    }
-
-    let source = if runtime.is_external_presets {
-        PresetSnapshotSource::External(runtime.presets_dir.clone())
-    } else {
-        PresetSnapshotSource::Embedded(core_runtime::embedded_preset_files())
-    };
-    let snapshot = capture_preset_snapshot(
-        &RealHost,
-        PresetSnapshotRequest {
-            source,
-            overlay_root: runtime.presets_overlay_dir.clone(),
-        },
-    )
-    .await?;
-    let managed = runtime
-        .managed_overlay
-        .then_some(runtime.presets_overlay_dir)
-        .flatten();
-    Ok((
-        snapshot,
-        "active".to_string(),
-        None,
-        runtime.shine_dir,
-        managed,
-    ))
-}
-
-fn explicit_scope(path: &Path) -> Result<(PathBuf, Option<BTreeSet<String>>)> {
-    let category = if path.is_file() {
-        if path.file_name().and_then(|name| name.to_str()) != Some("shine.toml") {
-            bail!("Preset migration file input must be shine.toml");
-        }
-        path.parent()
-            .context("shine.toml has no category directory")?
-    } else {
-        path
-    };
-    if let (Some(name), Some(kind_dir)) = (
-        category.file_name().and_then(|name| name.to_str()),
-        category.parent(),
-    ) && let Some(kind) = kind_dir.file_name().and_then(|name| name.to_str())
-        && matches!(kind, "app" | "shell" | "sys")
-    {
-        let root = kind_dir
-            .parent()
-            .context("Preset category has no repository root")?;
-        return Ok((
-            root.to_path_buf(),
-            Some(BTreeSet::from([format!("{kind}/{name}")])),
-        ));
-    }
-    if path.is_file() {
-        bail!("shine.toml must be under app/<name>, shell/<name>, or sys/<name>");
-    }
-    Ok((path.to_path_buf(), None))
-}
-
-fn mark_managed_overlay_read_only(plan: &mut PresetMigrationPlan, root: &Path) {
-    let blocked = plan
-        .edits
-        .iter()
-        .filter(|edit| edit.physical_path.starts_with(root))
-        .map(|edit| edit.logical_path.clone())
-        .collect::<BTreeSet<_>>();
-    if blocked.is_empty() {
-        return;
-    }
-    plan.edits
-        .retain(|edit| !blocked.contains(&edit.logical_path));
-    for target in blocked {
-        plan.report.diagnostics.push(PresetMigrationDiagnosticV1 {
-            severity: PresetMigrationSeverityV1::Blocker,
-            code: "managed_overlay_read_only".to_string(),
-            target,
-            source_layer: Some("overlay".to_string()),
-            message: "the active Git-managed overlay is force-mirrored; migrate its upstream checkout instead".to_string(),
-        });
-    }
-    sync_report_with_edits(plan);
-}
-
-async fn validate_candidate(snapshot: &PresetSnapshot, plan: &mut PresetMigrationPlan) {
-    // `validate_preset_path` derives a synthetic home beneath this root. Keep the
-    // root absolute according to the native path semantics so its all-platform
-    // metadata validation can run on Windows too.
-    #[cfg(windows)]
-    let root = Path::new(r"C:\shine-preset-migration");
-    #[cfg(not(windows))]
-    let root = Path::new("/shine-preset-migration");
-    let host = InMemoryHost::new();
-    let candidate_targets = plan
-        .edits
-        .iter()
-        .map(|edit| {
-            edit.logical_path
-                .split('/')
-                .take(2)
-                .collect::<Vec<_>>()
-                .join("/")
-        })
-        .collect::<BTreeSet<_>>();
-    if candidate_targets.is_empty() {
-        return;
-    }
-    let mut files = snapshot.files().clone();
-    for edit in &plan.edits {
-        match &edit.candidate {
-            Some(candidate) => {
-                files.insert(edit.logical_path.clone(), candidate.clone());
-            }
-            None => {
-                if let Some(base) = snapshot.base_bytes(&edit.logical_path) {
-                    files.insert(edit.logical_path.clone(), base.to_vec());
-                } else {
-                    files.remove(&edit.logical_path);
-                }
-            }
-        }
-    }
-    for (logical, bytes) in files {
-        let target = logical.split('/').take(2).collect::<Vec<_>>().join("/");
-        if !candidate_targets.contains(&target) {
-            continue;
-        }
-        host.put_file(root.join(logical), bytes);
-    }
-    let validation = validate_preset_path(&host, root, root).await;
-    let invalid_targets = validation
-        .categories
-        .iter()
-        .filter(|category| !category.valid)
-        .map(|category| format!("{}/{}", category.kind, category.name))
-        .collect::<BTreeSet<_>>();
-    for category in validation
-        .categories
-        .iter()
-        .filter(|category| !category.valid)
-    {
-        let target = format!("{}/{}", category.kind, category.name);
-        for item in category
-            .diagnostics
-            .iter()
-            .filter(|item| item.severity == PresetDiagnosticSeverity::Error)
-        {
-            plan.report.diagnostics.push(PresetMigrationDiagnosticV1 {
-                severity: PresetMigrationSeverityV1::Blocker,
-                code: format!("candidate_{}", item.code),
-                target: target.clone(),
-                source_layer: report_source_layer(plan, &target),
-                message: item.message.clone(),
-            });
-        }
-    }
-    for item in validation
-        .diagnostics
-        .iter()
-        .filter(|item| item.severity == PresetDiagnosticSeverity::Error)
-    {
-        plan.report.diagnostics.push(PresetMigrationDiagnosticV1 {
-            severity: PresetMigrationSeverityV1::Blocker,
-            code: format!("candidate_{}", item.code),
-            target: plan.report.scope.clone(),
-            source_layer: None,
-            message: item.message.clone(),
-        });
-    }
-    if !invalid_targets.is_empty() {
-        plan.edits.retain(|edit| {
-            let target = edit
-                .logical_path
-                .split('/')
-                .take(2)
-                .collect::<Vec<_>>()
-                .join("/");
-            !invalid_targets.contains(&target)
-        });
-    }
-    sync_report_with_edits(plan);
-}
-
-fn sync_report_with_edits(plan: &mut PresetMigrationPlan) {
-    let edited = plan
-        .edits
-        .iter()
-        .map(|edit| edit.logical_path.as_str())
-        .collect::<BTreeSet<_>>();
-    plan.report
-        .files
-        .retain(|file| edited.contains(file.target.as_str()));
-    plan.report.summary.changes = plan.edits.len();
-    plan.report.summary.blockers = plan
-        .report
-        .diagnostics
-        .iter()
-        .filter(|item| item.severity == PresetMigrationSeverityV1::Blocker)
-        .count();
-    plan.report.status = if plan.report.summary.blockers > 0 {
-        PresetMigrationStatusV1::Blocked
-    } else if plan.edits.is_empty() {
-        PresetMigrationStatusV1::Current
-    } else {
-        PresetMigrationStatusV1::Pending
-    };
-}
-
-fn report_source_layer(plan: &PresetMigrationPlan, target: &str) -> Option<String> {
-    plan.report
-        .files
-        .iter()
-        .find(|file| file.target.starts_with(target))
-        .map(|file| file.source_layer.clone())
-}
-
-fn print_text(
-    plan: &PresetMigrationPlan,
-    snapshot: &PresetSnapshot,
-    managed_overlay: Option<&Path>,
-    active_source: bool,
-) {
-    print!(
-        "{}",
-        migration_text(plan, snapshot, managed_overlay, active_source)
-    );
-}
-
-fn migration_text(
-    plan: &PresetMigrationPlan,
-    snapshot: &PresetSnapshot,
-    managed_overlay: Option<&Path>,
-    active_source: bool,
-) -> String {
-    let mut output = String::new();
-    let status = match plan.report.status {
-        PresetMigrationStatusV1::Current => "current",
-        PresetMigrationStatusV1::Pending => "changes pending",
-        PresetMigrationStatusV1::Blocked => "manual action required",
-        PresetMigrationStatusV1::Applied => "applied",
-        PresetMigrationStatusV1::PartiallyApplied => "partially applied",
-    };
-    let styled_status = match plan.report.status {
-        PresetMigrationStatusV1::Current | PresetMigrationStatusV1::Applied => {
-            crate::colors::green(status)
-        }
-        PresetMigrationStatusV1::Pending | PresetMigrationStatusV1::PartiallyApplied => {
-            crate::colors::yellow(status)
-        }
-        PresetMigrationStatusV1::Blocked => crate::colors::red(status),
-    };
-    let _ = writeln!(
-        output,
-        "{} {styled_status}",
-        crate::colors::bold("Preset migration:")
-    );
-
-    let mut groups = BTreeMap::<String, Vec<&PresetMigrationDiagnosticV1>>::new();
-    for diagnostic in &plan.report.diagnostics {
-        let key = metadata_logical_path(snapshot, &diagnostic.target)
-            .unwrap_or_else(|| diagnostic_category(&diagnostic.target));
-        groups.entry(key).or_default().push(diagnostic);
-    }
-    let mut needs_preset_pull = false;
-    for (logical, diagnostics) in groups {
-        let layer = diagnostics
-            .iter()
-            .find_map(|diagnostic| diagnostic.source_layer.as_deref())
-            .map(|value| format!(" ({value})"))
-            .unwrap_or_default();
-        let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "  {}{layer}",
-            logical.trim_end_matches("/shine.toml")
-        );
-        for diagnostic in &diagnostics {
-            let symbol = if diagnostic.severity == PresetMigrationSeverityV1::Blocker {
-                crate::colors::symbol("✗")
-            } else {
-                crate::colors::symbol("!")
-            };
-            let _ = writeln!(output, "    {symbol} {}", diagnostic.target);
-            crate::preset_report::write_wrapped(&mut output, "      ", &diagnostic.message);
-            let _ = writeln!(
-                output,
-                "      {} {}",
-                crate::colors::dim("code:"),
-                diagnostic.code
-            );
-        }
-        needs_preset_pull |= render_remediation(
-            &mut output,
-            snapshot,
-            &logical,
-            &diagnostics,
-            managed_overlay,
-            active_source,
-        );
-    }
-
-    if needs_preset_pull {
-        let _ = writeln!(output);
-        let _ = writeln!(output, "  {}", crate::colors::cyan("Next:"));
-        let _ = writeln!(output, "    Commit the upstream changes, then run:");
-        let _ = writeln!(output, "      shine preset pull");
-    }
-
-    if !plan.report.diagnostics.is_empty() {
-        let _ = writeln!(output);
-    }
-    let changes = count_phrase(
-        plan.report.summary.changes,
-        "automatic change",
-        "automatic changes",
-    );
-    let blockers = count_phrase(plan.report.summary.blockers, "blocker", "blockers");
-    let advisories = count_phrase(plan.report.summary.advisories, "advisory", "advisories");
-    let _ = writeln!(
-        output,
-        "{} {} · {} · {}",
-        crate::colors::bold("Summary:"),
-        if plan.report.summary.blockers > 0 {
-            crate::colors::red(&blockers)
-        } else {
-            crate::colors::dim(&blockers)
-        },
-        if plan.report.summary.changes > 0 {
-            crate::colors::green(&changes)
-        } else {
-            crate::colors::dim(&changes)
-        },
-        if plan.report.summary.advisories > 0 {
-            crate::colors::yellow(&advisories)
-        } else {
-            crate::colors::dim(&advisories)
-        }
-    );
-    output
-}
-
-fn render_remediation(
-    output: &mut String,
-    snapshot: &PresetSnapshot,
-    logical: &str,
-    diagnostics: &[&PresetMigrationDiagnosticV1],
-    managed_overlay: Option<&Path>,
-    active_source: bool,
-) -> bool {
-    let manual_permissions = diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "manual_permission_review_required");
-    let managed_read_only = diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "managed_overlay_read_only");
-    let manifest = snapshot
-        .origin(logical)
-        .and_then(|origin| origin.physical_path.as_deref());
-    let manifest_is_managed =
-        manifest.is_some_and(|path| managed_overlay.is_some_and(|root| path.starts_with(root)));
-
-    if managed_read_only && !manual_permissions {
-        let _ = writeln!(output);
-        let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
-        let _ = writeln!(
-            output,
-            "      Review and update {logical} in the upstream checkout."
-        );
-        let _ = writeln!(output, "      The managed overlay mirror is read-only.");
-    }
-
-    if manual_permissions {
-        if managed_read_only || manifest_is_managed {
-            let _ = writeln!(output);
-            let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
-            let _ = writeln!(
-                output,
-                "      Review and update {logical} in the upstream checkout."
-            );
-            let _ = writeln!(output, "      The managed overlay mirror is read-only.");
-        } else if let Some(manifest) = manifest {
-            let quoted = quote_command_arg(manifest, RuntimePlatform::current());
-            let _ = writeln!(output);
-            let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
-            let _ = writeln!(output, "      Edit: {}", manifest.display());
-            let _ = writeln!(output, "      Verify:");
-            let _ = writeln!(output, "        shine preset validate {quoted}");
-            let _ = writeln!(
-                output,
-                "        shine preset plan {quoted} --platform {}",
-                RuntimePlatform::current().as_str()
-            );
-        } else {
-            let _ = writeln!(output);
-            let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
-            let _ = writeln!(
-                output,
-                "      Add the target-local permission declaration in {logical}, then validate and plan that manifest."
-            );
-        }
-    }
-
-    for diagnostic in diagnostics {
-        if diagnostic.code == "recursive_artifact_hook_removed"
-            && let Some(category) = diagnostic.target.strip_prefix("app/")
-        {
-            let _ = writeln!(
-                output,
-                "    Next: run `shine app artifact apply {category}` after relevant changes."
-            );
-        }
-    }
-
-    for target in trust_review_targets(snapshot, logical, diagnostics) {
-        let timing = if active_source {
-            "After validation"
-        } else {
-            "After this source becomes active"
-        };
-        let _ = writeln!(output, "    {timing}, review the external executable code:");
-        let _ = writeln!(output, "      `shine trust inspect {target}`");
-        let _ = writeln!(
-            output,
-            "      If the inspection reports a requirement and you accept its scope, run `shine trust grant {target}`."
-        );
-    }
-
-    managed_read_only || (manual_permissions && manifest_is_managed)
-}
-
-fn metadata_logical_path(snapshot: &PresetSnapshot, target: &str) -> Option<String> {
-    let mut parts = target.split('/');
-    let kind = parts.next()?;
-    let name = parts.next()?;
-    let direct = format!("{kind}/{name}/shine.toml");
-    if snapshot.get(&direct).is_some() {
-        return Some(direct);
-    }
-    if kind != "sys" {
-        return None;
-    }
-    snapshot.files().iter().find_map(|(logical, bytes)| {
-        if !logical.starts_with("sys/") || !logical.ends_with("/shine.toml") {
-            return None;
-        }
-        let value = toml::from_slice::<toml::Value>(bytes).ok()?;
-        value
-            .get("items")
-            .and_then(toml::Value::as_array)
-            .is_some_and(|items| {
-                items
-                    .iter()
-                    .any(|item| item.get("id").and_then(toml::Value::as_str) == Some(name))
-            })
-            .then(|| logical.clone())
-    })
-}
-
-fn diagnostic_category(target: &str) -> String {
-    target.split('/').take(2).collect::<Vec<_>>().join("/")
-}
-
-fn trust_review_targets(
-    snapshot: &PresetSnapshot,
-    logical: &str,
-    diagnostics: &[&PresetMigrationDiagnosticV1],
-) -> BTreeSet<String> {
-    diagnostics
-        .iter()
-        .filter_map(|diagnostic| {
-            if diagnostic.source_layer.as_deref() == Some("embedded") {
-                return None;
-            }
-            match diagnostic.target.split_once('/') {
-                Some(("app", _))
-                    if matches!(
-                        diagnostic.code.as_str(),
-                        "manual_permission_review_required" | "external_code_trust_review_required"
-                    ) =>
-                {
-                    Some(diagnostic.target.clone())
-                }
-                Some(("sys", item))
-                    if diagnostic.code == "manual_permission_review_required"
-                        && sys_item_has_executable_code(snapshot, logical, item) =>
-                {
-                    Some(diagnostic.target.clone())
-                }
-                _ => None,
-            }
-        })
-        .collect()
-}
-
-fn sys_item_has_executable_code(snapshot: &PresetSnapshot, logical: &str, item_id: &str) -> bool {
-    let Some(value) = snapshot
-        .get(logical)
-        .and_then(|bytes| toml::from_slice::<toml::Value>(bytes).ok())
-    else {
-        return false;
-    };
-    let item_code = value
-        .get("items")
-        .and_then(toml::Value::as_array)
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|item| item.get("id").and_then(toml::Value::as_str) == Some(item_id))
-        })
-        .is_some_and(|item| {
-            let script = item
-                .get("install")
-                .and_then(|install| install.get("kind"))
-                .and_then(toml::Value::as_str)
-                == Some("script");
-            let shell_code = item
-                .get("shell")
-                .and_then(toml::Value::as_array)
-                .into_iter()
-                .flatten()
-                .any(|integration| {
-                    ["eval", "source", "fragment"]
-                        .iter()
-                        .any(|key| integration.get(*key).is_some())
-                });
-            script || shell_code
-        });
-    if item_code {
-        return true;
-    }
-    let category_prefix = logical.trim_end_matches("shine.toml");
-    snapshot.files().keys().any(|path| {
-        path.starts_with(category_prefix)
-            && path.contains("/profile/base.")
-            && snapshot
-                .origin(path)
-                .is_some_and(|origin| origin.source_kind != PresetSourceKind::Embedded)
-    })
-}
-
-fn quote_command_arg(path: &Path, platform: RuntimePlatform) -> String {
-    let value = path.display().to_string();
-    if platform == RuntimePlatform::Windows {
-        format!("'{}'", value.replace('\'', "''"))
-    } else {
-        crate::shell_quote::quote_if_needed(&value)
-    }
-}
-
-fn count_phrase(count: usize, singular: &str, plural: &str) -> String {
-    format!("{count} {}", if count == 1 { singular } else { plural })
-}
-
-fn print_diffs(edits: &[PresetMigrationEdit]) {
-    for edit in edits {
-        let old = String::from_utf8_lossy(&edit.original);
-        let new = edit
-            .candidate
-            .as_deref()
-            .map(String::from_utf8_lossy)
-            .unwrap_or_default();
-        println!();
-        println!(
-            "{}",
-            similar::TextDiff::from_lines(&old, &new)
-                .unified_diff()
-                .header(
-                    &format!("a/{}", edit.logical_path),
-                    &format!("b/{}", edit.logical_path)
-                )
-        );
-    }
-}
-
-#[derive(Serialize)]
-struct BackupManifest<'a> {
-    schema_version: u32,
-    files: Vec<BackupEntry<'a>>,
-}
-
-#[derive(Serialize)]
-struct BackupEntry<'a> {
-    logical_path: &'a str,
-    source_layer: &'a str,
-    original_sha256: String,
-    mode: Option<u32>,
-}
-
-fn migration_source_observations(
-    snapshot: &PresetSnapshot,
-    edits: &[PresetMigrationEdit],
-) -> BTreeMap<PathBuf, Vec<u8>> {
-    let targets = edits
-        .iter()
-        .map(|edit| {
-            edit.logical_path
-                .split('/')
-                .take(2)
-                .collect::<Vec<_>>()
-                .join("/")
-        })
-        .collect::<BTreeSet<_>>();
-    snapshot
-        .source_files()
-        .filter(|(logical, _)| {
-            let target = logical.split('/').take(2).collect::<Vec<_>>().join("/");
-            targets.contains(&target)
-        })
-        .filter_map(|(_, file)| {
-            file.origin
-                .physical_path
-                .as_ref()
-                .map(|path| (path.clone(), file.bytes.clone()))
-        })
-        .collect()
-}
-
-async fn ensure_sources_unchanged(sources: &BTreeMap<PathBuf, Vec<u8>>) -> Result<()> {
-    for (path, original) in sources {
-        let current = tokio::fs::read(path)
-            .await
-            .with_context(|| format!("reading {} after review", path.display()))?;
-        if current != *original {
-            bail!("Preset source changed after review");
-        }
-    }
-    Ok(())
-}
-
-async fn create_backup_set(
-    shine_dir: &Path,
-    edits: &[PresetMigrationEdit],
-    sources: &BTreeMap<PathBuf, Vec<u8>>,
-) -> Result<PathBuf> {
-    ensure_sources_unchanged(sources).await?;
-    let root = shine_dir
-        .join("preset-migration-backups")
-        .join(uuid::Uuid::new_v4().to_string());
-    tokio::fs::create_dir_all(&root).await?;
-    #[cfg(unix)]
-    tokio::fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o700)).await?;
-    let mut entries = Vec::new();
-    for edit in edits {
-        let backup = root.join(&edit.logical_path);
-        persist::atomic_write_private(&backup, &edit.original).await?;
-        entries.push(BackupEntry {
-            logical_path: &edit.logical_path,
-            source_layer: &edit.source_layer,
-            original_sha256: sha256(&edit.original),
-            mode: file_mode(&edit.physical_path).await?,
-        });
-    }
-    let manifest = toml::to_string_pretty(&BackupManifest {
-        schema_version: 1,
-        files: entries,
-    })?;
-    persist::atomic_write_private(&root.join("manifest.toml"), manifest.as_bytes()).await?;
-    Ok(root)
-}
-
-async fn apply_edits(
-    edits: &[PresetMigrationEdit],
-    sources: &BTreeMap<PathBuf, Vec<u8>>,
-) -> Result<()> {
-    ensure_sources_unchanged(sources).await?;
-    for edit in edits {
-        let current = tokio::fs::read(&edit.physical_path)
-            .await
-            .with_context(|| {
-                format!("reading {} before migration", edit.physical_path.display())
-            })?;
-        if current != edit.original {
-            bail!("Preset source changed after review: {}", edit.logical_path);
-        }
-        let permissions = tokio::fs::metadata(&edit.physical_path)
-            .await?
-            .permissions();
-        match &edit.candidate {
-            Some(candidate) => {
-                persist::atomic_write(&edit.physical_path, candidate).await?;
-                tokio::fs::set_permissions(&edit.physical_path, permissions).await?;
-            }
-            None => tokio::fs::remove_file(&edit.physical_path).await?,
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-async fn file_mode(path: &Path) -> Result<Option<u32>> {
-    use std::os::unix::fs::PermissionsExt;
-    Ok(Some(tokio::fs::metadata(path).await?.permissions().mode()))
-}
-
-#[cfg(not(unix))]
-async fn file_mode(_path: &Path) -> Result<Option<u32>> {
-    Ok(None)
-}
-
-fn legacy_metadata_hashes() -> BTreeMap<String, BTreeSet<String>> {
-    // Unique shine.toml SHA-256 values shipped by every v1.0.0 through v1.8.0
-    // release tag (including patch releases). Sys fingerprints remain evidence
-    // only: Core deliberately refuses to turn a v1 dispatcher into v2 items.
-    const ENTRIES: &[(&str, &str)] = &[
-        (
-            "app/JetBrains/shine.toml",
-            "0d6545cdfa392b6d4742bcddc288b4faf7382df3a23395a69300508e7c09e8f1",
-        ),
-        (
-            "app/archey4/shine.toml",
-            "97355899e41859f3c63323c5f4419a8e2c5f6723673765b7bf7935d3f8e2b6c2",
-        ),
-        (
-            "app/clash-verge/shine.toml",
-            "1a90f41ca438622b212de8fd5732a89c302f19216b53ac9c633bf8bef43ce97f",
-        ),
-        (
-            "app/clash-verge/shine.toml",
-            "842c227f8e53e3ddd6113402b53f293b495d4833d2530fa79ef0f8337a04f5bf",
-        ),
-        (
-            "app/docker-desktop/shine.toml",
-            "9ed5a6b310a152639bbacc3cc157d2e408fe2c4187d9d8f92b346941f6b6314b",
-        ),
-        (
-            "app/docker-engine/shine.toml",
-            "658acb03b9dc488f214daa0b2b13dd2516028047de8952e30557de26cbbc63a0",
-        ),
-        (
-            "app/fastfetch/shine.toml",
-            "2dd7d716ddaaf13f07649a24f3ce580d23275649a8744d7359f66edf3ada3731",
-        ),
-        (
-            "app/ghostty/shine.toml",
-            "7c8201f5059a7bb3e81382cf5436a1da14906656a62aaa243cdc970b149f9ef4",
-        ),
-        (
-            "app/surge/shine.toml",
-            "5df30183647d35bb9359c9a09ad7efe94fe8b5c212b0d486ded7c6288b349034",
-        ),
-        (
-            "app/surge/shine.toml",
-            "ac5db93291294515aba2c8f457af1790d1520732e5a7c337fcbbd71a60144a23",
-        ),
-        (
-            "app/vim/shine.toml",
-            "75d27a891409dc484bb833ca8b1c192461ee993ff7ec49ea71e0d5c05f5735a1",
-        ),
-        (
-            "shell/agent/shine.toml",
-            "e8eb84b91e3dfd958a81cc36d2425a0847257f9e940932643edfff5e80d53fd9",
-        ),
-        (
-            "shell/image-tools/shine.toml",
-            "5d18cec5a585d58f897ad8aa74073c805f95c2af84db714ca09c54d02ce92a28",
-        ),
-        (
-            "shell/proxy/shine.toml",
-            "9e1dbfca07fab117c067ea8a8244cc7a8d64684e204fb5ecf8690f17fe743d6e",
-        ),
-        (
-            "shell/utils/shine.toml",
-            "b670ab168bc4eaf4cc75b20b7637a6c109bd0ea6db309464d6b0cde81497997d",
-        ),
-        (
-            "sys/macos/shine.toml",
-            "18cf178c1f3e8b6d456731356c62c6db3af005a388b647f10e38513c5d25d49d",
-        ),
-        (
-            "sys/macos/shine.toml",
-            "31d2809917dfb40d6c5642acbca4d4fb8a5d0514eb3b4208bc840becdedf735e",
-        ),
-        (
-            "sys/ubuntu/shine.toml",
-            "72788f06f29e7e554be80f25bfac1239b8759f89e504285f3045db12b6cc9a96",
-        ),
-        (
-            "sys/ubuntu/shine.toml",
-            "957133cacf805a4041e91bf08f86ff727415fd5165ca52a34c4da8c2044e9d57",
-        ),
-        (
-            "sys/ubuntu/shine.toml",
-            "f52d5ae3be3506269b1e8b0d34c5daab0fd5ea3dc87fa22b0500c05bbc4fd4b5",
-        ),
-        (
-            "sys/ubuntu/shine.toml",
-            "fb0ec4efa47a16618d63eab975066eb19a0157a682399505d0bae9f67e559769",
-        ),
-        (
-            "sys/windows/shine.toml",
-            "707ad4c963722a983c853705d1bd7ee4d0c72f00c3e8cb5f3bf0490e7d346708",
-        ),
-        (
-            "sys/windows/shine.toml",
-            "916f8f87ac7f36c37d2970417176e3a49ac07b4fa8dee40a3ed409e94feefce2",
-        ),
-        (
-            "sys/windows/shine.toml",
-            "edb1ec46dd84cb5ca4c799164b6f4e21591a1e988876bf1d3fdbc8fc20870ad8",
-        ),
-    ];
-    let mut map = BTreeMap::<String, BTreeSet<String>>::new();
-    for (path, hash) in ENTRIES {
-        map.entry((*path).to_string())
-            .or_default()
-            .insert((*hash).to_string());
-    }
-    map
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::{Cli, Commands, PresetCommands};
     use crate::test_support::{env_lock, make_temp_dir};
     use clap::Parser;
+    use shine_core::runtime::PresetSourceKind;
+
+    #[test]
+    fn migration_notices_encode_fields_without_changing_report_or_candidates() {
+        let category = "demo\nFORGED\r\t\u{1b}";
+        let logical = format!("app/{category}/shine.toml");
+        let original = format!(
+            "dest = '~/.demo'\npost_install = {{ command = 'shine', args = ['app', 'artifact', 'apply', {}] }}\n[artifact]\nscript = 'build.ts'\n",
+            toml::Value::String(category.into())
+        );
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root(std::env::temp_dir())
+            .file(&logical, original.as_bytes().to_vec())
+            .file(format!("app/{category}/build.ts"), b"// inert".to_vec())
+            .build();
+        let plan = plan_preset_migration(&snapshot, "active", None, None);
+        assert_eq!(plan.edits.len(), 1);
+        assert!(compatibility_required(&plan));
+        let report = serde_json::to_value(&plan.report).unwrap();
+        let candidate = plan.edits[0].candidate.clone();
+        for text in [
+            compatibility_text(&plan),
+            migration_text(&plan, &snapshot, true),
+        ] {
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(!text.contains("\nFORGED"), "{text:?}");
+            assert!(text.contains(r"app/demo\nFORGED\r\t\u{1b}"), "{text:?}");
+        }
+        let text = migration_text(&plan, &snapshot, false);
+        assert!(text.contains("original category (control characters; copyable command omitted)"));
+        assert!(!text.contains("`shine app artifact apply"));
+        assert_eq!(serde_json::to_value(&plan.report).unwrap(), report);
+        assert_eq!(plan.edits[0].candidate, candidate);
+        assert_eq!(report["files"][0]["target"], logical);
+        assert_eq!(plan.edits[0].original, original.as_bytes());
+    }
 
     #[test]
     fn migrate_cli_parses_review_flags_and_rejects_yes_with_dry_run() {
@@ -1158,7 +285,7 @@ mod tests {
             item.code == "managed_overlay_read_only"
                 && item.source_layer.as_deref() == Some("overlay")
         }));
-        let output = migration_text(&plan, &snapshot, Some(root), true);
+        let output = migration_text(&plan, &snapshot, true);
         assert!(output.contains("upstream checkout"));
         assert!(output.contains("shine preset pull"));
         assert!(!output.contains("Edit: /managed-overlay"));
@@ -1196,7 +323,7 @@ mod tests {
         let plan = plan_preset_migration(&snapshot, "active", None, None);
 
         let summary = compatibility_text(&plan);
-        let detailed = migration_text(&plan, &snapshot, None, true);
+        let detailed = migration_text(&plan, &snapshot, true);
 
         assert!(summary.is_empty());
         assert!(!compatibility_required(&plan));
@@ -1216,7 +343,7 @@ mod tests {
             .build();
         let plan = plan_preset_migration(&snapshot, "active", None, None);
 
-        let output = migration_text(&plan, &snapshot, None, true);
+        let output = migration_text(&plan, &snapshot, true);
 
         assert!(output.contains("0 blockers · 0 automatic changes · 0 advisories"));
         assert!(!output.contains("shine preset validate"));
@@ -1240,7 +367,7 @@ mod tests {
             .build();
         let plan = plan_preset_migration(&snapshot, "active", None, None);
 
-        let output = migration_text(&plan, &snapshot, None, true);
+        let output = migration_text(&plan, &snapshot, true);
 
         assert!(output.contains("0 blockers · 1 automatic change · 0 advisories"));
         assert!(!output.contains("shine trust"));
@@ -1264,7 +391,7 @@ mod tests {
             .build();
         let plan = plan_preset_migration(&snapshot, "active", None, None);
 
-        let output = migration_text(&plan, &snapshot, Some(root), true);
+        let output = migration_text(&plan, &snapshot, true);
 
         assert!(output.contains("0 blockers · 0 automatic changes · 0 advisories"));
         assert!(!output.contains("upstream checkout"));
@@ -1272,17 +399,62 @@ mod tests {
     }
 
     #[test]
-    fn remediation_command_paths_are_platform_quoted() {
-        let path = Path::new("/preset root/it's/shine.toml");
-
-        assert_eq!(
-            quote_command_arg(path, RuntimePlatform::Linux),
-            "'/preset root/it'\\''s/shine.toml'"
-        );
-        assert_eq!(
-            quote_command_arg(path, RuntimePlatform::Windows),
-            "'/preset root/it''s/shine.toml'"
-        );
+    fn released_executable_migration_retains_external_trust_guidance() {
+        let logical = "app/demo/shine.toml";
+        let original = b"dest = '~/.demo'\n";
+        let current = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(logical, b"metadata_schema_version = 2\ndest = '~/.demo'\n[permissions]\nschema_version = 1\nfilesystem = [{ base = 'preset', path = 'build.ts', access = ['execute'] }]\n[artifact]\nscript = 'build.ts'\n".to_vec())
+            .file("app/demo/build.ts", b"// never executed".to_vec())
+            .build();
+        let legacy = BTreeMap::from([(logical.to_string(), BTreeSet::from([sha256(original)]))]);
+        for source in [PresetSourceKind::External, PresetSourceKind::Embedded] {
+            let mut builder = PresetSnapshot::builder(source);
+            if source == PresetSourceKind::External {
+                builder = builder.base_root(std::env::temp_dir());
+            }
+            let snapshot = builder
+                .file(logical, original.to_vec())
+                .file("app/demo/build.ts", b"// never executed".to_vec())
+                .build();
+            let plan = plan_preset_migration(
+                &snapshot,
+                "test",
+                None,
+                Some(PresetMigrationBaseline {
+                    current: &current,
+                    legacy_metadata_sha256: &legacy,
+                }),
+            );
+            assert_eq!(
+                plan.edits.len(),
+                usize::from(source == PresetSourceKind::External)
+            );
+            assert_eq!(
+                plan.report.summary.blockers,
+                usize::from(source == PresetSourceKind::Embedded)
+            );
+            for active in [false, true] {
+                let output = migration_text(&plan, &snapshot, active);
+                if source == PresetSourceKind::External {
+                    assert!(
+                        output.contains("`shine trust inspect app/demo`"),
+                        "{output}"
+                    );
+                    assert!(output.contains("`shine trust grant app/demo`"), "{output}");
+                    assert!(
+                        output.contains(if active {
+                            "After validation"
+                        } else {
+                            "After this source becomes active"
+                        }),
+                        "{output}"
+                    );
+                } else {
+                    assert!(!output.contains("shine trust"), "{output}");
+                }
+                assert!(!output.contains("shine preset pull"), "{output}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -1301,8 +473,6 @@ mod tests {
             .await
             .unwrap();
 
-        let previous_config = std::env::var_os("SHINE_CONFIG_DIR");
-        let previous_presets = std::env::var_os("SHINE_PRESETS");
         // SAFETY: env_lock serializes process-global environment mutation.
         unsafe {
             std::env::set_var("SHINE_CONFIG_DIR", &state);
@@ -1361,17 +531,58 @@ mod tests {
             );
         }
 
-        // SAFETY: env_lock remains held while the previous environment is restored.
+        drop(_guard);
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env_lock serializes process-global discovery state.
+    async fn migration_backup_failure_prevents_source_edits_and_runtime_initialization() {
+        let _guard = env_lock();
+        let root = make_temp_dir("shine-migration-backup-failure").await;
+        let state = root.join("state");
+        let presets = root.join("source");
+        let category = presets.join("app/demo");
+        tokio::fs::create_dir_all(&category).await.unwrap();
+        tokio::fs::create_dir_all(&state).await.unwrap();
+        let metadata = category.join("shine.toml");
+        let original = b"dest = '~/.demo'\n[[files]]\nsource = 'config.toml'\n";
+        tokio::fs::write(&metadata, original).await.unwrap();
+        tokio::fs::write(category.join("config.toml"), b"payload")
+            .await
+            .unwrap();
+        // A real filesystem failure at backup creation must not reach apply.
+        let backup_root = state.join("preset-migration-backups");
+        tokio::fs::write(&backup_root, b"occupied").await.unwrap();
+        // SAFETY: the guard restores environment/cwd before releasing the shared lock.
         unsafe {
-            match previous_config {
-                Some(value) => std::env::set_var("SHINE_CONFIG_DIR", value),
-                None => std::env::remove_var("SHINE_CONFIG_DIR"),
-            }
-            match previous_presets {
-                Some(value) => std::env::set_var("SHINE_PRESETS", value),
-                None => std::env::remove_var("SHINE_PRESETS"),
-            }
+            std::env::set_var("SHINE_CONFIG_DIR", &state);
+            std::env::remove_var("SHINE_PRESETS");
         }
+        assert!(
+            handle_migrate(Some(&presets), true, false, PresetReportFormat::Json)
+                .await
+                .unwrap()
+        );
+        let error = handle_migrate(Some(&presets), false, true, PresetReportFormat::Json)
+            .await
+            .unwrap_err();
+        assert!(
+            error.downcast_ref::<std::io::Error>().is_some(),
+            "{error:#}"
+        );
+        assert_eq!(tokio::fs::read(&metadata).await.unwrap(), original);
+        assert_eq!(
+            tokio::fs::read(category.join("config.toml")).await.unwrap(),
+            b"payload"
+        );
+        assert_eq!(tokio::fs::read(&backup_root).await.unwrap(), b"occupied");
+        let mut entries = tokio::fs::read_dir(&state).await.unwrap();
+        assert_eq!(
+            entries.next_entry().await.unwrap().unwrap().path(),
+            backup_root
+        );
+        assert!(entries.next_entry().await.unwrap().is_none());
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
 

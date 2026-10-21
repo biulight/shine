@@ -53,6 +53,9 @@ shine preset new sys --unrestricted
 
 其它类型把 `preset new` 的参数换成 `shell` 或 `sys`。定制内置类别时，进入仓库或 overlay 根目录
 并运行 `shine preset copy <kind>/<name>`；命令会创建类型与类别路径。
+`preset new`、`preset copy` 和 `preset export` 的路径进度消息会转义终端控制字符。
+文件位置及现有的 `--force` 替换规则保持不变。
+重复关联的提示也会转义来源路径中的控制字符，已有链接保持不变。
 
 `preset validate` 也接受仓库根目录、单个类别目录或其中的 `shine.toml`。根目录模式只扫描
 `app/`、`shell/`、`sys/` 下的直接类别目录；空仓库会失败。无论当前宿主是什么系统，它都会
@@ -61,6 +64,8 @@ shine preset new sys --unrestricted
 检查更新、写文件、联网或执行预设代码。
 
 默认输出文本；工具和 CI 可以使用 `--format json`。校验错误的退出码为 1，warning 不会导致失败。
+校验、lint 和作者 Plan 的文本报告会转义路径、标识符、诊断消息和权限标签中的控制字符。
+JSON 报告保留原始字段值。
 诊断代码表示未通过的检查，不受类别名称或消息措辞影响。例如，引用文件缺失时报告
 `missing_reference`，Bun 依赖声明不符合策略时报告 `bun_dependency_policy`。
 
@@ -70,6 +75,9 @@ shine preset new sys --unrestricted
 
 校验后运行 `preset lint`，检查作者质量和可移植性。warning 默认只是建议；CI 可在审阅后
 添加 `--deny-warnings`。
+如果 lint 无法加载输入或校验失败，文本提示会带上原始 `PATH`；请在同一目录执行提示中的
+`preset validate` 命令查看原因。若 `PATH` 不是 UTF-8 或包含控制字符，文本会说明已省略可复制命令；
+请将原始参数传给 `preset validate`。JSON 报告仍保留不含输入路径的诊断消息。
 Lint 会检查每个平台适用的资源，包括 Windows 的 PowerShell 命令；明确不适用于某个操作系统的
 App 类别或文件会在该操作系统的检查中跳过。
 
@@ -80,6 +88,10 @@ App 类别或文件会在该操作系统的检查中跳过。
 需要可重复的跨平台预期时，在类别中加入 `shine.test.toml`。测试描述初始条件和预期结果，不会执行
 setup code。`examples/presets` 下提供 App、Shell、Sys 三类可运行示例。`preset test` 只接受单个类别，
 不能传仓库根目录。
+在 Windows 等各宿主系统上，声明的文件和 receipt 都使用规划器的同一组虚拟目录。
+编写跨平台用例时，使用文件的相对路径基准，以及 receipt 中的 `${HOME}` 等占位符。
+文本报告会转义用例名中的控制字符，让每条结果保持在一行内。JSON 报告保留原始名称；
+两种格式的通过／失败判定和退出码相同。
 
 需要可分发 artifact 时，把已审查类别打包到 source tree 外部：
 
@@ -90,6 +102,8 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 返回的 hash 用于标识 bundle。`shine.test.toml` 只供作者使用，不会进入 bundle。Pack policy 失败
 必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。输出目录会在解析
 符号链接和父目录组件（`..`）后检查；即使使用 `--force`，也必须位于类别目录外。
+已有祖先必须是目录：若 `file` 是普通文件，`file/../bundle.tar.gz` 会以
+`output_write_failed` 失败，不会创建或替换 bundle。
 未使用 `--force` 时，如果其他进程在打包期间创建了输出文件，Shine 会保留该文件并以
 `output_exists` 失败。
 
@@ -105,9 +119,10 @@ shine preset migrate ./my-presets
 
 迁移器显示 unified metadata diff，确认默认是 No。它只修改 `shine.toml`，校验候选内容、复查来源
 hash，并在写入前创建完整的私有备份集；payload、脚本、值、runtime manifest 与 trust grant 都不会
-改变。若 executable identity 未变化，精确匹配已发布 1.x 内置 metadata 的文件可 rebase；安全的纯
-声明式 App 可以补齐当前 metadata。opaque code 和 Sys v1 dispatcher 会保留为人工 blocker，
-不会获得猜测或宽泛能力说明。
+改变。若 executable identity 未变化，精确匹配已发布 1.x 内置 metadata 的文件可 rebase；旧版
+App 可以补齐当前 metadata，而不添加能力说明。缺少可选能力表无需迁移，含 opaque code
+时也一样；外部代码信任仍需单独审阅。Sys v1 dispatcher 仍须人工迁移。
+文本中的备份路径会转义终端控制字符，备份内容和 JSON 报告标识保持不变。
 
 `--yes` 仅适合审阅后使用，且仍显示 text diff。JSON 是不含内容和 diff 的版本化报告：检查时使用
 `--format json --dry-run`，JSON 写入则必须同时指定 `--yes`。Git 管理的 overlay 只诊断、不修改；
@@ -200,11 +215,17 @@ Snapshot trust 绑定 target、capability 和完整有效类别快照，包括�
 
 Development trust 是对所显示本地来源中、指定 target/capability 的未来代码的长期授权，
 不代表持续代码审阅。来源目录/层变化、新 target 或新 capability 需要重新授权。
-Shell live 部署必须使用此模式。`opaque_code = "unrestricted"` 不会启用开发信任。`trust list`、
+Shell live 部署必须使用此模式。live 部署被阻止时，请先运行 `shine trust inspect <TARGET>`，
+再决定是否执行 `shine trust grant <TARGET> --development`。不愿授权未来代码修改时，
+可设置 `external_shell_mode = "snapshot"` 后重新审阅；普通 snapshot trust 不能授权 live 部署。
+`opaque_code = "unrestricted"` 不会启用开发信任。`trust list`、
 `trust inspect` 与安全 Plan 都会标注当前有效的开发信任。Grant 只保存在本机私有 trust
 store 中，Preset 不能随自身分发或启用它。
 默认的 `trust list` 会把安全范围相同的 capability 合并为一行，并显示每条已存 grant 当前是否有效；
 使用 `trust list --verbose` 可查看 capability 名称、本地开发来源标签与过期 grant 的复查提示。
+Trust 命令输出会转义 target、来源标签及作者 capability 说明中的控制字符，已存身份不变。
+target 含控制字符时，复查提示会省略可复制命令；请将原始 target 参数传给
+`trust inspect` 或 `trust grant`。
 
 每个外部 Shell command 都采用规范 target `shell/<CATEGORY>/<COMMAND>`。使用 `preset` 可以一次审阅或信任当前激活 Preset 快照中的全部可执行
 target；Shine 底层仍会按所选模式为各 target 保存独立的 target-local grant。撤销 `preset` 会清除所有已保存的
@@ -301,6 +322,13 @@ shine preset overlay info
 shine preset overlay unlink
 ```
 
+`preset link` 和 `preset overlay link` 的本地路径（包括解析符号链接后的目标）必须是有效的
+UTF-8。路径无法表示或所需的主目录无法按 UTF-8 展开时，命令会失败，不会链接到拼写不同的
+目录；`--create` 也不会绕过此检查。
+
+解除链接只移除当前配置中的 overlay 设置，不删除源文件。移除项目覆盖设置后，可能重新继承
+全局 overlay；可运行 `shine preset overlay info` 查看之后实际生效的 overlay。
+
 例如 `app/starship/starship.toml` 会覆盖基础来源中的同路径文件，其它预设继续沿用基础来源。
 
 ### 使用 Git 镜像 Overlay
@@ -318,7 +346,9 @@ shine preset pull
 shine preset overlay info
 ```
 
-关联命令会在 `~/.shine/overlay/` 浅克隆仓库；以后会把该目录镜像到远端分支的最新状态。此目录是缓存，任何本地修改都会在下次拉取时丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
+关联命令会在 `~/.shine/overlay/` 浅克隆仓库；以后会把该目录镜像到远端分支的最新状态。
+`overlay info` 报告托管目录是否存在。Git 来源、分支、目录和保留 checkout 的消息会转义终端控制字符。
+此目录是缓存，任何本地修改都会在下次拉取时丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
 
 使用不同的 Git URL 重新链接时，现有镜像会切换到该仓库。未指定 `--branch` 时，每次同步都跟随所配置远端的默认分支。拉取失败会保留之前的 checkout。
 
@@ -326,6 +356,8 @@ shine preset overlay info
 Git 元数据，并保留其内容；遇到意外占用的目录时，请先将其移到别处，再重试。fetch 成功后，同步会
 丢弃托管镜像中的已跟踪修改、未跟踪和被忽略的文件，以及嵌套仓库，即使远端 commit 没有变化。
 需要保留本地定制时，请使用手动关联的 overlay。
+Git overlay 的 checkout 路径必须能表示为 UTF-8。无法表示的路径会在克隆前被拒绝，
+不会改为写入含替换字符的另一个路径。
 
 如果只想定制一个内置类别，可在 overlay 根目录复制该预设，无需导出整套内容。例如，Surge 的本地代理、策略组和规则文件应从内置预设复制后再修改：
 
@@ -342,6 +374,12 @@ shine preset copy app/surge
 shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
+
+导出内容是内置预设加上当前 overlay 的覆盖和新增文件，不包含仅存在于外部基础目录中的文件；
+进度提示会说明是否包含 overlay。Copy 仍只提取原始内置类别。
+
+激活提示使用 `<PATH>` 占位符，并单独显示经过转义的目标路径。请按所用 shell 的规则引用实际
+路径，将其作为一个参数传入；转义后的显示文本不是可直接执行的 shell 参数。
 
 `preset copy` 和 `preset export` 都会拒绝作为输出的链接、特殊文件及链接子目录，即使指定
 `--force` 也不例外。请选择普通目录树作为输出位置。未指定 `--force` 时，已有普通文件会保留，
@@ -428,7 +466,7 @@ shine update --pull
 shine upgrade --pull
 ```
 
-Shine 会定位基础预设和当前 overlay 所在的 Git 仓库；两个来源属于同一仓库时只拉取一次，非 Git 来源会跳过。`update --pull` 和 `upgrade --pull` 会在拉取后重新加载配置，因此仓库中更新的 `shine.config.toml` 也会在后续步骤生效。
+Shine 会定位基础预设和当前 overlay 所在的 Git 仓库；两个来源属于同一仓库时只拉取一次，非 Git 来源会跳过。解析 Git 仓库根目录时会保留目录名中的空白，包括系统支持的末尾空格。`update --pull` 和 `upgrade --pull` 会在拉取后重新加载配置，因此仓库中更新的 `shine.config.toml` 也会在后续步骤生效。
 
 拉取前，所有待处理仓库都必须满足以下条件：
 
@@ -470,6 +508,9 @@ dest = { base = "data-dir", path = "com.example.my-app" }
 ```
 
 文件级覆盖既支持类别已有的绝对路径字符串，也支持平台映射。映射可使用精确的 `macos`、`linux`、`windows` 键，并可用 `unix` 作为 macOS/Linux 回退；同时存在时精确键优先。某个平台缺少分支时，该类别或文件不会在对应系统出现。App 与 Shell 显式文件的 `platforms` 数组使用同样四个选择器，按 OR 语义组合且不能为空。仅文件级可使用结构化 `data-dir`：它在 Windows 解析为 `%APPDATA%`，在 macOS 解析为 Application Support，在 Linux 解析为 `XDG_DATA_HOME`（未设置时为 `~/.local/share`）。`path` 和 `target` 必须是相对路径，且不能包含 `..`。
+
+没有 `shine.toml` 的旧 App 预设仍支持在首行或 shebang 的下一行用 `# shine-dest:` 指定完整目标路径。
+展开主目录后，路径必须是绝对路径，且不能包含 `..`。请改用不含父目录组件的明确目标路径后再重试。
 
 如果两个条目最终指向同一路径，Shine 会在写入前拒绝整个操作。后续 metadata 若移动已受管 source，`shine upgrade` 只会在旧文件未被修改且新目标不存在时迁移；否则保留两端现状并提示用户处理。
 

@@ -10,26 +10,15 @@ use shine_core::lifecycle::LifecycleOperation;
 use shine_core::lifecycle::LifecycleResultV1;
 use shine_core::runtime::{AppPlanRequest, PlanningInputVersions};
 
-pub async fn handle_uninstall(
-    config: &Config,
-    category: Option<&str>,
-    force: bool,
-    purge: bool,
-    dry_run: bool,
-) -> Result<()> {
-    handle_uninstall_approved(config, category, force, purge, dry_run, true).await
-}
-
 pub async fn handle_uninstall_approved(
     config: &Config,
     category: Option<&str>,
     force: bool,
-    purge: bool,
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_uninstall_with_reporter(config, category, force, purge, dry_run, yes, &mut renderer)
+    handle_uninstall_with_reporter(config, category, force, dry_run, yes, &mut renderer)
         .await
         .and_then(|result| crate::uninstall::check_completion(&result, dry_run))
 }
@@ -39,19 +28,16 @@ pub(crate) async fn handle_uninstall_with_result(
     config: &Config,
     category: Option<&str>,
     force: bool,
-    purge: bool,
     dry_run: bool,
 ) -> Result<LifecycleResultV1> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_uninstall_with_reporter(config, category, force, purge, dry_run, true, &mut renderer)
-        .await
+    handle_uninstall_with_reporter(config, category, force, dry_run, true, &mut renderer).await
 }
 
 async fn handle_uninstall_with_reporter(
     config: &Config,
     category: Option<&str>,
     force: bool,
-    purge: bool,
     dry_run: bool,
     yes: bool,
     reporter: &mut dyn LifecycleReporter,
@@ -63,7 +49,7 @@ async fn handle_uninstall_with_reporter(
         operation: LifecycleOperation::Uninstall,
         target: category.map(str::to_string),
         force,
-        purge,
+        purge: true,
         prune_stale: false,
         input_versions: PlanningInputVersions::default(),
     };
@@ -110,7 +96,7 @@ async fn handle_uninstall_with_reporter(
                     target: category.map(str::to_string),
                     dry_run,
                     force,
-                    purge,
+                    purge: true,
                 },
                 &mut observer,
                 &mut interaction,
@@ -183,6 +169,7 @@ async fn handle_uninstall_with_reporter(
                     .emit(PresentationEvent::stdout(report::user_modified_kept_text(
                         config,
                         &file.destination,
+                        owo_colors::Stream::Stdout,
                     )));
                 user_modified += 1;
             }
@@ -215,13 +202,10 @@ async fn handle_uninstall_with_reporter(
             _ => {}
         }
     }
-    if purge && !config.is_external_presets {
-        observer
-            .reporter
-            .emit(PresentationEvent::stdout(match category {
-                Some(category) => report::purge_category_text(category),
-                None => report::purge_all_text(),
-            }));
+    for outcome in &core_report.lifecycle.outcomes {
+        for line in report::cache_cleanup_lines(outcome) {
+            observer.reporter.emit(PresentationEvent::stdout(line));
+        }
     }
     let mut summary_parts = report::uninstall_summary_parts(removed, restored, user_modified, 0);
     if cleared_receipts > 0 {
@@ -255,9 +239,10 @@ async fn handle_uninstall_with_reporter(
             .map(|file| file.category.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         for category in categories {
+            let category_arg = crate::shell_quote::command_positionals(&[category]);
             observer.reporter.emit(PresentationEvent::BlankLine);
             observer.reporter.emit(PresentationEvent::stdout(format!(
-                "Preview forced uninstall: shine app uninstall {category} --force --dry-run"
+                "Preview forced uninstall: shine app uninstall --force --dry-run {category_arg}"
             )));
             let files = protected
                 .iter()
@@ -346,13 +331,22 @@ impl shine_core::runtime::RuntimeObserver for UninstallObserver<'_> {
                 .as_deref()
                 .and_then(|value| value.strip_prefix("app/"))
                 .unwrap_or("app");
-            if code == "app_artifact_permission_required" {
-                self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: artifact teardown skipped (run `shine trust grant app/{category}` after review; manual: shine app artifact remove {category})", report::symbol("!"))));
-            } else {
-                self.reporter.emit(PresentationEvent::stderr(format!(
-                    "  {} {category}: artifact teardown failed: {detail}",
-                    report::symbol("!")
+            if code == "app_artifact_permission_required" && category.chars().any(char::is_control)
+            {
+                self.reporter.emit(PresentationEvent::stdout(format!(
+                    "  {} {}: artifact teardown skipped; review trust and use `shine app artifact remove` with the original category argument (copyable command omitted)",
+                    report::symbol("!"), crate::output::escape_controls(category)
                 )));
+            } else if code == "app_artifact_permission_required" {
+                let target_arg = crate::shell_quote::command_arg(&format!("app/{category}"));
+                let category_arg = crate::shell_quote::command_positionals(&[category]);
+                self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: artifact teardown skipped (run `shine trust grant {target_arg}` after review; manual: shine app artifact remove {category_arg})", report::symbol("!"))));
+            } else {
+                self.reporter
+                    .emit(PresentationEvent::stderr(report::warning_text(
+                        category,
+                        format!("artifact teardown failed: {detail}"),
+                    )));
             }
         }
     }
@@ -362,30 +356,60 @@ impl shine_core::runtime::RuntimeObserver for UninstallObserver<'_> {
 mod tests {
     #![allow(clippy::await_holding_lock)]
     #[cfg(unix)]
-    use super::super::install::handle_install;
+    use super::super::install::handle_install_approved;
     use super::*;
     use crate::install_core::manifest::AppInstallStrategy;
     #[cfg(unix)]
     use crate::test_support::env_lock;
     use tokio::fs;
 
-    #[derive(Default)]
-    struct RecordingReporter(Vec<PresentationEvent>);
-    impl LifecycleReporter for RecordingReporter {
-        fn emit(&mut self, event: PresentationEvent) {
-            self.0.push(event);
-        }
-    }
-    impl RecordingReporter {
-        fn text(&self) -> String {
-            self.0
-                .iter()
-                .filter_map(|event| match event {
-                    PresentationEvent::Line { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+    use crate::test_support::RecordingReporter;
+
+    #[test]
+    fn artifact_teardown_notices_preserve_streams_and_omit_control_operands() {
+        use crate::presentation::PresentationStream;
+        use shine_core::runtime::{RuntimeEvent, RuntimeObserver};
+        for (code, stream) in [
+            (
+                "app_artifact_permission_required",
+                PresentationStream::Stdout,
+            ),
+            ("app_artifact_failed", PresentationStream::Stderr),
+        ] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut reporter =
+                crate::presentation::TerminalRenderer::new(&mut stdout, &mut stderr, None);
+            let mut observer = UninstallObserver {
+                reporter: &mut reporter,
+            };
+            observer.emit(RuntimeEvent::Warning {
+                code,
+                target: Some("app/item\nFORGED\r\t\u{1b}".into()),
+                detail: "failure\nFORGED\r\t\u{1b}".into(),
+            });
+            let bytes = if stream == PresentationStream::Stdout {
+                assert!(stderr.is_empty());
+                stdout
+            } else {
+                assert!(stdout.is_empty());
+                stderr
+            };
+            let text = String::from_utf8(bytes).unwrap();
+            assert_eq!(text.lines().count(), 1);
+            assert!(
+                !text.trim_end_matches('\n').chars().any(char::is_control),
+                "{text:?}"
+            );
+            assert!(text.contains(r"item\nFORGED\r\t\u{1b}"));
+            if stream == PresentationStream::Stdout {
+                assert!(
+                    text.contains("artifact teardown skipped")
+                        && text.contains("copyable command omitted")
+                );
+            } else {
+                assert!(text.contains(r"artifact teardown failed: failure\nFORGED\r\t\u{1b}"));
+            }
         }
     }
 
@@ -459,7 +483,6 @@ mod tests {
                 &config,
                 Some("sample"),
                 false,
-                false,
                 true,
                 true,
                 &mut preview,
@@ -475,7 +498,6 @@ mod tests {
                 Some("sample"),
                 false,
                 false,
-                false,
                 true,
                 &mut actual,
             )
@@ -487,7 +509,7 @@ mod tests {
             assert!(text.contains("Uninstall incomplete"));
             assert!(!text.contains("Done"));
             assert!(text.contains("1 removed"));
-            assert!(text.contains("shine app uninstall sample --force --dry-run"));
+            assert!(text.contains("shine app uninstall --force --dry-run sample"));
             assert_eq!(text.matches("Preview forced uninstall:").count(), 1);
             if mode == 1 {
                 assert!(!text.contains("protected.shine.bak"));
@@ -497,7 +519,6 @@ mod tests {
                     handle_uninstall_with_reporter(
                         &config,
                         Some("sample"),
-                        false,
                         false,
                         true,
                         true,
@@ -559,7 +580,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("git"), false, false)
+        handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
 
@@ -568,10 +589,19 @@ mod tests {
             .unwrap();
         let count_before = manifest_before.entries.len();
 
-        let result = handle_uninstall_with_result(&config, Some("git"), false, false, true)
+        let result = handle_uninstall_with_result(&config, Some("git"), false, true)
             .await
             .unwrap();
         assert!(result.dry_run);
+        assert_eq!(
+            result
+                .outcomes
+                .iter()
+                .find(|outcome| outcome.resource.as_deref() == Some("purge"))
+                .unwrap()
+                .effects,
+            vec![LifecycleEffect::CacheRemovePreviewed]
+        );
         assert_eq!(
             result
                 .outcomes
@@ -592,7 +622,7 @@ mod tests {
                 .iter()
                 .filter(|outcome| {
                     outcome.resource.as_deref() != Some("artifact:teardown")
-                        && outcome.resource.as_deref() != Some("preset-cache")
+                        && outcome.resource.as_deref() != Some("purge")
                 })
                 .all(|outcome| {
                     outcome.effects
@@ -618,8 +648,6 @@ mod tests {
             );
         }
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -636,13 +664,13 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
         fs::write(&dest, b"{\"debug\": false}\n").await.unwrap();
 
-        let result = handle_uninstall_with_result(&config, Some("sample"), true, false, false)
+        let result = handle_uninstall_with_result(&config, Some("sample"), true, false)
             .await
             .unwrap();
         assert_eq!(result.summary().changed, 1);
@@ -664,8 +692,6 @@ mod tests {
             "force uninstall should remove modified file"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -683,10 +709,10 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         // Install two categories so targeted removal can prove isolation.
-        handle_install(&config, Some("git"), false, false)
+        handle_install_approved(&config, Some("git"), false, false, true)
             .await
             .unwrap();
-        handle_install(&config, Some("starship"), false, false)
+        handle_install_approved(&config, Some("starship"), false, false, true)
             .await
             .unwrap();
         let manifest_all = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
@@ -714,10 +740,9 @@ mod tests {
             .count();
 
         // Uninstall only that category
-        let result =
-            handle_uninstall_with_result(&config, Some(&first_category), false, false, false)
-                .await
-                .unwrap();
+        let result = handle_uninstall_with_result(&config, Some(&first_category), false, false)
+            .await
+            .unwrap();
         assert!(
             result
                 .outcomes
@@ -743,8 +768,6 @@ mod tests {
             "uninstalled category must not appear in manifest"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -776,11 +799,11 @@ mod tests {
             .await
             .unwrap();
 
-        let preview = handle_uninstall_with_result(&config, Some("sample"), false, false, true)
+        let preview = handle_uninstall_with_result(&config, Some("sample"), false, true)
             .await
             .unwrap();
         assert_eq!(preview.summary().preserved, 1);
-        let result = handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+        let result = handle_uninstall_with_result(&config, Some("sample"), false, false)
             .await
             .unwrap();
 
@@ -824,7 +847,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+        let result = handle_uninstall_with_result(&config, Some("sample"), false, false)
             .await
             .unwrap();
 
@@ -876,7 +899,7 @@ mod tests {
             frontend.missing_app_sources().await.unwrap(),
             [("retired".into(), "config".into())]
         );
-        let preview = handle_uninstall_with_result(&config, Some("retired"), false, false, true)
+        let preview = handle_uninstall_with_result(&config, Some("retired"), false, true)
             .await
             .unwrap();
         assert_eq!(
@@ -893,7 +916,7 @@ mod tests {
                 .len(),
             1
         );
-        let result = handle_uninstall_with_result(&config, Some("retired"), false, false, false)
+        let result = handle_uninstall_with_result(&config, Some("retired"), false, false)
             .await
             .unwrap();
         assert_eq!(result.summary().changed, 1);
@@ -981,15 +1004,14 @@ mod tests {
                 [("retired".into(), "config.json".into())]
             );
             let unrelated =
-                handle_uninstall_with_result(&config, Some("replacement"), false, false, false)
+                handle_uninstall_with_result(&config, Some("replacement"), false, false)
                     .await
                     .unwrap();
             assert_eq!(unrelated.summary().changed, 0);
             assert_eq!(fs::read(&destination).await.unwrap(), current);
-            let result =
-                handle_uninstall_with_result(&config, Some("retired"), false, false, false)
-                    .await
-                    .unwrap();
+            let result = handle_uninstall_with_result(&config, Some("retired"), false, false)
+                .await
+                .unwrap();
             assert_eq!(result.summary().changed, 1);
             if json_merge {
                 let remaining: serde_json::Value =
@@ -1035,7 +1057,7 @@ mod tests {
             .await
             .unwrap();
 
-        let category = handle_uninstall_with_result(&config, Some("git"), false, true, false)
+        let category = handle_uninstall_with_result(&config, Some("git"), false, false)
             .await
             .unwrap();
         let category_purge = category
@@ -1055,7 +1077,7 @@ mod tests {
         fs::write(global_cache.join("orphan"), b"cache")
             .await
             .unwrap();
-        let global = handle_uninstall_with_result(&config, None, false, true, false)
+        let global = handle_uninstall_with_result(&config, None, false, false)
             .await
             .unwrap();
         let global_purge = global
@@ -1086,12 +1108,10 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         // Nothing installed — uninstalling a specific category should succeed silently
-        handle_uninstall(&config, Some("nonexistent"), false, false, false)
+        handle_uninstall_approved(&config, Some("nonexistent"), false, false, true)
             .await
             .unwrap();
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }

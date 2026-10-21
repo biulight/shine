@@ -4,9 +4,9 @@
 //! logical identities, hashes, actions, and stable diagnostics.
 
 use super::{PresetSnapshot, PresetSourceKind};
+pub use crate::digest::sha256_hex as sha256;
 use schemars::JsonSchema;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use toml_edit::{DocumentMut, Item, Value, value};
@@ -610,10 +610,6 @@ fn diagnostic_source_layer(snapshot: &PresetSnapshot, target: &str) -> Option<St
         }
     }
     None
-}
-
-pub fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }
 
 #[cfg(test)]

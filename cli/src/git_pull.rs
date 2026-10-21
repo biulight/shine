@@ -7,6 +7,7 @@ use tokio::process::Command;
 
 use crate::colors;
 use crate::config::Config;
+use crate::output::escape_controls;
 
 // Keep authentication/transport settings, but never let inherited repository
 // selectors redirect commands away from the explicitly selected checkout.
@@ -53,14 +54,20 @@ pub async fn handle_pull(config: &Config, verbose: bool) -> Result<()> {
                 "  {} {} ({})",
                 colors::dim("skipped"),
                 target.label,
-                colors::dim(&format!("same repository: {}", root.display()))
+                colors::dim(&format!(
+                    "same repository: {}",
+                    escape_controls(&root.display().to_string())
+                ))
             ),
             Some(_) => {}
             None if verbose => println!(
                 "  {} {} ({})",
                 colors::dim("skipped"),
                 target.label,
-                colors::dim(&format!("not a Git repository: {}", target.path.display()))
+                colors::dim(&format!(
+                    "not a Git repository: {}",
+                    escape_controls(&target.path.display().to_string())
+                ))
             ),
             None => {}
         }
@@ -87,7 +94,10 @@ pub async fn handle_pull(config: &Config, verbose: bool) -> Result<()> {
 
     for (label, root) in repositories {
         if verbose {
-            println!("Pulling {label} from {} ...", root.display());
+            println!(
+                "Pulling {label} from {} ...",
+                escape_controls(&root.display().to_string())
+            );
         }
         let summary = pull_ff_only(&root, verbose).await?;
         print_pull_summary(label, &summary);
@@ -114,6 +124,17 @@ fn configured_targets(config: &Config) -> Vec<PullTarget> {
     targets
 }
 
+fn git_path_output(stdout: Vec<u8>) -> Result<PathBuf> {
+    let path = String::from_utf8(stdout)?;
+    // Remove only Git's record terminator; whitespace can belong to the path.
+    let Some(path) = path.strip_suffix('\n') else {
+        return Ok(PathBuf::from(path));
+    };
+    #[cfg(windows)]
+    let path = path.strip_suffix('\r').unwrap_or(path);
+    Ok(PathBuf::from(path))
+}
+
 async fn repository_root(path: &Path) -> Result<Option<PathBuf>> {
     let output = git_command()
         .args(["rev-parse", "--show-toplevel"])
@@ -129,21 +150,20 @@ async fn repository_root(path: &Path) -> Result<Option<PathBuf>> {
         }
         bail!(
             "failed to inspect Git repository at {}: {}",
-            path.display(),
+            escape_controls(&path.display().to_string()),
             detail.trim()
         );
     }
 
     let root =
-        String::from_utf8(output.stdout).context("git returned a non-UTF-8 repository path")?;
-    let root = root.trim();
-    if root.is_empty() {
+        git_path_output(output.stdout).context("git returned a non-UTF-8 repository path")?;
+    if root.as_os_str().is_empty() {
         bail!(
             "git returned an empty repository root for {}",
-            path.display()
+            escape_controls(&path.display().to_string())
         );
     }
-    Ok(Some(PathBuf::from(root)))
+    Ok(Some(root))
 }
 
 async fn ensure_clean(label: &str, root: &Path) -> Result<()> {
@@ -152,14 +172,14 @@ async fn ensure_clean(label: &str, root: &Path) -> Result<()> {
         let detail = String::from_utf8_lossy(&output.stderr);
         bail!(
             "failed to inspect {label} repository {}: {}",
-            root.display(),
+            escape_controls(&root.display().to_string()),
             detail.trim()
         );
     }
     if !output.stdout.is_empty() {
         bail!(
             "refusing to pull {label}: Git worktree has uncommitted changes: {}\nCommit, stash, or discard the changes, then run 'shine preset pull' again.",
-            root.display()
+            escape_controls(&root.display().to_string())
         );
     }
     Ok(())
@@ -170,7 +190,7 @@ async fn ensure_tracking_branch(label: &str, root: &Path) -> Result<()> {
     if !branch.status.success() {
         bail!(
             "refusing to pull {label}: repository is in detached HEAD state: {}",
-            root.display()
+            escape_controls(&root.display().to_string())
         );
     }
 
@@ -189,7 +209,7 @@ async fn ensure_tracking_branch(label: &str, root: &Path) -> Result<()> {
         bail!(
             "refusing to pull {label}: branch '{}' has no upstream: {}",
             branch.trim(),
-            root.display()
+            escape_controls(&root.display().to_string())
         );
     }
     Ok(())
@@ -357,9 +377,7 @@ async fn ensure_managed_checkout(dir: &Path) -> Result<()> {
     if !git_dir.status.success()
         || tokio::fs::canonicalize(root).await? != expected
         || tokio::fs::canonicalize(
-            String::from_utf8(git_dir.stdout)
-                .context("Git returned a non-UTF-8 metadata path")?
-                .trim(),
+            git_path_output(git_dir.stdout).context("Git returned a non-UTF-8 metadata path")?,
         )
         .await?
             != expected.join(".git")
@@ -383,20 +401,22 @@ async fn clone_managed_overlay(
         .with_context(|| format!("failed to create {}", parent.display()))?;
 
     let temp = temp_clone_path(dir)?;
+    let temp_arg = temp
+        .to_str()
+        .context("managed overlay clone path is not valid UTF-8")?;
     if temp.exists() {
         tokio::fs::remove_dir_all(&temp)
             .await
             .with_context(|| format!("failed to remove stale clone dir {}", temp.display()))?;
     }
 
-    let temp_arg = temp.to_string_lossy().into_owned();
     let mut args: Vec<&str> = vec!["clone", "--depth", "1"];
     if let Some(branch) = branch {
         args.push("--branch");
         args.push(branch);
     }
     args.push(url);
-    args.push(&temp_arg);
+    args.push(temp_arg);
 
     if let Err(err) = run_git(parent, &args, verbose, "clone").await {
         let _ = tokio::fs::remove_dir_all(&temp).await;
@@ -562,6 +582,150 @@ mod tests {
     }
 
     #[test]
+    fn git_path_output_removes_only_the_record_terminator() {
+        for (output, expected) in [
+            ("repo\n", "repo"),
+            ("repo", "repo"),
+            ("repo \t\u{2003}\n", "repo \t\u{2003}"),
+            ("\n", ""),
+        ] {
+            assert_eq!(
+                git_path_output(output.as_bytes().to_vec()).unwrap(),
+                PathBuf::from(expected)
+            );
+        }
+        #[cfg(unix)]
+        for path in ["repo\n", "repo\r", "repo\r\n"] {
+            assert_eq!(
+                git_path_output(format!("{path}\n").into_bytes()).unwrap(),
+                PathBuf::from(path)
+            );
+        }
+        #[cfg(windows)]
+        assert_eq!(
+            git_path_output(b"repo\r\n".to_vec()).unwrap(),
+            PathBuf::from("repo")
+        );
+        assert!(git_path_output(vec![0xff, b'\n']).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn repository_root_preserves_directory_whitespace() {
+        let root = temp_dir("root-whitespace");
+        for suffix in [" ", "\t", "\n", "\r", "\u{2003}"] {
+            let dir = root.join(format!("selected{suffix}"));
+            init_repo(&dir);
+
+            assert_eq!(
+                repository_root(&dir).await.unwrap(),
+                Some(std::fs::canonicalize(&dir).unwrap()),
+                "directory suffix: {suffix:?}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pull_updates_whitespace_path_without_touching_neighbor() {
+        for verbose in [false, true] {
+            let root = temp_dir("pull-whitespace");
+            let source = root.join("source");
+            let selected = root.join("selected ");
+            let neighbor = root.join("selected");
+            init_repo(&source);
+            for dir in [&selected, &neighbor] {
+                git(
+                    &root,
+                    &["clone", source.to_str().unwrap(), dir.to_str().unwrap()],
+                );
+            }
+            let neighbor_head = head_short(&neighbor).await.unwrap();
+            std::fs::write(source.join("preset.txt"), "two\n").unwrap();
+            git(&source, &["commit", "-am", "update"]);
+            let state = root.join("state");
+            std::fs::create_dir_all(state.join("presets")).unwrap();
+            let config = Config::new_for_test(&state)
+                .with_presets_overlay_dir_override(Some(selected.clone()));
+
+            handle_pull(&config, verbose).await.unwrap();
+
+            assert_eq!(read_text(selected.join("preset.txt")), "two\n");
+            assert_eq!(
+                head_short(&selected).await.unwrap(),
+                head_short(&source).await.unwrap()
+            );
+            assert_eq!(read_text(neighbor.join("preset.txt")), "one\n");
+            assert_eq!(head_short(&neighbor).await.unwrap(), neighbor_head);
+            assert!(!neighbor.join(".git/FETCH_HEAD").exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pull_checks_selected_whitespace_path_before_fetch() {
+        let root = temp_dir("dirty-whitespace");
+        let source = root.join("source");
+        let selected = root.join("selected ");
+        let neighbor = root.join("selected");
+        init_repo(&source);
+        for dir in [&selected, &neighbor] {
+            git(
+                &root,
+                &["clone", source.to_str().unwrap(), dir.to_str().unwrap()],
+            );
+        }
+        std::fs::write(selected.join("preset.txt"), "user changes\n").unwrap();
+        let state = root.join("state");
+        std::fs::create_dir_all(state.join("presets")).unwrap();
+        let config =
+            Config::new_for_test(&state).with_presets_overlay_dir_override(Some(selected.clone()));
+
+        let error = handle_pull(&config, false).await.unwrap_err();
+
+        assert!(error.to_string().contains("uncommitted changes"));
+        assert_eq!(read_text(selected.join("preset.txt")), "user changes\n");
+        assert_eq!(read_text(neighbor.join("preset.txt")), "one\n");
+        for dir in [&selected, &neighbor] {
+            assert!(!dir.join(".git/FETCH_HEAD").exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_overlay_preserves_whitespace_checkout_identity() {
+        let root = temp_dir("managed-whitespace");
+        let source = root.join("source");
+        let selected = root.join("selected ");
+        let neighbor = root.join("selected");
+        init_repo(&source);
+        init_repo(&neighbor);
+        sync_managed_overlay(source.to_str().unwrap(), None, &selected, false)
+            .await
+            .unwrap();
+        std::fs::write(source.join("preset.txt"), "two\n").unwrap();
+        git(&source, &["commit", "-am", "update"]);
+        std::fs::write(selected.join("untracked.txt"), "disposable\n").unwrap();
+        std::fs::write(neighbor.join("untracked.txt"), "preserve\n").unwrap();
+        let neighbor_head = head_short(&neighbor).await.unwrap();
+
+        sync_managed_overlay(source.to_str().unwrap(), None, &selected, false)
+            .await
+            .unwrap();
+
+        assert_eq!(read_text(selected.join("preset.txt")), "two\n");
+        assert!(!selected.join("untracked.txt").exists());
+        assert_eq!(read_text(neighbor.join("preset.txt")), "one\n");
+        assert_eq!(read_text(neighbor.join("untracked.txt")), "preserve\n");
+        assert_eq!(head_short(&neighbor).await.unwrap(), neighbor_head);
+        assert!(!neighbor.join(".git/FETCH_HEAD").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn configured_targets_are_ordered_preset_then_overlay() {
         let dir = std::env::temp_dir().join("shine-pull-targets");
         let config =
@@ -589,6 +753,39 @@ mod tests {
 
         handle_pull(&config, false).await.unwrap();
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejected_pull_encodes_checkout_paths_without_fetching_or_changing_identity() {
+        let root = temp_dir(if cfg!(unix) {
+            "review\nFORGED\r\t\u{1b}中文"
+        } else {
+            "review中文"
+        });
+        let presets = root.join("presets");
+        init_repo(&presets);
+        let config = Config::new_for_test(&root);
+        for reason in ["uncommitted changes", "has no upstream", "detached HEAD"] {
+            if reason == "uncommitted changes" {
+                std::fs::write(presets.join("local.txt"), "keep\n").unwrap();
+            } else if reason == "has no upstream" {
+                std::fs::remove_file(presets.join("local.txt")).unwrap();
+            } else {
+                git(&presets, &["checkout", "--detach"]);
+            }
+            let head = std::fs::read(presets.join(".git/HEAD")).unwrap();
+            let error = handle_pull(&config, false).await.unwrap_err().to_string();
+            assert!(error.contains(reason), "{error}");
+            assert!(!error.contains(['\r', '\t', '\u{1b}']), "{error:?}");
+            assert!(!error.contains("\nFORGED"), "{error:?}");
+            if cfg!(unix) {
+                assert!(error.contains(r"review\nFORGED\r\t\u{1b}中文"));
+            }
+            assert_eq!(std::fs::read(presets.join(".git/HEAD")).unwrap(), head);
+            assert_eq!(read_text(presets.join("preset.txt")), "one\n");
+            assert!(!presets.join(".git/FETCH_HEAD").exists());
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -695,6 +892,44 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_overlay_clone_rejects_unrepresentable_path_without_alias_writes() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = temp_dir("clone-native-path");
+        std::fs::create_dir_all(&root).unwrap();
+        let parent = root.join(OsString::from_vec(b"state-\xff".to_vec()));
+        if let Err(error) = std::fs::create_dir(&parent) {
+            eprintln!("filesystem cannot create non-UTF-8 fixture: {error}");
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let alias = root.join("state-\u{fffd}");
+        std::fs::create_dir(&alias).unwrap();
+        std::fs::write(alias.join("preserve.txt"), "untouched").unwrap();
+        let remote = root.join("remote");
+        init_repo(&remote);
+        let destination = parent.join("overlay");
+
+        let error = sync_managed_overlay(remote.to_str().unwrap(), None, &destination, false)
+            .await
+            .unwrap_err();
+
+        let children: Vec<_> = std::fs::read_dir(&alias)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(children, vec![OsString::from("preserve.txt")], "{error:#}");
+        assert!(error.to_string().contains("not valid UTF-8"), "{error:#}");
+        assert!(!destination.exists());
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 0);
+        assert_eq!(read_text(alias.join("preserve.txt")), "untouched");
+        assert_eq!(read_text(remote.join("preset.txt")), "one\n");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

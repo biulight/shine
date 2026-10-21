@@ -1,4 +1,29 @@
+#[cfg(test)]
+mod privileged_tests;
+use super::managed_json::{
+    installed_json_hash, managed_json_hash, managed_json_payload, parse_json_object,
+    serialize_json_object,
+};
+mod artifact;
+mod assessment;
+#[cfg(test)]
+mod assessment_tests;
+#[cfg(test)]
+mod execution_tests;
+mod generator;
+mod hooks;
+mod inspect;
+#[cfg(test)]
+mod inspection_contract_tests;
+mod lifecycle;
+mod outcome;
+mod refresh;
+mod refresh_selection;
+pub(super) use refresh_selection::{SelectedRefreshFile, select_refresh_files};
+#[cfg(test)]
+mod refresh_tests;
 mod upgrade;
+use outcome::{AppFileOutcome, AppFileReportContext, RefreshChange};
 
 use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind};
 use crate::action::{ActionIrV1, ActionKindV1};
@@ -13,21 +38,16 @@ use crate::lifecycle::{
 use crate::permission::PermissionDeclarationV1;
 use crate::plan::{PermissionV1, PlanActionV1, PlanApprovalV1, PlanV1};
 use crate::runtime::{
-    AppFileInspection, CoreRuntime, FileSystemHost, InspectionChange, InspectionFileStatus,
-    PrivilegedFileSystemHost, ProcessHost, ProcessIo, ProcessRequest, RuntimeEvent,
-    RuntimeInteraction, RuntimeObserver,
+    AppFileInspection, CoreRuntime, FileSystemHost, FileSystemObservationHost, InspectionChange,
+    InspectionFileStatus, PrivilegedFileSystemHost, ProcessHost, ProcessIo, ProcessRequest,
+    RuntimeEvent, RuntimeInteraction, RuntimeObserver,
 };
 use crate::trust::TrustCapabilityV1;
 use anyhow::{Context, Result, bail};
-use serde_json::{Map as JsonMap, Value as JsonValue};
+use serde_json::Map as JsonMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
-
-const GENERATOR_TIMEOUT: Duration = Duration::from_secs(30);
-const GENERATOR_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
-const GENERATOR_STDERR_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct AppCategory {
@@ -265,17 +285,57 @@ struct AssessedAppFile {
     category: AppCategory,
     file: AppFile,
     destination: PathBuf,
-    content: Option<Vec<u8>>,
-    generator_error: Option<String>,
-    generator_diagnostic: Option<&'static str>,
+    content: AppContentAssessment,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct AppAssessmentOptions {
-    dry_run: bool,
-    run_generators: bool,
-    explicit_generators: bool,
-    preserve_generator_errors: bool,
+#[derive(Clone, Debug)]
+enum AppContentAssessment {
+    Ready(Vec<u8>),
+    NotEvaluated,
+    TrustRequired { error: String },
+    EvaluationFailed { error: String },
+}
+
+impl AppContentAssessment {
+    fn bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Ready(bytes) => Some(bytes),
+            Self::NotEvaluated | Self::TrustRequired { .. } | Self::EvaluationFailed { .. } => None,
+        }
+    }
+
+    fn error(&self) -> Option<&str> {
+        match self {
+            Self::TrustRequired { error } | Self::EvaluationFailed { error } => Some(error),
+            Self::Ready(_) | Self::NotEvaluated => None,
+        }
+    }
+
+    fn diagnostic(&self) -> Option<&'static str> {
+        match self {
+            Self::Ready(_) => None,
+            Self::NotEvaluated => Some("app_generator_not_evaluated"),
+            Self::TrustRequired { .. } => Some("app_generator_trust_required"),
+            Self::EvaluationFailed { .. } => Some("app_generator_evaluation_failed"),
+        }
+    }
+
+    fn generator_status(&self) -> Option<InspectionFileStatus> {
+        match self {
+            Self::Ready(_) => None,
+            Self::NotEvaluated => Some(InspectionFileStatus::GeneratorNotEvaluated),
+            Self::TrustRequired { .. } => Some(InspectionFileStatus::GeneratorTrustRequired),
+            Self::EvaluationFailed { .. } => Some(InspectionFileStatus::GeneratorEvaluationFailed),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppAssessmentPolicy {
+    InstallPreview,
+    Install,
+    Upgrade,
+    InspectEvaluated,
 }
 
 struct ApprovedAppInstall<'a> {
@@ -288,14 +348,6 @@ struct ApprovedAppUninstall<'a> {
     plan: &'a PlanV1,
     approval: &'a PlanApprovalV1,
     action_irs: Vec<ActionIrV1>,
-}
-
-fn generator_inspection_status(diagnostic: Option<&'static str>) -> InspectionFileStatus {
-    match diagnostic {
-        Some("app_generator_trust_required") => InspectionFileStatus::GeneratorTrustRequired,
-        Some("app_generator_evaluation_failed") => InspectionFileStatus::GeneratorEvaluationFailed,
-        _ => InspectionFileStatus::GeneratorNotEvaluated,
-    }
 }
 
 impl AppLifecycleReport {
@@ -347,368 +399,6 @@ where
         .await
     }
 
-    async fn install_apps_inner(
-        &self,
-        request: AppLifecycleRequest,
-        mut approved: Option<ApprovedAppInstall<'_>>,
-        observer: &mut impl RuntimeObserver,
-        interaction: &mut impl RuntimeInteraction,
-    ) -> Result<AppLifecycleReport> {
-        let categories = self.app_categories(request.target.as_deref())?;
-        if let Some(target) = &request.target
-            && categories.is_empty()
-        {
-            bail!("app preset category not found: {target}");
-        }
-        validate_app_destinations(self, &categories)?;
-
-        // Schema compatibility is checked before cache extraction, generator
-        // execution, authorization, or destination mutation.
-        let mut manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        let mut report = AppLifecycleReport::new(
-            LifecycleOperation::Install,
-            request.dry_run,
-            categories.clone(),
-        );
-        for category in &categories {
-            let cache = if self.context.is_external_presets {
-                LifecycleOutcomeV1::new(
-                    format!("app/{}", category.name),
-                    Some("preset-cache"),
-                    LifecycleStatus::Skipped,
-                    [LifecycleEffect::UserResourcePreserved],
-                )
-                .with_diagnostic_code("app_external_preset_cache_preserved")
-            } else {
-                self.reconcile_app_cache(AppCacheRequest {
-                    prefix: format!("app/{}", category.name),
-                    dry_run: request.dry_run,
-                    remove: false,
-                    purge: false,
-                    // Embedded cache refresh follows the current binary.
-                    overwrite: true,
-                })
-                .await?
-            };
-            report.lifecycle.push(cache);
-        }
-
-        // Preserve steps have no execution authority, including generator code.
-        // Remove their files before assessment, not merely before the final write.
-        let mut execution_categories = categories.clone();
-        if let Some(approved) = &approved {
-            for category in &mut execution_categories {
-                let target = format!("app/{}", category.name);
-                let mut selected = Vec::new();
-                for file in std::mem::take(&mut category.files) {
-                    let resource = file.source_rel.display().to_string();
-                    let preserved = approved.plan.steps.iter().any(|step| {
-                        step.target == target
-                            && step.resource.as_deref() == Some(resource.as_str())
-                            && step.action == PlanActionV1::Preserve
-                    });
-                    if !preserved {
-                        selected.push(file);
-                        continue;
-                    }
-                    let destination = self.app_destination(category, &file)?;
-                    let backup = manifest
-                        .find_by_dest(&destination)
-                        .and_then(|entry| entry.backup.clone());
-                    report.lifecycle.push(
-                        LifecycleOutcomeV1::new(
-                            &target,
-                            Some(resource),
-                            LifecycleStatus::Preserved,
-                            [LifecycleEffect::UserResourcePreserved],
-                        )
-                        .with_diagnostic_code("app_user_modified"),
-                    );
-                    report.files.push(AppFileLifecycleReport {
-                        category: category.name.clone(),
-                        source: file.source_rel,
-                        destination,
-                        transforms: file.transforms,
-                        backup,
-                        uninstall_strategy: None,
-                        restart_hint: file.restart_hint,
-                        generator_error: None,
-                        error: None,
-                        status: LifecycleStatus::Preserved,
-                        action: AppFileAction::UserModified,
-                    });
-                }
-                category.files = selected;
-            }
-        }
-        let assessed = self
-            .assess_app_files(
-                &execution_categories,
-                AppAssessmentOptions {
-                    dry_run: request.dry_run,
-                    run_generators: true,
-                    explicit_generators: true,
-                    preserve_generator_errors: false,
-                },
-                &manifest,
-                observer,
-            )
-            .await?;
-        let admin_count = assessed
-            .iter()
-            .filter(|assessment| assessment.file.requires_admin)
-            .count();
-        let admin_authorized = request.dry_run
-            || admin_count == 0
-            || self.context.running_as_admin
-            || interaction.authorize_admin(admin_count).await?;
-
-        let mut changed = BTreeSet::new();
-        for assessment in assessed {
-            let source = assessment.file.source_rel.clone();
-            let target = format!("app/{}", assessment.category.name);
-            if assessment.file.requires_admin && !admin_authorized {
-                report.lifecycle.push(
-                    LifecycleOutcomeV1::new(
-                        &target,
-                        Some(source.display().to_string()),
-                        LifecycleStatus::Failed,
-                        [],
-                    )
-                    .with_diagnostic_code("app_admin_not_authorized"),
-                );
-                report.files.push(AppFileLifecycleReport {
-                    category: assessment.category.name,
-                    source,
-                    destination: assessment.destination,
-                    transforms: assessment.file.transforms,
-                    backup: None,
-                    uninstall_strategy: None,
-                    restart_hint: assessment.file.restart_hint,
-                    generator_error: None,
-                    error: Some("administrator permission was not granted".to_string()),
-                    status: LifecycleStatus::Failed,
-                    action: AppFileAction::Failed,
-                });
-                continue;
-            }
-            if let Some(generator_error) = assessment.generator_error {
-                report.lifecycle.push(
-                    LifecycleOutcomeV1::new(
-                        &target,
-                        Some(source.display().to_string()),
-                        LifecycleStatus::Preserved,
-                        [LifecycleEffect::ManagedResourcePreserved],
-                    )
-                    .with_diagnostic_code("app_generator_unavailable"),
-                );
-                report.files.push(AppFileLifecycleReport {
-                    category: assessment.category.name,
-                    source,
-                    destination: assessment.destination,
-                    transforms: assessment.file.transforms,
-                    backup: None,
-                    uninstall_strategy: None,
-                    restart_hint: assessment.file.restart_hint,
-                    generator_error: Some(generator_error),
-                    error: None,
-                    status: LifecycleStatus::Preserved,
-                    action: AppFileAction::GeneratorPreserved,
-                });
-                continue;
-            }
-            let content = assessment
-                .content
-                .as_deref()
-                .context("App assessment did not contain install content")?;
-            let previous = manifest.find_by_dest(&assessment.destination).cloned();
-            let resource = source.display().to_string();
-            let action_index = approved.as_ref().and_then(|approved| {
-                approved.action_irs.iter().position(|ir| {
-                    matches!(ir.actions.as_slice(), [action] if action.target == target && action.resource == resource)
-                })
-            });
-            let mut journal_execution = None;
-            let outcome = if let Some(index) = action_index {
-                let approved = approved.as_mut().expect("approved App actions");
-                let action_ir = approved.action_irs.remove(index);
-                let is_update = matches!(
-                    action_ir.actions.as_slice(),
-                    [action] if matches!(action.kind, crate::action::ActionKindV1::UpdateManagedFile { .. })
-                );
-                let is_json = matches!(
-                    action_ir.actions.as_slice(),
-                    [action] if matches!(action.kind, crate::action::ActionKindV1::MergeManagedJson { .. })
-                );
-                let execution = if is_json {
-                    self.execute_app_managed_json_merge_approved(
-                        approved.plan,
-                        approved.approval,
-                        action_ir,
-                        content,
-                    )
-                    .await?
-                } else if is_update {
-                    self.execute_app_managed_file_update_approved(
-                        approved.plan,
-                        approved.approval,
-                        action_ir,
-                        content,
-                    )
-                    .await?
-                } else {
-                    self.execute_app_managed_file_creation_approved(
-                        approved.plan,
-                        approved.approval,
-                        action_ir,
-                        content,
-                    )
-                    .await?
-                };
-                let backup = (!is_update).then(|| execution.backup.clone()).flatten();
-                journal_execution = Some(execution);
-                let installed_hash = desired_app_hash(&assessment.file, content)?;
-                Ok(match backup {
-                    Some(backup) => InstallOutcome::BackedUpAndInstalled {
-                        backup,
-                        hash: installed_hash,
-                    },
-                    None => InstallOutcome::Installed {
-                        hash: installed_hash,
-                    },
-                })
-            } else {
-                self.install_app_content(
-                    &assessment.file,
-                    content,
-                    &assessment.destination,
-                    previous.is_some(),
-                    request.dry_run,
-                    request.force,
-                )
-                .await
-            };
-            let (status, effects, backup, error, action) = match outcome {
-                Ok(InstallOutcome::Installed { hash }) => {
-                    if !request.dry_run {
-                        manifest.upsert(app_entry(
-                            &assessment,
-                            hash,
-                            previous.as_ref().and_then(|entry| entry.backup.clone()),
-                        ));
-                        if let Some(execution) = journal_execution {
-                            // The matching ownership receipt must be durable
-                            // before the executor is allowed to clear the
-                            // operation journal.
-                            save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-                            self.commit_app_managed_file_operation(&execution).await?;
-                        }
-                    }
-                    changed.insert(assessment.category.name.clone());
-                    (
-                        LifecycleStatus::Changed,
-                        vec![
-                            LifecycleEffect::ResourceWritten,
-                            LifecycleEffect::ReceiptWritten,
-                        ],
-                        previous.and_then(|entry| entry.backup),
-                        None,
-                        AppFileAction::Installed,
-                    )
-                }
-                Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
-                    if !request.dry_run {
-                        manifest.upsert(app_entry(&assessment, hash, Some(backup.clone())));
-                        if let Some(execution) = journal_execution {
-                            save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-                            self.commit_app_managed_file_operation(&execution).await?;
-                        }
-                    }
-                    changed.insert(assessment.category.name.clone());
-                    (
-                        LifecycleStatus::Changed,
-                        vec![
-                            LifecycleEffect::BackupCreated,
-                            LifecycleEffect::ResourceWritten,
-                            LifecycleEffect::ReceiptWritten,
-                        ],
-                        Some(backup),
-                        None,
-                        AppFileAction::BackedUp,
-                    )
-                }
-                Ok(InstallOutcome::AlreadyManaged) => (
-                    LifecycleStatus::Unchanged,
-                    Vec::new(),
-                    previous.and_then(|entry| entry.backup),
-                    None,
-                    AppFileAction::Unchanged,
-                ),
-                Ok(InstallOutcome::DryRun) => (
-                    LifecycleStatus::Previewed,
-                    vec![
-                        LifecycleEffect::ResourceWritePreviewed,
-                        LifecycleEffect::ReceiptWritePreviewed,
-                    ],
-                    previous.and_then(|entry| entry.backup),
-                    None,
-                    AppFileAction::PreviewInstall,
-                ),
-                Err(error) => (
-                    LifecycleStatus::Failed,
-                    Vec::new(),
-                    previous.and_then(|entry| entry.backup),
-                    Some(format!("{error:#}")),
-                    AppFileAction::Failed,
-                ),
-            };
-            let mut lifecycle = LifecycleOutcomeV1::new(
-                target,
-                Some(source.display().to_string()),
-                status,
-                effects,
-            );
-            if error.is_some() {
-                lifecycle = lifecycle.with_diagnostic_code("app_install_failed");
-            }
-            report.lifecycle.push(lifecycle);
-            report.files.push(AppFileLifecycleReport {
-                category: assessment.category.name,
-                source,
-                destination: assessment.destination,
-                transforms: assessment.file.transforms,
-                backup,
-                uninstall_strategy: None,
-                restart_hint: assessment.file.restart_hint,
-                generator_error: None,
-                error,
-                status,
-                action,
-            });
-        }
-        if let Some(approved) = approved
-            && !approved.action_irs.is_empty()
-        {
-            bail!("approved App creation actions were not consumed by lifecycle execution");
-        }
-        if !request.dry_run {
-            save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-            let hooks = self
-                .run_app_hooks(
-                    AppHookRequest {
-                        categories,
-                        changed,
-                        phase: AppHookPhase::PostInstall,
-                        show_success: true,
-                    },
-                    observer,
-                )
-                .await;
-            report.lifecycle.outcomes.extend(hooks.outcomes);
-        }
-        Ok(report)
-    }
-
     /// Execute teardown, owned resource removal, receipt reconciliation and
     /// embedded-cache cleanup as one Core-owned uninstall lifecycle.
     pub(crate) async fn uninstall_apps(
@@ -741,846 +431,6 @@ where
             interaction,
         )
         .await
-    }
-
-    async fn uninstall_apps_inner(
-        &self,
-        request: AppUninstallLifecycleRequest,
-        mut approved: Option<ApprovedAppUninstall<'_>>,
-        observer: &mut impl RuntimeObserver,
-        interaction: &mut impl RuntimeInteraction,
-    ) -> Result<AppLifecycleReport> {
-        let mut manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        let selected = manifest
-            .entries
-            .iter()
-            .filter(|entry| {
-                request
-                    .target
-                    .as_ref()
-                    .is_none_or(|category| entry.source.starts_with(&format!("app/{category}/")))
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let category_names = selected
-            .iter()
-            .filter_map(|entry| entry.source.split('/').nth(1).map(str::to_string))
-            .chain(request.target.iter().cloned())
-            .collect::<BTreeSet<_>>();
-        let categories = self
-            .app_categories(None)?
-            .into_iter()
-            .filter(|category| category_names.contains(&category.name))
-            .collect::<Vec<_>>();
-        let mut report = AppLifecycleReport::new(
-            LifecycleOperation::Uninstall,
-            request.dry_run,
-            categories.clone(),
-        );
-        if request.target.is_some() && selected.is_empty() {
-            return Ok(report);
-        }
-
-        let admin_count = if let Some(approved) = &approved {
-            if approved
-                .plan
-                .permissions
-                .required
-                .contains(&PermissionV1::Administrator)
-            {
-                selected
-                    .iter()
-                    .filter(|entry| {
-                        if !entry.requires_admin {
-                            return false;
-                        }
-                        let Some((category, resource)) = app_source_parts(&entry.source) else {
-                            return false;
-                        };
-                        approved.plan.steps.iter().any(|step| {
-                            step.target == format!("app/{category}")
-                                && step.resource.as_deref() == Some(resource)
-                                && step.action == PlanActionV1::Remove
-                        })
-                    })
-                    .count()
-            } else {
-                0
-            }
-        } else {
-            selected.iter().filter(|entry| entry.requires_admin).count()
-        };
-        let admin_authorized = request.dry_run
-            || admin_count == 0
-            || self.context.running_as_admin
-            || interaction.authorize_admin(admin_count).await?;
-
-        // Teardown belongs to uninstall and always precedes file removal. It is
-        // intentionally non-fatal for implicit uninstall execution.
-        for category in &categories {
-            if let Some(artifact) = category.artifact.clone()
-                && artifact.teardown.is_some()
-            {
-                let outcome = self
-                    .run_app_artifact(
-                        AppArtifactRequest {
-                            category: category.name.clone(),
-                            artifact,
-                            action: AppArtifactAction::Remove,
-                            implicit: true,
-                            dry_run: request.dry_run,
-                        },
-                        observer,
-                    )
-                    .await
-                    .unwrap_or_else(|error| {
-                        observer.emit(RuntimeEvent::Warning {
-                            code: "app_artifact_teardown_failed",
-                            target: Some(format!("app/{}", category.name)),
-                            detail: format!("{error:#}"),
-                        });
-                        LifecycleOutcomeV1::new(
-                            format!("app/{}", category.name),
-                            Some("artifact:teardown"),
-                            LifecycleStatus::Failed,
-                            [],
-                        )
-                        .with_diagnostic_code("app_teardown_setup_failed")
-                    });
-                report.lifecycle.push(outcome);
-            }
-        }
-
-        for entry in selected {
-            let category = entry.source.split('/').nth(1).unwrap_or("app").to_string();
-            let source = PathBuf::from(
-                entry
-                    .source
-                    .splitn(3, '/')
-                    .nth(2)
-                    .unwrap_or(entry.source.as_str()),
-            );
-            if entry.requires_admin && !admin_authorized {
-                report.lifecycle.push(
-                    LifecycleOutcomeV1::new(
-                        format!("app/{category}"),
-                        Some(source.display().to_string()),
-                        LifecycleStatus::Failed,
-                        [],
-                    )
-                    .with_diagnostic_code("app_admin_not_authorized"),
-                );
-                report.files.push(AppFileLifecycleReport {
-                    category,
-                    source,
-                    destination: entry.destination,
-                    transforms: Vec::new(),
-                    backup: entry.backup,
-                    uninstall_strategy: Some(entry.install_strategy.clone()),
-                    restart_hint: None,
-                    generator_error: None,
-                    error: Some("administrator permission was not granted".to_string()),
-                    status: LifecycleStatus::Failed,
-                    action: AppFileAction::Failed,
-                });
-                continue;
-            }
-            let target = format!("app/{category}");
-            let resource = source.display().to_string();
-            let action_index = approved.as_ref().and_then(|approved| {
-                approved.action_irs.iter().position(|ir| {
-                    matches!(ir.actions.as_slice(), [action] if action.target == target && action.resource == resource)
-                })
-            });
-            let mut journal_execution = None;
-            let outcome = if let Some(index) = action_index {
-                let approved = approved.as_mut().expect("approved App uninstall actions");
-                let action_ir = approved.action_irs.remove(index);
-                let is_json = matches!(
-                    action_ir.actions.as_slice(),
-                    [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedJson { .. })
-                );
-                let execution = if is_json {
-                    self.execute_app_managed_json_removal_approved(
-                        approved.plan,
-                        approved.approval,
-                        action_ir,
-                    )
-                    .await?
-                } else {
-                    self.execute_app_managed_file_removal_approved(
-                        approved.plan,
-                        approved.approval,
-                        action_ir,
-                    )
-                    .await?
-                };
-                let outcome = match (execution.forced, execution.backup.clone()) {
-                    (false, None) => UninstallOutcome::Removed,
-                    (false, Some(backup)) => UninstallOutcome::RestoredBackup { backup },
-                    (true, None) => UninstallOutcome::ForceRemoved,
-                    (true, Some(backup)) => UninstallOutcome::ForceRestoredBackup { backup },
-                };
-                journal_execution = Some(execution);
-                Ok(outcome)
-            } else {
-                self.uninstall_app_entry(&entry, request.dry_run, request.force)
-                    .await
-            };
-            let (status, effects, remove_receipt, error, action) = match outcome {
-                Ok(UninstallOutcome::Removed) => (
-                    LifecycleStatus::Changed,
-                    vec![
-                        LifecycleEffect::ResourceRemoved,
-                        LifecycleEffect::ReceiptRemoved,
-                    ],
-                    true,
-                    None,
-                    AppFileAction::Removed,
-                ),
-                Ok(UninstallOutcome::ForceRemoved) => (
-                    LifecycleStatus::Changed,
-                    vec![
-                        LifecycleEffect::UserModificationOverridden,
-                        LifecycleEffect::ResourceRemoved,
-                        LifecycleEffect::ReceiptRemoved,
-                    ],
-                    true,
-                    None,
-                    AppFileAction::ForceRemoved,
-                ),
-                Ok(UninstallOutcome::RestoredBackup { .. }) => (
-                    LifecycleStatus::Changed,
-                    vec![
-                        LifecycleEffect::BackupRestored,
-                        LifecycleEffect::ReceiptRemoved,
-                    ],
-                    true,
-                    None,
-                    AppFileAction::Restored,
-                ),
-                Ok(UninstallOutcome::ForceRestoredBackup { .. }) => (
-                    LifecycleStatus::Changed,
-                    vec![
-                        LifecycleEffect::UserModificationOverridden,
-                        LifecycleEffect::BackupRestored,
-                        LifecycleEffect::ReceiptRemoved,
-                    ],
-                    true,
-                    None,
-                    AppFileAction::ForceRestored,
-                ),
-                Ok(UninstallOutcome::NotFound) => (
-                    LifecycleStatus::Changed,
-                    vec![LifecycleEffect::ReceiptRemoved],
-                    true,
-                    None,
-                    AppFileAction::Missing,
-                ),
-                Ok(UninstallOutcome::UserModified) => (
-                    LifecycleStatus::Preserved,
-                    vec![LifecycleEffect::UserResourcePreserved],
-                    false,
-                    None,
-                    AppFileAction::UserModified,
-                ),
-                Ok(UninstallOutcome::DryRun) => (
-                    LifecycleStatus::Previewed,
-                    vec![
-                        LifecycleEffect::ResourceRemovePreviewed,
-                        LifecycleEffect::ReceiptRemovePreviewed,
-                    ],
-                    false,
-                    None,
-                    AppFileAction::PreviewRemove,
-                ),
-                Err(error) => (
-                    LifecycleStatus::Failed,
-                    Vec::new(),
-                    false,
-                    Some(format!("{error:#}")),
-                    AppFileAction::Failed,
-                ),
-            };
-            if remove_receipt {
-                manifest.remove_by_dest(&entry.destination);
-                if let Some(execution) = journal_execution {
-                    save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-                    self.commit_app_managed_file_operation(&execution).await?;
-                }
-            }
-            let mut lifecycle = LifecycleOutcomeV1::new(
-                format!("app/{category}"),
-                Some(source.display().to_string()),
-                status,
-                effects,
-            );
-            if error.is_some() {
-                lifecycle = lifecycle.with_diagnostic_code("app_uninstall_failed");
-            }
-            report.lifecycle.push(lifecycle);
-            report.files.push(AppFileLifecycleReport {
-                category,
-                source,
-                destination: entry.destination,
-                transforms: Vec::new(),
-                backup: entry.backup,
-                uninstall_strategy: Some(entry.install_strategy.clone()),
-                restart_hint: None,
-                generator_error: None,
-                error,
-                status,
-                action,
-            });
-        }
-        if !request.dry_run {
-            save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-        }
-
-        if !self.context.is_external_presets {
-            let cache_targets = if request.purge && request.target.is_none() {
-                vec!["app".to_string()]
-            } else if let Some(category) = &request.target {
-                vec![format!("app/{category}")]
-            } else {
-                category_names
-                    .into_iter()
-                    .map(|category| format!("app/{category}"))
-                    .collect()
-            };
-            for target in cache_targets {
-                report.lifecycle.push(
-                    self.reconcile_app_cache(AppCacheRequest {
-                        prefix: target,
-                        dry_run: request.dry_run,
-                        remove: true,
-                        purge: request.purge,
-                        overwrite: false,
-                    })
-                    .await?,
-                );
-            }
-        } else if request.purge {
-            report.lifecycle.push(
-                LifecycleOutcomeV1::new(
-                    request
-                        .target
-                        .as_ref()
-                        .map(|category| format!("app/{category}"))
-                        .unwrap_or_else(|| "app".to_string()),
-                    Some("purge"),
-                    LifecycleStatus::Skipped,
-                    [LifecycleEffect::UserResourcePreserved],
-                )
-                .with_diagnostic_code("app_external_preset_cache_preserved"),
-            );
-        }
-        Ok(report)
-    }
-
-    /// Explicitly regenerate installed generated files from the captured
-    /// snapshot, then reconcile their receipts and post-upgrade hooks.
-    pub(crate) async fn refresh_app_generators(
-        &self,
-        request: AppRefreshRequest,
-        observer: &mut impl RuntimeObserver,
-        interaction: &mut impl RuntimeInteraction,
-    ) -> Result<AppLifecycleReport> {
-        let categories = self.app_categories(Some(&request.category))?;
-        let category = categories
-            .first()
-            .cloned()
-            .with_context(|| format!("app preset category not found: {}", request.category))?;
-        let mut manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        let candidates = if let Some(selector) = &request.file {
-            let file = category
-                .files
-                .iter()
-                .find(|file| &file.source_rel == selector)
-                .with_context(|| {
-                    format!(
-                        "app '{}' file not found: {}",
-                        request.category,
-                        selector.display()
-                    )
-                })?;
-            if file.generator.is_none() {
-                bail!(
-                    "app '{}' file is not generated: {}",
-                    request.category,
-                    selector.display()
-                );
-            }
-            vec![file.clone()]
-        } else {
-            category
-                .files
-                .iter()
-                .filter(|file| file.generator.is_some())
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        if candidates.is_empty() {
-            bail!("app '{}' has no generated files", request.category);
-        }
-
-        let mut selected = Vec::new();
-        for file in candidates {
-            let destination = self.app_destination(&category, &file)?;
-            let Some(entry) = manifest
-                .find_by_dest(&destination)
-                .filter(|entry| {
-                    entry.source
-                        == format!("app/{}/{}", request.category, file.source_rel.display())
-                })
-                .cloned()
-            else {
-                if request.file.is_some() {
-                    bail!(generated_file_not_installed_message(
-                        &request.category,
-                        &file.source_rel
-                    ));
-                }
-                continue;
-            };
-            selected.push((file, destination, entry));
-        }
-        if selected.is_empty() {
-            bail!(
-                "app '{}' has no installed generated files; run `shine install app/{}` first",
-                request.category,
-                request.category
-            );
-        }
-
-        let admin_count = selected
-            .iter()
-            .filter(|(file, _, _)| file.requires_admin)
-            .count();
-        if admin_count > 0
-            && !self.context.running_as_admin
-            && !interaction.authorize_admin(admin_count).await?
-        {
-            bail!("administrator permission was not granted");
-        }
-
-        let mut report =
-            AppLifecycleReport::new(LifecycleOperation::Update, false, vec![category.clone()]);
-        let mut changed = BTreeSet::new();
-        for (file, destination, entry) in selected {
-            let source = file.source_rel.clone();
-            let generator = file.generator.clone().expect("selected generated App file");
-            let result: Result<AppFileAction> = async {
-                if !self.context.env.contains_key(&generator.when_env) {
-                    bail!(
-                        "app '{}' generator requires config env '{}'",
-                        request.category,
-                        generator.when_env
-                    );
-                }
-                let bytes = self
-                    .run_app_generator(
-                        AppGeneratorRequest {
-                            category: request.category.clone(),
-                            source: source.display().to_string(),
-                            generator,
-                            explicit: true,
-                        },
-                        observer,
-                    )
-                    .await?
-                    .context("explicit App generator produced no content")?;
-                let content =
-                    crate::install::transforms::apply(&file.transforms, &bytes, &self.context.env)?;
-                let desired_hash = desired_app_hash(&file, &content)?;
-                let current_hash = match self.host.read(&destination).await {
-                    Ok(bytes) => installed_app_hash(&file, &bytes)?,
-                    Err(error) if error.is_not_found() => None,
-                    Err(error) => {
-                        return Err(error.into_anyhow("reading generated App destination"));
-                    }
-                };
-                if current_hash == Some(entry.content_hash) && desired_hash == entry.content_hash {
-                    return Ok(AppFileAction::Unchanged);
-                }
-                if current_hash.is_some_and(|hash| hash != entry.content_hash) && !request.force {
-                    return Ok(AppFileAction::UserModified);
-                }
-                let outcome = self
-                    .install_app_content(&file, &content, &destination, true, false, true)
-                    .await?;
-                let hash = match outcome {
-                    InstallOutcome::Installed { hash }
-                    | InstallOutcome::BackedUpAndInstalled { hash, .. } => hash,
-                    InstallOutcome::AlreadyManaged => return Ok(AppFileAction::Unchanged),
-                    InstallOutcome::DryRun => unreachable!("refresh is never dry-run"),
-                };
-                manifest.upsert(AppEntry {
-                    source: entry.source.clone(),
-                    destination: destination.clone(),
-                    backup: entry.backup.clone(),
-                    content_hash: hash,
-                    install_strategy: file.install_strategy.clone(),
-                    uses_env: true,
-                    requires_admin: file.requires_admin,
-                });
-                Ok(AppFileAction::Installed)
-            }
-            .await;
-            let (action, status, error) = match result {
-                Ok(AppFileAction::Installed) => {
-                    changed.insert(request.category.clone());
-                    (AppFileAction::Installed, LifecycleStatus::Changed, None)
-                }
-                Ok(AppFileAction::Unchanged) => {
-                    (AppFileAction::Unchanged, LifecycleStatus::Unchanged, None)
-                }
-                Ok(AppFileAction::UserModified) => (
-                    AppFileAction::UserModified,
-                    LifecycleStatus::Preserved,
-                    None,
-                ),
-                Ok(action) => (action, LifecycleStatus::Unchanged, None),
-                Err(error) => (
-                    AppFileAction::Failed,
-                    LifecycleStatus::Failed,
-                    Some(format!("{error:#}")),
-                ),
-            };
-            let effects = match status {
-                LifecycleStatus::Changed => {
-                    vec![
-                        LifecycleEffect::ResourceWritten,
-                        LifecycleEffect::ReceiptWritten,
-                    ]
-                }
-                LifecycleStatus::Preserved => vec![LifecycleEffect::UserResourcePreserved],
-                _ => Vec::new(),
-            };
-            let mut outcome = LifecycleOutcomeV1::new(
-                format!("app/{}", request.category),
-                Some(source.display().to_string()),
-                status,
-                effects,
-            );
-            if error.is_some() {
-                outcome = outcome.with_diagnostic_code("app_refresh_failed");
-            }
-            report.lifecycle.push(outcome);
-            report.files.push(AppFileLifecycleReport {
-                category: request.category.clone(),
-                source,
-                destination,
-                transforms: file.transforms,
-                backup: entry.backup,
-                uninstall_strategy: None,
-                restart_hint: file.restart_hint,
-                generator_error: None,
-                error,
-                status,
-                action,
-            });
-        }
-        if !changed.is_empty() {
-            save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-            let hooks = self
-                .run_app_hooks(
-                    AppHookRequest {
-                        categories: vec![category],
-                        changed,
-                        phase: AppHookPhase::PostUpgrade,
-                        show_success: true,
-                    },
-                    observer,
-                )
-                .await;
-            report.lifecycle.outcomes.extend(hooks.outcomes);
-        }
-        Ok(report)
-    }
-
-    /// Reconcile only manifest-installed App categories against one immutable
-    /// preset assessment. Automatic generators run once; manual generators
-    /// remain explicit-refresh only.
-    /// Inspect every active App file using the same one-pass generator
-    /// assessment and ownership rules as upgrade.
-    pub async fn inspect_apps(
-        &self,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<Vec<AppFileInspection>> {
-        self.inspect_apps_with_options(AppInspectionOptions::default(), observer)
-            .await
-    }
-
-    /// Receipt-owned resources absent from the effective App metadata. No code is evaluated.
-    pub(crate) async fn missing_app_sources(&self) -> Result<Vec<(String, String)>> {
-        let active =
-            self.app_categories(None)?
-                .into_iter()
-                .flat_map(|category| {
-                    category.files.into_iter().map(move |file| {
-                        format!("app/{}/{}", category.name, file.source_rel.display())
-                    })
-                })
-                .collect::<BTreeSet<_>>();
-        let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        Ok(manifest
-            .entries
-            .iter()
-            .filter(|entry| !active.contains(&entry.source))
-            .filter_map(|entry| {
-                app_source_parts(&entry.source)
-                    .map(|(category, resource)| (category.to_string(), resource.to_string()))
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect())
-    }
-
-    pub async fn inspect_apps_with_options(
-        &self,
-        options: AppInspectionOptions,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<Vec<AppFileInspection>> {
-        let selected = options.categories.iter().collect::<BTreeSet<_>>();
-        let categories = self
-            .app_categories(None)?
-            .into_iter()
-            .filter(|category| selected.is_empty() || selected.contains(&category.name))
-            .collect::<Vec<_>>();
-        let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
-        let assessments = self
-            .assess_app_files(
-                &categories,
-                AppAssessmentOptions {
-                    run_generators: options.run_generators,
-                    explicit_generators: options.run_generators,
-                    preserve_generator_errors: true,
-                    ..AppAssessmentOptions::default()
-                },
-                &manifest,
-                observer,
-            )
-            .await?;
-        let installed_categories = manifest
-            .entries
-            .iter()
-            .filter_map(|entry| {
-                app_source_parts(&entry.source).map(|(category, _)| category.to_string())
-            })
-            .collect::<BTreeSet<_>>();
-        let mut files = Vec::new();
-        for assessment in assessments {
-            let source = format!(
-                "app/{}/{}",
-                assessment.category.name,
-                assessment.file.source_rel.display()
-            );
-            let direct_entry = manifest.find_by_dest(&assessment.destination).cloned();
-            let source_entry = manifest.find_by_source(&source).cloned();
-            let entry = direct_entry.clone().or_else(|| source_entry.clone());
-            let current_content = match entry.as_ref() {
-                Some(entry) => match self.host.read(&entry.destination).await {
-                    Ok(bytes) => Some(bytes),
-                    Err(error) if error.is_not_found() => None,
-                    Err(error) => return Err(error.into_anyhow("reading installed App file")),
-                },
-                None => None,
-            };
-            let manual_generator = assessment
-                .file
-                .generator
-                .as_ref()
-                .is_some_and(|generator| !generator.auto);
-            let mut changes = Vec::new();
-            let status = if let Some(entry) = direct_entry.as_ref() {
-                let current_hash = current_content
-                    .as_deref()
-                    .map(|bytes| installed_app_hash(&assessment.file, bytes))
-                    .transpose()?;
-                match current_hash {
-                    None => InspectionFileStatus::Missing,
-                    Some(None) => InspectionFileStatus::Partial,
-                    Some(Some(hash)) if hash != entry.content_hash => {
-                        InspectionFileStatus::UserModified
-                    }
-                    Some(Some(_)) if assessment.generator_diagnostic.is_some() => {
-                        generator_inspection_status(assessment.generator_diagnostic)
-                    }
-                    Some(Some(_)) => {
-                        let desired = assessment
-                            .content
-                            .as_deref()
-                            .map(|content| desired_app_hash(&assessment.file, content))
-                            .transpose()?;
-                        if desired.is_some_and(|hash| hash != entry.content_hash) {
-                            changes.push(InspectionChange::ContentChanged);
-                            InspectionFileStatus::UpdateAvail
-                        } else {
-                            InspectionFileStatus::UpToDate
-                        }
-                    }
-                }
-            } else if let Some(entry) = source_entry.as_ref() {
-                if assessment.generator_diagnostic.is_some() {
-                    generator_inspection_status(assessment.generator_diagnostic)
-                } else if manual_generator && !options.run_generators {
-                    let current_hash = current_content
-                        .as_deref()
-                        .map(|bytes| installed_app_hash(&assessment.file, bytes))
-                        .transpose()?;
-                    match current_hash {
-                        None => InspectionFileStatus::Missing,
-                        Some(None) => InspectionFileStatus::Partial,
-                        Some(Some(hash)) if hash != entry.content_hash => {
-                            InspectionFileStatus::UserModified
-                        }
-                        Some(Some(_)) => InspectionFileStatus::UpToDate,
-                    }
-                } else {
-                    changes.push(InspectionChange::DestinationRelocated {
-                        from: entry.destination.clone(),
-                        to: assessment.destination.clone(),
-                    });
-                    if assessment
-                        .content
-                        .as_deref()
-                        .map(|content| desired_app_hash(&assessment.file, content))
-                        .transpose()?
-                        .is_some_and(|hash| hash != entry.content_hash)
-                    {
-                        changes.push(InspectionChange::ContentChanged);
-                    }
-                    InspectionFileStatus::UpdateAvail
-                }
-            } else if installed_categories.contains(&assessment.category.name)
-                && assessment.generator_diagnostic.is_some()
-            {
-                generator_inspection_status(assessment.generator_diagnostic)
-            } else if installed_categories.contains(&assessment.category.name)
-                && (!manual_generator || options.run_generators)
-                && assessment.content.is_some()
-            {
-                changes.push(InspectionChange::NewFile {
-                    destination: assessment.destination.clone(),
-                });
-                InspectionFileStatus::UpdateAvail
-            } else {
-                InspectionFileStatus::NotInstalled
-            };
-            let desired_content = assessment.content.clone();
-            files.push(AppFileInspection {
-                category: assessment.category,
-                file: assessment.file,
-                destination: Some(assessment.destination),
-                status,
-                manifest_entry: entry,
-                desired_content,
-                current_content,
-                changes,
-                assessment_error: assessment.generator_error,
-                assessment_diagnostic: assessment.generator_diagnostic,
-            });
-        }
-        Ok(files)
-    }
-
-    async fn assess_app_files(
-        &self,
-        categories: &[AppCategory],
-        options: AppAssessmentOptions,
-        manifest: &AppManifest,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<Vec<AssessedAppFile>> {
-        let mut assessed = Vec::new();
-        for category in categories {
-            for file in &category.files {
-                let destination = self.app_destination(category, file)?;
-                let raw = if !options.run_generators && file.generator.is_some() {
-                    assessed.push(AssessedAppFile {
-                        category: category.clone(),
-                        file: file.clone(),
-                        destination,
-                        content: None,
-                        generator_error: None,
-                        generator_diagnostic: Some("app_generator_not_evaluated"),
-                    });
-                    continue;
-                } else if options.dry_run || file.generator.is_none() {
-                    Some(
-                        self.app_source_bytes(category.name.as_str(), file)?
-                            .to_vec(),
-                    )
-                } else {
-                    if options.preserve_generator_errors
-                        && let Err(error) =
-                            self.ensure_app_code_allowed(&category.name, "generator")
-                    {
-                        assessed.push(AssessedAppFile {
-                            category: category.clone(),
-                            file: file.clone(),
-                            destination,
-                            content: None,
-                            generator_error: Some(format!("{error:#}")),
-                            generator_diagnostic: Some("app_generator_trust_required"),
-                        });
-                        continue;
-                    }
-                    match self
-                        .run_app_generator(
-                            AppGeneratorRequest {
-                                category: category.name.clone(),
-                                source: file.source_rel.display().to_string(),
-                                generator: file.generator.clone().expect("checked generator"),
-                                explicit: options.explicit_generators,
-                            },
-                            observer,
-                        )
-                        .await
-                    {
-                        Ok(Some(bytes)) => Some(bytes),
-                        Ok(None) => Some(self.app_source_bytes(&category.name, file)?.to_vec()),
-                        Err(error)
-                            if options.preserve_generator_errors
-                                || (manifest.find_by_dest(&destination).is_some()
-                                    && self.host.metadata(&destination).await.is_ok()) =>
-                        {
-                            assessed.push(AssessedAppFile {
-                                category: category.clone(),
-                                file: file.clone(),
-                                destination,
-                                content: None,
-                                generator_error: Some(format!("{error:#}")),
-                                generator_diagnostic: Some("app_generator_evaluation_failed"),
-                            });
-                            continue;
-                        }
-                        Err(error) => return Err(error),
-                    }
-                };
-                let content = raw
-                    .map(|bytes| {
-                        crate::install::transforms::apply(
-                            &file.transforms,
-                            &bytes,
-                            &self.context.env,
-                        )
-                        .with_context(|| {
-                            format!("transform failed: {}", file.transforms.join(", "))
-                        })
-                    })
-                    .transpose()?;
-                assessed.push(AssessedAppFile {
-                    category: category.clone(),
-                    file: file.clone(),
-                    destination,
-                    content,
-                    generator_error: None,
-                    generator_diagnostic: None,
-                });
-            }
-        }
-        Ok(assessed)
     }
 
     async fn install_app_content(
@@ -1634,7 +484,7 @@ where
                 Err(error) => return Err(error.into_anyhow("observing App uninstall preview")),
             };
             if let Some(bytes) = &current {
-                let modified = installed_app_entry_hash(entry, bytes)?
+                let modified = installed_strategy_hash(&entry.install_strategy, bytes)?
                     .is_some_and(|hash| hash != entry.content_hash);
                 if modified && !force {
                     return Ok(UninstallOutcome::UserModified);
@@ -1707,11 +557,9 @@ fn app_source_parts(source: &str) -> Option<(&str, &str)> {
 
 fn app_upgrade_file_report(
     assessment: &AssessedAppFile,
-    status: LifecycleStatus,
-    action: AppFileAction,
-    error: Option<String>,
+    outcome: AppFileOutcome,
 ) -> AppFileLifecycleReport {
-    AppFileLifecycleReport {
+    AppFileReportContext {
         category: assessment.category.name.clone(),
         source: assessment.file.source_rel.clone(),
         destination: assessment.destination.clone(),
@@ -1719,15 +567,8 @@ fn app_upgrade_file_report(
         backup: None,
         uninstall_strategy: None,
         restart_hint: assessment.file.restart_hint.clone(),
-        generator_error: (action == AppFileAction::GeneratorPreserved)
-            .then(|| error.clone())
-            .flatten(),
-        error: (action != AppFileAction::GeneratorPreserved)
-            .then_some(error)
-            .flatten(),
-        status,
-        action,
     }
+    .finish(outcome)
 }
 
 pub(crate) fn desired_app_hash(file: &AppFile, content: &[u8]) -> Result<u64> {
@@ -1737,20 +578,11 @@ pub(crate) fn desired_app_hash(file: &AppFile, content: &[u8]) -> Result<u64> {
     }
 }
 
-pub(crate) fn installed_app_hash(file: &AppFile, content: &[u8]) -> Result<Option<u64>> {
-    match &file.install_strategy {
-        AppInstallStrategy::Copy => Ok(Some(hash_content(content))),
-        AppInstallStrategy::JsonMerge { managed_keys } => {
-            installed_json_hash(content, managed_keys)
-        }
-    }
-}
-
-pub(crate) fn installed_app_entry_hash(
-    entry: &crate::install::AppEntry,
+pub(in crate::runtime) fn installed_strategy_hash(
+    strategy: &AppInstallStrategy,
     content: &[u8],
 ) -> Result<Option<u64>> {
-    match &entry.install_strategy {
+    match strategy {
         AppInstallStrategy::Copy => Ok(Some(hash_content(content))),
         AppInstallStrategy::JsonMerge { managed_keys } => {
             installed_json_hash(content, managed_keys)
@@ -1772,39 +604,15 @@ where
     if dry_run {
         return Ok(InstallOutcome::DryRun);
     }
-    let _guard = host.acquire_privileged_operation().await?;
-    let hash = hash_content(content);
-    let exists = match host.metadata(destination).await {
-        Ok(_) => true,
-        Err(error) if error.is_not_found() => false,
-        Err(error) => return Err(error.into_anyhow("inspecting privileged App destination")),
-    };
-    if exists && is_managed && !force {
-        let current = host
-            .read(destination)
-            .await
-            .map_err(|error| error.into_anyhow("reading privileged App destination"))?;
-        if hash_content(&current) == hash {
-            return Ok(InstallOutcome::AlreadyManaged);
-        }
-    }
-    let backup = if exists && !is_managed {
-        let backup = crate::install::file_ops::backup_path(destination);
-        host.move_privileged(destination, &backup).await?;
-        Some(backup)
-    } else {
-        None
-    };
-    if let Err(error) = host.write_privileged(destination, content).await {
-        if let Some(backup) = &backup {
-            let _ = host.move_privileged(backup, destination).await;
-        }
-        return Err(error);
-    }
-    Ok(match backup {
-        Some(backup) => InstallOutcome::BackedUpAndInstalled { backup, hash },
-        None => InstallOutcome::Installed { hash },
-    })
+    super::privileged_files::install_bytes(
+        host,
+        content,
+        destination,
+        is_managed,
+        force,
+        super::privileged_files::APP,
+    )
+    .await
 }
 
 async fn uninstall_privileged_entry<H>(
@@ -1819,36 +627,7 @@ where
     if dry_run {
         return Ok(UninstallOutcome::DryRun);
     }
-    let _guard = host.acquire_privileged_operation().await?;
-    let current = match host.read(&entry.destination).await {
-        Ok(bytes) => bytes,
-        Err(error) if error.is_not_found() => return Ok(UninstallOutcome::NotFound),
-        Err(error) => return Err(error.into_anyhow("reading privileged App destination")),
-    };
-    let user_modified = hash_content(&current) != entry.content_hash;
-    if user_modified && !force {
-        return Ok(UninstallOutcome::UserModified);
-    }
-    host.remove_privileged(&entry.destination).await?;
-    if let Some(backup) = &entry.backup
-        && host.metadata(backup).await.is_ok()
-    {
-        host.move_privileged(backup, &entry.destination).await?;
-        return Ok(if user_modified {
-            UninstallOutcome::ForceRestoredBackup {
-                backup: backup.clone(),
-            }
-        } else {
-            UninstallOutcome::RestoredBackup {
-                backup: backup.clone(),
-            }
-        });
-    }
-    Ok(if user_modified {
-        UninstallOutcome::ForceRemoved
-    } else {
-        UninstallOutcome::Removed
-    })
+    super::privileged_files::uninstall_entry(host, entry, force, super::privileged_files::APP).await
 }
 
 async fn install_json_merge(
@@ -1918,125 +697,8 @@ async fn uninstall_json_merge(
     })
 }
 
-pub(crate) fn managed_json_hash(source: &[u8], managed_keys: &[String]) -> Result<u64> {
-    Ok(hash_content(&serialize_json_object(
-        &managed_json_payload(source, managed_keys)?,
-    )?))
-}
-
-pub(crate) fn merge_managed_json_bytes(
-    current: Option<&[u8]>,
-    source: &[u8],
-    managed_keys: &[String],
-) -> Result<Vec<u8>> {
-    let managed = managed_json_payload(source, managed_keys)?;
-    let mut root = current
-        .map(|bytes| parse_json_object(bytes, "json-merge: destination must be a JSON object"))
-        .transpose()?
-        .unwrap_or_default();
-    for (key, value) in managed {
-        root.insert(key, value);
-    }
-    serialize_json_object(&root)
-}
-
-pub(crate) fn remove_managed_json_bytes(
-    current: &[u8],
-    managed_keys: &[String],
-) -> Result<Vec<u8>> {
-    let mut root = parse_json_object(current, "json-merge: destination must be a JSON object")?;
-    for key in managed_keys {
-        root.remove(key);
-    }
-    serialize_json_object(&root)
-}
-
-pub(crate) fn restore_managed_json_bytes(
-    current: &[u8],
-    original: &[u8],
-    managed_keys: &[String],
-) -> Result<Vec<u8>> {
-    let mut root = parse_json_object(current, "json-merge: destination must be a JSON object")?;
-    let original = parse_json_object(original, "json-merge: rollback must be a JSON object")?;
-    for key in managed_keys {
-        if let Some(value) = original.get(key) {
-            root.insert(key.clone(), value.clone());
-        } else {
-            root.remove(key);
-        }
-    }
-    serialize_json_object(&root)
-}
-
-pub(crate) fn managed_json_keys_match(
-    left: &[u8],
-    right: &[u8],
-    managed_keys: &[String],
-) -> Result<bool> {
-    let left = parse_json_object(left, "json-merge: destination must be a JSON object")?;
-    let right = parse_json_object(right, "json-merge: comparison must be a JSON object")?;
-    Ok(managed_keys
-        .iter()
-        .all(|key| left.get(key) == right.get(key)))
-}
-
-pub(crate) fn managed_json_keys_absent(bytes: &[u8], managed_keys: &[String]) -> Result<bool> {
-    let root = parse_json_object(bytes, "json-merge: destination must be a JSON object")?;
-    Ok(managed_keys.iter().all(|key| !root.contains_key(key)))
-}
-
-pub(crate) fn managed_json_payload(
-    source: &[u8],
-    managed_keys: &[String],
-) -> Result<JsonMap<String, JsonValue>> {
-    let source = parse_json_object(source, "json-merge: source must be a JSON object")?;
-    managed_keys
-        .iter()
-        .map(|key| {
-            source
-                .get(key)
-                .cloned()
-                .map(|value| (key.clone(), value))
-                .with_context(|| format!("json-merge: source missing managed key `{key}`"))
-        })
-        .collect()
-}
-
-pub(crate) fn installed_json_hash(bytes: &[u8], managed_keys: &[String]) -> Result<Option<u64>> {
-    let current = parse_json_object(bytes, "json-merge: destination must be a JSON object")?;
-    let managed = managed_keys
-        .iter()
-        .filter_map(|key| current.get(key).cloned().map(|value| (key.clone(), value)))
-        .collect::<JsonMap<_, _>>();
-    if managed.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(hash_content(&serialize_json_object(&managed)?)))
-    }
-}
-
-pub(crate) fn parse_json_object(
-    bytes: &[u8],
-    context: &'static str,
-) -> Result<JsonMap<String, JsonValue>> {
-    let value: JsonValue = serde_json::from_slice(bytes).context(context)?;
-    let JsonValue::Object(object) = value else {
-        bail!("{context}");
-    };
-    Ok(object)
-}
-
-pub(crate) fn serialize_json_object(object: &JsonMap<String, JsonValue>) -> Result<Vec<u8>> {
-    let mut bytes =
-        serde_json::to_vec_pretty(object).context("json-merge: serialization failed")?;
-    if bytes.last() != Some(&b'\n') {
-        bytes.push(b'\n');
-    }
-    Ok(bytes)
-}
-
 impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
-    pub fn validate_app_category_snapshot(&self, category: &str) -> Result<bool> {
+    pub(super) fn validate_app_category_snapshot(&self, category: &str) -> Result<bool> {
         let metadata = format!("app/{category}/shine.toml");
         let has_metadata = self.presets.file(&metadata).is_some();
         let categories = self.app_categories(Some(category))?;
@@ -2073,358 +735,6 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             }
         }
         Ok(has_metadata)
-    }
-
-    pub async fn run_app_generator(
-        &self,
-        request: AppGeneratorRequest,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<Option<Vec<u8>>> {
-        if !self.context.env.contains_key(&request.generator.when_env) {
-            return Ok(None);
-        }
-        if !request.explicit && !request.generator.auto {
-            return Ok(None);
-        }
-        self.ensure_app_code_allowed(&request.category, "generator")?;
-        let logical = format!(
-            "app/{}/{}",
-            request.category,
-            request.generator.script.display()
-        );
-        let mut env = BTreeMap::new();
-        for spec in &request.generator.env {
-            let value = self.context.env.get(&spec.source).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "app '{}' generator requires config env '{}'",
-                    request.category,
-                    spec.source
-                )
-            })?;
-            env.insert(spec.target.clone(), value.clone());
-        }
-        let output = self
-            .run_app_script(
-                &request.category,
-                &logical,
-                request.generator.runtime,
-                ProcessRequest {
-                    env,
-                    timeout: Some(GENERATOR_TIMEOUT),
-                    stdout_limit: Some(GENERATOR_STDOUT_LIMIT),
-                    stderr_limit: Some(GENERATOR_STDERR_LIMIT),
-                    ..ProcessRequest::default()
-                },
-            )
-            .await
-            .with_context(|| format!("running app '{}' generator", request.category))?;
-        if output.exit_code != Some(0) {
-            bail!(generator_failure_message(
-                &request.category,
-                output.exit_code,
-                &output.stderr
-            ));
-        }
-        let content = String::from_utf8(output.stdout)
-            .with_context(|| format!("app '{}' generator output is not UTF-8", request.category))?;
-        let note = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if !note.is_empty() {
-            observer.emit(RuntimeEvent::ProcessOutput {
-                code: "app_generator_note",
-                target: format!("app/{}", request.category),
-                stream: "stderr",
-                text: note,
-            });
-        }
-        Ok(Some(content.into_bytes()))
-    }
-
-    pub async fn run_app_hooks(
-        &self,
-        request: AppHookRequest,
-        observer: &mut impl RuntimeObserver,
-    ) -> AppHookReport {
-        let categories = request
-            .categories
-            .into_iter()
-            .map(|category| (category.name.clone(), category))
-            .collect::<BTreeMap<_, _>>();
-        let mut report = AppHookReport::default();
-        for category_name in request.changed {
-            let Some(category) = categories.get(&category_name) else {
-                continue;
-            };
-            let hooks = match request.phase {
-                AppHookPhase::PostInstall => &category.post_install,
-                AppHookPhase::PostUpgrade => &category.post_upgrade,
-            };
-            if hooks.is_empty() {
-                continue;
-            }
-            let resource = match request.phase {
-                AppHookPhase::PostInstall => "hook:post-install",
-                AppHookPhase::PostUpgrade => "hook:post-upgrade",
-            };
-            if let Err(error) = self.ensure_app_code_allowed(&category_name, resource) {
-                observer.emit(RuntimeEvent::Warning {
-                    code: "app_hook_permission_required",
-                    target: Some(format!("app/{category_name}")),
-                    detail: error.to_string(),
-                });
-                report.outcomes.push(
-                    LifecycleOutcomeV1::new(
-                        format!("app/{category_name}"),
-                        Some(resource),
-                        LifecycleStatus::Skipped,
-                        [],
-                    )
-                    .with_diagnostic_code("app_hook_permission_required"),
-                );
-                continue;
-            }
-            let mut completed = true;
-            let mut notes = Vec::new();
-            for hook in hooks {
-                let mut env: BTreeMap<String, String> = hook
-                    .env
-                    .iter()
-                    .filter_map(|spec| {
-                        self.context
-                            .env
-                            .get(&spec.source)
-                            .map(|value| (spec.target.clone(), value.clone()))
-                    })
-                    .collect();
-                let label = match &hook.action {
-                    AppHookAction::Command(command) => command.clone(),
-                    AppHookAction::Script { script, .. } => script.display().to_string(),
-                };
-                let process = ProcessRequest {
-                    args: hook.args.clone(),
-                    env: std::mem::take(&mut env),
-                    ..ProcessRequest::default()
-                };
-                let output = match &hook.action {
-                    AppHookAction::Command(command) => {
-                        self.host
-                            .run(ProcessRequest {
-                                program: command.clone(),
-                                ..process
-                            })
-                            .await
-                    }
-                    AppHookAction::Script { script, runtime } => {
-                        self.run_app_script(
-                            &category_name,
-                            &format!("app/{}/{}", category_name, script.display()),
-                            *runtime,
-                            process,
-                        )
-                        .await
-                    }
-                };
-                match output {
-                    Ok(output) if output.exit_code == Some(0) => {
-                        if request.show_success && hook.show_output {
-                            let note = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                            if !note.is_empty() {
-                                notes.push(note);
-                            }
-                        }
-                    }
-                    Ok(output) => {
-                        observer.emit(RuntimeEvent::Warning {
-                            code: "app_hook_failed",
-                            target: Some(format!("app/{category_name}")),
-                            detail: format!(
-                                "{} exited with {}{}",
-                                label,
-                                display_exit_code(output.exit_code),
-                                process_detail(&output)
-                            ),
-                        });
-                        completed = false;
-                        break;
-                    }
-                    Err(error) => {
-                        observer.emit(RuntimeEvent::Warning {
-                            code: "app_hook_failed",
-                            target: Some(format!("app/{category_name}")),
-                            detail: format!("{label}: {error}"),
-                        });
-                        completed = false;
-                        break;
-                    }
-                }
-            }
-            if request.show_success && completed {
-                observer.emit(RuntimeEvent::Progress {
-                    code: "app_hook_completed",
-                    target: format!("app/{category_name}"),
-                });
-            }
-            for note in &notes {
-                observer.emit(RuntimeEvent::ProcessOutput {
-                    code: "app_hook_note",
-                    target: format!("app/{category_name}"),
-                    stream: "stdout",
-                    text: note.clone(),
-                });
-            }
-            report.notes.extend(notes);
-            report.outcomes.push(if completed {
-                LifecycleOutcomeV1::new(
-                    format!("app/{category_name}"),
-                    Some(resource),
-                    LifecycleStatus::Changed,
-                    [LifecycleEffect::CodeExecuted],
-                )
-            } else {
-                LifecycleOutcomeV1::new(
-                    format!("app/{category_name}"),
-                    Some(resource),
-                    LifecycleStatus::Failed,
-                    [],
-                )
-                .with_diagnostic_code("app_hook_failed")
-            });
-        }
-        report
-    }
-
-    pub(crate) async fn run_app_artifact(
-        &self,
-        request: AppArtifactRequest,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<LifecycleOutcomeV1> {
-        let (script, resource) = match request.action {
-            AppArtifactAction::Apply => (&request.artifact.script, "artifact:apply"),
-            AppArtifactAction::Remove => (
-                request.artifact.teardown.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "app '{}' does not define an artifact teardown script",
-                        request.category
-                    )
-                })?,
-                "artifact:teardown",
-            ),
-        };
-        if request.dry_run {
-            return Ok(LifecycleOutcomeV1::new(
-                format!("app/{}", request.category),
-                Some(resource),
-                LifecycleStatus::Previewed,
-                [LifecycleEffect::CodeExecutionPreviewed],
-            ));
-        }
-        if request.implicit
-            && let Err(error) = self.ensure_app_code_allowed(&request.category, resource)
-        {
-            observer.emit(RuntimeEvent::Warning {
-                code: "app_artifact_permission_required",
-                target: Some(format!("app/{}", request.category)),
-                detail: error.to_string(),
-            });
-            return Ok(LifecycleOutcomeV1::new(
-                format!("app/{}", request.category),
-                Some(resource),
-                LifecycleStatus::Skipped,
-                [],
-            )
-            .with_diagnostic_code("app_artifact_permission_required"));
-        }
-        if !request.implicit {
-            self.ensure_app_code_allowed(&request.category, resource)?;
-        }
-        let logical = format!("app/{}/{script}", request.category);
-        for directory in [
-            self.context
-                .cache_dir
-                .join("shine")
-                .join("app")
-                .join(&request.category),
-            self.context
-                .shine_dir
-                .join("state")
-                .join("app")
-                .join(&request.category),
-        ] {
-            self.host
-                .create_dir_all(&directory)
-                .await
-                .map_err(|error| error.into_anyhow("creating App artifact directory"))?;
-        }
-        let output = self
-            .run_app_script(
-                &request.category,
-                &logical,
-                request.artifact.runtime,
-                ProcessRequest {
-                    env: request
-                        .artifact
-                        .env
-                        .iter()
-                        .filter_map(|spec| {
-                            self.context
-                                .env
-                                .get(&spec.source)
-                                .map(|value| (spec.target.clone(), value.clone()))
-                        })
-                        .collect(),
-                    io: if request.implicit {
-                        ProcessIo::Captured
-                    } else {
-                        ProcessIo::Inherit
-                    },
-                    ..ProcessRequest::default()
-                },
-            )
-            .await;
-        match output {
-            Ok(output) if output.exit_code == Some(0) => Ok(LifecycleOutcomeV1::new(
-                format!("app/{}", request.category),
-                Some(resource),
-                LifecycleStatus::Changed,
-                [LifecycleEffect::CodeExecuted],
-            )),
-            Ok(output) if request.implicit => {
-                observer.emit(RuntimeEvent::Warning {
-                    code: "app_artifact_teardown_failed",
-                    target: Some(format!("app/{}", request.category)),
-                    detail: format!(
-                        "artifact script exited with {}",
-                        display_exit_code(output.exit_code)
-                    ),
-                });
-                Ok(LifecycleOutcomeV1::new(
-                    format!("app/{}", request.category),
-                    Some(resource),
-                    LifecycleStatus::Failed,
-                    [],
-                )
-                .with_diagnostic_code("app_artifact_teardown_failed"))
-            }
-            Ok(output) => bail!(
-                "artifact script for '{}' exited with {}",
-                request.category,
-                display_exit_code(output.exit_code)
-            ),
-            Err(error) if request.implicit => {
-                observer.emit(RuntimeEvent::Warning {
-                    code: "app_artifact_teardown_failed",
-                    target: Some(format!("app/{}", request.category)),
-                    detail: error.to_string(),
-                });
-                Ok(LifecycleOutcomeV1::new(
-                    format!("app/{}", request.category),
-                    Some(resource),
-                    LifecycleStatus::Failed,
-                    [],
-                )
-                .with_diagnostic_code("app_artifact_teardown_failed"))
-            }
-            Err(error) => Err(error),
-        }
     }
 
     fn ensure_app_code_allowed(&self, category: &str, capability: &str) -> Result<()> {
@@ -2541,13 +851,12 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
 }
 
 impl<H: FileSystemHost> CoreRuntime<H> {
-    pub async fn reconcile_app_cache(
+    pub(in crate::runtime) async fn reconcile_app_cache(
         &self,
         request: AppCacheRequest,
     ) -> Result<LifecycleOutcomeV1> {
         let target = request.prefix.trim_end_matches('/');
         let mut changed = false;
-        let mut receipt_removed = false;
         for (logical, bytes) in
             self.presets.files().iter().filter(|(logical, _)| {
                 *logical == target || logical.starts_with(&format!("{target}/"))
@@ -2602,30 +911,13 @@ impl<H: FileSystemHost> CoreRuntime<H> {
                 Err(error) if error.is_not_found() => {}
                 Err(error) => return Err(error.into_anyhow("inspecting app preset cache root")),
             }
-            if target == "app" {
-                let manifest = self.context.shine_dir.join("app-manifest.toml");
-                match self.host.metadata(&manifest).await {
-                    Ok(_) => {
-                        changed = true;
-                        receipt_removed = true;
-                        if !request.dry_run {
-                            self.host
-                                .remove_file(&manifest)
-                                .await
-                                .map_err(|error| error.into_anyhow("purging App manifest"))?;
-                        }
-                    }
-                    Err(error) if error.is_not_found() => {}
-                    Err(error) => return Err(error.into_anyhow("inspecting App manifest")),
-                }
-            }
         }
         let status = match (request.dry_run, changed) {
             (true, true) => LifecycleStatus::Previewed,
             (false, true) => LifecycleStatus::Changed,
             _ => LifecycleStatus::Unchanged,
         };
-        let mut effects = match (request.purge, request.remove, request.dry_run, changed) {
+        let effects = match (request.purge, request.remove, request.dry_run, changed) {
             (_, _, _, false) => Vec::new(),
             (true, true, true, true) => vec![LifecycleEffect::CacheRemovePreviewed],
             (true, true, false, true) => vec![LifecycleEffect::CachePurged],
@@ -2634,13 +926,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             (_, false, true, true) => vec![LifecycleEffect::CacheWritePreviewed],
             (_, false, false, true) => vec![LifecycleEffect::CacheWritten],
         };
-        if receipt_removed {
-            effects.push(if request.dry_run {
-                LifecycleEffect::ReceiptRemovePreviewed
-            } else {
-                LifecycleEffect::ReceiptRemoved
-            });
-        }
         Ok(LifecycleOutcomeV1::new(
             target.to_string(),
             Some(if request.purge {
@@ -2665,67 +950,8 @@ pub(super) fn generated_file_not_installed_message(category: &str, source: &Path
     )
 }
 
-fn generator_failure_message(category: &str, exit_code: Option<i32>, stderr: &[u8]) -> String {
-    let detail = generator_failure_detail(stderr).unwrap_or_else(|| "details redacted".to_string());
-    format!(
-        "app '{category}' generator exited with {} ({detail})",
-        display_exit_code(exit_code)
-    )
-}
-
-fn generator_failure_detail(stderr: &[u8]) -> Option<String> {
-    const PREFIX: &str = "shine-generator-diagnostic-v1:";
-    let line = std::str::from_utf8(stderr).ok()?;
-    let line = line.strip_suffix('\n').unwrap_or(line);
-    if line.contains(['\n', '\r']) {
-        return None;
-    }
-    let diagnostic = line.strip_prefix(PREFIX)?;
-    let detail = match diagnostic {
-        "missing-input" => "required generator input is missing",
-        "invalid-url" => "configured URL is invalid",
-        "https-required" => "configured URL must use HTTPS",
-        "request-timeout" => "remote request timed out",
-        "request-failed" => "remote request failed before receiving a response",
-        "https-redirect-required" => "remote redirect left HTTPS",
-        "response-too-large" => "remote response exceeded the size limit",
-        "surge-configuration-response" => {
-            "remote server returned a complete Surge configuration; use a URI/Base64 subscription URL"
-        }
-        "no-compatible-nodes" => "response contained no compatible proxy nodes",
-        "invalid-subscription" => "subscription response could not be decoded",
-        "generation-failed" => "generation failed; details redacted",
-        _ => {
-            let status = diagnostic
-                .strip_prefix("http-status:")?
-                .parse::<u16>()
-                .ok()?;
-            if !(100..=599).contains(&status) {
-                return None;
-            }
-            return Some(format!("remote server returned HTTP {status}"));
-        }
-    };
-    Some(detail.to_string())
-}
-
-fn process_detail(output: &crate::runtime::ProcessOutput) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let detail = if stderr.trim().is_empty() {
-        stdout.trim()
-    } else {
-        stderr.trim()
-    };
-    if detail.is_empty() {
-        String::new()
-    } else {
-        format!(": {detail}")
-    }
-}
-
 async fn load_manifest(
-    host: &impl FileSystemHost,
+    host: &impl FileSystemObservationHost,
     shine_dir: &std::path::Path,
 ) -> Result<AppManifest> {
     let path = shine_dir.join("app-manifest.toml");
@@ -2734,14 +960,7 @@ async fn load_manifest(
         Err(error) if error.is_not_found() => AppManifest::default(),
         Err(error) => return Err(error.into_anyhow("failed to read app manifest")),
     };
-    match manifest.schema_version {
-        0 => manifest.schema_version = crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION,
-        crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION => {}
-        version => bail!(
-            "app manifest schema version {version} is newer than this Shine supports ({})",
-            crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION
-        ),
-    }
+    manifest.normalize_schema_version()?;
     Ok(manifest)
 }
 
@@ -2758,6 +977,7 @@ async fn save_manifest(
 
 #[cfg(test)]
 mod lifecycle_tests {
+    use super::generator::{generator_failure_detail, generator_failure_message};
     use super::*;
     use crate::runtime::{
         FileSystemObservationHost, HostOperation, InMemoryHost, NullObserver, PresetSnapshot,
@@ -2840,7 +1060,7 @@ mod lifecycle_tests {
         CoreRuntime::new(InMemoryHost::new(), context, presets)
     }
 
-    struct Interaction;
+    pub(super) struct Interaction;
     impl RuntimeInteraction for Interaction {
         fn confirm(&mut self, _code: &'static str, default: bool) -> Result<bool> {
             Ok(default)
@@ -3019,5 +1239,68 @@ mod lifecycle_tests {
             runtime.host().read(&home_dir.join("other")).await.unwrap(),
             b"other"
         );
+    }
+}
+
+#[cfg(test)]
+mod manifest_reader_tests {
+    use super::*;
+    use crate::runtime::{HostOperation, InMemoryHost};
+
+    #[tokio::test]
+    async fn app_manifest_reader_compatibility() {
+        for &input in crate::install::manifest::APP_MANIFEST_COMPATIBILITY_CASES {
+            let host = InMemoryHost::new();
+            let root = Path::new("/state");
+            let path = root.join("app-manifest.toml");
+            if let Some(input) = input {
+                host.put_file(&path, input.as_bytes().to_vec());
+            }
+            let loaded = load_manifest(&host, root).await;
+            assert_eq!(host.operations(), vec![HostOperation::Read(path.clone())]);
+            match input {
+                Some("schema_version = 2\n") => assert_eq!(
+                    loaded.unwrap_err().to_string(),
+                    "app manifest schema version 2 is newer than this Shine supports (1)"
+                ),
+                Some("schema_version = -1\n" | "[") => {
+                    let error = loaded.unwrap_err();
+                    assert_eq!(error.to_string(), "failed to parse app manifest");
+                    let parse_error = toml::from_str::<AppManifest>(input.unwrap()).unwrap_err();
+                    assert_eq!(error.root_cause().to_string(), parse_error.to_string());
+                }
+                _ => {
+                    let manifest = loaded.unwrap();
+                    assert_eq!(manifest.schema_version, 1);
+                    let parsed: AppManifest = toml::from_str(input.unwrap_or("")).unwrap();
+                    assert_eq!(manifest.entries, parsed.entries);
+                }
+            }
+            assert!(
+                host.operations()
+                    .iter()
+                    .all(|op| matches!(op, HostOperation::Read(_)))
+            );
+            assert_eq!(
+                host.read(&path).await.ok().as_deref(),
+                input.map(str::as_bytes)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn app_manifest_reader_preserves_io_errors() {
+        let host = crate::runtime::RealHost;
+        let root = std::env::temp_dir().join(format!(
+            "shine-manifest-read-error-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = root.join("app-manifest.toml");
+        tokio::fs::create_dir_all(&path).await.unwrap();
+        let error = load_manifest(&host, &root).await.unwrap_err();
+        assert_eq!(error.to_string(), "failed to read app manifest");
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        assert!(path.is_dir());
+        tokio::fs::remove_dir_all(&root).await.unwrap();
     }
 }

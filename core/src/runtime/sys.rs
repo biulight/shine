@@ -1,4 +1,10 @@
+mod inspect;
+mod lifecycle;
+#[cfg(test)]
+mod privileged_tests;
+mod transaction;
 use super::sys_action_executor::SysReceiptTransitionV1;
+use super::sys_manifest::config_string as sys_config_string;
 use crate::action::{
     ActionIrV1, DeclarativeActionV1, ManagedFileCreationWithBackupSpecV1,
     ManagedFileRelocationBackupV1, ManagedFileRelocationSpecV1, ManagedFileRemoveSpecV1,
@@ -114,13 +120,6 @@ pub struct ManagedFileReceipt {
     pub restart_hint: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResourcePlan {
-    pub description: String,
-    pub requires_admin: bool,
-    pub restart_hint: Option<String>,
-}
-
 #[derive(Clone, Debug)]
 pub struct ResourceOutcome {
     pub changed: bool,
@@ -133,25 +132,6 @@ pub struct ResourceOutcome {
 #[derive(Debug)]
 pub struct ResourceConflict {
     message: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct ManagedFileRequest {
-    pub os_id: String,
-    pub item_id: String,
-    pub label: String,
-    pub destination: PathBuf,
-    pub content: Vec<u8>,
-    pub privileged: bool,
-    pub restart_hint: Option<String>,
-    pub dry_run: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct ManagedFileRemoveRequest {
-    pub os_id: String,
-    pub item_id: String,
-    pub dry_run: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -185,7 +165,9 @@ pub struct SysManagedReport {
     pub lifecycle: LifecycleResultV1,
 }
 
-pub fn split_dns_receipt(request: &SplitDnsDomainRequest) -> Result<SplitDnsReceipt> {
+pub(in crate::runtime) fn split_dns_receipt(
+    request: &SplitDnsDomainRequest,
+) -> Result<SplitDnsReceipt> {
     let domain = normalize_dns_domain(&request.domain)?;
     let servers = normalize_dns_servers(&request.servers)?;
     let resource = match request.os_id.as_str() {
@@ -295,14 +277,17 @@ fn split_dns_host_request(receipt: &SplitDnsReceipt) -> SplitDnsRequest {
 }
 
 impl<H: SplitDnsHost + PrivilegedFileSystemHost> CoreRuntime<H> {
-    pub async fn split_dns_up_to_date(&self, request: &SplitDnsDomainRequest) -> Result<bool> {
+    pub(in crate::runtime) async fn split_dns_up_to_date(
+        &self,
+        request: &SplitDnsDomainRequest,
+    ) -> Result<bool> {
         let desired = split_dns_receipt(request)?;
         let host_request = split_dns_host_request(&desired);
         let state = self.host.inspect_split_dns(&host_request).await?;
         Ok(split_dns_state_matches(&state, &host_request))
     }
 
-    pub async fn apply_split_dns(
+    pub(in crate::runtime) async fn apply_split_dns(
         &self,
         request: SplitDnsDomainRequest,
         previous: Option<&SystemReceipt>,
@@ -356,7 +341,7 @@ impl<H: SplitDnsHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         })
     }
 
-    pub async fn remove_split_dns(
+    pub(in crate::runtime) async fn remove_split_dns(
         &self,
         receipt: &SplitDnsReceipt,
         dry_run: bool,
@@ -365,7 +350,7 @@ impl<H: SplitDnsHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     }
 }
 
-pub async fn remove_split_dns_with_host(
+async fn remove_split_dns_with_host(
     host: &(impl SplitDnsHost + PrivilegedFileSystemHost),
     receipt: &SplitDnsReceipt,
     dry_run: bool,
@@ -457,614 +442,8 @@ impl<H> CoreRuntime<H>
 where
     H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost,
 {
-    pub async fn installed_managed_sys(&self, os_id: &str) -> Result<Vec<SysInstalledRow>> {
-        let manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
-        let mut rows = manifest
-            .entries
-            .into_iter()
-            .filter(|entry| entry.os_id == os_id && entry.managed)
-            .map(|entry| SysInstalledRow {
-                item_id: entry.item_id,
-                label: entry.label,
-            })
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| {
-            left.label
-                .cmp(&right.label)
-                .then_with(|| left.item_id.cmp(&right.item_id))
-        });
-        Ok(rows)
-    }
-
-    /// Inspect recorded managed resources against the same desired-state
-    /// assessment used by mutation, without executing a host operation.
-    pub async fn inspect_managed_sys(
-        &self,
-        os_id: &str,
-    ) -> Result<(Vec<SysInstalledRow>, Vec<SysUpdateRow>, LifecycleResultV1)> {
-        let manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
-        let recorded = manifest
-            .entries
-            .iter()
-            .filter(|entry| entry.os_id == os_id && entry.managed)
-            .collect::<Vec<_>>();
-        let mut installed = recorded
-            .iter()
-            .map(|entry| SysInstalledRow {
-                item_id: entry.item_id.clone(),
-                label: entry.label.clone(),
-            })
-            .collect::<Vec<_>>();
-        installed.sort_by(|left, right| {
-            left.label
-                .cmp(&right.label)
-                .then_with(|| left.item_id.cmp(&right.item_id))
-        });
-        let mut lifecycle = LifecycleResultV1::new(LifecycleOperation::Update, false);
-        if recorded.is_empty() {
-            return Ok((installed, Vec::new(), lifecycle));
-        }
-        let loaded = self.load_sys_preset(os_id).await?;
-        let mut updates = Vec::new();
-        for entry in recorded {
-            let Some(item) = loaded.manifest.items.iter().find(|item| {
-                item.id == entry.item_id
-                    && item.mode == SysItemMode::Managed
-                    && item.driver != SysDriverKind::Script
-            }) else {
-                lifecycle.push(
-                    LifecycleOutcomeV1::new(
-                        format!("sys/{}", entry.item_id),
-                        None::<String>,
-                        LifecycleStatus::Skipped,
-                        [],
-                    )
-                    .with_diagnostic_code("sys_managed_item_unavailable"),
-                );
-                continue;
-            };
-            let details = self.managed_update_details(os_id, item, entry.receipt.as_ref())?;
-            if details.is_empty() {
-                lifecycle.push(LifecycleOutcomeV1::new(
-                    format!("sys/{}", item.id),
-                    None::<String>,
-                    LifecycleStatus::Unchanged,
-                    [],
-                ));
-            } else {
-                lifecycle.push(LifecycleOutcomeV1::new(
-                    format!("sys/{}", item.id),
-                    None::<String>,
-                    LifecycleStatus::Pending,
-                    [
-                        LifecycleEffect::ResourceWritePreviewed,
-                        LifecycleEffect::ReceiptWritePreviewed,
-                    ],
-                ));
-                updates.push(SysUpdateRow {
-                    item_id: item.id.clone(),
-                    label: item.label.clone(),
-                    details,
-                });
-            }
-        }
-        Ok((installed, updates, lifecycle))
-    }
-
-    fn managed_update_details(
-        &self,
-        os_id: &str,
-        item: &SysItem,
-        previous: Option<&SystemReceipt>,
-    ) -> Result<Vec<String>> {
-        match item.driver {
-            SysDriverKind::SplitDns => {
-                let desired = split_dns_receipt(&self.split_dns_item_request(os_id, item, true)?)?;
-                let Some(SystemReceipt::SplitDns(previous)) = previous else {
-                    return Ok(vec![
-                        "Receipt: missing or incompatible -> desired split DNS state".to_string(),
-                    ]);
-                };
-                let mut details = Vec::new();
-                if previous.domain != desired.domain {
-                    details.push(format!("Domain: {} -> {}", previous.domain, desired.domain));
-                }
-                if previous.servers != desired.servers {
-                    details.push(format!(
-                        "Servers: {} -> {}",
-                        previous.servers.join(", "),
-                        desired.servers.join(", ")
-                    ));
-                }
-                if previous.resource != desired.resource || previous.os_id != desired.os_id {
-                    details.push(format!(
-                        "Resource: {} -> {}",
-                        previous.resource, desired.resource
-                    ));
-                }
-                if previous.item_id != desired.item_id {
-                    details.push(format!("Item: {} -> {}", previous.item_id, desired.item_id));
-                }
-                Ok(details)
-            }
-            SysDriverKind::ManagedFile => {
-                let desired = self.managed_file_desired(os_id, item)?;
-                let Some(SystemReceipt::ManagedFile(previous)) = previous else {
-                    return Ok(vec![
-                        "Receipt: missing or incompatible -> desired managed file state"
-                            .to_string(),
-                    ]);
-                };
-                let mut details = Vec::new();
-                if previous.destination != desired.destination {
-                    details.push("Destination: changed".to_string());
-                }
-                if previous.content_hash != hash_content(&desired.content) {
-                    details.push("Content: changed".to_string());
-                }
-                Ok(details)
-            }
-            SysDriverKind::Script => Ok(Vec::new()),
-        }
-    }
-
     /// Core-owned managed Sys lifecycle. Selection and receipt assessment are
     /// performed once and reused for authorization, mutation and reporting.
-    pub(crate) async fn run_managed_sys(
-        &self,
-        request: SysManagedRequest,
-        interaction: &mut impl RuntimeInteraction,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<SysManagedReport> {
-        self.run_managed_sys_with_approval(request, interaction, observer, None)
-            .await
-    }
-
-    pub(crate) async fn run_managed_sys_with_approval(
-        &self,
-        request: SysManagedRequest,
-        interaction: &mut impl RuntimeInteraction,
-        observer: &mut impl RuntimeObserver,
-        approval: Option<(&crate::plan::PlanV1, &crate::plan::PlanApprovalV1)>,
-    ) -> Result<SysManagedReport> {
-        let mut manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
-        let loaded = self.load_sys_preset(&request.os_id).await;
-        let available = loaded.as_ref().ok().map(|loaded| &loaded.manifest.items);
-        let enabled = manifest
-            .entries
-            .iter()
-            .filter(|entry| entry.os_id == request.os_id && entry.managed)
-            .map(|entry| entry.item_id.clone())
-            .collect::<BTreeSet<_>>();
-        let selected = if let Some(target) = &request.target {
-            if let Some(item) =
-                available.and_then(|items| items.iter().find(|item| item.id == *target))
-            {
-                if item.mode != SysItemMode::Managed {
-                    bail!("sys item `{target}` is not managed and cannot be reapplied");
-                }
-                vec![item.clone()]
-            } else if request.action == SysManagedAction::Remove
-                && manifest.entries.iter().any(|entry| {
-                    entry.os_id == request.os_id
-                        && entry.item_id == *target
-                        && entry.receipt.is_some()
-                })
-            {
-                Vec::new()
-            } else {
-                bail!("unknown sys item `{target}`");
-            }
-        } else {
-            available
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter(|item| {
-                            item.mode == SysItemMode::Managed && enabled.contains(&item.id)
-                        })
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        let lifecycle = LifecycleResultV1::new(request.operation, request.dry_run);
-        let mut report = SysManagedReport {
-            items: Vec::new(),
-            summary: SysUpgradeReport::default(),
-            lifecycle,
-        };
-
-        // Recorded built-in resources remain removable without their original preset.
-        if selected.is_empty()
-            && request.action == SysManagedAction::Remove
-            && let Some(target) = &request.target
-            && let Some(entry) = manifest
-                .entries
-                .iter()
-                .find(|entry| entry.os_id == request.os_id && entry.item_id == *target)
-                .cloned()
-            && let Some(receipt) = entry.receipt.clone()
-        {
-            observer.emit(RuntimeEvent::Progress {
-                code: "sys_managed_item",
-                target: target.clone(),
-            });
-            if receipt.requires_admin()
-                && !request.dry_run
-                && !self.context.running_as_admin
-                && !interaction.authorize_admin(1).await?
-            {
-                report.summary.failed = 1;
-                report.lifecycle.push(
-                    LifecycleOutcomeV1::new(
-                        format!("sys/{target}"),
-                        None::<String>,
-                        LifecycleStatus::Failed,
-                        [],
-                    )
-                    .with_diagnostic_code("sys_admin_not_authorized"),
-                );
-                return Ok(report);
-            }
-            let (outcome, execution) = if let Some((plan, approval)) = approval {
-                match self.prepare_sys_removal_transaction(&entry).await {
-                    Ok(Some(prepared)) => {
-                        let execution = self
-                            .execute_sys_action_approved(
-                                plan,
-                                approval,
-                                prepared.action_ir,
-                                prepared.receipt,
-                                prepared.desired_content.as_deref(),
-                            )
-                            .await?;
-                        (Ok(prepared.outcome), Some(execution))
-                    }
-                    Ok(None) => (self.remove_system_receipt(&receipt, false).await, None),
-                    Err(error) => (Err(error), None),
-                }
-            } else {
-                (
-                    self.remove_system_receipt(&receipt, request.dry_run).await,
-                    None,
-                )
-            };
-            self.record_managed_resource_result(
-                &request,
-                None,
-                &entry.label,
-                outcome,
-                &mut manifest,
-                &mut report,
-            )
-            .await?;
-            if let Some(execution) = execution {
-                self.commit_sys_operation(&execution).await?;
-            }
-            return Ok(report);
-        }
-        if selected.is_empty() {
-            return Ok(report);
-        }
-
-        let mut missing = BTreeMap::<String, Vec<String>>::new();
-        for item in &selected {
-            let keys = item
-                .required_env
-                .iter()
-                .filter(|key| {
-                    self.context
-                        .env
-                        .get(*key)
-                        .is_none_or(|value| value.trim().is_empty())
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            if !keys.is_empty() {
-                missing.insert(item.id.clone(), keys);
-            }
-        }
-        let mut needs_admin = 0usize;
-        if !request.dry_run {
-            for item in &selected {
-                if missing.contains_key(&item.id) {
-                    continue;
-                }
-                let previous = manifest
-                    .entries
-                    .iter()
-                    .find(|entry| entry.os_id == request.os_id && entry.item_id == item.id)
-                    .and_then(|entry| entry.receipt.as_ref());
-                let changes = match request.action {
-                    SysManagedAction::Apply => !self
-                        .sys_managed_up_to_date(&request.os_id, item, previous)
-                        .await
-                        .unwrap_or(false),
-                    SysManagedAction::Remove => previous.is_some(),
-                };
-                if changes
-                    && (item.requires_admin || previous.is_some_and(SystemReceipt::requires_admin))
-                {
-                    needs_admin += 1;
-                }
-            }
-        }
-        if needs_admin > 0 {
-            for item in &selected {
-                observer.emit(RuntimeEvent::Progress {
-                    code: "sys_managed_item",
-                    target: item.label.clone(),
-                });
-            }
-        }
-        if needs_admin > 0
-            && !self.context.running_as_admin
-            && !interaction.authorize_admin(needs_admin).await?
-        {
-            for item in &selected {
-                report.lifecycle.push(
-                    LifecycleOutcomeV1::new(
-                        format!("sys/{}", item.id),
-                        None::<String>,
-                        LifecycleStatus::Failed,
-                        [],
-                    )
-                    .with_diagnostic_code("sys_admin_not_authorized"),
-                );
-            }
-            report.summary.failed = selected.len();
-            return Ok(report);
-        }
-
-        for item in &selected {
-            if needs_admin == 0 {
-                observer.emit(RuntimeEvent::Progress {
-                    code: "sys_managed_item",
-                    target: item.label.clone(),
-                });
-            }
-            if let Some(keys) = missing.get(&item.id) {
-                let outcome = SysItemOutcome {
-                    item_id: item.id.clone(),
-                    label: item.label.clone(),
-                    status: SysItemStatus::Failed,
-                    detail: format!("missing environment variable(s): {}", keys.join(", ")),
-                    logs: Vec::new(),
-                };
-                report.items.push(outcome);
-                report.summary.failed += 1;
-                report.lifecycle.push(
-                    LifecycleOutcomeV1::new(
-                        format!("sys/{}", item.id),
-                        None::<String>,
-                        LifecycleStatus::Failed,
-                        [],
-                    )
-                    .with_diagnostic_code("sys_missing_required_env"),
-                );
-                continue;
-            }
-            let previous = manifest
-                .entries
-                .iter()
-                .find(|entry| entry.os_id == request.os_id && entry.item_id == item.id)
-                .and_then(|entry| entry.receipt.as_ref())
-                .cloned();
-            let previous_entry = manifest
-                .entries
-                .iter()
-                .find(|entry| entry.os_id == request.os_id && entry.item_id == item.id)
-                .cloned();
-            let (resource, execution) = if let Some((plan, approval)) = approval {
-                let prepared = match request.action {
-                    SysManagedAction::Apply => {
-                        self.prepare_sys_apply_transaction(
-                            &request.os_id,
-                            item,
-                            previous_entry.as_ref(),
-                        )
-                        .await
-                    }
-                    SysManagedAction::Remove => match previous_entry.as_ref() {
-                        Some(entry) => self.prepare_sys_removal_transaction(entry).await,
-                        None => Err(anyhow::anyhow!(
-                            "managed item `{}` has no receipt to remove",
-                            item.id
-                        )),
-                    },
-                };
-                match prepared {
-                    Ok(Some(prepared)) => {
-                        let execution = self
-                            .execute_sys_action_approved(
-                                plan,
-                                approval,
-                                prepared.action_ir,
-                                prepared.receipt,
-                                prepared.desired_content.as_deref(),
-                            )
-                            .await?;
-                        (Ok(prepared.outcome), Some(execution))
-                    }
-                    Ok(None) => {
-                        let unchanged = match request.action {
-                            SysManagedAction::Apply => {
-                                self.apply_system_item(
-                                    &request.os_id,
-                                    item,
-                                    previous.as_ref(),
-                                    request.dry_run,
-                                )
-                                .await
-                            }
-                            SysManagedAction::Remove => match previous.as_ref() {
-                                Some(receipt) => self.remove_system_receipt(receipt, false).await,
-                                None => Err(anyhow::anyhow!(
-                                    "managed item `{}` has no receipt to remove",
-                                    item.id
-                                )),
-                            },
-                        };
-                        (unchanged, None)
-                    }
-                    Err(error) => (Err(error), None),
-                }
-            } else {
-                let resource = match request.action {
-                    SysManagedAction::Apply => {
-                        self.apply_system_item(
-                            &request.os_id,
-                            item,
-                            previous.as_ref(),
-                            request.dry_run,
-                        )
-                        .await
-                    }
-                    SysManagedAction::Remove => match previous.as_ref() {
-                        Some(receipt) => self.remove_system_receipt(receipt, request.dry_run).await,
-                        None => Err(anyhow::anyhow!(
-                            "managed item `{}` has no receipt to remove",
-                            item.id
-                        )),
-                    },
-                };
-                (resource, None)
-            };
-            self.record_managed_resource_result(
-                &request,
-                Some(item),
-                &item.label,
-                resource,
-                &mut manifest,
-                &mut report,
-            )
-            .await?;
-            if let Some(execution) = execution {
-                self.commit_sys_operation(&execution).await?;
-            }
-        }
-        Ok(report)
-    }
-
-    async fn record_managed_resource_result(
-        &self,
-        request: &SysManagedRequest,
-        item: Option<&SysItem>,
-        label: &str,
-        resource: Result<ResourceOutcome>,
-        manifest: &mut SysRunManifest,
-        report: &mut SysManagedReport,
-    ) -> Result<()> {
-        let item_id = item
-            .map(|item| item.id.as_str())
-            .or(request.target.as_deref())
-            .context("managed Sys item id")?;
-        match resource {
-            Ok(resource) => {
-                let mut effects = resource.effects.clone();
-                let status = if request.dry_run {
-                    LifecycleStatus::Previewed
-                } else if resource.changed {
-                    LifecycleStatus::Changed
-                } else {
-                    LifecycleStatus::Unchanged
-                };
-                if request.action == SysManagedAction::Remove {
-                    effects.push(if request.dry_run {
-                        LifecycleEffect::ReceiptRemovePreviewed
-                    } else {
-                        LifecycleEffect::ReceiptRemoved
-                    });
-                } else if resource.changed {
-                    effects.push(if request.dry_run {
-                        LifecycleEffect::ReceiptWritePreviewed
-                    } else {
-                        LifecycleEffect::ReceiptWritten
-                    });
-                }
-                report.lifecycle.push(LifecycleOutcomeV1::new(
-                    format!("sys/{item_id}"),
-                    None::<String>,
-                    status,
-                    effects,
-                ));
-                let item_status = if resource.changed {
-                    SysItemStatus::Updated
-                } else {
-                    SysItemStatus::AlreadyInstalled
-                };
-                report.items.push(SysItemOutcome {
-                    item_id: item_id.to_string(),
-                    label: label.to_string(),
-                    status: item_status,
-                    detail: resource.detail.clone(),
-                    logs: Vec::new(),
-                });
-                if resource.changed && !request.dry_run {
-                    report.summary.updated += 1;
-                } else {
-                    report.summary.skipped += 1;
-                }
-                if !request.dry_run {
-                    if request.action == SysManagedAction::Remove {
-                        manifest.entries.retain(|entry| {
-                            !(entry.os_id == request.os_id && entry.item_id == item_id)
-                        });
-                    } else if resource.changed {
-                        manifest.upsert(SysRunEntry {
-                            os_id: request.os_id.clone(),
-                            item_id: item_id.to_string(),
-                            label: label.to_string(),
-                            status: item_status,
-                            detail: resource.detail,
-                            updated_at: self.context.captured_unix_time.to_string(),
-                            managed: true,
-                            profile_enabled: false,
-                            receipt: resource.receipt,
-                        });
-                    }
-                    save_manifest_with_host(&self.host, &self.context.shine_dir, manifest).await?;
-                }
-            }
-            Err(error) => {
-                let user_modified = error.downcast_ref::<ResourceConflict>().is_some();
-                report.items.push(SysItemOutcome {
-                    item_id: item_id.to_string(),
-                    label: label.to_string(),
-                    status: SysItemStatus::Failed,
-                    detail: format!("{error:#}"),
-                    logs: Vec::new(),
-                });
-                report.summary.failed += 1;
-                report.lifecycle.push(
-                    LifecycleOutcomeV1::new(
-                        format!("sys/{item_id}"),
-                        None::<String>,
-                        if user_modified {
-                            LifecycleStatus::Preserved
-                        } else {
-                            LifecycleStatus::Failed
-                        },
-                        if user_modified {
-                            vec![LifecycleEffect::UserResourcePreserved]
-                        } else {
-                            Vec::new()
-                        },
-                    )
-                    .with_diagnostic_code(if user_modified {
-                        "sys_resource_user_modified"
-                    } else if request.action == SysManagedAction::Remove {
-                        "sys_remove_failed"
-                    } else {
-                        "sys_apply_failed"
-                    }),
-                );
-            }
-        }
-        Ok(())
-    }
-
     async fn sys_managed_up_to_date(
         &self,
         os_id: &str,
@@ -1093,409 +472,6 @@ where
             }
             SysDriverKind::Script => Ok(false),
         }
-    }
-
-    async fn prepare_sys_apply_transaction(
-        &self,
-        os_id: &str,
-        item: &SysItem,
-        previous_entry: Option<&SysRunEntry>,
-    ) -> Result<Option<PreparedSysTransaction>> {
-        let previous_receipt = previous_entry.and_then(|entry| entry.receipt.as_ref());
-        let target = format!("sys/{}", item.id);
-        match item.driver {
-            SysDriverKind::ManagedFile => {
-                let desired = self.managed_file_desired(os_id, item)?;
-                let desired_hash = hash_content(&desired.content);
-                let previous = match previous_receipt {
-                    Some(SystemReceipt::ManagedFile(receipt)) => Some(receipt),
-                    Some(other) => bail!("managed-file received {:?} receipt", other.driver()),
-                    None => None,
-                };
-                let desired_receipt = ManagedFileReceipt {
-                    version: RECEIPT_VERSION,
-                    destination: desired.destination.clone(),
-                    backup: previous
-                        .filter(|receipt| receipt.destination == desired.destination)
-                        .and_then(|receipt| receipt.backup.clone()),
-                    content_hash: desired_hash,
-                    privileged: item.requires_admin,
-                    restart_hint: desired.restart_hint.clone(),
-                };
-                let action_identity = format!("{os_id}:{}:{desired_hash}", item.id);
-                let action = if let Some(previous) = previous {
-                    let current = read_regular_sys_file(
-                        &self.host,
-                        &previous.destination,
-                        "reading managed Sys source",
-                    )
-                    .await?;
-                    let Some((current, mode)) = current else {
-                        bail!(
-                            "managed Sys file {} is missing; uninstall it before reapplying",
-                            previous.destination.display()
-                        );
-                    };
-                    if hash_content(&current) != previous.content_hash {
-                        return Err(ResourceConflict::user_modified(format!(
-                            "managed file {} was modified; keeping user content",
-                            previous.destination.display()
-                        ))
-                        .into());
-                    }
-                    if previous.destination == desired.destination {
-                        if current == desired.content
-                            && previous.content_hash == desired_hash
-                            && previous.privileged == item.requires_admin
-                        {
-                            return Ok(None);
-                        }
-                        DeclarativeActionV1::update_managed_file(
-                            format!("update:{action_identity}"),
-                            &target,
-                            desired.destination.display().to_string(),
-                            ManagedFileUpdateSpecV1 {
-                                destination: desired.destination.clone(),
-                                previous_backup: previous.backup.clone(),
-                                original_mode: mode,
-                                original_hash: previous.content_hash,
-                                desired_hash,
-                                requires_admin: item.requires_admin,
-                            },
-                        )
-                    } else {
-                        if self.host.metadata(&desired.destination).await.is_ok() {
-                            bail!(
-                                "managed Sys relocation destination {} must be absent",
-                                desired.destination.display()
-                            );
-                        }
-                        let previous_backup = match &previous.backup {
-                            Some(path) => {
-                                let (bytes, backup_mode) = read_regular_sys_file(
-                                    &self.host,
-                                    path,
-                                    "reading managed Sys persistent backup",
-                                )
-                                .await?
-                                .with_context(|| {
-                                    format!("managed Sys backup {} is missing", path.display())
-                                })?;
-                                Some(ManagedFileRelocationBackupV1 {
-                                    path: path.clone(),
-                                    mode: backup_mode,
-                                    hash: hash_content(&bytes),
-                                })
-                            }
-                            None => None,
-                        };
-                        DeclarativeActionV1::relocate_managed_file(
-                            format!("relocate:{action_identity}"),
-                            &target,
-                            desired.destination.display().to_string(),
-                            ManagedFileRelocationSpecV1 {
-                                previous_destination: previous.destination.clone(),
-                                previous_backup,
-                                desired_destination: desired.destination.clone(),
-                                previous_present: true,
-                                previous_mode: mode,
-                                previous_hash: previous.content_hash,
-                                desired_hash,
-                                previous_uses_env: false,
-                                desired_uses_env: false,
-                                previous_requires_admin: previous.privileged,
-                                desired_requires_admin: item.requires_admin,
-                            },
-                        )
-                    }
-                } else {
-                    match read_regular_sys_file(
-                        &self.host,
-                        &desired.destination,
-                        "reading managed Sys destination",
-                    )
-                    .await?
-                    {
-                        None => DeclarativeActionV1::create_managed_file(
-                            format!("create:{action_identity}"),
-                            &target,
-                            desired.destination.display().to_string(),
-                            desired.destination.clone(),
-                            desired_hash,
-                            item.requires_admin,
-                        ),
-                        Some((original, _)) => {
-                            let backup = crate::install::backup_path(&desired.destination);
-                            if self.host.metadata(&backup).await.is_ok() {
-                                bail!(
-                                    "managed Sys backup path {} is already occupied",
-                                    backup.display()
-                                );
-                            }
-                            DeclarativeActionV1::create_managed_file_with_backup(
-                                format!("create-with-backup:{action_identity}"),
-                                &target,
-                                desired.destination.display().to_string(),
-                                ManagedFileCreationWithBackupSpecV1 {
-                                    destination: desired.destination.clone(),
-                                    backup: backup.clone(),
-                                    original_hash: hash_content(&original),
-                                    desired_hash,
-                                    requires_admin: item.requires_admin,
-                                },
-                            )
-                        }
-                    }
-                };
-                let creates_backup = matches!(
-                    &action.kind,
-                    crate::action::ActionKindV1::CreateManagedFileWithBackup { .. }
-                );
-                let backup = match &action.kind {
-                    crate::action::ActionKindV1::CreateManagedFileWithBackup { backup, .. } => {
-                        Some(backup.clone())
-                    }
-                    _ => desired_receipt.backup.clone(),
-                };
-                let desired_entry = SysRunEntry {
-                    os_id: os_id.to_string(),
-                    item_id: item.id.clone(),
-                    label: item.label.clone(),
-                    status: SysItemStatus::Updated,
-                    detail: desired.destination.display().to_string(),
-                    updated_at: self.context.captured_unix_time.to_string(),
-                    managed: true,
-                    profile_enabled: false,
-                    receipt: Some(SystemReceipt::ManagedFile(ManagedFileReceipt {
-                        backup,
-                        ..desired_receipt
-                    })),
-                };
-                let outcome_receipt = desired_entry.receipt.clone();
-                Ok(Some(PreparedSysTransaction {
-                    action_ir: ActionIrV1::new(
-                        format!("sys:{}:{action_identity}", self.context.captured_unix_time),
-                        vec![action],
-                    ),
-                    receipt: SysReceiptTransitionV1 {
-                        previous: previous_entry.cloned().map(Box::new),
-                        desired: Some(Box::new(desired_entry)),
-                    },
-                    desired_content: Some(desired.content),
-                    outcome: ResourceOutcome {
-                        changed: true,
-                        effects: if creates_backup {
-                            vec![
-                                LifecycleEffect::BackupCreated,
-                                LifecycleEffect::ResourceWritten,
-                            ]
-                        } else {
-                            vec![LifecycleEffect::ResourceWritten]
-                        },
-                        detail: desired.destination.display().to_string(),
-                        receipt: outcome_receipt,
-                        restart_hint: desired.restart_hint,
-                    },
-                }))
-            }
-            SysDriverKind::SplitDns => {
-                let mut desired =
-                    split_dns_receipt(&self.split_dns_item_request(os_id, item, false)?)?;
-                let desired_request = split_dns_host_request(&desired);
-                let state = self.host.inspect_split_dns(&desired_request).await?;
-                if state.exists && !split_dns_owned(&state, &desired) {
-                    bail!(
-                        "split DNS destination {} exists but is not owned by shine",
-                        desired.resource
-                    );
-                }
-                desired.content_hash = Some(hash_content(&desired_request.content));
-                if previous_receipt.is_some_and(|receipt| {
-                    matches!(receipt, SystemReceipt::SplitDns(previous) if previous == &desired)
-                }) && split_dns_state_matches(&state, &desired_request)
-                {
-                    return Ok(None);
-                }
-                let previous = match previous_receipt {
-                    Some(SystemReceipt::SplitDns(receipt)) => {
-                        Some(split_dns_action_state(receipt)?)
-                    }
-                    Some(other) => bail!("split-dns received {:?} receipt", other.driver()),
-                    None => None,
-                };
-                let desired_state = split_dns_action_state(&desired)?;
-                let desired_entry = SysRunEntry {
-                    os_id: os_id.to_string(),
-                    item_id: item.id.clone(),
-                    label: item.label.clone(),
-                    status: SysItemStatus::Updated,
-                    detail: format!("{} -> {}", desired.domain, desired.servers.join(", ")),
-                    updated_at: self.context.captured_unix_time.to_string(),
-                    managed: true,
-                    profile_enabled: false,
-                    receipt: Some(SystemReceipt::SplitDns(desired.clone())),
-                };
-                let outcome_receipt = desired_entry.receipt.clone();
-                let action = DeclarativeActionV1::reconcile_sys_split_dns(
-                    format!("split-dns:{os_id}:{}", item.id),
-                    &target,
-                    desired.resource.clone(),
-                    previous,
-                    Some(desired_state),
-                );
-                Ok(Some(PreparedSysTransaction {
-                    action_ir: ActionIrV1::new(
-                        format!(
-                            "sys:{}:{os_id}:{}",
-                            self.context.captured_unix_time, item.id
-                        ),
-                        vec![action],
-                    ),
-                    receipt: SysReceiptTransitionV1 {
-                        previous: previous_entry.cloned().map(Box::new),
-                        desired: Some(Box::new(desired_entry)),
-                    },
-                    desired_content: None,
-                    outcome: ResourceOutcome {
-                        changed: true,
-                        effects: vec![LifecycleEffect::ResourceWritten],
-                        detail: format!("{} -> {}", desired.domain, desired.servers.join(", ")),
-                        receipt: outcome_receipt,
-                        restart_hint: None,
-                    },
-                }))
-            }
-            SysDriverKind::Script => bail!("script is not a built-in system resource driver"),
-        }
-    }
-
-    async fn prepare_sys_removal_transaction(
-        &self,
-        previous_entry: &SysRunEntry,
-    ) -> Result<Option<PreparedSysTransaction>> {
-        let receipt = previous_entry
-            .receipt
-            .as_ref()
-            .context("managed Sys removal requires a receipt")?;
-        let target = format!("sys/{}", previous_entry.item_id);
-        let (action, effects, detail) = match receipt {
-            SystemReceipt::ManagedFile(receipt) => {
-                let Some((current, mode)) = read_regular_sys_file(
-                    &self.host,
-                    &receipt.destination,
-                    "reading managed Sys removal destination",
-                )
-                .await?
-                else {
-                    return Ok(None);
-                };
-                if hash_content(&current) != receipt.content_hash {
-                    return Err(ResourceConflict::user_modified(format!(
-                        "managed file {} was modified; keeping user content",
-                        receipt.destination.display()
-                    ))
-                    .into());
-                }
-                let action = if let Some(backup) = &receipt.backup {
-                    let (backup_bytes, backup_mode) = read_regular_sys_file(
-                        &self.host,
-                        backup,
-                        "reading managed Sys persistent backup",
-                    )
-                    .await?
-                    .with_context(|| {
-                        format!("managed Sys backup {} is missing", backup.display())
-                    })?;
-                    DeclarativeActionV1::remove_managed_file_with_backup(
-                        format!("remove-with-backup:{}", previous_entry.item_id),
-                        &target,
-                        receipt.destination.display().to_string(),
-                        ManagedFileRemoveWithBackupSpecV1 {
-                            destination: receipt.destination.clone(),
-                            backup: backup.clone(),
-                            managed_mode: mode,
-                            managed_hash: receipt.content_hash,
-                            backup_mode,
-                            backup_hash: hash_content(&backup_bytes),
-                            uses_env: false,
-                            requires_admin: receipt.privileged,
-                        },
-                    )
-                } else {
-                    DeclarativeActionV1::remove_managed_file(
-                        format!("remove:{}", previous_entry.item_id),
-                        &target,
-                        receipt.destination.display().to_string(),
-                        ManagedFileRemoveSpecV1 {
-                            destination: receipt.destination.clone(),
-                            original_mode: mode,
-                            original_hash: receipt.content_hash,
-                            uses_env: false,
-                            requires_admin: receipt.privileged,
-                        },
-                    )
-                };
-                let effects = if receipt.backup.is_some() {
-                    vec![LifecycleEffect::BackupRestored]
-                } else {
-                    vec![LifecycleEffect::ResourceRemoved]
-                };
-                (action, effects, receipt.destination.display().to_string())
-            }
-            SystemReceipt::SplitDns(receipt) => {
-                let state = split_dns_action_state(receipt)?;
-                let request = split_dns_host_request(receipt);
-                let current = self.host.inspect_split_dns(&request).await?;
-                if !current.exists {
-                    return Ok(None);
-                }
-                if !split_dns_owned(&current, receipt) {
-                    return Err(ResourceConflict::user_modified(format!(
-                        "split DNS resource {} was modified; keeping user content",
-                        receipt.resource
-                    ))
-                    .into());
-                }
-                (
-                    DeclarativeActionV1::reconcile_sys_split_dns(
-                        format!("remove-split-dns:{}", previous_entry.item_id),
-                        &target,
-                        receipt.resource.clone(),
-                        Some(state),
-                        None,
-                    ),
-                    vec![LifecycleEffect::ResourceRemoved],
-                    format!("remove split DNS for {}", receipt.domain),
-                )
-            }
-            SystemReceipt::Script { .. } => {
-                bail!("script receipt is not a managed system resource")
-            }
-        };
-        Ok(Some(PreparedSysTransaction {
-            action_ir: ActionIrV1::new(
-                format!(
-                    "sys-remove:{}:{}:{}",
-                    self.context.captured_unix_time, previous_entry.os_id, previous_entry.item_id
-                ),
-                vec![action],
-            ),
-            receipt: SysReceiptTransitionV1 {
-                previous: Some(Box::new(previous_entry.clone())),
-                desired: None,
-            },
-            desired_content: None,
-            outcome: ResourceOutcome {
-                changed: true,
-                effects,
-                detail,
-                receipt: None,
-                restart_hint: match receipt {
-                    SystemReceipt::ManagedFile(receipt) => receipt.restart_hint.clone(),
-                    _ => None,
-                },
-            },
-        }))
     }
 
     async fn apply_system_item(
@@ -1533,80 +509,6 @@ where
                 bail!("script receipt is not a managed system resource")
             }
         }
-    }
-
-    fn split_dns_item_request(
-        &self,
-        os_id: &str,
-        item: &SysItem,
-        dry_run: bool,
-    ) -> Result<SplitDnsDomainRequest> {
-        let domain_key = sys_config_string(&item.config, "domain_env")?;
-        let servers_key = sys_config_string(&item.config, "servers_env")?;
-        Ok(SplitDnsDomainRequest {
-            os_id: os_id.to_string(),
-            item_id: item.id.clone(),
-            domain: self
-                .context
-                .env
-                .get(&domain_key)
-                .cloned()
-                .with_context(|| format!("missing environment variable `{domain_key}`"))?,
-            servers: self
-                .context
-                .env
-                .get(&servers_key)
-                .cloned()
-                .with_context(|| format!("missing environment variable `{servers_key}`"))?,
-            dry_run,
-        })
-    }
-
-    fn managed_file_desired(&self, os_id: &str, item: &SysItem) -> Result<ManagedFileDesired> {
-        let source = safe_managed_source(&sys_config_string(&item.config, "source")?)?;
-        let logical = format!(
-            "sys/{os_id}/{}",
-            source
-                .components()
-                .map(|part| part.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/")
-        );
-        let raw = self
-            .presets
-            .get(&logical)
-            .with_context(|| format!("reading {logical}"))?;
-        let destination = captured_sys_path(
-            &sys_config_string(&item.config, "target")?,
-            &self.context.home_dir,
-        )?;
-        let transforms = item
-            .config
-            .get("transforms")
-            .and_then(toml::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .map(|value| {
-                        value
-                            .as_str()
-                            .map(str::to_string)
-                            .context("managed-file transforms must be strings")
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let content = crate::install::apply_transforms(&transforms, raw, &self.context.env)?;
-        Ok(ManagedFileDesired {
-            destination,
-            content,
-            restart_hint: item
-                .config
-                .get("restart_hint")
-                .and_then(toml::Value::as_str)
-                .map(str::to_string),
-        })
     }
 
     async fn apply_managed_file_item(
@@ -1740,13 +642,80 @@ where
     }
 }
 
-fn sys_config_string(config: &toml::Table, key: &str) -> Result<String> {
-    config
-        .get(key)
-        .and_then(toml::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .with_context(|| format!("driver config requires non-empty `{key}`"))
+impl<H> CoreRuntime<H> {
+    fn split_dns_item_request(
+        &self,
+        os_id: &str,
+        item: &SysItem,
+        dry_run: bool,
+    ) -> Result<SplitDnsDomainRequest> {
+        let domain_key = sys_config_string(&item.config, "domain_env")?;
+        let servers_key = sys_config_string(&item.config, "servers_env")?;
+        Ok(SplitDnsDomainRequest {
+            os_id: os_id.to_string(),
+            item_id: item.id.clone(),
+            domain: self
+                .context
+                .env
+                .get(&domain_key)
+                .cloned()
+                .with_context(|| format!("missing environment variable `{domain_key}`"))?,
+            servers: self
+                .context
+                .env
+                .get(&servers_key)
+                .cloned()
+                .with_context(|| format!("missing environment variable `{servers_key}`"))?,
+            dry_run,
+        })
+    }
+
+    fn managed_file_desired(&self, os_id: &str, item: &SysItem) -> Result<ManagedFileDesired> {
+        let source = safe_managed_source(&sys_config_string(&item.config, "source")?)?;
+        let logical = format!(
+            "sys/{os_id}/{}",
+            source
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        );
+        let raw = self
+            .presets
+            .get(&logical)
+            .with_context(|| format!("reading {logical}"))?;
+        let destination = captured_sys_path(
+            &sys_config_string(&item.config, "target")?,
+            &self.context.home_dir,
+        )?;
+        let transforms = item
+            .config
+            .get("transforms")
+            .and_then(toml::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_string)
+                            .context("managed-file transforms must be strings")
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let content = crate::install::apply_transforms(&transforms, raw, &self.context.env)?;
+        Ok(ManagedFileDesired {
+            destination,
+            content,
+            restart_hint: item
+                .config
+                .get("restart_hint")
+                .and_then(toml::Value::as_str)
+                .map(str::to_string),
+        })
+    }
 }
 
 fn safe_managed_source(value: &str) -> Result<PathBuf> {
@@ -1796,39 +765,15 @@ where
     if !privileged {
         return install_bytes_with_host(host, content, destination, is_managed, false, true).await;
     }
-    let _guard = host.acquire_privileged_operation().await?;
-    let hash = hash_content(content);
-    let exists = match host.metadata(destination).await {
-        Ok(_) => true,
-        Err(error) if error.is_not_found() => false,
-        Err(error) => return Err(error.into_anyhow("inspecting privileged managed Sys file")),
-    };
-    if exists && is_managed {
-        let current = host
-            .read(destination)
-            .await
-            .map_err(|error| error.into_anyhow("reading privileged managed Sys file"))?;
-        if hash_content(&current) == hash {
-            return Ok(InstallOutcome::AlreadyManaged);
-        }
-    }
-    let backup = if exists && !is_managed {
-        let backup = crate::install::file_ops::backup_path(destination);
-        host.move_privileged(destination, &backup).await?;
-        Some(backup)
-    } else {
-        None
-    };
-    if let Err(error) = host.write_privileged(destination, content).await {
-        if let Some(backup) = &backup {
-            let _ = host.move_privileged(backup, destination).await;
-        }
-        return Err(error);
-    }
-    Ok(match backup {
-        Some(backup) => InstallOutcome::BackedUpAndInstalled { backup, hash },
-        None => InstallOutcome::Installed { hash },
-    })
+    super::privileged_files::install_bytes(
+        host,
+        content,
+        destination,
+        is_managed,
+        false,
+        super::privileged_files::SYS,
+    )
+    .await
 }
 
 async fn uninstall_sys_entry<H>(
@@ -1842,25 +787,7 @@ where
     if !privileged {
         return uninstall_entry_with_host(host, entry, false, false).await;
     }
-    let _guard = host.acquire_privileged_operation().await?;
-    let current = match host.read(&entry.destination).await {
-        Ok(bytes) => bytes,
-        Err(error) if error.is_not_found() => return Ok(UninstallOutcome::NotFound),
-        Err(error) => return Err(error.into_anyhow("reading privileged managed Sys file")),
-    };
-    if hash_content(&current) != entry.content_hash {
-        return Ok(UninstallOutcome::UserModified);
-    }
-    host.remove_privileged(&entry.destination).await?;
-    if let Some(backup) = &entry.backup
-        && host.metadata(backup).await.is_ok()
-    {
-        host.move_privileged(backup, &entry.destination).await?;
-        return Ok(UninstallOutcome::RestoredBackup {
-            backup: backup.clone(),
-        });
-    }
-    Ok(UninstallOutcome::Removed)
+    super::privileged_files::uninstall_entry(host, entry, false, super::privileged_files::SYS).await
 }
 
 impl fmt::Display for ResourceConflict {
@@ -1914,6 +841,18 @@ fn default_profile_enabled() -> bool {
 }
 
 impl SysRunManifest {
+    /// Normalize the container schema independently of inner receipt versions.
+    pub(super) fn normalize_schema_version(&mut self) -> Result<()> {
+        match self.schema_version {
+            0 => self.schema_version = SYS_MANIFEST_SCHEMA_VERSION,
+            SYS_MANIFEST_SCHEMA_VERSION => {}
+            version => bail!(
+                "sys manifest schema version {version} is newer than this Shine supports ({SYS_MANIFEST_SCHEMA_VERSION})"
+            ),
+        }
+        Ok(())
+    }
+
     pub async fn load(
         host: &impl crate::runtime::FileSystemObservationHost,
         shine_dir: &Path,
@@ -1935,208 +874,6 @@ impl SysRunManifest {
         } else {
             self.entries.push(entry);
         }
-    }
-}
-
-impl<H: FileSystemHost> CoreRuntime<H> {
-    pub async fn apply_managed_sys_file(
-        &self,
-        request: ManagedFileRequest,
-    ) -> Result<LifecycleResultV1> {
-        let _lifecycle_guard = if request.dry_run {
-            None
-        } else {
-            Some(self.acquire_sys_lifecycle_operation().await?)
-        };
-        if request.privileged {
-            bail!("managed Sys file requires a privileged host capability");
-        }
-        let mut manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
-        let previous = manifest
-            .entries
-            .iter()
-            .find(|entry| entry.os_id == request.os_id && entry.item_id == request.item_id);
-        let previous_receipt = previous.and_then(|entry| match &entry.receipt {
-            Some(SystemReceipt::ManagedFile(receipt)) => Some(receipt),
-            _ => None,
-        });
-        if let Some(receipt) = previous_receipt
-            && receipt.destination != request.destination
-        {
-            let entry = app_entry_from_receipt(receipt);
-            if matches!(
-                uninstall_entry_with_host(&self.host, &entry, request.dry_run, false).await?,
-                UninstallOutcome::UserModified
-            ) {
-                let mut result =
-                    LifecycleResultV1::new(LifecycleOperation::Upgrade, request.dry_run);
-                result.push(
-                    LifecycleOutcomeV1::new(
-                        format!("sys/{}", request.item_id),
-                        None::<String>,
-                        LifecycleStatus::Conflict,
-                        [LifecycleEffect::UserResourcePreserved],
-                    )
-                    .with_diagnostic_code("sys_user_modified"),
-                );
-                return Ok(result);
-            }
-        }
-        let is_managed =
-            previous_receipt.is_some_and(|receipt| receipt.destination == request.destination);
-        let outcome = install_bytes_with_host(
-            &self.host,
-            &request.content,
-            &request.destination,
-            is_managed,
-            request.dry_run,
-            true,
-        )
-        .await?;
-        let (status, mut effects, backup) = match outcome {
-            InstallOutcome::Installed { .. } => (
-                LifecycleStatus::Changed,
-                vec![LifecycleEffect::ResourceWritten],
-                previous_receipt.and_then(|receipt| receipt.backup.clone()),
-            ),
-            InstallOutcome::BackedUpAndInstalled { backup, .. } => (
-                LifecycleStatus::Changed,
-                vec![
-                    LifecycleEffect::BackupCreated,
-                    LifecycleEffect::ResourceWritten,
-                ],
-                Some(backup),
-            ),
-            InstallOutcome::AlreadyManaged => (
-                LifecycleStatus::Unchanged,
-                Vec::new(),
-                previous_receipt.and_then(|receipt| receipt.backup.clone()),
-            ),
-            InstallOutcome::DryRun => (
-                LifecycleStatus::Previewed,
-                vec![
-                    LifecycleEffect::ResourceWritePreviewed,
-                    LifecycleEffect::ReceiptWritePreviewed,
-                ],
-                None,
-            ),
-        };
-        if !request.dry_run {
-            manifest.upsert(SysRunEntry {
-                os_id: request.os_id,
-                item_id: request.item_id.clone(),
-                label: request.label,
-                status: if status == LifecycleStatus::Unchanged {
-                    SysItemStatus::AlreadyInstalled
-                } else {
-                    SysItemStatus::Updated
-                },
-                detail: request.destination.display().to_string(),
-                updated_at: String::new(),
-                managed: true,
-                profile_enabled: true,
-                receipt: Some(SystemReceipt::ManagedFile(ManagedFileReceipt {
-                    version: RECEIPT_VERSION,
-                    destination: request.destination,
-                    backup,
-                    content_hash: hash_content(&request.content),
-                    privileged: request.privileged,
-                    restart_hint: request.restart_hint,
-                })),
-            });
-            effects.push(LifecycleEffect::ReceiptWritten);
-            save_manifest_with_host(&self.host, &self.context.shine_dir, &manifest).await?;
-        }
-        let mut result = LifecycleResultV1::new(LifecycleOperation::Upgrade, request.dry_run);
-        result.push(LifecycleOutcomeV1::new(
-            format!("sys/{}", request.item_id),
-            None::<String>,
-            status,
-            effects,
-        ));
-        Ok(result)
-    }
-
-    pub async fn remove_managed_sys_file(
-        &self,
-        request: ManagedFileRemoveRequest,
-    ) -> Result<LifecycleResultV1> {
-        let _lifecycle_guard = if request.dry_run {
-            None
-        } else {
-            Some(self.acquire_sys_lifecycle_operation().await?)
-        };
-        let mut manifest = load_manifest_with_host(&self.host, &self.context.shine_dir).await?;
-        let position = manifest
-            .entries
-            .iter()
-            .position(|entry| entry.os_id == request.os_id && entry.item_id == request.item_id);
-        let mut result = LifecycleResultV1::new(LifecycleOperation::Uninstall, request.dry_run);
-        let Some(position) = position else {
-            return Ok(result);
-        };
-        let entry = manifest.entries[position].clone();
-        let Some(SystemReceipt::ManagedFile(receipt)) = entry.receipt else {
-            return Ok(result);
-        };
-        if receipt.privileged {
-            bail!("managed Sys file requires a privileged host capability");
-        }
-        let outcome = uninstall_entry_with_host(
-            &self.host,
-            &app_entry_from_receipt(&receipt),
-            request.dry_run,
-            false,
-        )
-        .await?;
-        let (status, effects, remove_receipt) = match outcome {
-            UninstallOutcome::UserModified => (
-                LifecycleStatus::Conflict,
-                vec![LifecycleEffect::UserResourcePreserved],
-                false,
-            ),
-            UninstallOutcome::DryRun => (
-                LifecycleStatus::Previewed,
-                vec![
-                    LifecycleEffect::ResourceRemovePreviewed,
-                    LifecycleEffect::ReceiptRemovePreviewed,
-                ],
-                false,
-            ),
-            UninstallOutcome::RestoredBackup { .. }
-            | UninstallOutcome::ForceRestoredBackup { .. } => (
-                LifecycleStatus::Changed,
-                vec![
-                    LifecycleEffect::BackupRestored,
-                    LifecycleEffect::ReceiptRemoved,
-                ],
-                true,
-            ),
-            UninstallOutcome::Removed | UninstallOutcome::ForceRemoved => (
-                LifecycleStatus::Changed,
-                vec![
-                    LifecycleEffect::ResourceRemoved,
-                    LifecycleEffect::ReceiptRemoved,
-                ],
-                true,
-            ),
-            UninstallOutcome::NotFound => (
-                LifecycleStatus::Changed,
-                vec![LifecycleEffect::ReceiptRemoved],
-                true,
-            ),
-        };
-        if remove_receipt {
-            manifest.entries.remove(position);
-            save_manifest_with_host(&self.host, &self.context.shine_dir, &manifest).await?;
-        }
-        result.push(LifecycleOutcomeV1::new(
-            format!("sys/{}", request.item_id),
-            None::<String>,
-            status,
-            effects,
-        ));
-        Ok(result)
     }
 }
 
@@ -2196,13 +933,7 @@ pub(crate) async fn load_manifest_with_host(
         Err(error) if error.is_not_found() => SysRunManifest::default(),
         Err(error) => return Err(error.into_anyhow("failed to read sys manifest")),
     };
-    match manifest.schema_version {
-        0 => manifest.schema_version = SYS_MANIFEST_SCHEMA_VERSION,
-        SYS_MANIFEST_SCHEMA_VERSION => {}
-        version => bail!(
-            "sys manifest schema version {version} is newer than this Shine supports ({SYS_MANIFEST_SCHEMA_VERSION})"
-        ),
-    }
+    manifest.normalize_schema_version()?;
     Ok(manifest)
 }
 
@@ -2227,8 +958,7 @@ pub(crate) async fn save_manifest_with_host(
 mod tests {
     use super::*;
     use crate::runtime::{
-        FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost,
-        RuntimeContext, RuntimePlatform,
+        InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost, RuntimeContext, RuntimePlatform,
     };
 
     #[tokio::test]
@@ -2253,51 +983,6 @@ mod tests {
         receipt.ensure_supported().unwrap();
         assert_eq!(receipt.driver(), SysDriverKind::ManagedFile);
         tokio::fs::remove_dir_all(root).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn managed_file_roundtrip_uses_virtual_host_and_receipt() {
-        let runtime = CoreRuntime::new(
-            InMemoryHost::new(),
-            RuntimeContext::isolated(
-                PathBuf::from("/home/test"),
-                PathBuf::from("/home/test/.shine"),
-                PathBuf::from("/presets"),
-                PathBuf::from("/bin"),
-                RuntimePlatform::Linux,
-            ),
-            PresetSnapshot::builder(PresetSourceKind::External).build(),
-        );
-        let applied = runtime
-            .apply_managed_sys_file(ManagedFileRequest {
-                os_id: "linux".into(),
-                item_id: "managed".into(),
-                label: "Managed".into(),
-                destination: PathBuf::from("/etc/example"),
-                content: b"desired".to_vec(),
-                privileged: false,
-                restart_hint: None,
-                dry_run: false,
-            })
-            .await
-            .unwrap();
-        assert_eq!(applied.summary().changed, 1);
-        let removed = runtime
-            .remove_managed_sys_file(ManagedFileRemoveRequest {
-                os_id: "linux".into(),
-                item_id: "managed".into(),
-                dry_run: false,
-            })
-            .await
-            .unwrap();
-        assert_eq!(removed.summary().changed, 1);
-        assert!(
-            runtime
-                .host()
-                .read(Path::new("/etc/example"))
-                .await
-                .is_err()
-        );
     }
 
     #[tokio::test]

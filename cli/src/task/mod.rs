@@ -21,7 +21,7 @@ use shine_core::runtime::{FileSystemHost, RealHost};
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use crate::{colors, path_display};
+use crate::{colors, output::escape_controls, path_display};
 use manifest::TaskManifest;
 
 const NOT_FOUND_HINT: &str = "Run `shine task list` to see saved tasks.";
@@ -59,7 +59,7 @@ pub async fn handle_save(
     if let Some(cwd) = cwd {
         println!(
             "Working dir: {}",
-            path_display::format_home(&cwd, &config.home_dir)
+            crate::output::escape_controls(&path_display::format_home(&cwd, &config.home_dir))
         );
     }
     Ok(())
@@ -68,7 +68,10 @@ pub async fn handle_save(
 pub async fn handle_run(config: &Config, name: &str, extra: &[String]) -> Result<()> {
     let manifest = TaskManifest::load(config.shine_dir()).await?;
     let Some(entry) = manifest.get(name) else {
-        bail!("Task not found: {name}\n\n{NOT_FOUND_HINT}");
+        bail!(
+            "Task not found: {}\n\n{NOT_FOUND_HINT}",
+            escape_controls(name)
+        );
     };
 
     let mut argv = entry.command.clone();
@@ -81,12 +84,12 @@ pub async fn handle_run(config: &Config, name: &str, extra: &[String]) -> Result
     let cwd_note = entry.cwd.as_deref().map_or_else(String::new, |cwd| {
         format!(
             " (cwd: {})",
-            path_display::format_home(cwd, &config.home_dir)
+            crate::output::escape_controls(&path_display::format_home(cwd, &config.home_dir))
         )
     });
     eprintln!(
         "{}{cwd_note}: {}",
-        colors::bold(&format!("Running {name}")),
+        colors::bold_stderr(&format!("Running {}", escape_controls(name))),
         render_command(&argv)
     );
 
@@ -101,12 +104,18 @@ pub async fn handle_list(config: &Config) -> Result<()> {
     }
 
     println!("{}", colors::bold("Saved Tasks"));
-    let width = manifest.tasks.keys().map(|k| k.len()).max().unwrap_or(0);
+    let width = manifest
+        .tasks
+        .keys()
+        .map(|name| console::measure_text_width(&escape_controls(name)))
+        .max()
+        .unwrap_or(0);
     for (name, entry) in &manifest.tasks {
+        let name = escape_controls(name);
         println!(
-            "{name:<width$}  {}",
+            "{name}{}  {}",
+            " ".repeat(width.saturating_sub(console::measure_text_width(&name))),
             render_command(&entry.command),
-            width = width
         );
     }
     Ok(())
@@ -115,16 +124,24 @@ pub async fn handle_list(config: &Config) -> Result<()> {
 pub async fn handle_info(config: &Config, name: &str) -> Result<()> {
     let manifest = TaskManifest::load(config.shine_dir()).await?;
     let Some(entry) = manifest.get(name) else {
-        bail!("Task not found: {name}\n\n{NOT_FOUND_HINT}");
+        bail!(
+            "Task not found: {}\n\n{NOT_FOUND_HINT}",
+            escape_controls(name)
+        );
     };
 
-    println!("{:<10} {}", "Task", name);
-    println!("{:<10} {}", "Command", render_command(&entry.command));
+    const LABEL_WIDTH: usize = "Working dir".len();
+    println!("{:<LABEL_WIDTH$} {}", "Task", escape_controls(name));
+    println!(
+        "{:<LABEL_WIDTH$} {}",
+        "Command",
+        render_command(&entry.command)
+    );
     if let Some(cwd) = entry.cwd.as_deref() {
         println!(
-            "{:<10} {}",
+            "{:<LABEL_WIDTH$} {}",
             "Working dir",
-            path_display::format_home(cwd, &config.home_dir)
+            crate::output::escape_controls(&path_display::format_home(cwd, &config.home_dir))
         );
     }
     Ok(())
@@ -136,10 +153,16 @@ pub async fn handle_delete(config: &Config, name: &str) -> Result<()> {
         .await?;
     let mut manifest = TaskManifest::load(config.shine_dir()).await?;
     if !manifest.remove(name) {
-        bail!("Task not found: {name}\n\n{NOT_FOUND_HINT}");
+        bail!(
+            "Task not found: {}\n\n{NOT_FOUND_HINT}",
+            escape_controls(name)
+        );
     }
     manifest.save(config.shine_dir()).await?;
-    println!("{}", colors::green(&format!("Deleted task {name}")));
+    println!(
+        "{}",
+        colors::green(&format!("Deleted task {}", escape_controls(name)))
+    );
     Ok(())
 }
 
@@ -147,6 +170,7 @@ pub async fn handle_delete(config: &Config, name: &str) -> Result<()> {
 /// propagate the child's exit code verbatim (never wrapping it in an anyhow
 /// error) so the task's own exit semantics survive `shine` in between.
 fn run_task_command(name: &str, argv: &[String], cwd: Option<&Path>) -> Result<()> {
+    let name = escape_controls(name);
     let Some((program, args)) = argv.split_first() else {
         bail!("Task {name} has no command to run.");
     };
@@ -165,12 +189,19 @@ fn run_task_command(name: &str, argv: &[String], cwd: Option<&Path>) -> Result<(
             {
                 bail!(
                     "Failed to run task {name}: working directory is unavailable: {}",
-                    path_display::format(cwd)
+                    escape_controls(&path_display::format(cwd))
                 );
             }
-            bail!("Failed to run task {name}: command not found: {program}");
+            bail!(
+                "Failed to run task {name}: command not found: {}",
+                escape_controls(program)
+            );
         }
-        Err(e) => bail!("Failed to run task {name}: {program}: {e}"),
+        Err(e) => bail!(
+            "Failed to run task {name}: {}: {}",
+            escape_controls(program),
+            escape_controls(&e.to_string())
+        ),
     };
 
     if status.success() {
@@ -193,10 +224,18 @@ fn resolve_task_cwd(config: &Config, cwd: Option<&Path>) -> Result<Option<PathBu
         return Ok(None);
     };
 
-    let raw = cwd.to_string_lossy();
-    let home = config.home_dir.to_string_lossy().into_owned();
-    let expanded = shellexpand::tilde_with_context(&raw, || Some(home)).into_owned();
-    let expanded = PathBuf::from(expanded);
+    let expanded = match cwd.strip_prefix("~") {
+        Ok(relative) => {
+            // Append literally: a Windows drive-like suffix must not replace the home root.
+            let mut expanded = config.home_dir.clone().into_os_string();
+            if !relative.as_os_str().is_empty() {
+                expanded.push(std::path::MAIN_SEPARATOR_STR);
+                expanded.push(relative);
+            }
+            PathBuf::from(expanded)
+        }
+        Err(_) => cwd.to_path_buf(),
+    };
     let absolute = if expanded.is_absolute() {
         expanded
     } else {
@@ -208,53 +247,62 @@ fn resolve_task_cwd(config: &Config, cwd: Option<&Path>) -> Result<Option<PathBu
         Ok(canonical) => canonical,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => bail!(
             "Failed to save task: working directory does not exist: {}",
-            path_display::format(&absolute)
+            escape_controls(&path_display::format(&absolute))
         ),
         Err(error) => bail!(
-            "Failed to save task: cannot resolve working directory: {}: {error}",
-            path_display::format(&absolute)
+            "Failed to save task: cannot resolve working directory: {}: {}",
+            escape_controls(&path_display::format(&absolute)),
+            escape_controls(&error.to_string())
         ),
     };
     if !canonical.is_dir() {
         bail!(
             "Failed to save task: working directory is not a directory: {}",
-            path_display::format(&canonical)
+            escape_controls(&path_display::format(&canonical))
         );
     }
+    canonical
+        .to_str()
+        .context("Failed to save task: working directory path is not valid UTF-8")?;
     Ok(Some(canonical))
 }
 
 fn validate_run_cwd(name: &str, cwd: &Path) -> Result<()> {
+    let name = escape_controls(name);
     match std::fs::metadata(cwd) {
         Ok(metadata) if metadata.is_dir() => Ok(()),
         Ok(_) => bail!(
             "Failed to run task {name}: working directory is not a directory: {}",
-            path_display::format(cwd)
+            escape_controls(&path_display::format(cwd))
         ),
         Err(error) => bail!(
-            "Failed to run task {name}: working directory is unavailable: {}: {error}",
-            path_display::format(cwd)
+            "Failed to run task {name}: working directory is unavailable: {}: {}",
+            escape_controls(&path_display::format(cwd)),
+            escape_controls(&error.to_string())
         ),
     }
 }
 
-/// Render an argv array back into a copy-paste-safe shell command line by
-/// single-quoting any argument that contains characters a shell would interpret.
+/// Render argv for the platform shell without changing direct execution inputs.
 fn render_command(argv: &[String]) -> String {
     argv.iter()
-        .map(|arg| shell_quote(arg))
+        .enumerate()
+        .map(|(index, arg)| {
+            if index == 0 {
+                crate::shell_quote::command_program(arg)
+            } else {
+                crate::shell_quote::command_arg(arg)
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn shell_quote(arg: &str) -> String {
-    crate::shell_quote::quote_if_needed(arg)
 }
 
 fn validate_task_name(name: &str) -> Result<()> {
     let invalid = || {
         anyhow::anyhow!(
-            "Invalid task name: {name}\n\nTask names may contain letters, numbers, dots, dashes, and underscores, and must start with a letter or number."
+            "Invalid task name: {}\n\nTask names may contain letters, numbers, dots, dashes, and underscores, and must start with a letter or number.",
+            escape_controls(name)
         )
     };
 
@@ -354,7 +402,11 @@ mod tests {
         ];
         assert_eq!(
             render_command(&argv),
-            "rsync -avz dist/ marqueeio.develop:/var/www/keystone/alex/"
+            if cfg!(windows) {
+                "& 'rsync' -avz dist/ marqueeio.develop:/var/www/keystone/alex/"
+            } else {
+                "rsync -avz dist/ marqueeio.develop:/var/www/keystone/alex/"
+            }
         );
     }
 
@@ -365,13 +417,29 @@ mod tests {
             "-c".to_string(),
             "lsof -ti :3000 | xargs kill".to_string(),
         ];
-        assert_eq!(render_command(&argv), "sh -c 'lsof -ti :3000 | xargs kill'");
+        assert_eq!(
+            render_command(&argv),
+            if cfg!(windows) {
+                "& 'sh' -c 'lsof -ti :3000 | xargs kill'"
+            } else {
+                "sh -c 'lsof -ti :3000 | xargs kill'"
+            }
+        );
     }
 
     #[test]
-    fn shell_quote_escapes_embedded_single_quotes() {
-        assert_eq!(shell_quote("it's"), "'it'\\''s'");
-        assert_eq!(shell_quote(""), "''");
+    fn render_command_preserves_program_position_and_literal_arguments() {
+        for program in ["if", "then", "time", "MODE=test"] {
+            let argv = [program, "if", "MODE=test", "it's", ""].map(str::to_owned);
+            assert_eq!(
+                render_command(&argv),
+                if cfg!(windows) {
+                    format!("& '{program}' if 'MODE=test' 'it''s' ''")
+                } else {
+                    format!("'{program}' if MODE=test 'it'\\''s' ''")
+                }
+            );
+        }
     }
 
     #[tokio::test]
@@ -450,10 +518,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn task_cwd_preserves_tilde_expansion_and_literal_absolute_components() {
+        let dir = temp_dir().await;
+        let mut config = config_in(&dir);
+        config.home_dir = dir.join("home");
+        let project = config.home_dir.join("project");
+        let literal = dir.join("~/project");
+        for path in [&project, &literal] {
+            tokio::fs::create_dir_all(path).await.unwrap();
+        }
+        for input in ["~/project", "~//project", "~/./project"] {
+            assert_eq!(
+                resolve_task_cwd(&config, Some(Path::new(input))).unwrap(),
+                Some(std::fs::canonicalize(&project).unwrap()),
+                "{input}"
+            );
+        }
+        for (input, expected) in [(Path::new("~"), &config.home_dir), (&literal, &literal)] {
+            assert_eq!(
+                resolve_task_cwd(&config, Some(input)).unwrap(),
+                Some(std::fs::canonicalize(expected).unwrap())
+            );
+        }
+        #[cfg(windows)]
+        assert!(
+            resolve_task_cwd(&config, Some(Path::new(&format!("~/{}", dir.display())))).is_err()
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn save_cwd_does_not_select_a_lossy_replacement_directory() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = temp_dir().await;
+        let config = config_in(&dir);
+        let raw = dir.join(std::ffi::OsStr::from_bytes(b"project-\xff"));
+        tokio::fs::create_dir(dir.join("project-\u{fffd}"))
+            .await
+            .unwrap();
+        let mut manifest = TaskManifest::default();
+        manifest.upsert("keep", vec!["echo".into(), "original".into()], None);
+        manifest.save(config.shine_dir()).await.unwrap();
+        let before = tokio::fs::read(config.shine_dir().join("tasks.toml"))
+            .await
+            .unwrap();
+
+        for (name, force) in [("new", false), ("keep", true)] {
+            let error = handle_save(&config, name, force, Some(&raw), vec!["echo".into()])
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("does not exist"), "{error:#}");
+            assert_eq!(
+                tokio::fs::read(config.shine_dir().join("tasks.toml"))
+                    .await
+                    .unwrap(),
+                before
+            );
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_cwd_expansion_retains_home_identity_without_affecting_absolute_paths() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = temp_dir().await;
+        let mut config = config_in(&dir);
+        config.home_dir = dir.join(std::ffi::OsStr::from_bytes(b"home-\xff"));
+        let other = dir.join("home-\u{fffd}/project");
+        tokio::fs::create_dir_all(&other).await.unwrap();
+
+        let error = resolve_task_cwd(&config, Some(Path::new("~/project"))).unwrap_err();
+
+        assert!(error.to_string().contains("does not exist"), "{error:#}");
+        assert_eq!(
+            resolve_task_cwd(&config, Some(&other)).unwrap(),
+            Some(std::fs::canonicalize(&other).unwrap())
+        );
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn save_rejects_non_utf8_canonical_cwd_before_manifest_mutation() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = temp_dir().await;
+        let config = config_in(&dir);
+        let raw = dir.join(std::ffi::OsStr::from_bytes(b"project-\xff"));
+        tokio::fs::create_dir(&raw).await.unwrap();
+        let alias = dir.join("alias");
+        std::os::unix::fs::symlink(&raw, &alias).unwrap();
+
+        for cwd in [&raw, &alias] {
+            let error = handle_save(&config, "new", false, Some(cwd), vec!["echo".into()])
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("not valid UTF-8"), "{error:#}");
+            assert!(!config.shine_dir().join("tasks.toml").exists());
+            assert!(!config.shine_dir().join("tasks.lock").exists());
+        }
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn save_rejects_missing_or_non_directory_cwd() {
         let dir = temp_dir().await;
         let config = config_in(&dir);
-        let file = dir.join("not-a-directory");
+        let file = dir.join(if cfg!(unix) {
+            "not-a-directory\nFORGED\r\t\u{1b}"
+        } else {
+            "not-a-directory中文"
+        });
         tokio::fs::write(&file, "x").await.unwrap();
 
         let missing = handle_save(
@@ -477,6 +653,16 @@ mod tests {
         .await
         .unwrap_err();
         assert!(not_dir.to_string().contains("not a directory"));
+        let run_error = validate_run_cwd("demo", &file).unwrap_err();
+        let disappeared = dir.join("missing\nFORGED\r\t\u{1b}");
+        let race_error =
+            run_task_command("demo", &["unused-program".into()], Some(&disappeared)).unwrap_err();
+        for error in [not_dir, run_error, race_error] {
+            let text = error.to_string();
+            assert!(!text.chars().any(char::is_control), "{text:?}");
+        }
+        assert_eq!(tokio::fs::read(&file).await.unwrap(), b"x");
+        assert!(!config.shine_dir().join("tasks.toml").exists());
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -634,6 +820,16 @@ mod tests {
                 .to_string()
                 .contains("working directory is unavailable")
         );
+        let name = "old\nFORGED=name\r\t\u{1b}";
+        let mut manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
+        manifest.upsert(name, vec!["echo".into()], Some(project));
+        manifest.save(config.shine_dir()).await.unwrap();
+        let text = handle_run(&config, name, &[])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains("old\\nFORGED=name\\r\\t\\u{1b}"), "{text:?}");
+        assert!(!text.contains(['\n', '\r', '\t', '\u{1b}']), "{text:?}");
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 

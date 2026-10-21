@@ -1,9 +1,13 @@
+mod action;
 mod apply;
 mod commit;
 mod journal_io;
+mod receipt_changes;
 mod receipts;
+pub(crate) use receipt_changes::{ShellReceiptRemoval, ShellReceiptTransition};
 mod recovery_apply;
 mod recovery_plan;
+use action::ShellAction;
 use journal_io::*;
 use receipts::*;
 
@@ -80,7 +84,7 @@ pub(crate) struct ShellSnapshotReplacement {
     pub target: String,
     pub destination: PathBuf,
     pub files: Vec<ShellSnapshotFile>,
-    pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
+    pub receipt_transitions: Vec<ShellReceiptTransition>,
 }
 
 pub(crate) struct ShellRenderedFileReplacement {
@@ -88,14 +92,14 @@ pub(crate) struct ShellRenderedFileReplacement {
     pub destination: PathBuf,
     pub bytes: Vec<u8>,
     pub unix_mode: Option<u32>,
-    pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
+    pub receipt_transitions: Vec<ShellReceiptTransition>,
 }
 
 pub(crate) struct ShellRenderedFileRemoval {
     pub target: String,
     pub destination: PathBuf,
     pub previous: ShellFileIdentityV1,
-    pub previous_receipts: Vec<(String, ShellManifestEntry)>,
+    pub previous_receipts: Vec<ShellReceiptRemoval>,
 }
 
 pub(crate) struct ShellCacheReplacementFile {
@@ -107,27 +111,27 @@ pub(crate) struct ShellCacheReplacementFile {
 pub(crate) struct ShellCacheReplacement {
     pub target: String,
     pub files: Vec<ShellCacheReplacementFile>,
-    pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
+    pub receipt_transitions: Vec<ShellReceiptTransition>,
 }
 
 pub(crate) struct ShellCacheRemoval {
     pub target: String,
     pub files: Vec<(PathBuf, ShellFileIdentityV1)>,
-    pub previous_receipts: Vec<(String, ShellManifestEntry)>,
+    pub previous_receipts: Vec<ShellReceiptRemoval>,
 }
 
 pub(crate) struct ShellSnapshotRemoval {
     pub target: String,
     pub destination: PathBuf,
     pub previous_files: Vec<ShellTreeFileV1>,
-    pub previous_receipts: Vec<(String, ShellManifestEntry)>,
+    pub previous_receipts: Vec<ShellReceiptRemoval>,
 }
 
 pub(crate) struct ShellProfileReconciliation {
     pub target: String,
     pub files: Vec<ShellProfilePreparedFile>,
-    pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
-    pub receipt_removals: Vec<(String, ShellManifestEntry)>,
+    pub receipt_transitions: Vec<ShellReceiptTransition>,
+    pub receipt_removals: Vec<ShellReceiptRemoval>,
     pub legacy_targets: Vec<String>,
 }
 
@@ -255,23 +259,8 @@ impl ShellOperationJournalV1 {
         {
             bail!("unsupported action or approval schema in Shell operation journal");
         }
-        if self.action_ir.actions.iter().any(|action| {
-            !matches!(
-                action.kind,
-                ActionKindV1::CreateShellLauncher { .. }
-                    | ActionKindV1::UpdateShellLauncher { .. }
-                    | ActionKindV1::RemoveShellLauncher { .. }
-                    | ActionKindV1::RemoveLegacyShellLauncher { .. }
-                    | ActionKindV1::ReplaceShellSnapshot { .. }
-                    | ActionKindV1::ReplaceShellCache { .. }
-                    | ActionKindV1::RemoveShellCache { .. }
-                    | ActionKindV1::RemoveShellSnapshot { .. }
-                    | ActionKindV1::ReconcileShellProfile { .. }
-                    | ActionKindV1::ReplaceShellRenderedFile { .. }
-                    | ActionKindV1::RemoveShellRenderedFile { .. }
-            )
-        }) {
-            bail!("Shell operation journal contains an unsupported action");
+        for action in &self.action_ir.actions {
+            ShellAction::from_kind(&action.kind)?;
         }
         if self.applied.iter().collect::<BTreeSet<_>>().len() != self.applied.len()
             || self.applied.iter().any(|action_id| {
@@ -290,18 +279,8 @@ impl ShellOperationJournalV1 {
                 !self.applied.contains(action_id)
                     || !self.action_ir.actions.iter().any(|action| {
                         &action.action_id == action_id
-                            && matches!(
-                                action.kind,
-                                ActionKindV1::RemoveShellLauncher { .. }
-                                    | ActionKindV1::RemoveLegacyShellLauncher { .. }
-                                    | ActionKindV1::ReplaceShellSnapshot { .. }
-                                    | ActionKindV1::ReplaceShellCache { .. }
-                                    | ActionKindV1::RemoveShellCache { .. }
-                                    | ActionKindV1::RemoveShellSnapshot { .. }
-                                    | ActionKindV1::ReconcileShellProfile { .. }
-                                    | ActionKindV1::ReplaceShellRenderedFile { .. }
-                                    | ActionKindV1::RemoveShellRenderedFile { .. }
-                            )
+                            && ShellAction::from_kind(&action.kind)
+                                .is_ok_and(|kind| kind.requires_receipt_commit_marker())
                     })
             })
         {
@@ -484,10 +463,10 @@ pub(crate) async fn collect_shell_tree_for_action(
 }
 
 fn manifest_entry_from_receipt(receipt: &ShellLauncherReceiptV1) -> Result<ShellManifestEntry> {
-    let mode = match receipt.mode.as_str() {
-        "snapshot" => super::ExternalShellMode::Snapshot,
-        "live" => super::ExternalShellMode::Live,
-        _ => bail!("Shell launcher receipt contains an unsupported mode"),
+    let delivery = receipt.validated_configuration()?;
+    let mode = match delivery.mode {
+        crate::action::shell_receipt::ReceiptMode::Snapshot => super::ExternalShellMode::Snapshot,
+        crate::action::shell_receipt::ReceiptMode::Live => super::ExternalShellMode::Live,
     };
     Ok(ShellManifestEntry {
         launcher_format: receipt.launcher_format.clone(),
@@ -1396,6 +1375,116 @@ async fn observe_launcher_removal_resource(
 mod tests {
     use super::*;
     use crate::runtime::InMemoryHost;
+
+    #[test]
+    fn manifest_action_and_recovery_share_receipt_delivery_rules_and_wire_shapes() {
+        let base = ShellManifestEntry {
+            launcher_format: None,
+            launcher_config_dir: None,
+            category: "demo".into(),
+            command: "run".into(),
+            mode: super::super::ExternalShellMode::Snapshot,
+            source_path: "source.ps1".into(),
+            rendered_path: "rendered.ps1".into(),
+            runtime: "native".into(),
+            bun_dependencies: None,
+            dependency_hash: None,
+            transforms: Vec::new(),
+            env: Vec::new(),
+            needs_source: false,
+            content_hash: 1,
+        };
+        let mut cases = vec![(base.clone(), true)];
+        let mut legacy_bun = base.clone();
+        legacy_bun.runtime = "bun".into();
+        legacy_bun.source_path = "source.ts".into();
+        cases.push((legacy_bun, true));
+        let mut entry = base.clone();
+        entry.bun_dependencies = Some("locked".into());
+        cases.push((entry, true));
+        for live in [false, true] {
+            let mut entry = base.clone();
+            entry.launcher_format = Some("native-cmd-v2".into());
+            if live {
+                entry.mode = super::super::ExternalShellMode::Live;
+            }
+            cases.push((entry, true));
+        }
+        let mut live = base.clone();
+        live.mode = super::super::ExternalShellMode::Live;
+        live.runtime = "bun".into();
+        live.source_path = "source.ts".into();
+        live.transforms = vec!["template".into()];
+        live.launcher_format = Some("live-bun-v2".into());
+        live.launcher_config_dir = Some(std::env::temp_dir().join("shine-receipt-config"));
+        cases.push((live.clone(), true));
+        for change in 0..8 {
+            let mut invalid = live.clone();
+            match change {
+                0 => invalid.runtime = "native".into(),
+                1 => invalid.mode = super::super::ExternalShellMode::Snapshot,
+                2 => invalid.transforms.clear(),
+                3 => invalid.needs_source = true,
+                4 => invalid.launcher_config_dir = Some("relative".into()),
+                5 => invalid.launcher_config_dir = Some(std::env::temp_dir().join("../escape")),
+                6 => invalid.launcher_format = Some("live-bun-v3".into()),
+                _ => invalid.bun_dependencies = Some("unknown".into()),
+            }
+            cases.push((invalid, false));
+        }
+        for entry in ["unknown", "bun"] {
+            let mut invalid = base.clone();
+            invalid.runtime = entry.into();
+            invalid.launcher_format = Some("native-cmd-v2".into());
+            cases.push((invalid, false));
+        }
+        for (entry, expected) in cases {
+            let receipt = receipt_contract(&entry);
+            let before = serde_json::to_value(&receipt).unwrap();
+            assert_eq!(
+                shell_link_spec_from_manifest_entry(&entry).is_ok(),
+                expected,
+                "{entry:?}"
+            );
+            assert_eq!(
+                receipt.validated_configuration().is_ok(),
+                expected,
+                "{receipt:?}"
+            );
+            let action = DeclarativeActionV1::create_shell_launcher(
+                "launcher",
+                "shell/demo/run",
+                "launcher",
+                receipt.clone(),
+                vec![ShellLauncherResourceV1::File {
+                    destination: "bin/run".into(),
+                    desired_hash: 1,
+                    unix_mode: None,
+                }],
+            );
+            assert_eq!(
+                ActionIrV1::new("receipt-test", vec![action])
+                    .validate()
+                    .is_ok(),
+                expected
+            );
+            let restored = manifest_entry_from_receipt(&receipt);
+            assert_eq!(restored.is_ok(), expected);
+            if let Ok(restored) = restored {
+                assert_eq!(restored, entry);
+                assert_eq!(
+                    serde_json::to_value(receipt_contract(&restored)).unwrap(),
+                    before
+                );
+                let encoded = toml::to_string(&entry).unwrap();
+                let decoded: ShellManifestEntry = toml::from_str(&encoded).unwrap();
+                assert_eq!(toml::to_string(&decoded).unwrap(), encoded);
+            }
+        }
+        let mut unsupported = receipt_contract(&base);
+        unsupported.mode = "other".into();
+        assert!(manifest_entry_from_receipt(&unsupported).is_err());
+    }
 
     #[cfg(unix)]
     #[tokio::test]

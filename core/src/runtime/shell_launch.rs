@@ -13,7 +13,7 @@ pub struct LiveBunLaunch {
     pub env: Vec<String>,
 }
 
-pub fn validate_live_shell_target(target: &str) -> Result<()> {
+fn validate_live_shell_target(target: &str) -> Result<()> {
     let parts = target.split('/').collect::<Vec<_>>();
     if parts.len() != 3
         || parts[0] != "shell"
@@ -359,7 +359,7 @@ mod tests {
             b"@@VALUE@@".to_vec(),
         );
         let mut runtime = CoreRuntime::new(base.host().clone(), context, snapshot);
-        runtime.context_mut_for_cli().trust_grants = runtime
+        runtime.context_mut_for_test().trust_grants = runtime
             .external_code_requirements("shell/demo/run")
             .await
             .unwrap()

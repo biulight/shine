@@ -1,13 +1,18 @@
 use std::path::Path;
 
 pub fn format(path: &Path) -> String {
-    normalize(&path.to_string_lossy())
+    let value = path.to_string_lossy();
+    if cfg!(windows) {
+        normalize(&value)
+    } else {
+        value.into_owned()
+    }
 }
 
 pub fn format_home(path: &Path, home_dir: &Path) -> String {
     match path.strip_prefix(home_dir) {
         Ok(relative) if relative.as_os_str().is_empty() => "~".to_string(),
-        Ok(relative) => format!("~/{}", normalize(&relative.to_string_lossy())),
+        Ok(relative) => format!("~/{}", format(relative)),
         Err(_) => format(path),
     }
 }
@@ -77,6 +82,8 @@ mod tests {
                 "//server/share/config",
             ),
             ("absolute://?/C:/config", "C:/config"),
+            (r"absolute:C:\keys\identity", "C:/keys/identity"),
+            (r"absolute:\\?\UNC\server\share", "//server/share"),
             ("home:.config/app", "~/.config/app"),
             ("home:.", "~"),
             ("shine:app-manifest.toml", "Shine state/app-manifest.toml"),
@@ -88,6 +95,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn formats_paths_with_forward_slashes() {
         assert_eq!(
             format(Path::new(r"C:\Users\alice\file.txt")),
@@ -96,6 +104,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn strips_windows_verbatim_disk_prefix() {
         assert_eq!(
             format(Path::new(r"\\?\C:\Users\alice\file.txt")),
@@ -104,11 +113,27 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn strips_windows_verbatim_unc_prefix() {
         assert_eq!(
             format(Path::new(r"\\?\UNC\server\share\file.txt")),
             "//server/share/file.txt"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn native_paths_preserve_literal_backslashes() {
+        let home = Path::new("/home/alice");
+        for relative in [
+            r"identity\literal.txt",
+            r"C:\keys\identity",
+            r"\\?\UNC\keys",
+        ] {
+            let path = home.join(relative);
+            assert_eq!(format(&path), format!("/home/alice/{relative}"));
+            assert_eq!(format_home(&path, home), format!("~/{relative}"));
+        }
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use crate::shell_quote::powershell_single_quote_contents as powershell_quote;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -42,7 +43,7 @@ impl HostError {
         self.kind == std::io::ErrorKind::NotFound
     }
 
-    pub fn is_not_directory(&self) -> bool {
+    pub(in crate::runtime) fn is_not_directory(&self) -> bool {
         self.kind == std::io::ErrorKind::NotADirectory
     }
 
@@ -811,10 +812,6 @@ impl SplitDnsHost for RealHost {
 
 fn split_dns_marker(item_id: &str) -> String {
     format!("Managed by shine: split-dns:{item_id}")
-}
-
-fn powershell_quote(value: &str) -> String {
-    value.replace('\'', "''")
 }
 
 #[derive(serde::Deserialize)]

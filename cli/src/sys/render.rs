@@ -1,4 +1,5 @@
 use crate::colors;
+use crate::output::escape_controls;
 use crate::sys::execution::{status_symbol, status_text};
 use crate::sys::run_manifest::SysRunEntry;
 use crate::sys::{LoadedSysPreset, ResolvedSelection, SysDriverKind, SysItem, SysItemMode};
@@ -20,17 +21,11 @@ pub(in crate::sys) fn print_available_item(item: &SysItem, entry: Option<&SysRun
         "    {:<18} {:<9} {}  {}",
         item.id,
         format!("[{kind}]"),
-        colors::bold(&item.label),
+        colors::bold(&escape_controls(&item.label)),
         status
     );
     if !item.description.is_empty() {
-        println!("      {}", colors::dim(&item.description));
-    }
-    if item.mode == SysItemMode::Managed {
-        println!(
-            "      {}",
-            colors::dim(&format!("Run: shine sys apply {}", item.id))
-        );
+        println!("      {}", colors::dim(&escape_controls(&item.description)));
     }
 }
 
@@ -60,11 +55,17 @@ pub(in crate::sys) async fn print_dry_run(
     println!("{}", colors::dim("[dry-run] System init preview"));
     println!("  OS: {os_id}");
     println!("  Shell: {sys_shell}");
-    println!("  Selection: {}", selection.source.describe());
+    println!(
+        "  Selection: {}",
+        escape_controls(&selection.source.describe())
+    );
     if !proxy_env.is_empty() {
         println!("  Proxy env:");
         for (key, value) in proxy_env {
-            println!("    {}", colors::dim(&format!("{key}={value}")));
+            println!(
+                "    {}",
+                colors::dim(&format!("{key}={}", escape_controls(value)))
+            );
         }
     }
     println!(
@@ -77,7 +78,7 @@ pub(in crate::sys) async fn print_dry_run(
     );
     println!("  Commands:");
     for preview in previews {
-        println!("    {preview}");
+        println!("    {}", escape_controls(preview));
     }
     let integrations = selection
         .item_ids

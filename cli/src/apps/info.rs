@@ -1,6 +1,7 @@
 use super::metadata;
 use crate::colors;
 use crate::config::Config;
+use crate::output::escape_controls;
 use crate::path_display;
 use anyhow::Result;
 
@@ -33,13 +34,22 @@ pub async fn handle_info(
     let cat = selected
         .first()
         .map(|inspection| &inspection.category)
-        .ok_or_else(|| anyhow::anyhow!("app preset category not found: {category}"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "app preset category not found: {}",
+                escape_controls(category)
+            )
+        })?;
 
     // Header
     if let Some(desc) = &cat.description {
-        println!("{}  {}", colors::bold(&cat.name), colors::dim(desc));
+        println!(
+            "{}  {}",
+            colors::bold(&escape_controls(&cat.name)),
+            colors::dim(&escape_controls(desc))
+        );
     } else {
-        println!("{}", colors::bold(&cat.name));
+        println!("{}", colors::bold(&escape_controls(&cat.name)));
     }
     println!();
 
@@ -47,7 +57,10 @@ pub async fn handle_info(
         println!(
             "  {}  {}",
             colors::dim("Destination"),
-            path_display::format_tilde_path(dest_root, &config.home_dir)
+            escape_controls(&path_display::format_tilde_path(
+                dest_root,
+                &config.home_dir
+            ))
         );
     }
     println!("  {}  {}", colors::dim("Files      "), cat.files.len());
@@ -56,7 +69,7 @@ pub async fn handle_info(
     let col_width = cat
         .files
         .iter()
-        .map(|f| f.source_rel.display().to_string().len())
+        .map(|f| console::measure_text_width(&escape_controls(&f.source_rel.display().to_string())))
         .max()
         .unwrap_or(0);
 
@@ -64,8 +77,9 @@ pub async fn handle_info(
 
     for inspection in &selected {
         let file = &inspection.file;
-        let source_name = file.source_rel.display().to_string();
-        let padding = " ".repeat(col_width.saturating_sub(source_name.len()));
+        let source_name = escape_controls(&file.source_rel.display().to_string());
+        let padding =
+            " ".repeat(col_width.saturating_sub(console::measure_text_width(&source_name)));
         let dest_str = match &inspection.destination {
             Some(dest) => {
                 let directly_installed = inspection
@@ -104,7 +118,10 @@ pub async fn handle_info(
                 format!(
                     "{}  {}{}",
                     colors::dim("→"),
-                    colors::dim(&path_display::format_home(dest, &config.home_dir)),
+                    colors::dim(&escape_controls(&path_display::format_home(
+                        dest,
+                        &config.home_dir
+                    ))),
                     status
                 )
             }
@@ -114,7 +131,7 @@ pub async fn handle_info(
         let file_desc = file
             .description
             .as_deref()
-            .map(|d| format!("  {}", colors::dim(d)))
+            .map(|d| format!("  {}", colors::dim(&escape_controls(d))))
             .unwrap_or_default();
 
         println!("  {source_name}{padding}  {dest_str}{file_desc}");
@@ -156,27 +173,45 @@ pub async fn handle_info(
             "{}",
             colors::yellow(&format!(
                 "! {}: {reason}",
-                inspection.file.source_rel.display()
+                escape_controls(&inspection.file.source_rel.display().to_string())
             ))
         );
         if let Some(error) = &inspection.assessment_error {
-            println!("{}", colors::dim(&format!("  {error}")));
+            println!("{}", colors::dim(&format!("  {}", escape_controls(error))));
         }
     }
 
     println!();
-    if any_installed {
+    let target_arg = crate::shell_quote::command_arg(&format!("app/{category}"));
+    if category.chars().any(char::is_control) {
+        let state = if any_installed {
+            "Installed"
+        } else {
+            "Not installed"
+        };
         println!(
             "{}",
             colors::dim(&format!(
-                "Installed. Run `shine install app/{category} --replace-managed` to repair managed files."
+                "{state}. Use shine install with the original target (control characters; copyable command omitted){}.",
+                if any_installed {
+                    " and --replace-managed to repair managed files"
+                } else {
+                    " to install"
+                }
+            ))
+        );
+    } else if any_installed {
+        println!(
+            "{}",
+            colors::dim(&format!(
+                "Installed. Run `shine install {target_arg} --replace-managed` to repair managed files."
             ))
         );
     } else {
         println!(
             "{}",
             colors::dim(&format!(
-                "Not installed. Run `shine install app/{category}` to install."
+                "Not installed. Run `shine install {target_arg}` to install."
             ))
         );
     }
@@ -208,7 +243,11 @@ pub async fn handle_list_with_presets_note(
 
     println!("{}\n", colors::bold("App Preset Categories"));
 
-    let name_width = categories.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    let name_width = categories
+        .iter()
+        .map(|c| console::measure_text_width(&escape_controls(&c.name)))
+        .max()
+        .unwrap_or(0);
 
     for cat in &categories {
         let effective_desc = cat.description.as_deref().or_else(|| {
@@ -219,23 +258,30 @@ pub async fn handle_list_with_presets_note(
             }
         });
 
-        let name_pad = " ".repeat(name_width.saturating_sub(cat.name.len()));
+        let name = escape_controls(&cat.name);
+        let name_pad = " ".repeat(name_width.saturating_sub(console::measure_text_width(&name)));
         let file_count = if cat.files.len() > 1 {
             format!("  {}", colors::dim(&format!("{} files", cat.files.len())))
         } else {
             String::new()
         };
 
-        let desc_part = effective_desc.map(|d| format!("  {d}")).unwrap_or_default();
+        let desc_part = effective_desc
+            .map(|d| format!("  {}", escape_controls(d)))
+            .unwrap_or_default();
 
-        println!("  {}{}{}{}", cat.name, name_pad, desc_part, file_count);
+        println!("  {name}{name_pad}{desc_part}{file_count}");
 
         // Per-file rows for explicit multi-file categories
         if cat.has_explicit_files && cat.list_mode == AppListMode::Files && cat.files.len() > 1 {
             for file in &cat.files {
-                let name = file.source_rel.display().to_string();
+                let name = escape_controls(&file.source_rel.display().to_string());
                 if let Some(desc) = &file.description {
-                    println!("    {}  {}", colors::dim(&name), colors::dim(desc));
+                    println!(
+                        "    {}  {}",
+                        colors::dim(&name),
+                        colors::dim(&escape_controls(desc))
+                    );
                 } else {
                     println!("    {}", colors::dim(&name));
                 }

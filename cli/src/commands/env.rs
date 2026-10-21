@@ -65,12 +65,20 @@ pub enum EnvWorkspaceSubcommand {
 pub enum EnvWorkspaceExportFormat {
     /// Conventional KEY=VALUE dotenv output
     Dotenv,
+    /// Persist selected secret files at their mapped targets
+    Files,
 }
 
 #[derive(Args, Debug)]
 pub struct EnvWorkspaceExportCommand {
     /// Export format
-    #[arg(long, value_enum, value_name = "FORMAT")]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        requires_if("dotenv", "output"),
+        requires_if("files", "file_groups")
+    )]
     pub format: EnvWorkspaceExportFormat,
     /// Workspace definition (defaults to the nearest shine.workspace.toml)
     #[arg(long, value_name = "FILE")]
@@ -79,8 +87,16 @@ pub struct EnvWorkspaceExportCommand {
     #[arg(long, value_name = "MODE")]
     pub mode: String,
     /// Destination dotenv file
-    #[arg(long, value_name = "FILE")]
-    pub output: PathBuf,
+    #[arg(long, value_name = "FILE", required_if_eq("format", "dotenv"))]
+    pub output: Option<PathBuf>,
+    /// Named secret file group to persist (repeatable; files format only)
+    #[arg(
+        long = "file-group",
+        value_name = "NAME",
+        required_if_eq("format", "files"),
+        conflicts_with_all = ["output", "force", "include_secrets"]
+    )]
+    pub file_groups: Vec<String>,
     /// Decrypt and include sealed workspace secrets
     #[arg(long)]
     pub include_secrets: bool,
@@ -521,6 +537,40 @@ mod phone_recipient_tests {
                 )
                 .is_err(),
                 "accepted {args:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod workspace_export_tests {
+    use crate::commands::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn export_format_argument_contract() {
+        let prefix = ["shine", "env", "workspace", "export"];
+        for args in [
+            "--format dotenv --mode prod --output out.env",
+            "--format dotenv --mode prod --output out.env --force --include-secrets",
+            "--format files --mode prod --file-group signing --file-group account --dry-run",
+        ] {
+            Cli::try_parse_from(prefix.into_iter().chain(args.split_whitespace())).unwrap();
+        }
+        for args in [
+            "--format dotenv --mode prod",
+            "--format dotenv --mode prod --file-group signing",
+            "--format dotenv --mode prod --output out.env --file-group signing",
+            "--format files --mode prod",
+            "--format files --mode prod --output out.env",
+            "--format files --file-group signing",
+            "--format files --mode prod --file-group signing --output out.env",
+            "--format files --mode prod --file-group signing --force",
+            "--format files --mode prod --file-group signing --include-secrets",
+        ] {
+            assert!(
+                Cli::try_parse_from(prefix.into_iter().chain(args.split_whitespace())).is_err(),
+                "{args}"
             );
         }
     }

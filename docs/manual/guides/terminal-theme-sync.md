@@ -21,7 +21,9 @@ current shell. Shine never overwrites a `BAT_THEME` you set yourself.
 
 Shine checks an existing `SHINE_TERMINAL_THEME`, then terminal-provided `COLORFGBG`, and only then
 queries the background through OSC 11. If it cannot determine the appearance, it does not guess or
-write variables.
+write variables. An unresolved theme returns exit code 0. `--quiet` hides non-essential
+diagnostics only; configuration errors still appear on stderr and return exit code 1, with no
+export statements on stdout.
 
 ## Synchronize in a managed profile
 

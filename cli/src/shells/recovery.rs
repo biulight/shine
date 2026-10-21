@@ -1,4 +1,4 @@
-//! Explicit CLI recovery for interrupted Shell launcher creation.
+//! Explicit CLI recovery for interrupted Shell resource changes.
 
 use crate::config::Config;
 use anyhow::Result;
@@ -29,11 +29,11 @@ pub async fn handle_recover_approved(config: &Config, yes: bool) -> Result<()> {
     };
     if report.rolled_back_actions.is_empty() {
         println!(
-            "Shell recovery complete: cleared the interrupted operation journal; no transaction-created launcher resources were removed."
+            "Shell recovery complete: cleared the operation journal; no Shell resource action needed recovery."
         );
     } else {
         println!(
-            "Shell recovery complete: rolled back {} interrupted launcher creation(s) and cleared the operation journal.",
+            "Shell recovery complete: recovered {} Shell resource action(s), including rollback or cleanup, and cleared the operation journal.",
             report.rolled_back_actions.len()
         );
     }

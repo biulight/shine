@@ -4,8 +4,14 @@ mod prepare;
 
 #[derive(Default)]
 struct PreparedOperation {
-    actions: Vec<DeclarativeActionV1>,
-    prepared: Vec<PreparedShellAction>,
+    steps: Vec<PreparedShellStep>,
+}
+
+// Keep the journal action and its executable payload together through preparation
+// and application. The journal receives only the payload-free action projection.
+struct PreparedShellStep {
+    action: DeclarativeActionV1,
+    prepared: PreparedShellAction,
 }
 
 impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
@@ -57,13 +63,16 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         self.prepare_removals(removals, &mut pending).await?;
         self.prepare_legacy_removals(legacy_removals, &mut pending)
             .await?;
-        let PreparedOperation { actions, prepared } = pending;
         let action_ir = ActionIrV1::new(
             format!(
                 "shell-launcher-reconcile:{}",
                 approval.plan_fingerprint.as_hex()
             ),
-            actions,
+            pending
+                .steps
+                .iter()
+                .map(|step| step.action.clone())
+                .collect(),
         );
         action_ir.validate()?;
         let requirements =
@@ -93,7 +102,11 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         }
         let mut journal = ShellOperationJournalV1::new(action_ir, approval.clone());
         save_shell_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
-        for (action, prepared_action) in journal.action_ir.actions.clone().iter().zip(&prepared) {
+        for PreparedShellStep {
+            action,
+            prepared: prepared_action,
+        } in &pending.steps
+        {
             match prepared_action {
                 PreparedShellAction::Cache { files } => {
                     for file in files {

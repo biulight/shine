@@ -27,7 +27,9 @@ binary cannot use biometry-gated Keychain APIs without Apple entitlements, so sh
   place that inspects the tag.
 - **Decryption is purely tag-based** and never consults `Config::secret_backend`. Changing the
   default encrypt backend can therefore never break a secret encrypted before the change.
-- `secret::encrypt_secret`/`decrypt_secret` are the only entry points call sites use; the
+- Stored-secret consumers use `secret::encrypt_secret` and `secret::decrypt_with_config`;
+  decryption resolves identities and hybrid preference from Config without consulting the default
+  encryption backend. The unused `decrypt_secret` wrapper was removed (ADR 0137). The
   previously-reserved `SecretBackend` trait and unused `GpgBackend` struct were removed since the
   final shape (recipient lists resolved per call, identities threaded into decrypt) didn't fit a
   per-instance trait object cleanly.

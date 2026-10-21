@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::Config;
-use crate::env::EnvConfig;
 use crate::presentation::{
     LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
@@ -26,54 +25,11 @@ pub struct AppUpgradeReport {
     pub restart_hints: BTreeSet<String>,
 }
 
-pub async fn handle_upgrade_installed(
-    config: &Config,
-    prune_stale: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<AppUpgradeReport> {
-    handle_upgrade_installed_with_output(config, prune_stale, false, sep).await
-}
-
-pub(crate) async fn handle_upgrade_installed_with_output(
-    config: &Config,
-    prune_stale: bool,
-    verbose: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<AppUpgradeReport> {
-    handle_upgrade_installed_with_output_with_result_approved(
-        config,
-        prune_stale,
-        verbose,
-        true,
-        sep,
-    )
-    .await
-    .map(|(report, _)| report)
-}
-
-pub(crate) async fn handle_upgrade_installed_with_output_with_result_approved(
-    config: &Config,
-    prune_stale: bool,
-    verbose: bool,
-    yes: bool,
-    sep: &mut crate::output::SectionSeparator,
-) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
-    handle_upgrade_installed_target_with_result_approved(
-        config,
-        None,
-        prune_stale,
-        verbose,
-        yes,
-        sep,
-    )
-    .await
-}
-
 pub(crate) async fn handle_upgrade_installed_with_output_with_result_prepared(
     config: &Config,
     prune_stale: bool,
     verbose: bool,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedAppUpgrade,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
     let mut renderer = TerminalRenderer::stdio_with_separator(sep);
@@ -155,13 +111,13 @@ async fn handle_upgrade_installed_target_with_reporter(
     .into_iter()
     .next()
     .expect("one reviewed App Plan");
-    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    let prepared = crate::lifecycle_plan::PreparedAppUpgrade::prepare(config, reviewed).await?;
     handle_upgrade_installed_target_with_prepared_reporter(
         config,
         category_filter,
         prune_stale,
         verbose,
-        crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime },
+        prepared,
         reporter,
     )
     .await
@@ -172,38 +128,28 @@ async fn handle_upgrade_installed_target_with_prepared_reporter(
     _category_filter: Option<&str>,
     _prune_stale: bool,
     verbose: bool,
-    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    prepared: crate::lifecycle_plan::PreparedAppUpgrade,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
-    let crate::lifecycle_plan::PreparedLifecyclePlan {
-        reviewed,
-        mut runtime,
-    } = prepared;
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
     let mut observer = UpgradeObserver::default();
     let mut interaction = TerminalInteraction;
-    let artifact_categories = runtime
+    let artifact_categories = prepared
+        .runtime()
         .app_categories(None)?
         .into_iter()
         .filter(|category| category.artifact.is_some())
         .map(|category| category.name)
         .collect::<BTreeSet<_>>();
-    let core = match crate::lifecycle_plan::execute_reviewed(
-        config,
-        runtime,
-        reviewed,
-        shine_core::frontend::ExecutionOptions {
-            show_hook_success: verbose,
-        },
-        &mut observer,
-        &mut interaction,
-    )
-    .await?
-    {
-        shine_core::frontend::OperationDetails::AppUpgrade(report) => *report,
-        _ => unreachable!("reviewed operation result type"),
-    };
+    let core = prepared
+        .execute(
+            config,
+            shine_core::frontend::ExecutionOptions {
+                show_hook_success: verbose,
+            },
+            &mut observer,
+            &mut interaction,
+        )
+        .await?;
 
     let show_unchanged = verbose && crate::presentation::full_upgrade_plan();
     let mut started = false;
@@ -362,13 +308,8 @@ fn render_runtime_event(reporter: &mut dyn LifecycleReporter, event: RuntimeEven
                 target.trim_start_matches("app/")
             )));
         }
-        RuntimeEvent::ProcessOutput { text, .. } => {
-            for line in text.lines() {
-                reporter.emit(PresentationEvent::stdout(format!(
-                    "     {}",
-                    report::dim(line)
-                )));
-            }
+        RuntimeEvent::ProcessOutput { stream, text, .. } => {
+            crate::presentation::emit_process_output(reporter, stream, &text);
         }
         _ => {}
     }
@@ -396,7 +337,6 @@ mod tests {
     async fn verbose_upgrade_reports_changed_app_files_but_not_current_files() {
         let _guard = env_lock();
         let dir = crate::test_support::make_temp_dir("shine-app-upgrade-report").await;
-        let previous_home = std::env::var_os("HOME");
         // SAFETY: `_guard` serializes HOME changes across tests in this process.
         unsafe { std::env::set_var("HOME", &dir) };
         let category = dir.join("presets/app/sample");
@@ -413,7 +353,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
-        super::super::install::handle_install(&config, Some("sample"), false, false)
+        super::super::install::handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
 
@@ -468,10 +408,7 @@ mod tests {
             PresentationEvent::Line { text, .. } if text.contains("config.txt")
         )));
 
-        match previous_home {
-            Some(home) => unsafe { std::env::set_var("HOME", home) },
-            None => unsafe { std::env::remove_var("HOME") },
-        }
+        drop(_guard);
         fs::remove_dir_all(dir).await.unwrap();
     }
 }

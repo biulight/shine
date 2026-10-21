@@ -2,6 +2,7 @@ use super::collect::{AppInfoFile, ShellInfoFile};
 use crate::apps::{AppCategory, AppFile};
 use crate::colors;
 use crate::config::Config;
+use crate::output::escape_controls;
 use crate::path_display;
 use crate::status::{FileStatus, UpdateChange};
 use anyhow::{Context, Result};
@@ -14,7 +15,7 @@ pub(super) async fn print_app_file(
     diff: bool,
     verbose: bool,
 ) -> Result<()> {
-    let label = fallback_app_label(&item.category, &item.file);
+    let label = escape_controls(&fallback_app_label(&item.category, &item.file));
     let source_path = config.preset_path(
         Path::new("app")
             .join(&item.category.name)
@@ -23,19 +24,22 @@ pub(super) async fn print_app_file(
 
     println!("{}", colors::bold(&format!("App Config: {label}")));
     if let Some(desc) = &item.file.description {
-        println!("{}  {desc}", colors::dim("Description"));
+        println!("{}  {}", colors::dim("Description"), escape_controls(desc));
     } else if let Some(desc) = &item.category.description {
-        println!("{}  {desc}", colors::dim("Description"));
+        println!("{}  {}", colors::dim("Description"), escape_controls(desc));
     }
     println!(
         "{}       {}",
         colors::dim("Source"),
-        path_display::format_home(&source_path, &config.home_dir)
+        escape_controls(&path_display::format_home(&source_path, &config.home_dir))
     );
     println!(
         "{}  {}",
         colors::dim("Destination"),
-        path_display::format_home(&item.destination, &config.home_dir)
+        escape_controls(&path_display::format_home(
+            &item.destination,
+            &config.home_dir
+        ))
     );
     println!(
         "{}       {}",
@@ -46,7 +50,7 @@ pub(super) async fn print_app_file(
         println!(
             "{}   {}",
             colors::dim("Transforms"),
-            item.file.transforms.join(", ")
+            escape_controls(&item.file.transforms.join(", "))
         );
     }
     if let Some(entry) = &item.manifest_entry {
@@ -55,7 +59,7 @@ pub(super) async fn print_app_file(
             println!(
                 "{}       {}",
                 colors::dim("Backup"),
-                path_display::format_home(backup, &config.home_dir)
+                escape_controls(&path_display::format_home(backup, &config.home_dir))
             );
         }
     }
@@ -80,33 +84,45 @@ pub(super) async fn print_shell_file(
     diff: bool,
     verbose: bool,
 ) -> Result<()> {
-    let label = format!("{}/{}", item.category.name, item.file.command_name);
+    let label = escape_controls(&format!(
+        "{}/{}",
+        item.category.name, item.file.command_name
+    ));
     println!("{}", colors::bold(&format!("Shell Preset: {label}")));
     if let Some(desc) = item.file.description.first() {
-        println!("{}  {desc}", colors::dim("Description"));
+        println!("{}  {}", colors::dim("Description"), escape_controls(desc));
     }
     println!(
         "{}       {}",
         colors::dim("Source"),
-        path_display::format_home(&item.source_path, &config.home_dir)
+        escape_controls(&path_display::format_home(
+            &item.source_path,
+            &config.home_dir
+        ))
     );
     if item.installed_source_path != item.source_path {
         println!(
             "{}     {}",
             colors::dim("Snapshot"),
-            path_display::format_home(&item.installed_source_path, &config.home_dir)
+            escape_controls(&path_display::format_home(
+                &item.installed_source_path,
+                &config.home_dir
+            ))
         );
     }
     println!(
         "{}     {}",
         colors::dim("Bin link"),
-        path_display::format_home(&item.link_path, &config.home_dir)
+        escape_controls(&path_display::format_home(
+            &item.link_path,
+            &config.home_dir
+        ))
     );
     if let Some(target) = &item.link_target {
         println!(
             "{} {}",
             colors::dim("Link target"),
-            path_display::format_home(target, &config.home_dir)
+            escape_controls(&path_display::format_home(target, &config.home_dir))
         );
     }
     println!(
@@ -122,7 +138,10 @@ pub(super) async fn print_shell_file(
         println!(
             "{}     {}",
             colors::dim("Rendered"),
-            path_display::format_home(&item.rendered_path, &config.home_dir)
+            escape_controls(&path_display::format_home(
+                &item.rendered_path,
+                &config.home_dir
+            ))
         );
     }
     if diff {
@@ -181,19 +200,22 @@ fn print_update_changes(config: &Config, changes: &[UpdateChange]) {
                     "     {}",
                     colors::dim(&format!(
                         "new file: {}",
-                        path_display::format_home(destination, &config.home_dir)
+                        escape_controls(&path_display::format_home(destination, &config.home_dir))
                     ))
                 );
             }
             UpdateChange::DeploymentChanged { field, from, to } => {
-                println!("     {}", colors::dim(&format!("{field}: {from} -> {to}")));
+                println!(
+                    "     {}",
+                    colors::dim(&escape_controls(&format!("{field}: {from} -> {to}")))
+                );
             }
             UpdateChange::CommandEntryMissing { path } => {
                 println!(
                     "     {}",
                     colors::dim(&format!(
                         "command entry: missing ({})",
-                        path_display::format_home(path, &config.home_dir)
+                        escape_controls(&path_display::format_home(path, &config.home_dir))
                     ))
                 );
             }
@@ -202,14 +224,17 @@ fn print_update_changes(config: &Config, changes: &[UpdateChange]) {
                     "     {}",
                     colors::dim(&format!(
                         "command entry: does not match expected ({})",
-                        path_display::format_home(path, &config.home_dir)
+                        escape_controls(&path_display::format_home(path, &config.home_dir))
                     ))
                 );
             }
             UpdateChange::ManifestEntryMissing { target } => {
                 println!(
                     "     {}",
-                    colors::dim(&format!("manifest entry: missing ({target})"))
+                    colors::dim(&format!(
+                        "manifest entry: missing ({})",
+                        escape_controls(target)
+                    ))
                 );
             }
         }
@@ -221,8 +246,8 @@ fn print_path_change(config: &Config, field: &str, from: &Path, to: &Path) {
         "     {}",
         colors::dim(&format!(
             "{field}: {} -> {}",
-            path_display::format_home(from, &config.home_dir),
-            path_display::format_home(to, &config.home_dir)
+            escape_controls(&path_display::format_home(from, &config.home_dir)),
+            escape_controls(&path_display::format_home(to, &config.home_dir))
         ))
     );
 }
@@ -252,7 +277,7 @@ fn print_heading(heading: &str, path: &Path) {
         "{}",
         colors::dim(&format!(
             "--- {heading}: {} ---",
-            path_display::format(path)
+            escape_controls(&path_display::format(path))
         ))
     );
 }
@@ -449,15 +474,16 @@ fn render_diff_or_note(
 fn colorize_unified_diff(diff: &str) -> String {
     let mut out = String::with_capacity(diff.len());
     for line in diff.split_inclusive('\n') {
+        let escaped = crate::output::escape_controls(line.trim_end_matches('\n'));
         let colored =
             if line.starts_with("@@") || line.starts_with("---") || line.starts_with("+++") {
-                colors::cyan(line.trim_end_matches('\n'))
+                colors::cyan(&escaped)
             } else if line.starts_with('+') && !line.starts_with("+++") {
-                colors::green(line.trim_end_matches('\n'))
+                colors::green(&escaped)
             } else if line.starts_with('-') && !line.starts_with("---") {
-                colors::red(line.trim_end_matches('\n'))
+                colors::red(&escaped)
             } else {
-                line.trim_end_matches('\n').to_string()
+                escaped
             };
         out.push_str(&colored);
         if line.ends_with('\n') {
@@ -510,6 +536,41 @@ mod tests {
     }
 
     #[test]
+    fn diff_escapes_controls_in_headers_and_all_line_kinds() {
+        let diff = render_diff_or_note(
+            "context\u{7}\nold\u{1b}[2J\t\n尾行\n".as_bytes(),
+            "context\u{7}\nnew\u{1b}[H\t\n尾行\n".as_bytes(),
+            "current\u{1b}[2J",
+            "expected\tfile",
+        );
+        for line in [
+            "--- current\\u{1b}[2J",
+            "+++ expected\\tfile",
+            "@@ -1,3 +1,3 @@",
+            " context\\u{7}",
+            "-old\\u{1b}[2J\\t",
+            "+new\\u{1b}[H\\t",
+            " 尾行",
+        ] {
+            assert!(diff.contains(line), "missing {line:?} in {diff:?}");
+        }
+        assert!(!diff.contains('\u{7}'));
+        assert!(!diff.contains('\t'));
+        assert!(!diff.contains("\u{1b}[2J"));
+        assert!(!diff.contains("\u{1b}[H"));
+    }
+
+    #[test]
+    fn diff_escapes_carriage_returns_without_changing_line_separators() {
+        let diff = colorize_unified_diff("-old\r\n+new\rcontent\n unchanged\r");
+        assert!(diff.contains("-old\\r"), "{diff:?}");
+        assert!(diff.contains("+new\\rcontent"), "{diff:?}");
+        assert!(diff.ends_with(" unchanged\\r"), "{diff:?}");
+        assert_eq!(diff.matches('\n').count(), 2);
+        assert!(!diff.contains('\r'));
+    }
+
+    #[test]
     fn diff_at_inline_limit_is_rendered() {
         let mut current = vec![b'a'; 256 * 1024];
         let mut expected = current.clone();
@@ -548,12 +609,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shine-info-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let config = Config::new_for_test(&dir);
-        let mut runtime = crate::core_runtime::from_config(&config).await.unwrap();
-        runtime.context_mut_for_cli().env = crate::env::EnvConfig::load_or_init(&config)
-            .await
-            .unwrap()
-            .as_map()
-            .clone();
+        let runtime = crate::core_runtime::from_config(&config).await.unwrap();
         let selected_source = runtime
             .inspect_shells()
             .await

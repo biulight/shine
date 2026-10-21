@@ -4,7 +4,7 @@ default-members = ["."]
 resolver = "2"
 
 [workspace.package]
-version = "2.5.0"
+version = "2.6.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Felix Jiang <biulight007@gmail.com>"]
@@ -16,7 +16,7 @@ anyhow = "1.0.102"
 directories = "6.0.0"
 toml = "1.1.2"
 toml_edit = "0.25.11"
-shine-core = { path = "core", version = "2.5.0" }
+shine-core = { path = "core", version = "2.6.0" }
 
 [package]
 name = "shine-cli"
@@ -31,14 +31,18 @@ homepage = "https://github.com/biulight/shine"
 keywords = ["cli", "environment", "configuration", "bootstrap", "shell"]
 categories = ["command-line-utilities", "config"]
 include = [
-    "Cargo.toml",
-    "Cargo.lock",
-    "LICENSE",
-    "README.md",
-    "cli/build.rs",
-    "cli/src/**",
-    "presets/**",
-    "skills/**",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/LICENSE",
+    "/README.md",
+    "/cli/build.rs",
+    "/cli/src/**",
+    "/tests/builtin_presets.rs",
+    "/tests/builtin_presets/**",
+    "/presets/**",
+    "/skills/**",
+    "/tests/source_package.rs",
+    "!**/node_modules/**",
 ]
 build = "cli/build.rs"
 
@@ -49,6 +53,28 @@ path = "cli/src/lib.rs"
 [[bin]]
 name = "shine"
 path = "cli/src/main.rs"
+
+[package.metadata.binstall]
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/shine-v{ version }-linux-x86_64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/shine-v{ version }-linux-aarch64.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/shine-v{ version }-darwin-x86_64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/shine-v{ version }-darwin-aarch64.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/shine-v{ version }-windows-x86_64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/shine-v{ version }-windows-aarch64.tar.gz"
 
 [dependencies]
 shine-core = { workspace = true }
@@ -71,7 +97,6 @@ similar = "3.1"
 reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls", "socks"] }
 semver = "1.0.28"
 serde_json = "1.0.145"
-jsonc-parser = { version = "=0.32.3", features = ["serde"] }
 flate2 = "1.1.4"
 tar = "0.4.44"
 glob = "0.3"

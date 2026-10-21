@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 
 use crate::colors;
+use crate::output::escape_controls;
 
-#[cfg(test)]
-use super::SysItem;
 use super::{ResolvedSelection, SysItemOutcome, SysItemStatus, selection::format_item_ids};
 
 pub(super) fn sys_item_label_width(
@@ -14,7 +13,7 @@ pub(super) fn sys_item_label_width(
         .item_ids
         .iter()
         .filter_map(|id| labels.get(id.as_str()))
-        .map(String::len)
+        .map(|label| console::measure_text_width(&escape_controls(label)))
         .chain(std::iter::once("profile".len()))
         .max()
         .unwrap_or(14)
@@ -25,7 +24,10 @@ pub(super) fn print_run_header(os_id: &str, sys_shell: &str, selection: &Resolve
     println!("{}", colors::bold("System Init"));
     println!("  OS: {os_id}");
     println!("  Shell: {sys_shell}");
-    println!("  Selection: {}", selection.source.describe());
+    println!(
+        "  Selection: {}",
+        escape_controls(&selection.source.describe())
+    );
     println!("  Items: {} selected", selection.item_ids.len());
     println!("  {}", colors::dim(&format_item_ids(&selection.item_ids)));
     println!();
@@ -54,14 +56,20 @@ pub(super) fn proxy_env_vars(config: &crate::config::Config) -> Vec<(&'static st
     ]
 }
 
-#[cfg(test)]
-pub(super) fn item_install_start_text(item: &SysItem, requires_admin: bool) -> String {
-    let admin_note = if requires_admin {
+pub(super) fn item_install_start_line(item_id: &str, label: &str, requires_admin: bool) -> String {
+    let admin = if requires_admin {
         " (administrator access required)"
     } else {
         ""
     };
-    format!("sys/{} ({}) installing{admin_note}", item.id, item.label)
+    format!(
+        "  {} {}",
+        colors::symbol("•"),
+        colors::dim(&format!(
+            "sys/{item_id} ({}) installing{admin}",
+            escape_controls(label)
+        ))
+    )
 }
 
 pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
@@ -85,7 +93,9 @@ pub(super) fn item_outcome_lines_with_status(
     symbol: &str,
     status: &str,
 ) -> Vec<String> {
-    let label = format!("{:<label_width$}", outcome.label);
+    let label = escape_controls(&outcome.label);
+    let padding = label_width.saturating_sub(console::measure_text_width(&label));
+    let label = format!("{label}{}", " ".repeat(padding));
     let status = format!("{status:<17}");
     let detail = if outcome.detail.is_empty() {
         String::new()
@@ -172,31 +182,50 @@ pub(super) fn presentation_symbol_stderr(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sys::manifest::parse_and_validate_manifest;
 
     #[test]
     fn item_install_start_names_item_and_admin_requirement() {
-        let manifest = parse_and_validate_manifest(
-            r#"
-version = 2
-
-[[items]]
-id = "zerotier"
-label = "ZeroTier"
-detect = { kind = "command", command = "zerotier-cli" }
-install = { kind = "script", path = "install/zerotier.sh" }
-"#,
-        )
-        .unwrap();
-
         assert_eq!(
-            item_install_start_text(&manifest.items[0], true),
-            "sys/zerotier (ZeroTier) installing (administrator access required)"
+            item_install_start_line("zerotier", "ZeroTier", true),
+            "  • sys/zerotier (ZeroTier) installing (administrator access required)"
         );
         assert_eq!(
-            item_install_start_text(&manifest.items[0], false),
-            "sys/zerotier (ZeroTier) installing"
+            item_install_start_line("zerotier", "ZeroTier", false),
+            "  • sys/zerotier (ZeroTier) installing"
         );
+    }
+
+    #[test]
+    fn sys_outcome_columns_use_terminal_width() {
+        let labels = BTreeMap::from([
+            ("ascii", "ASCII".to_string()),
+            ("wide", "中文标签中文标签".to_string()),
+            ("combining", "e\u{301}".to_string()),
+        ]);
+        let selection = ResolvedSelection {
+            item_ids: labels.keys().map(|id| (*id).to_string()).collect(),
+            source: shine_core::runtime::SelectionSource::Items,
+        };
+        let width = sys_item_label_width(&selection, &labels);
+        assert_eq!(width, 16);
+        for label in labels.values() {
+            let outcome = SysItemOutcome {
+                item_id: "item".into(),
+                label: label.clone(),
+                status: SysItemStatus::Updated,
+                detail: "detail".into(),
+                logs: vec![],
+            };
+            let line = &item_outcome_lines(&outcome, width)[0];
+            assert_eq!(
+                console::measure_text_width(line.split_once("updated").unwrap().0),
+                21
+            );
+            assert_eq!(
+                console::measure_text_width(line.split_once("detail").unwrap().0),
+                39
+            );
+        }
     }
 
     #[test]

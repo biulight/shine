@@ -94,10 +94,9 @@ fn resolve_theme() -> Option<Theme> {
 }
 
 /// `shine theme sync [--auto] [--quiet]`. Prints `eval`-able shell export
-/// statements to stdout; diagnostics go to stderr (suppressed by
-/// `--quiet`). Always exits successfully — an unresolved theme prints
-/// nothing rather than failing, so an old/broken binary or an unsupported
-/// terminal never blocks shell startup (PRD §7).
+/// statements to stdout; `--quiet` suppresses non-essential diagnostics on
+/// stderr. An unresolved theme succeeds without output (PRD §7), but
+/// configuration errors still propagate and produce a nonzero exit status.
 pub async fn handle_sync(auto: bool, quiet: bool) -> Result<()> {
     // Read-only: this runs on every interactive shell start and must never
     // create shine state on disk (AGENTS.md: Config::load_or_init() writes

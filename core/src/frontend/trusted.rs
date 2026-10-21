@@ -4,11 +4,11 @@ use super::{
     FrontendEventSink, FrontendEventStatusV1, FrontendService, FrontendServiceError,
     PlanReviewReportV1, ProjectedObserver, ReviewRequest,
 };
+use crate::digest::sha256_hex;
 use crate::lifecycle::{LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1};
 use crate::plan::{PermissionSetV1, PlanApprovalV1, PlanOperationV1};
 use crate::runtime::*;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 pub const EXECUTION_REPORT_SCHEMA_VERSION: u32 = 1;
 
@@ -392,7 +392,7 @@ fn sys_outcome(outcome: &SysItemOutcome) -> SysOutcomeV1 {
 
 fn recovery_result(operation_id: &str, count: usize) -> ExecutionResultV1 {
     ExecutionResultV1::Recovery {
-        operation_id: format!("operation:{:x}", Sha256::digest(operation_id.as_bytes())),
+        operation_id: format!("operation:{}", sha256_hex(operation_id.as_bytes())),
         rolled_back_actions: count as u64,
     }
 }

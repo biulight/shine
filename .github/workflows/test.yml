@@ -21,7 +21,7 @@ jobs:
       - name: Install TypeScript dependencies
         run: bun install --frozen-lockfile
       - name: Check Bun TypeScript sources
-        run: bun run check:ts
+        run: bun run --bun check:ts
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2

@@ -31,7 +31,15 @@ pub struct TaskEntry {
 
 impl TaskManifest {
     pub async fn load(shine_dir: &Path) -> Result<Self> {
-        crate::persist::load_toml_or_default(&shine_dir.join(TASKS_FILE), "tasks.toml").await
+        crate::persist::load_toml_or_default(&shine_dir.join(TASKS_FILE), "tasks.toml")
+            .await
+            .map_err(|error| {
+                if error.downcast_ref::<toml::de::Error>().is_some() {
+                    crate::config::config_parse_error(error).context("failed to parse tasks.toml")
+                } else {
+                    error
+                }
+            })
     }
 
     pub async fn save(&self, shine_dir: &Path) -> Result<()> {
@@ -57,6 +65,29 @@ mod tests {
 
     async fn temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-task-manifest").await
+    }
+
+    #[tokio::test]
+    async fn malformed_task_registry_omits_contents_and_preserves_read_failures() {
+        let dir = temp_dir().await;
+        let path = dir.join(TASKS_FILE);
+        for contents in [
+            "[tasks.demo]\ncommand='TASK_DOCUMENT_CANARY'\n",
+            "[tasks.demo]\ncommand=['TASK_DOCUMENT_CANARY'] invalid\n",
+        ] {
+            tokio::fs::write(&path, contents).await.unwrap();
+            let error = TaskManifest::load(&dir).await.unwrap_err();
+            let text = format!("{error:#}\n{error:?}");
+            assert!(!text.contains("TASK_DOCUMENT_CANARY"), "{text}");
+            assert!(text.contains("failed to parse tasks.toml"), "{text}");
+            assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), contents);
+        }
+        tokio::fs::remove_file(&path).await.unwrap();
+        tokio::fs::create_dir(&path).await.unwrap();
+        let error = TaskManifest::load(&dir).await.unwrap_err();
+        assert!(format!("{error:#}").contains("failed to read tasks.toml"));
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[tokio::test]

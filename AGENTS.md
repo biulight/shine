@@ -18,6 +18,10 @@ installation and uninstall. The root package is `shine-cli` (sources in `cli/`);
   [invariants](docs/kb/architecture/invariants.md) and search [lessons](docs/kb/lessons.md) for the
   affected behavior. Check [ADRs](docs/kb/decisions/) before proposing a design; consult
   [data flows](docs/kb/architecture/data-flows.md) for changes spanning modules.
+- Refactoring must reduce total maintenance cost while preserving behavior and safety boundaries.
+  Prefer deletion and direct local code; fewer files, less duplication or more tests alone do not
+  establish value. Count production, tests/support and docs separately, retain independent risk
+  coverage, and follow the [refactoring review gates](docs/kb/conventions.md#refactoring).
 - Update stale KB material in the same change using the
   [maintenance protocol](docs/kb/README.md#how-to-update-this-kb-maintenance-protocol).
 
@@ -67,7 +71,7 @@ cargo fmt --check
 cargo clippy --workspace --target-dir target --all-targets --all-features --tests --benches -- -D warnings
 cargo deny check bans licenses sources
 typos
-bun run check:ts                                      # typecheck + preset tests
+bun run --bun check:ts                                # typecheck + preset tests
 ```
 
 For public manual or website changes, run in `website/`:

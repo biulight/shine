@@ -5,21 +5,145 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **App content assessment has one explicit state.** Ready transformed bytes, not evaluated,
+  trust required and evaluation failed are mutually exclusive internal variants. Public inspection
+  DTOs retain their fields and diagnostic codes; missing/partial/user-modified states take
+  precedence for directly installed files. Generator failure preserves last-known-good content and
+  receipts, with the existing install-preserved and upgrade-failed report semantics (ADR 0117).
+  Named assessment policies keep install preview on transformed static fallback, install explicit,
+  upgrade automatic-only and evaluated inspection explicit. Ordinary `inspect_apps` needs only
+  filesystem observation; its assessment cannot execute generators or mutate state (ADR 0124).
+  Status regressions must exercise the production Core/FrontendService producer, with CLI tests
+  retaining row/rendering assertions; test fixtures may seed state but must not substitute a second
+  ownership, hash or status algorithm. Missing declared sources fail metadata validation. Ordinary
+  inspection reports an unchanged receipt-owned manual-generator file as not-evaluated; directly
+  installed missing/partial/user-modified files retain their existing precedence (ADR 0127).
+- **Migrated tests exercise the production owner.** Bun dependency, managed JSON and App destination
+  regressions use Core snapshot policy, ownership and destination entry points, not retired CLI
+  implementations. App data-directory tests use captured context rather than inferring it from HOME;
+  legacy full-path annotations pass the same parent-component check as metadata destinations.
+  Preserve source-layer admission, receipt/hash and compatibility cases (ADRs 0131, 0132).
+  Sys/Shell inventory tests use Frontend inventory and the actual CLI projection; current Shell
+  visibility follows available/installed state, not legacy status strings. Upgrade summary tests
+  capture the production reporter instead of maintaining a second wording function (ADR 0134).
+  Shell description/discovery regressions query Core metadata from captured snapshots; validation
+  golden reports come from the production validator, with only asserted temporary paths normalized.
+  Do not retain independent scanners or report aggregation inside tests (ADR 0135).
+  Asset copy/export and Config file/global-load tests call their production owners. Removal tests
+  use approved Shell uninstall. CLI uninstall always requests internal cleanup: extra cache-tree
+  files survive targeted Shell removal but are included in whole-shell cleanup. App cleanup removes
+  the selected internal category tree, or the entire App tree without a target. Only an empty App
+  manifest may be deleted; protected/failed receipts remain available for retry.
+  External preset sources remain preserved. Core retains its explicit purge field for Plan binding
+  and existing callers; the CLI no longer accepts `--purge` (ADR 0148). Do not revive the retired
+  asset-name deletion algorithm (ADR 0136).
+  Seal and stored-secret process regressions use `handle_seal` and `decrypt_with_config`; profile
+  rendering tests live beside their Core owner so CLI test wrappers do not require public helpers.
+  Preserve tag-based decrypt routing and legacy source/recipient cases (ADR 0137).
+  Generic harness tests enter Frontend App/Shell inspection with captured inputs and virtual
+  state; they must not preserve a second root-plus-path inspection algorithm. CLI lifecycle tests
+  pass their confirmation choice explicitly to production approved handlers (ADR 0138).
+  App inspection capability and partial-failure tests enter `FrontendService::inspect_apps`.
+  Shell profile mutation tests use approved install/uninstall or the completion entry; source
+  wrappers derive from installed commands, not caller-supplied test lists. Internal profile and
+  App action/generator/hook helpers stay runtime-scoped (ADR 0139).
+  Proxy tests use the production installation transaction and preserve project overrides during
+  global uninstall. Sys profile tests enter explicit-Host routing/reconciliation, and workspace
+  precedence tests compile captured sources. Keep rollback, BOM/CRLF and legacy cases (ADR 0140).
+- **Ordinary frontend inspection requires observation capability only.** App, Shell and Sys
+  default inspection, including the safe `ReadOnlyFrontend` surface, require only
+  `FileSystemObservationHost`. Sys status compares desired metadata with receipts; it must not
+  become a live provider or split-DNS probe. Explicit App generator evaluation retains its separate
+  trusted entry point and execution bounds. Shared report projection preserves safe errors,
+  category selection, status priority and observation order; it grants no approval (ADR 0129).
+- **Incomplete observations and profile attention keep their CLI meaning.** A failed release
+  check cannot produce an unqualified `Nothing to update` footer. Explicit Sys profile commands
+  render `NeedsAction` as attention rather than enabled/disabled success, and distinguish no-op
+  outcomes. Both policies retain their existing non-fatal exit behavior; rendering never changes
+  approval, profile merge publication, receipt order or recovery.
+- **CLI list presentation preserves query and output timing.** List/update/status query results
+  and borrowed view projections are local presentation data. Update retains its separate Shell
+  row/lifecycle captures and queries all domains before printing attention. Status prints the
+  Preset note and Shell attention before App/Sys queries; later errors cannot erase that output.
+  Diff reads stay at their original presentation boundary. Manual refresh and upgrade hints remain
+  distinct, generator evaluation stays opt-in, and evaluation failures render before nonzero exit.
+  Global failure labels, detailed status columns and recorded Sys change fields encode controls at
+  rendering; widths use the escaped strings. Manual-refresh hints omit copyable commands when
+  category/source operands contain controls, without changing the original selected refresh set.
+  Available Shell catalogs use the active snapshot, including built-in-plus-overlay sources.
+  Without an external source or active overlay, the embedded catalog retains its state-independent
+  metadata path; an invalid trust store must not block listing or change its successful exit.
+  Targeted deferred-generator notices follow resolved App category/file references, not unrelated
+  Apps or sibling files. Explicit evaluation remains category-scoped with all failures visible and
+  fatal; incomplete or failed assessment cannot produce a targeted no-update footer.
+  Inventory listing keeps its distinct missing-App-source error policy (ADR 0129).
+  Status retains installed managed Sys rows even without pending updates and labels current
+  state as receipt-based, never a live check; missing sources stay explicit. App summary generator
+  unknown/trust/failure counts must not be described as user modifications. Table padding uses
+  terminal display width, with one shared label width across the visible managed Sys result rows.
+  Generator summary units remain categories by default and files with `--diff`. Shell recovery's
+  legacy `rolled_back_actions` report also counts cleanup after commit; CLI wording must not claim
+  that committed content was rolled back.
+  Receipt-owned App resources absent from active metadata remain visible even when their entire
+  category is gone; they prevent the empty-installation message and retain uninstall-preview
+  guidance without becoming upgrade candidates or changing files, receipts or exit status.
+  App/Shell catalog list/info encode control-bearing names, descriptions and paths before styling or
+  column measurement. Control-bearing categories get an original-target install notice, never an
+  escaped alias as a copyable operand; Core metadata, selection and inspection remain unchanged.
+  Shell description lines keep parsed paragraph/blank-line structure while encoding controls
+  within each line; target lookup, ambiguity and missing-target exits retain their original policy.
+  Installed App/Shell `info` encodes metadata labels/descriptions and path headings after inspection;
+  verbose content keeps the existing lossy UTF-8 decoding and missing-final-newline behavior.
+  Shared source/overlay note values encode controls after source selection; internal label styling,
+  column padding, literal backslashes and the saved physical paths stay independent of encoding.
+- **Sys display encoding stays at the CLI boundary.** Suggested item operands use the shared
+  positional encoder, including `--` for leading hyphens. Detection command displays distinguish
+  program position from literal arguments and use POSIX/PowerShell encoding. Escape control
+  characters in Sys labels before rendering or measuring columns, sharing the broker list rule.
+  Catalog list/info also encode manifest/item descriptions before styling;
+  metadata, receipts, process argv, approval and exit policies retain their original values.
+  `sys info` also encodes recorded status detail, without treating a recorded failure as query failure.
 - **Identifiers and diagnostics do not determine execution intent.** App code boundaries come
   from actual generator/hook/artifact assessment, never static resource-name prefixes. Optional
   `PlanStepV1.kind` binds relocation, stale pruning, forced removal and shared Shell delivery
   intent into the full Plan fingerprint. Executors use typed intent plus exact ownership/state
   checks; diagnostic codes remain review output, not deletion authority (ADR 0104).
+- **Static validation retains its read-only order.** Source capture requires only filesystem
+  observation. Declaration diagnostics precede App destination checks and ordered all-platform
+  metadata validation; the first platform error wins. File filtering, snapshot executable flags,
+  portable foreign-platform paths and V1 report ordering remain unchanged across module splits
+  (ADR 0126).
 - **Static validation codes follow typed error origins.** Missing references, duplicate targets
   or commands and Bun policy failures carry structured kinds at the failing check. Category
   names and human-readable error chains cannot change the code; unclassified metadata failures
   use `invalid_metadata`.
+- **Authoring text encoding does not redefine report values.** Validation, lint and hypothetical
+  Plan text escape controls in source paths, logical identifiers, diagnostics and permission labels
+  with the shared CLI encoder. JSON, source identity, hypothetical planning and exit policies stay
+  unchanged. Lint omits copyable commands for control-bearing paths instead of suggesting an escaped
+  spelling as a different filesystem operand.
 
 - **Path presentation never changes permission identity.** Planners and App/Shell/Sys action
   executors use one root-aware encoder, preserving Unix roots, Windows drive roots and UNC
   prefixes. CLI path labels are applied only after exact permission/provenance matching and never
   fed back into approval. External-code confirmation wording comes from typed code boundaries;
   plans without external/overlay code still require normal snapshot-bound approval.
+
+- **Lifecycle display encoding follows identity matching.** Security Plan permission groups,
+  backup associations, step classification, code boundaries and fingerprints use original values.
+  Compact/detailed/bootstrap text encodes controls only at rendering. App result paths, labels,
+  error chains, refresh notices and restart hints use the same encoder before styling, preserving
+  stream choice and original error-chain depth. Control-bearing artifact and stale-source hints
+  request the original category argument rather than constructing an escaped operand. Bootstrap
+  preview encoding never changes injected proxy values; Git notices never rewrite process paths
+  or captured Git output.
+
+- **App install file failures remain visible at the CLI boundary.** Render all file results and
+  hints before returning the typed already-reported failure for any `AppFileAction::Failed`.
+  The footer counts failed files and says `Install incomplete`, including partial success.
+  Hook failures retain their non-fatal policy; do not infer file failure from all lifecycle
+  failures. Preview installs have their own count rather than being called skipped. This changes
+  neither Core execution, approval, receipt persistence nor recovery.
 
 - **Protected uninstall is incomplete in the CLI.** App and Shell report preserved/conflicting
   resources and failures explicitly, including partial completion, and actual commands return
@@ -30,6 +154,19 @@ bugs. Check this list before changing the modules named in each entry.
   verbose review retains them and every Plan stays approval-bound. Only a typed already-reported
   CLI failure may suppress the binary's duplicate error; its exit remains nonzero and other
   errors/unknown diagnostics must remain visible.
+
+- **Upgrade footers retain failure and preservation totals.** Aggregate upgrade includes managed
+  Sys preservation/conflicts alongside App and Env preservation. Both aggregate and targeted
+  footers show `Upgrade incomplete` and the authoritative report failure count before returning
+  their existing errors. Hook warnings do not become fatal; approval, execution and Core reports
+  remain unchanged. Schema output write errors propagate through the ordinary nonzero error path,
+  rather than panicking or becoming success.
+
+- **Review layouts remain pure and conservative.** Compact, detailed and bootstrap projections
+  preserve their existing formatting and classification rules. Unknown/blocking diagnostics, code
+  boundaries, administrator access and uncomputable permissions remain visible. Incomplete or
+  ambiguous bootstrap attribution falls back to the full review; display never edits the Plan or
+  creates approval (ADR 0126).
 
 - **Frontend approval is a consumed local capability.** Trusted human review retains the exact
   request and opaque configuration revision. Execution consumes a non-cloneable, non-serializable
@@ -45,6 +182,11 @@ bugs. Check this list before changing the modules named in each entry.
   preserved. Stable events explicitly omit raw runtime codes, details, labels and process output;
   target fields must belong to the generated Plan's canonical allow-list. Neither serialized
   operation state nor progress events authorize mutation (ADR 0079).
+
+- **Shared SHA-256 encoding does not unify fingerprint protocols.** `digest.rs` hashes exact bytes
+  and encodes 32-byte digests as 64 lowercase hexadecimal characters. Each caller owns its input
+  order, framing, normalization, domain separator, prefix, version and validation. Plan/snapshot
+  framing, workspace/cache protocols and FNV content receipt hashes remain distinct (ADR 0142).
 
 - **A security Plan is not dry-run and approval is snapshot-bound.** `PlanV1` contains only ordered
   semantic steps, safe diagnostic codes, resolved permissions, and digests of exact source/state
@@ -63,6 +205,18 @@ bugs. Check this list before changing the modules named in each entry.
   preview contract. Specialized operations use `sys-bootstrap`, `app-refresh`,
   `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
   lifecycle Plans or `LifecycleResultV1` operations.
+- **CLI upgrade handoffs preserve domain and approval ownership.** Reviewed request/approval pairs
+  stay private to lifecycle planning. Aggregate upgrade validates exactly one Shell, App and managed
+  Sys Upgrade request in the established order before any runtime preparation; every preparation
+  succeeds before any domain executes. Prepared handoffs are consumed, not cloned or reconstructed
+  by adapters. These internal types do not authorize mutation: existing Core locks, fresh Plan and
+  exact permission checks still run at apply time (ADR 0123).
+- **Target upgrade summaries retain domain-specific units.** App counts changed categories and
+  preserved non-auxiliary resources; Shell counts changed non-cache-only categories plus PATH and
+  lifecycle conflicts; Sys counts changed resources plus preserved/conflicting resources. Fatal App
+  and Sys totals come from their reports, so non-fatal hook outcomes do not change exit status.
+  Aggregate upgrade retains its separate counters and App-before-Sys failure precedence. The named
+  summary is display data, never approval or a shared transaction (ADR 0127).
 - **Filesystem summaries are Core-attributed review data.** Optional `filesystem_review` groups
   bind exact permissions and their typed purpose/target into the Plan fingerprint. CLI summaries
   never infer ownership from path prefixes or suffixes, never remove required permissions, and
@@ -107,6 +261,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **Preset fixtures are declarative assertions, never executable setup.** `shine preset test`
   accepts one category-local `shine.test.toml`, rejects unknown fields and unsupported schema
   versions, and runs each unique named case only through the synthetic authoring-report path.
+  Seeded state and planning share a host-native synthetic root, independently of the simulated
+  platform; receipt placeholders use TOML-safe paths under that same root.
   Host state may contain environment-name presence, opaque secret versions, bounded synthetic
   files, command-presence identities, current-version receipt documents, exact derived trust grants,
   and administrator state. Values and receipt contents never enter reports. Expectations compare
@@ -127,7 +283,10 @@ bugs. Check this list before changing the modules named in each entry.
   environment values, runtime manifests, and trust grants are never migrated. Opaque-code
   permissions, broad network access, and Sys v1 dispatchers are never inferred. Managed Git overlays
   are diagnostic-only; a source change, backup/write failure, refusal, or remaining blocker fails the
-  command even when independent safe edits have converged.
+  command even when independent safe edits have converged. Terminal summaries encode data before
+  wrapping; diff headers encode logical paths before diff construction and body rendering preserves
+  structural newlines while encoding CR/TAB/ESC. Display escapes never enter candidates or JSON.
+  Control-bearing remediation targets require original operands rather than escaped command aliases.
 - **Preset bundle bytes exclude host identity and author-only state.** `shine preset pack` uses one
   validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical
   file order, normalized mode, zero uid/gid/mtime, and a fixed gzip header determine bytes; physical
@@ -137,7 +296,9 @@ bugs. Check this list before changing the modules named in each entry.
   content or paths. Descriptions, labels, arguments, and other incidental strings never declare an
   executable payload. Without `--force`, publication must atomically reject any existing output
   entry, including one created by a concurrent writer; an existence check before replacement is
-  insufficient. Force keeps atomic replacement semantics.
+  insufficient. Force keeps atomic replacement semantics. Existing output ancestors must resolve
+  to directories before processing `..`; regular files and links to files cannot be traversed.
+  Text target rows escape controls at rendering; JSON targets and archive bytes retain their identity.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, captured executable intent, and each
   file's embedded, external, or overlay origin. It must not include physical source roots: relocating unchanged source is not a
@@ -237,7 +398,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **App refresh requires exact receipt ownership.** Destination equality alone cannot select a
   generated file: the receipt source must match the requested category and logical source file.
   Both planning and execution enforce this even with force; a foreign receipt never authorizes
-  generator execution or reassignment of its destination.
+  generator execution or reassignment of its destination. Direct refresh orchestration retains the
+  approved caller's lifecycle lock, selection-before-authorization, per-file continuation and one final receipt save before hooks. A failed final save does not roll back
+  already-applied refresh writes; hooks do not run (ADR 0130).
 - **App executable environment is explicit.** Generators receive only fixed `SHINE_APP_*` contract
   variables plus their `generator.env` mappings. Artifacts receive only the fixed contract plus
   their `[artifact].env` mappings, whose sources must be declared by the category's
@@ -286,6 +449,10 @@ bugs. Check this list before changing the modules named in each entry.
   replaceable reporter, but those events are not serializable and must never be copied into
   `LifecycleResultV1`. Confirmation and administrator authorization use the separate interaction
   port so reusable execution does not depend on dialoguer or terminal rendering.
+  Captured App notes retain their declared stdout/stderr stream and use that stream's color
+  support. Shell install dry-run remains a link-selection preview, not a reviewed Plan; its text
+  must not imply that conflicts, replacement effects, trust, permissions or profile changes passed
+  assessment. Presentation changes retain the existing requests, approval and exit policies.
 - **Lifecycle status distinguishes observation from execution.** Read-only `update` uses
   `dry_run = false` and `Pending`; explicit dry-run uses `dry_run = true` and `Previewed`.
   `Changed` means this execution changed Shine-owned state. App hooks/teardown may record execution
@@ -301,6 +468,12 @@ bugs. Check this list before changing the modules named in each entry.
   must exclude it from upgrade targets and point to the exact `app refresh` selector. A category
   with both automatic and manual changes must retain both actions. Typed inspection paths remain
   non-serializable and must not enter the lifecycle result.
+- **Shell display fields never supply identity or status decisions.** CLI rows retain Core's file
+  status, category, command name and ownership/missing-source flags. Pending matching, lifecycle
+  targets, diff selection and uninstall guidance use explicit selectors; symbols and labels are
+  presentation only. Category severity remains attention, partial, update, current, uninstalled,
+  in descending order, with the last row winning ties. An otherwise-current category with an
+  uninstalled sibling remains partial (ADR 0125).
 - **Managed-file update details are field labels, not payloads.** The read-only comparison may
   report that destination or content changed, but must not copy the destination, desired bytes, or
   environment values into structured lifecycle outcomes. Ownership and user-modification checks
@@ -310,24 +483,41 @@ bugs. Check this list before changing the modules named in each entry.
   mutation. Missing `schema_version` is legacy v0, read-only loads never rewrite it, the next
   successful mutation writes Shell v2 or App/Sys v1, and an unsupported future version fails first. The inner Sys
   receipt `version` is independent of `sys-manifest.toml`'s schema version.
+  App and Sys readers share only their domain-owned in-memory schema normalization; each reader
+  retains its original bytes, parsing diagnostics and IO behavior (ADR 0145).
+- **Bootstrap preparation precedes every installer and administrator prompt.** Validate persistent
+  state, preflight all selected items and compose selected profile inputs first. Keep fixed provider
+  invocation/preview policy separate from Host execution; optional version probes belong only to
+  execution-time detection. Stop after the first failed item without widening the selection, and
+  retain existing successful-item profile/receipt persistence (ADR 0128).
 
-- **Uninstall never touches user files.** `presets::remove_prefix` removes only embedded-asset
-  files; `bin_links::unlink_managed` removes only symlinks pointing into the managed presets dir,
+- **Removal must use domain ownership checks.** CLI asset readers expose extraction, not lifecycle
+  deletion. Approved Shell uninstall owns cache/launcher removal and receipt transitions; asset
+  enumeration is not removal authority (ADR 0136).
+  `launcher::unlink_managed_command_with_host` removes only symlinks pointing into the managed presets dir,
   plus **regular files that carry the native `# shine-managed`/`REM shine-managed` marker and a
   matching `# shine-target:`/`REM shine-target:` under the managed root** (Windows `.ps1`/`.cmd`
   shims and Unix `runtime = "bun"` launcher scripts); app
   uninstall is driven by `~/.shine/app-manifest.toml` entries only.
 - **Bun launchers are marked regular files, identified only by content, never by name.** A Unix
   `runtime = "bun"` command is a generated executable script (not a symlink); ownership and
-  current-ness (`bin_links::launcher_target`/`unix_launcher_status`, mirrored by
-  `windows_shim_status`) key on the platform-native managed marker + target path under the managed
-  root. An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user
-  conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
+  current-ness use production `launcher` Host probes and deterministic prepared resources, with
+  the platform-native managed marker + target path under the managed root as ownership evidence.
+  An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
   format change re-detects installed launchers as stale on upgrade; changing it is a format bump.
   Legacy content embeds the ordered `env` specs and Bun dependency policy. The `live-bun-v2`
   template reads those from its installed receipt; exact receipt comparisons still refresh both
   changes through an approved lifecycle operation. Ownership/removal still key only on the
   marker + target, independent of `env` and dependency mode.
+  Pure templates live in `launcher/templates.rs`; grouping invocation fields must preserve exact
+  bytes and the distinct creation/status name reconstruction rules. Neither grouping nor a single
+  current resource permits replacing a foreign Windows companion (ADR 0128).
+- **Shell preparation handoffs do not redefine receipt authority.** Named local transitions and
+  removals retain ordered targets, previous/desired receipts and explicit absence before projecting
+  the unchanged V1 contracts. Cache/render preparation retains preserved embedded bytes, optional
+  modes, transform inference, shared-output conflict checks and original effect timing. Fresh
+  observations, exact approval, transaction guards, receipt-positive commit and reverse recovery
+  remain in their existing owners (ADR 0130).
 - **Native CMD script escaping is receipt-versioned.** `native-cmd-v2` preserves apostrophes in
   a double-quoted PowerShell `-File` argument. Absent format fields retain exact legacy bytes for
   update, uninstall and recovery; PowerShell expression escaping must not be applied to CMD argv.
@@ -371,11 +561,38 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Declarative actions and recovery
 
+- **Shell preparation pairs each Action with its execution payload.** One ordered in-memory step
+  owns both; journal Action IR is a payload-free projection of that same sequence. Never rebuild
+  correspondence with independently appended vectors or positional truncating iteration. Pairing
+  does not replace Action validation, permission checks, journal-before-effect ordering, per-action
+  progress saves or fresh recovery approval (ADR 0117).
+- **App factory preserves per-resource admission.** The observation-only factory validates
+  approval before Host reads, then tries JSON relocation, Copy relocation, JSON merge and Copy in
+  that order. Relocation requires its exact typed Update step; ordinary Create/Update matching keeps
+  its existing target/resource/action rule. Generators remain excluded, non-admitted files emit no
+  action, and upgrade stale-prune actions follow active-file actions. Desired bytes and construction
+  locals remain local to that factory call and never replace fresh planning, executor authority or rollback checks
+  (ADR 0121).
 - **The executable Action IR is not the security Plan.** `PlanV1` remains a payload-free review and
   approval contract. `ActionIrV1` is created for execution only after planning and may carry resolved
   effect paths and content hashes, but never managed bytes, environment values, secret plaintext, or
   raw argv. Do not embed the Action IR in `PlanV1` or reinterpret semantic Plan steps as executable
   instructions.
+- **Resource contract routing is exhaustive and fail-closed.** Action DTOs retain their schemas;
+  private resource handlers must reject incompatible kinds or mark permissions uncomputable.
+  App commit converts to an App-only borrowed view and explicitly dispatches every supported
+  variant, including creation with no rollback cleanup. Journal removal follows every resource's
+  receipt/live-state checks and successful cleanup (ADR 0116).
+- **App upgrade completion owns the transaction guard.** Unjournaled, journaled-update and
+  journaled-relocation states are private variants; only journaled relocation owns old-source
+  cleanup. Keep the execution capability alive through immediate receipt save and commit, releasing
+  it at the same per-file boundary. Receipt-save failure retains explicit recovery state (ADR 0128).
+- **Shell phases share an exhaustive borrowed Action view.** Journal admission rejects non-Shell
+  kinds before resource effects. Receipt-marker eligibility, commit preflight/cleanup and recovery
+  projection/dispatch explicitly handle every supported Shell variant. Creation/update use matching
+  launcher receipts without positive markers; other Shell variants retain their marker boundary.
+  All commit preflights precede any rollback cleanup, and a cleanup failure retains the journal.
+  Domain recovery handlers and fresh approval checks remain authoritative (ADR 0118).
 - **Recovery is an explicit, freshly approved operation.** Ordinary planning, status, install,
   upgrade, and uninstall must not mutate an interrupted journal implicitly. `app-recovery` binds the
   exact journal bytes and current destination observation, validates its approval again under the
@@ -477,6 +694,12 @@ bugs. Check this list before changing the modules named in each entry.
   unchanged rollback material may be removed. Invalid JSON, changed managed keys, changed rollback
   kind/hash/mode, or a receipt conflict blocks without mutation. Prior and desired JSON values never
   enter Action IR or the journal.
+- **Managed JSON helpers preserve byte and subset identity.** The host-free `managed_json` module
+  owns the existing pretty-object serialization with a trailing LF and FNV-1a subset hashing.
+  A present `null` is not an absent key. No managed keys present yields no installed subset hash;
+  a partial subset still yields its existing hash. Approval and recovery remain responsible for
+  deciding whether an observed subset is admissible; helper extraction adds no write authority
+  and never serializes JSON values into Plans or journals (ADR 0125).
 - **App JSON relocation owns keys independently at both destinations.** `RelocateManagedJson`
   binds the exact old/new receipt identities, separate old/new managed-key sets and subset hashes,
   the optional old whole-file identity, canonical old rollback path, and an absent new destination.
@@ -581,6 +804,10 @@ bugs. Check this list before changing the modules named in each entry.
   affected profile. Recovery re-reads the current file, verifies only the owned-block transition,
   and restores or removes those blocks in place. Unrelated content written before or after the
   interrupted operation is preserved; a changed Shine block blocks recovery.
+  After all command receipts have been removed, full uninstall may remove remaining integration
+  using the reserved `shell/profile` legacy boundary only. It cannot mix with command boundaries
+  or create/replace a whole profile: execution and recovery both require an empty manifest, exact
+  previous file/sentinel identities, canonical rollback paths and a reviewed profile step (ADR 0149).
 - **Managed Sys recovery is receipt-positive and domain-scoped.**
   `sys-operation-journal.toml` precedes managed-file, split-DNS, or explicit profile-sentinel
   mutation and binds the exact previous and desired `SysRunEntry`. `shine sys recover [--yes]`
@@ -598,6 +825,11 @@ bugs. Check this list before changing the modules named in each entry.
   changes.
 
 ## Shell profile editing
+
+- **Literal encoding does not select shell semantics.** Shared POSIX and PowerShell encoders retain
+  exact output bytes. Callers still own Fish escaping, path normalization, `$HOME` expansion,
+  SSH NUL rejection and nesting, and CMD literal/legacy reconstruction. An escaped PowerShell
+  literal body excludes delimiters and must not become a CMD argument encoder (ADR 0141).
 
 - **Declarative PATH integrations are literal and idempotent.** Repeated profile loading must not
   duplicate existing entries. Reuse each path expression's own quoting in membership patterns,
@@ -643,6 +875,28 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Config files
 
+- **CLI configuration parser errors discard both source and value-bearing messages.** Minimal,
+  full and layered TOML readers plus comment-preserving writers use one shared CLI error mapper.
+  Workspace definitions, personal preferences, compiled cache documents, Broker policy and trust
+  stores reuse it before their existing file context. Proxy captured-rule and manifest parsers also
+  reuse it before mutation. The task registry retains its shared persistence reader, translating
+  only TOML parse failures at the CLI boundary; its missing-file default and I/O chain stay intact.
+  Keep existing file/field context, I/O errors, validation and write order; discard the original
+  parser chain, since type errors can quote values even without source excerpts. Silent metadata
+  probes remain silent, and serde's direct `Config` interface remains unchanged.
+  Diagnostic paths and key labels encode terminal controls only at formatting; captured native paths,
+  snapshot verification and original I/O causes remain intact.
+
+- **Runtime migration syntax errors do not retain source values.** The recipient inspection,
+  rewrite and final schema-state patch in `state migrate` share a file-only TOML parse diagnostic.
+  Drop the original parser error, including its source excerpt, duplicate-key text and Debug chain.
+  Project/workspace validation still precedes cleanup and writes in both preview and apply modes.
+  Migration action descriptions and current-schema recipient notices encode controls only at
+  print sites, keeping the original paths in their apply closures.
+  Workspace `env` and `env.encryption` must be table-like when present: scalar, array and
+  array-of-tables inputs return ordinary redacted errors, never panics. Use optional lookups for
+  absent settings; do not create encryption tables or expand inline-table recipient conversion.
+
 - **Self-install persists the path it actually writes.** Resolve `--dest` relative to the invocation
   cwd before installation and save the absolute path. Config-relative interpretation on reload must
   not redirect later upgrade synchronization to another binary.
@@ -650,6 +904,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **Trust store mutations serialize the entire read/modify/write cycle.** Grant and revoke acquire
   the persistent `trust.lock` OS lock before reading grants and retain it through private atomic
   persistence. Human review happens before locking; only the reviewed code identities are granted.
+  CLI trust output escapes controls in targets, local source labels and author statements before
+  styling or measuring columns. Control-bearing target hints omit copyable commands rather than
+  turning a display escape into a different operand; matching and persisted identities stay raw.
 
 - **Env precedence is unified and defaults never persist implicitly.** Builtin < overlay baseline <
   global config < global env file < project config < project env file. Keep raw definitions,
@@ -669,6 +926,29 @@ bugs. Check this list before changing the modules named in each entry.
 - **Read-only env commands do not initialize runtime state.** List/get/explain share the runtime
   resolver but route before advisory work, overlay synchronization and mutable initialization.
   Explain hides all values unless revealed, never decrypts, and keeps paths out of safe DTOs.
+
+- **Human-readable env output does not redefine values or write targets.** List cells escape
+  controls only after redaction and use terminal display widths; get/export/injection retain raw
+  values. Proxy toggles still select global config unless `--project` is explicit. Their post-save
+  effective-state inspection is read-only and best-effort: inspection failure warns, but does not
+  change the successful write's exit status. Self-upgrade failures preserve the error chain after
+  the existing cache invalidation, without changing installation or recovery behavior.
+  Proxy list fields encode stored command/with text without applying install-time validation.
+  List/explain path headings, directed-write receipts and proxy-toggle paths also encode controls
+  only at display. Proxy installation targets and post-save warnings, plus self-install sync results
+  and warnings, also encode controls before styling without changing original errors or status.
+  Missing-key/decrypt diagnostics encode only the displayed key; successful raw get/decrypt bytes
+  and original key lookup remain unchanged.
+  Explain's control-bearing encrypted-key hint requests the original key instead
+  of offering a display-escaped alias. Raw get/export/injection and save/reload exits remain unchanged.
+
+- **Shell result details are plain data, while statuses may carry styles.** Escape controls in
+  `detail_line_text` before dim styling; do not encode status ANSI sequences. Activation hints use
+  the shared CLI hint owner: control-bearing or non-UTF-8 paths request a new shell instead of
+  proposing a display-escaped/lossy source command. Core profile paths and bytes remain unchanged;
+  command-name summaries encode controls without changing stored names or execution. Structured
+  link-conflict statuses and continuation rows encode data before styling. Control-bearing categories
+  request the original category argument rather than offering an escaped alias as a repair command.
 
 - **Configuration edits preserve comments and unrelated raw definitions.** Whole-table saves use
   `shine_core::sync_table`; directed env and runtime-schema edits patch `toml_edit` entries. Never
@@ -698,6 +978,8 @@ bugs. Check this list before changing the modules named in each entry.
   case, because proxy launchers invoke Shine through PATH and would otherwise recurse.
 - **Proxy launchers bind their installation's runtime directory.** All platform launchers pass
   an absolute `--config-dir`; a caller's environment cannot silently select another trust/env store.
+  Text launchers require UTF-8 runtime and target paths; reject unrepresentable paths during
+  preflight, never render a replacement-character alias into a runnable launcher.
   Project discovery still follows the caller cwd. Reinstallation upgrades legacy launchers.
 - **Sudo home lookup uses the OS account database.** Use reentrant account lookup, including
   macOS Directory Services and Unix NSS, rather than parsing `/etc/passwd`. Copy account strings
@@ -705,22 +987,40 @@ bugs. Check this list before changing the modules named in each entry.
 - **Project-only proxies remain transparent outside the project.** Missing active rules forward
   directly without environment injection. PATH discovery excludes the actual Shine bin directory,
   including directory aliases, while preserving executable names such as `cargo` for dispatch.
+- **Proxy completion preserves child status and streams.** Enabled, disabled and unmatched rules
+  share the environment runner's completion policy: success returns normally, numeric child exits
+  propagate unchanged, and Unix signal termination maps to `128 + signal`. Forward stdout/stderr
+  bytes unchanged; spawn failures remain contextual command errors. This adds no signal forwarding
+  or process-group policy and changes no injection, lookup, launcher or persistence behavior.
 - **Managed overlay synchronization uses the configured source.** Fetch from the current URL and
   explicit branch or remote HEAD before updating origin/resetting; failed fetches preserve the last
   checkout and origin even during relink. Before fetch and destructive synchronization, require a
   non-linked standalone checkout whose canonical worktree and Git metadata roots are exactly the
   managed directory and its `.git` directory. Repository-selecting environment variables cannot
-  redirect Git operations. After a successful fetch/reset, clean untracked and ignored files and
+  redirect Git operations. Git path output loses only its record terminator, never whitespace
+  belonging to directory names. After a successful fetch/reset, clean untracked and ignored files and
   nested repositories only inside that verified disposable mirror, including when HEAD is unchanged.
+  Initial clone rejects non-UTF-8 staging paths before Git invocation or stale-temp cleanup; it must
+  never convert a native path lossily into a different writable sibling. Keep the existing UTF-8
+  Git path-output boundary, native temp-path construction and valid-path cleanup/mirror policy.
 - **Managed Git overlay configuration is global-only.** Project config does not load Git overlay
   keys, and all projects share `<shine_dir>/overlay`. Reject `overlay link --git` with an active
   project before saving or synchronizing; route through read-only config loading before runtime
   initialization or advisory work so refusal cannot initialize global state. Project-specific
   overlays use manual directory links;
   inherited global Git overlays remain readable and pullable from projects.
-- **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
-  key > `~/.shine/` default. Code and
-  [`data-flows.md`](data-flows.md#config-discovery) must agree.
+- **Config discovery priority is fixed.** Without project config, `SHINE_CONFIG_DIR` >
+  `SHINE_PRESETS` > `presets_dir` key > `~/.shine/` default. With project config, an explicit
+  project `presets_dir` can override `SHINE_CONFIG_DIR`'s presets default; `SHINE_PRESETS` still
+  wins. Source notices must respect that scope. Overlay info follows the effective manual
+  directory before inherited Git settings; unlink messages do not promise embedded fallback.
+  Source notices never reload config to predict post-save state or change source resolution.
+  Code and [`data-flows.md`](data-flows.md#config-discovery) must agree.
+- **Local Preset registration must not select lossy path aliases.** Both link modes reject
+  unrepresentable native operands before `--create` and unrepresentable resolved directory paths
+  before saving UTF-8 configuration. Expand with the captured config home. Shared full expansion
+  rejects an unrepresentable home only when `~` or `$HOME` actually needs it; unrelated absolute
+  and relative paths keep their existing behavior. Keep source modes, config locks and delta saves.
 - **External app preset hooks and generators require scoped trust.** `post_upgrade`
   runs commands after upgrades, while an automatic file generator may run during an approved
   install/upgrade and supply effective source bytes. Embedded code may run implicitly, but external
@@ -751,6 +1051,11 @@ bugs. Check this list before changing the modules named in each entry.
   preserve the manifest snapshot. Install, `shine app refresh`, or explicit
   `info`/`update --run-generators` evaluation may run it. Evaluation never writes; refresh must
   target manifest-owned files and preserve user modifications unless `--force` is explicit.
+- **Refresh shares rules, not captured authority.** Candidate selection and exact source/destination
+  receipt admission use `app/refresh_selection.rs`. Planning selects candidates before loading the
+  manifest; execution retains its manifest-first preparation order. Both use their own current
+  manifest, and approved execution still locks before fresh Plan validation. Selection stays in
+  declaration order and cannot authorize generators or reuse review-time receipts (ADR 0141).
 - **Generator failures never destroy the last-known-good managed file.** Status
   and upgrade warn and retain an existing manifest-owned destination. An enabled
   generator with no successful installed snapshot fails rather than installing
@@ -786,9 +1091,24 @@ bugs. Check this list before changing the modules named in each entry.
 - **A missing task `cwd` means dynamic caller cwd.** Legacy `tasks.toml` entries have no `cwd`, so
   deserialization must default it to `None`; only an explicit `task save --cwd` fixes the working
   directory. Never reinterpret missing `cwd` as the save-time directory.
+- **Task cwd resolution preserves filesystem identity.** Expand `~` and canonicalize using native
+  paths, without lossy string conversion. Reject a non-UTF-8 canonical cwd before locking or saving
+  the TOML registry, including force replacement; never select a replacement-character neighbor.
+- **Task cwd display does not feed execution.** Save/info and the stderr run announcement encode
+  terminal controls after home-relative formatting. Preserve stored native path identity, child
+  stdout/stderr bytes, exit status and the existing lock, validation and direct-argv policy.
+- **Task displays use the native platform shell.** Reuse program and argument encoders: POSIX on
+  Unix, PowerShell invocation/quoting on Windows. Existing manifest names remain lookup identities;
+  encode their controls only for status/error text and measure list columns by display width.
+  Startup/cwd failure fields encode controls after raw path lookup and process construction;
+  shell-quoted command previews remain independently copyable and never feed execution.
 
 ## Embedded presets
 
+- **CLI asset source selection is instance-scoped.** `PresetAssetReader` borrows the selected
+  overlay root from the consuming `Config`; enumeration and reads use that same root. Config
+  loading must not register an overlay in process-global state. Pristine copy/bootstrap APIs
+  remain embedded-only, and lifecycle execution still consumes Core's captured immutable snapshot.
 - **Preset copy/export writes replace entries inside a resolved output root.** Reject nested
   symlinks, Windows junctions/reparse points, and special output entries before staging and
   publication. Set final permissions on a complete synced staging file before publishing it.
@@ -797,12 +1117,12 @@ bugs. Check this list before changing the modules named in each entry.
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
 - **The generated built-in platform capability blocks must use runtime selector semantics.**
-  `preset_meta::tests::built_in_preset_platform_capability_docs_are_current` asks Core to derive App
+  The `builtin_presets` integration target checks capability docs using Core-derived App
   category and Shell command visibility from the pristine immutable snapshot for macOS, Linux, and Windows,
   then checks the delimited blocks in both public manual locales. Do not maintain a parallel
   platform map or weaken the test to trust prose labels; a preset metadata change and both generated
   blocks must land together. Regenerate them with
-  `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`.
+  `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test --test builtin_presets --target-dir target built_in_preset_platform_capability_docs_are_current`.
 - **Fallback depends on the selected preset mode.** In built-in mode, an overlay replaces matching
   paths and unmatched paths continue to read embedded assets. A full external preset source is
   authoritative for app and shell category discovery: a missing category or file is not silently
@@ -848,6 +1168,11 @@ bugs. Check this list before changing the modules named in each entry.
 - **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
   files, manifest entries, and managed launchers, including legacy launchers pointing into the
   external tree. The external presets and overlay directories remain untouched.
+- **Shell inspection cannot acquire execution capabilities.** `inspect_shells` and its snapshot
+  comparison require only `FileSystemObservationHost`. Per-command observation preserves Host read
+  and error order; the subsequent change/status projection has no Host access. Keep conflict ahead
+  of uninstalled/trust/update/missing-rendered/live/current status, retain change order and clear
+  changes for uninstalled commands. Receipt-only rows remain inspection data, not execution metadata.
 - **Shell inspection and planning use the same launcher ownership probe.** Both recognize
   category-scoped managed roots, the active overlay, and recorded source/rendered paths, including
   the platform's complete launcher resource set. Receipt-only commands remain visible as missing
@@ -867,6 +1192,19 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Secrets
 
+- **Owned workspace plaintext follows scope lifetime.** Compiled and explicit environment maps
+  wipe values on replacement and drop; consuming iteration retains the guard for unconsumed
+  entries. Dotenv serialization and decrypted cache buffers use zeroizing owners, including error
+  and cancellation paths. Decrypted-payload parse errors must omit source snippets and parser
+  chains that retain plaintext. Drop owned maps before child exit propagation, since `process::exit`
+  bypasses destructors. Existing broker map APIs explicitly transfer successful result ownership.
+  Shared source precedence must not skip validation/decryption of shadowed sources or reduce
+  complete declared-secret sets bound to broker policy (ADR 0114).
+  `workspace/source_payload.rs` shares sealed-source validation and full decrypted-key equality.
+  Plain export bypasses decryption; local and broker callers retain their existing hint wording,
+  precedence and release filtering. Sealing uses the pending-source decoder without the sealed
+  precondition. Cache/broker snapshot metadata validation never decrypts (ADR 0141).
+
 - **Workspace file groups are explicit binary release.** Version 3 mappings require repeatable
   `--file-group` selection. Capture all ciphertext before decryption and decrypt all selected files
   before target creation. Reject links, hard-link aliases, path/case overlaps and pre-existing run
@@ -877,6 +1215,10 @@ bugs. Check this list before changing the modules named in each entry.
   keys, including deleted working files and aliases in parent directory names. Git discovery errors
   fail closed; exit 128 alone never proves absence.
   Run previews use stderr, preserving exact child stdout; dry-run previews use stdout.
+  Preview paths are quoted with control characters escaped on one line. Seal/removal/export result
+  paths and cleanup warnings encode controls only when rendered; child stdout remains raw.
+  Display strings never
+  replace the raw filesystem paths used for preflight, crypto, locks, writes or cleanup.
   Keep targets inside the workspace.
   Create plaintext privately before bytes are written (Unix 0600/0700, Windows protected current-user
   ACLs), hold shared path locks, and recheck captured inputs before writes/deletion. Cleanup uses
@@ -903,6 +1245,13 @@ bugs. Check this list before changing the modules named in each entry.
   into an absent path inside a same-directory private staging directory, restrict the file to 0600
   on Unix, extract its recipient, then use synced replacement. Never delete the old key before
   invoking keygen. Normal initialization retains keygen's exclusive-create semantics.
+  Pass output/staging paths as native OS arguments for both ordinary and Touch ID keygen. A
+  configuration hint must not substitute a lossy path: retain absolute TOML quoting for UTF-8
+  paths and omit the copyable assignment for unrepresentable paths.
+  Identity list and ordinary/Touch ID generation result rows encode display paths and recipients;
+  native argv, source comments and copyable TOML hints (including multiline values) remain raw.
+  Identity preflight/read errors, including public phone-stub reads, encode only display paths and
+  invalid policy labels. Error chains retain typed I/O causes and never include identity contents.
 
 - **Sealing replaces only regular source files.** Reject symbolic links before capturing any
   sources and recheck before replacement; on Unix require exactly one hard link. Atomic rename
@@ -923,6 +1272,16 @@ bugs. Check this list before changing the modules named in each entry.
   decrypts also capture the age client's progress diagnostics; explicit QR and opted-in messages
   stay interactive, and captured diagnostics become visible when decryption fails. A shell may
   independently move its next prompt.
+- **Shell export rejects unrepresentable values before output.** After selecting/decrypting the
+  winning stored value, `env secret export` rejects NUL with an error that omits the value. Print no
+  partial export code, do not fall back from a selected secret, and preserve raw get/decrypt output.
+  The Unix source helper evaluates only successful output and returns the producer failure code.
+  Keep its capture variable inside command substitution so an exported alias cannot be shadowed.
+- **PowerShell exports survive native pipeline transport.** Windows PowerShell 5.1 splits native
+  stdout into lines and decodes bytes using its console code page. Encode CR/LF or non-ASCII values
+  as a single ASCII UTF-8 Base64 decoding expression, retaining ordinary ASCII literal quoting.
+  Exercise the shipped PowerShell source helper under UTF-8 and a legacy code page, preserving
+  Unicode, exact CR/LF bytes and the caller's encoding. Do not alter stored values or raw output.
 - **A valid nonmatching plugin identity is an ordinary miss within the selected age backend.** The
   plugin must return no file key and no stanza error so reference age can try the next configured
   identity. Malformed supported stanzas, unavailable identity state, cancellation, and final
@@ -931,7 +1290,8 @@ bugs. Check this list before changing the modules named in each entry.
   standalone plugin's transactional setup and record its versioned public stub path and recipient,
   but it must not allocate, discover, copy, remove, or repair plugin TPM/Secure Enclave keys, replay, locator, pairing,
   or recovery state. A failed Shine config write never authorizes cleanup. Phone setup does not
-  change the default secret backend or add a phone-only recipient set (see
+  change the default secret backend or add a phone-only recipient set. Receipt paths are display-escaped;
+  stored identity paths and TOML recovery assignments preserve the original values (see
   [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md)).
 - **Decrypt routing is self-describing.** Untagged data is GPG, `age:` is age and
   `hybrid:` is the versioned two-wrapper envelope (ADR 0084). Encryption defaults never
@@ -946,11 +1306,24 @@ bugs. Check this list before changing the modules named in each entry.
 - **Hybrid local caches follow the locally selected backend.** Validate captured source
   structure before cache decryption, and bind source/policy snapshots, backend and workspace
   recipients inside the encrypted cache. Never reuse legacy caches or global recipient fallbacks.
+- **Workspace project cache keys preserve native directory identity.** Hash the canonical native
+  path encoding, including the fallback when canonicalization fails. UTF-8 project keys retain
+  their existing bytes; lossy display aliases must never select another project's cache directory.
   Cache decryption failure/cancellation is terminal. Personal workspace preferences are trusted
   local input; broker requests cannot supply them (ADR 0085).
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
   prefix, breaks every secret encrypted before the change.
-- **Workspace export decrypts only on explicit request.** `shine env workspace export` omits
+- **Persistent file export transfers ownership only after complete preparation and writes.**
+  `workspace export --format files` selects explicit version 3 groups and mode, never env sources.
+  Share seal/run locks, capture all ciphertext before decryption, decrypt everything before creating
+  targets, and recheck workspace/source snapshots before and throughout writes. Final exclusive
+  creation rejects concurrent destinations; existing targets are never adopted or overwritten.
+  Private files are synced before completion; all existing file-group path/Git/size constraints apply.
+  Keep the owned-object cleanup guard armed across writes and cancellation, and disarm it only after
+  final input and output identity checks. Failure removes only newly owned files/empty directories,
+  retains replacements, and reports cleanup errors. Success leaves user-managed plaintext that run
+  must still reject. This is not a multi-file transaction or crash-recovery mechanism (ADR 0112).
+- **Dotenv export decrypts only on explicit request.** `shine env workspace export --format dotenv` omits
   secret-winning keys unless `--include-secrets` is present, never mixes in the caller's process
   environment, and never prints exported values in its status or dry-run output. On Unix, an
   export containing secrets must be created privately (`0600`) before plaintext bytes are written;
@@ -961,10 +1334,29 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## SSH transfer
 
+- **Local status waits are bounded without changing error classification.** Connection/handshake
+  and status request each have a five-second deadline, scoped only to `local status`.
+  Connection errors remain stdout observations with success; post-handshake errors remain command
+  failures on stderr. Transfer and broker approval waits retain their own policies. SCP preview
+  quoting is presentation-only and never feeds argv or path resolution.
+  Encode status session/host/directory fields, connection observations and rejection messages only
+  at display sites; retain raw socket/token data, configuration startup and timeout/exit boundaries.
+
+- **SSH diagnostics are encoded independently of transfer frames.** Connection-task errors and
+  session cleanup warnings encode terminal controls only at printing. Protocol parsing, task
+  tracking/draining, replacement-file preservation, cleanup best-effort policy and raw child Log
+  frames remain unchanged.
+
 - **SSH session resources are owned from the first setup step.** Listener binding, context
   persistence, spawn/wait failures and cancellation must release the listener and session
   directory. Stop and await the accept loop before draining connection tasks; finish cleanup
   before propagating the SSH exit status, including `process::exit` paths.
+- **SSH construction preserves the user option boundary and wrapper bytes.** The named parsed
+  result is local input data, not approval. Preserve separate/attached option values, repeated
+  option order, `--`, destination and remote argv; POSIX quoting and encoded Windows wrappers stay
+  byte-compatible. Pure builders own no listener, process or broker capability. Session setup,
+  broker mode/trust/nonce checks and cleanup remain at the original orchestration boundaries
+  (ADR 0130).
 - **IPv6 transfer destinations remain one address.** Bracket IPv6 literals, including user and
   zone-qualified forms, in SCP operands. Select SCP for literal IPv6 destinations because the
   macOS system rsync parser splits even bracketed literals at the first colon. Retain the SCP
@@ -974,6 +1366,9 @@ bugs. Check this list before changing the modules named in each entry.
   at consumption, place them only after argv's option separator, and use tilde-only expansion for
   local hints rather than expanding the agent's environment. Reconnection options come only from
   the locally captured session context; tokens never authorize broker decryption.
+  Reject unrepresentable local path/home expansions before tool selection, preview or execution;
+  String argv and glob patterns must never substitute lossy filesystem aliases. An unused native
+  home does not block absolute or literal-relative hints, and `$VAR` stays literal.
 - **Transfer failure and cancellation stop child processes.** Detect a closed control connection
   even while a child is silent or has closed its output pipes. Error paths terminate and reap the
   child; cancellation has a drop guard. On Unix, isolate and terminate the whole process group,
@@ -995,6 +1390,10 @@ bugs. Check this list before changing the modules named in each entry.
   protocol argument protection from ambient settings. SCP retains its own operand handling.
 
 ## SSH secret broker
+
+- **Broker CLI descriptions retain snapshot identity.** Local describe encodes source paths only
+  in text rows; workspace/source hashes, payload bytes and policy matching remain raw. Missing
+  policy diagnostics encode the supplied selector without validating it as a new policy name.
 
 - **Policy writers share a persistent `ssh-secret-broker.lock`.** Add, remove, local update and
   remote enrollment lock before the final store read and retain the guard through private atomic
@@ -1031,6 +1430,9 @@ bugs. Check this list before changing the modules named in each entry.
   then an RAII guard restores raw termios and resumes SSH on success or every error path. Dropping
   the guard immediately after the yes/no prompt breaks terminal pinentry and permits concurrent
   requests to corrupt each other's TTY interaction.
+  The private interaction port owns terminal mechanics and the returned guard only. Mode/policy
+  authorization, nonce claims and the operation lock remain with the broker coordinator; a mock or
+  successful prompt is never itself secret-release authority (ADR 0128).
 - **Broker UI is rendered only inside the local-TTY guard.** OpenSSH raw mode disables normal LF
   cursor handling, so inspect/enrollment details printed before termios restoration form a
   staircase and can interleave with the remote shell. Confirmation accepts plain `y`/`yes` and
@@ -1071,6 +1473,8 @@ bugs. Check this list before changing the modules named in each entry.
   reports a retry warning and exits nonzero without a completion summary or stale cache writes;
   automatic advisories silently discard superseded results. See ADR 0108.
 
+- **Release-cache warnings encode error chains only when printed.** Cache write, cooldown and
+  invalidation failures retain their best-effort behavior; encoding grants no success or authority.
 - **A failed or rate-limited version check must never fail the user's command** (`main.rs`,
   commits `605fdd8`, `f033a25`). Network errors are tolerated; rate-limit cooldowns are cached.
 - **`preview` is not a release baseline.** Version comparisons and release notes must use the
@@ -1079,14 +1483,28 @@ bugs. Check this list before changing the modules named in each entry.
   before stale-entry handling, shell filtering happens before link/template reconciliation, and
   managed sys apply receives the selected item. Filtering only the report after a global upgrade
   would violate the command's user-visible scope.
+- **Preset selectors preserve literal identity.** Install, uninstall, upgrade and inspection must
+  retain leading/trailing whitespace in category names rather than selecting a trimmed sibling.
+  Reject entirely blank operands without rewriting nonblank ones. Keep existing canonical suffix
+  normalization, ambiguity checks, metadata command-name validation and approval/execution gates.
 
 ## Tests
 
+- **Built-in preset contracts exercise shipped inputs through production owners.** The integration
+  target reads the actual embedded bundle and calls Core/CLI entry points; it must not introduce
+  a second metadata scanner, destination resolver or planner. Keep CLI assembly and generic engine
+  safety tests with their owners. Test relocation preserves assertions and platform gates, including
+  captured data-directory independence and capability-block CRLF/update behavior (ADR 0147).
+
 - **Env-var mutation in tests must hold `crate::test_support::env_lock()`** — a single shared
-  mutex used across the lib/bin boundary (it is deliberately *not* `#[cfg(test)]`-gated because
-  `cfg(test)` does not cross that boundary).
+  guard used across the lib/bin boundary (it is deliberately *not* `#[cfg(test)]`-gated because
+  `cfg(test)` does not cross that boundary). The guard restores the captured environment and cwd
+  before releasing its mutex, including on panic. Manual cleanup must not substitute removing
+  a variable for restoring its original value.
 - **Tests that touch real system paths** (e.g. docker-engine's `/etc/docker/daemon.json`) must
-  additionally hold the cross-process admin lock for their full body (commit `fbd9c55`).
+  additionally hold the cross-process admin test lock for their full body. It uses the same
+  persistent OS file-lock implementation as lifecycle locks; errors fail the test, timeout never
+  revokes a live owner, and release never unlinks the lock file (ADR 0113).
 
 ## One-operation external code consent
 

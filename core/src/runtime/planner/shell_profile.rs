@@ -64,6 +64,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 }
             }
             changed
+        } else if request.operation == LifecycleOperation::Uninstall && request.target.is_none() {
+            crate::runtime::shell::prepare_shell_profile_files(
+                self.host(),
+                self.context(),
+                &[],
+                !manifest.entries.is_empty(),
+                true,
+            )
+            .await?
+            .into_iter()
+            .map(|file| file.destination)
+            .collect()
         } else {
             BTreeSet::new()
         };

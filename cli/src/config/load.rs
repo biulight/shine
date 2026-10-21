@@ -1,5 +1,6 @@
 //! Config loading: global runtime config, project-layer discovery and merge.
 
+use crate::output::escape_controls;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -54,8 +55,8 @@ impl Config {
         if let Some(project_config) = find_project_config(&current_dir) {
             bail!(
                 "{} already exists; current directory is already under a shine project at {}",
-                project_config.path.display(),
-                project_config.root.display()
+                escape_controls(&project_config.path.display().to_string()),
+                escape_controls(&project_config.root.display().to_string())
             );
         }
 
@@ -108,10 +109,22 @@ impl Config {
             .clone()
             .context("project config disappeared; retry")?;
         config.config_inputs.push(project_input);
-        let original: toml::Table =
-            toml::from_str(&contents).context("Failed to parse project config file")?;
-        let overrides: ProjectOverrides =
-            toml::from_str(&contents).context("Failed to parse project config file")?;
+        let original: toml::Table = toml::from_str(&contents)
+            .map_err(super::config_parse_error)
+            .with_context(|| {
+                format!(
+                    "Failed to parse project config file {}",
+                    escape_controls(&project_config.path.display().to_string())
+                )
+            })?;
+        let overrides: ProjectOverrides = toml::from_str(&contents)
+            .map_err(super::config_parse_error)
+            .with_context(|| {
+                format!(
+                    "Failed to parse project config file {}",
+                    escape_controls(&project_config.path.display().to_string())
+                )
+            })?;
 
         let project_presets = overrides
             .presets_dir
@@ -198,15 +211,10 @@ impl Config {
             config.initialize_runtime().await?;
         }
         config.resolve_env_layers().await?;
-        crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
 
         let loaded = config.serialize_effective_table()?;
         config.save_state = Some(ConfigSaveState { original, loaded });
         Ok(config)
-    }
-
-    pub async fn load_global_runtime_or_init() -> Result<Self> {
-        Self::load_global_runtime(true).await
     }
 
     async fn load_global_runtime(initialize: bool) -> Result<Self> {
@@ -221,7 +229,7 @@ impl Config {
             .iter()
             .find(|input| input.path == config.config_path())
             .and_then(|input| input.contents.as_deref())
-            .map(toml::from_str)
+            .map(|contents| toml::from_str(contents).map_err(super::config_parse_error))
             .transpose()?
             .unwrap_or_default();
         let loaded = config.serialize_effective_table()?;
@@ -271,7 +279,14 @@ impl Config {
         let toml_presets = global_input
             .contents
             .as_deref()
-            .map(read_minimal_config)
+            .map(|contents| {
+                read_minimal_config(contents).with_context(|| {
+                    format!(
+                        "Failed to parse {}",
+                        escape_controls(&config_path.display().to_string())
+                    )
+                })
+            })
             .transpose()?
             .and_then(|config| config.presets_dir);
         let toml_presets = toml_presets
@@ -287,8 +302,14 @@ impl Config {
         let bin_dir = shine_dir.join("bin");
 
         if let Some(contents) = &global_input.contents {
-            let mut config: Config =
-                toml::from_str(contents).context("Failed to parse global config file")?;
+            let mut config: Config = toml::from_str(contents)
+                .map_err(super::config_parse_error)
+                .with_context(|| {
+                    format!(
+                        "Failed to parse global config file {}",
+                        escape_controls(&config_path.display().to_string())
+                    )
+                })?;
             if config
                 .secret_backend
                 .as_deref()
@@ -320,10 +341,9 @@ impl Config {
             if let Some(path) = config.self_install_dest.as_deref() {
                 config.self_install_dest = Some(resolve_config_presets_path(path, &config_dir));
             }
-            crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
             // Recovery/settings-only loaders also preserve raw unrelated fields.
             config.save_state = Some(ConfigSaveState {
-                original: toml::from_str(contents)?,
+                original: toml::from_str(contents).map_err(super::config_parse_error)?,
                 loaded: config.serialize_effective_table()?,
             });
             Ok((config, true))
@@ -340,7 +360,6 @@ impl Config {
                 config_inputs: vec![global_input],
                 ..Config::default()
             };
-            crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
             Ok((config, false))
         }
     }
@@ -355,13 +374,23 @@ impl Config {
                 return Ok(super::CURRENT_RUNTIME_SCHEMA_VERSION);
             }
             Err(e) => {
-                return Err(e).with_context(|| format!("Failed to read {}", config_path.display()));
+                return Err(e).with_context(|| {
+                    format!(
+                        "Failed to read {}",
+                        escape_controls(&config_path.display().to_string())
+                    )
+                });
             }
         };
 
         read_minimal_config(&content)
             .map(|config| config.schema_version)
-            .with_context(|| format!("Failed to parse {}", config_path.display()))
+            .with_context(|| {
+                format!(
+                    "Failed to parse {}",
+                    escape_controls(&config_path.display().to_string())
+                )
+            })
     }
 }
 
@@ -567,7 +596,7 @@ mod tests {
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
         std::env::set_current_dir(&child_dir).unwrap();
 
-        let config = Config::load_global_runtime_or_init().await.unwrap();
+        let config = Config::load_global_runtime(true).await.unwrap();
 
         assert_eq!(
             fs::canonicalize(config.config_path()).await.unwrap(),
@@ -639,8 +668,6 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn global_config_with_presets_dir_remains_global_config() {
         let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
-        let original_home = std::env::var("HOME").ok();
         let home_dir = make_temp_dir().await;
         let shine_dir = home_dir.join(".shine");
         let child_dir = shine_dir.join("presets/shell/proxy");
@@ -685,19 +712,7 @@ mod tests {
             fs::canonicalize(&external_presets).await.unwrap()
         );
 
-        restore_current_dir(&original_dir);
-        match original_home {
-            Some(home) => {
-                // SAFETY: env_lock() is held for the duration of this block, preventing
-                //          concurrent env mutation from other threads in this test binary.
-                unsafe { std::env::set_var("HOME", home) };
-            }
-            None => {
-                // SAFETY: env_lock() is held for the duration of this block, preventing
-                //          concurrent env mutation from other threads in this test binary.
-                unsafe { std::env::remove_var("HOME") };
-            }
-        }
+        drop(_guard);
         fs::remove_dir_all(&home_dir).await.unwrap();
         fs::remove_dir_all(external_presets.parent().unwrap())
             .await
@@ -857,8 +872,6 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn project_config_without_presets_dir_inherits_global_config() {
         let _guard = env_lock();
-        let original_dir = std::env::current_dir().unwrap();
-        let original_home = std::env::var("HOME").ok();
         let project_dir = make_temp_dir().await;
         let home_dir = make_temp_dir().await;
         let state_dir = home_dir.join(".shine");
@@ -891,11 +904,7 @@ mod tests {
         assert_eq!(config.gpg_recipients, ["global-key"]);
         assert!(config.is_external_presets);
 
-        restore_current_dir(&original_dir);
-        match original_home {
-            Some(home) => unsafe { std::env::set_var("HOME", home) },
-            None => unsafe { std::env::remove_var("HOME") },
-        }
+        drop(_guard);
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&home_dir).await.unwrap();
     }

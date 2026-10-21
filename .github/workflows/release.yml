@@ -115,10 +115,83 @@ jobs:
             install.sh
             install.ps1
 
+  verify-binstall:
+    needs:
+      - release
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            run_binary: true
+          - runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            run_binary: false
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            run_binary: true
+          - runner: macos-14
+            target: x86_64-apple-darwin
+            run_binary: false
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            run_binary: true
+          - runner: windows-latest
+            target: aarch64-pc-windows-msvc
+            run_binary: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust with mise
+        uses: jdx/mise-action@v4
+        with:
+          version: 2026.7.7
+          install_args: rust
+      - name: Install cargo-binstall
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall@1.12.7
+          fallback: none
+      - name: Verify published crate metadata and release archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          BINSTALL_TARGET: ${{ matrix.target }}
+        run: |
+          mise exec -- cargo binstall shine-cli --version "=${RELEASE_TAG#v}" \
+            --target "$BINSTALL_TARGET" --strategies crate-meta-data \
+            --root "$RUNNER_TEMP/binstall-$BINSTALL_TARGET" --dry-run --no-confirm
+      - name: Install and run native release binary
+        if: matrix.run_binary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          BINSTALL_TARGET: ${{ matrix.target }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          install_root="$RUNNER_TEMP/binstall-$BINSTALL_TARGET"
+          mise exec -- cargo binstall shine-cli --version "=$version" \
+            --target "$BINSTALL_TARGET" --strategies crate-meta-data \
+            --root "$install_root" --no-confirm
+          binary="$install_root/bin/shine"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            binary="${binary}.exe"
+          fi
+          actual="$(SHINE_CONFIG_DIR="$RUNNER_TEMP/shine-binstall-config" "$binary" --version)"
+          actual="${actual//$'\r'/}"
+          echo "$actual"
+          read -r name installed_version _ <<< "$actual"
+          [[ "$name" == "shine" && "$installed_version" == "$version" ]]
+
   open-main-pr:
     if: ${{ !contains(github.ref_name, '-') }}
     needs:
-      - release
+      - verify-binstall
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:

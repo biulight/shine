@@ -1,10 +1,10 @@
 # 0013 — One template delimiter (`@@VAR@@`) for every file type; per-type delimiters rejected
 
 - **Status**: accepted
-- **Evidence**: `cli/src/install_core/transforms/template.rs` (`@@[A-Za-z_][A-Za-z0-9_]*@@`),
-  `cli/src/install_core/transforms/mod.rs` (bare-string transform registry),
+- **Evidence**: `core/src/install/transforms/template.rs` (`@@[A-Za-z_][A-Za-z0-9_]*@@`),
+  `core/src/install/transforms/mod.rs` (bare-string transform registry),
   `core/src/runtime/app_metadata.rs` (`AppFile.transforms: Vec<String>`, transform validation),
-  `cli/src/shells/{metadata,template}.rs`, `presets/app/clash-verge/{shine.toml,merge.yaml}`,
+  `core/src/runtime/shell.rs`, `presets/app/clash-verge/{shine.toml,merge.yaml}`,
   `docs/clash-verge-local-subscription-prd.md` §6.1 (line 149)
 
 ## Context
@@ -32,7 +32,7 @@ same inert-example-plus-overlay pattern. The request that prompted this ADR was 
 question, not a blocked task.
 
 There is prior art for file-type-specific *syntax*: the `# shine-template: true` annotation
-(`presets.rs::parse_template_annotation`) is `.sh`/`.ps1`-only because `#` is not a JS/TS comment.
+(`core/src/runtime/shell.rs::has_template_annotation`) is `.sh`/`.ps1`-only because `#` is not a JS/TS comment.
 So the design space was genuinely open.
 
 ## Decision

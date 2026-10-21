@@ -1,11 +1,31 @@
-//! App actions.
-
+//! Approved static App Action construction with observation-only capability.
 use super::*;
+use crate::action::{
+    ManagedFileRelocationBackupV1, ManagedFileRelocationSpecV1, ManagedFileUpdateSpecV1,
+    ManagedJsonMergeSpecV1, ManagedJsonRelocationSpecV1,
+};
+
+// Ordinary create/update steps deliberately impose no step-kind restriction.
+fn has_app_file_step(
+    plan: &PlanV1,
+    target: &str,
+    resource: &str,
+    action: PlanActionV1,
+    kind: Option<PlanStepKindV1>,
+) -> bool {
+    plan.steps.iter().any(|step| {
+        step.target == target
+            && step.resource.as_deref() == Some(resource)
+            && step.action == action
+            && kind
+                .as_ref()
+                .is_none_or(|kind| step.kind.as_ref() == Some(kind))
+    })
+}
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
-    /// Emit the exact creation actions only after the corresponding install
-    /// Plan has been freshly regenerated and approved. Managed bytes remain
-    /// outside the Action IR and are checked again by the executor.
+    /// Emit exact static actions only after the corresponding Plan has been freshly approved.
+    /// Managed bytes remain outside the Action IR and are checked again by the executor.
     pub(super) async fn approved_app_file_action_irs(
         &self,
         request: &AppPlanRequest,
@@ -25,7 +45,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         let categories = self.app_categories(request.target.as_deref())?;
         let (manifest, _) = load_app_manifest(self.host(), &self.context().shine_dir).await?;
         let mut actions = Vec::new();
-
         for category in categories {
             for file in &category.files {
                 if file.generator.is_some() {
@@ -43,7 +62,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 let action_identity = format!("{target}/{resource}");
                 let desired_hash = desired_app_hash(file, &desired)?;
                 let direct = manifest.find_by_source(&source);
-                if let Some(entry) = direct.filter(|entry| {
+                let ir_id = format!("app-{operation}:{fingerprint}:{action_identity}");
+                let action = if let Some(entry) = direct.filter(|entry| {
                     static_app_relocation(
                         request.operation,
                         request.force,
@@ -51,12 +71,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         entry,
                         &destination,
                     ) == Some(StaticAppRelocation::Json)
-                        && plan.steps.iter().any(|step| {
-                            step.target == target
-                                && step.resource.as_deref() == Some(resource.as_str())
-                                && step.action == PlanActionV1::Update
-                                && step.kind == Some(StaticAppRelocation::Json.step_kind())
-                        })
+                        && has_app_file_step(
+                            plan,
+                            &target,
+                            &resource,
+                            PlanActionV1::Update,
+                            Some(StaticAppRelocation::Json.step_kind()),
+                        )
                 }) {
                     if manifest.find_by_dest(&destination).is_some()
                         || path_exists(self.host(), &destination).await?
@@ -113,7 +134,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     {
                         bail!("managed JSON relocation rollback path changed after Plan approval");
                     }
-                    let action = DeclarativeActionV1::relocate_managed_json(
+                    DeclarativeActionV1::relocate_managed_json(
                         format!("relocate-json:{action_identity}"),
                         target,
                         resource,
@@ -133,14 +154,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 .iter()
                                 .any(|transform| transform == "template"),
                         },
-                    );
-                    actions.push(ActionIrV1::new(
-                        format!("app-{operation}:{fingerprint}:{action_identity}"),
-                        vec![action],
-                    ));
-                    continue;
-                }
-                if let Some(entry) = direct.filter(|entry| {
+                    )
+                } else if let Some(entry) = direct.filter(|entry| {
                     static_app_relocation(
                         request.operation,
                         request.force,
@@ -148,12 +163,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         entry,
                         &destination,
                     ) == Some(StaticAppRelocation::File)
-                        && plan.steps.iter().any(|step| {
-                            step.target == target
-                                && step.resource.as_deref() == Some(resource.as_str())
-                                && step.action == PlanActionV1::Update
-                                && step.kind == Some(StaticAppRelocation::File.step_kind())
-                        })
+                        && has_app_file_step(
+                            plan,
+                            &target,
+                            &resource,
+                            PlanActionV1::Update,
+                            Some(StaticAppRelocation::File.step_kind()),
+                        )
                 }) {
                     if manifest.find_by_dest(&destination).is_some()
                         || path_exists(self.host(), &destination).await?
@@ -206,7 +222,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     {
                         bail!("App relocation rollback path changed after Plan approval");
                     }
-                    let action = DeclarativeActionV1::relocate_managed_file(
+                    DeclarativeActionV1::relocate_managed_file(
                         format!("relocate:{action_identity}"),
                         target,
                         resource,
@@ -226,14 +242,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             previous_requires_admin: entry.requires_admin,
                             desired_requires_admin: file.requires_admin,
                         },
-                    );
-                    actions.push(ActionIrV1::new(
-                        format!("app-{operation}:{fingerprint}:{action_identity}"),
-                        vec![action],
-                    ));
-                    continue;
-                }
-                if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
+                    )
+                } else if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
                     &file.install_strategy
                 {
                     let expected_step = if direct.is_some() {
@@ -250,11 +260,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             || entry.requires_admin
                             || desired_hash == entry.content_hash
                     }) || (direct.is_none() && request.operation != LifecycleOperation::Install)
-                        || !plan.steps.iter().any(|step| {
-                            step.target == target
-                                && step.resource.as_deref() == Some(resource.as_str())
-                                && step.action == expected_step
-                        })
+                        || !has_app_file_step(plan, &target, &resource, expected_step, None)
                     {
                         continue;
                     }
@@ -284,7 +290,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     {
                         bail!("managed JSON rollback path changed after Plan approval");
                     }
-                    let action = DeclarativeActionV1::merge_managed_json(
+                    DeclarativeActionV1::merge_managed_json(
                         format!("merge-json:{action_identity}"),
                         target,
                         resource,
@@ -294,109 +300,106 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             original_hash,
                             previous_receipt_hash: direct.map(|entry| entry.content_hash),
                             desired_managed_hash: desired_hash,
-                            managed_keys: managed_keys.clone(),
-                        },
-                    );
-                    actions.push(ActionIrV1::new(
-                        format!("app-{operation}:{fingerprint}:{action_identity}"),
-                        vec![action],
-                    ));
-                    continue;
-                }
-                let desired_hash = crate::install::hash_content(&desired);
-                let action = if let Some(entry) = direct {
-                    if entry.destination != destination
-                        || entry.install_strategy != crate::install::AppInstallStrategy::Copy
-                        || entry.requires_admin != file.requires_admin
-                        || request.force
-                        || desired_hash == entry.content_hash
-                        || !plan.steps.iter().any(|step| {
-                            step.target == target
-                                && step.resource.as_deref() == Some(resource.as_str())
-                                && step.action == PlanActionV1::Update
-                        })
-                    {
-                        continue;
-                    }
-                    let Some(original) = read_optional(self.host(), &destination).await? else {
-                        continue;
-                    };
-                    if crate::install::hash_content(&original) != entry.content_hash {
-                        continue;
-                    }
-                    let original_mode =
-                        self.host().metadata(&destination).await.map_err(|error| {
-                            error.into_anyhow("observing managed App update mode")
-                        })?;
-                    if original_mode.kind != FileKind::File {
-                        continue;
-                    }
-                    let original_mode = original_mode.unix_mode;
-                    let rollback = crate::action::managed_file_rollback_path(&destination);
-                    if manifest.find_by_dest(&rollback).is_some()
-                        || path_exists(self.host(), &rollback).await?
-                    {
-                        bail!("App update rollback path changed after Plan approval");
-                    }
-                    DeclarativeActionV1::update_managed_file(
-                        format!("update:{action_identity}"),
-                        target,
-                        resource,
-                        ManagedFileUpdateSpecV1 {
-                            destination,
-                            previous_backup: entry.backup.clone(),
-                            original_mode,
-                            original_hash: entry.content_hash,
-                            desired_hash,
-                            requires_admin: file.requires_admin,
+                            managed_keys: managed_keys.to_vec(),
                         },
                     )
                 } else {
-                    if request.operation != LifecycleOperation::Install
-                        || manifest.find_by_dest(&destination).is_some()
-                        || !plan.steps.iter().any(|step| {
-                            step.target == target
-                                && step.resource.as_deref() == Some(resource.as_str())
-                                && step.action == PlanActionV1::Create
-                        })
-                    {
-                        continue;
-                    }
-                    match read_optional(self.host(), &destination).await? {
-                        None => DeclarativeActionV1::create_managed_file(
-                            format!("create:{action_identity}"),
+                    let desired_hash = crate::install::hash_content(&desired);
+                    if let Some(entry) = direct {
+                        if entry.destination != destination
+                            || entry.install_strategy != crate::install::AppInstallStrategy::Copy
+                            || entry.requires_admin != file.requires_admin
+                            || request.force
+                            || desired_hash == entry.content_hash
+                            || !has_app_file_step(
+                                plan,
+                                &target,
+                                &resource,
+                                PlanActionV1::Update,
+                                None,
+                            )
+                        {
+                            continue;
+                        }
+                        let Some(original) = read_optional(self.host(), &destination).await? else {
+                            continue;
+                        };
+                        if crate::install::hash_content(&original) != entry.content_hash {
+                            continue;
+                        }
+                        let original_mode =
+                            self.host().metadata(&destination).await.map_err(|error| {
+                                error.into_anyhow("observing managed App update mode")
+                            })?;
+                        if original_mode.kind != FileKind::File {
+                            continue;
+                        }
+                        let original_mode = original_mode.unix_mode;
+                        let rollback = crate::action::managed_file_rollback_path(&destination);
+                        if manifest.find_by_dest(&rollback).is_some()
+                            || path_exists(self.host(), &rollback).await?
+                        {
+                            bail!("App update rollback path changed after Plan approval");
+                        }
+                        DeclarativeActionV1::update_managed_file(
+                            format!("update:{action_identity}"),
                             target,
                             resource,
-                            destination,
-                            desired_hash,
-                            file.requires_admin,
-                        ),
-                        Some(original) => {
-                            let backup = crate::install::backup_path(&destination);
-                            if manifest.find_by_dest(&backup).is_some()
-                                || path_exists(self.host(), &backup).await?
-                            {
-                                bail!("App backup path changed after Plan approval");
-                            }
-                            DeclarativeActionV1::create_managed_file_with_backup(
-                                format!("create-with-backup:{action_identity}"),
+                            ManagedFileUpdateSpecV1 {
+                                destination,
+                                previous_backup: entry.backup.clone(),
+                                original_mode,
+                                original_hash: entry.content_hash,
+                                desired_hash,
+                                requires_admin: file.requires_admin,
+                            },
+                        )
+                    } else {
+                        if request.operation != LifecycleOperation::Install
+                            || manifest.find_by_dest(&destination).is_some()
+                            || !has_app_file_step(
+                                plan,
+                                &target,
+                                &resource,
+                                PlanActionV1::Create,
+                                None,
+                            )
+                        {
+                            continue;
+                        }
+                        match read_optional(self.host(), &destination).await? {
+                            None => DeclarativeActionV1::create_managed_file(
+                                format!("create:{action_identity}"),
                                 target,
                                 resource,
-                                crate::action::ManagedFileCreationWithBackupSpecV1 {
-                                    destination,
-                                    backup,
-                                    original_hash: crate::install::hash_content(&original),
-                                    desired_hash,
-                                    requires_admin: file.requires_admin,
-                                },
-                            )
+                                destination,
+                                desired_hash,
+                                file.requires_admin,
+                            ),
+                            Some(original) => {
+                                let backup = crate::install::backup_path(&destination);
+                                if manifest.find_by_dest(&backup).is_some()
+                                    || path_exists(self.host(), &backup).await?
+                                {
+                                    bail!("App backup path changed after Plan approval");
+                                }
+                                DeclarativeActionV1::create_managed_file_with_backup(
+                                    format!("create-with-backup:{action_identity}"),
+                                    target,
+                                    resource,
+                                    crate::action::ManagedFileCreationWithBackupSpecV1 {
+                                        destination,
+                                        backup,
+                                        original_hash: crate::install::hash_content(&original),
+                                        desired_hash,
+                                        requires_admin: file.requires_admin,
+                                    },
+                                )
+                            }
                         }
                     }
                 };
-                actions.push(ActionIrV1::new(
-                    format!("app-{operation}:{fingerprint}:{action_identity}"),
-                    vec![action],
-                ));
+                actions.push(ActionIrV1::new(ir_id, vec![action]));
             }
         }
         if request.operation == LifecycleOperation::Upgrade && request.prune_stale {

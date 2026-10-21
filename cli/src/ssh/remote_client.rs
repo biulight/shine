@@ -14,6 +14,9 @@ use tokio::net::UnixStream;
 use super::protocol::{self, ClientMessage, Direction, LogStream, PROTOCOL_VERSION, ServerMessage};
 use crate::env::broker::WorkspaceSnapshot;
 use crate::home;
+use crate::output::escape_controls;
+
+const STATUS_PHASE_TIMEOUT: Duration = Duration::from_secs(5);
 
 const BROKER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
@@ -264,34 +267,51 @@ async fn relay_until_done(stream: &mut UnixStream) -> Result<()> {
 pub async fn handle_status() -> Result<()> {
     let session = session_from_env()?;
 
-    match connect_and_handshake(&session.remote_sock).await {
+    // Preserve the existing phase boundary: connection failures are status data,
+    // while failures after a successful handshake are command errors.
+    let connection = tokio::time::timeout(
+        STATUS_PHASE_TIMEOUT,
+        connect_and_handshake(&session.remote_sock),
+    )
+    .await
+    .context("local status connection timed out after 5 seconds")
+    .and_then(|result| result);
+    match connection {
         Ok(mut stream) => {
-            protocol::write_message(
-                &mut stream,
-                &ClientMessage::Status {
-                    token: session.token,
-                },
-            )
-            .await?;
-            match protocol::read_message(&mut stream).await? {
+            let response = tokio::time::timeout(STATUS_PHASE_TIMEOUT, async {
+                protocol::write_message(
+                    &mut stream,
+                    &ClientMessage::Status {
+                        token: session.token,
+                    },
+                )
+                .await?;
+                protocol::read_message(&mut stream).await
+            })
+            .await
+            .context("local status response timed out after 5 seconds")??;
+            match response {
                 ServerMessage::StatusResponse {
                     session_local_dir,
                     host,
                 } => {
-                    println!("session:    {}", session.session_id);
+                    println!("session:    {}", escape_controls(&session.session_id));
                     println!("connection: connected");
                     println!("protocol:   v{PROTOCOL_VERSION}");
-                    println!("host:       {host}");
-                    println!("local dir:  {session_local_dir}");
+                    println!("host:       {}", escape_controls(&host));
+                    println!("local dir:  {}", escape_controls(&session_local_dir));
                     Ok(())
                 }
-                ServerMessage::Error { message } => bail!("{message}"),
+                ServerMessage::Error { message } => bail!("{}", escape_controls(&message)),
                 other => bail!("unexpected response: {other:?}"),
             }
         }
         Err(error) => {
-            println!("session:    {}", session.session_id);
-            println!("connection: unreachable ({error:#})");
+            println!("session:    {}", escape_controls(&session.session_id));
+            println!(
+                "connection: unreachable ({})",
+                escape_controls(&format!("{error:#}"))
+            );
             Ok(())
         }
     }

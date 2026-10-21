@@ -1,10 +1,18 @@
+mod projection;
+mod query;
+mod render;
+use projection::*;
+#[cfg(test)]
+use render::app_status_summary_parts;
+
 use crate::apps::load_active_categories;
 use crate::colors;
 use crate::config::Config;
 use crate::info::UpdateDiffs;
 use crate::output;
 use crate::status::{
-    AppRow, FileStatus, ShellRow, build_app_rows_with_lifecycle_options, build_shell_rows,
+    AppRow, FileStatus, ShellRow, ShellRowStatus, build_app_rows_with_lifecycle_options,
+    build_shell_rows,
 };
 use crate::sys;
 use anyhow::{Context, Result};
@@ -13,977 +21,23 @@ use shine_core::frontend::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-#[cfg(test)]
-const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
-
-async fn build_update_app_rows(
-    config: &Config,
-    categories: &[crate::apps::AppCategory],
-    run_generators: bool,
-) -> Result<(
-    Vec<AppRow>,
-    shine_core::lifecycle::LifecycleResultV1,
-    Vec<shine_core::runtime::AppFileInspection>,
-)> {
-    if !run_generators {
-        return build_app_rows_with_lifecycle_options(config, categories, false).await;
-    }
-    let (static_rows, static_lifecycle, static_inspections) =
-        build_app_rows_with_lifecycle_options(config, categories, false).await?;
-    let installed = static_rows
-        .iter()
-        .filter(|row| row.file_status != FileStatus::NotInstalled)
-        .map(|row| row.category.as_str())
-        .collect::<BTreeSet<_>>();
-    let selected = categories
-        .iter()
-        .filter(|category| installed.contains(category.name.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    if selected.is_empty() {
-        return Ok((static_rows, static_lifecycle, static_inspections));
-    }
-    build_app_rows_with_lifecycle_options(config, &selected, true).await
-}
-
-fn print_generator_notice(rows: &[AppRow], run_generators: bool) -> (bool, bool) {
-    let not_evaluated = rows
-        .iter()
-        .any(|row| row.file_status == FileStatus::GeneratorNotEvaluated);
-    let failures = rows
-        .iter()
-        .filter(|row| {
-            matches!(
-                row.file_status,
-                FileStatus::GeneratorEvaluationFailed | FileStatus::GeneratorTrustRequired
-            )
-        })
-        .collect::<Vec<_>>();
-    if !run_generators && not_evaluated {
-        println!();
-        println!(
-            "{}",
-            colors::yellow("! Generated configuration was not evaluated.")
-        );
-        println!(
-            "{}",
-            colors::dim(
-                "  Update status may be incomplete. Re-run with `--run-generators` to evaluate generator output."
-            )
-        );
-    }
-    for row in &failures {
-        println!();
-        println!(
-            "{}",
-            colors::yellow(&format!("! {}: {}", row.label, row.status_text))
-        );
-    }
-    (not_evaluated || !failures.is_empty(), !failures.is_empty())
-}
-
-async fn missing_app_sources(config: &Config) -> Result<Vec<(String, String)>> {
-    crate::core_runtime::frontend_from_config(config)
-        .await?
-        .missing_app_sources()
-        .await
-        .map_err(FrontendServiceError::into_source)
-}
-
-fn print_missing_app_sources(items: &[(String, String)]) {
-    for (category, resource) in items {
-        println!(
-            "{}",
-            colors::yellow(&format!(
-                "! app/{category} · {resource}: Preset source missing; installed content and receipt retained."
-            ))
-        );
-        println!("  Preview uninstall: shine app uninstall {category} --dry-run");
-    }
-}
-
 pub async fn handle_update_list(config: &Config, diff: bool, run_generators: bool) -> Result<bool> {
-    let shell_rows = build_shell_rows(config).await?;
-    let shell_lifecycle = crate::shells::collect_update_lifecycle_result(config).await?;
-    let pending_shell = shell_lifecycle
-        .outcomes
-        .iter()
-        .filter(|outcome| outcome.status == shine_core::lifecycle::LifecycleStatus::Pending)
-        .map(|outcome| outcome.target.as_str())
-        .collect::<BTreeSet<_>>();
-    let update_shell: Vec<&ShellRow> = shell_rows
-        .iter()
-        .filter(|r| {
-            r.is_installed
-                && pending_shell.contains(
-                    format!(
-                        "shell/{}/{}",
-                        r.category,
-                        r.label.split('/').next_back().unwrap_or(&r.label)
-                    )
-                    .as_str(),
-                )
-        })
-        .collect();
-
-    let cats = load_active_categories(config, None)
-        .await
-        .context("loading active App Presets for update")?;
-    let (app_rows, app_lifecycle, app_inspections) =
-        build_update_app_rows(config, &cats, run_generators).await?;
-    let pending_app = app_lifecycle
-        .outcomes
-        .iter()
-        .filter(|outcome| outcome.status == shine_core::lifecycle::LifecycleStatus::Pending)
-        .map(|outcome| outcome.target.as_str())
-        .collect::<BTreeSet<_>>();
-    let update_app_rows: Vec<&AppRow> = app_rows
-        .iter()
-        .filter(|r| {
-            r.upgrade_available && pending_app.contains(format!("app/{}", r.category).as_str())
-        })
-        .collect();
-    let update_app = app_update_categories(&update_app_rows);
-    let actionable_app_rows = app_rows
-        .iter()
-        .filter(|row| {
-            (row.upgrade_available || !row.refresh_sources.is_empty())
-                && pending_app.contains(format!("app/{}", row.category).as_str())
-        })
-        .collect::<Vec<_>>();
-    let actionable_app = app_update_categories(&actionable_app_rows);
-    let refresh_commands = app_refresh_commands(&actionable_app);
-    let update_sys = sys::managed_updates(config)
-        .await
-        .context("checking managed Sys Presets for update")?;
-
-    let shell_attention = shell_rows
-        .iter()
-        .filter(|row| row.is_installed && (row.link_conflict || row.preset_missing))
-        .collect::<Vec<_>>();
-    let any_update =
-        !update_shell.is_empty() || !actionable_app.is_empty() || !update_sys.is_empty();
-    let missing_sources = missing_app_sources(config).await?;
-    let has_generator_attention = app_rows.iter().any(|row| {
-        matches!(
-            row.file_status,
-            FileStatus::GeneratorNotEvaluated
-                | FileStatus::GeneratorEvaluationFailed
-                | FileStatus::GeneratorTrustRequired
-        )
-    });
-    if !any_update
-        && !has_generator_attention
-        && shell_attention.is_empty()
-        && missing_sources.is_empty()
-    {
-        return Ok(false);
-    }
-
-    crate::config::print_presets_note(config);
-    print_shell_attention(&shell_attention);
-    print_missing_app_sources(&missing_sources);
-
-    if !diff {
-        let shell_names = shell_categories(&update_shell);
-        let app_names = actionable_app
-            .keys()
-            .map(|category| (*category).to_string())
-            .collect::<Vec<_>>();
-        let sys_names = sorted_names(update_sys.iter().map(|row| row.item_id.clone()).collect());
-
-        let mut separator = output::SectionSeparator::new();
-        print_name_section(&mut separator, "Shell Presets", &shell_names);
-        print_name_section(&mut separator, "App Configs", &app_names);
-        print_name_section(&mut separator, "System Configs", &sys_names);
-        let (_, generator_failed) = print_generator_notice(&app_rows, run_generators);
-        let upgrade_app_names = update_app
-            .keys()
-            .map(|category| (*category).to_string())
-            .collect::<Vec<_>>();
-        print_action_hints(
-            &update_targets(&shell_names, &upgrade_app_names, &sys_names),
-            &refresh_commands,
-        );
-        if generator_failed {
-            anyhow::bail!("one or more App generators could not be evaluated");
-        }
-        return Ok(true);
-    }
-
-    let update_diffs = UpdateDiffs::collect_with_app_inspections(config, app_inspections).await?;
-
-    if !update_shell.is_empty() {
-        println!("{}", colors::bold("Shell Presets"));
-
-        let label_width = update_shell
-            .iter()
-            .map(|r| r.label.len())
-            .max()
-            .unwrap_or(0);
-
-        for row in &update_shell {
-            let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
-            println!(
-                "  {}  {}{}  {}",
-                row.symbol,
-                row.label,
-                pad,
-                colors::status_label(row.status_text, row.status_sym),
-            );
-            update_diffs.print_shell_for_row(config, &row.label).await?;
-        }
-    }
-
-    if !actionable_app.is_empty() {
-        if !update_shell.is_empty() {
-            println!();
-        }
-        println!("{}", colors::bold("App Configs"));
-
-        let label_width = actionable_app
-            .keys()
-            .map(|category| category.len())
-            .max()
-            .unwrap_or(0);
-
-        for (category, rows) in &actionable_app {
-            let pad = " ".repeat(label_width.saturating_sub(category.len()));
-            let (status_text, status_sym) = app_category_action_status(rows);
-            println!(
-                "  {}  {}{}  {}",
-                colors::symbol("↑"),
-                category,
-                pad,
-                colors::status_label(status_text, status_sym),
-            );
-            for row in rows {
-                print_app_update_detail(row);
-                update_diffs.print_app_for_row(config, &row.label).await?;
-            }
-        }
-    }
-
-    if !update_sys.is_empty() {
-        if !update_shell.is_empty() || !actionable_app.is_empty() {
-            println!();
-        }
-        println!("{}", colors::bold("System Configs"));
-        for row in &update_sys {
-            println!(
-                "  {}  {}  {}  {}",
-                colors::symbol("↑"),
-                row.label,
-                colors::dim(&format!("({})", row.item_id)),
-                colors::status_label("update available", "↑"),
-            );
-            for detail in &row.details {
-                println!("     {}", colors::dim(detail));
-            }
-        }
-    }
-
-    let (_, generator_failed) = print_generator_notice(&app_rows, run_generators);
-    if any_update {
-        let shell_names = shell_categories(&update_shell);
-        let app_names = update_app
-            .keys()
-            .map(|category| (*category).to_string())
-            .collect::<Vec<_>>();
-        let sys_names = sorted_names(update_sys.iter().map(|row| row.item_id.clone()).collect());
-        print_action_hints(
-            &update_targets(&shell_names, &app_names, &sys_names),
-            &refresh_commands,
-        );
-    }
-    if generator_failed {
-        anyhow::bail!("one or more App generators could not be evaluated");
-    }
-
-    Ok(true)
-}
-
-fn shell_attention_lines(rows: &[&ShellRow]) -> Vec<String> {
-    let mut lines = Vec::new();
-    for row in rows
-        .iter()
-        .filter(|row| row.is_installed && (row.link_conflict || row.preset_missing))
-    {
-        lines.push(format!("  ! shell/{}  {}", row.label, row.status_text));
-        if row.link_conflict {
-            lines.push("    Launcher preserved; resolve its ownership conflict before upgrading this target.".to_string());
-        }
-        if row.preset_missing {
-            lines.push(format!("    Restore the Preset or review `shine shell uninstall {}` to remove the installed command.", row.label));
-        }
-    }
-    lines
-}
-
-fn print_shell_attention(rows: &[&ShellRow]) {
-    let lines = shell_attention_lines(rows);
-    if lines.is_empty() {
-        return;
-    }
-    println!("{}", colors::bold("Shell attention required"));
-    for line in lines {
-        println!("{line}");
-    }
-    println!();
-}
-
-fn print_action_hints(upgrade_targets: &[String], refresh_commands: &[String]) {
-    if upgrade_targets.is_empty() && refresh_commands.is_empty() {
-        return;
-    }
-    println!();
-    if !upgrade_targets.is_empty() {
-        println!("{}", colors::dim(&update_hint_text(upgrade_targets)));
-    }
-    for command in refresh_commands {
-        println!(
-            "{}",
-            colors::dim(&format!(
-                "Run `{command}` to refresh generated configuration."
-            ))
-        );
-    }
-}
-
-fn update_hint_text(targets: &[String]) -> String {
-    let command = match targets {
-        [target] => format!("shine upgrade {target}"),
-        _ => "shine upgrade".to_string(),
-    };
-    format!("Run `{command}` to apply updates.")
-}
-
-fn update_targets(shell: &[String], app: &[String], sys: &[String]) -> Vec<String> {
-    shell
-        .iter()
-        .map(|category| format!("shell/{category}"))
-        .chain(app.iter().map(|category| format!("app/{category}")))
-        .chain(sys.iter().map(|item| format!("sys/{item}")))
-        .collect()
-}
-
-fn app_update_categories<'a>(rows: &[&'a AppRow]) -> BTreeMap<&'a str, Vec<&'a AppRow>> {
-    let mut categories = BTreeMap::new();
-    for row in rows {
-        categories
-            .entry(row.category.as_str())
-            .or_insert_with(Vec::new)
-            .push(*row);
-    }
-    categories
-}
-
-fn app_refresh_commands(rows: &BTreeMap<&str, Vec<&AppRow>>) -> Vec<String> {
-    rows.iter()
-        .flat_map(|(category, rows)| {
-            rows.iter().flat_map(move |row| {
-                row.refresh_sources.iter().map(move |source| {
-                    format!(
-                        "shine app refresh {} {}",
-                        crate::shell_quote::quote_if_needed(category),
-                        crate::shell_quote::quote_if_needed(source)
-                    )
-                })
-            })
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn app_category_action_status(rows: &[&AppRow]) -> (&'static str, &'static str) {
-    let upgrade_available = rows.iter().any(|row| row.upgrade_available);
-    let refresh_available = rows.iter().any(|row| !row.refresh_sources.is_empty());
-    let text = match (upgrade_available, refresh_available) {
-        (true, true) => "update and refresh available",
-        (false, true) => "refresh available",
-        _ => "update available",
-    };
-    (text, "↑")
-}
-
-fn print_app_update_detail(row: &AppRow) {
-    let destination = row
-        .dest
-        .as_deref()
-        .map(|dest| format!("  {}  {}", colors::dim("→"), colors::dim(dest)))
-        .unwrap_or_default();
-    println!(
-        "     {}  {}{}  {}",
-        colors::symbol("↑"),
-        row.label,
-        destination,
-        colors::status_label(row.status_text, "↑"),
-    );
+    let inputs = query::collect_update(config, run_generators).await?;
+    render::update(config, inputs, diff, run_generators).await
 }
 
 pub async fn handle_status_list(config: &Config, diff: bool, run_generators: bool) -> Result<()> {
     crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;
-    let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
-    let all_shell: Vec<&ShellRow> = shell_rows.iter().collect();
-    print_shell_attention(
-        &installed_shell
-            .iter()
-            .copied()
-            .filter(|row| row.link_conflict || row.preset_missing)
-            .collect::<Vec<_>>(),
-    );
-
-    let cats = load_active_categories(config, None)
-        .await
-        .context("loading active App Presets for status")?;
-    let (app_rows, _, app_inspections) =
-        build_update_app_rows(config, &cats, run_generators).await?;
-    let installed_app: Vec<&AppRow> = app_rows
-        .iter()
-        .filter(|r| r.file_status != FileStatus::NotInstalled)
-        .collect();
-    let all_app: Vec<&AppRow> = app_rows.iter().collect();
-    let update_sys = sys::managed_updates(config)
-        .await
-        .context("checking managed Sys Presets for status")?;
-
-    let any = !installed_shell.is_empty() || !installed_app.is_empty() || !update_sys.is_empty();
-
-    if !any {
-        println!(
-            "{}",
-            colors::dim("Nothing installed yet. Run `shine shell install` or `shine app install`.")
-        );
-        return Ok(());
-    }
-
-    let update_diffs = if diff {
-        Some(UpdateDiffs::collect_with_app_inspections(config, app_inspections).await?)
-    } else {
-        None
-    };
-    let shell_statuses = if diff {
-        installed_shell
-            .iter()
-            .map(|row| ShellLifecycleStatus {
-                category: row.category.clone(),
-                detail_label: row.label.clone(),
-                status_sym: row.status_sym,
-                status_text: row.status_text,
-            })
-            .collect()
-    } else {
-        shell_category_statuses(&all_shell)
-    };
-    let app_statuses = if diff {
-        installed_app
-            .iter()
-            .map(|row| AppLifecycleStatus {
-                category: row.category.clone(),
-                detail_label: row.label.clone(),
-                sym: row.sym,
-                status_text: row.status_text,
-                file_status: row.file_status,
-                dest: row.dest.clone(),
-                upgrade_available: row.upgrade_available,
-                refresh_sources: row.refresh_sources.clone(),
-            })
-            .collect()
-    } else {
-        app_category_statuses(&all_app)
-    };
-
-    // ── Shell Presets ────────────────────────────────────────────────────────
-    if !installed_shell.is_empty() {
-        println!("{}", colors::bold("Shell Presets"));
-
-        let label_width = if diff {
-            installed_shell.iter().map(|row| row.label.len()).max()
-        } else {
-            shell_statuses.iter().map(|row| row.category.len()).max()
-        }
-        .unwrap_or(0);
-
-        for row in &shell_statuses {
-            let label = if diff {
-                &row.detail_label
-            } else {
-                &row.category
-            };
-            let pad = " ".repeat(label_width.saturating_sub(label.len()));
-            let run_hint = if row.status_sym == "↑" {
-                format!("  {}", colors::dim("run `shine upgrade`"))
-            } else {
-                String::new()
-            };
-            println!(
-                "  {}  {}{}  {}{}",
-                colors::symbol(row.status_sym),
-                label,
-                pad,
-                colors::status_label(row.status_text, row.status_sym),
-                run_hint,
-            );
-            if diff
-                && row.status_sym == "↑"
-                && let Some(diffs) = &update_diffs
-            {
-                diffs.print_shell_for_row(config, &row.detail_label).await?;
-            }
-        }
-    }
-
-    // ── App Configs ──────────────────────────────────────────────────────────
-    if !installed_app.is_empty() {
-        if !installed_shell.is_empty() {
-            println!();
-        }
-        println!("{}", colors::bold("App Configs"));
-
-        let label_width = if diff {
-            installed_app.iter().map(|row| row.label.len()).max()
-        } else {
-            app_statuses.iter().map(|row| row.category.len()).max()
-        }
-        .unwrap_or(0);
-
-        let mut up_to_date = 0usize;
-        let mut update_available = 0usize;
-        let mut refresh_available = 0usize;
-        let mut user_modified = 0usize;
-        let mut missing = 0usize;
-
-        for row in &app_statuses {
-            let label = if diff {
-                &row.detail_label
-            } else {
-                &row.category
-            };
-            let pad = " ".repeat(label_width.saturating_sub(label.len()));
-            let dest_part = if diff {
-                row.dest
-                    .as_deref()
-                    .map(|d| format!("  {}  {}", colors::dim("→"), colors::dim(d)))
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-
-            let run_hint = app_status_run_hint(row);
-
-            println!(
-                "  {}  {}{}{}  {}{}",
-                colors::symbol(row.sym),
-                label,
-                pad,
-                dest_part,
-                colors::status_label(row.status_text, row.sym),
-                run_hint,
-            );
-
-            if diff
-                && row.file_status == FileStatus::UpdateAvail
-                && let Some(diffs) = &update_diffs
-            {
-                diffs.print_app_for_row(config, &row.detail_label).await?;
-            }
-
-            match row.file_status {
-                FileStatus::Missing => missing += 1,
-                FileStatus::UserModified | FileStatus::Partial => user_modified += 1,
-                FileStatus::UpdateAvail => {
-                    if row.upgrade_available {
-                        update_available += 1;
-                    }
-                    if !row.refresh_sources.is_empty() {
-                        refresh_available += 1;
-                    }
-                    if !row.upgrade_available && row.refresh_sources.is_empty() {
-                        update_available += 1;
-                    }
-                }
-                FileStatus::GeneratorNotEvaluated
-                | FileStatus::GeneratorEvaluationFailed
-                | FileStatus::GeneratorTrustRequired => user_modified += 1,
-                FileStatus::UpToDate => up_to_date += 1,
-                FileStatus::NotInstalled => {}
-            }
-        }
-
-        let parts = app_status_summary_parts(
-            up_to_date,
-            update_available,
-            refresh_available,
-            user_modified,
-            missing,
-        );
-        if !parts.is_empty() {
-            output::footer("Summary", &parts);
-        }
-    }
-
-    if !update_sys.is_empty() {
-        if !installed_shell.is_empty() || !installed_app.is_empty() {
-            println!();
-        }
-        println!("{}", colors::bold("System Configs"));
-        for row in &update_sys {
-            println!(
-                "  {}  {}  {}  {}  {}",
-                colors::symbol("↑"),
-                row.label,
-                colors::dim(&format!("({})", row.item_id)),
-                colors::status_label("update available", "↑"),
-                colors::dim("run `shine upgrade`"),
-            );
-            for detail in &row.details {
-                println!("     {}", colors::dim(detail));
-            }
-        }
-    }
-
-    let (_, generator_failed) = print_generator_notice(&app_rows, run_generators);
-    if generator_failed {
-        anyhow::bail!("one or more App generators could not be evaluated");
-    }
-
-    Ok(())
+    render::status_shell_attention(&shell_rows);
+    let inputs = query::collect_status(config, shell_rows, run_generators).await?;
+    render::status(config, inputs, diff, run_generators).await
 }
 
 pub async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
-    let service = crate::core_runtime::frontend_from_config(config).await?;
-    let shell_inventory = service
-        .inventory(InventoryRequest::for_kind(CapabilityKindV1::Shell))
-        .await
-        .map_err(FrontendServiceError::into_source)?;
-    let installed_shell = installed_shell_categories_from_inventory(&shell_inventory);
-
-    let installed_app = match service
-        .inventory(InventoryRequest::for_kind(CapabilityKindV1::App))
-        .await
-    {
-        Ok(report) => installed_app_categories_from_inventory(&report),
-        Err(error) if error.diagnostic().code == "frontend_inventory_app_source_failed" => {
-            Vec::new()
-        }
-        Err(error) => return Err(error.into_source()),
-    };
-
-    let os_id = sys::detect_os_id().await?;
-    let sys_inventory = service
-        .inventory(
-            InventoryRequest::for_kind(CapabilityKindV1::Sys)
-                .with_sys_os_id(os_id)
-                .installed_only(),
-        )
-        .await
-        .map_err(FrontendServiceError::into_source)?;
-    let installed_sys = installed_sys_items_from_inventory(&sys_inventory);
-
-    let missing_sources = missing_app_sources(config).await?;
-    let installed_shell = sorted_names(installed_shell);
-    let installed_app = sorted_names(installed_app);
-    let installed_sys = sorted_names(installed_sys);
-
-    let any = !installed_shell.is_empty() || !installed_app.is_empty() || !installed_sys.is_empty();
-
-    if !any {
-        println!(
-            "{}",
-            colors::dim(
-                "Nothing installed yet. Run `shine shell install`, `shine app install`, or `shine sys list`."
-            )
-        );
-        return Ok(());
-    }
-
-    let mut separator = output::SectionSeparator::new();
-    print_name_section(&mut separator, "Shell Presets", &installed_shell);
-    print_name_section(&mut separator, "App Configs", &installed_app);
-    print_name_section(&mut separator, "System Configs", &installed_sys);
-    if !missing_sources.is_empty() {
-        separator.begin();
-        print_missing_app_sources(&missing_sources);
-    }
-
-    Ok(())
-}
-
-fn shell_inventory_category(target: &str) -> Option<String> {
-    let remainder = target.strip_prefix("shell/")?;
-    let (category, command) = remainder.split_once('/')?;
-    (!category.is_empty() && !command.is_empty()).then(|| category.to_string())
-}
-
-fn installed_shell_categories_from_inventory(report: &InventoryReportV1) -> Vec<String> {
-    report
-        .items
-        .iter()
-        .filter(|item| item.available && item.installed)
-        .filter_map(|item| shell_inventory_category(&item.target))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn installed_app_categories_from_inventory(report: &InventoryReportV1) -> Vec<String> {
-    report
-        .items
-        .iter()
-        .filter(|item| item.installed)
-        .filter_map(|item| item.target.strip_prefix("app/").map(str::to_string))
-        .collect()
-}
-
-fn installed_sys_items_from_inventory(report: &InventoryReportV1) -> Vec<String> {
-    report
-        .items
-        .iter()
-        .filter(|item| item.installed)
-        .filter_map(|item| item.target.strip_prefix("sys/").map(str::to_string))
-        .collect()
-}
-
-fn print_name_section(separator: &mut output::SectionSeparator, title: &str, names: &[String]) {
-    if names.is_empty() {
-        return;
-    }
-
-    separator.begin();
-    println!("{} {}", colors::cyan("==>"), colors::bold(title));
-    output::print_columns(names);
-}
-
-#[cfg(test)]
-fn installed_app_categories(rows: &[AppRow]) -> Vec<String> {
-    rows.iter()
-        .filter(|row| row.file_status != FileStatus::NotInstalled)
-        .map(|row| row.category.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn shell_categories(rows: &[&ShellRow]) -> Vec<String> {
-    rows.iter()
-        .map(|row| row.category.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-struct ShellLifecycleStatus {
-    category: String,
-    detail_label: String,
-    status_sym: &'static str,
-    status_text: &'static str,
-}
-
-fn shell_category_statuses(rows: &[&ShellRow]) -> Vec<ShellLifecycleStatus> {
-    let mut grouped: BTreeMap<&str, Vec<&ShellRow>> = BTreeMap::new();
-    for row in rows {
-        grouped.entry(&row.category).or_default().push(row);
-    }
-    grouped
-        .into_iter()
-        .filter_map(|(category, rows)| {
-            if !rows.iter().any(|row| row.is_installed) {
-                return None;
-            }
-            if rows.len() == 1 {
-                let row = rows[0];
-                return Some(ShellLifecycleStatus {
-                    category: category.to_string(),
-                    detail_label: row.label.clone(),
-                    status_sym: row.status_sym,
-                    status_text: row.status_text,
-                });
-            }
-            let selected = rows
-                .iter()
-                .filter(|row| row.is_installed)
-                .max_by_key(|row| shell_status_priority(row.status_sym))
-                .expect("grouped shell category is non-empty");
-            let partially_installed = rows.iter().any(|row| !row.is_installed);
-            let (status_sym, status_text) = if partially_installed && selected.status_sym == "✓" {
-                ("~", "partial install")
-            } else {
-                (selected.status_sym, selected.status_text)
-            };
-            Some(ShellLifecycleStatus {
-                category: category.to_string(),
-                detail_label: category.to_string(),
-                status_sym,
-                status_text,
-            })
-        })
-        .collect()
-}
-
-fn shell_status_priority(sym: &str) -> usize {
-    match sym {
-        "!" => 4,
-        "~" => 3,
-        "↑" => 2,
-        "✓" => 1,
-        _ => 0,
-    }
-}
-
-struct AppLifecycleStatus {
-    category: String,
-    detail_label: String,
-    sym: &'static str,
-    status_text: &'static str,
-    file_status: FileStatus,
-    dest: Option<String>,
-    upgrade_available: bool,
-    refresh_sources: Vec<String>,
-}
-
-fn app_category_statuses(rows: &[&AppRow]) -> Vec<AppLifecycleStatus> {
-    let mut grouped: BTreeMap<&str, Vec<&AppRow>> = BTreeMap::new();
-    for row in rows {
-        grouped.entry(&row.category).or_default().push(row);
-    }
-    grouped
-        .into_iter()
-        .filter_map(|(category, rows)| {
-            let has_installed = rows
-                .iter()
-                .any(|row| row.file_status != FileStatus::NotInstalled);
-            if !has_installed {
-                return None;
-            }
-            if rows.len() == 1 {
-                let row = rows[0];
-                return Some(AppLifecycleStatus {
-                    category: category.to_string(),
-                    detail_label: row.label.clone(),
-                    sym: row.sym,
-                    status_text: row.status_text,
-                    file_status: row.file_status,
-                    dest: row.dest.clone(),
-                    upgrade_available: row.upgrade_available,
-                    refresh_sources: row.refresh_sources.clone(),
-                });
-            }
-            let has_not_installed = rows
-                .iter()
-                .any(|row| row.file_status == FileStatus::NotInstalled);
-            let installed_max = rows
-                .iter()
-                .map(|row| row.file_status)
-                .filter(|status| *status != FileStatus::NotInstalled)
-                .max()
-                .expect("installed app category has an installed row");
-            let status = if has_not_installed && installed_max == FileStatus::UpToDate {
-                FileStatus::Partial
-            } else {
-                installed_max
-            };
-            let (sym, mut status_text) = match status {
-                FileStatus::Missing => ("!", "destination missing"),
-                FileStatus::UserModified => ("~", "user modified"),
-                FileStatus::Partial => ("~", "partial install"),
-                FileStatus::UpdateAvail => ("↑", "update available"),
-                FileStatus::GeneratorNotEvaluated => ("!", "generator not evaluated"),
-                FileStatus::GeneratorEvaluationFailed => ("!", "generator evaluation failed"),
-                FileStatus::GeneratorTrustRequired => ("!", "generator trust required"),
-                FileStatus::UpToDate => ("✓", "up-to-date"),
-                FileStatus::NotInstalled => unreachable!(),
-            };
-            let upgrade_available = rows.iter().any(|row| row.upgrade_available);
-            let refresh_sources = rows
-                .iter()
-                .flat_map(|row| row.refresh_sources.iter().cloned())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            if status == FileStatus::UpdateAvail {
-                status_text = match (upgrade_available, refresh_sources.is_empty()) {
-                    (true, false) => "update and refresh available",
-                    (false, false) => "refresh available",
-                    _ => status_text,
-                };
-            }
-            Some(AppLifecycleStatus {
-                category: category.to_string(),
-                detail_label: category.to_string(),
-                sym,
-                status_text,
-                file_status: status,
-                dest: None,
-                upgrade_available,
-                refresh_sources,
-            })
-        })
-        .collect()
-}
-
-fn sorted_names(mut names: Vec<String>) -> Vec<String> {
-    names.sort_by(|left, right| {
-        left.to_lowercase()
-            .cmp(&right.to_lowercase())
-            .then_with(|| left.cmp(right))
-    });
-    names
-}
-
-#[cfg(test)]
-fn should_show_shell_in_simple_list(row: &ShellRow) -> bool {
-    row.is_installed && row.status_text != SHELL_PRESET_PRESENT_LINK_MISSING
-}
-
-fn app_status_summary_parts(
-    up_to_date: usize,
-    update_available: usize,
-    refresh_available: usize,
-    user_modified: usize,
-    missing: usize,
-) -> Vec<String> {
-    let mut parts = Vec::new();
-    output::push_count(&mut parts, up_to_date, colors::green, "up-to-date");
-    output::push_count(
-        &mut parts,
-        update_available,
-        colors::cyan,
-        "update available",
-    );
-    output::push_count(
-        &mut parts,
-        refresh_available,
-        colors::cyan,
-        "refresh available",
-    );
-    output::push_count(&mut parts, user_modified, colors::yellow, "user-modified");
-    output::push_count(&mut parts, missing, colors::yellow, "destination missing");
-    parts
-}
-
-fn app_status_run_hint(row: &AppLifecycleStatus) -> String {
-    let mut commands = Vec::new();
-    if row.upgrade_available {
-        commands.push(format!(
-            "run `shine upgrade app/{}`",
-            crate::shell_quote::quote_if_needed(&row.category)
-        ));
-    }
-    commands.extend(row.refresh_sources.iter().map(|source| {
-        format!(
-            "run `shine app refresh {} {}`",
-            crate::shell_quote::quote_if_needed(&row.category),
-            crate::shell_quote::quote_if_needed(source)
-        )
-    }));
-    if commands.is_empty() {
-        String::new()
-    } else {
-        format!("  {}", colors::dim(&commands.join("; ")))
-    }
+    let inputs = query::collect_inventory(config).await?;
+    render::inventory(inputs)
 }
 
 #[cfg(test)]
@@ -993,6 +47,8 @@ mod tests {
     fn shell_row(status_text: &'static str, is_installed: bool) -> ShellRow {
         ShellRow {
             category: "proxy".to_string(),
+            command_name: "setproxy".to_string(),
+            file_status: FileStatus::Partial,
             symbol: String::new(),
             label: "proxy/setproxy".to_string(),
             status_sym: "~",
@@ -1034,6 +90,150 @@ mod tests {
         assert!(shell_attention_lines(&[&current]).is_empty());
     }
 
+    #[tokio::test]
+    async fn shell_rows_keep_identity_and_partial_status_when_display_fields_change() {
+        use shine_core::runtime::{CoreRuntime, PresetSnapshot, PresetSourceKind};
+        let runtime = crate::test_support::installed_shell_runtime().await;
+        let mut rows = runtime
+            .inspect_shells()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(ShellRow::from)
+            .collect::<Vec<_>>();
+        let run = rows
+            .iter_mut()
+            .find(|row| row.command_name == "run")
+            .unwrap();
+        run.label = "friendly label/with/slashes".into();
+        run.status_sym = "↑"; // Presentation must not manufacture an applicable update.
+        let statuses = shell_category_statuses(&rows.iter().collect::<Vec<_>>());
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].status, ShellRowStatus::Partial);
+        assert_eq!(statuses[0].status_text, "partial install");
+
+        let mut snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded);
+        for (logical, bytes) in runtime.presets().files() {
+            snapshot = snapshot.file(
+                logical,
+                if logical == "shell/demo/run.ts" {
+                    b"console.log('changed');\n".to_vec()
+                } else {
+                    bytes.clone()
+                },
+            );
+        }
+        let updated = CoreRuntime::new(
+            runtime.host().clone(),
+            runtime.context().clone(),
+            snapshot.build(),
+        );
+        let mut rows = updated
+            .inspect_shells()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(ShellRow::from)
+            .collect::<Vec<_>>();
+        let run = rows
+            .iter_mut()
+            .find(|row| row.command_name == "run")
+            .unwrap();
+        assert_eq!(run.status(), ShellRowStatus::UpdateAvail);
+        run.label = "friendly label/with/slashes".into();
+        run.status_sym = "!"; // Display changes cannot hide the stable pending target either.
+        let detail = ShellLifecycleStatus::from(&*run);
+        assert_eq!(detail.detail_label, "friendly label/with/slashes");
+        assert_eq!(detail.selector, "demo/run");
+        assert_eq!(detail.status, ShellRowStatus::UpdateAvail);
+
+        let pending = pending_shell_rows(&rows, &BTreeSet::from(["shell/demo/run"]));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].target(), "shell/demo/run");
+        assert_eq!(pending[0].selector(), "demo/run");
+        assert_eq!(
+            shell_category_statuses(&rows.iter().collect::<Vec<_>>())[0].status,
+            ShellRowStatus::UpdateAvail
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_preset_guidance_uses_receipt_identity_instead_of_display_label() {
+        use shine_core::runtime::{CoreRuntime, PresetSnapshot, PresetSourceKind};
+        let runtime = crate::test_support::installed_shell_runtime().await;
+        let missing = CoreRuntime::new(
+            runtime.host().clone(),
+            runtime.context().clone(),
+            PresetSnapshot::builder(PresetSourceKind::Embedded).build(),
+        );
+        let mut rows = missing
+            .inspect_shells()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(ShellRow::from)
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].preset_missing && rows[0].is_installed);
+        rows[0].label = "friendly label".into();
+        let attention = shell_attention_lines(&[&rows[0]]).join("\n");
+        assert!(attention.contains("! shell/friendly label"));
+        assert!(attention.contains("shine shell uninstall demo/run"));
+        assert!(!attention.contains("uninstall friendly label"));
+        assert!(!attention.contains("shine upgrade"));
+        assert_eq!(
+            shell_category_statuses(&[&rows[0]])[0].status,
+            ShellRowStatus::Attention
+        );
+    }
+
+    #[test]
+    fn typed_shell_priority_keeps_attention_order_and_last_row_ties() {
+        let mut current = shell_row("current", true);
+        current.file_status = FileStatus::UpToDate;
+        let mut pending = shell_row("pending", true);
+        pending.file_status = FileStatus::UpdateAvail;
+        let partial = shell_row("partial", true);
+        let mut modified = shell_row("modified", true);
+        modified.file_status = FileStatus::UserModified;
+        let mut missing = shell_row("missing", true);
+        missing.file_status = FileStatus::Missing;
+        let mut conflict = shell_row("conflict", true);
+        conflict.link_conflict = true;
+        for (rows, status, text) in [
+            (
+                vec![&current, &pending],
+                ShellRowStatus::UpdateAvail,
+                "pending",
+            ),
+            (vec![&pending, &partial], ShellRowStatus::Partial, "partial"),
+            (
+                vec![&partial, &modified],
+                ShellRowStatus::Partial,
+                "modified",
+            ),
+            (
+                vec![&modified, &partial],
+                ShellRowStatus::Partial,
+                "partial",
+            ),
+            (
+                vec![&partial, &missing],
+                ShellRowStatus::Attention,
+                "missing",
+            ),
+            (
+                vec![&missing, &conflict],
+                ShellRowStatus::Attention,
+                "conflict",
+            ),
+        ] {
+            let grouped = shell_category_statuses(&rows);
+            assert_eq!(grouped[0].status, status);
+            assert_eq!(grouped[0].status_text, text);
+        }
+    }
+
     #[test]
     fn update_rows_group_app_files_by_category() {
         let first = app_row("clash-verge", FileStatus::UpdateAvail);
@@ -1058,6 +258,7 @@ mod tests {
 
     #[test]
     fn manual_generator_updates_render_refresh_commands_instead_of_upgrade_targets() {
+        use clap::Parser;
         let mut row = app_row("surge", FileStatus::UpdateAvail);
         row.upgrade_available = false;
         row.refresh_sources = vec!["subscription-proxies.conf".to_string()];
@@ -1071,6 +272,26 @@ mod tests {
             app_category_action_status(&grouped["surge"]),
             ("refresh available", "↑")
         );
+        for (category, source) in [("-surge", "-file.conf"), ("surge", "-file.conf")] {
+            let mut row = app_row(category, FileStatus::UpdateAvail);
+            row.refresh_sources = vec![source.into()];
+            let commands = app_refresh_commands(&app_update_categories(&[&row]));
+            let parsed =
+                crate::commands::Cli::try_parse_from(commands[0].split_whitespace()).unwrap();
+            let crate::commands::Commands::App {
+                command:
+                    crate::commands::AppCommands::Refresh {
+                        category: actual,
+                        file,
+                        ..
+                    },
+            } = parsed.command
+            else {
+                panic!("expected refresh command")
+            };
+            assert_eq!(actual, category);
+            assert_eq!(file.as_deref(), Some(source));
+        }
     }
 
     #[test]
@@ -1121,9 +342,12 @@ mod tests {
     fn default_shell_status_collapses_commands_and_reports_partial_install() {
         let mut installed = shell_row("up-to-date", true);
         installed.status_sym = "✓";
+        installed.file_status = FileStatus::UpToDate;
         let mut missing = shell_row("not installed", false);
         missing.label = "proxy/usetproxy".to_string();
         missing.status_sym = "✗";
+        missing.file_status = FileStatus::NotInstalled;
+        missing.command_name = "usetproxy".into();
 
         let statuses = shell_category_statuses(&[&installed, &missing]);
 
@@ -1144,55 +368,105 @@ mod tests {
         assert_eq!(statuses[0].file_status, FileStatus::Partial);
     }
 
-    #[test]
-    fn simple_list_hides_preset_present_when_bin_symlink_missing() {
-        let row = shell_row(SHELL_PRESET_PRESENT_LINK_MISSING, true);
-
-        assert!(!should_show_shell_in_simple_list(&row));
-    }
-
-    #[test]
-    fn simple_list_keeps_other_installed_shell_states() {
-        assert!(should_show_shell_in_simple_list(&shell_row(
-            "up-to-date",
-            true
-        )));
-        assert!(should_show_shell_in_simple_list(&shell_row(
-            "bin symlink present, preset missing",
-            true
-        )));
-        assert!(should_show_shell_in_simple_list(&shell_row(
-            "update available",
-            true
-        )));
-    }
-
-    #[test]
-    fn simple_list_hides_uninstalled_shell_rows() {
-        let row = shell_row("not installed", false);
-
-        assert!(!should_show_shell_in_simple_list(&row));
-    }
-
-    #[test]
-    fn simple_list_collapses_installed_app_files_to_their_category() {
-        let rows = vec![
-            app_row("surge", FileStatus::UpToDate),
-            app_row("surge", FileStatus::Missing),
-            app_row("ghostty", FileStatus::NotInstalled),
-        ];
-
-        assert_eq!(installed_app_categories(&rows), vec!["surge"]);
-    }
-
-    #[test]
-    fn simple_list_shows_partially_installed_app_categories() {
-        let rows = vec![
-            app_row("surge", FileStatus::NotInstalled),
-            app_row("surge", FileStatus::UserModified),
-        ];
-
-        assert_eq!(installed_app_categories(&rows), vec!["surge"]);
+    #[tokio::test]
+    async fn simple_list_shell_visibility_uses_production_inventory() {
+        use shine_core::runtime::{
+            CoreRuntime, FileSystemHost, FileSystemObservationHost, HostOperation, PresetSnapshot,
+            PresetSourceKind, command_path_for_name,
+        };
+        for (state, expected) in [
+            ("current", true),
+            ("update", true),
+            ("foreign-launcher", true),
+            ("receipt-without-launcher", true),
+            ("legacy-launcher-without-receipt", true),
+            ("uninstalled", false),
+            ("missing-preset", false),
+        ] {
+            let installed = crate::test_support::installed_shell_runtime().await;
+            let manifest_path = installed.context().shine_dir.join("shell-manifest.toml");
+            let launcher = command_path_for_name(&installed.context().bin_dir, "run".as_ref());
+            let mut snapshot = installed.presets().clone();
+            match state {
+                "update" => {
+                    let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
+                    for (path, bytes) in snapshot.files() {
+                        builder = builder.file(
+                            path,
+                            if path == "shell/demo/run.ts" {
+                                b"console.log('new');\n".to_vec()
+                            } else {
+                                bytes.clone()
+                            },
+                        );
+                    }
+                    snapshot = builder.build();
+                }
+                "foreign-launcher" => installed.host().put_file(&launcher, b"foreign".to_vec()),
+                "receipt-without-launcher" | "uninstalled" => {
+                    installed.host().remove_file(&launcher).await.unwrap();
+                }
+                "missing-preset" => {
+                    snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded).build()
+                }
+                _ => {}
+            }
+            if matches!(state, "uninstalled" | "legacy-launcher-without-receipt") {
+                installed.host().put_file(
+                    &manifest_path,
+                    b"schema_version = 1\nentries = []\n".to_vec(),
+                );
+            }
+            let manifest = installed.host().read(&manifest_path).await.unwrap();
+            let launcher_before = installed.host().read(&launcher).await.ok();
+            let start = installed.host().operations().len();
+            let service = shine_core::frontend::FrontendService::new(CoreRuntime::new(
+                installed.host().clone(),
+                installed.context().clone(),
+                snapshot,
+            ));
+            let report = service
+                .inventory(InventoryRequest::for_kind(CapabilityKindV1::Shell))
+                .await
+                .unwrap();
+            let run = report
+                .items
+                .iter()
+                .find(|item| item.target == "shell/demo/run")
+                .unwrap_or_else(|| {
+                    panic!("{state}: missing receipt or available item: {report:?}")
+                });
+            assert_eq!(run.available, state != "missing-preset", "{state}: {run:?}");
+            assert_eq!(run.installed, state != "uninstalled", "{state}: {run:?}");
+            assert_eq!(
+                installed_shell_categories_from_inventory(&report),
+                if expected {
+                    vec!["demo".to_string()]
+                } else {
+                    Vec::new()
+                },
+                "{state}: {report:?}"
+            );
+            // An available, uninstalled sibling cannot create another category entry.
+            if state != "missing-preset" {
+                let idle = report
+                    .items
+                    .iter()
+                    .find(|item| item.target == "shell/demo/idle")
+                    .unwrap();
+                assert!(idle.available && !idle.installed, "{state}: {idle:?}");
+            }
+            assert!(
+                installed.host().operations()[start..]
+                    .iter()
+                    .all(|op| matches!(op, HostOperation::Read(_)))
+            );
+            assert_eq!(
+                installed.host().read(&manifest_path).await.unwrap(),
+                manifest
+            );
+            assert_eq!(installed.host().read(&launcher).await.ok(), launcher_before);
+        }
     }
 
     #[test]
@@ -1288,5 +562,48 @@ mod tests {
                 "5 destination missing".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn update_projection_keeps_pending_ownership_and_manual_refresh_actions_separate() {
+        use shine_core::lifecycle::{
+            LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+        };
+        let mut pending_shell = shell_row("update available", true);
+        pending_shell.command_name = "pending".into();
+        let mut conflict = shell_row("launcher conflict", true);
+        conflict.link_conflict = true;
+        let shell = vec![pending_shell, conflict];
+        let mut shell_lifecycle = LifecycleResultV1::new(LifecycleOperation::Update, false);
+        shell_lifecycle.push(LifecycleOutcomeV1::new(
+            shell[0].target(),
+            None::<String>,
+            LifecycleStatus::Pending,
+            [],
+        ));
+        let mut manual = app_row("demo", FileStatus::UpdateAvail);
+        manual.upgrade_available = false;
+        manual.refresh_sources = vec!["manual.txt".into()];
+        let app = vec![
+            manual,
+            app_row("demo", FileStatus::UpdateAvail),
+            app_row("excluded", FileStatus::UpdateAvail),
+        ];
+        let mut app_lifecycle = LifecycleResultV1::new(LifecycleOperation::Update, false);
+        app_lifecycle.push(LifecycleOutcomeV1::new(
+            "app/demo",
+            None::<String>,
+            LifecycleStatus::Pending,
+            [],
+        ));
+        let view = UpdateView::new(&shell, &shell_lifecycle, &app, &app_lifecycle, false);
+        assert_eq!(view.update_shell.len(), 1);
+        assert_eq!(view.update_shell[0].command_name, "pending");
+        assert_eq!(view.shell_attention.len(), 1);
+        assert_eq!(view.actionable_app["demo"].len(), 2);
+        assert_eq!(view.update_app["demo"].len(), 1);
+        assert!(!view.actionable_app.contains_key("excluded"));
+        assert_eq!(view.refresh_commands, ["shine app refresh demo manual.txt"]);
+        assert!(view.any_update);
     }
 }

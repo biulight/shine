@@ -1,3 +1,13 @@
+//! Sys bootstrap orchestration; ordering and existing approval boundaries remain here.
+mod detection;
+mod execution;
+mod provider;
+mod selection;
+use detection::DetectionResult;
+pub(super) use provider::sys_install_requires_admin;
+use provider::{install_requires_admin, package_preview};
+use selection::resolve_selection;
+
 use super::command_detection::{command_candidates, observe_command_candidate};
 use super::{
     CoreRuntime, FileSystemHost, ProcessHost, ProcessRequest, ResolvedSelection, RuntimeEvent,
@@ -43,17 +53,6 @@ pub struct SysBootstrapBatchReport {
     pub selection: ResolvedSelection,
     pub previews: Vec<String>,
     pub outcomes: Vec<SysItemOutcome>,
-}
-
-enum DetectionResult {
-    Present(String),
-    Missing,
-}
-
-struct ExecutionResult {
-    success: bool,
-    failure_detail: String,
-    logs: Vec<String>,
 }
 
 impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
@@ -230,7 +229,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         })
     }
 
-    pub async fn sys_item_is_present(&self, item: &SysItem) -> Result<bool> {
+    pub(in crate::runtime) async fn sys_item_is_present(&self, item: &SysItem) -> Result<bool> {
         let detect = item
             .detect
             .as_ref()
@@ -365,7 +364,12 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         })
     }
 
-    pub fn preflight_sys_item(&self, _os_id: &str, root: &Path, item: &SysItem) -> Result<()> {
+    pub(in crate::runtime) fn preflight_sys_item(
+        &self,
+        _os_id: &str,
+        root: &Path,
+        item: &SysItem,
+    ) -> Result<()> {
         for key in &item.required_env {
             if self
                 .context()
@@ -405,7 +409,12 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         Ok(())
     }
 
-    pub fn sys_install_preview(&self, os_id: &str, root: &Path, item: &SysItem) -> Result<String> {
+    pub(in crate::runtime) fn sys_install_preview(
+        &self,
+        os_id: &str,
+        root: &Path,
+        item: &SysItem,
+    ) -> Result<String> {
         let install = item
             .install
             .as_ref()
@@ -433,316 +442,6 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             }
         }
     }
-
-    async fn detect_sys_item(&self, detection: &SysDetection) -> Result<DetectionResult> {
-        match detection {
-            SysDetection::Command {
-                command,
-                version_args,
-            } => self.detect_command(command, version_args).await,
-            SysDetection::Path { path } => self.detect_path(path).await,
-            SysDetection::Any { probes } => {
-                for probe in probes {
-                    let result = match probe {
-                        SysDetectionProbe::Command { command } => {
-                            self.detect_command(command, &[]).await?
-                        }
-                        SysDetectionProbe::Path { path } => self.detect_path(path).await?,
-                    };
-                    if matches!(result, DetectionResult::Present(_)) {
-                        return Ok(result);
-                    }
-                }
-                Ok(DetectionResult::Missing)
-            }
-        }
-    }
-
-    async fn detect_path(&self, raw: &str) -> Result<DetectionResult> {
-        let path = captured_expand(raw, &self.context().home_dir);
-        match self.host().metadata(&path).await {
-            Ok(_) => Ok(DetectionResult::Present(path.display().to_string())),
-            Err(error) if error.is_not_found() => Ok(DetectionResult::Missing),
-            Err(error) => Err(error.into_anyhow("inspecting Sys detection path")),
-        }
-    }
-
-    async fn detect_command(
-        &self,
-        command: &str,
-        version_args: &[String],
-    ) -> Result<DetectionResult> {
-        let Some(program) = self.find_command(command).await? else {
-            return Ok(DetectionResult::Missing);
-        };
-        if version_args.is_empty() {
-            return Ok(DetectionResult::Present(program.display().to_string()));
-        }
-        let output = self
-            .host()
-            .run(ProcessRequest {
-                program: program.display().to_string(),
-                args: version_args.to_vec(),
-                stdout_limit: Some(MAX_LOG_BYTES),
-                stderr_limit: Some(MAX_LOG_BYTES),
-                ..ProcessRequest::default()
-            })
-            .await;
-        let detail = output
-            .ok()
-            .filter(|output| output.exit_code == Some(0))
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .and_then(|stdout| stdout.lines().next().map(str::to_string))
-            .filter(|line| !line.trim().is_empty())
-            .unwrap_or_else(|| program.display().to_string());
-        Ok(DetectionResult::Present(detail))
-    }
-
-    async fn find_command(&self, command: &str) -> Result<Option<PathBuf>> {
-        for candidate in command_candidates(self.context(), command) {
-            let observation = observe_command_candidate(self.host(), &candidate)
-                .await
-                .map_err(|error| error.into_anyhow("inspecting Sys detection command"))?;
-            if observation.is_executable(self.context().platform) {
-                return Ok(Some(candidate));
-            }
-        }
-        Ok(None)
-    }
-
-    async fn run_package(
-        &self,
-        os_id: &str,
-        provider: SysPackageProvider,
-        package: &str,
-        admin: bool,
-    ) -> Result<ExecutionResult> {
-        let (program, mut args, _) =
-            package_command(os_id, provider, package, &self.context().proxy_env)?;
-        let mut env = self.context().proxy_env.clone();
-        let program = if admin && !self.context().running_as_admin {
-            let mut sudo_args = vec!["-n".to_string()];
-            if !env.is_empty() {
-                sudo_args.push("env".to_string());
-                sudo_args.extend(env.iter().map(|(key, value)| format!("{key}={value}")));
-            }
-            sudo_args.push(program);
-            sudo_args.append(&mut args);
-            args = sudo_args;
-            "sudo".to_string()
-        } else {
-            program
-        };
-        let output = self
-            .host()
-            .run(ProcessRequest {
-                program,
-                args,
-                env: std::mem::take(&mut env),
-                inherit_stdin: true,
-                timeout: Some(BOOTSTRAP_TIMEOUT),
-                stdout_limit: Some(MAX_LOG_BYTES),
-                stderr_limit: Some(MAX_LOG_BYTES),
-                ..ProcessRequest::default()
-            })
-            .await;
-        execution_result(
-            output,
-            format!("{provider:?} install failed"),
-            provider == SysPackageProvider::Winget,
-        )
-    }
-
-    async fn run_sys_script(
-        &self,
-        os_id: &str,
-        script: &Path,
-        root: &Path,
-        shell: &str,
-        item: &SysItem,
-        admin: bool,
-    ) -> Result<ExecutionResult> {
-        let (program, mut args) = match os_id {
-            "windows" => (
-                "powershell.exe".to_string(),
-                vec![
-                    "-NoProfile".into(),
-                    "-ExecutionPolicy".into(),
-                    "Bypass".into(),
-                    "-File".into(),
-                ],
-            ),
-            "macos" => ("zsh".to_string(), Vec::new()),
-            _ => ("bash".to_string(), Vec::new()),
-        };
-        args.push(script.display().to_string());
-        let mut env = BTreeMap::from([
-            ("SHINE_SYS_PRESET_ROOT".into(), root.display().to_string()),
-            ("SHINE_SYS_SHELL".into(), shell.to_string()),
-            (
-                "SHINE_TARGET_HOME".into(),
-                self.context().home_dir.display().to_string(),
-            ),
-        ]);
-        for key in &item.required_env {
-            if let Some(value) = self.context().env.get(key) {
-                env.insert(key.clone(), value.clone());
-            }
-        }
-        env.extend(self.context().proxy_env.clone());
-        let (program, args) = if admin && !self.context().running_as_admin {
-            let mut sudo = vec![
-                "-n".to_string(),
-                format!(
-                    "--preserve-env={}",
-                    env.keys().cloned().collect::<Vec<_>>().join(",")
-                ),
-                program,
-            ];
-            sudo.extend(args);
-            ("sudo".to_string(), sudo)
-        } else {
-            (program, args)
-        };
-        let output = self
-            .host()
-            .run(ProcessRequest {
-                program,
-                args,
-                cwd: script.parent().map(Path::to_path_buf),
-                env,
-                inherit_stdin: true,
-                timeout: Some(BOOTSTRAP_TIMEOUT),
-                stdout_limit: Some(MAX_LOG_BYTES),
-                stderr_limit: Some(MAX_LOG_BYTES),
-                ..ProcessRequest::default()
-            })
-            .await;
-        execution_result(
-            output,
-            format!("sys item `{}` install script failed", item.id),
-            item.requires_admin && os_id == "windows",
-        )
-    }
-}
-
-impl<H> CoreRuntime<H> {
-    pub async fn resolve_sys_bootstrap_selection(
-        &self,
-        os_id: &str,
-        requested: &[String],
-        preset: Option<&str>,
-        interactive: bool,
-        interaction: &mut impl RuntimeInteraction,
-        observer: &mut impl RuntimeObserver,
-    ) -> Result<ResolvedSelection> {
-        let loaded = self.load_sys_preset(os_id).await?;
-        resolve_selection(
-            &loaded.manifest,
-            requested,
-            preset,
-            interactive,
-            interaction,
-            observer,
-        )
-    }
-}
-
-fn resolve_selection(
-    manifest: &SysManifest,
-    requested: &[String],
-    preset: Option<&str>,
-    interactive: bool,
-    interaction: &mut impl RuntimeInteraction,
-    observer: &mut impl RuntimeObserver,
-) -> Result<ResolvedSelection> {
-    if !requested.is_empty() {
-        if preset.is_some() {
-            bail!("explicit sys bootstrap items cannot be combined with `--preset`");
-        }
-        let mut seen = BTreeSet::new();
-        let mut item_ids = Vec::new();
-        for item_id in requested {
-            let item = manifest
-                .items
-                .iter()
-                .find(|item| item.id == *item_id)
-                .with_context(|| format!("unknown sys bootstrap item `{item_id}`"))?;
-            if item.mode == SysItemMode::Managed {
-                bail!("`{item_id}` is a managed system resource; use `shine sys apply {item_id}`");
-            }
-            if seen.insert(item_id.as_str()) {
-                item_ids.push(item_id.clone());
-            }
-        }
-        return Ok(ResolvedSelection {
-            item_ids,
-            source: SelectionSource::Items,
-        });
-    }
-    if let Some(name) = preset {
-        let profile = manifest
-            .profiles
-            .get(name)
-            .with_context(|| format!("unknown sys bootstrap profile `{name}`"))?;
-        return Ok(ResolvedSelection {
-            item_ids: profile.items.clone(),
-            source: SelectionSource::Profile(name.to_string()),
-        });
-    }
-    let init_items = manifest
-        .items
-        .iter()
-        .filter(|item| item.mode == SysItemMode::Init)
-        .collect::<Vec<_>>();
-    if init_items.is_empty() {
-        return Ok(ResolvedSelection {
-            item_ids: Vec::new(),
-            source: SelectionSource::NoItems,
-        });
-    }
-    if interactive {
-        observer.emit(RuntimeEvent::Interaction {
-            code: "sys_bootstrap_selection",
-            target: manifest.default_profile.clone().unwrap_or_default(),
-        });
-        let choices = init_items
-            .iter()
-            .map(|item| item.id.clone())
-            .collect::<Vec<_>>();
-        let defaults = default_selection(manifest);
-        let item_ids = interaction.select_many("Select system init items", &choices, &defaults)?;
-        return Ok(ResolvedSelection {
-            item_ids,
-            source: SelectionSource::Interactive,
-        });
-    }
-    let name = manifest
-        .default_profile
-        .as_deref()
-        .context("sys bootstrap requires `default_profile` for non-interactive runs")?;
-    let profile = manifest
-        .profiles
-        .get(name)
-        .with_context(|| format!("unknown sys bootstrap profile `{name}`"))?;
-    Ok(ResolvedSelection {
-        item_ids: profile.items.clone(),
-        source: SelectionSource::DefaultProfile(name.to_string()),
-    })
-}
-
-fn default_selection(manifest: &SysManifest) -> Vec<String> {
-    if let Some(name) = manifest.default_profile.as_deref()
-        && let Some(profile) = manifest.profiles.get(name)
-    {
-        return profile.items.clone();
-    }
-    manifest
-        .items
-        .iter()
-        .filter(|item| item.mode == SysItemMode::Init && item.default)
-        .map(|item| item.id.clone())
-        .collect()
 }
 
 fn safe_sys_path(root: &Path, relative: &str) -> Result<PathBuf> {
@@ -761,147 +460,6 @@ fn safe_sys_path(root: &Path, relative: &str) -> Result<PathBuf> {
     }
     Ok(root.join(path))
 }
-fn captured_expand(raw: &str, home: &Path) -> PathBuf {
-    if raw == "~" || raw == "$HOME" {
-        home.to_path_buf()
-    } else if let Some(rest) = raw
-        .strip_prefix("~/")
-        .or_else(|| raw.strip_prefix("$HOME/"))
-    {
-        home.join(rest)
-    } else {
-        PathBuf::from(raw)
-    }
-}
-pub fn sys_install_requires_admin(
-    os_id: &str,
-    install: &SysInstall,
-    item: &SysItem,
-) -> Result<bool> {
-    match install {
-        SysInstall::Package {
-            provider, package, ..
-        } => Ok(package_command(os_id, *provider, package, &BTreeMap::new())?.2),
-        SysInstall::Script { .. } => Ok(item.requires_admin && os_id != "windows"),
-    }
-}
-fn install_requires_admin(os_id: &str, install: &SysInstall, item: &SysItem) -> Result<bool> {
-    sys_install_requires_admin(os_id, install, item)
-}
-fn package_preview(os_id: &str, provider: SysPackageProvider, package: &str) -> Result<String> {
-    let (program, args, admin) = package_command(os_id, provider, package, &BTreeMap::new())?;
-    Ok(format!(
-        "{}{} {}",
-        if admin { "sudo " } else { "" },
-        program,
-        args.join(" ")
-    ))
-}
-fn package_command(
-    os_id: &str,
-    provider: SysPackageProvider,
-    package: &str,
-    proxy: &BTreeMap<String, String>,
-) -> Result<(String, Vec<String>, bool)> {
-    match provider {
-        SysPackageProvider::Homebrew | SysPackageProvider::HomebrewCask => {
-            if os_id == "windows" {
-                bail!("Homebrew sys provider is unavailable on Windows");
-            }
-            let mut args = vec!["install".to_string()];
-            if provider == SysPackageProvider::HomebrewCask {
-                args.push("--cask".into());
-            }
-            args.push(package.into());
-            Ok(("brew".into(), args, false))
-        }
-        SysPackageProvider::Apt => {
-            if os_id != "ubuntu" {
-                bail!("APT sys provider is supported only on Ubuntu presets");
-            }
-            Ok((
-                "apt-get".into(),
-                vec!["install".into(), "-y".into(), package.into()],
-                true,
-            ))
-        }
-        SysPackageProvider::Winget => {
-            if os_id != "windows" {
-                bail!("Winget sys provider is supported only on Windows presets");
-            }
-            let mut args = vec![
-                "install".into(),
-                "--exact".into(),
-                "--id".into(),
-                package.into(),
-                "--accept-package-agreements".into(),
-                "--accept-source-agreements".into(),
-            ];
-            if let Some(proxy) = proxy.get("SHINE_SYS_PROXY") {
-                args.extend(["--proxy".into(), proxy.clone()]);
-            }
-            Ok(("winget".into(), args, false))
-        }
-    }
-}
-fn execution_result(
-    output: Result<super::ProcessOutput>,
-    prefix: String,
-    windows_admin_hint: bool,
-) -> Result<ExecutionResult> {
-    match output {
-        Err(error) if error.to_string().contains("timed out") => Ok(ExecutionResult {
-            success: false,
-            failure_detail: format!("{prefix}: timed out after 30 minutes"),
-            logs: Vec::new(),
-        }),
-        Err(error) => Err(error).context("running sys bootstrap installer"),
-        Ok(output) => {
-            let success = output.exit_code == Some(0);
-            let mut detail = if success {
-                String::new()
-            } else {
-                format!(
-                    "{prefix} (exit {})",
-                    output
-                        .exit_code
-                        .map_or_else(|| "signal".to_string(), |code| code.to_string())
-                )
-            };
-            if !success && windows_admin_hint {
-                detail.push_str("; retry from an elevated PowerShell");
-            }
-            Ok(ExecutionResult {
-                success,
-                failure_detail: detail,
-                logs: bounded_logs(&output.stdout, &output.stderr),
-            })
-        }
-    }
-}
-fn bounded_logs(stdout: &[u8], stderr: &[u8]) -> Vec<String> {
-    let mut bytes = stdout.to_vec();
-    if !stdout.is_empty() && !stderr.is_empty() {
-        bytes.push(b'\n');
-    }
-    bytes.extend_from_slice(stderr);
-    let truncated = bytes.len() > MAX_LOG_BYTES;
-    if truncated {
-        bytes = bytes[bytes.len() - MAX_LOG_BYTES..].to_vec();
-    }
-    let mut lines = String::from_utf8_lossy(&bytes)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if truncated {
-        lines.insert(
-            0,
-            "installer output truncated at 64 KiB; showing final output".into(),
-        );
-    }
-    lines
-}
 fn sys_outcome(
     item: &SysItem,
     status: SysItemStatus,
@@ -916,3 +474,6 @@ fn sys_outcome(
         logs,
     }
 }
+
+#[cfg(test)]
+mod tests;

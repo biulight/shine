@@ -18,6 +18,7 @@ shine app install starship --dry-run
 ```
 
 涉及系统目录的预设可能需要额外权限。先使用 `--dry-run` 确认目标路径和变更范围。
+预览摘要会分别统计将安装和跳过的文件，不会写入应用配置文件。
 
 ## 安装与更新
 
@@ -29,6 +30,10 @@ shine upgrade
 ```
 
 `shine update` 比较当前安装结果与预设，只报告状态；`shine upgrade` 将受管 shell 和应用配置更新到当前预设内容。
+
+`Install incomplete` 摘要表示一个或多个文件安装失败，命令会以非零状态退出。
+导致安装提前中止的错误会直接报告，不输出该摘要。
+本次运行中已经成功安装的文件会保留；重试前先检查报告的结果。post-install hook 的警告仍不影响成功退出。
 
 重新安装类别时会保留安装后被修改的文件，包括受管 JSON 键。对于审阅过的 Plan 标为保留的文件，
 Shine 也会跳过其 generator。若要显式覆盖已修改的受管内容，先使用
@@ -66,7 +71,6 @@ metadata_schema_version = 2
 ```bash
 shine app uninstall starship --dry-run
 shine app uninstall starship
-shine app uninstall starship --purge
 ```
 
 install、upgrade、uninstall、generator refresh 和 artifact apply/remove 都会在改动前显示 Plan，
@@ -83,7 +87,14 @@ install、upgrade、uninstall、generator refresh 和 artifact apply/remove 都�
 仍不属于带事务日志的静态文件恢复流程。
 
 `app uninstall --force` 会显式允许删除用户修改过的受管内容，执行前务必使用 `--dry-run` 预览。
-`--purge` 还会删除该类别已安装的预设文件。upgrade 仅在获批命令包含 `--prune-stale` 时移除已从
+卸载默认清理内部缓存。指定类别时，会删除该类别的整个内部缓存，包括额外文件，但保留 App manifest；
+未指定类别时，会删除整棵内部 App 缓存树；仅当没有剩余安装记录时才删除 App manifest。
+受保护或卸载失败的条目会保留记录及已记录的备份，便于处理问题后重试；`--force` 仍需显式审批。
+预览说明将要移除的内容，执行仅报告实际完成的清理。外部预设源始终保留，受管目标和清单记录
+仍按正常卸载规则处理。`shine uninstall app/<category>` 使用相同的类别限定行为。
+`--purge` 已移除；旧命令请直接去掉该选项。缓存清理同样包含在待审批的 Plan 和 `--dry-run` 预览中。
+
+upgrade 仅在获批命令包含 `--prune-stale` 时移除已从
 预设中删除且未被修改的受管条目；用户修改过的条目仍会保留。
 
 ## 恢复中断的 App 操作

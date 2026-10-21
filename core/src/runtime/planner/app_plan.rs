@@ -273,10 +273,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 None
             };
             let modified = match (active_file.as_ref(), current.as_deref()) {
-                (Some(file), Some(bytes)) => installed_app_hash(file, bytes)
+                (Some(file), Some(bytes)) => installed_strategy_hash(&file.install_strategy, bytes)
                     .map(|hash| hash.is_some_and(|hash| hash != entry.content_hash))
                     .unwrap_or(true),
-                (None, Some(bytes)) => installed_app_entry_hash(entry, bytes)
+                (None, Some(bytes)) => installed_strategy_hash(&entry.install_strategy, bytes)
                     .map(|hash| hash.is_some_and(|hash| hash != entry.content_hash))
                     .unwrap_or(true),
                 (_, None) => false,
@@ -298,7 +298,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             | crate::install::AppInstallStrategy::JsonMerge { .. }
                     )
                     && current.as_deref().is_some_and(|bytes| {
-                        installed_app_hash(file, bytes)
+                        installed_strategy_hash(&file.install_strategy, bytes)
                             .ok()
                             .flatten()
                             .is_some_and(|hash| hash == entry.content_hash || request.force)

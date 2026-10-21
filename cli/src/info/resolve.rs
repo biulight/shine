@@ -96,34 +96,33 @@ pub(super) fn build_candidates(
 }
 
 pub(super) fn resolve_target(target: &str, candidates: &[TargetCandidate]) -> Result<Vec<InfoRef>> {
-    let trimmed = target.trim();
-    if trimmed.is_empty() {
+    if target.trim().is_empty() {
         bail!("info target must not be empty");
     }
 
     let exact: Vec<_> = candidates
         .iter()
-        .filter(|c| c.canonical == trimmed)
+        .filter(|c| c.canonical == target)
         .collect();
     if exact.len() == 1 {
         return Ok(vec![exact[0].item.clone()]);
     }
     if exact.len() > 1 {
-        return ambiguity(trimmed, exact);
+        return ambiguity(target, exact);
     }
 
     let alias: Vec<_> = candidates
         .iter()
-        .filter(|c| c.aliases.contains(trimmed))
+        .filter(|c| c.aliases.contains(target))
         .collect();
     if alias.len() == 1 {
         return Ok(vec![alias[0].item.clone()]);
     }
     if alias.len() > 1 {
-        return ambiguity(trimmed, alias);
+        return ambiguity(target, alias);
     }
 
-    bail!("{}", missing_target_message(trimmed, candidates));
+    bail!("{}", missing_target_message(target, candidates));
 }
 
 fn ambiguity(target: &str, matches: Vec<&TargetCandidate>) -> Result<Vec<InfoRef>> {

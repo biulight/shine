@@ -22,7 +22,7 @@ pub fn parse_sys_manifest(content: &str) -> Result<SysManifest> {
     Ok(manifest)
 }
 
-pub fn validate_sys_manifest(manifest: &SysManifest) -> Result<()> {
+fn validate_sys_manifest(manifest: &SysManifest) -> Result<()> {
     match manifest.version {
         Some(2) => {}
         None | Some(1) => bail!(
@@ -108,7 +108,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             })
             .collect()
     }
+}
 
+impl<H: super::FileSystemObservationHost> CoreRuntime<H> {
     pub async fn inspect_sys_run_manifest(&self) -> Result<super::SysRunManifest> {
         super::sys::load_manifest_with_host(self.host(), &self.context().shine_dir).await
     }
@@ -477,7 +479,7 @@ fn validate_relative(id: &str, label: &str, value: &str) -> Result<()> {
     }
     Ok(())
 }
-fn config_string(config: &toml::Table, key: &str) -> Result<String> {
+pub(super) fn config_string(config: &toml::Table, key: &str) -> Result<String> {
     config
         .get(key)
         .and_then(toml::Value::as_str)
@@ -489,6 +491,61 @@ fn config_string(config: &toml::Table, key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn driver_config_strings_reject_empty_without_trimming_values() {
+        for value in [
+            None,
+            Some(toml::Value::Integer(1)),
+            Some("".into()),
+            Some(" \t\n".into()),
+        ] {
+            let mut config = toml::Table::new();
+            if let Some(value) = value {
+                config.insert("source".into(), value);
+            }
+            assert_eq!(
+                config_string(&config, "source").unwrap_err().to_string(),
+                "driver config requires non-empty `source`"
+            );
+        }
+        let mut config = toml::Table::new();
+        config.insert("source".into(), "  config/中文.txt  ".into());
+        assert_eq!(
+            config_string(&config, "source").unwrap(),
+            "  config/中文.txt  "
+        );
+    }
+
+    #[test]
+    fn v2_manifest_rejects_duplicate_items_and_invalid_profiles() {
+        let item = "[[items]]\nid = 'tool'\nlabel = 'Tool'\ndetect = { kind = 'path', path = '~/tool' }\ninstall = { kind = 'script', path = 'tool.sh' }\n";
+        let valid = format!(
+            "version = 2\ndefault_profile = 'recommended'\n{item}\n[profiles.recommended]\nitems = ['tool']\n"
+        );
+        assert_eq!(parse_sys_manifest(&valid).unwrap().items.len(), 1);
+        for (content, expected) in [
+            (
+                format!("version = 2\n{item}\n{item}"),
+                "duplicate sys bootstrap item id",
+            ),
+            (
+                valid.replace("items = ['tool']", "items = ['missing']"),
+                "unknown item `missing`",
+            ),
+            (
+                format!("version = 2\ndefault_profile = 'missing'\n{item}"),
+                "default profile `missing`",
+            ),
+        ] {
+            assert!(
+                parse_sys_manifest(&content)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected)
+            );
+        }
+    }
     use crate::plan::{OpaqueCodeScopeV1, PermissionV1};
     use crate::runtime::{
         FileSystemObservationHost, HostOperation, InMemoryHost, PresetSnapshot, PresetSourceKind,

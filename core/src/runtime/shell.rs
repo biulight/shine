@@ -1,3 +1,14 @@
+mod metadata;
+use metadata::{
+    ShellCategoryToml, is_native_shell_script, normalize_shell_metadata_source, shell_logical_path,
+};
+mod cache;
+mod delivery;
+mod inspect;
+mod lifecycle;
+mod rendered;
+use delivery::{ShellSourceLayout, source_transforms};
+
 use super::launcher::{
     prepare_launcher_resources, prepared_launcher_resource_is_exact,
     probe_managed_command_with_host, uses_native_cmd_literal_path,
@@ -6,16 +17,15 @@ use super::metadata_diagnostic::{MetadataDiagnosticError, MetadataDiagnosticKind
 use super::shell_action_executor::{
     ShellCacheRemoval, ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation,
     ShellLauncherRemoval, ShellLauncherUpdate, ShellLegacyLauncherRemoval,
-    ShellProfilePreparedFile, ShellProfileReconciliation, ShellRenderedFileRemoval,
-    ShellRenderedFileReplacement, ShellSharedReplacements, ShellSnapshotFile, ShellSnapshotRemoval,
-    ShellSnapshotReplacement,
+    ShellProfilePreparedFile, ShellProfileReconciliation, ShellReceiptRemoval,
+    ShellReceiptTransition, ShellRenderedFileRemoval, ShellRenderedFileReplacement,
+    ShellSharedReplacements, ShellSnapshotFile, ShellSnapshotRemoval, ShellSnapshotReplacement,
 };
 use super::{
-    CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, InspectionChange,
-    InspectionFileStatus, LinkConflict, LinkConflictKind, LinkReport, LinkSpec, PathUpdateStatus,
-    PrivilegedFileSystemHost, ShellConfigUpdate, ShellFileInspection, ShellProfileRemoval,
-    UnlinkReport, command_path_for_name, link_executables_with_host, link_is_current_with_host,
-    unlink_managed_command_with_host,
+    CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, LinkConflict,
+    LinkConflictKind, LinkReport, LinkSpec, PathUpdateStatus, PrivilegedFileSystemHost,
+    ShellConfigUpdate, ShellProfileRemoval, UnlinkReport, command_path_for_name,
+    link_executables_with_host, unlink_managed_command_with_host,
 };
 use crate::action::{
     ShellFileIdentityV1, ShellProfileFileOwnershipV1, managed_file_rollback_path,
@@ -33,30 +43,12 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-#[derive(Debug, Deserialize)]
-struct ShellCategoryToml {
-    description: Option<String>,
-    permission_defaults: Option<PermissionDeclarationV1>,
-    files: Option<Vec<ShellFileToml>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ShellFileToml {
-    source: String,
-    target: Option<String>,
-    description: Option<String>,
-    needs_source: Option<bool>,
-    platforms: Option<Vec<String>>,
-    runtime: Option<String>,
-    transforms: Option<Vec<String>>,
-    env: Option<Vec<String>>,
-    permissions: Option<PermissionDeclarationV1>,
-}
-
 pub const SHELL_MANIFEST_FILE: &str = "shell-manifest.toml";
 pub const SHELL_MANIFEST_SCHEMA_VERSION: u32 = 2;
-pub const LIVE_BUN_LAUNCHER_FORMAT: &str = "live-bun-v2";
-pub const NATIVE_CMD_LAUNCHER_FORMAT: &str = "native-cmd-v2";
+pub use crate::action::shell_receipt::{LIVE_BUN_LAUNCHER_FORMAT, NATIVE_CMD_LAUNCHER_FORMAT};
+use crate::action::shell_receipt::{
+    LauncherFormat, ReceiptDependencies, ReceiptRuntime, ShellReceiptConfiguration,
+};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -103,39 +95,31 @@ pub struct BunRuntimeSpec {
 }
 
 pub(crate) fn shell_link_spec_from_manifest_entry(entry: &ShellManifestEntry) -> Result<LinkSpec> {
-    let live_launch_config = match (&entry.launcher_format, &entry.launcher_config_dir) {
-        (None, None) => None,
-        (Some(format), None)
-            if format == NATIVE_CMD_LAUNCHER_FORMAT
-                && entry.runtime == "native"
-                && entry.source_path.extension() == Some(std::ffi::OsStr::new("ps1")) =>
-        {
-            None
-        }
-        (Some(format), Some(config))
-            if format == LIVE_BUN_LAUNCHER_FORMAT
-                && entry.mode == ExternalShellMode::Live
-                && entry.runtime == "bun"
-                && !entry.transforms.is_empty()
-                && !entry.needs_source
-                && config.is_absolute()
-                && !config
-                    .components()
-                    .any(|part| part == std::path::Component::ParentDir) =>
-        {
-            Some(config.clone())
-        }
-        _ => bail!("unsupported or inconsistent Shell launcher format in receipt"),
+    let delivery = ShellReceiptConfiguration {
+        format: entry.launcher_format.as_deref(),
+        config_dir: entry.launcher_config_dir.as_deref(),
+        mode: match entry.mode {
+            ExternalShellMode::Snapshot => "snapshot",
+            ExternalShellMode::Live => "live",
+        },
+        runtime: &entry.runtime,
+        source: &entry.source_path,
+        transforms: &entry.transforms,
+        needs_source: entry.needs_source,
+        dependencies: entry.bun_dependencies.as_deref(),
+    }
+    .validate()?;
+    let live_launch_config = match delivery.format {
+        LauncherFormat::LiveBunV2 { config_dir } => Some(config_dir.to_path_buf()),
+        LauncherFormat::Legacy | LauncherFormat::NativeCmdV2 => None,
     };
-    let runtime = match entry.runtime.as_str() {
-        "native" => LinkRuntime::Native,
-        "bun" => LinkRuntime::Bun,
-        value => bail!("unsupported Shell launcher runtime in receipt: {value}"),
+    let runtime = match delivery.runtime {
+        ReceiptRuntime::Native => LinkRuntime::Native,
+        ReceiptRuntime::Bun => LinkRuntime::Bun,
     };
-    let bun_dependencies = match entry.bun_dependencies.as_deref() {
-        None => BunDependencyMode::Disabled,
-        Some("locked") => BunDependencyMode::Locked,
-        Some(value) => bail!("unsupported Shell Bun dependency mode in receipt: {value}"),
+    let bun_dependencies = match delivery.dependencies {
+        ReceiptDependencies::Disabled => BunDependencyMode::Disabled,
+        ReceiptDependencies::Locked => BunDependencyMode::Locked,
     };
     let source = if entry.transforms.is_empty() {
         entry.source_path.clone()
@@ -145,8 +129,7 @@ pub(crate) fn shell_link_spec_from_manifest_entry(entry: &ShellManifestEntry) ->
     let render_target = (entry.mode == ExternalShellMode::Live && !entry.transforms.is_empty())
         .then(|| format!("shell/{}/{}", entry.category, entry.command));
     Ok(LinkSpec {
-        native_cmd_literal_path: entry.launcher_format.as_deref()
-            == Some(NATIVE_CMD_LAUNCHER_FORMAT),
+        native_cmd_literal_path: delivery.format == LauncherFormat::NativeCmdV2,
         live_launch_config,
 
         source,
@@ -374,25 +357,6 @@ fn embedded_shell_cache_mode(logical: &str) -> Option<u32> {
     }
 }
 
-fn inspection_list(values: &[String]) -> String {
-    if values.is_empty() {
-        "none".to_string()
-    } else {
-        values.join(", ")
-    }
-}
-
-fn push_inspection_change(
-    changes: &mut Vec<InspectionChange>,
-    field: &'static str,
-    from: String,
-    to: String,
-) {
-    if from != to {
-        changes.push(InspectionChange::DeploymentChanged { field, from, to });
-    }
-}
-
 impl<H> CoreRuntime<H> {
     pub(crate) fn live_bun_launcher_config(
         &self,
@@ -450,460 +414,10 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         })
     }
 
-    pub async fn inspect_shells(&self) -> Result<Vec<ShellFileInspection>> {
-        let categories = self.shell_categories(None)?;
-        let manifest =
-            load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-        let mut files = Vec::new();
-        for category in categories {
-            let snapshot_current = self
-                .shell_snapshot_current(&category.name)
-                .await
-                .unwrap_or(false);
-            for file in &category.files {
-                let desired_path = self.desired_shell_source_path(&category.name, &file.source_rel);
-                let source_path =
-                    self.shell_deployment_source_path(&category.name, &file.source_rel);
-                let rendered_path = self.shell_rendered_path(&category.name, &file.source_rel);
-                let logical_source = format!(
-                    "shell/{}/{}",
-                    category.name,
-                    shell_logical_path(&file.source_rel)
-                );
-                let effective_transforms = if !file.transforms.is_empty() {
-                    file.transforms.clone()
-                } else if self
-                    .presets()
-                    .get(&logical_source)
-                    .is_some_and(has_template_annotation)
-                {
-                    vec!["template".to_string()]
-                } else {
-                    Vec::new()
-                };
-                let effective_source = if effective_transforms.is_empty() {
-                    source_path.clone()
-                } else {
-                    rendered_path.clone()
-                };
-                let desired_content = self
-                    .presets()
-                    .get(&logical_source)
-                    .map(|bytes| {
-                        crate::install::apply_transforms(
-                            &effective_transforms,
-                            bytes,
-                            &self.context().env,
-                        )
-                    })
-                    .transpose()?;
-                let current_content = match self.host().read(&effective_source).await {
-                    Ok(bytes) => Some(bytes),
-                    Err(error) if error.is_not_found() => None,
-                    Err(error) => return Err(error.into_anyhow("reading installed Shell content")),
-                };
-                let link_path = command_path_for_name(
-                    &self.context().bin_dir,
-                    std::ffi::OsStr::new(&file.command_name),
-                );
-                let file_exists = self.host().metadata(&source_path).await.is_ok();
-                let link_metadata = self.host().metadata(&link_path).await.ok();
-                let link_exists = link_metadata.is_some();
-                let link_target = if link_metadata
-                    .as_ref()
-                    .is_some_and(|metadata| metadata.kind == FileKind::Symlink)
-                {
-                    self.host().read_link(&link_path).await.ok()
-                } else {
-                    None
-                };
-                let bun = self.shell_bun_runtime_spec(&category.name, file)?;
-                let runtime_env = file
-                    .env
-                    .iter()
-                    .map(crate::env::EnvVarSpec::to_with_arg)
-                    .collect::<Vec<_>>();
-                let render_target = (self.context().is_external_presets
-                    && self.context().external_shell_mode == ExternalShellMode::Live
-                    && !effective_transforms.is_empty())
-                .then(|| format!("shell/{}/{}", category.name, file.command_name));
-                let live_launch_config = self.live_bun_launcher_config(
-                    file.runtime,
-                    !effective_transforms.is_empty(),
-                    file.needs_source,
-                );
-                let link_current = if let Some(config) = &live_launch_config {
-                    let spec = LinkSpec {
-                        source: effective_source.clone(),
-                        link_name: file.command_name.clone().into(),
-                        runtime: file.runtime,
-                        bun_dependencies: bun.dependency_mode,
-                        env: runtime_env.clone(),
-                        render_target: render_target.clone(),
-                        native_cmd_literal_path: false,
-                        live_launch_config: Some(config.clone()),
-                    };
-                    let mut exact = true;
-                    for resource in prepare_launcher_resources(&self.context().bin_dir, &spec) {
-                        exact &=
-                            prepared_launcher_resource_is_exact(self.host(), &resource).await?;
-                    }
-                    exact
-                } else if link_exists {
-                    link_is_current_with_host(
-                        self.host(),
-                        &link_path,
-                        &effective_source,
-                        file.runtime,
-                        bun.dependency_mode,
-                        &runtime_env,
-                        render_target.as_deref(),
-                    )
-                    .await?
-                } else {
-                    false
-                };
-                let canonical = format!("shell/{}/{}", category.name, file.command_name);
-                let entry = manifest.find(&canonical);
-                let live_trust_review_required = self.context().is_external_presets
-                    && entry.is_some_and(|entry| entry.mode == ExternalShellMode::Live)
-                    && !self.shell_command_development_trusted(&category, file)?;
-                let launcher_probe = probe_shell_launcher(
-                    self.host(),
-                    self.context(),
-                    &category.name,
-                    &file.command_name,
-                    entry,
-                )
-                .await?;
-                let link_conflict = !launcher_probe.conflicts.is_empty();
-                let installed = entry.is_some()
-                    || link_exists
-                    || link_conflict
-                    || !launcher_probe.resources.is_empty();
-                let source_status = self
-                    .inspect_shell_source(
-                        &category.name,
-                        file,
-                        &source_path,
-                        &rendered_path,
-                        &effective_transforms,
-                    )
-                    .await?;
-                let mut changes = Vec::new();
-                if source_status == InspectionFileStatus::UpdateAvail {
-                    changes.push(InspectionChange::ContentChanged);
-                }
-                let expected_runtime = match file.runtime {
-                    LinkRuntime::Native => "native",
-                    LinkRuntime::Bun => "bun",
-                };
-                let desired_launcher_format = if live_launch_config.is_some() {
-                    Some(LIVE_BUN_LAUNCHER_FORMAT)
-                } else if uses_native_cmd_literal_path(file.runtime, &effective_source) {
-                    Some(NATIVE_CMD_LAUNCHER_FORMAT)
-                } else {
-                    None
-                };
-                let manifest_current = (!self.context().is_external_presets && entry.is_none())
-                    || entry.is_some_and(|entry| {
-                        entry.mode == self.context().external_shell_mode
-                            && entry.source_path == source_path
-                            && entry.runtime == expected_runtime
-                            && entry.bun_dependencies
-                                == bun.dependency_mode.as_manifest_value().map(str::to_string)
-                            && entry.dependency_hash == bun.dependency_hash
-                            && entry.transforms == effective_transforms
-                            && entry.env == runtime_env
-                            && entry.needs_source == file.needs_source
-                            && entry.launcher_config_dir == live_launch_config
-                            && entry.launcher_format.as_deref() == desired_launcher_format
-                    });
-                if let Some(entry) = entry {
-                    push_inspection_change(
-                        &mut changes,
-                        "launcher format",
-                        entry
-                            .launcher_format
-                            .clone()
-                            .unwrap_or_else(|| "legacy".into()),
-                        desired_launcher_format.unwrap_or("legacy").into(),
-                    );
-                    if entry.source_path != source_path {
-                        changes.push(InspectionChange::SourceRelocated {
-                            from: entry.source_path.clone(),
-                            to: source_path.clone(),
-                        });
-                    }
-                    if self.context().is_external_presets
-                        && self.context().external_shell_mode == ExternalShellMode::Live
-                        && self
-                            .presets()
-                            .get(&format!(
-                                "shell/{}/{}",
-                                category.name,
-                                shell_logical_path(&file.source_rel)
-                            ))
-                            .is_some_and(|bytes| {
-                                crate::install::hash_content(bytes) != entry.content_hash
-                            })
-                    {
-                        changes.push(InspectionChange::ContentChanged);
-                    }
-                    push_inspection_change(
-                        &mut changes,
-                        "mode",
-                        format!("{:?}", entry.mode).to_lowercase(),
-                        format!("{:?}", self.context().external_shell_mode).to_lowercase(),
-                    );
-                    push_inspection_change(
-                        &mut changes,
-                        "runtime",
-                        entry.runtime.clone(),
-                        expected_runtime.to_string(),
-                    );
-                    push_inspection_change(
-                        &mut changes,
-                        "bun dependencies",
-                        entry
-                            .bun_dependencies
-                            .clone()
-                            .unwrap_or_else(|| "disabled".to_string()),
-                        bun.dependency_mode
-                            .as_manifest_value()
-                            .unwrap_or("disabled")
-                            .to_string(),
-                    );
-                    push_inspection_change(
-                        &mut changes,
-                        "dependency lock",
-                        entry
-                            .dependency_hash
-                            .map(|hash| format!("{hash:016x}"))
-                            .unwrap_or_else(|| "none".to_string()),
-                        bun.dependency_hash
-                            .map(|hash| format!("{hash:016x}"))
-                            .unwrap_or_else(|| "none".to_string()),
-                    );
-                    push_inspection_change(
-                        &mut changes,
-                        "transforms",
-                        inspection_list(&entry.transforms),
-                        inspection_list(&effective_transforms),
-                    );
-                    push_inspection_change(
-                        &mut changes,
-                        "env",
-                        inspection_list(&entry.env),
-                        inspection_list(&runtime_env),
-                    );
-                    push_inspection_change(
-                        &mut changes,
-                        "needs source",
-                        entry.needs_source.to_string(),
-                        file.needs_source.to_string(),
-                    );
-                }
-                if installed && file_exists && !link_exists {
-                    changes.push(InspectionChange::CommandEntryMissing {
-                        path: link_path.clone(),
-                    });
-                }
-                if self.context().is_external_presets && entry.is_none() && link_exists {
-                    changes.push(InspectionChange::ManifestEntryMissing { target: canonical });
-                }
-                if live_trust_review_required {
-                    changes.push(InspectionChange::DeploymentChanged {
-                        field: "trust",
-                        from: "legacy or snapshot trust".to_string(),
-                        to: "development trust".to_string(),
-                    });
-                }
-                if !snapshot_current
-                    && source_status != InspectionFileStatus::UpdateAvail
-                    && self.context().external_shell_mode == ExternalShellMode::Snapshot
-                {
-                    changes.push(InspectionChange::DeploymentChanged {
-                        field: "snapshot",
-                        from: "installed layout".to_string(),
-                        to: "active preset layout".to_string(),
-                    });
-                }
-                let rebuild_explained = changes.iter().any(|change| {
-                    matches!(
-                        change,
-                        InspectionChange::SourceRelocated { .. }
-                            | InspectionChange::DeploymentChanged { .. }
-                            | InspectionChange::CommandEntryMissing { .. }
-                    )
-                });
-                if !link_current && link_exists && !link_conflict && !rebuild_explained {
-                    changes.push(InspectionChange::CommandEntryOutdated {
-                        path: link_path.clone(),
-                    });
-                }
-                if !installed {
-                    changes.clear();
-                }
-                let (status, status_text) = if link_conflict {
-                    (
-                        InspectionFileStatus::UserModified,
-                        "launcher ownership conflict",
-                    )
-                } else if !installed {
-                    (InspectionFileStatus::NotInstalled, "not installed")
-                } else if live_trust_review_required {
-                    (
-                        InspectionFileStatus::UpdateAvail,
-                        "development trust required",
-                    )
-                } else if (installed && !link_exists)
-                    || (link_exists && (!link_current || !manifest_current || !snapshot_current))
-                    || source_status == InspectionFileStatus::UpdateAvail
-                {
-                    (InspectionFileStatus::UpdateAvail, "update available")
-                } else if source_status == InspectionFileStatus::Missing && link_exists {
-                    (InspectionFileStatus::Missing, "rendered script missing")
-                } else if self.context().is_external_presets
-                    && self.context().external_shell_mode == ExternalShellMode::Live
-                    && file_exists
-                    && link_exists
-                {
-                    (
-                        InspectionFileStatus::UpToDate,
-                        if effective_transforms.is_empty() {
-                            "live source"
-                        } else {
-                            "rendered on next run"
-                        },
-                    )
-                } else {
-                    (InspectionFileStatus::UpToDate, "up-to-date")
-                };
-                files.push(ShellFileInspection {
-                    category: category.clone(),
-                    file: file.clone(),
-                    source_path: desired_path,
-                    installed_source_path: source_path,
-                    rendered_path,
-                    link_path,
-                    link_target,
-                    desired_content,
-                    current_content,
-                    status,
-                    status_text,
-                    installed,
-                    link_conflict,
-                    preset_missing: false,
-                    changes,
-                });
-            }
-        }
-        // Receipt-only entries are inspection records, never executable Preset metadata.
-        let present = files
-            .iter()
-            .map(|file| (file.category.name.clone(), file.file.command_name.clone()))
-            .collect::<BTreeSet<_>>();
-        for entry in &manifest.entries {
-            if present.contains(&(entry.category.clone(), entry.command.clone())) {
-                continue;
-            }
-            let probe = probe_shell_launcher(
-                self.host(),
-                self.context(),
-                &entry.category,
-                &entry.command,
-                Some(entry),
-            )
-            .await?;
-            let link_conflict = !probe.conflicts.is_empty();
-            let file = ShellFile {
-                source_rel: entry.source_path.file_name().unwrap_or_default().into(),
-                command_name: entry.command.clone(),
-                description: Vec::new(),
-                needs_source: entry.needs_source,
-                runtime: if entry.runtime == "bun" {
-                    LinkRuntime::Bun
-                } else {
-                    LinkRuntime::Native
-                },
-                transforms: entry.transforms.clone(),
-                env: Vec::new(),
-                permissions: None,
-            };
-            files.push(ShellFileInspection {
-                category: ShellCategory {
-                    name: entry.category.clone(),
-                    description: None,
-                    files: Vec::new(),
-                    uses_metadata: false,
-                },
-                file,
-                source_path: entry.source_path.clone(),
-                installed_source_path: entry.source_path.clone(),
-                rendered_path: entry.rendered_path.clone(),
-                link_path: command_path_for_name(&self.context().bin_dir, entry.command.as_ref()),
-                link_target: None,
-                desired_content: None,
-                current_content: None,
-                status: if link_conflict {
-                    InspectionFileStatus::UserModified
-                } else {
-                    InspectionFileStatus::Missing
-                },
-                status_text: if link_conflict {
-                    "preset missing; launcher ownership conflict"
-                } else {
-                    "preset missing; installed entry preserved"
-                },
-                installed: true,
-                link_conflict,
-                preset_missing: true,
-                changes: Vec::new(),
-            });
-        }
-        Ok(files)
-    }
-
-    async fn inspect_shell_source(
+    pub(in crate::runtime) async fn validate_shell_category_snapshot(
         &self,
         category: &str,
-        file: &ShellFile,
-        source_path: &Path,
-        rendered_path: &Path,
-        transforms: &[String],
-    ) -> Result<InspectionFileStatus> {
-        let logical = format!("shell/{category}/{}", shell_logical_path(&file.source_rel));
-        let desired = self
-            .presets()
-            .get(&logical)
-            .context("missing Shell source")?;
-        let current = match self.host().read(source_path).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.is_not_found() => return Ok(InspectionFileStatus::UpdateAvail),
-            Err(error) => return Err(error.into_anyhow("reading deployed Shell source")),
-        };
-        if self.context().is_external_presets
-            && self.context().external_shell_mode == ExternalShellMode::Live
-        {
-            return Ok(InspectionFileStatus::UpToDate);
-        }
-        if current != desired {
-            return Ok(InspectionFileStatus::UpdateAvail);
-        }
-        if transforms.is_empty() {
-            return Ok(InspectionFileStatus::UpToDate);
-        }
-        let expected = crate::install::apply_transforms(transforms, desired, &self.context().env)?;
-        match self.host().read(rendered_path).await {
-            Ok(current) if current == expected => Ok(InspectionFileStatus::UpToDate),
-            Ok(_) => Ok(InspectionFileStatus::UpdateAvail),
-            Err(error) if error.is_not_found() => Ok(InspectionFileStatus::Missing),
-            Err(error) => Err(error.into_anyhow("reading rendered Shell source")),
-        }
-    }
-
-    pub async fn validate_shell_category_snapshot(&self, category: &str) -> Result<bool> {
+    ) -> Result<bool> {
         let metadata = format!("shell/{category}/shine.toml");
         let has_metadata = self.presets().file(&metadata).is_some();
         let categories = self.shell_categories(Some(category))?;
@@ -953,602 +467,8 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         operation: LifecycleOperation,
         approval: Option<&PlanApprovalV1>,
     ) -> Result<ShellLifecycleReport> {
-        // Future-version rejection is deliberately the first stateful check.
-        let manifest_before =
-            load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-        let selection = request
-            .target
-            .as_deref()
-            .map(parse_shell_lifecycle_target)
-            .transpose()?;
-        let category_filter = selection.as_ref().map(|target| target.category);
-        let mut categories = self.shell_categories(category_filter)?;
-        let category_found = !categories.is_empty();
-        if let Some(target) = &selection
-            && let Some(command) = target.command
-        {
-            for category in &mut categories {
-                category.files.retain(|file| file.command_name == command);
-            }
-            categories.retain(|category| !category.files.is_empty());
-        }
-        if categories.is_empty() {
-            if let Some(target) = &request.target {
-                if category_found
-                    && selection
-                        .as_ref()
-                        .is_some_and(|value| value.command.is_some())
-                {
-                    bail!("shell preset command not found: {target}");
-                }
-                let category = selection
-                    .as_ref()
-                    .map_or(target.as_str(), |value| value.category);
-                bail!("shell preset category not found: {category}");
-            }
-            bail!("no shell preset categories found");
-        }
-        self.validate_shell_snapshot(&categories).await?;
-        let prefix = category_filter.map_or_else(
-            || "shell".to_string(),
-            |category| format!("shell/{category}"),
-        );
-
-        let specs = self.shell_link_specs(&categories).await?;
-        let planned_links = specs
-            .iter()
-            .map(|spec| {
-                let command = spec.link_name.to_string_lossy().to_string();
-                (
-                    command,
-                    command_path_for_name(&self.context().bin_dir, &spec.link_name),
-                    spec.source.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut names = BTreeSet::new();
-        for (command, _, _) in &planned_links {
-            if !names.insert(command.clone()) {
-                bail!("duplicate requested shell command: {command}");
-            }
-        }
-
-        if request.dry_run {
-            let mut lifecycle = LifecycleResultV1::new(operation, true);
-            for category in &categories {
-                for file in &category.files {
-                    let mut effects = vec![
-                        LifecycleEffect::ResourceWritePreviewed,
-                        LifecycleEffect::ReceiptWritePreviewed,
-                    ];
-                    if !self.context().is_external_presets
-                        || self.context().external_shell_mode == ExternalShellMode::Snapshot
-                    {
-                        effects.push(LifecycleEffect::CacheWritePreviewed);
-                    }
-                    lifecycle.push(LifecycleOutcomeV1::new(
-                        format!("shell/{}/{}", category.name, file.command_name),
-                        None::<String>,
-                        LifecycleStatus::Previewed,
-                        effects,
-                    ));
-                }
-            }
-            return Ok(ShellLifecycleReport {
-                categories,
-                cache: ShellCacheReport::default(),
-                snapshots_updated: 0,
-                templates: ShellTemplateReport::default(),
-                links: empty_link_report(),
-                profile: None,
-                source_commands: Vec::new(),
-                planned_links,
-                lifecycle,
-            });
-        }
-
-        let (cache_replacements, cache) =
-            if !self.context().is_external_presets && approval.is_some() {
-                self.prepare_shell_cache_replacements(&categories, &manifest_before, request.force)
-                    .await?
-            } else if self.context().is_external_presets {
-                (Vec::new(), ShellCacheReport::default())
-            } else {
-                (
-                    Vec::new(),
-                    self.reconcile_shell_cache(ShellCacheRequest {
-                        prefix,
-                        dry_run: false,
-                        remove: false,
-                        overwrite: request.force,
-                        purge: false,
-                    })
-                    .await?,
-                )
-            };
-        let cache_receipts = cache_replacements
-            .iter()
-            .flat_map(|replacement| replacement.receipt_transitions.iter())
-            .map(|(target, _, desired)| (target.clone(), desired.clone()))
-            .collect::<BTreeMap<_, _>>();
-        let mut transactional_snapshot_categories = BTreeSet::new();
-        if approval.is_some()
-            && self.context().is_external_presets
-            && self.context().external_shell_mode == ExternalShellMode::Snapshot
-        {
-            for category in &categories {
-                let untransformed = category.files.iter().all(|file| {
-                    file.transforms.is_empty()
-                        && self
-                            .presets()
-                            .get(&format!(
-                                "shell/{}/{}",
-                                category.name,
-                                shell_logical_path(&file.source_rel)
-                            ))
-                            .is_none_or(|bytes| !has_template_annotation(bytes))
-                });
-                if untransformed && !self.shell_snapshot_current(&category.name).await? {
-                    transactional_snapshot_categories.insert(category.name.clone());
-                }
-            }
-        }
-        let legacy_snapshot_categories = categories
-            .iter()
-            .filter(|category| !transactional_snapshot_categories.contains(&category.name))
-            .cloned()
-            .collect::<Vec<_>>();
-        let snapshots_updated = self
-            .materialize_shell_snapshots(&legacy_snapshot_categories)
-            .await?
-            + transactional_snapshot_categories.len();
-        let scripts = categories
-            .iter()
-            .flat_map(|category| {
-                category.files.iter().map(|file| ShellScriptTemplate {
-                    source_path: self
-                        .shell_deployment_source_path(&category.name, &file.source_rel),
-                    rendered_path: self.shell_rendered_path(&category.name, &file.source_rel),
-                    display_name: format!("{}/{}", category.name, file.command_name),
-                    transforms: file.transforms.clone(),
-                })
-            })
-            .collect::<Vec<_>>();
-        let mut templates = if approval.is_some() {
-            ShellTemplateReport::default()
-        } else {
-            self.render_shell_templates(&scripts).await?
-        };
-        let mut applicable_specs = Vec::new();
-        let mut foreign_commands = BTreeSet::new();
-        let mut links = empty_link_report();
-        if operation == LifecycleOperation::Upgrade {
-            for spec in &specs {
-                let command = spec.link_name.to_string_lossy().to_string();
-                let category = categories
-                    .iter()
-                    .find(|category| {
-                        category
-                            .files
-                            .iter()
-                            .any(|file| file.command_name == command)
-                    })
-                    .map(|category| category.name.as_str())
-                    .unwrap_or_default();
-                let target = format!("shell/{category}/{command}");
-                // The planner includes the receipt's old paths when sources move.
-                // Reuse that ownership boundary instead of dropping valid launchers.
-                let roots = self.shell_managed_roots(category, manifest_before.find(&target));
-                let probe = unlink_managed_command_with_host(
-                    self.host(),
-                    &self.context().bin_dir,
-                    &spec.link_name,
-                    &roots,
-                    true,
-                )
-                .await?;
-                let link_path = command_path_for_name(&self.context().bin_dir, &spec.link_name);
-                let stale_symlink = self
-                    .host()
-                    .metadata(&link_path)
-                    .await
-                    .is_ok_and(|metadata| metadata.kind == FileKind::Symlink);
-                if !probe.skipped.is_empty() && !stale_symlink {
-                    foreign_commands.insert(command);
-                    links.conflicts.push(LinkConflict {
-                        link_path,
-                        source: spec.source.clone(),
-                        kind: LinkConflictKind::ExistingEntry,
-                    });
-                } else {
-                    applicable_specs.push(spec.clone());
-                }
-            }
-        } else {
-            applicable_specs.extend(specs.iter().cloned());
-        }
-        let mut legacy_specs = Vec::new();
-        let mut launcher_creations = Vec::new();
-        let mut launcher_updates = Vec::new();
-        for spec in applicable_specs {
-            let command = spec.link_name.to_string_lossy().to_string();
-            let category = categories
-                .iter()
-                .find(|category| {
-                    category
-                        .files
-                        .iter()
-                        .any(|file| file.command_name == command)
-                })
-                .context("Shell launcher category disappeared before execution")?;
-            let file = category
-                .files
-                .iter()
-                .find(|file| file.command_name == command)
-                .context("Shell launcher command disappeared before execution")?;
-            let target = format!("shell/{}/{}", category.name, command);
-            let resources = prepare_launcher_resources(&self.context().bin_dir, &spec);
-            let desired_receipt = if let Some(receipt) = cache_receipts.get(&target) {
-                receipt.clone()
-            } else if transactional_snapshot_categories.contains(&category.name) {
-                self.desired_shell_manifest_entry(category, file)?
-            } else {
-                self.shell_manifest_entry(category, file).await?
-            };
-            let all_absent = if operation == LifecycleOperation::Install
-                && approval.is_some()
-                && manifest_before.find(&target).is_none()
-            {
-                let mut absent = true;
-                for resource in &resources {
-                    match self.host().metadata(resource.destination()).await {
-                        Err(error) if error.is_not_found() => {}
-                        Ok(_) => absent = false,
-                        Err(error) => {
-                            return Err(error.into_anyhow("inspecting Shell launcher creation"));
-                        }
-                    }
-                }
-                absent
-            } else {
-                false
-            };
-            if all_absent {
-                launcher_creations.push((target, spec, desired_receipt));
-            } else if approval.is_some()
-                && let Some(previous_receipt) = manifest_before.find(&target)
-                && *previous_receipt != desired_receipt
-            {
-                let previous_spec = shell_link_spec_from_manifest_entry(previous_receipt)?;
-                let previous_resources =
-                    prepare_launcher_resources(&self.context().bin_dir, &previous_spec);
-                let same_shape = previous_resources.len() == resources.len()
-                    && previous_resources
-                        .iter()
-                        .zip(&resources)
-                        .all(|(previous, desired)| previous.destination() == desired.destination());
-                let mut exact = same_shape;
-                let mut changed = false;
-                let mut rollback_absent = true;
-                if same_shape {
-                    for (previous, desired) in previous_resources.iter().zip(&resources) {
-                        exact &= prepared_launcher_resource_is_exact(self.host(), previous).await?;
-                        if previous != desired {
-                            changed = true;
-                            let rollback = managed_file_rollback_path(previous.destination());
-                            match self.host().metadata(&rollback).await {
-                                Err(error) if error.is_not_found() => {}
-                                Ok(_) => rollback_absent = false,
-                                Err(error) => {
-                                    return Err(error
-                                        .into_anyhow("inspecting Shell launcher rollback path"));
-                                }
-                            }
-                        }
-                    }
-                }
-                if exact && changed && rollback_absent {
-                    launcher_updates.push((
-                        target,
-                        previous_receipt.clone(),
-                        spec,
-                        desired_receipt,
-                    ));
-                } else {
-                    legacy_specs.push(spec);
-                }
-            } else {
-                legacy_specs.push(spec);
-            }
-        }
-        let applied = link_executables_with_host(
-            self.host(),
-            &self.context().bin_dir,
-            &legacy_specs,
-            request.force,
-        )
-        .await?;
-        links.created.extend(applied.created);
-        links.skipped.extend(applied.skipped);
-        links.conflicts.extend(applied.conflicts);
-        links.overwritten.extend(applied.overwritten);
-        let launcher_creation_refs = launcher_creations
-            .iter()
-            .map(|(target, spec, receipt)| ShellLauncherCreation {
-                target: target.clone(),
-                spec,
-                receipt: receipt.clone(),
-            })
-            .collect::<Vec<_>>();
-        let launcher_update_refs = launcher_updates
-            .iter()
-            .map(
-                |(target, previous_receipt, desired_spec, desired_receipt)| ShellLauncherUpdate {
-                    target: target.clone(),
-                    previous_receipt: previous_receipt.clone(),
-                    desired_spec,
-                    desired_receipt: desired_receipt.clone(),
-                },
-            )
-            .collect::<Vec<_>>();
-        let scope = if selection
-            .as_ref()
-            .is_some_and(|target| target.command.is_some())
-        {
-            ShellManifestUpdateScope::Commands
-        } else {
-            ShellManifestUpdateScope::Categories
-        };
-        let mut manifest_categories = categories.clone();
-        for category in &mut manifest_categories {
-            category
-                .files
-                .retain(|file| !foreign_commands.contains(&file.command_name));
-        }
-        let mut snapshot_replacements = Vec::new();
-        for category in &manifest_categories {
-            if !transactional_snapshot_categories.contains(&category.name) {
-                continue;
-            }
-            let files = self.shell_snapshot_files(&category.name);
-            let mut receipt_transitions = Vec::new();
-            for file in &category.files {
-                let target = format!("shell/{}/{}", category.name, file.command_name);
-                receipt_transitions.push((
-                    target.clone(),
-                    manifest_before.find(&target).cloned(),
-                    self.desired_shell_manifest_entry(category, file)?,
-                ));
-            }
-            snapshot_replacements.push(ShellSnapshotReplacement {
-                target: format!("shell/{}", category.name),
-                destination: self
-                    .context()
-                    .shine_dir
-                    .join("installed/shell")
-                    .join(&category.name),
-                files,
-                receipt_transitions,
-            });
-        }
-        let rendered_replacements = if approval.is_some() {
-            let (replacements, report) = self
-                .prepare_shell_rendered_replacements(
-                    &manifest_categories,
-                    &manifest_before,
-                    request.force,
-                )
-                .await?;
-            templates = report;
-            replacements
-        } else {
-            Vec::new()
-        };
-        let profile_reconciliations = if approval.is_some() {
-            let mut planned_manifest = manifest_before.clone();
-            let mut planned_entries = Vec::new();
-            for category in &manifest_categories {
-                for file in &category.files {
-                    let target = format!("shell/{}/{}", category.name, file.command_name);
-                    let entry = if let Some(receipt) = cache_receipts.get(&target) {
-                        receipt.clone()
-                    } else if transactional_snapshot_categories.contains(&category.name) {
-                        self.desired_shell_manifest_entry(category, file)?
-                    } else {
-                        self.shell_manifest_entry(category, file).await?
-                    };
-                    planned_entries.push(entry);
-                }
-            }
-            let selected_categories = manifest_categories
-                .iter()
-                .map(|category| category.name.clone())
-                .collect::<BTreeSet<_>>();
-            let selected_targets = planned_entries
-                .iter()
-                .map(|entry| format!("shell/{}/{}", entry.category, entry.command))
-                .collect::<BTreeSet<_>>();
-            match scope {
-                ShellManifestUpdateScope::Categories => {
-                    planned_manifest.replace_categories(&selected_categories, planned_entries)
-                }
-                ShellManifestUpdateScope::Commands => {
-                    planned_manifest.replace_targets(&selected_targets, planned_entries)
-                }
-            }
-            self.prepare_shell_profile_reconciliation(
-                &manifest_before,
-                &planned_manifest,
-                false,
-                operation == LifecycleOperation::Install && request.force,
-                &[],
-            )
-            .await?
-        } else {
-            Vec::new()
-        };
-        let shell_execution = if let Some(approval) = approval {
-            self.reconcile_shell_launchers_approved(
-                ShellSharedReplacements {
-                    caches: &cache_replacements,
-                    snapshots: &snapshot_replacements,
-                    rendered_files: &rendered_replacements,
-                    rendered_removals: &[],
-                    cache_removals: &[],
-                    snapshot_removals: &[],
-                    profiles: &profile_reconciliations,
-                },
-                &launcher_creation_refs,
-                &launcher_update_refs,
-                &[],
-                &[],
-                approval,
-            )
-            .await?
-        } else {
-            None
-        };
-        links.created.extend(
-            launcher_creations.iter().map(|(_, spec, _)| {
-                command_path_for_name(&self.context().bin_dir, &spec.link_name)
-            }),
-        );
-        links
-            .overwritten
-            .extend(launcher_updates.iter().map(|(_, _, spec, _)| {
-                command_path_for_name(&self.context().bin_dir, &spec.link_name)
-            }));
-        self.update_shell_manifest_unlocked(&manifest_categories, scope)
-            .await?;
-        if let Some(execution) = &shell_execution {
-            self.mark_shell_launcher_receipt_committed(execution)
-                .await?;
-            self.commit_shell_launcher_operation(execution).await?;
-        }
-        let manifest_after =
-            load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-        let mut source_commands = manifest_after
-            .entries
-            .iter()
-            .filter(|entry| entry.needs_source)
-            .map(|entry| entry.command.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        source_commands.sort();
-        let profile_force = operation == LifecycleOperation::Install && request.force;
-        let profile = if approval.is_some() {
-            let managed =
-                super::managed_shell_profile_path(&self.context().shine_dir, self.context().shell);
-            let managed_changed = profile_reconciliations
-                .iter()
-                .any(|profile| profile.files.iter().any(|file| file.destination == managed));
-            let updated_config = profile_reconciliations.iter().find_map(|profile| {
-                profile
-                    .files
-                    .iter()
-                    .find(|file| file.ownership == ShellProfileFileOwnershipV1::SentinelBlock)
-                    .map(|file| file.destination.clone())
-            });
-            ShellConfigUpdate {
-                profile_updated: managed_changed,
-                config_status: updated_config.map_or(
-                    PathUpdateStatus::AlreadyConfigured,
-                    PathUpdateStatus::Updated,
-                ),
-            }
-        } else {
-            self.install_shell_profile(
-                &self.context().shell_config_paths,
-                profile_force,
-                &source_commands,
-            )
-            .await?
-        };
-        let cache_changed = !cache.created.is_empty() || !cache.overwritten.is_empty();
-        let profile_changed = profile.profile_updated
-            || matches!(profile.config_status, PathUpdateStatus::Updated(_));
-        let mut lifecycle = LifecycleResultV1::new(operation, false);
-        for category in &categories {
-            for file in &category.files {
-                let canonical = format!("shell/{}/{}", category.name, file.command_name);
-                let link_path = command_path_for_name(
-                    &self.context().bin_dir,
-                    std::ffi::OsStr::new(&file.command_name),
-                );
-                let conflict = links
-                    .conflicts
-                    .iter()
-                    .any(|value| value.link_path == link_path);
-                let link_changed = links
-                    .created
-                    .iter()
-                    .chain(&links.overwritten)
-                    .any(|path| path == &link_path);
-                let template_changed = templates
-                    .updated
-                    .iter()
-                    .any(|name| name == &format!("{}/{}", category.name, file.command_name));
-                let receipt_changed = manifest_before.find(&canonical).is_none() || link_changed;
-                let changed = cache_changed
-                    || snapshots_updated > 0
-                    || link_changed
-                    || template_changed
-                    || receipt_changed
-                    || profile_changed;
-                if conflict {
-                    lifecycle.push(
-                        LifecycleOutcomeV1::new(
-                            canonical,
-                            None::<String>,
-                            LifecycleStatus::Conflict,
-                            [],
-                        )
-                        .with_diagnostic_code("shell_command_conflict"),
-                    );
-                    continue;
-                }
-                let mut effects = Vec::new();
-                if cache_changed {
-                    effects.push(LifecycleEffect::CacheWritten);
-                }
-                if snapshots_updated > 0 || link_changed || template_changed || profile_changed {
-                    effects.push(LifecycleEffect::ResourceWritten);
-                }
-                if receipt_changed {
-                    effects.push(LifecycleEffect::ReceiptWritten);
-                }
-                lifecycle.push(LifecycleOutcomeV1::new(
-                    canonical,
-                    None::<String>,
-                    if changed {
-                        LifecycleStatus::Changed
-                    } else {
-                        LifecycleStatus::Unchanged
-                    },
-                    effects,
-                ));
-            }
-        }
-        let installed_selected_source_commands = categories
-            .iter()
-            .flat_map(|category| category.files.iter())
-            .filter(|file| file.needs_source)
-            .map(|file| file.command_name.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        Ok(ShellLifecycleReport {
-            categories,
-            cache,
-            snapshots_updated,
-            templates,
-            links,
-            profile: Some(profile),
-            source_commands: installed_selected_source_commands,
-            planned_links,
-            lifecycle,
-        })
+        self.reconcile_shell_deployment(request, operation, approval)
+            .await
     }
 
     /// Upgrade only commands recorded as installed. Category-targeted upgrade
@@ -1683,578 +603,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         request: ShellUninstallRequest,
         approval: Option<&PlanApprovalV1>,
     ) -> Result<ShellUninstallReport> {
-        let mut manifest =
-            load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-        let selection = request
-            .target
-            .as_deref()
-            .map(parse_shell_lifecycle_target)
-            .transpose()?;
-        let mut targets = manifest
-            .entries
-            .iter()
-            .filter(|entry| {
-                selection.as_ref().is_none_or(|target| {
-                    entry.category == target.category
-                        && target
-                            .command
-                            .is_none_or(|command| entry.command == command)
-                })
-            })
-            .map(|entry| (entry.category.clone(), entry.command.clone()))
-            .collect::<BTreeSet<_>>();
-        if targets.is_empty() {
-            let mut categories =
-                self.shell_categories(selection.as_ref().map(|target| target.category))?;
-            if let Some(command) = selection.as_ref().and_then(|target| target.command) {
-                for category in &mut categories {
-                    category.files.retain(|file| file.command_name == command);
-                }
-            }
-            for category in categories {
-                for file in category.files {
-                    let roots = self.shell_managed_roots(&category.name, None);
-                    let probe = probe_managed_command_with_host(
-                        self.host(),
-                        &self.context().bin_dir,
-                        std::ffi::OsStr::new(&file.command_name),
-                        &roots,
-                    )
-                    .await?;
-                    if !probe.resources.is_empty() || !probe.conflicts.is_empty() {
-                        targets.insert((category.name.clone(), file.command_name));
-                    }
-                }
-            }
-        }
-        if let Some(target) = &request.target
-            && targets.is_empty()
-        {
-            bail!("shell command is not installed: {target}");
-        }
-
-        let selected = targets.clone();
-        let categories_removed = targets
-            .iter()
-            .map(|(category, _)| category.clone())
-            .filter(|category| {
-                !manifest.entries.iter().any(|entry| {
-                    entry.category == *category
-                        && !selected.contains(&(entry.category.clone(), entry.command.clone()))
-                })
-            })
-            .collect::<BTreeSet<_>>();
-        let mut launcher_removals = Vec::new();
-        if approval.is_some() && !request.dry_run {
-            for (category, command) in &targets {
-                let target = format!("shell/{category}/{command}");
-                let Some(entry) = manifest.find(&target).cloned() else {
-                    continue;
-                };
-                let spec = shell_link_spec_from_manifest_entry(&entry)?;
-                let resources = prepare_launcher_resources(&self.context().bin_dir, &spec);
-                let mut exact = true;
-                let mut rollback_absent = true;
-                for resource in &resources {
-                    exact &= prepared_launcher_resource_is_exact(self.host(), resource).await?;
-                    let rollback = managed_file_rollback_path(resource.destination());
-                    match self.host().metadata(&rollback).await {
-                        Err(error) if error.is_not_found() => {}
-                        Ok(_) => rollback_absent = false,
-                        Err(error) => {
-                            return Err(
-                                error.into_anyhow("inspecting Shell launcher rollback path")
-                            );
-                        }
-                    }
-                }
-                if exact && rollback_absent {
-                    launcher_removals.push(ShellLauncherRemoval {
-                        target,
-                        previous_receipt: entry,
-                    });
-                }
-            }
-        }
-        let transactional_targets = launcher_removals
-            .iter()
-            .map(|removal| removal.target.clone())
-            .collect::<BTreeSet<_>>();
-        let mut legacy_launcher_removals = Vec::new();
-        for (category, command) in &targets {
-            let canonical = format!("shell/{category}/{command}");
-            if manifest.find(&canonical).is_some() {
-                continue;
-            }
-            let roots = self.shell_managed_roots(category, None);
-            let probe = probe_managed_command_with_host(
-                self.host(),
-                &self.context().bin_dir,
-                std::ffi::OsStr::new(command),
-                &roots,
-            )
-            .await?;
-            if !probe.conflicts.is_empty() {
-                continue;
-            }
-            if !probe.resources.is_empty() {
-                legacy_launcher_removals.push(ShellLegacyLauncherRemoval {
-                    target: canonical,
-                    resources: probe.resources,
-                });
-            }
-        }
-        let legacy_targets = legacy_launcher_removals
-            .iter()
-            .map(|removal| removal.target.clone())
-            .collect::<Vec<_>>();
-        let mut rendered_removals = Vec::new();
-        if approval.is_some() && !request.dry_run {
-            let rendered_root = self.context().shine_dir.join("rendered/shell");
-            let selected_rendered_paths = manifest
-                .entries
-                .iter()
-                .filter(|entry| targets.contains(&(entry.category.clone(), entry.command.clone())))
-                .map(|entry| entry.rendered_path.clone())
-                .collect::<BTreeSet<_>>();
-            for destination in selected_rendered_paths {
-                if !destination.starts_with(&rendered_root) {
-                    continue;
-                }
-                let consumers = manifest
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.rendered_path == destination)
-                    .collect::<Vec<_>>();
-                if consumers.iter().any(|entry| {
-                    !targets.contains(&(entry.category.clone(), entry.command.clone()))
-                }) {
-                    continue;
-                }
-                let rollback = managed_file_rollback_path(&destination);
-                match self.host().metadata(&rollback).await {
-                    Err(error) if error.is_not_found() => {}
-                    Ok(_) => bail!(
-                        "Shell rendered-file rollback path is occupied: {}",
-                        rollback.display()
-                    ),
-                    Err(error) => {
-                        return Err(error
-                            .into_anyhow("inspecting Shell rendered-file removal rollback path"));
-                    }
-                }
-                let metadata = match self.host().metadata(&destination).await {
-                    Err(error) if error.is_not_found() => continue,
-                    Ok(metadata) if metadata.kind == FileKind::File => metadata,
-                    Ok(_) => bail!("Shell rendered-file removal target is not a regular file"),
-                    Err(error) => {
-                        return Err(
-                            error.into_anyhow("inspecting Shell rendered-file removal target")
-                        );
-                    }
-                };
-                let previous = ShellFileIdentityV1 {
-                    content_hash: crate::install::hash_content(
-                        &self.host().read(&destination).await.map_err(|error| {
-                            error.into_anyhow("reading Shell rendered-file removal target")
-                        })?,
-                    ),
-                    unix_mode: metadata.unix_mode,
-                };
-                let previous_receipts = consumers
-                    .into_iter()
-                    .map(|entry| {
-                        (
-                            format!("shell/{}/{}", entry.category, entry.command),
-                            entry.clone(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let target = previous_receipts
-                    .first()
-                    .map(|(target, _)| target.clone())
-                    .context("Shell rendered-file removal has no receipt consumer")?;
-                rendered_removals.push(ShellRenderedFileRemoval {
-                    target,
-                    destination,
-                    previous,
-                    previous_receipts,
-                });
-            }
-        }
-        let mut cache_removals = Vec::new();
-        let mut snapshot_removals = Vec::new();
-        if approval.is_some() && !request.dry_run {
-            let receipt_removals_for = |category: Option<&str>| {
-                manifest
-                    .entries
-                    .iter()
-                    .filter(|entry| {
-                        category.is_none_or(|category| entry.category == category)
-                            && selected.contains(&(entry.category.clone(), entry.command.clone()))
-                    })
-                    .map(|entry| {
-                        (
-                            format!("shell/{}/{}", entry.category, entry.command),
-                            entry.clone(),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            };
-            if !self.context().is_external_presets {
-                if request.purge && selection.is_none() {
-                    let root = self.context().presets_dir.join("shell");
-                    let mut files = Vec::new();
-                    if let Some(tree) = super::shell_action_executor::collect_shell_tree_for_action(
-                        self.host(),
-                        &root,
-                    )
-                    .await?
-                    {
-                        for file in tree {
-                            let destination = root.join(&file.relative_path);
-                            let metadata =
-                                self.host().metadata(&destination).await.map_err(|error| {
-                                    error.into_anyhow("inspecting Shell cache purge file")
-                                })?;
-                            files.push((
-                                destination,
-                                ShellFileIdentityV1 {
-                                    content_hash: file.content_hash,
-                                    unix_mode: metadata.unix_mode,
-                                },
-                            ));
-                        }
-                    }
-                    if !files.is_empty() {
-                        cache_removals.push(ShellCacheRemoval {
-                            target: "shell".to_string(),
-                            files,
-                            previous_receipts: receipt_removals_for(None),
-                        });
-                    }
-                } else {
-                    for category in &categories_removed {
-                        let prefix = format!("shell/{category}/");
-                        let mut files = Vec::new();
-                        for logical in self
-                            .presets()
-                            .files()
-                            .keys()
-                            .filter(|logical| logical.starts_with(&prefix))
-                        {
-                            let destination = self.context().presets_dir.join(logical);
-                            let metadata = match self.host().metadata(&destination).await {
-                                Ok(metadata) if metadata.kind == FileKind::File => metadata,
-                                Ok(_) => bail!(
-                                    "Shell cache removal target is not a regular file: {}",
-                                    destination.display()
-                                ),
-                                Err(error) if error.is_not_found() => continue,
-                                Err(error) => {
-                                    return Err(
-                                        error.into_anyhow("inspecting Shell cache removal target")
-                                    );
-                                }
-                            };
-                            let bytes = self.host().read(&destination).await.map_err(|error| {
-                                error.into_anyhow("reading Shell cache removal target")
-                            })?;
-                            files.push((
-                                destination,
-                                ShellFileIdentityV1 {
-                                    content_hash: crate::install::hash_content(&bytes),
-                                    unix_mode: metadata.unix_mode,
-                                },
-                            ));
-                        }
-                        if !files.is_empty() {
-                            cache_removals.push(ShellCacheRemoval {
-                                target: format!("shell/{category}"),
-                                files,
-                                previous_receipts: receipt_removals_for(Some(category)),
-                            });
-                        }
-                    }
-                }
-            }
-            for category in &categories_removed {
-                let destination = self
-                    .context()
-                    .shine_dir
-                    .join("installed/shell")
-                    .join(category);
-                let rollback = shell_snapshot_rollback_path(&destination);
-                match self.host().metadata(&rollback).await {
-                    Err(error) if error.is_not_found() => {}
-                    Ok(_) => bail!(
-                        "Shell snapshot removal rollback path is occupied: {}",
-                        rollback.display()
-                    ),
-                    Err(error) => {
-                        return Err(error.into_anyhow("inspecting Shell snapshot removal rollback"));
-                    }
-                }
-                if let Some(previous_files) =
-                    super::shell_action_executor::collect_shell_tree_for_action(
-                        self.host(),
-                        &destination,
-                    )
-                    .await?
-                {
-                    snapshot_removals.push(ShellSnapshotRemoval {
-                        target: format!("shell/{category}"),
-                        destination,
-                        previous_files,
-                        previous_receipts: receipt_removals_for(Some(category)),
-                    });
-                }
-            }
-        }
-        let profile_reconciliations = if approval.is_some() && !request.dry_run {
-            let mut planned_manifest = manifest.clone();
-            for (category, command) in &targets {
-                planned_manifest.remove_target(category, command);
-            }
-            self.prepare_shell_profile_reconciliation(
-                &manifest,
-                &planned_manifest,
-                selection.is_none(),
-                false,
-                &legacy_targets,
-            )
-            .await?
-        } else {
-            Vec::new()
-        };
-        let shell_execution = if let Some(approval) = approval {
-            self.reconcile_shell_launchers_approved(
-                ShellSharedReplacements {
-                    caches: &[],
-                    snapshots: &[],
-                    rendered_files: &[],
-                    rendered_removals: &rendered_removals,
-                    cache_removals: &cache_removals,
-                    snapshot_removals: &snapshot_removals,
-                    profiles: &profile_reconciliations,
-                },
-                &[],
-                &[],
-                &launcher_removals,
-                &legacy_launcher_removals,
-                approval,
-            )
-            .await?
-        } else {
-            None
-        };
-        let mut links = empty_unlink_report();
-        let mut target_states = Vec::new();
-        for (category, command) in &targets {
-            let canonical = format!("shell/{category}/{command}");
-            let entry = manifest.find(&canonical).cloned();
-            let (managed, foreign) = if transactional_targets.contains(&canonical) {
-                let entry = entry
-                    .as_ref()
-                    .context("transactional Shell launcher receipt disappeared")?;
-                let spec = shell_link_spec_from_manifest_entry(entry)?;
-                links.removed.extend(
-                    prepare_launcher_resources(&self.context().bin_dir, &spec)
-                        .into_iter()
-                        .map(|resource| resource.destination().to_path_buf()),
-                );
-                (true, false)
-            } else if legacy_targets.contains(&canonical) {
-                links.removed.extend(
-                    legacy_launcher_removals
-                        .iter()
-                        .find(|removal| removal.target == canonical)
-                        .into_iter()
-                        .flat_map(|removal| removal.resources.iter())
-                        .map(|resource| resource.destination().to_path_buf()),
-                );
-                (true, false)
-            } else if approval.is_some() && entry.is_some() {
-                let spec = shell_link_spec_from_manifest_entry(
-                    entry
-                        .as_ref()
-                        .context("planned Shell launcher receipt disappeared")?,
-                )?;
-                links.skipped.extend(
-                    prepare_launcher_resources(&self.context().bin_dir, &spec)
-                        .into_iter()
-                        .map(|resource| resource.destination().to_path_buf()),
-                );
-                (false, true)
-            } else {
-                let roots = self.shell_managed_roots(category, entry.as_ref());
-                let report = unlink_managed_command_with_host(
-                    self.host(),
-                    &self.context().bin_dir,
-                    std::ffi::OsStr::new(command),
-                    &roots,
-                    request.dry_run,
-                )
-                .await?;
-                let managed = !report.removed.is_empty();
-                let foreign = !report.skipped.is_empty();
-                links.removed.extend(report.removed);
-                links.skipped.extend(report.skipped);
-                (managed, foreign)
-            };
-            target_states.push((category.clone(), command.clone(), managed, foreign));
-
-            if !request.dry_run {
-                manifest.remove_target(category, command);
-            }
-        }
-
-        if !request.dry_run {
-            save_shell_manifest_with_host(self.host(), &self.context().shine_dir, &manifest)
-                .await?;
-            if let Some(execution) = &shell_execution {
-                self.mark_shell_launcher_receipt_committed(execution)
-                    .await?;
-                self.commit_shell_launcher_operation(execution).await?;
-            }
-        }
-        let mut cache = ShellCacheReport::default();
-        if approval.is_none() && !self.context().is_external_presets {
-            for category in &categories_removed {
-                let report = self
-                    .reconcile_shell_cache(ShellCacheRequest {
-                        prefix: format!("shell/{category}"),
-                        dry_run: request.dry_run,
-                        remove: true,
-                        overwrite: false,
-                        purge: request.purge,
-                    })
-                    .await?;
-                merge_shell_cache_report(&mut cache, report);
-            }
-            if request.purge && selection.is_none() {
-                let report = self
-                    .reconcile_shell_cache(ShellCacheRequest {
-                        prefix: "shell".to_string(),
-                        dry_run: request.dry_run,
-                        remove: true,
-                        overwrite: false,
-                        purge: true,
-                    })
-                    .await?;
-                merge_shell_cache_report(&mut cache, report);
-            }
-        }
-        if approval.is_none() && !request.dry_run {
-            for category in &categories_removed {
-                self.remove_shell_snapshot_tree(category).await?;
-            }
-            if request.purge && !self.context().is_external_presets {
-                self.remove_empty_shell_roots(&categories_removed).await?;
-            }
-        } else if approval.is_some() && !request.dry_run {
-            cache.removed.extend(
-                cache_removals
-                    .iter()
-                    .flat_map(|removal| removal.files.iter().map(|(path, _)| path.clone())),
-            );
-            if request.purge && !self.context().is_external_presets {
-                self.remove_empty_shell_roots(&categories_removed).await?;
-            }
-        }
-        let profile = if request.dry_run {
-            None
-        } else if approval.is_some() {
-            if selection.is_none() {
-                let managed = super::managed_shell_profile_path(
-                    &self.context().shine_dir,
-                    self.context().shell,
-                );
-                Some(ShellProfileRemoval {
-                    config_paths: profile_reconciliations
-                        .iter()
-                        .flat_map(|profile| profile.files.iter())
-                        .filter(|file| file.ownership == ShellProfileFileOwnershipV1::SentinelBlock)
-                        .map(|file| file.destination.clone())
-                        .collect(),
-                    managed_profile: profile_reconciliations
-                        .iter()
-                        .flat_map(|profile| profile.files.iter())
-                        .any(|file| file.destination == managed)
-                        .then_some(managed),
-                })
-            } else {
-                None
-            }
-        } else if selection.is_none() {
-            Some(
-                self.remove_shell_profile(&self.context().shell_config_paths)
-                    .await?,
-            )
-        } else {
-            let source_commands = manifest
-                .entries
-                .iter()
-                .filter(|entry| entry.needs_source)
-                .map(|entry| entry.command.clone())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            self.write_shell_profile(&source_commands).await?;
-            None
-        };
-
-        let mut lifecycle = LifecycleResultV1::new(LifecycleOperation::Uninstall, request.dry_run);
-        for (category, command, managed, foreign) in target_states {
-            let category_removed = categories_removed.contains(&category);
-            let mut effects = Vec::new();
-            if managed {
-                effects.push(if request.dry_run {
-                    LifecycleEffect::ResourceRemovePreviewed
-                } else {
-                    LifecycleEffect::ResourceRemoved
-                });
-            }
-            if foreign {
-                effects.push(LifecycleEffect::UserResourcePreserved);
-            }
-            effects.push(if request.dry_run {
-                LifecycleEffect::ReceiptRemovePreviewed
-            } else {
-                LifecycleEffect::ReceiptRemoved
-            });
-            if category_removed {
-                effects.push(if request.dry_run {
-                    LifecycleEffect::CacheRemovePreviewed
-                } else {
-                    LifecycleEffect::CacheRemoved
-                });
-            }
-            let status = if foreign {
-                LifecycleStatus::Conflict
-            } else if request.dry_run {
-                LifecycleStatus::Previewed
-            } else {
-                LifecycleStatus::Changed
-            };
-            let outcome = LifecycleOutcomeV1::new(
-                format!("shell/{category}/{command}"),
-                None::<String>,
-                status,
-                effects,
-            );
-            lifecycle.push(if foreign {
-                outcome.with_diagnostic_code("shell_command_conflict")
-            } else {
-                outcome
-            });
-        }
-        Ok(ShellUninstallReport {
-            links,
-            cache,
-            profile,
-            lifecycle,
-        })
+        self.reconcile_shell_removal(request, approval).await
     }
 
     fn shell_managed_roots(
@@ -2269,45 +618,17 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         let mut specs = Vec::new();
         for category in categories {
             for file in &category.files {
-                let source = self.shell_deployment_source_path(&category.name, &file.source_rel);
                 let logical = format!(
                     "shell/{}/{}",
                     category.name,
                     shell_logical_path(&file.source_rel)
                 );
-                let annotated = self
-                    .presets()
-                    .get(&logical)
-                    .is_some_and(has_template_annotation);
-                let transforms = !file.transforms.is_empty() || annotated;
-                let effective = if transforms {
-                    self.shell_rendered_path(&category.name, &file.source_rel)
-                } else {
-                    source
-                };
-                let bun = self.shell_bun_runtime_spec(&category.name, file)?;
-                specs.push(LinkSpec {
-                    native_cmd_literal_path: uses_native_cmd_literal_path(file.runtime, &effective),
-                    live_launch_config: self.live_bun_launcher_config(
-                        file.runtime,
-                        transforms,
-                        file.needs_source,
-                    ),
-
-                    source: effective,
-                    link_name: OsString::from(&file.command_name),
-                    runtime: file.runtime,
-                    bun_dependencies: bun.dependency_mode,
-                    env: file
-                        .env
-                        .iter()
-                        .map(crate::env::EnvVarSpec::to_with_arg)
-                        .collect(),
-                    render_target: (self.context().is_external_presets
-                        && self.context().external_shell_mode == ExternalShellMode::Live
-                        && transforms)
-                        .then(|| format!("shell/{}/{}", category.name, file.command_name)),
-                });
+                let bytes = self.presets().get(&logical).unwrap_or_default();
+                let layout = self.shell_source_layout(&category.name, file, bytes);
+                specs.push(
+                    self.desired_shell_delivery(&category.name, file, layout)?
+                        .spec,
+                );
             }
         }
         Ok(specs)
@@ -2424,7 +745,11 @@ impl<H> CoreRuntime<H> {
             .collect()
     }
 
-    pub fn desired_shell_source_path(&self, category: &str, source_rel: &Path) -> PathBuf {
+    pub(in crate::runtime) fn desired_shell_source_path(
+        &self,
+        category: &str,
+        source_rel: &Path,
+    ) -> PathBuf {
         let logical = format!("shell/{category}/{}", shell_logical_path(source_rel));
         self.presets()
             .origin(&logical)
@@ -2432,7 +757,11 @@ impl<H> CoreRuntime<H> {
             .unwrap_or_else(|| self.context().presets_dir.join(logical))
     }
 
-    pub fn shell_deployment_source_path(&self, category: &str, source_rel: &Path) -> PathBuf {
+    pub(super) fn shell_deployment_source_path(
+        &self,
+        category: &str,
+        source_rel: &Path,
+    ) -> PathBuf {
         if self.context().is_external_presets
             && self.context().external_shell_mode == ExternalShellMode::Snapshot
         {
@@ -2446,7 +775,7 @@ impl<H> CoreRuntime<H> {
         }
     }
 
-    pub fn shell_rendered_path(&self, category: &str, source_rel: &Path) -> PathBuf {
+    pub(super) fn shell_rendered_path(&self, category: &str, source_rel: &Path) -> PathBuf {
         self.context()
             .shine_dir
             .join("rendered/shell")
@@ -2454,7 +783,7 @@ impl<H> CoreRuntime<H> {
             .join(source_rel)
     }
 
-    pub fn shell_bun_runtime_spec(
+    pub(in crate::runtime) fn shell_bun_runtime_spec(
         &self,
         category: &str,
         file: &ShellFile,
@@ -2520,7 +849,7 @@ impl<H> CoreRuntime<H> {
 }
 
 impl<H: FileSystemHost> CoreRuntime<H> {
-    pub async fn effective_shell_transforms(
+    pub(in crate::runtime) async fn effective_shell_transforms(
         &self,
         file: &ShellFile,
         source: &Path,
@@ -2540,7 +869,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         })
     }
 
-    pub async fn reconcile_shell_cache(
+    pub(in crate::runtime) async fn reconcile_shell_cache(
         &self,
         request: ShellCacheRequest,
     ) -> Result<ShellCacheReport> {
@@ -2621,7 +950,10 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(report)
     }
 
-    pub async fn validate_shell_snapshot(&self, categories: &[ShellCategory]) -> Result<()> {
+    pub(in crate::runtime) async fn validate_shell_snapshot(
+        &self,
+        categories: &[ShellCategory],
+    ) -> Result<()> {
         if !self.context().is_external_presets
             || self.context().external_shell_mode != ExternalShellMode::Snapshot
         {
@@ -2647,7 +979,10 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(())
     }
 
-    pub async fn materialize_shell_snapshots(&self, categories: &[ShellCategory]) -> Result<usize> {
+    pub(in crate::runtime) async fn materialize_shell_snapshots(
+        &self,
+        categories: &[ShellCategory],
+    ) -> Result<usize> {
         if !self.context().is_external_presets
             || self.context().external_shell_mode != ExternalShellMode::Snapshot
         {
@@ -2715,30 +1050,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             changed += 1;
         }
         Ok(changed)
-    }
-
-    pub async fn shell_snapshot_current(&self, category: &str) -> Result<bool> {
-        if !self.context().is_external_presets
-            || self.context().external_shell_mode != ExternalShellMode::Snapshot
-        {
-            return Ok(true);
-        }
-        let expected = self.shell_snapshot_identities(category);
-        let root = self
-            .context()
-            .shine_dir
-            .join("installed/shell")
-            .join(category);
-        super::planner::shell_snapshot_tree_current(self.host(), &root, &expected).await
-    }
-
-    pub async fn update_shell_manifest(
-        &self,
-        categories: &[ShellCategory],
-        scope: ShellManifestUpdateScope,
-    ) -> Result<()> {
-        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
-        self.update_shell_manifest_unlocked(categories, scope).await
     }
 
     async fn update_shell_manifest_unlocked(
@@ -2817,13 +1128,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             .presets()
             .get(&logical)
             .context("missing desired Shell source")?;
-        let transforms = if !file.transforms.is_empty() {
-            file.transforms.clone()
-        } else if has_template_annotation(bytes) {
-            vec!["template".to_string()]
-        } else {
-            Vec::new()
-        };
+        let transforms = source_transforms(file, bytes);
         self.shell_manifest_entry_for_content(category, file, source_path, transforms, bytes)
     }
 
@@ -2835,49 +1140,18 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         transforms: Vec<String>,
         bytes: &[u8],
     ) -> Result<ShellManifestEntry> {
-        let rendered_path = self.shell_rendered_path(&category.name, &file.source_rel);
-        let env = file
-            .env
-            .iter()
-            .map(crate::env::EnvVarSpec::to_with_arg)
-            .collect::<Vec<_>>();
-        let bun = self.shell_bun_runtime_spec(&category.name, file)?;
-        Ok(ShellManifestEntry {
-            launcher_format: self
-                .live_bun_launcher_config(file.runtime, !transforms.is_empty(), file.needs_source)
-                .map(|_| LIVE_BUN_LAUNCHER_FORMAT.to_string())
-                .or_else(|| {
-                    uses_native_cmd_literal_path(file.runtime, &source_path)
-                        .then(|| NATIVE_CMD_LAUNCHER_FORMAT.to_string())
-                }),
-            launcher_config_dir: self.live_bun_launcher_config(
-                file.runtime,
-                !transforms.is_empty(),
-                file.needs_source,
-            ),
-
-            category: category.name.clone(),
-            command: file.command_name.clone(),
-            mode: if self.context().is_external_presets {
-                self.context().external_shell_mode
-            } else {
-                ExternalShellMode::Snapshot
-            },
-            source_path,
-            rendered_path,
-            runtime: if file.runtime == LinkRuntime::Bun {
-                "bun"
-            } else {
-                "native"
-            }
-            .to_string(),
-            bun_dependencies: bun.dependency_mode.as_manifest_value().map(str::to_string),
-            dependency_hash: bun.dependency_hash,
+        let layout = ShellSourceLayout {
+            source: source_path,
+            rendered: self.shell_rendered_path(&category.name, &file.source_rel),
             transforms,
-            env,
-            needs_source: file.needs_source,
-            content_hash: crate::install::hash_content(bytes),
-        })
+        };
+        let delivery = self.desired_shell_delivery(&category.name, file, layout)?;
+        let mode = if self.context().is_external_presets {
+            self.context().external_shell_mode
+        } else {
+            ExternalShellMode::Snapshot
+        };
+        Ok(delivery.into_receipt(&category.name, &file.command_name, mode, bytes))
     }
 
     pub async fn render_live_shell(&self, target: &str) -> Result<()>
@@ -2946,24 +1220,10 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(())
     }
 
-    pub async fn remove_shell_manifest_entries(
+    pub(in crate::runtime) async fn remove_shell_snapshot_tree(
         &self,
-        category: Option<&str>,
-        command: Option<&str>,
+        category: &str,
     ) -> Result<()> {
-        let _lifecycle_guard = self.acquire_shell_lifecycle_operation().await?;
-        let mut manifest =
-            load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-        match (category, command) {
-            (Some(category), Some(command)) => manifest.remove_target(category, command),
-            (Some(category), None) => manifest.remove_category(category),
-            (None, None) => manifest.entries.clear(),
-            (None, Some(_)) => bail!("shell command removal requires a category"),
-        }
-        save_shell_manifest_with_host(self.host(), &self.context().shine_dir, &manifest).await
-    }
-
-    pub async fn remove_shell_snapshot_tree(&self, category: &str) -> Result<()> {
         let path = self
             .context()
             .shine_dir
@@ -2983,7 +1243,10 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(())
     }
 
-    pub async fn remove_empty_shell_roots(&self, categories: &BTreeSet<String>) -> Result<()> {
+    pub(in crate::runtime) async fn remove_empty_shell_roots(
+        &self,
+        categories: &BTreeSet<String>,
+    ) -> Result<()> {
         let shell_root = self.context().presets_dir.join("shell");
         for category in categories {
             let path = shell_root.join(category);
@@ -3022,37 +1285,6 @@ impl<H: FileSystemHost> CoreRuntime<H> {
 }
 
 impl<H> CoreRuntime<H> {
-    pub fn shell_categories(&self, filter: Option<&str>) -> Result<Vec<ShellCategory>> {
-        let categories = self.shell_categories_or_missing(filter)?;
-        if filter.is_some() && categories.is_empty() && self.context().is_external_presets {
-            bail!(
-                "shell preset category not found: {}",
-                filter.unwrap_or_default()
-            );
-        }
-        Ok(categories)
-    }
-
-    pub(super) fn shell_categories_or_missing(
-        &self,
-        filter: Option<&str>,
-    ) -> Result<Vec<ShellCategory>> {
-        let prefix = "shell/";
-        let names = self
-            .presets()
-            .files()
-            .keys()
-            .filter_map(|path| path.strip_prefix(prefix))
-            .filter_map(|rest| rest.split_once('/').map(|(category, _)| category))
-            .filter(|category| filter.is_none_or(|filter| filter == *category))
-            .map(str::to_string)
-            .collect::<BTreeSet<_>>();
-        names
-            .into_iter()
-            .map(|name| self.parse_shell_category(&name))
-            .collect()
-    }
-
     pub(crate) fn effective_shell_cache_logicals(
         &self,
         category: &ShellCategory,
@@ -3103,142 +1335,6 @@ impl<H> CoreRuntime<H> {
         }
         Ok(selected)
     }
-
-    fn parse_shell_category(&self, name: &str) -> Result<ShellCategory> {
-        let prefix = format!("shell/{name}/");
-        let metadata_path = format!("{prefix}shine.toml");
-        let metadata = self.presets().get(&metadata_path);
-        let parsed = metadata
-            .map(|bytes| {
-                toml::from_slice::<ShellCategoryToml>(bytes)
-                    .with_context(|| format!("failed to parse {metadata_path}"))
-            })
-            .transpose()?;
-        if let Some(defaults) = parsed
-            .as_ref()
-            .and_then(|parsed| parsed.permission_defaults.as_ref())
-        {
-            defaults
-                .validate()
-                .with_context(|| format!("invalid permission_defaults in {metadata_path}"))?;
-        }
-        let mut files = Vec::new();
-        if let Some(entries) = parsed.as_ref().and_then(|parsed| parsed.files.as_ref()) {
-            for entry in entries {
-                if !shell_platform_matches(
-                    entry.platforms.as_deref(),
-                    self.context().platform,
-                    &metadata_path,
-                )? {
-                    continue;
-                }
-                let runtime = match entry.runtime.as_deref() {
-                    None | Some("native") => LinkRuntime::Native,
-                    Some("bun") => LinkRuntime::Bun,
-                    Some(other) => bail!("unsupported runtime `{other}` (expected `bun`)"),
-                };
-                let source_rel = normalize_shell_metadata_source(&entry.source, runtime)
-                    .with_context(|| format!("invalid source in {metadata_path}"))?;
-                if !shell_source_matches(runtime, self.context().shell, &source_rel) {
-                    continue;
-                }
-                let command_name = shell_command_name(&source_rel, entry.target.as_deref())?;
-                let needs_source = entry.needs_source.unwrap_or(false);
-                if runtime == LinkRuntime::Bun && needs_source {
-                    bail!(
-                        "{metadata_path}: `runtime = \"bun\"` cannot be combined with `needs_source = true`"
-                    );
-                }
-                let transforms = entry.transforms.clone().unwrap_or_default();
-                crate::install::transforms::validate(&transforms)
-                    .with_context(|| format!("invalid transforms in {metadata_path}"))?;
-                let env = crate::env::parse_env_specs(entry.env.as_deref().unwrap_or_default())
-                    .with_context(|| format!("invalid env in {metadata_path}"))?;
-                if runtime != LinkRuntime::Bun && !env.is_empty() {
-                    bail!("{metadata_path}: `env` is only valid when `runtime = \"bun\"`");
-                }
-                let permissions = entry.permissions.as_ref().or_else(|| {
-                    parsed
-                        .as_ref()
-                        .and_then(|parsed| parsed.permission_defaults.as_ref())
-                });
-                if let Some(permissions) = permissions {
-                    permissions
-                        .validate()
-                        .with_context(|| format!("invalid permissions in {metadata_path}"))?;
-                }
-                let logical = format!("{prefix}{}", shell_logical_path(&source_rel));
-                let bytes = self.presets().get(&logical).ok_or_else(|| {
-                    MetadataDiagnosticError::new(
-                        MetadataDiagnosticKind::MissingReference,
-                        format!(
-                            "shell/{name}/shine.toml references missing file: {}",
-                            source_rel.display()
-                        ),
-                    )
-                })?;
-                let description = entry.description.clone().map_or_else(
-                    || shell_description(bytes, runtime),
-                    |description| vec![description],
-                );
-                files.push(ShellFile {
-                    source_rel,
-                    command_name,
-                    description,
-                    needs_source,
-                    runtime,
-                    transforms,
-                    env,
-                    permissions: permissions.cloned(),
-                });
-            }
-        } else {
-            for path in self.presets().files().keys() {
-                let Some(relative) = path.strip_prefix(&prefix) else {
-                    continue;
-                };
-                if relative == "shine.toml" || !is_native_shell_script(Path::new(relative)) {
-                    continue;
-                }
-                let source_rel = normalize_shell_metadata_source(relative, LinkRuntime::Native)?;
-                if !shell_source_matches(LinkRuntime::Native, self.context().shell, &source_rel) {
-                    continue;
-                }
-                let bytes = self.presets().get(path).unwrap_or_default();
-                files.push(ShellFile {
-                    command_name: shell_command_name(&source_rel, None)?,
-                    description: shell_description(bytes, LinkRuntime::Native),
-                    needs_source: false,
-                    runtime: LinkRuntime::Native,
-                    transforms: Vec::new(),
-                    env: Vec::new(),
-                    permissions: parsed
-                        .as_ref()
-                        .and_then(|parsed| parsed.permission_defaults.clone()),
-                    source_rel,
-                });
-            }
-        }
-        files.sort_by(|left, right| left.command_name.cmp(&right.command_name));
-        let mut commands = BTreeSet::new();
-        for file in &files {
-            if !commands.insert(file.command_name.clone()) {
-                bail!(MetadataDiagnosticError::new(
-                    MetadataDiagnosticKind::DuplicateCommand,
-                    format!(
-                        "shell/{name} declares command `{}` more than once",
-                        file.command_name
-                    ),
-                ));
-            }
-        }
-        Ok(ShellCategory {
-            name: name.to_string(),
-            description: parsed.and_then(|parsed| parsed.description),
-            files,
-            uses_metadata: metadata.is_some(),
-        })
-    }
 }
 
 pub(super) async fn prepare_shell_profile_files(
@@ -3251,7 +1347,7 @@ pub(super) async fn prepare_shell_profile_files(
     let mut files = Vec::new();
     let managed_profile = super::managed_shell_profile_path(&context.shine_dir, context.shell);
     let desired_profile = (!remove_all).then(|| {
-        super::managed_profile_snippet(
+        super::profile::managed_profile_snippet(
             context.shell,
             &context.bin_dir,
             &context.home_dir,
@@ -3380,294 +1476,36 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             .collect::<BTreeSet<_>>()
         {
             match (before.get(&target), after.get(&target)) {
-                (previous, Some(desired)) => receipt_transitions.push((
+                (previous, Some(desired)) => receipt_transitions.push(ShellReceiptTransition {
                     target,
-                    previous.map(|entry| (*entry).clone()),
-                    (*desired).clone(),
-                )),
+                    previous: previous.map(|entry| (*entry).clone()),
+                    desired: (*desired).clone(),
+                }),
                 (Some(previous), None) => {
-                    receipt_removals.push((target, (*previous).clone()));
+                    receipt_removals.push(ShellReceiptRemoval {
+                        target,
+                        previous: (*previous).clone(),
+                    });
                 }
                 (None, None) => unreachable!(),
             }
         }
+        let legacy_targets =
+            if remove_all && before.is_empty() && after.is_empty() && legacy_targets.is_empty() {
+                vec![crate::action::SHELL_PROFILE_ONLY_TARGET.to_string()]
+            } else {
+                legacy_targets.to_vec()
+            };
         Ok(vec![ShellProfileReconciliation {
             target: "shell/profile".to_string(),
             files,
             receipt_transitions,
             receipt_removals,
-            legacy_targets: legacy_targets.to_vec(),
+            legacy_targets,
         }])
     }
 
-    async fn planned_embedded_shell_source(
-        &self,
-        category: &ShellCategory,
-        file: &ShellFile,
-        overwrite: bool,
-    ) -> Result<(Vec<u8>, Option<u32>)> {
-        let logical = format!(
-            "shell/{}/{}",
-            category.name,
-            shell_logical_path(&file.source_rel)
-        );
-        let desired = self
-            .presets()
-            .get(&logical)
-            .context("missing desired embedded Shell source")?;
-        let source_path = self.shell_deployment_source_path(&category.name, &file.source_rel);
-        match self.host().metadata(&source_path).await {
-            Ok(metadata) if metadata.kind == FileKind::File => {
-                let current =
-                    self.host().read(&source_path).await.map_err(|error| {
-                        error.into_anyhow("reading embedded Shell cache source")
-                    })?;
-                if overwrite && current != *desired {
-                    Ok((desired.to_vec(), embedded_shell_cache_mode(&logical)))
-                } else {
-                    Ok((current, metadata.unix_mode))
-                }
-            }
-            Ok(_) => bail!(
-                "embedded Shell cache source is not a regular file: {}",
-                source_path.display()
-            ),
-            Err(error) if error.is_not_found() => {
-                Ok((desired.to_vec(), embedded_shell_cache_mode(&logical)))
-            }
-            Err(error) => Err(error.into_anyhow("inspecting embedded Shell cache source")),
-        }
-    }
-
-    async fn planned_embedded_shell_manifest_entry(
-        &self,
-        category: &ShellCategory,
-        file: &ShellFile,
-        overwrite: bool,
-    ) -> Result<ShellManifestEntry> {
-        let source_path = self.shell_deployment_source_path(&category.name, &file.source_rel);
-        let (bytes, _) = self
-            .planned_embedded_shell_source(category, file, overwrite)
-            .await?;
-        let transforms = if !file.transforms.is_empty() {
-            file.transforms.clone()
-        } else if has_template_annotation(&bytes) {
-            vec!["template".to_string()]
-        } else {
-            Vec::new()
-        };
-        self.shell_manifest_entry_for_content(category, file, source_path, transforms, &bytes)
-    }
-
-    async fn prepare_shell_cache_replacements(
-        &self,
-        categories: &[ShellCategory],
-        manifest_before: &ShellManifest,
-        overwrite: bool,
-    ) -> Result<(Vec<ShellCacheReplacement>, ShellCacheReport)> {
-        let mut replacements = Vec::new();
-        let mut report = ShellCacheReport::default();
-        for category in categories {
-            let prefix = format!("shell/{}/", category.name);
-            let effective_logicals = self.effective_shell_cache_logicals(category)?;
-            let mut files = Vec::new();
-            for (logical, bytes) in self.presets().files().iter().filter(|(logical, _)| {
-                logical.starts_with(&prefix) && effective_logicals.contains(*logical)
-            }) {
-                let destination = self.context().presets_dir.join(logical);
-                let previous = match self.host().metadata(&destination).await {
-                    Ok(metadata) if metadata.kind == FileKind::File => {
-                        let current = self.host().read(&destination).await.map_err(|error| {
-                            error.into_anyhow("reading embedded Shell cache file")
-                        })?;
-                        if current == *bytes || !overwrite {
-                            report.skipped.push(destination);
-                            continue;
-                        }
-                        report.overwritten.push(destination.clone());
-                        Some(ShellFileIdentityV1 {
-                            content_hash: crate::install::hash_content(&current),
-                            unix_mode: metadata.unix_mode,
-                        })
-                    }
-                    Ok(_) => bail!(
-                        "embedded Shell cache destination is not a regular file: {}",
-                        destination.display()
-                    ),
-                    Err(error) if error.is_not_found() => {
-                        report.created.push(destination.clone());
-                        None
-                    }
-                    Err(error) => {
-                        return Err(error.into_anyhow("inspecting embedded Shell cache file"));
-                    }
-                };
-                let rollback = managed_file_rollback_path(&destination);
-                match self.host().metadata(&rollback).await {
-                    Err(error) if error.is_not_found() => {}
-                    Ok(_) => bail!(
-                        "embedded Shell cache rollback path is occupied: {}",
-                        rollback.display()
-                    ),
-                    Err(error) => {
-                        return Err(error.into_anyhow("inspecting embedded Shell cache rollback"));
-                    }
-                }
-                let unix_mode = embedded_shell_cache_mode(logical);
-                let desired = ShellFileIdentityV1 {
-                    content_hash: crate::install::hash_content(bytes),
-                    unix_mode,
-                };
-                if previous.as_ref() == Some(&desired) {
-                    report.skipped.push(destination);
-                    continue;
-                }
-                files.push(ShellCacheReplacementFile {
-                    destination,
-                    bytes: bytes.clone(),
-                    unix_mode,
-                });
-            }
-            if files.is_empty() {
-                continue;
-            }
-            let mut receipt_transitions = Vec::new();
-            for file in &category.files {
-                let target = format!("shell/{}/{}", category.name, file.command_name);
-                receipt_transitions.push((
-                    target.clone(),
-                    manifest_before.find(&target).cloned(),
-                    self.planned_embedded_shell_manifest_entry(category, file, overwrite)
-                        .await?,
-                ));
-            }
-            replacements.push(ShellCacheReplacement {
-                target: format!("shell/{}", category.name),
-                files,
-                receipt_transitions,
-            });
-        }
-        Ok((replacements, report))
-    }
-
-    async fn prepare_shell_rendered_replacements(
-        &self,
-        categories: &[ShellCategory],
-        manifest_before: &ShellManifest,
-        overwrite_embedded: bool,
-    ) -> Result<(Vec<ShellRenderedFileReplacement>, ShellTemplateReport)> {
-        let mut replacements = BTreeMap::<PathBuf, ShellRenderedFileReplacement>::new();
-        let mut report = ShellTemplateReport::default();
-        for category in categories {
-            for file in &category.files {
-                let source = self.shell_deployment_source_path(&category.name, &file.source_rel);
-                let (content, source_mode, transforms) = if self.context().is_external_presets {
-                    let logical = format!(
-                        "shell/{}/{}",
-                        category.name,
-                        shell_logical_path(&file.source_rel)
-                    );
-                    let desired = self
-                        .presets()
-                        .get(&logical)
-                        .context("missing desired Shell rendered-file source")?;
-                    let transforms = if !file.transforms.is_empty() {
-                        file.transforms.clone()
-                    } else if has_template_annotation(desired) {
-                        vec!["template".to_string()]
-                    } else {
-                        continue;
-                    };
-                    let content =
-                        self.host().read(&source).await.map_err(|error| {
-                            error.into_anyhow("reading Shell rendered-file source")
-                        })?;
-                    let mode = self
-                        .host()
-                        .metadata(&source)
-                        .await
-                        .ok()
-                        .and_then(|metadata| metadata.unix_mode);
-                    (content, mode, transforms)
-                } else {
-                    let (content, mode) = self
-                        .planned_embedded_shell_source(category, file, overwrite_embedded)
-                        .await?;
-                    let transforms = if !file.transforms.is_empty() {
-                        file.transforms.clone()
-                    } else if has_template_annotation(&content) {
-                        vec!["template".to_string()]
-                    } else {
-                        continue;
-                    };
-                    (content, mode, transforms)
-                };
-                let rendered =
-                    crate::install::apply_transforms(&transforms, &content, &self.context().env)
-                        .with_context(|| {
-                            format!("template substitution failed for {}", source.display())
-                        })?;
-                let destination = self.shell_rendered_path(&category.name, &file.source_rel);
-                let unix_mode = source_mode.or_else(|| cfg!(unix).then_some(0o755));
-                let current = match self.host().metadata(&destination).await {
-                    Ok(metadata) if metadata.kind == FileKind::File => {
-                        let bytes = self.host().read(&destination).await.map_err(|error| {
-                            error.into_anyhow("reading current Shell rendered file")
-                        })?;
-                        bytes == rendered && metadata.unix_mode == unix_mode
-                    }
-                    Ok(_) => false,
-                    Err(error) if error.is_not_found() => false,
-                    Err(error) => {
-                        return Err(error.into_anyhow("inspecting Shell rendered file"));
-                    }
-                };
-                if current {
-                    continue;
-                }
-                let target = format!("shell/{}/{}", category.name, file.command_name);
-                let desired_receipt = if self.context().is_external_presets {
-                    self.shell_manifest_entry(category, file).await?
-                } else {
-                    self.planned_embedded_shell_manifest_entry(category, file, overwrite_embedded)
-                        .await?
-                };
-                let transition = (
-                    target.clone(),
-                    manifest_before.find(&target).cloned(),
-                    desired_receipt,
-                );
-                if let Some(existing) = replacements.get_mut(&destination) {
-                    if existing.bytes != rendered || existing.unix_mode != unix_mode {
-                        bail!(
-                            "Shell commands sharing rendered path {} produce different output",
-                            destination.display()
-                        );
-                    }
-                    existing.receipt_transitions.push(transition);
-                } else {
-                    replacements.insert(
-                        destination.clone(),
-                        ShellRenderedFileReplacement {
-                            target,
-                            destination,
-                            bytes: rendered,
-                            unix_mode,
-                            receipt_transitions: vec![transition],
-                        },
-                    );
-                }
-                report
-                    .updated
-                    .push(format!("{}/{}", category.name, file.command_name));
-            }
-        }
-        report.updated.sort();
-        report.updated.dedup();
-        Ok((replacements.into_values().collect(), report))
-    }
-
-    pub async fn render_shell_templates(
+    pub(in crate::runtime) async fn render_shell_templates(
         &self,
         scripts: &[ShellScriptTemplate],
     ) -> Result<ShellTemplateReport> {
@@ -3777,127 +1615,6 @@ async fn save_shell_manifest_with_host(
         .map_err(|error| error.into_anyhow("failed to write shell manifest"))
 }
 
-fn shell_platform_matches(
-    platforms: Option<&[String]>,
-    current: super::RuntimePlatform,
-    context: &str,
-) -> Result<bool> {
-    let Some(platforms) = platforms else {
-        return Ok(true);
-    };
-    if platforms.is_empty() {
-        bail!(
-            "{context} platforms must not be empty; expected `macos`, `linux`, `windows`, or `unix`"
-        );
-    }
-    let mut matches = false;
-    for platform in platforms {
-        match platform.trim().to_ascii_lowercase().as_str() {
-            "macos" => matches |= current == super::RuntimePlatform::Macos,
-            "linux" => matches |= current == super::RuntimePlatform::Linux,
-            "windows" => matches |= current == super::RuntimePlatform::Windows,
-            "unix" => matches |= current.is_unix(),
-            _ => bail!(
-                "{context} has unsupported platform `{platform}`; expected `macos`, `linux`, `windows`, or `unix`"
-            ),
-        }
-    }
-    Ok(matches)
-}
-
-fn normalize_shell_metadata_source(value: &str, runtime: LinkRuntime) -> Result<PathBuf> {
-    let path = Path::new(value);
-    if path.as_os_str().is_empty() || path.is_absolute() {
-        bail!("source path must be a non-empty relative path");
-    }
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(value) => normalized.push(value),
-            std::path::Component::CurDir => {}
-            _ => bail!("source path must be relative and must not contain '..'"),
-        }
-    }
-    if normalized.file_name().and_then(|value| value.to_str()) == Some("shine.toml") {
-        bail!("source path must not point to shine.toml");
-    }
-    let valid = match runtime {
-        LinkRuntime::Native => is_native_shell_script(&normalized),
-        LinkRuntime::Bun => matches!(
-            normalized.extension().and_then(|value| value.to_str()),
-            Some("ts" | "js" | "mts" | "mjs")
-        ),
-    };
-    if !valid {
-        bail!("source path extension is incompatible with the declared runtime");
-    }
-    Ok(normalized)
-}
-
-fn shell_command_name(source: &Path, target: Option<&str>) -> Result<String> {
-    let command = target
-        .map(str::to_string)
-        .unwrap_or_else(|| super::link_stem(source).to_string_lossy().to_string());
-    let trimmed = command.trim();
-    let path = Path::new(trimmed);
-    if trimmed.is_empty() || matches!(trimmed, "." | "..") || path.components().count() != 1 {
-        bail!("command name must be a plain filename");
-    }
-    Ok(trimmed.to_string())
-}
-
-fn is_native_shell_script(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|value| value.to_str()),
-        Some("sh" | "ps1")
-    )
-}
-
-fn shell_source_matches(runtime: LinkRuntime, shell: ShellType, source: &Path) -> bool {
-    if runtime == LinkRuntime::Bun {
-        return true;
-    }
-    let is_powershell = source.extension().and_then(|value| value.to_str()) == Some("ps1");
-    is_powershell == (shell == ShellType::PowerShell)
-}
-
-fn shell_logical_path(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn shell_description(bytes: &[u8], runtime: LinkRuntime) -> Vec<String> {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return Vec::new();
-    };
-    let leader = if runtime == LinkRuntime::Bun {
-        "//"
-    } else {
-        "#"
-    };
-    let mut description = Vec::new();
-    for line in text.lines() {
-        if line.starts_with("#!") {
-            continue;
-        }
-        let trimmed = line.trim_start();
-        if let Some(value) = trimmed.strip_prefix(leader) {
-            let value = value.strip_prefix(' ').unwrap_or(value);
-            if !value.starts_with("shine-") {
-                description.push(value.to_string());
-            }
-        } else if !trimmed.is_empty() {
-            break;
-        }
-    }
-    while description.last().is_some_and(String::is_empty) {
-        description.pop();
-    }
-    description
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ShellTarget<'a> {
     pub category: &'a str,
@@ -3905,8 +1622,7 @@ pub struct ShellTarget<'a> {
 }
 
 pub fn parse_shell_lifecycle_target(target: &str) -> Result<ShellTarget<'_>> {
-    let target = target.trim();
-    if target.is_empty() {
+    if target.trim().is_empty() {
         bail!("shell preset target must not be empty");
     }
     let mut parts = target.split('/');
@@ -3988,7 +1704,7 @@ impl ShellManifest {
             .find(|entry| canonical_target(entry) == target)
     }
 
-    pub fn replace_categories(
+    pub(in crate::runtime) fn replace_categories(
         &mut self,
         categories: &BTreeSet<String>,
         entries: Vec<ShellManifestEntry>,
@@ -3999,11 +1715,7 @@ impl ShellManifest {
         self.entries.sort_by_key(canonical_target);
     }
 
-    pub fn remove_category(&mut self, category: &str) {
-        self.entries.retain(|entry| entry.category != category);
-    }
-
-    pub fn remove_target(&mut self, category: &str, command: &str) {
+    pub(in crate::runtime) fn remove_target(&mut self, category: &str, command: &str) {
         self.entries
             .retain(|entry| entry.category != category || entry.command != command);
     }
@@ -4032,6 +1744,34 @@ mod tests {
         FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost,
         RuntimeContext, RuntimePlatform,
     };
+
+    #[test]
+    fn shell_target_preserves_whitespace_identity() {
+        for category in [" demo", "demo ", "demo\u{a0}"] {
+            assert_eq!(
+                parse_shell_lifecycle_target(category).unwrap(),
+                ShellTarget {
+                    category,
+                    command: None
+                }
+            );
+            let target = format!("{category}/tool");
+            assert_eq!(
+                parse_shell_lifecycle_target(&target).unwrap(),
+                ShellTarget {
+                    category,
+                    command: Some("tool")
+                }
+            );
+        }
+        assert_eq!(
+            parse_shell_lifecycle_target("demo/tool ").unwrap().command,
+            Some("tool ")
+        );
+        for invalid in ["", " \t\n", "\u{a0}", "demo/", "/tool", "demo/tool/extra"] {
+            assert!(parse_shell_lifecycle_target(invalid).is_err());
+        }
+    }
 
     #[test]
     fn native_cmd_receipts_keep_legacy_format_and_validate_new_format() {
@@ -4144,6 +1884,29 @@ content_hash = 1
         assert_eq!(
             manifest.entries[0].launcher_format.as_deref(),
             Some(NATIVE_CMD_LAUNCHER_FORMAT)
+        );
+        // The newly written native-cmd-v2 receipt must converge on the next review.
+        let current = runtime
+            .plan_shells(super::super::ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo/run".into()),
+                force: false,
+                purge: false,
+                input_versions: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            current
+                .steps
+                .iter()
+                .find(|step| step.target == "shell/demo/run" && step.resource.is_none())
+                .is_some_and(|step| step.action == crate::plan::PlanActionV1::None),
+            "{current:?}"
+        );
+        assert_eq!(
+            runtime.inspect_shells().await.unwrap()[0].status,
+            crate::runtime::InspectionFileStatus::UpToDate
         );
         let request = super::super::ShellPlanRequest {
             operation: LifecycleOperation::Uninstall,

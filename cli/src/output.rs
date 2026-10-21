@@ -19,6 +19,20 @@ const DETAIL_LABEL_WIDTH: usize = 15;
 const DETAIL_STATUS_WIDTH: usize = 13;
 const COLUMN_GAP: usize = 2;
 
+/// Keep untrusted labels on one terminal row without changing their stored values.
+pub(crate) fn escape_controls(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_control() {
+                ch.escape_debug().to_string()
+            } else {
+                ch.to_string()
+            }
+        })
+        .collect()
+}
+
 /// Tracks whether any upgrade section has printed content yet, so a run
 /// covering several optional sections (shell presets, app configs, managed
 /// system configs) can emit exactly one blank-line separator between two
@@ -172,9 +186,10 @@ pub fn detail_line(label: &str, status: &str, detail: Option<String>) {
 }
 
 pub(crate) fn detail_line_text(label: &str, status: &str, detail: Option<String>) -> String {
+    // Details are plain data; callers may style the status separately.
     let detail = detail
         .filter(|value| !value.is_empty())
-        .map(|value| format!("  {}", colors::dim(&value)))
+        .map(|value| format!("  {}", colors::dim(&escape_controls(&value))))
         .unwrap_or_default();
 
     format!(
@@ -182,7 +197,7 @@ pub(crate) fn detail_line_text(label: &str, status: &str, detail: Option<String>
         colors::bold(label),
         pad(label, DETAIL_LABEL_WIDTH),
         status,
-        pad_plain(visible_len_without_ansi(status), DETAIL_STATUS_WIDTH),
+        pad_plain(measure_text_width(status), DETAIL_STATUS_WIDTH),
         detail
     )
 }
@@ -201,32 +216,11 @@ pub(crate) fn hint_line_text(label: &str, detail: &str) -> String {
 }
 
 fn pad(label: &str, width: usize) -> String {
-    pad_plain(label.chars().count(), width)
+    pad_plain(measure_text_width(label), width)
 }
 
 fn pad_plain(visible_len: usize, width: usize) -> String {
     " ".repeat(width.saturating_sub(visible_len) + 1)
-}
-
-// Only handles CSI sequences (\x1b[...alpha). OSC and other escape types are not stripped.
-fn visible_len_without_ansi(value: &str) -> usize {
-    let mut len = 0usize;
-    let mut chars = value.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' && chars.peek() == Some(&'[') {
-            chars.next();
-            for c in chars.by_ref() {
-                if c.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            len += 1;
-        }
-    }
-
-    len
 }
 
 #[cfg(test)]
@@ -247,8 +241,28 @@ mod tests {
     }
 
     #[test]
-    fn visible_len_ignores_ansi_sequences() {
-        assert_eq!(visible_len_without_ansi("\x1b[32mupdated\x1b[0m"), 7);
+    fn detail_columns_use_terminal_width_for_unicode_and_styles() {
+        let rows = ["cat", "猫", "e\u{301}", "\x1b[32m猫\x1b[0m"]
+            .map(|status| detail_line_text("Link Conflict", status, Some("detail".into())));
+        let widths = rows.map(|row| measure_text_width(row.split_once("detail").unwrap().0));
+        assert_eq!(widths, [widths[0]; 4]);
+    }
+
+    #[test]
+    fn detail_data_escapes_controls_preserving_status_styles_and_literal_paths() {
+        let status = "\u{1b}[32mupdated\u{1b}[0m";
+        let row = detail_line_text(
+            "Shell Profile",
+            status,
+            Some("/tmp/a\nFORGED\r\t\u{1b}\\literal中文".into()),
+        );
+        assert!(row.contains(status), "{row:?}");
+        assert!(
+            console::strip_ansi_codes(&row).ends_with("/tmp/a\\nFORGED\\r\\t\\u{1b}\\literal中文"),
+            "{row:?}"
+        );
+        assert_eq!(row.lines().count(), 1);
+        assert!(!row.contains(['\r', '\t']));
     }
 
     #[test]

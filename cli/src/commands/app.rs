@@ -62,6 +62,9 @@ pub enum AppCommands {
         yes: bool,
     },
     /// Uninstall installed app preset files and optionally restore backups
+    #[command(
+        after_help = "Internal cleanup is included: with CATEGORY, remove its entire internal cache, including extra files, and retain the App manifest. Without CATEGORY, remove the entire internal App cache tree; remove the App manifest only when no installation records remain. Protected or failed removals retain their records for retry. External preset sources are preserved; their App manifest is retained with updated records."
+    )]
     Uninstall {
         /// Show all security Plan paths, identities, and diagnostics
         #[arg(long)]
@@ -72,9 +75,6 @@ pub enum AppCommands {
         /// Remove app config files even if they were modified after install
         #[arg(long)]
         force: bool,
-        /// Also remove the app presets directory and manifest after uninstalling
-        #[arg(long)]
-        purge: bool,
         /// Print what would be removed without making any changes
         #[arg(long)]
         dry_run: bool,

@@ -4,6 +4,7 @@
 //! External directory discovery and snapshot construction stay reusable and
 //! testable by observing the selected host through `FileSystemHost`.
 
+use super::path_text::preset_path as logical_path;
 use super::preset::PresetSnapshotBuilder;
 use super::{FileKind, FileSystemHost, PresetSnapshot, PresetSourceKind};
 use anyhow::{Context, Result};
@@ -138,13 +139,6 @@ async fn capture_preset_tree(
     }
     files.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(files)
-}
-
-fn logical_path(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 #[cfg(test)]

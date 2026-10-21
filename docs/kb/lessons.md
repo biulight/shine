@@ -1,5 +1,776 @@
 # Lessons Learned
 
+## 2026-10-21 — Fixture observations must share the planner's native root
+
+- **Evidence**: Windows seeded `/shine-author/home` while planning read `C:\shine-author\home`.
+  A declared existing App file lost its backup permission in the report; empty-state tests passed.
+- **Fix**: share the synthetic root between authoring, fixture seeding and lint. Expand Windows
+  receipt placeholders with forward slashes so both TOML string styles remain valid.
+- **Coverage**: all three simulated platforms check existing-file backup requirements and matching
+  receipts with literal/basic strings, retaining report redaction and observation-only source reads.
+
+## 2026-10-21 — Failure diagnostics need their own display boundary
+
+- **Evidence**: actual env reads, task cwd failures and missing Broker policy queries split stderr
+  on supplied control characters. Local Broker describe split a source row while still returning 0.
+  Captured SSH cleanup and malformed-frame tests independently split nonfatal warning lines.
+- **Fix**: reuse the CLI control encoder at these display/error-context boundaries. Retain raw
+  key/path/selector lookup, command construction, snapshot hashes, wire parsing and task draining.
+  Do not encode successful env reads, decrypted values or relayed subprocess output.
+- **Coverage**: regressions retain exit 1 and unchanged config/registry/policy state on failure;
+  describe retains exact source/workspace hashes without decryption or command execution. SSH
+  diagnostics remain nonfatal and replacement session files survive cleanup failure. Task
+  startup races and non-directory cwd paths retain their original failure policy.
+
+## 2026-10-21 — Lifecycle reviews and results need encoding after identity decisions
+
+- **Evidence**: a real App install/upgrade/uninstall with a control-bearing destination split
+  Security Plan permissions, backup summaries and outcome rows; restart hints split rows too.
+  Sys previews exposed raw profile/proxy/path controls, and verbose Git notices exposed checkout
+  path controls. Refresh warning and summary regressions failed independently. A rejected upgrade
+  target also exposed raw controls through the shared target-resolution error, after its title
+  had already been encoded. Encode only the diagnostic operands, keeping parsing and lookup raw.
+- **Fix**: encode fields at the existing CLI renderer boundaries; preserve Plan grouping and
+  fingerprints, Core requests, native paths, copied-command argument identity and process output.
+  Do not encode an already styled transform label or broaden an uninstall error to a full chain.
+- **Coverage**: every review layout retains serialized Plan/fingerprint identity and blockers;
+  ready permission summaries retain backup associations/counts. Actual App preview/install/upgrade/
+  protected uninstall/forced restore preserve contents, backups, receipts and exits. Sys previews
+  retain config/metadata and create no receipt; Git tests retain dirty refusal, fast-forward,
+  deduplication and neighbor isolation. Observer tests distinguish notices from child output.
+
+## 2026-10-21 — Registry, migration and task displays retain their own compatibility boundaries
+
+- **Evidence**: malformed task and proxy documents exposed supplied markers through parser errors;
+  task reads/writes and proxy install/uninstall still correctly failed before mutation. The task
+  persistence helper also carries I/O failures, so replacing every error would lose compatibility.
+- **Fix**: translate only task TOML errors at its CLI owner and reuse the static config mapper for
+  proxy captured rules, typed rule conversion and both manifest readers. Retain the shared reader,
+  missing-file default, locks, exact snapshots, preflight, rollback and write order.
+- **Display evidence**: runtime migration actions/current-schema notices and release-cache warnings
+  split rows on control-bearing paths. Existing task names split labels and misaligned Unicode
+  columns. Encode these fields at display without feeding the encoding back into identities.
+- **Windows boundary**: POSIX single-quote escaping produced three PowerShell parse errors for a
+  saved task. Reuse native command program/argument encoders; test the displayed command through
+  real PowerShell against direct execution, including literal syntax and child exit 17. The test's
+  outer `powershell -Command` must explicitly forward `$LASTEXITCODE`: its default maps a native
+  nonzero status to 1, unlike the task runner's direct child-status propagation.
+- **Coverage**: syntax/type failures preserve all inputs, task reads/mutations/run aliases retain
+  exit 1, migration preview/apply cover old/current schema and every input file, cached warnings
+  remain nonfatal, and task lookup/deletion retain original stored names.
+
+## 2026-10-21 — Document readers need the same diagnostic boundary as configuration readers
+
+- **Evidence**: typed and syntax errors in workspace, personal preference, compiled cache, Broker
+  and trust documents retained supplied markers in full error chains. Caller-owned path context
+  did not remove the underlying parser content.
+- **Fix**: reuse the existing static config parser-error mapper before adding file context. Preserve
+  validation, read order, cache fallback and future-version refusal; never repair malformed stores.
+- **Coverage**: reader Display/Debug tests and real run/export tests retain paths and exit behavior
+  without exposing document contents or modifying inputs. Embedded catalog queries still bypass
+  invalid trust storage, while runtime-backed queries and installation still reject it.
+- **Presentation**: exercise cache warnings with control-bearing paths, exact binary child output
+  and exit 23. Structured Shell conflicts encode every data row; categories containing controls
+  request their original argument instead of generating an escaped copy command.
+- **Native test boundary**: a PowerShell function consumes the `--` separator that a native CLI
+  receives. Capture hint arguments with a native probe, including a leading-hyphen selector;
+  hexadecimal output avoids adding console encoding behavior to the argument assertion.
+
+## 2026-10-21 — Configuration type errors can quote supplied values without source snippets
+
+- **Symptom**: ordinary `env get` failed with exit 1 but printed a plaintext test marker from
+  malformed global/project config or env files. An invalid typed field also appeared in the
+  parser's own message, so merely suppressing its source excerpt would still expose it.
+- **Fix**: map TOML and comment-preserving document parse failures to one static CLI config error,
+  then retain caller-owned file/field context. Keep the original parser, precedence, snapshots,
+  locks and persistence. Discovery probes that previously ignored errors still ignore them.
+- **Coverage**: real CLI reads/writes fail safely for syntax and type errors in all five file
+  layers without changing any input; writer/validator entry points check complete Display/Debug
+  error chains. Theme's quiet startup path still reports failure without leaking values.
+
+## 2026-10-21 — Invalid migration inputs must fail without source excerpts or panics
+
+- **Symptom**: `state migrate` and its dry run returned 1 for a malformed project/workspace file
+  but echoed a plaintext test value in the parser's source excerpt on stderr.
+- **Cause**: adding a file context to a TOML parser error retained the original source-bearing
+  chain; hiding only the outer error would still leak through CLI or Debug formatting.
+- **Related failure**: scalar or array `env`/`env.encryption` values reached nested TOML indexing
+  and panicked with exit 101 instead of returning an ordinary invalid-configuration error.
+  Missing optional tables or recipient keys could also panic during inspection.
+- **Fix**: use one migration-local document parser with a file-only error in all inspection,
+  rewrite and final schema-patch readers. Keep the existing read, lock, validation and write order.
+  Validate table shapes and use optional lookups, without adding encryption tables or expanding
+  inline-table conversion rules.
+- **Coverage**: real CLI cases cover project/workspace files, old/current global schemas and
+  preview/apply, asserting exit 1 and unchanged config/cache bytes. Owner-level cases cover every
+  document reader with invalid strings and duplicate keys, checking Display and Debug chains.
+  Workspace reader tests cover invalid shapes and preserve valid missing, standard and inline tables.
+
+## 2026-10-21 — PowerShell exports must cross the native pipeline intact
+
+- **Symptoms**: the shipped PowerShell export helper rejected multiline values as `System.Object[]`
+  instead of code strings; a Unicode value returned success but changed under a legacy console
+  code page. Directly evaluating an already captured Rust string did not cover either failure.
+- **Fix**: render CR/LF or non-ASCII values as one ASCII UTF-8 Base64 decoding expression, using
+  the existing encoder crate and literal quoting. Ordinary ASCII output, helper code, selection,
+  decryption, NUL rejection, configuration and exit policies stay unchanged.
+- **Coverage**: source the actual PowerShell preset under UTF-8 and code page 936, asserting exact
+  empty/quoted/Unicode/CR/LF/CRLF values, inert code-like text, unchanged parent encoding and config.
+
+## 2026-10-21 — Shell export must reject NUL before reporting success
+
+- **Symptom**: exporting `prefix\0suffix` returned 0 and printed a NUL in shell code; the documented
+  POSIX command-substitution/eval consumer silently produced `prefixsuffix` and also returned 0.
+- **Related failure**: the Unix source helper also returned 0 for missing-key/failed exports because
+  eval of an empty substitution succeeds. Capture code separately inside the subshell and emit only
+  a numeric return for failure; keep temporary variables out of the caller's export scope.
+- **Fix**: reject NUL after stored-value selection/decryption and before shell rendering, without
+  including the value in the diagnostic. Reuse existing lookup, decryption and shell quoting.
+- **Coverage**: CLI tests cover leading/middle/trailing NUL for every configured shell and aliases,
+  unchanged config/raw reads, redacted diagnostics, native POSIX/PowerShell literal round trips,
+  and a controlled GPG winner over NUL-containing plaintext. Direct decrypt remains byte-exact.
+  Actual Bash/Zsh source-helper regressions retain success, failure codes 1/2/7, unchanged caller
+  values, failure-output rejection and aliases matching the capture variable.
+
+## 2026-10-21 — Identity generation must pass native output paths to keygen
+
+- **Symptom**: non-UTF-8 `--output` failed after keygen wrote a replacement-character sibling;
+  configuration hints could then describe that different UTF-8 identity instead of the real path.
+- **Cause/fix**: keygen argument vectors converted paths through `to_string_lossy`. Retain OS
+  strings in both ordinary and Touch ID keygen, including forced staging paths. Preserve the
+  pre-generation absolute hint snapshot, but omit its copyable TOML assignment if not UTF-8.
+- **Coverage**: Linux CLI substitutes cover raw filenames/parents, absent/existing lossy aliases,
+  ordinary/forced generation, conflicts, backend and recipient-validation failures, 0600 output,
+  unchanged aliases/config and staging cleanup. Unix argument/failure checks include macOS Touch
+  ID; argument tests also retain unpaired Windows UTF-16. UTF-8 hint and removed-cwd tests remain.
+
+## 2026-10-21 — Transparent proxies must retain signal-derived failure status
+
+- **Symptom**: the same child printed identical stdout/stderr but returned 143/137 through `env run`
+  and 1 through a transparent proxy after SIGTERM/SIGKILL. Ordinary `exit 7` already returned 7.
+- **Fix**: replace the proxy's independent success/code/fallback branch with the existing environment
+  completion helper. Keep injection selection, argv, inherited streams, spawn errors and launcher
+  installation unchanged; add no signal relay or process-group behavior.
+- **Coverage**: real installed Unix shims cover enabled, disabled and project-only-unmatched rules,
+  two terminating signals, ordinary exits, binary streams, literal argv and unchanged configuration,
+  receipts and launchers. Direct CLI regressions cover normal exits, bypassed missing values and
+  spawn errors on all platforms, including Windows `STATUS_CONTROL_C_EXIT` preservation.
+
+## 2026-10-21 — Preset registration must reject unrepresentable source identities
+
+- **Symptom**: an absent non-UTF-8 operand beside a replacement-character directory made both local
+  link commands exit 0 and persist that sibling as the source. `~/source` did the same with a
+  non-UTF-8 home and an existing replacement-character sibling.
+- **Fix**: reject unrepresentable operands before creation and resolved paths before saving. Reuse
+  full expansion with the captured config home; reject an unrepresentable home only if expansion
+  requests it. Keep valid expansion, source modes, no-op detection, configuration locks and saves.
+- **Coverage**: native invalid-byte/UTF-16 operands with and without existing aliases and `--create`;
+  unchanged config/source bytes; Unix home aliases; Linux existing non-UTF-8 directories and UTF-8
+  symlinks to them; valid UTF-8 expansion, snapshot/live modes and no-op saves on all platforms.
+
+## 2026-10-21 — Selector whitespace belongs to category identity
+
+- **Symptom**: with both `demo` and `demo ` installed, `upgrade 'app/demo ' --yes` exited 0 but
+  updated `demo`; uninstall preview and available inspection likewise selected the trimmed sibling.
+- **Fix**: remove operand trimming from the shared dispatch, upgrade, installed/available info and
+  Core Shell lifecycle parsers. Retain blank-input rejection, canonical suffix normalization,
+  ambiguity checks, authoring command-name validation, trust, approval, execution and exit policy.
+- **Coverage**: parser regressions cover leading/trailing ASCII and Unicode whitespace. Real App
+  and Shell CLI fixtures use distinct adjacent categories, including Windows-valid trailing NBSP;
+  check available/installed inspection, scoped mutation, refusal without approval, read-only previews,
+  and unchanged sibling content/receipts. Fixture scripts are installed but never executed.
+
+## 2026-10-21 — Trust review text must encode source-controlled fields before styling
+
+- **Symptom**: ESC/newlines in a valid category target or source label reached trust inspection,
+  enrollment review and list rows unchanged with `NO_COLOR=1`, allowing misleading terminal rows.
+- **Fix**: use the shared control encoder on displayed fields and measure escaped list targets.
+  Omit copyable review/grant commands for control-bearing targets; retain normal shell quoting,
+  original target/source identities, trust matching, confirmation, locks and private persistence.
+- **Coverage**: rendering tests retain exact grant serialization while covering target, source and
+  statement fields. Real CLI tests cover list widths, stale hints, exact-target/no-op revocation and
+  untouched sibling grants on all platforms; Unix enrollment checks refusal without `--yes`, both
+  grant modes, matching inspection, unchanged Preset bytes and absent installed content.
+
+## 2026-10-21 — Authoring reports need text encoding at each untrusted field
+
+- **Symptom**: valid category names containing ESC and newlines passed static validation and reached
+  validation, lint and hypothetical Plan text unchanged, even with `NO_COLOR=1`. Diagnostic paths
+  and permission labels had the same presentation boundary.
+- **Fix**: reuse `escape_controls` before text wrapping or field rendering. Keep internally styled
+  wrapping, original Core reports, JSON fields, validity/readiness and warning exit policy intact.
+  Control-bearing lint operands get an original-argument notice, never a copyable escaped alias.
+- **Coverage**: shared diagnostic rendering and real CLI regressions cover missing paths on all
+  platforms, Unix control-bearing categories/resources/destinations, exact JSON identities, warning
+  refusal, unchanged source bytes and absent state initialization. Existing non-UTF-8 collision and
+  shell-round-trip tests retain independent coverage.
+
+## 2026-10-21 — Path notices must preserve operation and observation boundaries
+
+- **Symptoms**: env path headings/receipts, repeated-link notices, managed overlay fields and
+  retained paths, self-install receipts/PATH examples, migration backup paths and seal results
+  emitted terminal controls. Overlay info called any existing managed directory `Cloned`.
+- **Fix**: reuse the shared display encoder; keep resolution, saved sources, source synchronization,
+  backup contents, raw values, seal publication, authorization and exits unchanged. Directory
+  presence is described as presence. Control-bearing PATH/key hints request the original operand.
+- **Coverage**: isolated CLI regressions preserve env redaction, reveal-without-decrypt, directed
+  writes/inheritance, proxy scope, link no-op bytes, source saving before missing-Git failure,
+  retained checkout content, native install/PATH identity, text/JSON backup bytes and tool-free
+  secretless sealing. Fixtures attach preserved comments to retained configuration entries.
+
+## 2026-10-21 — Encode result rows without rewriting usable data
+
+- **Symptoms**: identity paths/recipient comments, stored proxy fields, recorded Sys details and
+  project/template/copy/export paths could forge terminal rows with LF/CR/TAB/ESC.
+- **Fix**: reuse `escape_controls` at the owning display sites. Keep recipient parsing, proxy
+  install validation, query exits, initialization consent, template force policy and asset extraction
+  unchanged. A copyable identity assignment is TOML: it may deliberately span lines and must not
+  receive the display encoder, which would name a different file.
+- **Coverage**: real isolated CLI tests preserve identity/config/receipt bytes, public-only keygen
+  argv and multiline-hint round trips, proxy enabled states, recorded failures, init denial/yes,
+  three template create/refuse/force paths, copied user files and export source selection.
+
+## 2026-10-21 — Local status frames are structured observations, not terminal rows
+
+- **Symptom**: successful status fields, an unavailable socket's path and a rejected status message
+  printed LF/CR/TAB/ESC raw, allowing one field to look like extra status rows.
+- **Fix**: reuse the display encoder at status output/error sites, retaining raw session/token/socket
+  values and both phase deadlines. Connection failures stay stdout/success; later failures stay
+  stderr/exit 1. Keep startup initialization, transfer logs and broker waits unchanged.
+- **Coverage**: real Unix-socket CLI peers cover connected/rejected control-bearing fields, Unicode
+  and literal backslashes; unavailable paths retain two rows. Existing timeout/auth tests remain,
+  and preseeded configuration bytes stay unchanged. This is not live remote SSH validation.
+
+## 2026-10-21 — Task cwd hints are display text, not child output
+
+- **Symptom**: save/info and the stderr run announcement printed LF/CR/TAB/ESC from a valid saved
+  working directory unchanged, allowing the announcement to look like extra terminal rows.
+- **Fix**: encode only home-formatted cwd hints with the existing display helper. Keep the saved
+  cwd, direct argv, locks, streams and numeric/signal exit policy unchanged.
+- **Coverage**: cross-platform info of a stored cwd; Unix real save and exit-7 execution from the
+  control-bearing directory, retaining raw `pwd` stdout and exact task registry bytes on reads.
+
+## 2026-10-21 — Sys catalog descriptions share the label display boundary
+
+- **Symptom**: `sys list` encoded item labels but printed declared manifest/item description
+  LF/CR/TAB/ESC raw, even with `NO_COLOR`. Item info used the same raw description.
+- **Fix**: encode descriptions through the existing display helper before styling; leave stored
+  declarations, current-OS selection, command hints, status inspection and execution unchanged.
+- **Coverage**: real CLI list/current/all and init/managed info queries retain Unicode/backslashes,
+  exact metadata/config/cache bytes and absent trust/installation receipts without running items.
+
+## 2026-10-21 — Wire transfer hints must not expand home into a lossy sibling
+
+- **Symptom**: a non-UTF-8 HOME made `~/private.txt` resolve to an existing replacement-character
+  sibling on macOS and Linux; argv construction also accepted lossy native local operands.
+- **Fix**: use checked tilde-only expansion with the existing effective-home resolver and reject
+  unsupported local text operands before globbing, preview or tool selection. Preserve literal
+  environment references, normal argv, tool fallback, overwrite policy and child exit handling.
+- **Coverage**: real alias sentinel, literal variables/other-user tilde and unused malformed home;
+  upload/download error messages with all force/dry-run/tool choices; malformed Unix/Windows argv
+  and default/relative/glob local paths. Existing native tool and child-lifecycle tests remain.
+
+## 2026-10-21 — Per-project caches must hash native path identity
+
+- **Symptom**: two distinct Linux project directories, one with a non-UTF-8 name and one with its
+  replacement-character spelling, selected the same compiled environment cache directory.
+- **Fix**: give the existing SHA-256 helper the canonical native path encoding instead of lossy
+  display bytes. Preserve UTF-8 keys, canonicalization fallback, payload formats and encryption.
+- **Coverage**: malformed Unix/Windows path keys remain distinct; ordinary UTF-8 keys and canonical
+  aliases remain compatible. Linux additionally exercises both existing native directories.
+
+## 2026-10-21 — Proxy launchers must preserve the configured runtime identity
+
+- **Symptom**: Linux proxy installation under a non-UTF-8 runtime root succeeded, but its launcher
+  pinned `--config-dir` to a different replacement-character path.
+- **Fix**: validate runtime/target UTF-8 paths in the existing launcher preflight, before rendering.
+  Preserve platform quoting, lifecycle/config locks, rollback and child execution/exit policy.
+- **Coverage**: malformed Unix bytes and Windows UTF-16 are rejected by the renderer; a native Linux
+  installation regression preserves configuration, absent launcher/receipt and the alias sentinel.
+  Existing installed-launcher tests retain status, signal, binary streams and runtime-state coverage.
+
+## 2026-10-21 — Git clone argv must not target a lossy staging-path alias
+
+- **Symptom**: on Linux, a non-UTF-8 managed root caused a first clone to create
+  `overlay.shine-clone-tmp` inside a different replacement-character directory, then fail the rename.
+- **Cause**: native temp-path construction was followed by `to_string_lossy` for Git argv. Cleanup
+  still used the original native path, leaving the unintended clone behind.
+- **Fix**: reuse the existing UTF-8 Git boundary before clone/stale cleanup. Keep native temp-name
+  construction, valid-path argv/order, clone cleanup, force-mirroring and existing checkout checks.
+- **Coverage**: a real local Git clone regression fails before repair by observing the extra alias
+  child; afterward it retains the sentinel and an empty native parent. Native Linux proves this
+  case; filesystems unable to create non-UTF-8 names cannot establish that runtime boundary.
+
+## 2026-10-21 — Shell catalog encoding must preserve parsed description paragraphs
+
+- **Symptom**: Shell catalog list/info and the available-target info fallback printed declared
+  LF/ESC descriptions and comment-line ESC/TAB bytes as terminal controls. Control-bearing targets
+  also entered install hints and lookup-error choices unchanged.
+- **Fix**: reuse the display encoder per name/path/description line, before styling and width
+  measurement. Preserve parsed blank lines, exact lookup/status identity, normal quoting, repair
+  options and failure exits; control-bearing hints request the original operand.
+- **Coverage**: real CLI category/command/canonical queries cover paragraph layout, missing and
+  ambiguous targets, ordinary installed repair hints, preserved receipts/metadata and Unix names.
+
+## 2026-10-21 — Shared Preset note values need encoding after source selection
+
+- **Symptom**: a valid external/overlay physical root containing LF/ESC forged rows in the public
+  source prefix even after individual query fields encoded their metadata.
+- **Fix**: encode only the shared note value through `escape_controls`; retain styled labels,
+  padding, source composition, saved path identities and stdout timing.
+- **Coverage**: pure note tests preserve explicit ANSI label styles and literal backslashes. Real
+  Unix catalog queries use isolated `SHINE_CONFIG_DIR/presets`, validate base/overlay selection,
+  exact config/resource bytes, exit 0 and absent installation state.
+
+## 2026-10-21 — Installed info has a separate metadata rendering boundary
+
+- **Symptom**: after installation, `info` bypassed the available-catalog renderer and printed raw
+  App display names, file/category descriptions and Shell descriptions as terminal rows/controls.
+- **Fix**: reuse `escape_controls` for installed metadata fields and path headings. Keep inspection,
+  status, manifest data, diff rendering, generator policy and explicit verbose file content unchanged.
+- **Coverage**: real CLI App file/category-description fallback and Shell cases cover ordinary,
+  diff and verbose modes, exact original content and unchanged receipts/source bytes. Unix fixtures
+  include control-bearing physical roots without changing logical installation identities.
+
+## 2026-10-21 — App catalog queries must encode metadata before column layout
+
+- **Symptom**: valid metadata descriptions injected LF/ESC rows into `app list`, `app info` and
+  available-target `info`; source paths and file descriptions also exposed LF/CR/TAB controls.
+- **Fix**: use the shared display encoder before styling and width measurement. Keep exact category
+  filtering, observation order, deferred-generator behavior and post-render failure policy. Install
+  hints for control-bearing names request the original target instead of an escaped alias.
+- **Coverage**: real CLI queries cover metadata on all platforms plus Unix category/source/destination
+  controls, wide-character padding, normal install hints and unchanged source/config/install state.
+
+## 2026-10-21 — Pack target text needs its own terminal boundary
+
+- **Symptom**: a successful `preset pack` printed category LF/CR/TAB/ESC bytes as terminal controls,
+  despite validation/lint/Plan text already encoding their own fields.
+- **Fix**: reuse `escape_controls` only for the pack text target. Keep Core/JSON identities,
+  deterministic archives, no-clobber/force publication and exit rules unchanged.
+- **Coverage**: real Unix CLI text/JSON create, existing-output refusal and force replacement retain
+  identical bundle bytes, exact JSON target, original sources and no initialized state.
+
+## 2026-10-21 — Pack output normalization must retain directory traversal failures
+
+- **Symptom**: `file/../bundle.tar.gz` was normalized through an existing regular file, so packing
+  reported success and created or force-replaced a sibling bundle although the requested path
+  could not be traversed by the filesystem.
+- **Fix**: require each existing canonical output ancestor to be a directory before processing the
+  next component. Keep virtual missing directories, symlink-directory resolution, pack policy,
+  atomic publication and existing diagnostic codes.
+- **Coverage**: unit tests cover regular-file and symlink-to-file ancestors; real text/JSON CLI
+  regressions check exit 1, `output_write_failed`, preserved source/blocker/bundle bytes and no state
+  initialization with and without force. Existing scope and no-clobber tests remain independent.
+
+## 2026-10-21 — Task cwd resolution must not select a lossy path alias
+
+- **Symptom**: a missing non-UTF-8 `task save --cwd` operand was accepted when a different directory
+  with replacement characters existed. The task was persisted and later executed in that directory.
+- **Cause**: both cwd and the home used for tilde expansion were converted with `to_string_lossy`
+  before filesystem resolution.
+- **Fix**: retain native path identity through expansion/canonicalization and reject canonical paths
+  that the UTF-8 TOML registry cannot represent before mutation. Keep argv, locks and child exits.
+- **Coverage**: real CLI saves, including `--force`, preserve existing task/config bytes on rejection;
+  unit tests cover operand/home collisions and unaffected absolute paths. Linux additionally checks
+  existing non-UTF-8 directories and UTF-8 symlinks resolving to them before lock/manifest creation.
+
+## 2026-10-21 — Git path records must preserve directory identity
+
+- **Symptom**: pulling a source whose directory ended in whitespace could update a different sibling
+  repository and report success. Its actual worktree changes were not checked, and managed overlays
+  with such paths were rejected on subsequent synchronization.
+- **Cause**: trimming `rev-parse` path output removed characters belonging to the directory name.
+- **Fix**: share a path-output decoder that removes only Git's record terminator. Keep UTF-8 error
+  boundaries, clean/tracking preflight, fast-forward pulls and managed checkout guards unchanged.
+- **Coverage**: real local repositories cover trailing space, tab, LF, CR and Unicode whitespace;
+  selected-versus-sibling pulls in both verbosity modes; dirty selected worktrees; and managed mirror
+  cleanup confined to the selected checkout. Decoder tests retain invalid UTF-8 rejection.
+
+## 2026-10-21 — Full-external completion must retain active overlay candidates
+
+- **Symptom**: `shell list` showed overlay-only commands while completion with the same external
+  source omitted them. Category, Shell command, App capability and Sys callbacks returned before
+  their overlay union in full-external mode.
+- **Fix**: collect the selected base first, then reuse the existing overlay collectors and sorted
+  candidate union. Keep discovery, best-effort parsing, embedded fallback rules, trust, approval
+  and execution unchanged; completion does not construct a runtime.
+- **Coverage**: all four collectors retain base plus overlay candidates without embedded additions.
+  A real completion-protocol request matches the Shell catalog, tolerates malformed trust state,
+  and preserves config/trust bytes without receipts, installed files or an update cache.
+
+## 2026-10-20 — Diff text and release success messages describe presentation only
+
+- **Symptoms**: inline diffs emitted source-controlled terminal escapes and carriage returns even
+  with `NO_COLOR`; explicit stable-channel reinstalls and downgrades were described as upgrades.
+- **Fix**: reuse `escape_controls` on each rendered diff line before coloring, preserving line
+  separators and the original comparison inputs. Use neutral stable installation wording without
+  version inference. Channel selection, force-install behavior, approval, execution and exits stay
+  unchanged.
+- **Coverage**: renderer regressions cover headers, added/removed/context lines, Unicode and CR;
+  an isolated CLI App info check verifies escaped output, successful exit, unchanged source/destination
+  bytes and absent trust/installation records. Message tests cover increasing, equal, decreasing
+  and preview-to-stable versions while retaining both preview message cases.
+
+## 2026-10-20 — Preset source messages must follow effective scope
+
+- **Symptoms**: overlay info preferred inherited Git settings over an active project directory;
+  project link warned that `SHINE_CONFIG_DIR` blocked an already effective setting; base-source
+  unlink promised embedded presets despite environment overrides or global inheritance.
+- **Fix**: reuse effective overlay selection and project-scope detection only in presentation.
+  Keep unlink wording scoped to the saved setting without reloading config or predicting a source.
+  Source resolution, saves, approval, execution and exits remain unchanged.
+- **Coverage**: real CLI tests compare notices with subsequent catalogs and environment reads,
+  covering project/manual versus inherited Git overlays, true and false environment warnings,
+  blank overrides, unlink to environment/global/embedded sources, and retained configuration,
+  source files and absent installation/trust state.
+
+## 2026-10-20 — Preserve note streams and distinguish selection from review
+
+- **Symptoms**: App install/upgrade/refresh redirected generator stderr notes to stdout; Shell
+  install preview described link candidates as definite changes despite not assessing conflicts;
+  lint/test summaries used plural nouns for one category, warning or case.
+- **Fix**: share the CLI note renderer over existing presentation events and stream-aware colors,
+  describe the unchanged Shell preview boundary, and reuse Preset `count_phrase`. Keep requests,
+  trust, approval, execution, JSON reports and exits unchanged.
+- **Coverage**: real CLI regressions check generator stderr versus hook stdout across all three
+  App consumers and a no-op refresh, selection-only previews with a conflicting launcher and
+  unchanged blocked installation, plus lint warning/error counts, JSON and warning exit policy.
+  Existing fixture-name regressions retain case identity, pass/fail and single-case summaries.
+
+## 2026-10-20 — Catalogs and targeted notices retain their query scope
+
+- **Symptoms**: Shell catalog listing bypassed overlays in built-in mode; targeted Shell/static
+  App queries printed unrelated deferred-generator guidance; failed targeted evaluation still
+  concluded that no update was available.
+- **Fix**: reuse active metadata capture and resolved target references for deferred notices.
+  Preserve the embedded-only metadata path when there is no external source or active overlay;
+  constructing a full runtime would make pure built-in listing fail on unrelated trust state.
+  Reuse the notice's incomplete/failure facts for the footer. Explicit generator evaluation stays
+  category-scoped, including visible fatal sibling failures; approval, execution and exits remain.
+- **Coverage**: real CLI tests cover both base sources with/without overlays, additions and
+  overridden descriptions, category/file aliases, default deferral, trust rejection, explicit
+  failure, mixed pending changes and successful no-op evaluation, retaining receipts and content.
+  Malformed/future-schema trust files and a trust-path directory retain identical embedded catalog
+  output and exit 0; runtime-backed catalogs and installation retain their existing rejection.
+
+## 2026-10-20 — Sys output must retain operand, argument and row boundaries
+
+- **Symptoms**: valid leading-hyphen item IDs became options in suggested commands; detection
+  arguments were joined without quoting; label newlines and ESC bytes split or controlled rows.
+- **Fix**: reuse positional encoders, share Task's program-position quoting rule, and move the
+  existing broker control-character escape rule to CLI output helpers. Measure escaped labels;
+  retain raw metadata/receipts and all approval, execution and exit behavior.
+- **Coverage**: isolated CLI tests pass hints through the native shell and Clap, preserve literal
+  detection argv, and check catalog/info/preview/recorded rows, aligned columns, approval denial,
+  approved managed-file writes and unchanged raw receipts during later inspection/previews.
+
+## 2026-10-20 — Test final summaries, suggested arguments and output failures
+
+- **Symptoms**: whole-config upgrade omitted kept Sys files and failed upgrades ended with `Done`;
+  Shell info hints split names containing spaces; schema output panicked on a closed pipe.
+- **Fix**: retain Sys lifecycle preservation totals and authoritative fatal report counts in CLI
+  summaries, reuse command argument encoders, and propagate schema writer errors normally.
+  Preserve approvals, execution, normal exits and non-fatal hook warnings.
+- **Coverage**: production CLI regressions cover unchanged, targeted, aggregate, verbose and mixed
+  App/Sys outcomes with retained bytes/receipts, App generator versus hook failures, shell-and-Clap
+  parsing of install/repair hints, and closed output pipes for both schema formats without state init.
+
+## 2026-10-20 — Native-shell hint tests need stable cwd paths and launcher counts
+
+- **Symptom**: Windows hint regressions failed on a missing-path report and Shell uninstall preview.
+- **Cause/fix**: PowerShell expanded an 8.3 cwd alias while the direct process retained it. Canonicalize
+  the existing fixture cwd before both launches, retaining exact report comparison even for absent
+  operands. A Windows command owns both `.ps1` and `.cmd` launchers; derive preview counts from the
+  same platform-specific launcher list whose bytes and links the test verifies remain unchanged.
+- **Rule**: native-shell command regressions must account for cwd alias expansion and physical
+  launcher pairs without weakening argument, exit-status or non-mutation assertions.
+
+## 2026-10-20 — Suggested commands and result rows retain consumer boundaries
+
+- **Symptoms**: Plan/error hints split quoted targets; leading-hyphen categories passed shell
+  parsing but failed Clap parsing. Live Shell blockers suggested snapshot grants, forced dotenv
+  imports called replacements creations, and fixture names could forge extra text result rows.
+- **Fix**: quote at command owners, group final positional operands behind `--` when needed,
+  and put options first. Retain the live trust diagnostic when grouping targets and explain
+  development authorization versus snapshot delivery. Use neutral forced-write wording without
+  adding filesystem observations; escape fixture names only in text rendering.
+- **Coverage**: CLI regressions parse hints through shell and Clap, preview leading-hyphen removals,
+  preserve blocked trust/config/receipts, and compare import preview/conflict/write bytes. Fixture
+  tests retain raw JSON names, pass/fail and exits while keeping control-containing names on one row.
+- **Rule**: shell quoting does not protect option parsing. Display changes must not alter argv,
+  approval/trust policy, atomic publication, report schemas or persisted names.
+
+## 2026-10-19 — Command displays need position and path boundaries
+
+- **Symptoms**: stale trust-list hints split targets containing spaces; executable names such as
+  `if` or `MODE=test` ran through direct argv but failed when their displayed POSIX command was
+  copied; dotenv export paths containing controls split preview and result lines.
+- **Fix**: reuse suggested-command argument encoding for trust-list review hints, distinguish
+  program position from argument position in Task displays, and quote/escape dotenv destination
+  messages. Preserve argv, child streams/exit status, raw paths and exported bytes.
+- **Maintenance**: remove migration rendering for the retired `manual_permission_review_required`
+  diagnostic and its exclusive Sys-code detector, retaining actual external-code trust advisories
+  and managed-overlay remediation. Author capability tables remain optional (ADR 0091).
+- **Coverage**: CLI tests parse stale/missing-source trust hints without running them, compare saved
+  Task displays with native POSIX execution, and exercise dotenv preview/create/force/conflict
+  messages with unchanged output bytes. Migration tests retain external/embedded trust distinctions,
+  active-source timing and existing read-only overlay/backup boundaries.
+
+## 2026-10-19 — Missing App metadata does not erase installed-resource visibility
+
+- **Symptom**: `update --verbose` claimed nothing was installed after an App category disappeared,
+  while its destination files and receipts remained; ordinary `list/update` still showed them.
+- **Cause/fix**: detailed status considered only active App rows. Include the existing read-only
+  missing-source query in status inputs and reuse retained-content/uninstall-preview notices.
+  Keep these resources out of current/update summary counts and preserve the true empty state,
+  exit status, generator opt-in and raw receipt/destination bytes.
+- **Coverage**: real CLI tests cover a removed file entry alongside active entries, an entirely
+  removed category, verbose/diff/evaluation modes, quoted category arguments and byte preservation.
+
+## 2026-10-19 — Distinguish nextest capture-pipe races from product process leaks
+
+- **Symptom**: old nextest marks unrelated macOS tests `LEAK`, even pure parsing/string tests;
+  isolated reruns pass. This reports unclosed captured output handles, not a heap-leak measurement.
+- **Cause to check**: concurrent spawns can inherit sibling capture pipes on Apple platforms;
+  [nextest 0.9.145 fixes the runner race](https://github.com/nextest-rs/nextest/pull/3553).
+- **Verification**: preserve test names with `--status-level leak`, inspect subprocess ownership,
+  and compare the same binaries with a fixed runner at the same timeout. Do not weaken leak
+  detection or change production code solely to suppress this symptom.
+
+## 2026-10-19 — Command hints and summaries retain argument and outcome boundaries
+
+- **Symptoms**: App/trust/artifact hints split category names containing spaces; refresh counted
+  preserved user modifications as execution failures; `sys list --all` suggested current-OS
+  operations for foreign-OS items; file-group path newlines split metadata previews.
+- **Fix**: encode suggested-command arguments for POSIX/PowerShell without changing execution
+  argv, count preserved refresh files separately while retaining nonzero incomplete exits, and
+  keep current-OS command guidance in the catalog owner. Quote/escape file-group preview paths
+  only; keep actual paths, output streams, crypto, ownership and cleanup unchanged.
+- **Coverage**: CLI hints are parsed without executing them; literal categories retain install,
+  repair, artifact, missing-source and protected-uninstall guidance. Refresh tests cover approval
+  denial, preserved-only and mixed success/failure, receipt preservation and explicit force. Sys
+  catalogs cover current/foreign OSs with shared and unique IDs through info and apply dry-runs.
+  File-group tests cover unusual paths, metadata-only previews, binary output, child exit propagation,
+  cleanup and persistent export.
+
+## 2026-10-19 — Status summaries must retain observation states
+
+- **Symptoms**: deferred generators appeared as `user-modified` in summaries; verbose status said
+  nothing was installed when only current managed Sys records existed. App Unicode rows and
+  managed Sys labels also used inconsistent column widths; Shell recovery still described every
+  action as launcher creation.
+- **Fix**: retain generator summary states and the existing Sys inspection's installed rows;
+  label receipt-based current/missing state explicitly. Measure display columns, size managed
+  result rows together after visibility filtering, and describe recovery resource actions.
+  Name generator counter units explicitly: categories by default, files with `--diff`. Recovery's
+  legacy action counter includes committed rollback-material cleanup, so describe recovery rather
+  than claiming every counted action reversed installed content.
+- **Coverage**: CLI regressions cover generator deferral/trust/failure, Sys current/pending/missing
+  sources with unchanged receipts/destinations, and App Unicode catalog/info/update rows. Reporter
+  coverage checks mixed Sys label widths and hidden unchanged rows. Execution and approval are unchanged.
+  Mixed Sys states retain each record once; multi-generator categories retain category/file units
+  and actual user modifications. Real CLI recovery covers rollback, committed cleanup, journal-only
+  completion and denied consent while preserving committed content and receipts.
+
+## 2026-10-18 — Preset hints must describe source composition and inheritance
+
+- **Symptoms**: project overlay unlink promised no overlay despite global inheritance; export
+  called an embedded-plus-overlay result built-in only; activation hints split paths with spaces.
+- **Fix**: describe unlink's selected scope without changing inheritance, identify overlay-aware
+  export, and show command templates with separate display-escaped paths rather than shell code.
+- **Coverage**: CLI tests check inherited overlay after unlink, preserved source files and global
+  config, export source labels and bytes, and copy/export hints for paths with shell metacharacters.
+
+## 2026-10-18 — Env display and proxy writes need distinct presentation contracts
+
+- **Symptoms**: proxy toggles reported a global change as if it were effective in an overriding
+  project; wide/multiline env values broke list rows; self-upgrade flattened nested errors.
+- **Fix**: report saved scope separately from best-effort effective state, escape display cells
+  after redaction and size them by terminal columns, and retain upgrade error context chains.
+- **Coverage**: CLI tests preserve both proxy write targets and raw env values, check redaction,
+  wide/combining/multiline cells, and verify upgrade error causes without exposing test credentials.
+  A failed post-save proxy inspection still succeeds and leaves the saved rule intact.
+
+## 2026-10-18 — Status deadlines and preview path boundaries
+
+- **Symptoms**: `local status` could wait forever for a silent peer; SCP previews joined paths
+  with spaces, obscuring operand boundaries and allowing filenames to split output lines.
+- **Fix**: bound status connection and response phases independently while preserving their
+  existing exit policies; quote and escape preview operands without changing transfer inputs.
+- **Coverage**: real CLI silent-peer, connected and rejected-token fixtures check output streams
+  and exit codes; preview tests cover multiple paths, spaces, quotes, newline escaping and no spawn.
+- **Rule**: diagnostic commands need bounded waits; display strings must never become execution
+  inputs. Theme `--quiet` suppresses non-essential diagnostics, not configuration errors.
+
+## 2026-10-18 — Presentation must retain incomplete observations and profile attention
+
+- **Symptoms**: `update` printed `Nothing to update` after a failed release check; explicit Sys
+  profile commands displayed a success state even when Core returned `NeedsAction`.
+- **Fix**: retain release-check completion for the no-update footer and project typed profile
+  outcomes into the final line. Keep release-check failures and profile attention non-fatal;
+  rendering does not alter approval, merge execution, receipts or recovery.
+- **Coverage**: command regressions exercise unreadable version cache with/without pending App
+  updates and profile merge conflicts. Preset wrapping uses terminal display width, preserves
+  long tokens and keeps JSON untouched; Task info labels share the longest label's width.
+
+## 2026-10-18 — Install summaries must not discard file failures
+
+- **Symptom**: App install rendered per-file errors but ended with `Done · nothing changed` and
+  returned success; dry-run writes were counted as skipped.
+- **Cause**: the CLI counted only installed/skipped files and discarded the resulting lifecycle
+  value. A blanket lifecycle-failure check would also change non-fatal hook behavior.
+- **Fix**: count typed file failures and previews in the production renderer, finish reporting,
+  then return `ReportedCommandFailure` for file failures. Process regressions use real generated
+  JSON merge failures, partial success, and normal trust/approval; hook warnings stay non-fatal.
+- **Rule**: summaries and exit status must reflect the same domain outcomes. Choose color support
+  for the actual destination stream, and measure terminal columns with display width rather than
+  bytes or Unicode scalar counts.
+
+## 2026-10-18 — Cargo include basenames can admit dependency-tree files
+
+- **Symptom**: `cargo package --list` included nested README/LICENSE files from local
+  `website/node_modules`, despite an apparently narrow source-package allow-list.
+- **Cause**: unanchored basename patterns match at any depth; broad source-tree patterns can also
+  include a nested `node_modules` directory. `include` is authoritative over ignored local files.
+- **Fix / rule**: root-anchor intended package paths and explicitly negate `**/node_modules/**`.
+  The `source_package` integration test feeds the real include policy to Cargo with synthetic
+  required files and forbidden dependency trees. Verify both package membership and packaged tests;
+  a clean checkout without installed dependencies is insufficient regression evidence.
+
+## 2026-10-18 — Simulated runtime fixtures must select their Shell explicitly
+
+- **Symptom**: Windows CI returned no Shell inspection rows for the Core-only Linux harness.
+- **Cause**: `RuntimeContext::isolated` defaults to the host's Shell; PowerShell filtered out the
+  harness's declared `.sh` source even though its captured platform was Linux.
+- **Fix**: explicitly select Bash alongside the simulated Linux platform, retaining the production
+  inspection entry, all report assertions and the observation-only Host check (ADR 0138).
+- **Rule**: captured platform and Shell are independent inputs. Set both when a fixture models a
+  specific runtime; do not weaken production source filtering to accommodate host defaults.
+- **Evidence**: native Windows reproduced the original zero-row failure; after selecting Bash,
+  all six `runtime_boundary` tests passed under nextest. The same six tests passed on macOS.
+
+## 2026-10-18 — Production-entry fixtures must not pre-satisfy mutation assertions
+
+- **Symptom**: the migrated legacy Shell sentinel test installed source commands through the real
+  handler, which also created the managed profile. Later wrapper assertions could pass even if the
+  completion entry did not write the profile.
+- **Fix**: retain the real receipt and launchers, remove the fixture's managed profile, then require
+  completion to report a profile update and recreate both source wrappers without changing receipts.
+- **Rule**: check the precondition immediately before the operation under test; production setup
+  must not silently perform the mutation the regression is meant to verify (ADR 0139).
+
+## 2026-10-17 — Asset-removal tests must preserve production purge semantics
+
+- **Symptom**: migrating an asset-reader deletion test to approved uninstall initially asserted
+  that extra cache-tree files survived whole-shell `--purge`. The real approved purge includes them.
+- **Rule**: test ordinary removal and explicit purge separately. Preserve current selection,
+  approval and receipt semantics instead of importing a retired helper's deletion policy.
+- **Evidence**: production-handler regressions cover ordinary user-file retention, whole-tree
+  purge, configuration retention, dry-run byte preservation, repeated removal and absent-runtime
+  preview. App fixtures still prove installed-source selection with distinct disk bytes (ADR 0136).
+
+## 2026-10-17 — Test fixtures must not reimplement discovery or report aggregation
+
+- **Symptom**: Shell description/scanner tests called retired CLI algorithms, while validation
+  golden tests used a byte-for-byte copy of Core's report aggregation.
+- **Rule**: seed sources and query production metadata/validation before deleting old copies.
+  Preserve current parsing and platform rules; an old `.sh` scanner is not the compatibility owner.
+- **Evidence**: migrated tests cover real external snapshot capture, nested sources, declared Bun
+  and native platform alternatives, plus production error/warning counts. Normalize temporary
+  golden paths only after checking their canonical values (ADR 0135).
+
+## 2026-10-17 — Historical presentation tests can encode obsolete behavior
+
+- **Symptom**: Shell simple-list and upgrade-summary tests passed against private copies while
+  production used inventory availability/installation and a different summary branch.
+- **Rule**: establish replacement assertions against the current production consumer before
+  deleting the copies. Preserve current behavior rather than reviving obsolete status-string
+  filtering or verbose `up to date` output. Keep installation and upgrade summaries distinct.
+- **Evidence**: inventory tests seed real receipts/launchers; upgrade tests capture the approved
+  handler's reporter. Sys installed-only filtering now tests the frontend's OS/managed selection
+  rather than a standalone runtime query (ADR 0134).
+- **Review check**: use distinct cross-OS targets so inventory deduplication cannot hide a missing
+  OS filter. Assert receipt-only inventory flags before projection; an empty simple list alone
+  cannot prove the underlying receipt remains visible.
+
+## 2026-10-17 — Test-only destination checks can hide production gaps
+
+- **Symptom**: legacy App parent-path rejection passed in a CLI-only resolver but failed after moving
+  the test to Core. The production annotation branch returned before shared destination validation.
+- **Fix**: resolve legacy full paths through the common check and test both metadata resolution and
+  install planning. Supply an explicit captured data directory in embedded destination tests.
+- **Rule**: migrate behavioral assertions before deleting copies; a passing independent algorithm
+  says nothing about production validation or captured-context semantics.
+- **Migration check**: preserve installed versus active snapshot selection. Vim/Ghostty destination
+  tests must use `from_installed_presets`; distinct disk fixture bytes catch an accidental embedded
+  fallback even when destination assertions still pass.
+
+## 2026-10-17 — Optional root matching must not terminate fallback lookup
+
+- **Symptom**: Shell conflict guidance lost the category for rendered template sources.
+- **Cause**: `?` returned from the whole function when the presets prefix did not match.
+- **Fix**: chain each root match independently and test the rendered-source conflict message, explicit
+  hint precedence and unknown-source fallback.
+
+## 2026-10-17 — Compilation does not prove retired adapters were removed
+
+- **Symptom**: a detached Shell template file still received edits, and migrated App status tests
+  left an unused helper chain and CLI-only JSON/Bun policy copies behind.
+- **Cause**: files outside the module tree are not compiled; public helpers and self-contained
+  test implementations can survive without a production caller.
+- **Rule**: trace module membership and callers after migration, move behavioral assertions to
+  the production owner, then delete the retired chain. Retain platform-gated code, receipt-format
+  reconstruction and recovery consumers; a missing local-platform depfile alone is not proof.
+
+## 2026-10-17 — Desired launcher delivery must have one definition
+
+- **Cause**: Shell inspection and receipts understood native-cmd-v2, but planning's independent
+  current-state comparison accepted only live-bun-v2 or an absent format.
+- **Fix**: share captured-input layout, LinkSpec and receipt comparison through desired delivery;
+  keep each caller's original observation and Bun-policy assessment order.
+- **Rule**: share desired-state definitions, not pre-approval observations. Cover install → inspect
+  → repeated upgrade convergence, including native Windows launcher migration (ADR 0116).
+
+## 2026-10-16 — Zeroizing a buffer does not redact parser errors
+
+- **Symptom**: malformed decrypted ordinary env-cache TOML appeared verbatim in the unreadable-cache
+  warning, including the value on the failing line.
+- **Cause**: `read_valid_cache` propagated the TOML error, which retains a source snippet, after
+  wrapping the input in `Zeroizing`. Source payload and hybrid-cache parsing already redacted it.
+- **Fix**: return a generic cache-payload diagnostic without attaching the parser error. Regression
+  tests exercise both syntax and value-type failures through a controlled decryption backend.
+- **Rule**: audit diagnostics alongside plaintext owners; error objects can retain their own copies.
+
+## 2026-10-16 — Mise selection must survive nested Bun package scripts
+
+- **Symptom**: `mise exec -- bun run check:ts` selected Bun 1.3.14 at entry, but nested scripts
+  ran a different Bun from PATH. A source-filter regression alone still passed.
+- **Fix**: use `bun run --bun check:ts` in the local hook and CI. Check `Bun.version` against
+  `mise.toml` in the ordinary tooling suite; the old invocation fails this regression when a
+  different ambient Bun is present.
+- **Rule**: verify the consumer process's runtime, not only the outer launcher or command text.
+
+## 2026-10-16 — Test guards must retain ownership and restore original process state
+
+- **Symptoms**: the admin test directory lock reclaimed a possibly live owner after 60 seconds
+  and ignored other acquisition errors. Manual HOME cleanup removed pre-existing values;
+  panic skipped cleanup entirely.
+- **Fix**: reuse the persistent lifecycle OS file lock, fail loudly on acquisition errors, and
+  restore captured env/cwd before releasing the shared test mutex. Child-process regressions
+  cover contention, owner exit, invalid lock paths, normal return and panic restoration.
+- **Rule**: timeout is not abandonment evidence. Restore the original process state, including
+  variable absence, rather than assuming the caller started without test-controlled values.
+
+## 2026-10-16 — Process failure classification must survive wording and context changes
+
+- **Cause**: Sys bootstrap classified timeouts by searching English error text, despite the
+  process host preserving `std::io::ErrorKind::TimedOut`.
+- **Fix**: inspect the typed error through its anyhow context chain. Derive the displayed duration
+  from the configured bootstrap timeout; retain ordinary installer failures and Windows hints.
+- **Coverage**: deadline errors with unrelated wording and outer context, non-timeout errors
+  containing `timed out`, and nonzero process output with administrator guidance.
+
 ## 2026-10-15 — Consumed temporary credentials are already cleaned
 
 - **Symptom**: a child consumed and deleted its mapped credential, exited zero, and left no file,
@@ -2023,8 +2794,8 @@ measured, not inferred.
 - **Root cause**: rsync/scp interpret leading-`-` operands as options, and rsync's `-e`/`--rsh`
   (and `-o ProxyCommand`) are command-execution vectors. Any wire string that lands in an option
   slot — or is word-split by a shell — is a local RCE.
-- **Fix** (`cli/src/ssh/agent.rs`): spawn argv-only, never `sh -c`; emit the remote path only as
-  the single token `<host>:<remote_spec>` after a `--` separator (a `-`-leading spec becomes an
+- **Fix** (`cli/src/ssh/agent/transfer/argv.rs`; originally `agent.rs`): spawn argv-only, never
+  `sh -c`; emit the remote path only as the single token `<host>:<remote_spec>` after a `--` separator (a `-`-leading spec becomes an
   inert `host:-…`); anchor local operands to the session dir and `./`-prefix any dash-leading one;
   build the ssh reconnection `-e`/`-o` string **solely** from the local `SessionContext` (never the
   wire); reject control chars in `remote_spec`; expand wire paths tilde-only (not `${VAR}`); expand
@@ -2405,3 +3176,176 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Rule**: source availability, installed state, and ownership are separate facts. A source
   disappearance must not hide an installation or authorize removal, and a conflict is not an
   applicable update. Internal App cache maintenance remains distinct from configuration changes.
+
+## 2026-10-18 — Sys recorded results span operations and runs
+
+- **Symptom**: `sys status` called mixed bootstrap/managed records the last bootstrap result, and
+  Unicode labels shifted result columns.
+- **Cause**: the shared manifest upserts individual items across runs; label sizing mixed byte
+  lengths with character-count padding.
+- **Fix**: describe per-item recorded system results and use terminal display widths in Sys result
+  sizing and padding. Preserve observation, exit codes, approval and recovery behavior.
+- **Regression**: exercise real CLI mixed/foreign/empty records and unchanged manifest bytes; check
+  ASCII, wide and combining labels through the shared outcome renderer.
+
+## 2026-10-19 — Self-install hints preserve literal paths and sync diagnostics
+
+- **Symptom**: the POSIX PATH hint expanded special characters in an installed directory; separate
+  copy synchronization warnings used different streams and omitted inner errors.
+- **Fix**: quote the literal directory separately from PATH expansion and emit sync failures on
+  stderr with their error chain, retaining the Windows elevation hint and best-effort success policy.
+- **Regression**: execute the generated hint in an isolated shell; capture sync stdout/stderr and
+  verify preserved files, successful copying and same-path skipping.
+
+## 2026-10-19 — Migration artifact hints must quote category arguments
+
+- **Symptom**: a valid category containing spaces produced an artifact follow-up command that
+  failed argument parsing; quotes and dollar signs could also change shell interpretation.
+- **Fix**: reuse platform-specific command argument quoting in the migration renderer only.
+- **Regression**: real CLI dry-runs assert the hint and unchanged sources/state; POSIX shell or
+  PowerShell parses the arguments without invoking artifact execution.
+
+## 2026-10-19 — Dotenv export previews count non-secret bindings only
+
+- **Symptom**: `--include-secrets --dry-run` labeled a plain-only count as including secrets.
+- **Fix**: qualify the count and explicitly state that secrets are neither decrypted nor counted;
+  preserve compilation, secret shadowing, exit codes and publication boundaries.
+- **Regression**: real CLI previews with/without secret inclusion preserve absent/existing outputs
+  and sources, exclude shadowed plain values, and never print value sentinels.
+
+## 2026-10-19 — Duplicate broker policy guidance must match update arguments
+
+- **Symptom**: duplicate add errors suggested a positional policy name that update does not accept.
+- **Fix**: show `--name`, explain that full policy parameters and optional constraints must be
+  supplied again, and point to generated help without implying approval.
+- **Regression**: real CLI duplicate add retains exit 1, stderr and unchanged policy bytes; help
+  exposes the named options and a changed update still cannot proceed without confirmation.
+
+## 2026-10-19 — Identity configuration hints preserve path identity
+
+- **Symptom**: custom identity hints embedded raw paths in TOML quotes; relative paths also
+  depended on the directory used by later commands.
+- **Fix**: render the generated target as an absolute TOML string in the hint only; leave keygen
+  arguments, publication, config loading and device selection unchanged. Capture the hint before
+  keygen, resolving its parent so a disappearing invocation directory cannot cause a late failure
+  or leave a `../` hint dependent on that directory.
+- **Regression**: a real CLI with an isolated placeholder keygen parses the emitted TOML, checks
+  special path characters and reads the same identity from another directory without another keygen.
+
+## 2026-10-19 — Shell uninstall guidance distinguishes inventory and purge scope
+
+- **Symptom**: help called `shell list` installed inventory and described purge as empty-directory
+  removal even though whole-shell internal purge includes extra cache-tree files.
+- **Fix**: direct installed-resource inspection to `shine list`; distinguish whole-shell, targeted
+  and external-source purge behavior in generated help and both manual locales.
+- **Boundary**: presentation only; keep approval, removal scope, recovery and exit behavior intact.
+
+## 2026-10-19 — Default cleanup must retain incomplete App uninstall receipts
+
+- **Symptom**: whole-App cleanup deleted the manifest after protected removal, while the summary
+  claimed receipts were retained; forced retry could no longer locate backups. Preview also printed
+  completed cleanup messages.
+- **Fix**: lifecycle finalization deletes only an empty remaining manifest. Preview projects receipt
+  removals in memory, and CLI cleanup messages use lifecycle effects. CLI uninstall APIs expose no
+  cleanup toggle; both preview and execution request the same Core cleanup policy.
+- **Regression**: real CLI protected/mixed removal retains receipts and restores backups on forced
+  retry; denied-administrator failure preserves receipts, rejects stale approval and succeeds after
+  fresh review. Default cleanup does not bypass journal or approval boundaries.
+
+## 2026-10-19 — Remaining Shell integration needs its own empty-manifest boundary
+
+- **Symptom**: uninstalling the last category left the managed profile and startup sentinel, but
+  subsequent full uninstall generated a profile action with no receipt boundary and failed validation.
+- **Fix**: represent observed remaining integration with the reserved profile-only boundary;
+  require an empty manifest in preparation, commit and recovery. Include profile-only changes in
+  planning even without cache or launcher changes. Keep all file, sentinel and rollback checks.
+- **Regression**: real CLI category-then-full uninstall checks preview/consent and unrelated startup
+  text. Interrupted removal rejects new receipts, changed rollback content and stale approval;
+  freshly reviewed recovery restores integration without overwriting unrelated edits.
+
+## 2026-10-20 — Display fixes must preserve input and stored identities
+
+- **Symptoms**: lint remediation validated the current directory instead of its input; local path
+  display rewrote literal Unix backslashes; broker project control characters forged list rows.
+- **Fix**: the CLI text adapter quotes the original lint operand while leaving Core/JSON unchanged.
+  Non-UTF-8 operands omit the copyable command and require reusing the original argument; lossy
+  conversion can otherwise select a distinct valid input. Do not change validation admission.
+  Native path display converts separators only on Windows; logical permission strings retain their
+  separate normalization. Broker list cells escape controls without altering stored policy values.
+- **Regression**: execute suggested validation commands through the native shell; assert exact Unix
+  identity paths and unchanged key bytes; round-trip broker info and retain policy bytes after list.
+  A raw non-UTF-8 operand beside a valid replacement-character path must retain exit 1 and the
+  original JSON diagnostic without suggesting the other input or initializing runtime state.
+
+## 2026-10-21 — Safe previews do not cover completion rows or warnings
+
+- **Symptom**: file-group previews escaped paths, but successful seal/export rows and cleanup
+  warnings still split at path controls. Sync and proxy notices had the same independent gap.
+- **Fix**: encode only human result fields and formatted warning chains at their existing print
+  boundaries. Shell details share plain-data encoding; activation hints omit copyable commands for
+  control-bearing or non-UTF-8 paths instead of turning display escapes into different operands.
+- **Regression**: extend production CLI/child-process capture tests, retaining exact binary stdout,
+  selected raw paths, verified plaintext removal, replacement protection and child exit 42. Keep
+  warning-only save/sync success, nested error causes, ordinary quoting and profile idempotence.
+
+## 2026-10-21 — Auxiliary review output shares the terminal boundary
+
+- **Symptom**: migration headings/diff headers, generator failure labels, update relocation rows and
+  appended trust notices still emitted raw controls after the main catalog/Plan views were fixed.
+- **Fix**: encode human data at each final output boundary and reuse trust command guidance;
+  keep original selectors for grouping, diff lookup, trust evaluation and mutation. Migration diffs
+  preserve structural LF and display CR/TAB explicitly; they are not patch input.
+- **Regression**: snapshot compatibility reports and real CLI migration, generator, update/status
+  and blocked lifecycle checks retain JSON/candidate hashes, redaction, exit codes and file bytes.
+  Migration's pre-existing CRLF normalization is checked through candidate hashes, not redefined by
+  display tests. Explicit artifacts retain inherited process I/O and their existing failure policy.
+
+## 2026-10-21 — Global list output has independent labels and remediation
+
+- **Symptom**: fixing targeted info/update did not encode global generator failures, detailed status
+  labels, manual refresh commands or Sys receipt-change details. Preset-link/copy errors and Git
+  preflight refusals also used different path presentation from successful notices.
+- **Fix**: encode final display fields and measure escaped labels; share a local refresh-hint renderer
+  across global views while preserving raw command generation, sorting and target selection. Reuse
+  the existing plural-count helper for extraction receipts and encode only CLI-owned Git path fields.
+- **Regression**: real CLI cases retain generator opt-in/redaction/nonzero failures, manual refresh
+  selection, receipt bytes and source config; Git tests reject dirty/no-upstream/detached inputs before
+  fetch and retain HEAD/payloads. Captured and inherited Git process output keeps its existing contract.
+
+## 2026-10-21 — Failure paths need the same display boundary as success receipts
+
+- **Symptom**: self-install, identity initialization/reads and preset export/extraction success rows
+  encoded controls, but their error contexts could still split terminal lines or emit ESC.
+- **Fix**: use the existing display encoder in error fields; keep native paths, original policy
+  lookup, I/O causes, failure timing and administrator fallback classification intact. Never format
+  identity-file contents into diagnostics or expand Shine's public phone-handoff responsibility.
+- **Regression**: real CLI failures preserve existing files/config, self-copy refusal and rename-error
+  staging cleanup; owner tests retain I/O error types, absent-file behavior and private-content
+  non-disclosure. Link extraction tests retain dangling/parent/force rejection and untouched referents.
+  Preset export still initializes empty bin/presets directories; early env failures do not.
+
+## 2026-10-21 — Review each consumer of shared paths and backend diagnostics
+
+- **Symptom**: phone setup receipts, age preflight errors, existing-project refusals, upgrade file
+  errors and legacy-service cleanup diagnostics still emitted controls after adjacent output paths
+  had been fixed. Fixing one renderer did not establish coverage of other consumers.
+- **Fix**: apply the existing control encoder at the final human field; preserve copied TOML, native
+  operands, typed I/O causes, backend validation, service cleanup order and upgrade rollback.
+- **Regression**: an isolated fake phone plugin runs once and retains its public stub even if config
+  saving fails; saved/manual TOML round-trips the original path. Age failures precede tool lookup,
+  project refusal preserves ancestor config, and upgrade/cleanup failures retain retry state.
+
+## 2026-10-21 — Redacted parser errors still need safe context fields
+
+- **Evidence**: configuration, trust and migration readers omitted private contents but retained raw
+  controls in file/key context. Directed-write refusals did the same, while a suggested delete for
+  `TEAM KEY` split into two arguments and exited 2 in a real shell.
+- **Fix**: encode human context fields and saved/deleted labels; keep raw operands and typed errors.
+  Reuse native command argument/positional quoting, place options before a leading-hyphen key, and
+  omit copyable commands for control-bearing keys. Do not validate storage keys as shell env names.
+- **Coverage**: all config layers retain redaction and bytes; stale saves/commits still reject under
+  their existing lock, migration refuses before cleanup, and invalid trust stores remain untouched.
+  Native-shell deletion hints preserve exact special keys and leave the winning sidecar unchanged.
+- **Test isolation**: embedded completion checks must not fall back to a user's real global or
+  project configuration. An isolated empty project plus explicit temporary config root retains the
+  embedded source mode and verifies that completion creates no runtime state.

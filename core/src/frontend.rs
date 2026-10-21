@@ -922,7 +922,7 @@ auto = false
         let since = host.operations().len();
         let mut runtime = runtime(host, presets);
         runtime
-            .context_mut_for_cli()
+            .context_mut_for_test()
             .env
             .insert("GENERATE".into(), "1".into());
         let service = FrontendService::new(runtime);
@@ -1303,7 +1303,7 @@ package = "tool"
             .with_approved_code(&approved);
         assert!(fresh.validate_approved(&approved).await.is_err());
         let mut live = runtime(InMemoryHost::new(), snapshot());
-        live.context_mut_for_cli().external_shell_mode = crate::runtime::ExternalShellMode::Live;
+        live.context_mut_for_test().external_shell_mode = crate::runtime::ExternalShellMode::Live;
         let mut live = FrontendService::new(live).into_trusted();
         let review = live
             .review_with_code_confirmation(code_review_request())

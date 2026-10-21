@@ -41,9 +41,9 @@ repos:
       - id: bun-check
         name: Bun TypeScript check
         description: Type-check and test Bun TypeScript sources.
-        entry: bash -c 'mise exec -- bun run check:ts'
+        entry: bash -c 'mise exec -- bun run --bun check:ts'
         language: system
-        files: ^(mise\.toml|package\.json|tsconfig\.json|bun\.lock|presets/app/clash-verge/.*\.ts)$
+        files: ^(\.pre-commit-config\.yaml|mise\.toml|package\.json|tsconfig\.json|bun\.lock|presets/.*\.ts)$
         pass_filenames: false
       - id: mise-check
         name: mise config check
@@ -71,5 +71,5 @@ repos:
         description: unit test for the project
         entry: bash -c 'unset $(git rev-parse --local-env-vars) && cargo nextest run --workspace --all-features'
         language: rust
-        files: \.rs$
+        files: (\.rs$|^presets/|^Cargo\.(toml|lock)$|^\.pre-commit-config\.yaml$|^mise\.toml$)
         pass_filenames: false

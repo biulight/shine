@@ -1,4 +1,6 @@
 pub mod action;
+#[doc(hidden)]
+pub mod digest;
 pub mod env;
 #[doc(hidden)]
 pub mod frontend;
@@ -12,4 +14,6 @@ pub mod plan;
 #[doc(hidden)]
 pub mod runtime;
 pub mod sentinel;
+#[doc(hidden)]
+pub mod shell_quote;
 pub mod trust;

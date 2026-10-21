@@ -22,8 +22,9 @@ pub(super) async fn load_config(config: &Config, workspace: &Path) -> Result<Con
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(effective),
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
     };
-    let local: LocalConfig =
-        toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
+    let local: LocalConfig = toml::from_str(&contents)
+        .map_err(crate::config::config_parse_error)
+        .with_context(|| format!("parsing {}", path.display()))?;
     if let Some(preference) = local.hybrid_decrypt_backend {
         let backend: BackendKind = preference.parse()?;
         if backend == BackendKind::Hybrid {
@@ -63,7 +64,7 @@ fn cache_context(input_hash: &str, backend: BackendKind, recipients: &[String]) 
     // Length-delimited serialization binds boundaries as well as values.
     let encoded = serde_json::to_vec(&(VERSION, input_hash, backend_name(backend), recipients))
         .expect("cache context is serializable");
-    format!("sha256:{:x}", Sha256::digest(encoded))
+    format!("sha256:{}", shine_core::digest::sha256_hex(&encoded))
 }
 
 fn validate_sources(sources: &CapturedSources) -> Result<bool> {
@@ -72,14 +73,11 @@ fn validate_sources(sources: &CapturedSources) -> Result<bool> {
         let Some(contents) = contents else { continue };
         let source = parse_source(path, contents)?;
         has_payload |= !source.payload.data.trim().is_empty();
-        for (key, state) in &source.secret {
-            if !matches!(state, SecretState::Sealed(true)) {
-                bail!(
-                    "{key} in {} is not sealed; run `shine env secret seal`",
-                    path.display()
-                );
-            }
-        }
+        super::source_payload::validate_sealed_source(
+            path,
+            &source,
+            super::source_payload::SealHint::Include,
+        )?;
         if let Some(encoded) = source.payload.data.strip_prefix(secret::hybrid::PREFIX) {
             secret::hybrid::validate(encoded)?;
         }
@@ -94,7 +92,7 @@ pub(super) async fn compile(
     input_hash: &str,
     policy: &Encryption,
     sources: &CapturedSources,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<SensitiveValues> {
     // Reject malformed hybrid sources before selection or any cache decryption.
     if !validate_sources(sources)? {
         return compile_captured_sources(sources, config).await;
@@ -130,7 +128,10 @@ pub(super) async fn compile(
         BackendKind::Hybrid => unreachable!(),
     };
     if let Err(error) = write_local_cache(&path, &context, &values, &encryption).await {
-        eprintln!("Warning: could not update environment cache: {error:#}");
+        eprintln!(
+            "Warning: could not update environment cache: {}",
+            crate::output::escape_controls(&format!("{error:#}"))
+        );
     }
     Ok(values)
 }
@@ -140,7 +141,7 @@ async fn read_cache(
     context: &str,
     selected: BackendKind,
     config: &Config,
-) -> Result<Option<BTreeMap<String, String>>> {
+) -> Result<Option<SensitiveValues>> {
     let contents = match tokio::fs::read_to_string(path).await {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -165,7 +166,7 @@ async fn read_cache(
     decode_payload(&plaintext, context).map(Some)
 }
 
-fn decode_payload(plaintext: &str, context: &str) -> Result<BTreeMap<String, String>> {
+fn decode_payload(plaintext: &str, context: &str) -> Result<SensitiveValues> {
     let mut payload: Payload = toml::from_str(plaintext)
         .map_err(|_| anyhow::anyhow!("invalid encrypted environment cache payload"))?;
     if payload.version != VERSION
@@ -188,7 +189,7 @@ async fn write_local_cache(
         context: context.into(),
         payload: SecretPayload {
             version: SECRET_PAYLOAD_VERSION,
-            values: values.clone(),
+            values: values.clone().into(),
         },
     })?);
     let data = secret::encrypt_local_cache(plaintext.as_bytes(), encryption).await?;
@@ -296,12 +297,16 @@ mod tests {
     fn encrypted_context_rejects_relabelled_cache() {
         let recipients = vec!["age1test".into()];
         let context = cache_context("source-v1", BackendKind::Age, &recipients);
+        assert_eq!(
+            context,
+            "sha256:c3b0f15bd9bc983897edffeec6b83c633aa69a35e5319b37fac36a43084f6302"
+        );
         let plaintext = toml::to_string(&Payload {
             version: VERSION,
             context: context.clone(),
             payload: SecretPayload {
                 version: SECRET_PAYLOAD_VERSION,
-                values: BTreeMap::from([("TOKEN".into(), "value".into())]),
+                values: BTreeMap::from([("TOKEN".into(), "value".into())]).into(),
             },
         })
         .unwrap();

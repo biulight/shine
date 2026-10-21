@@ -4,6 +4,7 @@ use clap::CommandFactory;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::io::{self, Write};
 
 #[derive(Serialize)]
 struct PresetCommandHelpV1 {
@@ -25,22 +26,29 @@ pub fn handle_schema(format: PresetReportFormat) -> Result<()> {
         commands: generated_command_help()?,
         schemas: core.schemas,
     };
+    let mut output = io::stdout().lock();
     match format {
-        PresetReportFormat::Json => println!("{}", serde_json::to_string_pretty(&document)?),
+        PresetReportFormat::Json => {
+            writeln!(output, "{}", serde_json::to_string_pretty(&document)?)?
+        }
         PresetReportFormat::Text => {
-            println!(
+            writeln!(
+                output,
                 "Preset authoring schema reference v{}",
                 document.schema_version
-            );
-            println!("Commands:");
+            )?;
+            writeln!(output, "Commands:")?;
             for command in &document.commands {
-                println!("  {}", command.name);
+                writeln!(output, "  {}", command.name)?;
             }
-            println!("Schemas:");
+            writeln!(output, "Schemas:")?;
             for name in document.schemas.keys() {
-                println!("  {name}");
+                writeln!(output, "  {name}")?;
             }
-            println!("Use --format json for generated command help and JSON Schemas.");
+            writeln!(
+                output,
+                "Use --format json for generated command help and JSON Schemas."
+            )?;
         }
     }
     Ok(())

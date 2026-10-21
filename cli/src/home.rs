@@ -95,18 +95,25 @@ pub fn full_expand(s: &str) -> Result<String, shellexpand::LookupError<std::env:
 
 /// Like `full_expand` but takes an explicit home directory instead of reading the environment.
 /// Use this when a `Config` is available — pass `&config.home_dir` to avoid a data race in tests.
+/// An unrepresentable home is an error only if the input actually expands it.
 pub fn full_expand_with_home(
     s: &str,
     home: &std::path::Path,
 ) -> Result<String, shellexpand::LookupError<std::env::VarError>> {
-    let home = home.to_string_lossy().into_owned();
-    let home2 = home.clone();
-    shellexpand::full_with_context(
+    let mut unrepresentable_home = false;
+    let expanded = shellexpand::full_with_context(
         s,
-        move || Some(home),
-        move |var| {
+        || {
+            let value = home.to_str();
+            unrepresentable_home = value.is_none();
+            value
+        },
+        |var| {
             if var == "HOME" {
-                return Ok(Some(home2.clone()));
+                return home
+                    .to_str()
+                    .map(|value| Some(value.to_owned()))
+                    .ok_or_else(|| std::env::VarError::NotUnicode(home.as_os_str().to_owned()));
             }
             match std::env::var(var) {
                 Ok(v) => Ok(Some(v)),
@@ -114,8 +121,16 @@ pub fn full_expand_with_home(
                 Err(e) => Err(e),
             }
         },
-    )
-    .map(|c| c.into_owned())
+    );
+    // Returning None alone would leave `~` literal and could select another directory.
+    // Reject only when expansion actually requests an unrepresentable home.
+    if unrepresentable_home {
+        return Err(shellexpand::LookupError {
+            var_name: "HOME".into(),
+            cause: std::env::VarError::NotUnicode(home.as_os_str().to_owned()),
+        });
+    }
+    expanded.map(|c| c.into_owned())
 }
 
 fn default_config_dir() -> Result<PathBuf> {
@@ -136,5 +151,55 @@ mod tests {
         assert!(account_home(&format!("shine-missing-{}", uuid::Uuid::new_v4())).is_none());
         assert!(account_home("root\0other").is_none());
         assert!(account_home("root").is_some_and(|home| home.is_absolute()));
+    }
+}
+
+#[cfg(test)]
+mod expansion_tests {
+    use super::*;
+
+    #[test]
+    fn full_expansion_preserves_utf8_home_and_existing_shell_expansion_rules() {
+        let home = PathBuf::from("home ' spaces\u{a0}");
+        for input in ["~/source", "$HOME/source", "${HOME}/source"] {
+            assert_eq!(
+                full_expand_with_home(input, &home).unwrap(),
+                "home ' spaces\u{a0}/source"
+            );
+        }
+        assert_eq!(
+            full_expand_with_home("~other/source", &home).unwrap(),
+            "~other/source"
+        );
+    }
+
+    #[test]
+    fn full_expansion_rejects_unrepresentable_home_only_when_needed() {
+        #[cfg(unix)]
+        let home = {
+            use std::os::unix::ffi::OsStringExt;
+            PathBuf::from(std::ffi::OsString::from_vec(b"home-\xff".to_vec()))
+        };
+        #[cfg(windows)]
+        let home = {
+            use std::os::windows::ffi::OsStringExt;
+            PathBuf::from(std::ffi::OsString::from_wide(&[b'h' as u16, 0xd800]))
+        };
+        for input in ["~", "~/source", "$HOME/source", "${HOME}/source"] {
+            let error = full_expand_with_home(input, &home).unwrap_err();
+            assert_eq!(error.var_name, "HOME");
+            assert_eq!(
+                error.cause,
+                std::env::VarError::NotUnicode(home.as_os_str().to_owned())
+            );
+        }
+        let absolute = std::env::temp_dir().join("source");
+        for input in [
+            absolute.to_str().unwrap(),
+            "relative/source",
+            "~other/source",
+        ] {
+            assert_eq!(full_expand_with_home(input, &home).unwrap(), input);
+        }
     }
 }

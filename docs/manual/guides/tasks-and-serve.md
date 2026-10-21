@@ -27,8 +27,15 @@ shine task info kill-port
 ```
 
 Tasks are stored in `tasks.toml` under the active Shine runtime directory. `SHINE_CONFIG_DIR` or the
-global `--config-dir` selects the corresponding task list. A task saved with `--cwd` always starts
+global `--config-dir` selects the corresponding task list. Malformed task TOML reports a parse
+error without printing stored commands; the failed operation leaves the list unchanged.
+A task saved with `--cwd` always starts
 there; without it, the task uses the caller's current directory.
+
+`--cwd` expands a leading `~` and saves the resolved absolute directory. If that directory's path
+cannot be represented as UTF-8, saving fails without changing the task list, including with `--force`.
+Working-directory displays in save/info and the run announcement escape terminal controls.
+The saved path, child's output and exit status retain their original values.
 
 Concurrent saves and deletions use a shared process lock to preserve each completed update.
 They wait up to 30 seconds for an active writer, then fail without changing the task list.
@@ -37,6 +44,13 @@ The `tasks.lock` file may remain in the runtime directory; do not delete it to u
 Shine stores and executes an argument array directly without adding a shell. Argument boundaries and
 the child exit code are preserved. For pipes, redirection, variable expansion, or globs, include the
 shell in the task, such as `sh -c '...'`. Windows does not include `sh`; that form is Unix-only.
+
+On Unix, saved-command displays use POSIX shell quoting, including executable names such as `if` or
+`MODE=test` that would otherwise be parsed as shell syntax. These quotes are for display; task
+execution continues to use the original argument array. The run announcement goes to stderr,
+leaving the child's stdout available for piping. On Windows, these displays use PowerShell quoting
+and its `&` invocation operator. Stored task names escape controls in human output, and list
+columns use terminal display widths; lookup and deletion still use the original name.
 
 Replace or delete a task:
 

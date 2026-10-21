@@ -1,16 +1,17 @@
+mod prepared;
+pub(crate) use prepared::{
+    PreparedAppUpgrade, PreparedShellUpgrade, PreparedSysManaged, PreparedSysUpgrade,
+    prepare_upgrade_plans,
+};
+mod classification;
 mod render;
 use render::*;
 pub(crate) use render::{permission_group, permission_name, styled_action_name};
 
 use crate::config::Config;
-use crate::env::EnvConfig;
 use anyhow::{Result, bail};
-use sha2::{Digest, Sha256};
-use shine_core::plan::{
-    CodeEntryKindV2, CodeSourceV2, CodeTargetRoleV2, CodeTimingV2, CodeTrustStateV2,
-    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, OpaqueCodeScopeV1, PermissionV1,
-    PlanActionV1, PlanV1,
-};
+use shine_core::digest::sha256_hex as hex_digest;
+use shine_core::plan::{CodeSourceV2, PlanActionV1, PlanV1};
 use shine_core::runtime::{
     AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest, CoreRuntime,
     OpaqueSecretVersion, PlanningInputVersions, RealHost, ShellPlanRequest,
@@ -89,9 +90,10 @@ impl LifecyclePlanRequest {
         }
     }
 
-    fn configure_runtime(&self, runtime: &mut CoreRuntime<RealHost>) {
-        if let Self::SysBootstrap { proxy_env, .. } = self {
-            runtime.context_mut_for_cli().proxy_env = proxy_env.clone();
+    fn configure_runtime(&self, runtime: CoreRuntime<RealHost>) -> CoreRuntime<RealHost> {
+        match self {
+            Self::SysBootstrap { proxy_env, .. } => runtime.with_proxy_env(proxy_env.clone()),
+            _ => runtime,
         }
     }
 
@@ -129,13 +131,14 @@ impl LifecyclePlanRequest {
 
 #[derive(Debug)]
 pub(crate) struct ReviewedLifecyclePlan {
-    pub(crate) request: LifecyclePlanRequest,
-    pub(crate) approved: shine_core::frontend::ApprovedOperation,
+    request: LifecyclePlanRequest,
+    approved: shine_core::frontend::ApprovedOperation,
 }
 
-pub(crate) struct PreparedLifecyclePlan {
-    pub(crate) reviewed: ReviewedLifecyclePlan,
-    pub(crate) runtime: CoreRuntime<RealHost>,
+impl ReviewedLifecyclePlan {
+    pub(crate) fn permissions(&self) -> &shine_core::plan::PermissionSetV1 {
+        self.approved.permissions()
+    }
 }
 
 pub(crate) async fn review_plans(
@@ -215,14 +218,14 @@ async fn review_plans_with_render_mode(
     let code_confirmation =
         !yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let config_digest = active_config_digest(config).await?;
-    let mut runtime = runtime_with_env(config).await?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     let mut planned = Vec::new();
     let mut human_reviews = Vec::new();
     let mut needs_confirmation = false;
     let mut blocked = false;
     let mut blocked_diagnostics = std::collections::BTreeSet::new();
     for request in requests {
-        request.configure_runtime(&mut runtime);
+        runtime = request.configure_runtime(runtime);
         let mut trusted = shine_core::frontend::FrontendService::new(runtime)
             .with_configuration_revision(Some(config_digest.clone()))
             .into_trusted();
@@ -302,8 +305,9 @@ async fn review_plans_with_render_mode(
         rendered.push(format!("  {}", crate::colors::bold("Development trust")));
         for target in development_trust_targets {
             rendered.push(format!(
-                "    {} {target} · code changes allowed from the enrolled local source",
-                crate::colors::symbol("✓")
+                "    {} {} · code changes allowed from the enrolled local source",
+                crate::colors::symbol("✓"),
+                crate::output::escape_controls(&target)
             ));
         }
     }
@@ -436,6 +440,7 @@ fn blocked_plan_error(
         .map(|step| step.target.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     for target in legacy_overlay_metadata_targets {
+        let target = crate::output::escape_controls(target);
         reasons.push(format!(
             "{target}: legacy v1 overlay metadata contains a recursive artifact hook that is incompatible with Shine 2. Remove or migrate only `{target}/shine.toml`; retain overlay payload files such as `merge.yaml` and `rules/`. `shine state migrate` does not modify Preset overlays"
         ));
@@ -451,6 +456,7 @@ fn blocked_plan_error(
         .map(|step| step.target.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     for target in legacy_metadata_targets {
+        let target = crate::output::escape_controls(target);
         reasons.push(format!(
             "{target}: legacy v1 App metadata contains a recursive artifact hook that is incompatible with Shine 2. Migrate `{target}/shine.toml` to metadata schema v2 and remove the recursive hook; `shine state migrate` does not modify Preset metadata"
         ));
@@ -469,18 +475,48 @@ fn blocked_plan_error(
                 )
             })
         })
-        .map(|step| step.target.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
+        .fold(
+            std::collections::BTreeMap::<&str, bool>::new(),
+            |mut targets, step| {
+                *targets.entry(step.target.as_str()).or_default() |= step
+                    .diagnostic_codes
+                    .iter()
+                    .any(|code| code == "shell_live_requires_development_trust");
+                targets
+            },
+        );
 
     let missing = planned
         .iter()
         .flat_map(|(_, plan)| plan.permissions.missing_declarations.iter())
         .map(permission_name)
         .collect::<std::collections::BTreeSet<_>>();
-    for target in external_app_and_shell_targets {
-        reasons.push(format!(
-            "{target}: external Preset code is not trusted; run `shine trust inspect {target}` to review the current scope, then `shine trust grant {target}` if you accept it"
-        ));
+    for (target, development) in external_app_and_shell_targets {
+        let inspect = crate::trust::trust_command_hint("inspect", target);
+        let grant = crate::trust::trust_command_hint("grant", target);
+        let controls = target.chars().any(char::is_control);
+        let inspect = if controls {
+            inspect
+        } else {
+            format!("`{inspect}`")
+        };
+        let grant = if controls {
+            if development {
+                format!("{grant}, adding --development")
+            } else {
+                grant
+            }
+        } else if development {
+            format!("`{grant} --development`")
+        } else {
+            format!("`{grant}`")
+        };
+        let target = crate::output::escape_controls(target);
+        reasons.push(if development {
+            format!("{target}: live Shell deployment requires development trust; run {inspect} to review the current scope. If you accept long-term authorization of future code from this local source, run {grant}; otherwise set `external_shell_mode = \"snapshot\"` and review again")
+        } else {
+            format!("{target}: external Preset code is not trusted; run {inspect} to review the current scope, then {grant} if you accept it")
+        });
     }
     if !missing.is_empty() {
         reasons.push(format!(
@@ -553,8 +589,9 @@ pub(crate) async fn prepare_runtime(
     reviewed: &ReviewedLifecyclePlan,
 ) -> Result<CoreRuntime<RealHost>> {
     let revision = active_config_digest(config).await?;
-    let mut runtime = runtime_with_env(config).await?;
-    reviewed.request.configure_runtime(&mut runtime);
+    let runtime = reviewed
+        .request
+        .configure_runtime(crate::core_runtime::from_config(config).await?);
     let trusted = shine_core::frontend::FrontendService::new(runtime)
         .with_configuration_revision(Some(revision))
         .into_trusted();
@@ -610,24 +647,6 @@ async fn active_config_digest(config: &Config) -> Result<String> {
     }
 }
 
-pub(crate) async fn prepare_plans(
-    config: &Config,
-    reviewed: Vec<ReviewedLifecyclePlan>,
-) -> Result<Vec<PreparedLifecyclePlan>> {
-    let mut prepared = Vec::with_capacity(reviewed.len());
-    for reviewed in reviewed {
-        let runtime = prepare_runtime(config, &reviewed).await?;
-        prepared.push(PreparedLifecyclePlan { reviewed, runtime });
-    }
-    Ok(prepared)
-}
-
-async fn runtime_with_env(config: &Config) -> Result<CoreRuntime<RealHost>> {
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    runtime.context_mut_for_cli().env = EnvConfig::load_or_init(config).await?.as_map().clone();
-    Ok(runtime)
-}
-
 fn planning_input_versions(config: &Config) -> PlanningInputVersions {
     let mut versions = PlanningInputVersions::default();
     for (name, value) in &config.env {
@@ -640,15 +659,15 @@ fn planning_input_versions(config: &Config) -> PlanningInputVersions {
     versions
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 #[cfg(test)]
 mod tests {
+    use super::classification::{is_routine_cache_maintenance, is_stale_app_preservation};
     use super::*;
     use shine_core::lifecycle::LifecycleOperation;
+    use shine_core::plan::{
+        CodeEntryKindV2, CodeTargetRoleV2, CodeTimingV2, CodeTrustStateV2, FilesystemAccessV1,
+        NetworkScopeV1, PermissionV1,
+    };
     use shine_core::plan::{PermissionSetV1, PlanInputsV1, PlanStepV1, SnapshotDigestV1};
 
     fn digest(label: &str) -> shine_core::plan::SnapshotDigestV1 {
@@ -1037,6 +1056,93 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_review_data_controls_leave_plan_and_fingerprint_intact() {
+        use shine_core::plan::EnvironmentSensitivityV1;
+        let value = "data\nFORGED\r\t\u{1b}\\literal中文";
+        let mut plan = bootstrap_display_plan();
+        plan.steps[0].target = format!("sys/{value}");
+        plan.permission_scopes[0].target = Some(plan.steps[0].target.clone());
+        plan.steps[2].resource = Some(value.into());
+        plan.steps[0].diagnostic_codes.push(value.into());
+        let permissions = [
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: format!("home:{value}"),
+            },
+            PermissionV1::Network {
+                scope: NetworkScopeV1::Host(value.into()),
+            },
+            PermissionV1::Command {
+                program: value.into(),
+            },
+            PermissionV1::Environment {
+                name: value.into(),
+                sensitivity: EnvironmentSensitivityV1::Secret,
+            },
+            PermissionV1::System {
+                capability: value.into(),
+                resource: Some(value.into()),
+            },
+        ];
+        for permission in permissions {
+            plan.permissions.required.insert(permission.clone());
+            plan.permission_scopes[0]
+                .permissions
+                .required
+                .insert(permission.clone());
+            plan.author_capabilities.insert(permission.clone());
+            plan.permissions.missing_declarations.insert(permission);
+        }
+        plan.permissions.uncomputable_codes.insert(value.into());
+        plan.code_boundaries.push(shine_core::plan::CodeBoundaryV2 {
+            target: value.into(),
+            entry_kind: CodeEntryKindV2::SysBootstrapScript,
+            timing: CodeTimingV2::ExecuteNow,
+            source: CodeSourceV2::ExternalOrOverlay,
+            trust: CodeTrustStateV2::MissingOrStale,
+            unisolated: true,
+            shared_resource: None,
+            target_role: CodeTargetRoleV2::Selected,
+        });
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
+        let request = LifecyclePlanRequest::SysBootstrap {
+            request: SysBootstrapPlanRequest {
+                os_id: "ubuntu".into(),
+                item_ids: vec![],
+                sys_shell: "bash".into(),
+                force_profile: false,
+                input_versions: PlanningInputVersions::default(),
+            },
+            proxy_env: Default::default(),
+        };
+        let planned = vec![(request, plan.clone())];
+        let layouts = [
+            render_plan_lines(&plan, "config").unwrap(),
+            render_compact_plan_lines(&planned, "config").unwrap(),
+            render_upgrade_detailed_plan_lines(&planned, "config").unwrap(),
+            render_bootstrap_plan_lines(&plan, "config", false).unwrap(),
+            render_bootstrap_plan_lines(&plan, "config", true).unwrap(),
+        ];
+        for lines in layouts {
+            let text = lines.join("\n");
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(
+                !text.lines().any(|line| line.starts_with("FORGED")),
+                "{text:?}"
+            );
+            assert!(
+                text.contains(r"data\nFORGED\r\t\u{1b}\literal中文"),
+                "{text:?}"
+            );
+            assert!(text.contains("trust missing or stale"));
+            assert!(text.to_lowercase().contains("administrator"));
+        }
+        assert_eq!(serde_json::to_value(&plan).unwrap(), before);
+        assert_eq!(plan.fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
     fn renderer_includes_steps_permissions_and_fingerprint() {
         let permission = PermissionV1::Command {
             program: "demo".to_string(),
@@ -1138,6 +1244,39 @@ mod tests {
     }
 
     #[test]
+    fn permission_summary_controls_preserve_backup_association_and_counts() {
+        let mut plan = filesystem_summary_fixture();
+        let suffix = "\nFORGED\r\t\u{1b}";
+        for group in &mut plan.filesystem_review {
+            group.target.push_str(suffix);
+            group.permissions =
+                PermissionSetV1::new(group.permissions.iter().cloned().map(|permission| {
+                    let PermissionV1::Filesystem { access, mut path } = permission else {
+                        panic!("filesystem fixture")
+                    };
+                    path.push_str(suffix);
+                    PermissionV1::Filesystem { access, path }
+                }));
+        }
+        plan.permissions.required = PermissionSetV1::new(
+            plan.filesystem_review
+                .iter()
+                .flat_map(|group| group.permissions.iter().cloned()),
+        );
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
+        let compact = render_compact_permissions(&plan).join("\n");
+        assert!(!compact.contains(['\r', '\t', '\u{1b}']), "{compact:?}");
+        assert!(compact.contains(r"Installed files · shell/test/mytool\nFORGED\r\t\u{1b}"));
+        assert!(
+            compact.contains(r"remove/write (6 paths; backups for ~/.zshrc\nFORGED\r\t\u{1b})"),
+            "{compact:?}"
+        );
+        assert_eq!(serde_json::to_value(&plan).unwrap(), before);
+        assert_eq!(plan.fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
     fn filesystem_summary_preserves_exact_permissions_and_verbose_details() {
         let plan = filesystem_summary_fixture();
         let fingerprint = plan.fingerprint().unwrap();
@@ -1154,6 +1293,50 @@ mod tests {
         for permission in plan.permissions.required.iter() {
             assert!(full.contains(&permission_name(permission)));
         }
+        assert_eq!(plan.fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
+    fn stale_source_guidance_never_copies_a_display_escape_as_an_operand() {
+        let step = PlanStepV1::new(
+            "app/item\nFORGED\r\t\u{1b}",
+            Some("preset-cache:config"),
+            PlanActionV1::Preserve,
+        )
+        .with_diagnostic_code("app_stale_source_preserved");
+        let lines = render::stale_app_source_guidance(&step, "  ");
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].contains("original category argument (copyable command omitted)"));
+        assert!(!lines.join("").chars().any(char::is_control));
+    }
+
+    #[test]
+    fn cache_diagnostics_remain_visible_without_changing_reviewed_plan() {
+        let mut plan = filesystem_summary_fixture();
+        plan.operation = shine_core::plan::PlanOperationV1::Upgrade;
+        plan.steps = vec![
+            PlanStepV1::new("shell/demo", Some("preset-cache"), PlanActionV1::Update)
+                .with_diagnostic_code("shell_cache_replace_transaction")
+                .with_diagnostic_code("future_cache_warning"),
+            PlanStepV1::new(
+                "app/demo",
+                Some("preset-cache:config"),
+                PlanActionV1::Preserve,
+            )
+            .with_diagnostic_code("app_stale_source_preserved")
+            .with_diagnostic_code("future_preservation_warning"),
+            PlanStepV1::new("app/demo", Some("config"), PlanActionV1::Blocked)
+                .with_diagnostic_code("shell_managed_launcher_update_transaction"),
+        ];
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
+        let compact = render_compact_steps(&plan).join("\n");
+        assert!(compact.contains("future_cache_warning"));
+        assert!(compact.contains("future_preservation_warning"));
+        assert!(compact.contains("shell_managed_launcher_update_transaction"));
+        assert!(!is_routine_cache_maintenance(&plan.steps[0]));
+        assert!(!is_stale_app_preservation(&plan.steps[1]));
+        assert_eq!(serde_json::to_value(&plan).unwrap(), before);
         assert_eq!(plan.fingerprint().unwrap(), fingerprint);
     }
 
@@ -1534,7 +1717,7 @@ mod tests {
         assert!(compact.contains("~ shell/utils/copyfile"));
         assert!(compact.contains("app/docker · daemon.jsonc [app_stale_source_preserved]"));
         assert!(compact.contains("Preset source missing; installed content and receipt retained."));
-        assert!(compact.contains("shine app uninstall docker --dry-run"));
+        assert!(compact.contains("shine app uninstall --dry-run docker"));
         assert!(compact.contains("shell_cache_destination_conflict"));
         assert!(compact.contains("unexpected_cache_diagnostic"));
         assert!(compact.contains("filesystem write"));
@@ -1619,7 +1802,7 @@ mod tests {
         assert!(compact.contains("Warnings"));
         assert!(compact.contains("app/docker · daemon.jsonc [app_stale_source_preserved]"));
         assert!(compact.contains("Preset source missing; installed content and receipt retained."));
-        assert!(compact.contains("shine app uninstall docker --dry-run"));
+        assert!(compact.contains("shine app uninstall --dry-run docker"));
         assert_eq!(planned[0].1.fingerprint().unwrap(), fingerprint);
         let verbose = render_upgrade_detailed_plan_lines(&planned, "config")
             .unwrap()
@@ -2096,5 +2279,93 @@ mod tests {
         let receipt =
             std::collections::BTreeSet::from(["shell_recovery_receipt_conflict".to_string()]);
         assert!(blocked_plan_message(&receipt).contains("ownership receipts"));
+    }
+
+    #[test]
+    fn bootstrap_attribution_failures_preserve_the_exact_full_review() {
+        let plan = bootstrap_display_plan();
+        for invalid in ["duplicate", "unknown-target", "incomplete-union"] {
+            let mut plan = plan.clone();
+            match invalid {
+                "duplicate" => plan
+                    .permission_scopes
+                    .push(plan.permission_scopes[0].clone()),
+                "unknown-target" => {
+                    plan.permission_scopes[0].target = Some("sys/not-selected".into())
+                }
+                "incomplete-union" => {
+                    plan.permissions.required.insert(PermissionV1::Command {
+                        program: "unattributed".into(),
+                    });
+                }
+                _ => unreachable!(),
+            }
+            let before = serde_json::to_value(&plan).unwrap();
+            let full = render_plan_lines(&plan, "config").unwrap();
+            for verbose in [false, true] {
+                assert_eq!(
+                    render_bootstrap_plan_lines(&plan, "config", verbose).unwrap(),
+                    full,
+                    "{invalid}"
+                );
+            }
+            assert_eq!(serde_json::to_value(&plan).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn all_review_layouts_retain_code_boundaries_privilege_and_unknown_blockers() {
+        let mut plan = bootstrap_display_plan();
+        plan.steps[0].action = PlanActionV1::Blocked;
+        plan.steps[0]
+            .diagnostic_codes
+            .push("future_blocking_diagnostic".into());
+        plan.code_boundaries.push(shine_core::plan::CodeBoundaryV2 {
+            target: "sys/rust".into(),
+            entry_kind: CodeEntryKindV2::SysBootstrapScript,
+            timing: CodeTimingV2::ExecuteNow,
+            source: CodeSourceV2::ExternalOrOverlay,
+            trust: CodeTrustStateV2::MissingOrStale,
+            unisolated: true,
+            shared_resource: None,
+            target_role: CodeTargetRoleV2::Selected,
+        });
+        plan.permissions
+            .uncomputable_codes
+            .insert("future_permission_diagnostic".into());
+        let before = plan.fingerprint().unwrap();
+        let request = LifecyclePlanRequest::SysBootstrap {
+            request: SysBootstrapPlanRequest {
+                os_id: "ubuntu".into(),
+                item_ids: vec![],
+                sys_shell: "bash".into(),
+                force_profile: false,
+                input_versions: PlanningInputVersions::default(),
+            },
+            proxy_env: Default::default(),
+        };
+        let planned = vec![(request, plan.clone())];
+        let mut layouts = vec![
+            render_plan_lines(&plan, "config").unwrap(),
+            render_compact_plan_lines(&planned, "config").unwrap(),
+            render_upgrade_detailed_plan_lines(&planned, "config").unwrap(),
+        ];
+        for verbose in [false, true] {
+            layouts.push(render_bootstrap_plan_lines(&plan, "config", verbose).unwrap());
+        }
+        for lines in layouts {
+            let text = lines.join("\n");
+            for required in [
+                "future_blocking_diagnostic",
+                "future_permission_diagnostic",
+                "Code execution and trust",
+                "trust missing or stale",
+                "unisolated code",
+            ] {
+                assert!(text.contains(required), "missing {required}: {text}");
+            }
+            assert!(text.to_lowercase().contains("administrator"));
+        }
+        assert_eq!(plan.fingerprint().unwrap(), before);
     }
 }

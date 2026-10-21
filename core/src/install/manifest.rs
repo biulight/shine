@@ -71,6 +71,18 @@ pub fn hash_content(bytes: &[u8]) -> u64 {
 }
 
 impl AppManifest {
+    /// Normalize supported read-time schemas without writing or changing receipts.
+    pub(crate) fn normalize_schema_version(&mut self) -> Result<()> {
+        match self.schema_version {
+            0 => self.schema_version = APP_MANIFEST_SCHEMA_VERSION,
+            APP_MANIFEST_SCHEMA_VERSION => {}
+            version => bail!(
+                "app manifest schema version {version} is newer than this Shine supports ({APP_MANIFEST_SCHEMA_VERSION})"
+            ),
+        }
+        Ok(())
+    }
+
     pub async fn load(host: &impl FileSystemObservationHost, shine_dir: &Path) -> Result<Self> {
         let path = shine_dir.join(MANIFEST_FILE);
         let mut manifest: Self = match host.read(&path).await {
@@ -78,13 +90,7 @@ impl AppManifest {
             Err(error) if error.is_not_found() => Self::default(),
             Err(error) => return Err(error.into_anyhow("failed to read app manifest")),
         };
-        match manifest.schema_version {
-            0 => manifest.schema_version = APP_MANIFEST_SCHEMA_VERSION,
-            APP_MANIFEST_SCHEMA_VERSION => {}
-            version => bail!(
-                "app manifest schema version {version} is newer than this Shine supports ({APP_MANIFEST_SCHEMA_VERSION})"
-            ),
-        }
+        manifest.normalize_schema_version()?;
         Ok(manifest)
     }
 
@@ -133,6 +139,28 @@ impl AppManifest {
 }
 
 #[cfg(test)]
+pub(crate) const APP_MANIFEST_COMPATIBILITY_CASES: &[Option<&str>] = &[
+    None,
+    Some("entries = []\n"),
+    Some(
+        r#"[[entries]]
+source = "app/demo/config"
+destination = "/old/config"
+content_hash = 7
+[[entries]]
+source = "app/demo/config"
+destination = "/new/config"
+content_hash = 8
+"#,
+    ),
+    Some("schema_version = 0\n"),
+    Some("schema_version = 1\n"),
+    Some("schema_version = 2\n"),
+    Some("schema_version = -1\n"),
+    Some("["),
+];
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use tokio::fs;
@@ -141,6 +169,56 @@ mod tests {
         let path = std::env::temp_dir().join(format!("shine-manifest-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&path).await.unwrap();
         path
+    }
+
+    #[tokio::test]
+    async fn app_manifest_direct_reader_compatibility() {
+        use crate::runtime::{HostOperation, InMemoryHost};
+        for &input in APP_MANIFEST_COMPATIBILITY_CASES {
+            let host = InMemoryHost::new();
+            let root = Path::new("/state");
+            let path = root.join(MANIFEST_FILE);
+            if let Some(input) = input {
+                host.put_file(&path, input.as_bytes().to_vec());
+            }
+            let direct = AppManifest::load(&host, root).await;
+            match input {
+                Some("schema_version = 2\n") => assert_eq!(
+                    direct.unwrap_err().to_string(),
+                    "app manifest schema version 2 is newer than this Shine supports (1)"
+                ),
+                Some("schema_version = -1\n" | "[") => assert_eq!(
+                    direct.unwrap_err().to_string(),
+                    toml::from_str::<AppManifest>(input.unwrap())
+                        .unwrap_err()
+                        .to_string()
+                ),
+                _ => {
+                    let manifest = direct.unwrap();
+                    assert_eq!(manifest.schema_version, 1);
+                    let parsed: AppManifest = toml::from_str(input.unwrap_or("")).unwrap();
+                    assert_eq!(manifest.entries, parsed.entries);
+                }
+            }
+            assert_eq!(host.operations(), vec![HostOperation::Read(path.clone())]);
+            assert_eq!(
+                host.read(&path).await.ok().as_deref(),
+                input.map(str::as_bytes)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn app_manifest_direct_reader_preserves_io_errors() {
+        let host = crate::runtime::RealHost;
+        let root = make_temp_dir().await;
+        let path = root.join(MANIFEST_FILE);
+        fs::create_dir_all(&path).await.unwrap();
+        let error = AppManifest::load(&host, &root).await.unwrap_err();
+        assert_eq!(error.to_string(), "failed to read app manifest");
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        assert!(path.is_dir());
+        fs::remove_dir_all(root).await.unwrap();
     }
 
     fn sample_entry(dest: &str) -> AppEntry {

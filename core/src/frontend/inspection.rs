@@ -3,16 +3,16 @@
 use super::{
     CapabilityKindV1, FrontendDiagnosticV1, FrontendService, FrontendServiceError, InventoryRequest,
 };
+use crate::digest::sha256_hex;
 use crate::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
 };
 use crate::runtime::{
     AppFileInspection, AppInspectionOptions, FileSystemHost, InspectionChange as UpdateChange,
     InspectionFileStatus as FileStatus, PrivilegedFileSystemHost, ProcessHost, RuntimeObserver,
-    ShellFileInspection, SplitDnsHost, SysInstalledRow, SysUpdateRow,
+    ShellFileInspection, SysInstalledRow, SysUpdateRow,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 pub const INSPECTION_REPORT_SCHEMA_VERSION: u32 = 1;
 
@@ -130,8 +130,8 @@ fn is_manual_generator_update(file: &AppFileInspection) -> bool {
 fn resource_id(source: &std::path::Path) -> String {
     // Normalize native separators so the same logical source has the same identity on every host.
     format!(
-        "resource:{:x}",
-        Sha256::digest(source.to_string_lossy().replace('\\', "/").as_bytes())
+        "resource:{}",
+        sha256_hex(source.to_string_lossy().replace('\\', "/").as_bytes())
     )
 }
 
@@ -141,20 +141,18 @@ fn sort_report(report: &mut InspectionReportV1) {
         .sort_by(|a, b| (a.kind, &a.target, &a.resource).cmp(&(b.kind, &b.target, &b.resource)));
 }
 
-impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> FrontendService<H> {
+impl<H: crate::runtime::FileSystemObservationHost> FrontendService<H> {
     /// Default inspection is process-free, including for generator-backed files.
     pub async fn inspect_apps(
         &self,
         categories: Vec<String>,
     ) -> Result<AppInspection, FrontendServiceError> {
-        self.inspect_apps_with_options(
-            AppInspectionOptions {
-                categories,
-                run_generators: false,
-            },
-            &mut crate::runtime::NullObserver,
-        )
-        .await
+        let files = self
+            .runtime
+            .inspect_apps_read_only(&categories)
+            .await
+            .map_err(|error| FrontendServiceError::new("frontend_inspection_app_failed", error))?;
+        self.project_app_inspection(files, &categories).await
     }
 
     /// Local presentation details for receipt-owned sources absent from effective metadata.
@@ -165,7 +163,9 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> FrontendService
             .await
             .map_err(|error| FrontendServiceError::new("frontend_inspection_app_failed", error))
     }
+}
 
+impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> FrontendService<H> {
     /// Trusted-local explicit evaluation; never expose this option through a read-only AI adapter.
     pub async fn inspect_apps_with_options(
         &self,
@@ -178,6 +178,16 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> FrontendService
             .inspect_apps_with_options(options, observer)
             .await
             .map_err(|error| FrontendServiceError::new("frontend_inspection_app_failed", error))?;
+        self.project_app_inspection(files, &categories).await
+    }
+}
+
+impl<H: crate::runtime::FileSystemObservationHost> FrontendService<H> {
+    async fn project_app_inspection(
+        &self,
+        files: Vec<AppFileInspection>,
+        categories: &[String],
+    ) -> Result<AppInspection, FrontendServiceError> {
         let mut report = InspectionReportV1::default();
         for file in &files {
             let operations = if file.status == FileStatus::NotInstalled {
@@ -193,7 +203,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> FrontendService
                 operations,
             });
         }
-        self.add_missing_presets(&mut report, CapabilityKindV1::App, None, &categories)
+        self.add_missing_presets(&mut report, CapabilityKindV1::App, None, categories)
             .await?;
         sort_report(&mut report);
         let lifecycle = app_inspection_lifecycle(&files);
@@ -205,7 +215,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> FrontendService
     }
 }
 
-impl<H: FileSystemHost + PrivilegedFileSystemHost> FrontendService<H> {
+impl<H: crate::runtime::FileSystemObservationHost> FrontendService<H> {
     pub async fn inspect_shells(&self) -> Result<ShellInspection, FrontendServiceError> {
         let files = self.runtime.inspect_shells().await.map_err(|error| {
             FrontendServiceError::new("frontend_inspection_shell_failed", error)
@@ -243,7 +253,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> FrontendService<H> {
     }
 }
 
-impl<H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost> FrontendService<H> {
+impl<H: crate::runtime::FileSystemObservationHost> FrontendService<H> {
     pub async fn inspect_sys(&self, os_id: &str) -> Result<SysInspection, FrontendServiceError> {
         let (installed, updates, lifecycle) = self
             .runtime

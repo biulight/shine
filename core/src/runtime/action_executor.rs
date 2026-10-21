@@ -1,4 +1,4 @@
-use super::app::{
+use super::managed_json::{
     installed_json_hash, managed_json_hash, managed_json_keys_absent, managed_json_keys_match,
     merge_managed_json_bytes, parse_json_object, remove_managed_json_bytes,
     restore_managed_json_bytes,
@@ -11,6 +11,7 @@ use crate::action::{
     ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, RollbackSupportV1,
     managed_file_rollback_path,
 };
+#[cfg(test)]
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppInstallStrategy, AppManifest, hash_content};
 use crate::plan::{
@@ -366,6 +367,7 @@ use journal_io::*;
 use receipts::*;
 use recovery_apply::restore_json_keys_from_rollback;
 use recovery_assessment::*;
+use recovery_plan::observe_recovery_pair;
 
 #[cfg(test)]
 mod tests;

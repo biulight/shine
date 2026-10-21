@@ -1,5 +1,6 @@
 //! Shared terminal presentation for Preset diagnostics.
 
+use console::measure_text_width;
 use shine_core::runtime::{PresetDiagnostic, PresetDiagnosticSeverity};
 use std::fmt::Write as _;
 
@@ -29,12 +30,12 @@ pub(crate) fn write_diagnostic(
         String::new()
     };
     let message_prefix = format!("{prefix}{symbol}");
-    let continuation_prefix = format!("{prefix}{}", " ".repeat(visible_width(&symbol)));
+    let continuation_prefix = format!("{prefix}{}", " ".repeat(measure_text_width(&symbol)));
     write_wrapped_with_continuation(
         output,
         &message_prefix,
         &continuation_prefix,
-        &diagnostic.message,
+        &crate::output::escape_controls(&diagnostic.message),
     );
     let detail_prefix = format!("{prefix}  ");
     let _ = writeln!(
@@ -48,7 +49,7 @@ pub(crate) fn write_diagnostic(
             output,
             "{detail_prefix}{} {}",
             crate::colors::dim("file:"),
-            path.display()
+            crate::output::escape_controls(&path.display().to_string())
         );
     }
 }
@@ -64,17 +65,19 @@ fn write_wrapped_with_continuation(
     text: &str,
 ) {
     let first_available = TEXT_WIDTH
-        .saturating_sub(visible_width(first_prefix))
+        .saturating_sub(measure_text_width(first_prefix))
         .max(20);
     let continuation_available = TEXT_WIDTH
-        .saturating_sub(visible_width(continuation_prefix))
+        .saturating_sub(measure_text_width(continuation_prefix))
         .max(20);
     let mut line = String::new();
     let mut prefix = first_prefix;
     let mut available = first_available;
     for word in text.split_whitespace() {
         let separator = usize::from(!line.is_empty());
-        if !line.is_empty() && line.chars().count() + separator + word.chars().count() > available {
+        if !line.is_empty()
+            && measure_text_width(&line) + separator + measure_text_width(word) > available
+        {
             let _ = writeln!(output, "{prefix}{line}");
             line.clear();
             prefix = continuation_prefix;
@@ -92,29 +95,30 @@ fn write_wrapped_with_continuation(
     }
 }
 
-fn visible_width(value: &str) -> usize {
-    let mut escaped = false;
-    value
-        .chars()
-        .filter(|character| {
-            if *character == '\u{1b}' {
-                escaped = true;
-                return false;
-            }
-            if escaped {
-                if character.is_ascii_alphabetic() {
-                    escaped = false;
-                }
-                return false;
-            }
-            true
-        })
-        .count()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_fields_escape_controls_before_wrapping() {
+        let diagnostic = PresetDiagnostic {
+            severity: PresetDiagnosticSeverity::Error,
+            code: "stable".into(),
+            message: "bad\x1b[31m\nFORGED\tvalue".into(),
+            path: Some("source\x1b[0m\nFORGED".into()),
+        };
+        let mut output = String::new();
+        write_diagnostic(&mut output, "  ", &diagnostic, true, true);
+        assert!(
+            output.contains("bad\\u{1b}[31m\\nFORGED\\tvalue"),
+            "{output:?}"
+        );
+        assert!(output.contains("source\\u{1b}[0m\\nFORGED"), "{output:?}");
+        assert!(output.contains("code: stable"));
+        assert!(!output.contains('\x1b'));
+        assert!(!output.contains('\t'));
+        assert_eq!(diagnostic.message, "bad\x1b[31m\nFORGED\tvalue");
+    }
 
     #[test]
     fn wrapped_diagnostic_indents_continuations_without_repeating_the_symbol() {
@@ -129,7 +133,35 @@ mod tests {
         write_diagnostic(&mut output, "  ", &diagnostic, true, false);
 
         assert_eq!(output.matches('✗').count(), 1);
-        assert!(output.lines().all(|line| visible_width(line) <= TEXT_WIDTH));
+        assert!(
+            output
+                .lines()
+                .all(|line| measure_text_width(line) <= TEXT_WIDTH)
+        );
         assert!(output.contains("\n    word"));
+    }
+
+    #[test]
+    fn wrapping_measures_unicode_and_color_without_splitting_long_tokens() {
+        for word in ["中文", "e\u{301}", "\x1b[32m中文\x1b[0m"] {
+            let text = format!("{word} ").repeat(70);
+            let mut output = String::new();
+            write_wrapped(&mut output, "  ", &text);
+            assert!(output.lines().count() > 1);
+            assert!(
+                output
+                    .lines()
+                    .all(|line| measure_text_width(line) <= TEXT_WIDTH),
+                "{output}"
+            );
+            assert_eq!(
+                output.split_whitespace().collect::<Vec<_>>(),
+                text.split_whitespace().collect::<Vec<_>>()
+            );
+        }
+        let long_path = format!("/{}", "中文".repeat(60));
+        let mut output = String::new();
+        write_wrapped(&mut output, "  ", &long_path);
+        assert_eq!(output, format!("  {long_path}\n"));
     }
 }

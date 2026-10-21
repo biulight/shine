@@ -17,7 +17,7 @@ pub enum TaskCommands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
-    /// Run a saved task in the current directory
+    /// Run a saved task in its saved working directory, or the caller's directory if none was saved
     Run(TaskRunCommand),
     /// List saved tasks
     List,

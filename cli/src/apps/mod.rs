@@ -1,12 +1,6 @@
-#[cfg(test)]
-mod annotation;
 mod build;
-#[cfg(test)]
-mod generator;
 mod info;
 mod install;
-#[cfg(test)]
-mod json_merge;
 mod metadata;
 mod recovery;
 mod refresh;
@@ -14,37 +8,29 @@ mod report;
 mod uninstall;
 mod upgrade;
 
-pub use build::{handle_build, handle_build_approved, handle_unbuild, handle_unbuild_approved};
+pub use build::{handle_build_approved, handle_unbuild_approved};
 #[doc(hidden)]
 pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};
-pub use install::{handle_install, handle_install_approved};
+pub use install::handle_install_approved;
 pub use metadata::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
     load_active_categories, load_embedded_categories, load_installed_categories,
 };
 pub use recovery::handle_recover_approved;
-pub use refresh::{handle_refresh, handle_refresh_approved};
-pub use uninstall::{handle_uninstall, handle_uninstall_approved};
+pub use refresh::handle_refresh_approved;
+pub use uninstall::handle_uninstall_approved;
+pub use upgrade::AppUpgradeReport;
 #[cfg(test)]
 pub(crate) use upgrade::handle_upgrade_installed_target_with_result;
-pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
 pub(crate) use upgrade::{
     handle_upgrade_installed_target_with_result_approved,
     handle_upgrade_installed_with_output_with_result_prepared,
 };
 
-#[cfg(test)]
-use crate::config::Config;
-#[cfg(test)]
-use crate::install_core::manifest::{self, AppInstallStrategy, hash_content};
-#[cfg(test)]
-use crate::install_core::transforms;
 use anyhow::{Context, Result};
 #[cfg(test)]
-use std::collections::BTreeMap;
-#[cfg(test)]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 const APP_TEMPLATE: &str = r#"# App preset metadata for shine.
 metadata_schema_version = 2
 description = "My app configuration."
@@ -80,9 +66,15 @@ pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()>
     let (path, overwritten) =
         shine_core::init_template::write_shine_toml_template(&dir, force, &template)?;
     if overwritten {
-        println!("Updated app preset template: {}", path.display());
+        println!(
+            "Updated app preset template: {}",
+            crate::output::escape_controls(&path.display().to_string())
+        );
     } else {
-        println!("Created app preset template: {}", path.display());
+        println!(
+            "Created app preset template: {}",
+            crate::output::escape_controls(&path.display().to_string())
+        );
     }
     Ok(())
 }
@@ -114,209 +106,6 @@ fn unrestricted_init_template_is_valid_schema_v2() {
     );
 }
 
-/// Hash the effective install content for `file` — applies transforms if declared.
-///
-/// Returns `None` when the source cannot be read (e.g. not yet extracted).
-#[cfg(test)]
-pub async fn materialize_file_content(
-    config: &Config,
-    cat: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<u8>> {
-    if let Some(generated) = generator::generate(config, cat, file, env).await? {
-        return apply_file_transforms(file, generated, env);
-    }
-    materialize_static_file_content(config, cat, file, env).await
-}
-
-/// Read and transform only the declared static source. Used by installation
-/// dry-runs so inspecting a plan can never execute a generator.
-#[cfg(test)]
-async fn materialize_static_file_content(
-    config: &Config,
-    cat: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<u8>> {
-    let raw = if config.is_external_presets {
-        let path = config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
-        tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("reading {}", path.display()))?
-    } else {
-        let key = format!("app/{}/{}", cat.name, file.source_rel.display());
-        crate::presets::read_asset_bytes(&key)
-            .with_context(|| format!("embedded source not found: {key}"))?
-    };
-
-    apply_file_transforms(file, raw, env)
-}
-
-#[cfg(test)]
-fn apply_file_transforms(
-    file: &metadata::AppFile,
-    raw: Vec<u8>,
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<u8>> {
-    if file.transforms.is_empty() {
-        Ok(raw)
-    } else {
-        transforms::apply(&file.transforms, &raw, env)
-            .with_context(|| format!("transform failed: {}", file.transforms.join(", ")))
-    }
-}
-
-#[cfg(test)]
-pub async fn source_bytes_for_file(
-    config: &Config,
-    cat: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    env: &BTreeMap<String, String>,
-) -> Option<Vec<u8>> {
-    materialize_file_content(config, cat, file, env).await.ok()
-}
-
-#[cfg(test)]
-pub async fn source_hash_for_file(
-    config: &Config,
-    cat: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    env: &BTreeMap<String, String>,
-) -> Option<u64> {
-    let effective = match materialize_file_content(config, cat, file, env).await {
-        Ok(content) => content,
-        Err(error) => {
-            eprintln!(
-                "  {} {}/{}: source unavailable; no changes applied ({error:#})",
-                crate::colors::symbol("!"),
-                cat.name,
-                file.source_rel.display()
-            );
-            return None;
-        }
-    };
-    desired_content_hash(file, &effective).ok()
-}
-
-#[cfg(test)]
-pub fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u64> {
-    match &file.install_strategy {
-        AppInstallStrategy::Copy => Ok(hash_content(bytes)),
-        AppInstallStrategy::JsonMerge { managed_keys } => {
-            json_merge::managed_hash(bytes, managed_keys)
-        }
-    }
-}
-
-#[cfg(test)]
-pub fn installed_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<Option<u64>> {
-    match &file.install_strategy {
-        AppInstallStrategy::Copy => Ok(Some(hash_content(bytes))),
-        AppInstallStrategy::JsonMerge { managed_keys } => {
-            json_merge::installed_hash(bytes, managed_keys)
-        }
-    }
-}
-
-#[cfg(test)]
-pub fn resolve_install_destination(
-    category: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    config: &Config,
-) -> Result<PathBuf> {
-    if let Some(file_root) = &file.destination_root {
-        let root = match file_root {
-            metadata::AppDestinationRoot::Path(dest_root) => {
-                expand_destination_root(dest_root, config)?
-            }
-            metadata::AppDestinationRoot::DataDir(relative) => {
-                data_dir_for_config(config)?.join(relative)
-            }
-        };
-        return Ok(root.join(&file.target_rel));
-    }
-    if let Some(dest_root) = category.destination_root.as_ref() {
-        let root = expand_destination_root(dest_root, config)?;
-        return Ok(root.join(&file.target_rel));
-    }
-
-    annotation::resolve_destination(
-        file.legacy_dest_annotation.as_deref(),
-        &category.name,
-        &file.target_rel.display().to_string(),
-        config,
-    )
-}
-
-#[cfg(test)]
-fn expand_destination_root(dest_root: &str, config: &Config) -> Result<PathBuf> {
-    let expanded = crate::config::full_expand_with_home(dest_root, &config.home_dir)
-        .with_context(|| format!("failed to expand destination root: {dest_root}"))?;
-    let root = PathBuf::from(&expanded);
-    if !is_install_destination_root_absolute(&expanded, &root) {
-        anyhow::bail!("destination root must be absolute after expansion");
-    }
-    if root
-        .components()
-        .any(|c| c == std::path::Component::ParentDir)
-    {
-        anyhow::bail!("destination root must not contain '..'");
-    }
-    Ok(root)
-}
-
-#[cfg(test)]
-fn data_dir_for_config(config: &Config) -> Result<PathBuf> {
-    if config.home_dir == crate::home::effective_home_dir() {
-        return directories::BaseDirs::new()
-            .context("resolving system data directory")
-            .map(|dirs| dirs.data_dir().to_path_buf());
-    }
-    if cfg!(windows) {
-        Ok(config.home_dir.join("AppData/Roaming"))
-    } else if cfg!(target_os = "macos") {
-        Ok(config.home_dir.join("Library/Application Support"))
-    } else {
-        Ok(config.home_dir.join(".local/share"))
-    }
-}
-
-#[cfg(test)]
-fn validate_unique_install_destinations<'a>(
-    categories: impl IntoIterator<Item = &'a metadata::AppCategory>,
-    config: &Config,
-) -> Result<()> {
-    let mut destinations = BTreeMap::<String, String>::new();
-    for category in categories {
-        for file in &category.files {
-            let destination = resolve_install_destination(category, file, config)?;
-            let mut key = destination.to_string_lossy().into_owned();
-            if cfg!(windows) {
-                key.make_ascii_lowercase();
-            }
-            let source = format!("app/{}/{}", category.name, file.source_rel.display());
-            if let Some(existing) = destinations.insert(key, source.clone()) {
-                anyhow::bail!(
-                    "app preset destinations collide: '{existing}' and '{source}' both resolve to {}",
-                    destination.display()
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(all(test, windows))]
-fn is_install_destination_root_absolute(_expanded: &str, root: &Path) -> bool {
-    root.is_absolute()
-}
-
-#[cfg(all(test, not(windows)))]
-fn is_install_destination_root_absolute(expanded: &str, root: &Path) -> bool {
-    root.is_absolute() || expanded.starts_with('/')
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::await_holding_lock)]
@@ -342,11 +131,13 @@ mod tests {
             info::handle_info(&config, "surge", false, false)
                 .await
                 .unwrap_err(),
-            build::handle_build(&config, "surge").await.unwrap_err(),
-            refresh::handle_refresh(&config, "surge", None, false)
+            build::handle_build_approved(&config, "surge", true)
                 .await
                 .unwrap_err(),
-            install::handle_install(&config, Some("surge"), false, false)
+            refresh::handle_refresh_approved(&config, "surge", None, false, true)
+                .await
+                .unwrap_err(),
+            install::handle_install_approved(&config, Some("surge"), false, false, true)
                 .await
                 .unwrap_err(),
         ] {
@@ -405,7 +196,7 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        install::handle_install(&config, Some("sample"), false, false)
+        install::handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let destination = dir.join(".config/sample/daemon.json");
@@ -417,7 +208,7 @@ mod tests {
         )
         .await
         .unwrap();
-        uninstall::handle_uninstall(&config, Some("sample"), false, false, false)
+        uninstall::handle_uninstall_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
 
@@ -523,88 +314,6 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn install_resolves_windows_docker_engine_destination_on_windows() {
-        let dir = std::env::temp_dir().join("shine-apps-win-dest");
-        let config = Config::new_for_test(&dir);
-        let categories = metadata::load_embedded_categories(Some("docker-engine")).unwrap();
-        let docker = categories
-            .iter()
-            .find(|c| c.name == "docker-engine")
-            .unwrap();
-        let file = docker.files.first().unwrap();
-
-        let destination = resolve_install_destination(docker, file, &config).unwrap();
-
-        assert_eq!(destination, dir.join(".docker").join("daemon.json"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn install_accepts_unix_metadata_destination_on_unix() {
-        let dir = std::env::temp_dir().join("shine-apps-unix-dest");
-        let config = Config::new_for_test(&dir);
-        let categories = metadata::load_embedded_categories(Some("docker-engine")).unwrap();
-        let docker = categories
-            .iter()
-            .find(|c| c.name == "docker-engine")
-            .unwrap();
-        let file = docker.files.first().unwrap();
-
-        let destination = resolve_install_destination(docker, file, &config).unwrap();
-
-        assert_eq!(
-            destination,
-            PathBuf::from("/etc/docker").join("daemon.json")
-        );
-    }
-
-    #[test]
-    fn per_file_destination_overrides_category_root() {
-        let dir = std::env::temp_dir().join("shine-apps-file-dest");
-        let config = Config::new_for_test(&dir);
-        let categories = metadata::load_embedded_categories(Some("clash-verge")).unwrap();
-        let clash = categories.first().unwrap();
-        let merge = clash
-            .files
-            .iter()
-            .find(|file| file.source_rel == Path::new("merge.yaml"))
-            .unwrap();
-        let local_rule = clash
-            .files
-            .iter()
-            .find(|file| file.source_rel == Path::new("rules/lan.list"))
-            .unwrap();
-
-        assert_eq!(
-            resolve_install_destination(clash, merge, &config).unwrap(),
-            dir.join(".shine/clash-verge/merge.yaml")
-        );
-        assert_eq!(
-            resolve_install_destination(clash, local_rule, &config).unwrap(),
-            data_dir_for_config(&config)
-                .unwrap()
-                .join("io.github.clash-verge-rev.clash-verge-rev")
-                .join("ruleset/shine-source/lan.list")
-        );
-    }
-
-    #[test]
-    fn duplicate_effective_destinations_are_rejected() {
-        let dir = std::env::temp_dir().join("shine-apps-collision");
-        let config = Config::new_for_test(&dir);
-        let mut category = metadata::load_embedded_categories(Some("clash-verge"))
-            .unwrap()
-            .remove(0);
-        let mut duplicate = category.files[0].clone();
-        duplicate.source_rel = PathBuf::from("duplicate.yaml");
-        category.files.push(duplicate);
-
-        let error = validate_unique_install_destinations([&category], &config).unwrap_err();
-        assert!(error.to_string().contains("destinations collide"));
-    }
-
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_skips_up_to_date_app_config() {
@@ -622,23 +331,23 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
         let before = fs::read(&dest).await.unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 0, "up-to-date app config must not update");
         assert_eq!(report.skipped, 1, "up-to-date app config should be skipped");
         assert_eq!(fs::read(&dest).await.unwrap(), before);
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -655,7 +364,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -671,9 +380,11 @@ mod tests {
         )
         .await;
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 1, "changed source should update");
         assert_eq!(report.skipped, 0);
@@ -683,8 +394,6 @@ mod tests {
             .unwrap();
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -712,10 +421,10 @@ mod tests {
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
-        handle_install(&config, Some("other"), false, false)
+        handle_install_approved(&config, Some("other"), false, false, true)
             .await
             .unwrap();
 
@@ -745,8 +454,6 @@ mod tests {
         }));
         assert_eq!(fs::read(&other_dest).await.unwrap(), other_before);
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -815,9 +522,10 @@ mod tests {
         let categories = metadata::load_active_categories(&config, None)
             .await
             .unwrap();
-        let (_rows, update) = crate::status::build_app_rows_with_lifecycle(&config, &categories)
-            .await
-            .unwrap();
+        let (_rows, update, _) =
+            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, false)
+                .await
+                .unwrap();
         let pending = update
             .outcomes
             .iter()
@@ -874,8 +582,8 @@ mod tests {
         let categories = metadata::load_active_categories(&config, None)
             .await
             .unwrap();
-        let (_rows, after_upgrade) =
-            crate::status::build_app_rows_with_lifecycle(&config, &categories)
+        let (_rows, after_upgrade, _) =
+            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, false)
                 .await
                 .unwrap();
         assert!(after_upgrade.outcomes.iter().any(|outcome| {
@@ -889,7 +597,7 @@ mod tests {
         }));
 
         let uninstall =
-            uninstall::handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+            uninstall::handle_uninstall_with_result(&config, Some("sample"), false, false)
                 .await
                 .unwrap();
         assert!(uninstall.outcomes.iter().any(|outcome| {
@@ -914,8 +622,6 @@ mod tests {
                 .any(|entry| entry.source == "app/other/config.json")
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -942,7 +648,7 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         assert!(
@@ -974,8 +680,6 @@ mod tests {
         }));
         assert_eq!(fs::read_to_string(&marker).await.unwrap(), "x");
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1002,19 +706,19 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
         crate::trust::grant_current_for_test(&config, "app/sample").await;
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 0);
         assert!(!marker.exists(), "unchanged config must not run hook");
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1040,7 +744,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         write_external_sample_app_with_post_upgrade(
@@ -1063,8 +767,6 @@ mod tests {
             "external hook must be skipped without a matching scoped trust grant"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1081,7 +783,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         write_external_sample_app_with_extra(
@@ -1092,9 +794,11 @@ mod tests {
         .await;
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         let new_dest = dir.join(".config/sample/themes/theme.conf");
         assert_eq!(report.updated, 1, "new app file should be installed");
@@ -1116,8 +820,6 @@ mod tests {
             "new app file should be tracked in manifest"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1134,7 +836,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         write_external_sample_app_with_extra(
@@ -1150,9 +852,11 @@ mod tests {
         fs::write(&new_dest, b"user-owned\n").await.unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let error = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap_err();
+        let error = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap_err();
 
         assert!(error.to_string().contains("Plan is blocked"));
         assert_eq!(fs::read(&new_dest).await.unwrap(), b"user-owned\n");
@@ -1164,8 +868,6 @@ mod tests {
             "unmanaged destination should not be added to manifest"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1182,7 +884,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1191,9 +893,11 @@ mod tests {
             .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, true, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, true, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 1, "stale cleanup should count as a change");
         assert_eq!(report.skipped, 0);
@@ -1206,8 +910,6 @@ mod tests {
             "stale manifest entry should be removed"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1224,7 +926,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1234,9 +936,11 @@ mod tests {
             .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, true, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, true, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 1, "manifest cleanup should count as change");
         assert_eq!(report.skipped, 0);
@@ -1248,8 +952,6 @@ mod tests {
             "missing stale destination should be removed from manifest"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1266,7 +968,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1275,9 +977,11 @@ mod tests {
             .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
@@ -1290,8 +994,6 @@ mod tests {
             "stale manifest entry should remain without prune"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1308,7 +1010,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1318,9 +1020,11 @@ mod tests {
             .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, true, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, true, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
@@ -1334,8 +1038,6 @@ mod tests {
             "user-modified stale entry should remain tracked"
         );
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1352,7 +1054,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let cat_dir = dir.join("presets/app/sample");
@@ -1370,9 +1072,11 @@ mod tests {
         .unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, true, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, true, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         let dest = dir.join(".config/sample/daemon.json");
         assert_eq!(
@@ -1391,8 +1095,6 @@ mod tests {
         let entry = manifest.find_by_dest(&dest).unwrap();
         assert_eq!(entry.source, "app/sample/daemon-renamed.jsonc");
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -1409,16 +1111,18 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample"), false, false)
+        handle_install_approved(&config, Some("sample"), false, false, true)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
         fs::write(&dest, b"{\"user\":true}\n").await.unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, _) = handle_upgrade_installed_target_with_result_approved(
+            &config, None, false, false, true, &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             report.updated, 0,
@@ -1427,8 +1131,6 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert_eq!(fs::read(&dest).await.unwrap(), b"{\"user\":true}\n");
 
-        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
-        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }

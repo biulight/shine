@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use crate::commands::OverlayLinkCommand;
 use crate::config::{self, Config};
+use crate::output::escape_controls;
+use crate::preset_report::count_phrase;
 use crate::{colors, presets};
 
 pub async fn handle_preset_copy(target: &str, force: bool) -> Result<()> {
@@ -10,8 +12,9 @@ pub async fn handle_preset_copy(target: &str, force: bool) -> Result<()> {
 
     let current_dir = std::env::current_dir().context("reading current directory")?;
     println!(
-        "Copying built-in preset {target} to {} ...",
-        current_dir.display()
+        "Copying built-in preset {} to {} ...",
+        crate::output::escape_controls(target),
+        crate::output::escape_controls(&current_dir.display().to_string())
     );
 
     let report = copy_embedded_preset(target, &current_dir, force).await?;
@@ -21,10 +24,7 @@ pub async fn handle_preset_copy(target: &str, force: bool) -> Result<()> {
     println!(
         "Tip: delete files you do not plan to customize so they continue to follow built-in updates."
     );
-    println!(
-        "Tip: run `shine preset overlay link {}` to activate this directory.",
-        current_dir.display()
-    );
+    print_activation_hint("shine preset overlay link", &current_dir);
 
     Ok(())
 }
@@ -36,7 +36,7 @@ async fn copy_embedded_preset(
 ) -> Result<presets::ExtractReport> {
     crate::commands::parse_copy_target(target).map_err(anyhow::Error::msg)?;
     if presets::embedded_asset_paths(target).is_empty() {
-        bail!("built-in preset not found: {target}");
+        bail!("built-in preset not found: {}", escape_controls(target));
     }
     presets::extract_embedded_prefix(target, target_dir, force).await
 }
@@ -47,16 +47,28 @@ fn print_extract_report(report: &presets::ExtractReport) {
     let skipped = report.skipped.len();
 
     if created > 0 {
-        println!("{}", colors::green(&format!("  {created} file(s) created")));
+        println!(
+            "{}",
+            colors::green(&format!(
+                "  {} created",
+                count_phrase(created, "file", "files")
+            ))
+        );
     }
     if overwritten > 0 {
         println!(
             "{}",
-            colors::yellow(&format!("  {overwritten} file(s) updated (overwritten)"))
+            colors::yellow(&format!(
+                "  {} updated (overwritten)",
+                count_phrase(overwritten, "file", "files")
+            ))
         );
     }
     if skipped > 0 {
-        println!("  {skipped} file(s) skipped (already exist; use --force to overwrite)");
+        println!(
+            "  {} skipped (already exist; use --force to overwrite)",
+            count_phrase(skipped, "file", "files")
+        );
     }
 }
 
@@ -68,13 +80,26 @@ pub async fn handle_preset_export(
     use anyhow::Context as _;
 
     let target = dir.unwrap_or_else(|| config.presets_dir().to_owned());
-    tokio::fs::create_dir_all(&target)
-        .await
-        .with_context(|| format!("creating export directory: {}", target.display()))?;
+    tokio::fs::create_dir_all(&target).await.with_context(|| {
+        format!(
+            "creating export directory: {}",
+            escape_controls(&target.display().to_string())
+        )
+    })?;
 
-    println!("Exporting built-in presets to {} ...", target.display());
+    println!(
+        "Exporting {} to {} ...",
+        if config.active_presets_overlay_dir().is_some() {
+            "built-in presets with overlay overrides and additions"
+        } else {
+            "built-in presets"
+        },
+        crate::output::escape_controls(&target.display().to_string())
+    );
 
-    let report = presets::extract_all(&target, force).await?;
+    let report = presets::PresetAssetReader::new(config.active_presets_overlay_dir())
+        .extract_all(&target, force)
+        .await?;
 
     let created = report.created.len();
     let overwritten = report.overwritten.len();
@@ -86,13 +111,16 @@ pub async fn handle_preset_export(
 
     if !config.is_external_presets {
         println!();
-        println!(
-            "Tip: run `shine preset link {}` to activate this directory.",
-            target.display()
-        );
+        print_activation_hint("shine preset link", &target);
     }
 
     Ok(())
+}
+
+// Show a command template and a separate display-only path, not shell-specific code.
+fn print_activation_hint(command: &str, path: &std::path::Path) {
+    println!("Tip: activate this directory with `{command} <PATH>`.");
+    println!("  PATH (display-escaped): {:?}", path.to_string_lossy());
 }
 
 /// Which override a `handle_link`-style command is pointing at. The two link
@@ -112,32 +140,49 @@ async fn handle_link(
 ) -> Result<()> {
     use anyhow::Context as _;
 
-    let raw = path.to_string_lossy();
-    let expanded = config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
+    let raw = path
+        .to_str()
+        .context("preset source path is not valid UTF-8")?;
+    let expanded = config::full_expand_with_home(raw, &config.home_dir)
+        .with_context(|| format!("expanding path: {}", escape_controls(raw)))?;
     let expanded = PathBuf::from(expanded);
 
     if create {
         tokio::fs::create_dir_all(&expanded)
             .await
-            .with_context(|| format!("creating directory: {}", expanded.display()))?;
+            .with_context(|| {
+                format!(
+                    "creating directory: {}",
+                    escape_controls(&expanded.display().to_string())
+                )
+            })?;
     }
 
     let meta = tokio::fs::metadata(&expanded).await.with_context(|| {
         if create {
-            format!("accessing directory: {}", expanded.display())
+            format!(
+                "accessing directory: {}",
+                escape_controls(&expanded.display().to_string())
+            )
         } else {
             format!(
                 "path does not exist: {} (use --create to create it)",
-                expanded.display()
+                escape_controls(&expanded.display().to_string())
             )
         }
     })?;
 
     if !meta.is_dir() {
-        bail!("path is not a directory: {}", expanded.display());
+        bail!(
+            "path is not a directory: {}",
+            escape_controls(&expanded.display().to_string())
+        );
     }
 
     let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
+    absolute
+        .to_str()
+        .context("resolved preset source path is not valid UTF-8")?;
 
     if matches!(kind, LinkKind::Overlay) {
         config::validate_env_override_file(&absolute.join("shine.env.toml")).await?;
@@ -166,7 +211,7 @@ async fn handle_link(
             LinkKind::Presets => format!("already linked: {}", absolute.display()),
             LinkKind::Overlay => format!("overlay already linked: {}", absolute.display()),
         };
-        println!("{}", colors::dim(&message));
+        println!("{}", colors::dim(&crate::output::escape_controls(&message)));
         return Ok(());
     }
 
@@ -186,9 +231,11 @@ async fn handle_link(
 
     match kind {
         LinkKind::Presets => {
-            if std::env::var("SHINE_CONFIG_DIR")
-                .map(|v| !v.trim().is_empty())
-                .unwrap_or(false)
+            // An explicit project source survives SHINE_CONFIG_DIR's presets default.
+            if (!config.is_project_config()
+                && std::env::var("SHINE_CONFIG_DIR")
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false))
                 || std::env::var("SHINE_PRESETS")
                     .map(|v| !v.trim().is_empty())
                     .unwrap_or(false)
@@ -263,7 +310,7 @@ pub async fn handle_preset_unlink(config: &Config) -> Result<()> {
     );
     println!(
         "{}",
-        colors::dim("Built-in embedded presets will be used on the next run.")
+        colors::dim("Environment overrides and inherited settings still apply on the next run.")
     );
 
     Ok(())
@@ -307,12 +354,23 @@ async fn handle_overlay_link_git(
         .expect("overlay Git source was just set");
     println!(
         "{}",
-        colors::green(&format!("Overlay Git source set: {url}"))
+        colors::green(&format!(
+            "Overlay Git source set: {}",
+            crate::output::escape_controls(url)
+        ))
     );
     if let Some(branch) = branch {
-        println!("  {} {branch}", colors::dim("branch:"));
+        println!(
+            "  {} {}",
+            colors::dim("branch:"),
+            crate::output::escape_controls(branch)
+        );
     }
-    println!("  {} {}", colors::dim("managed dir:"), dir.display());
+    println!(
+        "  {} {}",
+        colors::dim("managed dir:"),
+        crate::output::escape_controls(&dir.display().to_string())
+    );
 
     // Clone (or mirror, if already present) now so the overlay is usable right
     // away instead of waiting for the next `shine preset pull`.
@@ -342,14 +400,18 @@ pub async fn handle_overlay_unlink(config: &Config) -> Result<()> {
     );
     println!(
         "{}",
-        colors::dim("Built-in embedded presets will be used without overlay on the next run.")
+        colors::dim(if config.is_project_config() {
+            "Global overlay settings may still be inherited. Run `shine preset overlay info` to inspect the effective overlay."
+        } else {
+            "The base presets source will be used without this overlay on the next run."
+        })
     );
     if let Some(dir) = managed_dir.filter(|dir| dir.exists()) {
         println!(
             "{}",
             colors::dim(&format!(
                 "The managed overlay checkout remains at {}. Remove it manually if unwanted.",
-                dir.display()
+                crate::output::escape_controls(&dir.display().to_string())
             ))
         );
     }
@@ -358,14 +420,30 @@ pub async fn handle_overlay_unlink(config: &Config) -> Result<()> {
 }
 
 pub fn handle_overlay_info(config: &Config) -> Result<()> {
-    if let Some((url, branch, dir)) = config.overlay_git_source() {
-        println!("{}", colors::green(&format!("Overlay Git source: {url}")));
+    if config.presets_overlay_dir_override.is_none()
+        && let Some((url, branch, dir)) = config.overlay_git_source()
+    {
+        println!(
+            "{}",
+            colors::green(&format!(
+                "Overlay Git source: {}",
+                crate::output::escape_controls(url)
+            ))
+        );
         if let Some(branch) = branch {
-            println!("  {} {branch}", colors::dim("branch:"));
+            println!(
+                "  {} {}",
+                colors::dim("branch:"),
+                crate::output::escape_controls(branch)
+            );
         }
-        println!("  {} {}", colors::dim("managed dir:"), dir.display());
+        println!(
+            "  {} {}",
+            colors::dim("managed dir:"),
+            crate::output::escape_controls(&dir.display().to_string())
+        );
         if dir.exists() {
-            println!("{}", colors::green("Cloned"));
+            println!("{}", colors::green("Managed directory exists"));
         } else {
             println!(
                 "{}",
@@ -375,7 +453,7 @@ pub fn handle_overlay_info(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(dir) = &config.presets_overlay_dir_override {
+    if let Some(dir) = config.active_presets_overlay_dir() {
         println!("{}", colors::presets_overlay_note(dir));
         println!("{}", colors::green("Active"));
     } else {
@@ -397,6 +475,170 @@ mod tests {
 
     fn config_in(dir: &std::path::Path) -> Config {
         crate::test_support::test_config(dir)
+    }
+
+    #[tokio::test]
+    async fn export_uses_its_config_overlay_and_retains_collision_and_builtin_copy_policy() {
+        let root = make_temp_dir().await;
+        let key = "app/clash-verge/merge.yaml";
+        let overlay = root.join("overlay");
+        fs::create_dir_all(overlay.join("app/clash-verge"))
+            .await
+            .unwrap();
+        fs::write(overlay.join(key), b"overlay marker")
+            .await
+            .unwrap();
+        fs::write(overlay.join("overlay-only.txt"), b"overlay addition")
+            .await
+            .unwrap();
+        let mut config = config_in(&root).with_presets_overlay_dir_override(Some(overlay));
+        // Export still means embedded bundle + overlay, even in full external mode.
+        config.is_external_presets = true;
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::write(config.presets_dir().join("external-only.txt"), b"external")
+            .await
+            .unwrap();
+        let builtin = config_in(&root.join("builtin"));
+        let out = root.join("export");
+        let out_builtin = root.join("export-builtin");
+        let (a, b) = tokio::join!(
+            handle_preset_export(&config, Some(out.clone()), false),
+            handle_preset_export(&builtin, Some(out_builtin.clone()), false),
+        );
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(fs::read(out.join(key)).await.unwrap(), b"overlay marker");
+        assert!(out.join("overlay-only.txt").is_file());
+        assert!(!out.join("external-only.txt").exists());
+        assert_eq!(
+            fs::read(out_builtin.join(key)).await.unwrap(),
+            presets::read_embedded_asset_bytes(key).unwrap()
+        );
+        assert!(!out_builtin.join("overlay-only.txt").exists());
+        fs::write(out.join(key), b"user content").await.unwrap();
+        handle_preset_export(&config, Some(out.clone()), false)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(out.join(key)).await.unwrap(), b"user content");
+        handle_preset_export(&config, Some(out.clone()), true)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(out.join(key)).await.unwrap(), b"overlay marker");
+        let pristine = root.join("pristine");
+        copy_embedded_preset("app/clash-verge", &pristine, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read(pristine.join(key)).await.unwrap(),
+            presets::read_embedded_asset_bytes(key).unwrap()
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_shell_category_only_extracts_matching_files() {
+        let dir = make_temp_dir().await;
+        let report = copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+
+        assert!(
+            dir.join("shell/proxy").is_dir(),
+            "shell/proxy/ subdirectory should be created"
+        );
+        assert!(!report.created.is_empty());
+        for path in &report.created {
+            assert!(
+                path.starts_with(dir.join("shell/proxy")),
+                "{path:?} should be under shell/proxy/"
+            );
+        }
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_skips_existing_files_when_overwrite_false() {
+        let dir = make_temp_dir().await;
+        let marker = b"original content";
+
+        copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+
+        let first_file = presets::embedded_asset_paths("shell/proxy")
+            .into_iter()
+            .find(|p| p.starts_with("shell/proxy/"))
+            .unwrap();
+        let dest = dir.join(&first_file);
+        fs::write(&dest, marker).await.unwrap();
+
+        let report = copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+        assert!(report.skipped.contains(&dest));
+
+        let content = fs::read(&dest).await.unwrap();
+        assert_eq!(content, marker, "existing file should not be overwritten");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_overwrites_when_overwrite_true() {
+        let dir = make_temp_dir().await;
+        let marker = b"marker";
+
+        copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+
+        let first_file = presets::embedded_asset_paths("shell/proxy")
+            .into_iter()
+            .find(|p| p.starts_with("shell/proxy/"))
+            .unwrap();
+        let dest = dir.join(&first_file);
+        fs::write(&dest, marker).await.unwrap();
+
+        let report = copy_embedded_preset("shell/proxy", &dir, true)
+            .await
+            .unwrap();
+        assert!(report.overwritten.contains(&dest));
+
+        let content = fs::read(&dest).await.unwrap();
+        assert_eq!(
+            content,
+            presets::read_embedded_asset_bytes(&first_file).unwrap(),
+            "force copy must publish the complete embedded content"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_sets_executable_bit_on_sh_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = make_temp_dir().await;
+        let report = copy_embedded_preset("shell/proxy", &dir, false)
+            .await
+            .unwrap();
+
+        assert!(
+            report
+                .created
+                .iter()
+                .any(|path| path.extension().is_some_and(|ext| ext == "sh"))
+        );
+        for path in &report.created {
+            if path.extension().and_then(|e| e.to_str()) == Some("sh") {
+                let mode = fs::metadata(path).await.unwrap().permissions().mode();
+                assert!(mode & 0o111 != 0, "{path:?} should be executable");
+            }
+        }
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[test]

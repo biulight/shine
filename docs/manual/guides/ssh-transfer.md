@@ -167,6 +167,14 @@ shine env broker policy update \
   --mode development --release DEPLOY_TOKEN -- bun run build
 ```
 
+Adding an existing policy name fails without replacing it. To update it, use `--name` and supply
+the policy parameters again, including any project or remote-workspace constraints; see
+`shine env broker policy update --help`. Changed policies still require review and confirmation.
+
+`shine env broker policy list` shows one policy per line. Control characters in the SSH target or
+project are displayed as escapes, such as `\n` and `\t`. Use `shine env broker policy info <NAME>`
+for the policy's TOML representation; listing does not change stored values or matching rules.
+
 Concurrent policy changes preserve updates to other policies. If the target policy changes or is
 removed while confirmation is pending, the update fails and requires a fresh review.
 
@@ -285,6 +293,12 @@ destination, Shine places it in the remote current directory using the source na
 refuses file-to-directory or directory-to-file replacement. Preview resolved paths and overwrite
 behavior with `--dry-run`.
 
+SCP dry-run previews quote each path and escape control characters so spaces and line breaks
+remain distinguishable. This display does not change the paths used for transfer.
+Local transfer paths must be valid UTF-8. A `~` hint whose local home cannot be represented is
+rejected before transfer or preview; it never selects a replacement-character directory.
+Local hints expand only a leading `~`; `$VAR` and `${VAR}` remain literal filename text.
+
 ## Inspect connection state
 
 ```bash
@@ -293,6 +307,12 @@ shine local status
 
 The output includes session ID, reachability, protocol version, and the local default directory. A
 shell not entered through `shine ssh` reports the missing session variables.
+Connection/handshake and the subsequent status request each have a five-second timeout.
+An unreachable connection is reported on stdout with exit code 0; a failed status request
+(including authentication rejection or a response timeout) reports an error on stderr with exit code 1.
+These limits apply only to `local status`.
+Status fields and connection/rejection messages display terminal control characters as escapes;
+the session, authentication and connection paths retain their original values.
 
 ### Hybrid secrets through the broker
 

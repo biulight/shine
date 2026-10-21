@@ -25,7 +25,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.5.0 sh install.sh
+SHINE_VERSION=2.6.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -39,8 +39,32 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.5.0"; .\install.ps1
+$env:SHINE_VERSION = "2.6.0"; .\install.ps1
 ```
+
+## Install with cargo-binstall
+
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed, download a prebuilt
+Shine binary from the official GitHub Releases:
+
+```bash
+cargo binstall shine-cli
+shine --version
+```
+
+The package is named `shine-cli`; the installed command is `shine`. The default destination is
+`$CARGO_HOME/bin` (usually `~/.cargo/bin`); make sure it is in `PATH`.
+
+Official binaries cover x86_64 and aarch64 on macOS, Linux with glibc, and Windows (MSVC builds).
+Linux musl binaries are not provided. If no suitable binary is found, cargo-binstall may try a
+third-party binary or compile from source. To require an official prebuilt binary, use:
+
+```bash
+cargo binstall shine-cli --strategies crate-meta-data
+```
+
+Run `cargo binstall shine-cli` again to upgrade through cargo-binstall. The moving `preview`
+channel is available through `shine self upgrade --channel preview` instead.
 
 ## Install from source
 
@@ -63,6 +87,13 @@ shine self upgrade --channel stable
 shine self upgrade --channel preview
 ```
 
+Explicit `--channel stable` also permits reinstalling the same version or installing an older
+stable release. Its success message reports the installed and previous versions without claiming
+the version increased.
+
+If `shine self upgrade` fails, it returns exit code 1 and reports the failure context and underlying
+cause on stderr. Use that diagnostic to distinguish connection, archive, and installation errors.
+
 `preview` is a continuously updated prerelease channel and is not included in routine automatic
 update checks. `shine update` checks both installed configuration and stable Shine releases.
 
@@ -82,6 +113,12 @@ target options. Keep private backups and check important projects with `shine en
 
 `shine self install --dest <PATH>` resolves a relative path from the current directory and remembers
 the absolute destination, so later upgrades sync the same installed copy from any directory.
+If the directory is not on PATH, the printed POSIX shell example preserves special characters in
+the directory name. `self install` result paths escape terminal controls; a directory containing
+controls gets a manual PATH instruction using the original directory instead of a copyable example.
+If an upgrade succeeds but syncing this separate copy fails, Shine prints a
+warning with the cause to stderr; the upgrade still returns success. Sync result paths and warning
+details escape terminal controls without changing the recorded destination.
 
 On Unix, if `shine self install` copies the binary to a location the current user cannot modify,
 Shine interactively requests authorization and completes the installation through `sudo`. After a
@@ -89,6 +126,20 @@ successful `shine self upgrade`, the same behavior applies when syncing a separa
 destination. Shine cannot currently elevate to replace the running binary itself when that binary
 is in a protected directory; install and run it from a user-writable location instead. On Windows,
 installing or upgrading in a protected location requires a terminal with the necessary permissions.
+
+## Upgrade to Shine 2.6
+
+Shine 2.6 removes `--purge` from `uninstall`, `app uninstall`, and `shell uninstall`.
+Remove that option from scripts; commands that still contain it fail before loading configuration.
+Uninstall now includes internal cache cleanup in the Plan you approve. Preview removals with
+`--dry-run`, especially before removing a whole App category or all Shell presets. External preset
+sources are preserved. See [App removal](./guides/app-presets.md) and
+[Shell removal](./guides/shell-presets.md) for scope and retained-file behavior.
+
+Shine 2.6 also adds persistent secret-file export with
+`shine env workspace export --format files --mode <MODE> --file-group <GROUP>`.
+Unlike temporary files supplied to `env run`, exported plaintext stays on disk until you remove it.
+Read the [secret-file guide](./guides/environment.md#workspace-secret-files) before use.
 
 ## Retire an older local HTTP service
 

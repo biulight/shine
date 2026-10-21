@@ -11,7 +11,7 @@ pub(crate) async fn run_declared_bun(
     args: &[OsString],
 ) -> Result<()> {
     let mut explicit = if launch.env.is_empty() {
-        BTreeMap::new()
+        super::workspace::SensitiveValues::default()
     } else {
         resolve_explicit_values(config, &launch.env).await?
     };
@@ -22,9 +22,7 @@ pub(crate) async fn run_declared_bun(
     ];
     command.extend_from_slice(args);
     let result = launch_status(&command, &explicit).await;
-    for value in explicit.values_mut() {
-        value.zeroize();
-    }
+    explicit.zeroize();
     match result {
         Ok(status) => finish_command_status(status),
         Err(error)

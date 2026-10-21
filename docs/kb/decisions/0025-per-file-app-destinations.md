@@ -20,8 +20,8 @@ widens `SAFE_PATHS`).
 An explicit app `[[files]]` entry may declare `dest`. It overrides the category `dest` for that file;
 files without it are unchanged. Absolute strings and existing platform maps keep their current
 meaning. A file may also use `{ base = "data-dir", path = "..." }`, resolved against the platform's
-per-user application-data directory only when an active `Config` is available, preserving test-home
-isolation. The rooted path and `target` are relative and reject parent traversal.
+per-user application-data directory captured in `RuntimeContext`. Tests provide that directory
+explicitly instead of deriving it from a synthetic HOME (ADR 0132). The rooted path and `target` are relative and reject parent traversal.
 
 Effective destinations must be unique across the active app metadata before install or upgrade
 writes. Manifest identity is one entry per preset `source`. If a metadata update changes that
