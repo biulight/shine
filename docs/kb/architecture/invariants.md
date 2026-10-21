@@ -67,6 +67,9 @@ bugs. Check this list before changing the modules named in each entry.
   Preset note and Shell attention before App/Sys queries; later errors cannot erase that output.
   Diff reads stay at their original presentation boundary. Manual refresh and upgrade hints remain
   distinct, generator evaluation stays opt-in, and evaluation failures render before nonzero exit.
+  Global failure labels, detailed status columns and recorded Sys change fields encode controls at
+  rendering; widths use the escaped strings. Manual-refresh hints omit copyable commands when
+  category/source operands contain controls, without changing the original selected refresh set.
   Available Shell catalogs use the active snapshot, including built-in-plus-overlay sources.
   Without an external source or active overlay, the embedded catalog retains its state-independent
   metadata path; an invalid trust store must not block listing or change its successful exit.

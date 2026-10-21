@@ -24,7 +24,11 @@ fn print_generator_notice(attention: &GeneratorAttention<'_>, run_generators: bo
         println!();
         println!(
             "{}",
-            colors::yellow(&format!("! {}: {}", row.label, row.status_text))
+            colors::yellow(&format!(
+                "! {}: {}",
+                output::escape_controls(&row.label),
+                row.status_text
+            ))
         );
     }
 }
@@ -66,7 +70,8 @@ fn print_action_hints(upgrade_targets: &[String], refresh_commands: &[String]) {
         println!(
             "{}",
             colors::dim(&format!(
-                "Run `{command}` to refresh generated configuration."
+                "Run {} to refresh generated configuration.",
+                refresh_command_hint(command)
             ))
         );
     }
@@ -129,6 +134,14 @@ pub(super) fn app_status_summary_parts(
     parts
 }
 
+fn refresh_command_hint(command: &str) -> String {
+    if command.chars().any(char::is_control) {
+        "shine app refresh with the original category and source arguments (control characters; copyable command omitted)".to_string()
+    } else {
+        format!("`{command}`")
+    }
+}
+
 fn app_status_run_hint(row: &AppLifecycleStatus) -> String {
     let mut commands = Vec::new();
     if row.upgrade_available {
@@ -138,10 +151,11 @@ fn app_status_run_hint(row: &AppLifecycleStatus) -> String {
         ));
     }
     commands.extend(row.refresh_sources.iter().map(|source| {
-        format!(
-            "run `shine app refresh {}`",
+        let command = format!(
+            "shine app refresh {}",
             crate::shell_quote::command_positionals(&[&row.category, source])
-        )
+        );
+        format!("run {}", refresh_command_hint(&command))
     }));
     if commands.is_empty() {
         String::new()
@@ -226,17 +240,18 @@ pub(super) async fn update(
 
         let label_width = update_shell
             .iter()
-            .map(|r| console::measure_text_width(&r.label))
+            .map(|r| console::measure_text_width(&output::escape_controls(&r.label)))
             .max()
             .unwrap_or(0);
 
         for row in &update_shell {
-            let pad =
-                " ".repeat(label_width.saturating_sub(console::measure_text_width(&row.label)));
+            let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(
+                &output::escape_controls(&row.label),
+            )));
             println!(
                 "  {}  {}{}  {}",
                 row.symbol,
-                row.label,
+                output::escape_controls(&row.label),
                 pad,
                 colors::status_label(row.status_text, row.status_sym),
             );
@@ -285,11 +300,11 @@ pub(super) async fn update(
                 "  {}  {}  {}  {}",
                 colors::symbol("↑"),
                 output::escape_controls(&row.label),
-                colors::dim(&format!("({})", row.item_id)),
+                colors::dim(&format!("({})", output::escape_controls(&row.item_id))),
                 colors::status_label("update available", "↑"),
             );
             for detail in &row.details {
-                println!("     {}", colors::dim(detail));
+                println!("     {}", colors::dim(&output::escape_controls(detail)));
             }
         }
     }
@@ -397,12 +412,12 @@ pub(super) async fn status(
         let label_width = if diff {
             installed_shell
                 .iter()
-                .map(|row| console::measure_text_width(&row.label))
+                .map(|row| console::measure_text_width(&output::escape_controls(&row.label)))
                 .max()
         } else {
             shell_statuses
                 .iter()
-                .map(|row| console::measure_text_width(&row.category))
+                .map(|row| console::measure_text_width(&output::escape_controls(&row.category)))
                 .max()
         }
         .unwrap_or(0);
@@ -413,7 +428,8 @@ pub(super) async fn status(
             } else {
                 &row.category
             };
-            let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(label)));
+            let label = output::escape_controls(label);
+            let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(&label)));
             let run_hint = if row.status == ShellRowStatus::UpdateAvail {
                 format!("  {}", colors::dim("run `shine upgrade`"))
             } else {
@@ -446,12 +462,12 @@ pub(super) async fn status(
         let label_width = if diff {
             installed_app
                 .iter()
-                .map(|row| console::measure_text_width(&row.label))
+                .map(|row| console::measure_text_width(&output::escape_controls(&row.label)))
                 .max()
         } else {
             app_statuses
                 .iter()
-                .map(|row| console::measure_text_width(&row.category))
+                .map(|row| console::measure_text_width(&output::escape_controls(&row.category)))
                 .max()
         }
         .unwrap_or(0);
@@ -468,7 +484,8 @@ pub(super) async fn status(
             } else {
                 &row.category
             };
-            let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(label)));
+            let label = output::escape_controls(label);
+            let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(&label)));
             let dest_part = if diff {
                 row.dest
                     .as_deref()
@@ -575,12 +592,12 @@ pub(super) async fn status(
                 "  {}  {}  {}  {}  {}",
                 colors::symbol("↑"),
                 output::escape_controls(&row.label),
-                colors::dim(&format!("({})", row.item_id)),
+                colors::dim(&format!("({})", output::escape_controls(&row.item_id))),
                 colors::status_label("update available", "↑"),
                 colors::dim("run `shine upgrade`"),
             );
             for detail in &row.details {
-                println!("     {}", colors::dim(detail));
+                println!("     {}", colors::dim(&output::escape_controls(detail)));
             }
         }
         for row in &sys.installed {
@@ -610,7 +627,7 @@ pub(super) async fn status(
                 "  {}  {}  {}  {}",
                 colors::symbol(symbol),
                 output::escape_controls(&row.label),
-                colors::dim(&format!("({})", row.item_id)),
+                colors::dim(&format!("({})", output::escape_controls(&row.item_id))),
                 colors::status_label(status, symbol)
             );
         }

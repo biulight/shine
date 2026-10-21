@@ -3290,3 +3290,15 @@ When cutting a release, always diff against the latest stable `v*` tag
   and blocked lifecycle checks retain JSON/candidate hashes, redaction, exit codes and file bytes.
   Migration's pre-existing CRLF normalization is checked through candidate hashes, not redefined by
   display tests. Explicit artifacts retain inherited process I/O and their existing failure policy.
+
+## 2026-10-21 — Global list output has independent labels and remediation
+
+- **Symptom**: fixing targeted info/update did not encode global generator failures, detailed status
+  labels, manual refresh commands or Sys receipt-change details. Preset-link/copy errors and Git
+  preflight refusals also used different path presentation from successful notices.
+- **Fix**: encode final display fields and measure escaped labels; share a local refresh-hint renderer
+  across global views while preserving raw command generation, sorting and target selection. Reuse
+  the existing plural-count helper for extraction receipts and encode only CLI-owned Git path fields.
+- **Regression**: real CLI cases retain generator opt-in/redaction/nonzero failures, manual refresh
+  selection, receipt bytes and source config; Git tests reject dirty/no-upstream/detached inputs before
+  fetch and retain HEAD/payloads. Captured and inherited Git process output keeps its existing contract.

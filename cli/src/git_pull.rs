@@ -150,7 +150,7 @@ async fn repository_root(path: &Path) -> Result<Option<PathBuf>> {
         }
         bail!(
             "failed to inspect Git repository at {}: {}",
-            path.display(),
+            escape_controls(&path.display().to_string()),
             detail.trim()
         );
     }
@@ -160,7 +160,7 @@ async fn repository_root(path: &Path) -> Result<Option<PathBuf>> {
     if root.as_os_str().is_empty() {
         bail!(
             "git returned an empty repository root for {}",
-            path.display()
+            escape_controls(&path.display().to_string())
         );
     }
     Ok(Some(root))
@@ -172,14 +172,14 @@ async fn ensure_clean(label: &str, root: &Path) -> Result<()> {
         let detail = String::from_utf8_lossy(&output.stderr);
         bail!(
             "failed to inspect {label} repository {}: {}",
-            root.display(),
+            escape_controls(&root.display().to_string()),
             detail.trim()
         );
     }
     if !output.stdout.is_empty() {
         bail!(
             "refusing to pull {label}: Git worktree has uncommitted changes: {}\nCommit, stash, or discard the changes, then run 'shine preset pull' again.",
-            root.display()
+            escape_controls(&root.display().to_string())
         );
     }
     Ok(())
@@ -190,7 +190,7 @@ async fn ensure_tracking_branch(label: &str, root: &Path) -> Result<()> {
     if !branch.status.success() {
         bail!(
             "refusing to pull {label}: repository is in detached HEAD state: {}",
-            root.display()
+            escape_controls(&root.display().to_string())
         );
     }
 
@@ -209,7 +209,7 @@ async fn ensure_tracking_branch(label: &str, root: &Path) -> Result<()> {
         bail!(
             "refusing to pull {label}: branch '{}' has no upstream: {}",
             branch.trim(),
-            root.display()
+            escape_controls(&root.display().to_string())
         );
     }
     Ok(())
@@ -753,6 +753,39 @@ mod tests {
 
         handle_pull(&config, false).await.unwrap();
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejected_pull_encodes_checkout_paths_without_fetching_or_changing_identity() {
+        let root = temp_dir(if cfg!(unix) {
+            "review\nFORGED\r\t\u{1b}中文"
+        } else {
+            "review中文"
+        });
+        let presets = root.join("presets");
+        init_repo(&presets);
+        let config = Config::new_for_test(&root);
+        for reason in ["uncommitted changes", "has no upstream", "detached HEAD"] {
+            if reason == "uncommitted changes" {
+                std::fs::write(presets.join("local.txt"), "keep\n").unwrap();
+            } else if reason == "has no upstream" {
+                std::fs::remove_file(presets.join("local.txt")).unwrap();
+            } else {
+                git(&presets, &["checkout", "--detach"]);
+            }
+            let head = std::fs::read(presets.join(".git/HEAD")).unwrap();
+            let error = handle_pull(&config, false).await.unwrap_err().to_string();
+            assert!(error.contains(reason), "{error}");
+            assert!(!error.contains(['\r', '\t', '\u{1b}']), "{error:?}");
+            assert!(!error.contains("\nFORGED"), "{error:?}");
+            if cfg!(unix) {
+                assert!(error.contains(r"review\nFORGED\r\t\u{1b}中文"));
+            }
+            assert_eq!(std::fs::read(presets.join(".git/HEAD")).unwrap(), head);
+            assert_eq!(read_text(presets.join("preset.txt")), "one\n");
+            assert!(!presets.join(".git/FETCH_HEAD").exists());
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -5311,6 +5311,63 @@ fn preset_export_reports_overlay_sources_and_preserves_export_semantics() {
 }
 
 #[test]
+fn preset_failures_escape_operands_and_preserve_source_configuration() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    let config = "schema_version=2\n";
+    fs::write(state.join("config.toml"), config).unwrap();
+    let missing = fixture.0.join(if cfg!(unix) {
+        "missing\nFORGED\r\t\u{1b}"
+    } else {
+        "missing中文"
+    });
+    let file = fixture.0.join(if cfg!(unix) {
+        "file\nFORGED\r\t\u{1b}"
+    } else {
+        "file中文"
+    });
+    fs::write(&file, "retain").unwrap();
+    for prefix in [vec!["preset", "link"], vec!["preset", "overlay", "link"]] {
+        for (path, create) in [(&missing, false), (&file, false), (&file, true)] {
+            let mut command = fixture.command();
+            command.env("NO_COLOR", "1").args(&prefix).arg(path);
+            if create {
+                command.arg("--create");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(output.stdout.is_empty(), "{output:?}");
+            let text = String::from_utf8(output.stderr).unwrap();
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(!text.contains("\nFORGED"), "{text:?}");
+            assert_eq!(
+                fs::read_to_string(state.join("config.toml")).unwrap(),
+                config
+            );
+            assert_eq!(fs::read_to_string(&file).unwrap(), "retain");
+            assert!(!missing.exists());
+        }
+    }
+    let output = fixture
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["preset", "copy", "app/missing\nFORGED\r\t\u{1b}"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Error: built-in preset not found: app/missing\\nFORGED\\r\\t\\u{1b}\n"
+    );
+    assert!(!fixture.0.join("app").exists());
+    assert_eq!(
+        fs::read_to_string(state.join("config.toml")).unwrap(),
+        config
+    );
+}
+
+#[test]
 fn preset_copy_encodes_destination_preserving_existing_files_and_config() {
     let fixture = Fixture::new();
     let state = fixture.0.join("state");
@@ -5333,6 +5390,15 @@ fn preset_copy_encodes_destination_preserving_existing_files_and_config() {
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
+        assert!(!text.contains("file(s)"), "{text}");
+        assert!(
+            text.contains(if existing {
+                "files skipped"
+            } else {
+                "files created"
+            }),
+            "{text}"
+        );
         assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
         let header = text.lines().next().unwrap();
         assert!(

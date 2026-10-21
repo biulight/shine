@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use crate::commands::OverlayLinkCommand;
 use crate::config::{self, Config};
+use crate::output::escape_controls;
+use crate::preset_report::count_phrase;
 use crate::{colors, presets};
 
 pub async fn handle_preset_copy(target: &str, force: bool) -> Result<()> {
@@ -34,7 +36,7 @@ async fn copy_embedded_preset(
 ) -> Result<presets::ExtractReport> {
     crate::commands::parse_copy_target(target).map_err(anyhow::Error::msg)?;
     if presets::embedded_asset_paths(target).is_empty() {
-        bail!("built-in preset not found: {target}");
+        bail!("built-in preset not found: {}", escape_controls(target));
     }
     presets::extract_embedded_prefix(target, target_dir, force).await
 }
@@ -45,16 +47,28 @@ fn print_extract_report(report: &presets::ExtractReport) {
     let skipped = report.skipped.len();
 
     if created > 0 {
-        println!("{}", colors::green(&format!("  {created} file(s) created")));
+        println!(
+            "{}",
+            colors::green(&format!(
+                "  {} created",
+                count_phrase(created, "file", "files")
+            ))
+        );
     }
     if overwritten > 0 {
         println!(
             "{}",
-            colors::yellow(&format!("  {overwritten} file(s) updated (overwritten)"))
+            colors::yellow(&format!(
+                "  {} updated (overwritten)",
+                count_phrase(overwritten, "file", "files")
+            ))
         );
     }
     if skipped > 0 {
-        println!("  {skipped} file(s) skipped (already exist; use --force to overwrite)");
+        println!(
+            "  {} skipped (already exist; use --force to overwrite)",
+            count_phrase(skipped, "file", "files")
+        );
     }
 }
 
@@ -127,28 +141,39 @@ async fn handle_link(
         .to_str()
         .context("preset source path is not valid UTF-8")?;
     let expanded = config::full_expand_with_home(raw, &config.home_dir)
-        .with_context(|| format!("expanding path: {raw}"))?;
+        .with_context(|| format!("expanding path: {}", escape_controls(raw)))?;
     let expanded = PathBuf::from(expanded);
 
     if create {
         tokio::fs::create_dir_all(&expanded)
             .await
-            .with_context(|| format!("creating directory: {}", expanded.display()))?;
+            .with_context(|| {
+                format!(
+                    "creating directory: {}",
+                    escape_controls(&expanded.display().to_string())
+                )
+            })?;
     }
 
     let meta = tokio::fs::metadata(&expanded).await.with_context(|| {
         if create {
-            format!("accessing directory: {}", expanded.display())
+            format!(
+                "accessing directory: {}",
+                escape_controls(&expanded.display().to_string())
+            )
         } else {
             format!(
                 "path does not exist: {} (use --create to create it)",
-                expanded.display()
+                escape_controls(&expanded.display().to_string())
             )
         }
     })?;
 
     if !meta.is_dir() {
-        bail!("path is not a directory: {}", expanded.display());
+        bail!(
+            "path is not a directory: {}",
+            escape_controls(&expanded.display().to_string())
+        );
     }
 
     let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);

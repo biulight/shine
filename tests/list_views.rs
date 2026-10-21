@@ -1392,6 +1392,180 @@ fn embedded_shell_catalog_does_not_read_invalid_trust_but_runtime_paths_still_do
 }
 
 #[test]
+fn global_generator_notices_escape_labels_and_keep_failure_exit_and_column_alignment() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fixture.app(true);
+    let preset = fixture.0.join("state/presets/app/demo");
+    let label = "manual\nFORGED\r\t\u{1b}中文";
+    let metadata = fs::read_to_string(preset.join("shine.toml"))
+        .unwrap()
+        .replace(
+            "source = 'manual.txt'",
+            &format!(
+                "source = 'manual.txt'\ndisplay_name = {}",
+                toml::Value::String(label.into())
+            ),
+        );
+    fs::write(preset.join("shine.toml"), &metadata).unwrap();
+    fs::write(preset.join("generate.ts"), format!(
+        "await Bun.write({:?}, 'ran'); process.stderr.write('PRIVATE_DETAIL'); process.exit(9);\n",
+        fixture.0.join("generator-ran").to_str().unwrap())).unwrap();
+    let manifest = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    for trusted in [false, true] {
+        if trusted {
+            success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+        }
+        for args in [
+            vec!["update", "--run-generators"],
+            vec!["update", "--verbose", "--diff", "--run-generators"],
+        ] {
+            let output = fixture.run(&args);
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("one or more App generators could not be evaluated")
+            );
+            let text = stdout(&output);
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(
+                !text.contains("\nFORGED") && !text.contains("PRIVATE_DETAIL"),
+                "{text:?}"
+            );
+            assert!(
+                text.contains(r"! manual\nFORGED\r\t\u{1b}中文: generator"),
+                "{text:?}"
+            );
+            assert!(!text.contains("Nothing to update."));
+            if args.contains(&"--diff") {
+                let columns: Vec<_> = text
+                    .lines()
+                    .filter_map(|line| line.split_once("  →  "))
+                    .map(|(prefix, _)| console::measure_text_width(prefix))
+                    .collect();
+                assert_eq!(columns.len(), 2, "{text}");
+                assert_eq!(columns[0], columns[1], "{text}");
+            }
+        }
+        assert_eq!(fixture.0.join("generator-ran").exists(), trusted);
+    }
+    assert_eq!(
+        fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+        manifest
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("destination/manual.txt")).unwrap(),
+        "manual-v1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(preset.join("shine.toml")).unwrap(),
+        metadata
+    );
+}
+
+#[test]
+fn global_manual_refresh_hints_preserve_source_identity_without_copying_controls() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fixture.app(true);
+    let preset = fixture.0.join("state/presets/app/demo");
+    let source = if cfg!(unix) {
+        "manual\nFORGED\r\t\u{1b}.txt"
+    } else {
+        "manual 中文.txt"
+    };
+    let metadata = fs::read_to_string(preset.join("shine.toml"))
+        .unwrap()
+        .replace(
+            "source = 'manual.txt'",
+            &format!(
+                "source = {}\ntarget = 'manual.txt'",
+                toml::Value::String(source.into())
+            ),
+        );
+    fs::write(preset.join("shine.toml"), &metadata).unwrap();
+    fs::rename(preset.join("manual.txt"), preset.join(source)).unwrap();
+    success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+    let manifest = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    let deferred = fixture.run(&["update"]);
+    success(&deferred);
+    assert!(!fixture.0.join("generator-ran").exists());
+    for args in [
+        vec!["update", "--run-generators"],
+        vec!["update", "--verbose", "--run-generators"],
+    ] {
+        let output = fixture.run(&args);
+        success(&output);
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = stdout(&output);
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(!text.contains("\nFORGED"), "{text:?}");
+        if cfg!(unix) {
+            assert!(text.contains("original category and source arguments (control characters; copyable command omitted)"), "{text}");
+            assert!(!text.contains("`shine app refresh demo"));
+        } else {
+            assert!(
+                text.contains("`shine app refresh demo 'manual 中文.txt'`"),
+                "{text}"
+            );
+        }
+        assert!(!text.contains("shine upgrade app/demo"));
+    }
+    assert!(fixture.0.join("generator-ran").exists());
+    assert_eq!(
+        fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+        manifest
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("destination/manual.txt")).unwrap(),
+        "manual-v1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(preset.join("shine.toml")).unwrap(),
+        metadata
+    );
+    assert!(preset.join(source).exists());
+}
+
+#[tokio::test]
+async fn global_sys_change_details_escape_recorded_values_without_touching_resources() {
+    let fixture = Fixture::new();
+    let os_id = cli::sys::detect_os_id().await.unwrap();
+    let preset = fixture.0.join("state/presets/sys").join(&os_id);
+    fs::create_dir_all(&preset).unwrap();
+    fs::write(fixture.0.join("state/config.toml"), "schema_version=2\n[env]\nPRIVATE_DNS_DOMAIN='example.test'\nPRIVATE_DNS_SERVERS='1.1.1.1'\n").unwrap();
+    fs::write(preset.join("shine.toml"), "version=2\n[[items]]\nid='demo'\nlabel='DNS demo'\nmode='managed'\ndriver='split-dns'\nrequired_env=['PRIVATE_DNS_DOMAIN','PRIVATE_DNS_SERVERS']\n[items.config]\ndomain_env='PRIVATE_DNS_DOMAIN'\nservers_env='PRIVATE_DNS_SERVERS'\n").unwrap();
+    let old = toml::Value::String("old\nFORGED\r\t\u{1b}".into()).to_string();
+    let receipt = format!(
+        "schema_version=1\n[[entries]]\nos_id={os_id:?}\nitem_id='demo'\nlabel='DNS demo'\nstatus='updated'\nupdated_at='1'\nmanaged=true\n[entries.receipt]\ndriver='split-dns'\nversion=1\nos_id={os_id:?}\nitem_id='demo'\ndomain={old}\nservers=['8.8.8.8']\nresource={old}\n"
+    );
+    fs::write(fixture.0.join("state/sys-manifest.toml"), &receipt).unwrap();
+    for args in [vec!["update", "--diff"], vec!["update", "--verbose"]] {
+        let output = fixture.run(&args);
+        success(&output);
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = stdout(&output);
+        assert!(
+            text.contains(r"Domain: old\nFORGED\r\t\u{1b} -> example.test"),
+            "{text:?}"
+        );
+        assert!(
+            text.contains(r"Resource: old\nFORGED\r\t\u{1b} -> "),
+            "{text:?}"
+        );
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(!text.contains("\nFORGED"));
+    }
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("state/sys-manifest.toml")).unwrap(),
+        receipt
+    );
+    assert!(!fixture.0.join("state/operations").exists());
+}
+
+#[test]
 fn targeted_update_encodes_relocation_rows_and_preserves_installed_files() {
     let fixture = Fixture::new();
     fixture.app(false);

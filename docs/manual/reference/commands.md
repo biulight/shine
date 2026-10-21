@@ -260,6 +260,9 @@ still covers the selected App category, even for a single-file target. Trust or 
 remain nonzero; an incomplete evaluation does not produce a `No update available` conclusion.
 Their failure labels and details escape terminal controls. Update path-change rows and App destination
 paths in `update --diff` and `update --verbose --diff` do the same; they do not change files or installation records.
+Global generator failure notices and detailed status labels also display controls as escapes and keep
+columns aligned. Refresh hints with control-bearing arguments ask for the original category and
+source instead of providing a copyable command. Recorded Sys change details use escaped text too.
 
 `update --verbose` includes installed managed system configurations even when no update is pending.
 `up-to-date (recorded)` compares the desired configuration with the installation record; it is not a
@@ -361,7 +364,10 @@ Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These c
 authoring input without installing it. `migrate --dry-run` previews legacy metadata changes;
 applying a migration requires review and confirmation. A Git-managed overlay is a disposable mirror,
 so edit its upstream checkout rather than the mirror.
-Text summaries use singular or plural counts, such as `1 category` and `1 case`.
+Text summaries use singular or plural counts, such as `1 category`, `1 case`, and `1 file`.
+This includes created, overwritten and skipped counts from `preset copy` and `preset export`.
+Source-link errors, unknown copy targets and Git preflight errors escape their displayed operands;
+path resolution, source precedence and Git refusal rules remain unchanged.
 JSON field names and exit rules, including `lint --deny-warnings`, are unchanged.
 `preset pack` text reports escape control characters in target names to keep the target on one
 line. JSON reports and bundle contents retain the original target name.

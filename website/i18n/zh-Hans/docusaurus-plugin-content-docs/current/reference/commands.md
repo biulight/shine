@@ -209,6 +209,8 @@ shine completions <bash|zsh|powershell>
 `No update available` 的结论。
 这些失败提示的标签和详情会转义终端控制字符。更新路径变更行，以及 `update --diff` 和
 `update --verbose --diff` 中的 App 目标路径也采用同样显示方式，不会更改文件或安装记录。
+全局生成器失败提示和详细状态标签也会转义控制字符，并保持列对齐。刷新参数含控制字符时，
+提示会要求使用原始分类和源文件参数，不提供可复制命令。已记录的 Sys 变更详情也使用转义文本。
 
 `update --verbose` 也会列出已安装且暂无更新的受管系统配置。
 `up-to-date (recorded)` 表示期望配置与安装记录一致，并非实时系统检查；Preset 来源缺失会单独提示。
@@ -299,7 +301,10 @@ Git 自身输出的格式保持不变。
 发布预设前使用 `validate`、`lint`、`plan` 和 `test`。这些命令只检查创作输入，不会安装预设。
 `migrate --dry-run` 用于预览旧 metadata 迁移，实际应用前需要审阅并确认。Git 管理的 overlay 是
 可丢弃镜像，应在上游 checkout 中编辑，而不是修改镜像。
-文本汇总按数量使用单复数，例如 `1 category` 和 `1 case`。
+文本汇总按数量使用单复数，例如 `1 category`、`1 case` 和 `1 file`，包括 `preset copy` 和
+`preset export` 创建、覆盖及跳过的文件数。
+来源链接错误、未知复制目标及 Git 前置检查错误会转义所显示的参数；路径解析、来源优先级和
+Git 拒绝规则保持不变。
 JSON 字段名和退出规则保持不变，包括 `lint --deny-warnings` 的警告退出策略。
 `preset pack` 文本报告会转义目标名中的控制字符，将目标保留在同一行。
 JSON 报告和包内容保留原始目标名。
