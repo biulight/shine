@@ -442,7 +442,7 @@ fn configuration_parse_failures_omit_values_without_writing_any_layer() {
     ];
     for path in paths {
         for syntax_error in [true, false] {
-            let f = Fixture::new();
+            let f = output_path_fixture();
             f.layers();
             let invalid = if syntax_error {
                 "TOKEN = \"PRIVATE_CONFIG_CANARY_UNCLOSED\n"
@@ -462,6 +462,11 @@ fn configuration_parse_failures_omit_values_without_writing_any_layer() {
                 assert!(result.stdout.is_empty(), "{result:?}");
                 let diagnostic = String::from_utf8(result.stderr).unwrap();
                 assert!(diagnostic.contains("TOML parse error"), "{diagnostic}");
+                assert!(
+                    !diagnostic.contains(['\r', '\t', '\u{1b}'])
+                        && !diagnostic.contains("\nFORGED"),
+                    "{diagnostic:?}"
+                );
                 assert!(
                     !diagnostic.contains("PRIVATE_CONFIG_CANARY"),
                     "{diagnostic}"
@@ -1546,5 +1551,129 @@ fn env_read_errors_encode_key_labels_without_changing_lookup_or_plain_output() {
         );
         assert!(stderr.contains(r"\nFORGED\r\t\u{1b}"), "{stderr:?}");
         assert_eq!(f.read("state/config.toml"), original);
+    }
+}
+
+#[test]
+fn directed_write_messages_encode_keys_without_changing_storage_or_shadowing() {
+    let f = output_path_fixture();
+    let key = "KEY\nFORGED\r\t\u{1b}";
+    let config = "schema_version=2\n";
+    f.write("state/config.toml", config);
+    let sidecar = format!("{}='PRIVATE_VALUE'\n", serde_json::to_string(key).unwrap());
+    f.write("state/shine.env.toml", &sidecar);
+    for args in [
+        vec!["set", key, "new"],
+        vec!["set", key, "new", "--force"],
+        vec!["delete", key, "--global"],
+    ] {
+        let out = f.run(false, &args);
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(out.stdout.is_empty());
+        let text = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !text.contains(['\r', '\t', '\u{1b}']) && !text.contains("\nFORGED"),
+            "{text:?}"
+        );
+        assert!(!text.contains("PRIVATE_VALUE"));
+        assert_eq!(f.read("state/config.toml"), config);
+        assert_eq!(f.read("state/shine.env.toml"), sidecar);
+        if args[0] == "set" {
+            assert!(
+                text.contains(
+                    "original storage key (control characters; copyable command omitted)"
+                ),
+                "{text}"
+            );
+            assert!(!text.contains("shine env set KEY\\n"));
+        }
+    }
+    let text = f.ok(false, &["set", key, "new", "--global"]);
+    assert!(
+        text.starts_with(r"Saved KEY\nFORGED\r\t\u{1b} in "),
+        "{text}"
+    );
+    let saved: toml::Table = f.read("state/config.toml").parse().unwrap();
+    assert_eq!(saved["env"][key].as_str(), Some("new"));
+    assert!(text.contains("selected layer remains shadowed"));
+    let text = f.ok(false, &["delete", key, "--global"]);
+    assert!(
+        text.starts_with(r"Deleted KEY\nFORGED\r\t\u{1b} in "),
+        "{text}"
+    );
+    assert_eq!(f.read("state/shine.env.toml"), sidecar);
+}
+
+#[test]
+fn directed_delete_hint_round_trips_special_keys_through_native_shell() {
+    for key in ["TEAM KEY", "-LEADING", "KEY'$(echo INJECTED);&"] {
+        let f = Fixture::new();
+        let entry = format!("{}='retain'\n", serde_json::to_string(key).unwrap());
+        f.write(
+            "state/config.toml",
+            &format!("schema_version=2\n[env]\n{entry}"),
+        );
+        f.write("state/shine.env.toml", &entry);
+        let refused = f.run(false, &["delete", "--", key]);
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let error = String::from_utf8(refused.stderr).unwrap();
+        let hint = error
+            .split("Alternative: `")
+            .nth(1)
+            .unwrap()
+            .split('`')
+            .next()
+            .unwrap();
+        let program = if cfg!(windows) {
+            format!(
+                "& {}",
+                shine_core::shell_quote::powershell_single_quote(env!("CARGO_BIN_EXE_shine"))
+            )
+        } else {
+            shine_core::shell_quote::posix_single_quote(env!("CARGO_BIN_EXE_shine"))
+        };
+        let script = format!(
+            "{program} --config-dir {} {}{}",
+            if cfg!(windows) {
+                shine_core::shell_quote::powershell_single_quote(
+                    f.0.join("state").to_str().unwrap(),
+                )
+            } else {
+                shine_core::shell_quote::posix_single_quote(f.0.join("state").to_str().unwrap())
+            },
+            hint.strip_prefix("shine ").unwrap(),
+            if cfg!(windows) {
+                "; exit $LASTEXITCODE"
+            } else {
+                ""
+            }
+        );
+        let configured = f.command(false);
+        let mut cmd = Command::new(if cfg!(windows) {
+            "powershell.exe"
+        } else {
+            "sh"
+        });
+        cmd.current_dir(configured.get_current_dir().unwrap());
+        for (name, value) in configured.get_envs() {
+            match value {
+                Some(value) => {
+                    cmd.env(name, value);
+                }
+                None => {
+                    cmd.env_remove(name);
+                }
+            }
+        }
+        if cfg!(windows) {
+            cmd.args(["-NoProfile", "-NonInteractive", "-Command"]);
+        } else {
+            cmd.arg("-c");
+        }
+        let out = cmd.arg(&script).output().unwrap();
+        assert!(out.status.success(), "{hint}: {out:?}");
+        let saved: toml::Table = f.read("state/config.toml").parse().unwrap();
+        assert!(!saved["env"].as_table().unwrap().contains_key(key));
+        assert_eq!(f.read("state/shine.env.toml"), entry);
     }
 }

@@ -1,5 +1,6 @@
 use crate::colors;
 use crate::config::{CURRENT_RUNTIME_SCHEMA_VERSION, Config};
+use crate::output::escape_controls;
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -32,13 +33,13 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
                 if dry_run {
                     println!(
                         "[dry-run] migrate recipient configuration in {} ({age_count} age1se recipient(s) to age1tag)",
-                        crate::output::escape_controls(&path.display().to_string()),
+                        escape_controls(&path.display().to_string()),
                     );
                 } else {
                     migrate_config_gpg_recipient(&path).await?;
                     println!(
                         "Migrated recipient configuration in {} ({age_count} age1se recipient(s) to age1tag)",
-                        crate::output::escape_controls(&path.display().to_string())
+                        escape_controls(&path.display().to_string())
                     );
                 }
                 if age_count > 0 {
@@ -56,13 +57,13 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
             if dry_run {
                 println!(
                     "[dry-run] migrate workspace format and recipients in {} ({age_count} age1se recipient(s) to age1tag)",
-                    crate::output::escape_controls(&path.display().to_string())
+                    escape_controls(&path.display().to_string())
                 );
             } else {
                 migrate_workspace_gpg_recipient(&path).await?;
                 println!(
                     "Migrated workspace format and recipients in {} ({age_count} age1se recipient(s) to age1tag)",
-                    crate::output::escape_controls(&path.display().to_string())
+                    escape_controls(&path.display().to_string())
                 );
             }
             if age_count > 0 {
@@ -94,12 +95,9 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
         println!("{}", colors::dim(&format!("schema {}", step.to_version)));
         for action in actions_for_step(config, step).await? {
             if dry_run {
-                println!(
-                    "  [dry-run] {}",
-                    crate::output::escape_controls(&action.description)
-                );
+                println!("  [dry-run] {}", escape_controls(&action.description));
             } else {
-                println!("  {}", crate::output::escape_controls(&action.description));
+                println!("  {}", escape_controls(&action.description));
                 (action.apply).await?;
             }
         }
@@ -164,7 +162,9 @@ async fn actions_for_step<'a>(
                     match tokio::fs::remove_file(&path).await {
                         Ok(()) => Ok(()),
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                        Err(e) => Err(e).with_context(|| format!("removing {}", path.display())),
+                        Err(e) => Err(e).with_context(|| {
+                            format!("removing {}", escape_controls(&path.display().to_string()))
+                        }),
                     }
                 }),
             }]
@@ -231,14 +231,22 @@ fn find_workspace_from_current_dir() -> Option<PathBuf> {
 
 async fn validate_recipient_migration_inputs(config: &Config) -> Result<()> {
     for path in config_migration_paths(config) {
-        config_age_migration_count(&path)
-            .await
-            .with_context(|| format!("validating recipient migration in {}", path.display()))?;
+        config_age_migration_count(&path).await.with_context(|| {
+            format!(
+                "validating recipient migration in {}",
+                escape_controls(&path.display().to_string())
+            )
+        })?;
     }
     if let Some(path) = find_workspace_from_current_dir() {
         workspace_age_migration_count(&path)
             .await
-            .with_context(|| format!("validating recipient migration in {}", path.display()))?;
+            .with_context(|| {
+                format!(
+                    "validating recipient migration in {}",
+                    escape_controls(&path.display().to_string())
+                )
+            })?;
     }
     Ok(())
 }
@@ -296,7 +304,7 @@ async fn migrate_recipient_key(
     if mutate(&mut document)? {
         crate::persist::atomic_write_private(path, document.to_string().as_bytes())
             .await
-            .with_context(|| format!("writing {}", path.display()))?;
+            .with_context(|| format!("writing {}", escape_controls(&path.display().to_string())))?;
         return Ok(true);
     }
     Ok(false)
@@ -305,9 +313,12 @@ async fn migrate_recipient_key(
 fn parse_migration_document(contents: &str, path: &Path) -> Result<toml_edit::DocumentMut> {
     // Parser errors retain source snippets and may echo values or duplicate keys.
     // Drop that chain, as environment-source parsing does, and keep only the file.
-    contents
-        .parse()
-        .map_err(|_| anyhow::anyhow!("invalid migration TOML syntax in {}", path.display()))
+    contents.parse().map_err(|_| {
+        anyhow::anyhow!(
+            "invalid migration TOML syntax in {}",
+            escape_controls(&path.display().to_string())
+        )
+    })
 }
 
 fn workspace_migration_encryption(
@@ -332,7 +343,7 @@ fn workspace_migration_encryption(
 async fn workspace_needs_migration(path: &Path) -> Result<bool> {
     let contents = tokio::fs::read_to_string(path)
         .await
-        .with_context(|| format!("reading {}", path.display()))?;
+        .with_context(|| format!("reading {}", escape_controls(&path.display().to_string())))?;
     let document = parse_migration_document(&contents, path)?;
     let encryption = workspace_migration_encryption(&document)?;
     Ok(document
@@ -354,7 +365,7 @@ async fn workspace_needs_migration(path: &Path) -> Result<bool> {
 async fn config_needs_migration(path: &Path) -> Result<bool> {
     let contents = tokio::fs::read_to_string(path)
         .await
-        .with_context(|| format!("reading {}", path.display()))?;
+        .with_context(|| format!("reading {}", escape_controls(&path.display().to_string())))?;
     let document = parse_migration_document(&contents, path)?;
     Ok(document.as_table().contains_key("gpg_key_id")
         || age_migration_count(document.as_table().get("age_recipients"))? > 0)
@@ -363,7 +374,7 @@ async fn config_needs_migration(path: &Path) -> Result<bool> {
 async fn config_age_migration_count(path: &Path) -> Result<usize> {
     let contents = tokio::fs::read_to_string(path)
         .await
-        .with_context(|| format!("reading {}", path.display()))?;
+        .with_context(|| format!("reading {}", escape_controls(&path.display().to_string())))?;
     let document = parse_migration_document(&contents, path)?;
     age_migration_count(document.as_table().get("age_recipients"))
 }
@@ -371,7 +382,7 @@ async fn config_age_migration_count(path: &Path) -> Result<usize> {
 async fn workspace_age_migration_count(path: &Path) -> Result<usize> {
     let contents = tokio::fs::read_to_string(path)
         .await
-        .with_context(|| format!("reading {}", path.display()))?;
+        .with_context(|| format!("reading {}", escape_controls(&path.display().to_string())))?;
     let document = parse_migration_document(&contents, path)?;
     let encryption = workspace_migration_encryption(&document)?;
     age_migration_count(

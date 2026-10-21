@@ -3325,3 +3325,18 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Regression**: an isolated fake phone plugin runs once and retains its public stub even if config
   saving fails; saved/manual TOML round-trips the original path. Age failures precede tool lookup,
   project refusal preserves ancestor config, and upgrade/cleanup failures retain retry state.
+
+## 2026-10-21 — Redacted parser errors still need safe context fields
+
+- **Evidence**: configuration, trust and migration readers omitted private contents but retained raw
+  controls in file/key context. Directed-write refusals did the same, while a suggested delete for
+  `TEAM KEY` split into two arguments and exited 2 in a real shell.
+- **Fix**: encode human context fields and saved/deleted labels; keep raw operands and typed errors.
+  Reuse native command argument/positional quoting, place options before a leading-hyphen key, and
+  omit copyable commands for control-bearing keys. Do not validate storage keys as shell env names.
+- **Coverage**: all config layers retain redaction and bytes; stale saves/commits still reject under
+  their existing lock, migration refuses before cleanup, and invalid trust stores remain untouched.
+  Native-shell deletion hints preserve exact special keys and leave the winning sidecar unchanged.
+- **Test isolation**: embedded completion checks must not fall back to a user's real global or
+  project configuration. An isolated empty project plus explicit temporary config root retains the
+  embedded source mode and verifies that completion creates no runtime state.

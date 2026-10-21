@@ -504,7 +504,10 @@ async fn load_store_path(path: &Path) -> Result<TrustStoreV1> {
     match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
-                bail!("trust store must be a regular file: {}", path.display());
+                bail!(
+                    "trust store must be a regular file: {}",
+                    escape_controls(&path.display().to_string())
+                );
             }
             #[cfg(unix)]
             {
@@ -512,7 +515,7 @@ async fn load_store_path(path: &Path) -> Result<TrustStoreV1> {
                 if metadata.permissions().mode() & 0o077 != 0 {
                     bail!(
                         "trust store permissions are too broad; expected 0600: {}",
-                        path.display()
+                        escape_controls(&path.display().to_string())
                     );
                 }
             }
@@ -520,12 +523,24 @@ async fn load_store_path(path: &Path) -> Result<TrustStoreV1> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(TrustStoreV1::default());
         }
-        Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspecting {}",
+                    escape_controls(&path.display().to_string())
+                )
+            });
+        }
     }
     let contents = tokio::fs::read_to_string(path).await?;
     let mut store: TrustStoreV1 = toml::from_str(&contents)
         .map_err(crate::config::config_parse_error)
-        .with_context(|| format!("parsing trust store {}", path.display()))?;
+        .with_context(|| {
+            format!(
+                "parsing trust store {}",
+                escape_controls(&path.display().to_string())
+            )
+        })?;
     if !matches!(
         store.schema_version,
         LEGACY_TRUST_SCHEMA_VERSION | TRUST_STORE_SCHEMA_VERSION

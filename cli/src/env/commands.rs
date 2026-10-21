@@ -267,7 +267,8 @@ fn print_secret_preference(config: &Config, key: &str) {
             return;
         }
         println!(
-            "Explicit injection prefers {encrypted}; run `shine env explain {encrypted}` to inspect its source."
+            "Explicit injection prefers {encrypted}; run `shine env explain {}` to inspect its source.",
+            crate::shell_quote::command_positionals(&[&encrypted])
         );
     }
 }
@@ -279,8 +280,9 @@ async fn report_saved(
     deleted: bool,
 ) -> Result<()> {
     println!(
-        "{} {key} in {} ({})",
+        "{} {} in {} ({})",
         if deleted { "Deleted" } else { "Saved" },
+        escape_controls(key),
         escape_controls(&plan.target.path.display().to_string()),
         plan.kind.label()
     );

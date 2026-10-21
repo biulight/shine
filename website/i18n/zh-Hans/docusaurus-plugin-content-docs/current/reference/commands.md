@@ -54,6 +54,8 @@ shine upgrade app/starship
 | `shine theme sync` | 输出终端主题环境变量 |
 
 所有命令都接受全局选项 `--config-dir <PATH>`。
+配置、信任存储及运行时迁移诊断会转义所显示路径和键名中的控制字符，继续省略文件内容；
+读取和写入的拒绝规则、迁移顺序保持不变。
 
 `shine init` 会转义目录确认提示、结果路径及已有项目拒绝消息中的终端控制字符；确认流程和项目配置位置保持不变。
 
@@ -357,6 +359,9 @@ shine env secret identity list
 `env list --reveal`、`env get`、`env secret decrypt`、带 `--include-secrets` 的导出，以及 `env run`
 启动的子进程都可能接触明文。只在可信终端运行，也不要把密钥直接写入命令参数或文档。
 
+保存/删除回执中的键名及写入拒绝路径会转义控制字符。环境写入和 explain 命令提示会正确引用
+存储键；含控制字符的键需使用原始参数，不提供显示转义后的可复制别名。显式目标选择、遮蔽保护
+及已停用的 `--force` 行为保持不变。
 缺失键和解密诊断会转义键名中的控制字符。`env get` 和 `env secret decrypt` 成功时仍输出原始值。
 Broker 策略查找错误及本地 `env broker describe` 的来源行也会转义控制字符；来源摘要和策略匹配不变。
 身份文件错误会显示转义后的路径，不打印文件内容；无效的 Touch ID 策略名也会转义。

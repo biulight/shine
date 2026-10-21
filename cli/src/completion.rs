@@ -674,8 +674,14 @@ mod tests {
     #[test]
     fn embedded_candidates_include_known_categories() {
         let _guard = env_lock();
+        let dir = temp_dir("embedded");
+        std::fs::create_dir_all(&dir).unwrap();
+        // An empty isolated project selects embedded metadata without consulting user presets.
+        std::fs::write(dir.join("shine.config.toml"), "").unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
         unsafe {
-            std::env::remove_var("SHINE_CONFIG_DIR");
+            std::env::set_var("SHINE_CONFIG_DIR", dir.join("state"));
             std::env::remove_var("SHINE_PRESETS");
         }
 
@@ -714,6 +720,13 @@ mod tests {
         assert!(preset_copy.contains("shell/proxy"));
         assert!(preset_copy.contains("sys/macos"));
         assert!(!preset_copy.contains("surge"));
+        assert!(
+            !dir.join("state").exists(),
+            "completion initialized runtime state"
+        );
+        assert_eq!(std::fs::read(dir.join("shine.config.toml")).unwrap(), b"");
+        std::env::set_current_dir(original_dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

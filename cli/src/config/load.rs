@@ -1,5 +1,6 @@
 //! Config loading: global runtime config, project-layer discovery and merge.
 
+use crate::output::escape_controls;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -54,8 +55,8 @@ impl Config {
         if let Some(project_config) = find_project_config(&current_dir) {
             bail!(
                 "{} already exists; current directory is already under a shine project at {}",
-                crate::output::escape_controls(&project_config.path.display().to_string()),
-                crate::output::escape_controls(&project_config.root.display().to_string())
+                escape_controls(&project_config.path.display().to_string()),
+                escape_controls(&project_config.root.display().to_string())
             );
         }
 
@@ -113,7 +114,7 @@ impl Config {
             .with_context(|| {
                 format!(
                     "Failed to parse project config file {}",
-                    project_config.path.display()
+                    escape_controls(&project_config.path.display().to_string())
                 )
             })?;
         let overrides: ProjectOverrides = toml::from_str(&contents)
@@ -121,7 +122,7 @@ impl Config {
             .with_context(|| {
                 format!(
                     "Failed to parse project config file {}",
-                    project_config.path.display()
+                    escape_controls(&project_config.path.display().to_string())
                 )
             })?;
 
@@ -279,8 +280,12 @@ impl Config {
             .contents
             .as_deref()
             .map(|contents| {
-                read_minimal_config(contents)
-                    .with_context(|| format!("Failed to parse {}", config_path.display()))
+                read_minimal_config(contents).with_context(|| {
+                    format!(
+                        "Failed to parse {}",
+                        escape_controls(&config_path.display().to_string())
+                    )
+                })
             })
             .transpose()?
             .and_then(|config| config.presets_dir);
@@ -302,7 +307,7 @@ impl Config {
                 .with_context(|| {
                     format!(
                         "Failed to parse global config file {}",
-                        config_path.display()
+                        escape_controls(&config_path.display().to_string())
                     )
                 })?;
             if config
@@ -369,13 +374,23 @@ impl Config {
                 return Ok(super::CURRENT_RUNTIME_SCHEMA_VERSION);
             }
             Err(e) => {
-                return Err(e).with_context(|| format!("Failed to read {}", config_path.display()));
+                return Err(e).with_context(|| {
+                    format!(
+                        "Failed to read {}",
+                        escape_controls(&config_path.display().to_string())
+                    )
+                });
             }
         };
 
         read_minimal_config(&content)
             .map(|config| config.schema_version)
-            .with_context(|| format!("Failed to parse {}", config_path.display()))
+            .with_context(|| {
+                format!(
+                    "Failed to parse {}",
+                    escape_controls(&config_path.display().to_string())
+                )
+            })
     }
 }
 

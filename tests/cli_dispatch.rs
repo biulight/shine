@@ -1245,7 +1245,7 @@ fn state_migration_rejects_invalid_documents_before_cleanup_or_writes() {
             ),
         ] {
             for dry_run in [false, true] {
-                let fixture = Fixture::new();
+                let fixture = display_path_fixture();
                 let state = fixture.0.join("state");
                 fs::create_dir(&state).unwrap();
                 let config = state.join("config.toml");
@@ -1266,6 +1266,11 @@ fn state_migration_rejects_invalid_documents_before_cleanup_or_writes() {
                 assert!(result.stdout.is_empty(), "{result:?}");
                 let diagnostic = String::from_utf8(result.stderr).unwrap();
                 assert!(diagnostic.contains(name), "{diagnostic}");
+                assert!(
+                    !diagnostic.contains(['\r', '\t', '\u{1b}'])
+                        && !diagnostic.contains("\nFORGED"),
+                    "{diagnostic:?}"
+                );
                 assert!(diagnostic.contains(message), "{diagnostic}");
                 assert!(
                     !diagnostic.contains("PRIVATE_MIGRATION_CANARY"),
@@ -7334,6 +7339,46 @@ fn shell_uninstall_help_describes_inventory_and_cleanup_scope() {
         assert!(
             !fixture.0.join("state").exists(),
             "{args:?} initialized state"
+        );
+    }
+}
+
+#[test]
+fn invalid_trust_store_notices_encode_paths_without_repairing_state() {
+    for directory in [false, true] {
+        let f = display_path_fixture();
+        let state = f.0.join("state");
+        fs::create_dir(&state).unwrap();
+        fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+        let store = state.join("trust.toml");
+        let invalid = "SECRET='PRIVATE_TRUST_CANARY' invalid\n";
+        if directory {
+            fs::create_dir(&store).unwrap();
+        } else {
+            fs::write(&store, invalid).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&store, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        }
+        let out = f.command().args(["trust", "list"]).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(out.stdout.is_empty());
+        let text = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !text.contains(['\r', '\t', '\u{1b}']) && !text.contains("\nFORGED"),
+            "{text:?}"
+        );
+        assert!(text.contains("trust.toml") && !text.contains("PRIVATE_TRUST_CANARY"));
+        if directory {
+            assert!(store.is_dir());
+        } else {
+            assert_eq!(fs::read_to_string(&store).unwrap(), invalid);
+        }
+        assert_eq!(
+            fs::read_to_string(state.join("config.toml")).unwrap(),
+            "schema_version=2\n"
         );
     }
 }

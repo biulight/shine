@@ -2,8 +2,8 @@
 
 use anyhow::{Result, bail};
 
-/// Checks whether `name` is a real executable on `PATH` (including the
-/// `.exe` suffix on Windows), without spawning it.
+/// Checks whether `name` resolves to a file on `PATH` (including the `.exe`
+/// suffix on Windows), without spawning it or checking executable permissions.
 ///
 /// Used before shelling out to an external CLI (`gpg`, `age`, `age-keygen`,
 /// `age-plugin-se`, `age-plugin-phone`) so a missing dependency fails with a clear

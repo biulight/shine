@@ -55,6 +55,8 @@ shine upgrade app/starship
 | `shine theme sync` | Print terminal-theme environment exports |
 
 Every command accepts the global `--config-dir <PATH>` option.
+Configuration, trust-store and runtime-migration diagnostics escape controls in displayed paths and
+key labels. File contents remain omitted; read/write refusal and migration ordering are unchanged.
 
 `shine init` escapes terminal control characters in directory prompts, result paths and existing-project
 refusals; confirmation and the project configuration location are unchanged.
@@ -424,6 +426,10 @@ both the saved file and current effective source. The old `--force` for `set`, `
 commands started by `env run` can expose plaintext. Run them only in a trusted terminal and never
 put secrets directly in command arguments or documentation.
 
+Saved/deleted key labels and write-refusal paths escape controls. Suggested env write and explain
+commands quote storage keys; control-bearing keys require the original argument instead of a copied
+display escape. Explicit target selection, shadowing protection and retired `--force` behavior remain
+unchanged.
 Missing-key and decryption diagnostics escape control characters in key names. Successful `env get`
 and `env secret decrypt` output retains the original value. Broker policy lookup errors and local
 `env broker describe` source rows also escape controls; source hashes and policy matching are unchanged.

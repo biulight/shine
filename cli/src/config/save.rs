@@ -1,5 +1,6 @@
 //! Config persistence: coordinated atomic writes and raw-layer delta saves.
 
+use crate::output::escape_controls;
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 #[cfg(test)]
@@ -22,7 +23,7 @@ impl Config {
         {
             bail!(
                 "configuration changed at {}; retry the command",
-                config_path.display()
+                escape_controls(&config_path.display().to_string())
             );
         }
         let new_table = self.serialize_table_for_save()?;

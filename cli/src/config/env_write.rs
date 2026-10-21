@@ -1,5 +1,6 @@
 //! Explicit, snapshot-checked single-key writes. Encryption happens outside locks.
 use super::{Config, ConfigInput, EnvLayerKind};
+use crate::output::escape_controls;
 use anyhow::{Context, Result, bail};
 use clap::Args;
 use shine_core::runtime::{FileSystemHost, RealHost};
@@ -151,11 +152,16 @@ impl EnvWritePlan {
             EnvLayerKind::GlobalConfig => "--global",
             _ => "--project",
         };
+        let display_key = escape_controls(key);
         let example = |flags: &str| {
+            if key.chars().any(char::is_control) {
+                return "use the original storage key (control characters; copyable command omitted)".to_string();
+            }
+            let operand = crate::shell_quote::command_positionals(&[key]);
             if delete {
-                format!("shine env delete {key} {flags}")
+                format!("shine env delete {flags} {operand}")
             } else {
-                format!("shine env set {key} <VALUE> {flags}")
+                format!("shine env set {flags} {operand} <VALUE>")
             }
         };
         if options.force {
@@ -191,7 +197,7 @@ impl EnvWritePlan {
             {
                 bail!(
                     "--force is retired; former target {} is a managed mirror and cannot be written. Edit upstream, use a manual --overlay, or select --global --env-file; nothing was written",
-                    former_path.display()
+                    escape_controls(&former_path.display().to_string())
                 );
             }
             let flags = match former_kind {
@@ -202,9 +208,17 @@ impl EnvWritePlan {
                 EnvLayerKind::ProjectConfig => "--project",
                 EnvLayerKind::Builtin => flags,
             };
+            let encryption = if key.chars().any(char::is_control) {
+                "shine env secret encrypt with --set and the original storage key (copyable command omitted)".to_string()
+            } else {
+                format!(
+                    "shine env secret encrypt --set={}",
+                    crate::shell_quote::command_arg(key)
+                )
+            };
             bail!(
-                "--force is retired; nothing was written. Former target: {}. Replace --force with {flags} for storage key {key}. Alternative: `{}`; for encryption use `shine env secret encrypt --set {key}` with the same target options",
-                former_path.display(),
+                "--force is retired; nothing was written. Former target: {}. Replace --force with {flags} for storage key {display_key}. Alternative: `{}`; for encryption use `{encryption}` with the same target options",
+                escape_controls(&former_path.display().to_string()),
                 example(flags)
             );
         }
@@ -219,10 +233,10 @@ impl EnvWritePlan {
                 _ => "--overlay",
             };
             bail!(
-                "{key} in {} would be shadowed by {} at {}. Choose the target explicitly: add {flags} to maintain this layer, or {winner_flags} to modify the effective layer; nothing was written.\nAlternative: `{}` or `{}`",
-                path.display(),
+                "{display_key} in {} would be shadowed by {} at {}. Choose the target explicitly: add {flags} to maintain this layer, or {winner_flags} to modify the effective layer; nothing was written.\nAlternative: `{}` or `{}`",
+                escape_controls(&path.display().to_string()),
                 winner.kind.label(),
-                winner.path.as_ref().unwrap().display(),
+                escape_controls(&winner.path.as_ref().unwrap().display().to_string()),
                 example(flags),
                 example(winner_flags)
             );
@@ -234,14 +248,20 @@ impl EnvWritePlan {
         if let Ok(metadata) = tokio::fs::metadata(&path).await
             && metadata.permissions().readonly()
         {
-            bail!("{} is not writable", path.display());
+            bail!(
+                "{} is not writable",
+                escape_controls(&path.display().to_string())
+            );
         }
         let mut parent = path.parent();
         while let Some(directory) = parent {
             match tokio::fs::metadata(directory).await {
                 Ok(metadata) => {
                     if !metadata.is_dir() || (cfg!(unix) && metadata.permissions().readonly()) {
-                        bail!("{} is not a writable directory", directory.display());
+                        bail!(
+                            "{} is not a writable directory",
+                            escape_controls(&directory.display().to_string())
+                        );
                     }
                     break;
                 }
@@ -256,7 +276,7 @@ impl EnvWritePlan {
             .as_deref()
             .map(|contents| toml::from_str(contents).map_err(super::config_parse_error))
             .transpose()
-            .with_context(|| format!("parsing {}", path.display()))?
+            .with_context(|| format!("parsing {}", escape_controls(&path.display().to_string())))?
             .unwrap_or_default();
         let entries = if kind.is_config() {
             table.get("env").and_then(toml::Value::as_table)
@@ -265,8 +285,8 @@ impl EnvWritePlan {
         };
         if delete && !entries.is_some_and(|table| table.contains_key(key)) {
             bail!(
-                "{key} has no local entry in {}; nothing was deleted",
-                path.display()
+                "{display_key} has no local entry in {}; nothing was deleted",
+                escape_controls(&path.display().to_string())
             );
         }
         let cwd = std::env::current_dir()?;

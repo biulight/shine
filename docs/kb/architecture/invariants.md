@@ -882,6 +882,8 @@ bugs. Check this list before changing the modules named in each entry.
   Keep existing file/field context, I/O errors, validation and write order; discard the original
   parser chain, since type errors can quote values even without source excerpts. Silent metadata
   probes remain silent, and serde's direct `Config` interface remains unchanged.
+  Diagnostic paths and key labels encode terminal controls only at formatting; captured native paths,
+  snapshot verification and original I/O causes remain intact.
 
 - **Runtime migration syntax errors do not retain source values.** The recipient inspection,
   rewrite and final schema-state patch in `state migrate` share a file-only TOML parse diagnostic.
