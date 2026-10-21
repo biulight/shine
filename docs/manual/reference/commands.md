@@ -56,8 +56,8 @@ shine upgrade app/starship
 
 Every command accepts the global `--config-dir <PATH>` option.
 
-`shine init` escapes terminal control characters in directory prompts and result paths; confirmation
-and the project configuration location are unchanged.
+`shine init` escapes terminal control characters in directory prompts, result paths and existing-project
+refusals; confirmation and the project configuration location are unchanged.
 
 Suggested App install/repair, upgrade, artifact, refresh, uninstall, Shell repair, and trust commands quote
 names containing spaces or shell punctuation. Use these hints in a POSIX shell on Unix or in
@@ -429,6 +429,8 @@ and `env secret decrypt` output retains the original value. Broker policy lookup
 `env broker describe` source rows also escape controls; source hashes and policy matching are unchanged.
 Identity-file errors show escaped paths without printing file contents. Invalid Touch ID policy names
 are escaped too; supported platforms, policy validation and existing-file protection are unchanged.
+Phone setup receipts escape display paths while saved paths and manual recovery TOML retain their
+original values. Age preflight errors also escape invalid recipient labels and identity paths.
 
 Broker policy commands are documented with the complete remote workflow in
 [SSH sessions, secret brokering, and file transfer](../guides/ssh-transfer.md). For local values,
@@ -499,6 +501,8 @@ shine clear serve
 `clear` requires an explicit target; running it alone does not clean up everything. `clear serve`
 stops and removes an older version's user service without loading Shine configuration or deleting
 published files. Repeating successful cleanup is safe; service-manager errors are reported.
+Failure notices escape controls in registration paths and captured service-manager diagnostics;
+cleanup ordering and refusal rules remain unchanged.
 Successful cleanup resets its cached reminders and discards in-flight results in the selected
 configuration directory. Use the same `--config-dir` or `SHINE_CONFIG_DIR` when checking that state.
 The `shine serve` namespace is removed. See
@@ -535,7 +539,8 @@ shine self upgrade [--channel <stable|preview>]
 ```
 
 Self-install failure messages escape source and destination paths. Failure status and administrator
-checks are unchanged; a failed copy does not save a new installation destination.
+checks are unchanged; a failed copy does not save a new installation destination. Upgrade file errors
+also escape displayed paths; staging, rollback, release-channel and force-install rules are unchanged.
 
 `stable` follows released versions. `preview` follows the replaceable preview build. See
 [Installation and upgrades](../installation.md).

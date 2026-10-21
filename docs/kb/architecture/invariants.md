@@ -1286,7 +1286,8 @@ bugs. Check this list before changing the modules named in each entry.
   standalone plugin's transactional setup and record its versioned public stub path and recipient,
   but it must not allocate, discover, copy, remove, or repair plugin TPM/Secure Enclave keys, replay, locator, pairing,
   or recovery state. A failed Shine config write never authorizes cleanup. Phone setup does not
-  change the default secret backend or add a phone-only recipient set (see
+  change the default secret backend or add a phone-only recipient set. Receipt paths are display-escaped;
+  stored identity paths and TOML recovery assignments preserve the original values (see
   [ADR 0075](../decisions/0075-phone-identity-setup-handoff.md)).
 - **Decrypt routing is self-describing.** Untagged data is GPG, `age:` is age and
   `hybrid:` is the versioned two-wrapper envelope (ADR 0084). Encryption defaults never

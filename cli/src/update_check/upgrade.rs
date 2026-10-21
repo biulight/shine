@@ -1,7 +1,7 @@
 use super::github::{GithubRelease, download_asset_bytes, fetch_release};
 use super::{ReleaseChannel, UpgradeResult, parse_release_tag, unix_timestamp_now};
 use crate::config::Config;
-use crate::{platform, version};
+use crate::{output::escape_controls, platform, version};
 use anyhow::{Context, Result, anyhow, bail};
 use flate2::read::GzDecoder;
 use semver::Version;
@@ -101,7 +101,7 @@ async fn install_downloaded_archive(
     fs::write(&staged_path, extracted).await.with_context(|| {
         format!(
             "failed to stage upgrade binary at {}",
-            staged_path.display()
+            escape_controls(&staged_path.display().to_string())
         )
     })?;
     set_executable_permissions(&staged_path).await?;
@@ -113,12 +113,12 @@ async fn install_downloaded_archive(
             if cfg!(windows) {
                 bail!(
                     "cannot replace {} due to insufficient permissions; rerun from an elevated terminal or install to a user-writable path",
-                    current_exe.display()
+                    escape_controls(&current_exe.display().to_string())
                 );
             } else {
                 bail!(
                     "cannot replace {} due to insufficient permissions; reinstall with install.sh into a user-writable directory such as ~/.local/bin",
-                    current_exe.display()
+                    escape_controls(&current_exe.display().to_string())
                 );
             }
         }
@@ -127,7 +127,7 @@ async fn install_downloaded_archive(
             return Err(err).with_context(|| {
                 format!(
                     "failed to prepare existing binary {}",
-                    current_exe.display()
+                    escape_controls(&current_exe.display().to_string())
                 )
             });
         }
@@ -145,7 +145,7 @@ async fn install_downloaded_archive(
                     format!(
                         "failed to install upgraded binary at {}; \
                              original binary has been restored",
-                        current_exe.display()
+                        escape_controls(&current_exe.display().to_string())
                     )
                 })
             }
@@ -156,8 +156,8 @@ async fn install_downloaded_archive(
                         "failed to install upgraded binary at {} \
                              and rollback also failed ({rollback_err:#}); \
                              {} may be missing — reinstall from install.sh",
-                        current_exe.display(),
-                        current_exe.display()
+                        escape_controls(&current_exe.display().to_string()),
+                        escape_controls(&current_exe.display().to_string())
                     )
                 })
             }
@@ -285,12 +285,22 @@ async fn set_executable_permissions(path: &Path) -> Result<()> {
 
     let mut permissions = fs::metadata(path)
         .await
-        .with_context(|| format!("failed to read metadata for {}", path.display()))?
+        .with_context(|| {
+            format!(
+                "failed to read metadata for {}",
+                escape_controls(&path.display().to_string())
+            )
+        })?
         .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions)
         .await
-        .with_context(|| format!("failed to mark {} as executable", path.display()))
+        .with_context(|| {
+            format!(
+                "failed to mark {} as executable",
+                escape_controls(&path.display().to_string())
+            )
+        })
 }
 
 #[cfg(not(unix))]
@@ -330,6 +340,59 @@ mod tests {
             .expect("archive entry should be written");
         let encoder = builder.into_inner().expect("archive should finish");
         encoder.finish().expect("gzip should finish")
+    }
+
+    #[tokio::test]
+    async fn upgrade_path_errors_preserve_io_causes_and_remove_staged_files() {
+        let root =
+            std::env::temp_dir().join(format!("shine-upgrade-error-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).await.unwrap();
+        let parent = root.join(if cfg!(unix) {
+            "parent\nFORGED\r\t\u{1b}"
+        } else {
+            "parent中文"
+        });
+        let binary = parent.join("shine");
+        let archive = archive_with_file("shine", b"new binary placeholder");
+        for parent_is_file in [true, false] {
+            if parent_is_file {
+                fs::write(&parent, b"retained parent").await.unwrap();
+            } else {
+                fs::create_dir(&parent).await.unwrap();
+            }
+            let error = install_downloaded_archive(&archive, &binary, "shine")
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+            );
+            let text = format!("{error:#}");
+            assert!(
+                text.contains(if parent_is_file {
+                    "failed to stage"
+                } else {
+                    "failed to prepare existing binary"
+                }),
+                "{text}"
+            );
+            assert!(
+                !text.contains(['\r', '\t', '\u{1b}']) && !text.contains("\nFORGED"),
+                "{text:?}"
+            );
+            if parent_is_file {
+                assert_eq!(fs::read(&parent).await.unwrap(), b"retained parent");
+                fs::remove_file(&parent).await.unwrap();
+            } else {
+                assert_eq!(
+                    std::fs::read_dir(&parent).unwrap().count(),
+                    0,
+                    "staging file leaked"
+                );
+            }
+        }
+        fs::remove_dir_all(root).await.unwrap();
     }
 
     #[test]

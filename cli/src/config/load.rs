@@ -54,8 +54,8 @@ impl Config {
         if let Some(project_config) = find_project_config(&current_dir) {
             bail!(
                 "{} already exists; current directory is already under a shine project at {}",
-                project_config.path.display(),
-                project_config.root.display()
+                crate::output::escape_controls(&project_config.path.display().to_string()),
+                crate::output::escape_controls(&project_config.root.display().to_string())
             );
         }
 

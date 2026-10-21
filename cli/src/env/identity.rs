@@ -87,7 +87,7 @@ pub async fn handle_phone_identity_init(
         .unwrap_or_else(|_| "age_identities = [\"<phone identity path>\"]\n".to_string());
         eprintln!(
             "Phone pairing succeeded, but Shine could not update {}. The pairing remains active; do not start another setup. Add this to the global config manually:\n\n{}",
-            path_display::format(global.config_path()),
+            escape_controls(&path_display::format(global.config_path())),
             manual.trim_end()
         );
         return Err(error).context("saving the phone identity in global Shine config");
@@ -97,13 +97,13 @@ pub async fn handle_phone_identity_init(
         "{}",
         colors::green(&format!(
             "configured phone-backed age identity at {}",
-            path_display::format(&result.identity_path)
+            escape_controls(&path_display::format(&result.identity_path))
         ))
     );
     println!("  recipient: {}", result.recipient);
     println!(
         "  global config: {}",
-        path_display::format(global.config_path())
+        escape_controls(&path_display::format(global.config_path()))
     );
     println!();
     println!(

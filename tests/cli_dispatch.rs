@@ -1055,6 +1055,28 @@ fn init_encodes_prompt_and_result_preserving_consent_and_project_path() {
     let config: toml::Value =
         toml::from_str(&fs::read_to_string(work.join("shine.config.toml")).unwrap()).unwrap();
     assert_eq!(config["presets_dir"].as_str(), Some("."));
+    let original = fs::read(work.join("shine.config.toml")).unwrap();
+    let child = work.join("nested");
+    fs::create_dir(&child).unwrap();
+    for cwd in [&work, &child] {
+        let refused = fixture
+            .command()
+            .current_dir(cwd)
+            .env("NO_COLOR", "1")
+            .args(["init", "--yes"])
+            .output()
+            .unwrap();
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        assert!(refused.stdout.is_empty());
+        let text = String::from_utf8(refused.stderr).unwrap();
+        assert!(text.contains("already under a shine project"));
+        assert!(
+            !text.contains(['\r', '\t', '\u{1b}']) && !text.contains("\nFORGED"),
+            "{text:?}"
+        );
+        assert_eq!(fs::read(work.join("shine.config.toml")).unwrap(), original);
+        assert!(!child.join("shine.config.toml").exists());
+    }
     assert!(!fixture.0.join("state/config.toml").exists());
 }
 
@@ -5307,6 +5329,157 @@ fn preset_export_reports_overlay_sources_and_preserves_export_semantics() {
         assert_eq!(out.join("overlay-only.txt").exists(), with_overlay);
         assert!(out.join("shell/proxy/shine.toml").is_file());
         assert!(!out.join("external-only.txt").exists());
+    }
+}
+
+#[test]
+fn age_preflight_diagnostics_encode_fields_without_running_tools_or_exposing_plaintext() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    let missing = fixture.0.join("missing\nFORGED\r\t\u{1b}");
+    let config = format!(
+        "schema_version=2\nage_identity={}\n[env]\nINPUT='PRIVATE_INPUT'\nCIPHER='age:Zm9v'\n",
+        toml::Value::String(missing.to_str().unwrap().into())
+    );
+    fs::write(state.join("config.toml"), &config).unwrap();
+    for (args, reason) in [
+        (
+            vec![
+                "env",
+                "secret",
+                "encrypt",
+                "--backend",
+                "age",
+                "--recipient",
+                "age1bad\nFORGED\r\t\u{1b}X",
+                "--from",
+                "INPUT",
+            ],
+            "recipient must not contain whitespace",
+        ),
+        (
+            vec!["env", "secret", "decrypt", "CIPHER"],
+            "age identity file not found",
+        ),
+    ] {
+        let output = fixture
+            .command()
+            .env("PATH", fixture.0.join("no-external-tools"))
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(reason), "{stderr}");
+        assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+        assert!(stderr.contains(r"\nFORGED\r\t\u{1b}"), "{stderr}");
+        assert!(!stderr.contains("PRIVATE_INPUT"));
+        assert_eq!(
+            fs::read_to_string(state.join("config.toml")).unwrap(),
+            config
+        );
+        assert_eq!(fs::read_dir(&state).unwrap().count(), 1);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn phone_setup_notices_encode_paths_and_keep_manual_toml_and_pairing_state() {
+    use std::os::unix::fs::PermissionsExt;
+    let recipient = "age1phone1qypkk9737tsjcsj8lz7wdetr53q0yacr0kqjm6en5r62zw29mzvv99sa27n9c";
+    for save_fails in [false, true] {
+        let fixture = display_path_fixture();
+        let state = fixture.0.join("state");
+        fs::create_dir(&state).unwrap();
+        let config =
+            "schema_version=2\nsecret_backend='gpg'\nage_recipients=['recovery-placeholder']\n";
+        fs::write(state.join("config.toml"), config).unwrap();
+        let stub = fixture.0.join("phone\nSTUB\r\t\u{1b}\\literal.txt");
+        let contents = format!("# recipient: {recipient}\nAGE-PLUGIN-PHONE-1EXAMPLE\n");
+        fs::write(&stub, &contents).unwrap();
+        let bin = fixture.0.join("test-bin");
+        fs::create_dir(&bin).unwrap();
+        let payload = serde_json::json!({
+            "schema_version": 1,
+            "identity_path": stub,
+            "recipient": recipient,
+        });
+        let program = bin.join("age-plugin-phone");
+        fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\nprintf 'called\\n' >> \"$SHINE_TEST_CALLS\"\nprintf '%s\\n' {}\n",
+                shine_core::shell_quote::posix_single_quote(&payload.to_string())
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+        if save_fails {
+            // Fail the config lock without touching plugin-owned state or depending on UID.
+            fs::create_dir(state.join(".config.toml.shine.lock")).unwrap();
+        }
+        let calls = fixture.0.join("calls");
+        let output = fixture
+            .command()
+            .env("PATH", &bin)
+            .env("NO_COLOR", "1")
+            .env("SHINE_TEST_CALLS", &calls)
+            .args([
+                "env",
+                "secret",
+                "identity",
+                "init",
+                "--phone",
+                "--recipient-type",
+                "phone",
+                "--label",
+                "Review fixture",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(if save_fails { 1 } else { 0 }),
+            "{output:?}"
+        );
+        assert_eq!(fs::read_to_string(&calls).unwrap(), "called\n");
+        assert_eq!(fs::read_to_string(&stub).unwrap(), contents);
+        let saved = fs::read_to_string(state.join("config.toml")).unwrap();
+        let identities = if save_fails {
+            assert!(output.stdout.is_empty());
+            assert_eq!(saved, config);
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            let (notice, remaining) = stderr.split_once("\n\n").unwrap();
+            assert!(notice.contains("pairing remains active; do not start another setup"));
+            assert!(
+                !notice.contains(['\r', '\t', '\u{1b}']) && !notice.contains("\nFORGED"),
+                "{notice:?}"
+            );
+            let (manual, error) = remaining.split_once("\nError:").unwrap();
+            assert!(error.contains("saving the phone identity in global Shine config"));
+            manual.parse::<toml::Table>().unwrap()
+        } else {
+            assert!(output.stderr.is_empty());
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(!stdout.contains(['\r', '\t', '\u{1b}']), "{stdout:?}");
+            assert!(!stdout.contains("\nFORGED") && !stdout.contains("\nSTUB"));
+            assert!(
+                stdout.contains(r"phone\nSTUB\r\t\u{1b}\literal.txt"),
+                "{stdout}"
+            );
+            assert!(stdout.contains(&format!("  recipient: {recipient}\n")));
+            let saved = saved.parse::<toml::Table>().unwrap();
+            assert_eq!(saved["secret_backend"].as_str(), Some("gpg"));
+            assert_eq!(
+                saved["age_recipients"][0].as_str(),
+                Some("recovery-placeholder")
+            );
+            saved
+        };
+        assert_eq!(identities["age_identities"][0].as_str(), stub.to_str());
     }
 }
 

@@ -241,7 +241,7 @@ async fn registration_exists(host: &impl FileSystemHost, path: &Path) -> Result<
             ensure!(
                 metadata.kind == FileKind::File,
                 "legacy service registration is not a regular file: {}",
-                path.display()
+                crate::output::escape_controls(&path.display().to_string())
             );
             Ok(true)
         }
@@ -275,7 +275,7 @@ async fn run(host: &impl ProcessHost, program: &str, args: &[String]) -> Result<
     ensure!(
         output.exit_code == Some(0),
         "{program} failed during legacy service cleanup: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
+        crate::output::escape_controls(String::from_utf8_lossy(&output.stderr).trim())
     );
     Ok(output)
 }
@@ -428,15 +428,56 @@ mod tests {
     #[tokio::test]
     async fn cleanup_rejects_linked_registration_before_running_service_manager() {
         let host = InMemoryHost::new();
-        let home = std::env::temp_dir().join("shine-legacy-home");
+        let home = std::env::temp_dir().join("shine-legacy-home\nFORGED\r\t\u{1b}");
         let target = home.join("unrelated.conf");
         let path = home.join("Library/LaunchAgents/top.biulight.shine.http.plist");
         host.put_file(&target, b"user data".to_vec());
         host.symlink(&target, &path).await.unwrap();
-        assert!(uninstall(&host, "macos", &home, None).await.is_err());
+        let error = uninstall(&host, "macos", &home, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(r"shine-legacy-home\nFORGED\r\t\u{1b}"),
+            "{error:?}"
+        );
+        assert!(!error.contains(['\r', '\t', '\u{1b}']), "{error:?}");
         assert_eq!(host.read(&target).await.unwrap(), b"user data");
         assert_eq!(host.metadata(&path).await.unwrap().kind, FileKind::Symlink);
         assert!(runs(&host).is_empty());
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_encodes_diagnostics_without_removing_registration() {
+        for platform in ["macos", "linux", "windows"] {
+            let host = InMemoryHost::new();
+            let home = std::env::temp_dir().join("shine-legacy-diagnostic");
+            let registration = home.join(if platform == "macos" {
+                "Library/LaunchAgents/top.biulight.shine.http.plist"
+            } else {
+                ".config/systemd/user/shine-http.service"
+            });
+            host.put_file(&registration, b"retain registration".to_vec());
+            host.queue_process_output(Ok(ProcessOutput {
+                exit_code: Some(1),
+                stdout: b"ignored stdout".to_vec(),
+                stderr: b"failure\nFORGED\r\t\x1b[31m".to_vec(),
+            }));
+            let error = uninstall(&host, platform, &home, None)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(r"failure\nFORGED\r\t\u{1b}[31m"),
+                "{error:?}"
+            );
+            assert!(!error.contains("ignored stdout"));
+            assert_eq!(
+                host.read(&registration).await.unwrap(),
+                b"retain registration"
+            );
+            assert_eq!(runs(&host).len(), 1);
+        }
     }
 
     #[tokio::test]

@@ -3314,3 +3314,14 @@ When cutting a release, always diff against the latest stable `v*` tag
   staging cleanup; owner tests retain I/O error types, absent-file behavior and private-content
   non-disclosure. Link extraction tests retain dangling/parent/force rejection and untouched referents.
   Preset export still initializes empty bin/presets directories; early env failures do not.
+
+## 2026-10-21 — Review each consumer of shared paths and backend diagnostics
+
+- **Symptom**: phone setup receipts, age preflight errors, existing-project refusals, upgrade file
+  errors and legacy-service cleanup diagnostics still emitted controls after adjacent output paths
+  had been fixed. Fixing one renderer did not establish coverage of other consumers.
+- **Fix**: apply the existing control encoder at the final human field; preserve copied TOML, native
+  operands, typed I/O causes, backend validation, service cleanup order and upgrade rollback.
+- **Regression**: an isolated fake phone plugin runs once and retains its public stub even if config
+  saving fails; saved/manual TOML round-trips the original path. Age failures precede tool lookup,
+  project refusal preserves ancestor config, and upgrade/cleanup failures retain retry state.
