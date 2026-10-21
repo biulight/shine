@@ -5574,6 +5574,151 @@ fn self_install_path_hint_preserves_literal_directory_and_existing_path() {
 }
 
 #[test]
+fn migration_preview_encodes_diff_without_changing_applied_metadata() {
+    let fixture = Fixture::new();
+    let category = if cfg!(unix) {
+        "demo\nFORGED\r\t\u{1b}"
+    } else {
+        "demo中文"
+    };
+    let root = fixture.0.join("presets");
+    let app = root.join("app").join(category);
+    fs::create_dir_all(&app).unwrap();
+    let original = format!(
+        "# preserved\tcomment\r\ndest = '~/.demo'\r\npost_install = {{ command = 'shine', args = ['app', 'artifact', 'apply', {}] }}\r\n[artifact]\r\nscript = 'build.ts'\r\n",
+        toml::Value::String(category.into())
+    );
+    fs::write(app.join("shine.toml"), &original).unwrap();
+    fs::write(
+        app.join("build.ts"),
+        "throw new Error('must not execute');\n",
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["preset", "migrate"])
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let json = run(&["--dry-run", "--format", "json"]);
+    assert!(json.status.success(), "{json:?}");
+    assert!(json.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(
+        report["files"][0]["target"],
+        format!("app/{category}/shine.toml")
+    );
+    let preview = run(&["--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(preview.stderr.is_empty());
+    assert_eq!(
+        fs::read(app.join("shine.toml")).unwrap(),
+        original.as_bytes()
+    );
+    assert!(!fixture.0.join("state").exists());
+    let text = String::from_utf8(preview.stdout).unwrap();
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert!(!text.contains("\nFORGED"), "{text:?}");
+    assert!(text.contains(r"# preserved\tcomment\r"), "{text:?}");
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("--- a/"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("+++ b/"))
+            .count(),
+        1
+    );
+    let applied = run(&["--yes", "--format", "json"]);
+    assert!(applied.status.success(), "{applied:?}");
+    let applied_report: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
+    assert_eq!(applied_report["status"], "applied");
+    let bytes = fs::read(app.join("shine.toml")).unwrap();
+    assert_eq!(
+        shine_core::digest::sha256_hex(&bytes),
+        report["files"][0]["candidate_sha256"]
+    );
+    assert!(
+        bytes
+            .windows(b"# preserved\tcomment\n".len())
+            .any(|w| w == b"# preserved\tcomment\n")
+    );
+    assert_eq!(
+        fs::read_to_string(app.join("build.ts")).unwrap(),
+        "throw new Error('must not execute');\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn blocked_plan_and_development_notice_encode_targets_without_executing() {
+    let fixture = Fixture::new();
+    let category = "demo\nFORGED\r\t\u{1b}";
+    let target = format!("app/{category}");
+    let app = fixture.0.join("state/presets/app").join(category);
+    fs::create_dir_all(&app).unwrap();
+    fs::write(
+        fixture.0.join("state/config.toml"),
+        "schema_version=2\n[env]\nENABLE='1'\n",
+    )
+    .unwrap();
+    fs::write(app.join("shine.toml"), "metadata_schema_version=2\ndest='~/.demo'\n[permissions]\nschema_version=2\nopaque_code='unrestricted'\n[[files]]\nsource='config.txt'\ngenerator={script='generate.ts', runtime='bun', env=['ENABLE'], when_env='ENABLE'}\n").unwrap();
+    fs::write(app.join("config.txt"), "original\n").unwrap();
+    let sentinel = fixture.0.join("must-not-run");
+    fs::write(
+        app.join("generate.ts"),
+        format!(
+            "await Bun.write({:?}, 'ran');\n",
+            sentinel.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    for trusted in [false, true] {
+        if trusted {
+            let grant = fixture
+                .command()
+                .args(["trust", "grant", &target, "--development", "--yes"])
+                .output()
+                .unwrap();
+            assert!(grant.status.success(), "{grant:?}");
+        }
+        let output = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["app", "install", category, "--yes"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("security Plan is blocked; no changes were made"));
+        assert!(stderr.contains("environment plain ENABLE"));
+        assert!(!sentinel.exists());
+        assert!(!fixture.0.join("state/app-manifest.toml").exists());
+        assert!(!fixture.0.join("home/.demo/config.txt").exists());
+        for text in [&stdout, &stderr] {
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(!text.contains("\nFORGED"), "{text:?}");
+        }
+        if trusted {
+            assert!(stdout.contains(r"app/demo\nFORGED\r\t\u{1b} · code changes allowed"));
+        } else {
+            assert!(
+                stderr.contains("original target (control characters; copyable command omitted)")
+            );
+            assert!(!stderr.contains("`shine trust inspect"));
+        }
+    }
+}
+
+#[test]
 fn preset_migration_artifact_hint_preserves_category_argument() {
     for (category, posix, powershell) in [
         ("demo", "demo", "demo"),

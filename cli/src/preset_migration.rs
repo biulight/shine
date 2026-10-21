@@ -199,6 +199,41 @@ mod tests {
     use shine_core::runtime::PresetSourceKind;
 
     #[test]
+    fn migration_notices_encode_fields_without_changing_report_or_candidates() {
+        let category = "demo\nFORGED\r\t\u{1b}";
+        let logical = format!("app/{category}/shine.toml");
+        let original = format!(
+            "dest = '~/.demo'\npost_install = {{ command = 'shine', args = ['app', 'artifact', 'apply', {}] }}\n[artifact]\nscript = 'build.ts'\n",
+            toml::Value::String(category.into())
+        );
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root(std::env::temp_dir())
+            .file(&logical, original.as_bytes().to_vec())
+            .file(format!("app/{category}/build.ts"), b"// inert".to_vec())
+            .build();
+        let plan = plan_preset_migration(&snapshot, "active", None, None);
+        assert_eq!(plan.edits.len(), 1);
+        assert!(compatibility_required(&plan));
+        let report = serde_json::to_value(&plan.report).unwrap();
+        let candidate = plan.edits[0].candidate.clone();
+        for text in [
+            compatibility_text(&plan),
+            migration_text(&plan, &snapshot, true),
+        ] {
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(!text.contains("\nFORGED"), "{text:?}");
+            assert!(text.contains(r"app/demo\nFORGED\r\t\u{1b}"), "{text:?}");
+        }
+        let text = migration_text(&plan, &snapshot, false);
+        assert!(text.contains("original category (control characters; copyable command omitted)"));
+        assert!(!text.contains("`shine app artifact apply"));
+        assert_eq!(serde_json::to_value(&plan.report).unwrap(), report);
+        assert_eq!(plan.edits[0].candidate, candidate);
+        assert_eq!(report["files"][0]["target"], logical);
+        assert_eq!(plan.edits[0].original, original.as_bytes());
+    }
+
+    #[test]
     fn migrate_cli_parses_review_flags_and_rejects_yes_with_dry_run() {
         let cli = Cli::try_parse_from([
             "shine",

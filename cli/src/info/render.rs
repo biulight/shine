@@ -200,19 +200,22 @@ fn print_update_changes(config: &Config, changes: &[UpdateChange]) {
                     "     {}",
                     colors::dim(&format!(
                         "new file: {}",
-                        path_display::format_home(destination, &config.home_dir)
+                        escape_controls(&path_display::format_home(destination, &config.home_dir))
                     ))
                 );
             }
             UpdateChange::DeploymentChanged { field, from, to } => {
-                println!("     {}", colors::dim(&format!("{field}: {from} -> {to}")));
+                println!(
+                    "     {}",
+                    colors::dim(&escape_controls(&format!("{field}: {from} -> {to}")))
+                );
             }
             UpdateChange::CommandEntryMissing { path } => {
                 println!(
                     "     {}",
                     colors::dim(&format!(
                         "command entry: missing ({})",
-                        path_display::format_home(path, &config.home_dir)
+                        escape_controls(&path_display::format_home(path, &config.home_dir))
                     ))
                 );
             }
@@ -221,14 +224,17 @@ fn print_update_changes(config: &Config, changes: &[UpdateChange]) {
                     "     {}",
                     colors::dim(&format!(
                         "command entry: does not match expected ({})",
-                        path_display::format_home(path, &config.home_dir)
+                        escape_controls(&path_display::format_home(path, &config.home_dir))
                     ))
                 );
             }
             UpdateChange::ManifestEntryMissing { target } => {
                 println!(
                     "     {}",
-                    colors::dim(&format!("manifest entry: missing ({target})"))
+                    colors::dim(&format!(
+                        "manifest entry: missing ({})",
+                        escape_controls(target)
+                    ))
                 );
             }
         }
@@ -240,8 +246,8 @@ fn print_path_change(config: &Config, field: &str, from: &Path, to: &Path) {
         "     {}",
         colors::dim(&format!(
             "{field}: {} -> {}",
-            path_display::format_home(from, &config.home_dir),
-            path_display::format_home(to, &config.home_dir)
+            escape_controls(&path_display::format_home(from, &config.home_dir)),
+            escape_controls(&path_display::format_home(to, &config.home_dir))
         ))
     );
 }

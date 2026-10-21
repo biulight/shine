@@ -3,6 +3,7 @@ mod render;
 mod resolve;
 
 use crate::config::Config;
+use crate::output::escape_controls;
 use crate::status::FileStatus;
 use crate::{apps, colors, path_display, shells};
 use anyhow::{Context, Result, bail};
@@ -145,12 +146,12 @@ fn print_generator_notice(
             "{}",
             colors::yellow(&format!(
                 "! {}/{}: {reason}",
-                file.category.name,
-                file.file.source_rel.display()
+                escape_controls(&file.category.name),
+                escape_controls(&file.file.source_rel.display().to_string())
             ))
         );
         if let Some(error) = &file.assessment_error {
-            println!("{}", colors::dim(&format!("  {error}")));
+            println!("{}", colors::dim(&format!("  {}", escape_controls(error))));
         }
     }
     (!failures.is_empty(), not_evaluated)
@@ -249,7 +250,10 @@ pub async fn handle_update_target(
     if !printed && !generator_incomplete && !generator_failed {
         println!(
             "{}",
-            colors::dim(&format!("No update available for {target}."))
+            colors::dim(&format!(
+                "No update available for {}.",
+                escape_controls(target)
+            ))
         );
     }
 
@@ -270,17 +274,22 @@ fn print_shell_update_row(file: &collect::ShellInfoFile) {
     println!(
         "  {}  {}/{}  {}",
         colors::symbol(symbol),
-        file.category.name,
-        file.file.command_name,
+        escape_controls(&file.category.name),
+        escape_controls(&file.file.command_name),
         colors::status_label(file.status, symbol)
     );
     if file.attention_required {
-        let target = crate::shell_quote::command_positionals(&[&format!(
-            "{}/{}",
-            file.category.name, file.file.command_name
-        )]);
+        let target = format!("{}/{}", file.category.name, file.file.command_name);
+        let removal = if target.chars().any(char::is_control) {
+            "shine shell uninstall with the original target (control characters; copyable command omitted)".to_string()
+        } else {
+            format!(
+                "`shine shell uninstall {}`",
+                crate::shell_quote::command_positionals(&[&target])
+            )
+        };
         println!(
-            "    Installed files are preserved. Restore the Preset or inspect the launcher before retrying; use `shine shell uninstall {target}` for explicit removal."
+            "    Installed files are preserved. Restore the Preset or inspect the launcher before retrying; use {removal} for explicit removal."
         );
     }
 }
@@ -289,12 +298,12 @@ fn print_app_update_row(config: &Config, file: &collect::AppInfoFile) {
     println!(
         "  {}  {}  {}  {}  {}",
         colors::symbol("↑"),
-        app_file_label(file),
+        escape_controls(&app_file_label(file)),
         colors::dim("→"),
-        colors::dim(&path_display::format_home(
+        colors::dim(&escape_controls(&path_display::format_home(
             &file.destination,
             &config.home_dir
-        )),
+        ))),
         colors::status_label("update available", "↑"),
     );
 }

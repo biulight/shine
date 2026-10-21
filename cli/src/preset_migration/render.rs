@@ -1,5 +1,6 @@
 //! CLI-only compatibility, remediation and diff rendering.
 use super::*;
+use crate::output::escape_controls;
 use crate::preset_report::count_phrase;
 
 pub fn print_compatibility(plan: &PresetMigrationPlan) {
@@ -17,8 +18,8 @@ pub(super) fn compatibility_text(plan: &PresetMigrationPlan) -> String {
             output,
             "  {} migrate {} ({})",
             crate::colors::symbol("~"),
-            file.target,
-            file.source_layer
+            escape_controls(&file.target),
+            escape_controls(&file.source_layer)
         );
     }
     for diagnostic in &plan.report.diagnostics {
@@ -31,14 +32,18 @@ pub(super) fn compatibility_text(plan: &PresetMigrationPlan) -> String {
         let _ = writeln!(
             output,
             "  {marker} {}{}",
-            diagnostic.target,
+            escape_controls(&diagnostic.target),
             diagnostic
                 .source_layer
                 .as_deref()
-                .map(|layer| format!(" ({layer})"))
+                .map(|layer| format!(" ({})", escape_controls(layer)))
                 .unwrap_or_default()
         );
-        crate::preset_report::write_wrapped(&mut output, "    ", &diagnostic.message);
+        crate::preset_report::write_wrapped(
+            &mut output,
+            "    ",
+            &escape_controls(&diagnostic.message),
+        );
         let _ = writeln!(
             output,
             "    {} {}",
@@ -118,13 +123,13 @@ pub(super) fn migration_text(
         let layer = diagnostics
             .iter()
             .find_map(|diagnostic| diagnostic.source_layer.as_deref())
-            .map(|value| format!(" ({value})"))
+            .map(|value| format!(" ({})", escape_controls(value)))
             .unwrap_or_default();
         let _ = writeln!(output);
         let _ = writeln!(
             output,
             "  {}{layer}",
-            logical.trim_end_matches("/shine.toml")
+            escape_controls(logical.trim_end_matches("/shine.toml"))
         );
         for diagnostic in &diagnostics {
             let symbol = if diagnostic.severity == PresetMigrationSeverityV1::Blocker {
@@ -132,8 +137,16 @@ pub(super) fn migration_text(
             } else {
                 crate::colors::symbol("!")
             };
-            let _ = writeln!(output, "    {symbol} {}", diagnostic.target);
-            crate::preset_report::write_wrapped(&mut output, "      ", &diagnostic.message);
+            let _ = writeln!(
+                output,
+                "    {symbol} {}",
+                escape_controls(&diagnostic.target)
+            );
+            crate::preset_report::write_wrapped(
+                &mut output,
+                "      ",
+                &escape_controls(&diagnostic.message),
+            );
             let _ = writeln!(
                 output,
                 "      {} {}",
@@ -198,7 +211,8 @@ pub(super) fn render_remediation(
         let _ = writeln!(output, "    {}", crate::colors::yellow("Fix:"));
         let _ = writeln!(
             output,
-            "      Review and update {logical} in the upstream checkout."
+            "      Review and update {} in the upstream checkout.",
+            escape_controls(logical)
         );
         let _ = writeln!(output, "      The managed overlay mirror is read-only.");
     }
@@ -207,6 +221,13 @@ pub(super) fn render_remediation(
         if diagnostic.code == "recursive_artifact_hook_removed"
             && let Some(category) = diagnostic.target.strip_prefix("app/")
         {
+            if category.chars().any(char::is_control) {
+                let _ = writeln!(
+                    output,
+                    "    Next: run shine app artifact apply with the original category (control characters; copyable command omitted) after relevant changes."
+                );
+                continue;
+            }
             let category = crate::shell_quote::command_positionals(&[category]);
             let _ = writeln!(
                 output,
@@ -225,17 +246,28 @@ pub(super) fn render_remediation(
         .map(|diagnostic| &diagnostic.target)
         .collect::<BTreeSet<_>>();
     for target in trust_targets {
-        let target = crate::shell_quote::command_arg(target);
+        let inspect = crate::trust::trust_command_hint("inspect", target);
+        let inspect = if target.chars().any(char::is_control) {
+            inspect
+        } else {
+            format!("`{inspect}`")
+        };
+        let grant = crate::trust::trust_command_hint("grant", target);
+        let grant = if target.chars().any(char::is_control) {
+            grant
+        } else {
+            format!("`{grant}`")
+        };
         let timing = if active_source {
             "After validation"
         } else {
             "After this source becomes active"
         };
         let _ = writeln!(output, "    {timing}, review the external executable code:");
-        let _ = writeln!(output, "      `shine trust inspect {target}`");
+        let _ = writeln!(output, "      {inspect}");
         let _ = writeln!(
             output,
-            "      If the inspection reports a requirement and you accept its scope, run `shine trust grant {target}`."
+            "      If the inspection reports a requirement and you accept its scope, run {grant}."
         );
     }
 
@@ -283,14 +315,17 @@ pub(super) fn print_diffs(edits: &[PresetMigrationEdit]) {
             .map(String::from_utf8_lossy)
             .unwrap_or_default();
         println!();
-        println!(
-            "{}",
-            similar::TextDiff::from_lines(&old, &new)
-                .unified_diff()
-                .header(
-                    &format!("a/{}", edit.logical_path),
-                    &format!("b/{}", edit.logical_path)
-                )
-        );
+        let path = escape_controls(&edit.logical_path);
+        let diff = similar::TextDiff::from_lines(&old, &new)
+            .unified_diff()
+            .header(&format!("a/{path}"), &format!("b/{path}"))
+            .to_string();
+        for line in diff.split_inclusive('\n') {
+            print!("{}", escape_controls(line.trim_end_matches('\n')));
+            if line.ends_with('\n') {
+                println!();
+            }
+        }
+        println!();
     }
 }

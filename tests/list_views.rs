@@ -9,11 +9,7 @@ use std::{
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("shine-list-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("shine-list-{}", uuid::Uuid::new_v4()));
         for path in [
             "home/AppData/Roaming",
             "home/AppData/Local",
@@ -1393,6 +1389,130 @@ fn embedded_shell_catalog_does_not_read_invalid_trust_but_runtime_paths_still_do
             assert_eq!(fs::read_dir(&trust).unwrap().count(), 0);
         }
     }
+}
+
+#[test]
+fn targeted_update_encodes_relocation_rows_and_preserves_installed_files() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    let manifest = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    let metadata = fixture.0.join("state/presets/app/demo/shine.toml");
+    let original = fs::read_to_string(&metadata).unwrap();
+    let name = if cfg!(unix) {
+        "new\nFORGED\r\t\u{1b}中文"
+    } else {
+        "new中文"
+    };
+    let destination = fixture.0.join(name);
+    let changed = original.replace(
+        &format!("{:?}", fixture.0.join("destination").to_str().unwrap()),
+        &toml::Value::String(destination.to_str().unwrap().into()).to_string(),
+    );
+    assert_ne!(original, changed);
+    fs::write(&metadata, &changed).unwrap();
+    for args in [
+        vec!["update", "app/demo"],
+        vec!["update", "--diff"],
+        vec!["update", "--verbose", "--diff"],
+    ] {
+        let output = fixture.run(&args);
+        success(&output);
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = stdout(&output);
+        assert!(
+            text.contains("destination:") && text.contains("content: unchanged"),
+            "{text:?}"
+        );
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(!text.contains("\nFORGED"), "{text:?}");
+        if cfg!(unix) {
+            assert!(text.contains(r"new\nFORGED\r\t\u{1b}中文"));
+        }
+    }
+    assert_eq!(
+        fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+        manifest
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("destination/config.txt")).unwrap(),
+        "static-v1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("destination/manual.txt")).unwrap(),
+        "manual-v1\n"
+    );
+    assert!(!destination.exists());
+    assert_eq!(fs::read_to_string(&metadata).unwrap(), changed);
+}
+
+#[test]
+fn generator_failure_notices_encode_renamed_source_and_remain_read_only() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fixture.app(true);
+    let preset = fixture.0.join("state/presets/app/demo");
+    let name = if cfg!(unix) {
+        "manual\nFORGED\r\t\u{1b}.txt"
+    } else {
+        "manual中文.txt"
+    };
+    let metadata = fs::read_to_string(preset.join("shine.toml"))
+        .unwrap()
+        .replace(
+            "source = 'manual.txt'",
+            &format!(
+                "source = {}\ntarget = 'manual.txt'",
+                toml::Value::String(name.into())
+            ),
+        );
+    fs::write(preset.join("shine.toml"), &metadata).unwrap();
+    fs::rename(preset.join("manual.txt"), preset.join(name)).unwrap();
+    fs::write(preset.join("generate.ts"), format!(
+        "await Bun.write({:?}, 'ran'); process.stderr.write('PRIVATE_GENERATOR_DETAIL'); process.exit(9);\n",
+        fixture.0.join("generator-ran").to_str().unwrap())).unwrap();
+    let manifest = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    for trusted in [false, true] {
+        if trusted {
+            success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+        }
+        for command in ["info", "update"] {
+            // Selecting a static sibling still reports every category-scoped evaluation failure.
+            let output = fixture.run(&[command, "app/demo/config.txt", "--run-generators"]);
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("one or more App generators could not be evaluated")
+            );
+            let text = stdout(&output);
+            assert!(text.contains(if trusted {
+                "generator evaluation failed"
+            } else {
+                "generator trust required"
+            }));
+            assert!(!text.contains("PRIVATE_GENERATOR_DETAIL"));
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(!text.contains("\nFORGED"), "{text:?}");
+            if cfg!(unix) {
+                assert!(text.contains(r"demo/manual\nFORGED\r\t\u{1b}.txt:"));
+            }
+            assert!(!text.contains("No update available"));
+        }
+        assert_eq!(fixture.0.join("generator-ran").exists(), trusted);
+    }
+    assert_eq!(
+        fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+        manifest
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("destination/manual.txt")).unwrap(),
+        "manual-v1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(preset.join("shine.toml")).unwrap(),
+        metadata
+    );
 }
 
 #[test]

@@ -258,6 +258,8 @@ Content diffs shown by `info`, `app info`, and `update` escape control character
 or file. Shell queries do not suggest generator evaluation. Explicit `--run-generators` evaluation
 still covers the selected App category, even for a single-file target. Trust or evaluation failures
 remain nonzero; an incomplete evaluation does not produce a `No update available` conclusion.
+Their failure labels and details escape terminal controls. Update path-change rows and App destination
+paths in `update --diff` and `update --verbose --diff` do the same; they do not change files or installation records.
 
 `update --verbose` includes installed managed system configurations even when no update is pending.
 `up-to-date (recorded)` compares the desired configuration with the installation record; it is not a
@@ -366,6 +368,11 @@ line. JSON reports and bundle contents retain the original target name.
 If `preset schema` cannot write its output, it reports an error and exits nonzero.
 Artifact follow-up commands printed by migration quote category names for POSIX shells on Unix
 and PowerShell on Windows. Migration itself does not run those commands.
+Migration summaries and diff previews escape controls in names, paths and line contents. These diffs
+are for review, not patch input; JSON identities and the metadata written by migration retain their
+original meaning. For targets containing controls, migration and blocked-Plan trust guidance ask for
+the original argument instead of printing a copyable command. Development-trust notices also escape
+controls without changing the grant or authorizing an operation.
 New templates omit empty and speculative capability tables. `--unrestricted` adds the optional
 unrestricted author statement, but all arbitrary code is unisolated with or without it.
 

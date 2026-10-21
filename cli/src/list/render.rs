@@ -76,12 +76,18 @@ fn print_app_update_detail(row: &AppRow) {
     let destination = row
         .dest
         .as_deref()
-        .map(|dest| format!("  {}  {}", colors::dim("→"), colors::dim(dest)))
+        .map(|dest| {
+            format!(
+                "  {}  {}",
+                colors::dim("→"),
+                colors::dim(&output::escape_controls(dest))
+            )
+        })
         .unwrap_or_default();
     println!(
         "     {}  {}{}  {}",
         colors::symbol("↑"),
-        row.label,
+        output::escape_controls(&row.label),
         destination,
         colors::status_label(row.status_text, "↑"),
     );
@@ -466,7 +472,13 @@ pub(super) async fn status(
             let dest_part = if diff {
                 row.dest
                     .as_deref()
-                    .map(|d| format!("  {}  {}", colors::dim("→"), colors::dim(d)))
+                    .map(|d| {
+                        format!(
+                            "  {}  {}",
+                            colors::dim("→"),
+                            colors::dim(&output::escape_controls(d))
+                        )
+                    })
                     .unwrap_or_default()
             } else {
                 String::new()

@@ -305,8 +305,9 @@ async fn review_plans_with_render_mode(
         rendered.push(format!("  {}", crate::colors::bold("Development trust")));
         for target in development_trust_targets {
             rendered.push(format!(
-                "    {} {target} · code changes allowed from the enrolled local source",
-                crate::colors::symbol("✓")
+                "    {} {} · code changes allowed from the enrolled local source",
+                crate::colors::symbol("✓"),
+                crate::output::escape_controls(&target)
             ));
         }
     }
@@ -439,6 +440,7 @@ fn blocked_plan_error(
         .map(|step| step.target.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     for target in legacy_overlay_metadata_targets {
+        let target = crate::output::escape_controls(target);
         reasons.push(format!(
             "{target}: legacy v1 overlay metadata contains a recursive artifact hook that is incompatible with Shine 2. Remove or migrate only `{target}/shine.toml`; retain overlay payload files such as `merge.yaml` and `rules/`. `shine state migrate` does not modify Preset overlays"
         ));
@@ -454,6 +456,7 @@ fn blocked_plan_error(
         .map(|step| step.target.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     for target in legacy_metadata_targets {
+        let target = crate::output::escape_controls(target);
         reasons.push(format!(
             "{target}: legacy v1 App metadata contains a recursive artifact hook that is incompatible with Shine 2. Migrate `{target}/shine.toml` to metadata schema v2 and remove the recursive hook; `shine state migrate` does not modify Preset metadata"
         ));
@@ -489,11 +492,30 @@ fn blocked_plan_error(
         .map(permission_name)
         .collect::<std::collections::BTreeSet<_>>();
     for (target, development) in external_app_and_shell_targets {
-        let target_arg = crate::shell_quote::command_arg(target);
-        reasons.push(if development {
-            format!("{target}: live Shell deployment requires development trust; run `shine trust inspect {target_arg}` to review the current scope. If you accept long-term authorization of future code from this local source, run `shine trust grant {target_arg} --development`; otherwise set `external_shell_mode = \"snapshot\"` and review again")
+        let inspect = crate::trust::trust_command_hint("inspect", target);
+        let grant = crate::trust::trust_command_hint("grant", target);
+        let controls = target.chars().any(char::is_control);
+        let inspect = if controls {
+            inspect
         } else {
-            format!("{target}: external Preset code is not trusted; run `shine trust inspect {target_arg}` to review the current scope, then `shine trust grant {target_arg}` if you accept it")
+            format!("`{inspect}`")
+        };
+        let grant = if controls {
+            if development {
+                format!("{grant}, adding --development")
+            } else {
+                grant
+            }
+        } else if development {
+            format!("`{grant} --development`")
+        } else {
+            format!("`{grant}`")
+        };
+        let target = crate::output::escape_controls(target);
+        reasons.push(if development {
+            format!("{target}: live Shell deployment requires development trust; run {inspect} to review the current scope. If you accept long-term authorization of future code from this local source, run {grant}; otherwise set `external_shell_mode = \"snapshot\"` and review again")
+        } else {
+            format!("{target}: external Preset code is not trusted; run {inspect} to review the current scope, then {grant} if you accept it")
         });
     }
     if !missing.is_empty() {

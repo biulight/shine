@@ -278,7 +278,10 @@ bugs. Check this list before changing the modules named in each entry.
   environment values, runtime manifests, and trust grants are never migrated. Opaque-code
   permissions, broad network access, and Sys v1 dispatchers are never inferred. Managed Git overlays
   are diagnostic-only; a source change, backup/write failure, refusal, or remaining blocker fails the
-  command even when independent safe edits have converged.
+  command even when independent safe edits have converged. Terminal summaries encode data before
+  wrapping; diff headers encode logical paths before diff construction and body rendering preserves
+  structural newlines while encoding CR/TAB/ESC. Display escapes never enter candidates or JSON.
+  Control-bearing remediation targets require original operands rather than escaped command aliases.
 - **Preset bundle bytes exclude host identity and author-only state.** `shine preset pack` uses one
   validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical
   file order, normalized mode, zero uid/gid/mtime, and a fixed gzip header determine bytes; physical

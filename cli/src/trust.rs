@@ -374,7 +374,7 @@ fn render_inspect_guidance(
     )
 }
 
-fn trust_command_hint(action: &str, target: &str) -> String {
+pub(crate) fn trust_command_hint(action: &str, target: &str) -> String {
     if target.chars().any(char::is_control) {
         format!(
             "shine trust {action} with the original target (control characters; copyable command omitted)"

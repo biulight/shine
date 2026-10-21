@@ -207,6 +207,8 @@ shine completions <bash|zsh|powershell>
 查询 Shell 目标时不会建议评估生成器。显式传入 `--run-generators` 时，即使目标是单个文件，
 仍会评估其 App 分类中的生成器。信任或评估失败仍以非零状态退出；评估未完成时不会得出
 `No update available` 的结论。
+这些失败提示的标签和详情会转义终端控制字符。更新路径变更行，以及 `update --diff` 和
+`update --verbose --diff` 中的 App 目标路径也采用同样显示方式，不会更改文件或安装记录。
 
 `update --verbose` 也会列出已安装且暂无更新的受管系统配置。
 `up-to-date (recorded)` 表示期望配置与安装记录一致，并非实时系统检查；Preset 来源缺失会单独提示。
@@ -304,6 +306,10 @@ JSON 报告和包内容保留原始目标名。
 如果 `preset schema` 无法写入输出，它会报告错误并以非零状态退出。
 迁移输出的 artifact 后续操作命令会引用分类名：Unix 使用 POSIX shell 语法，Windows 使用
 PowerShell 语法。迁移本身不会执行这些命令。
+迁移汇总和 diff 预览会转义名称、路径及行内的控制字符。这些 diff 用于审阅，不能直接作为补丁；
+JSON 中的身份信息和迁移写入的 metadata 保持原有含义。目标含控制字符时，迁移和 Plan 阻断后的
+信任提示会要求使用原始参数，不提供可复制命令。Development trust 提示也会转义控制字符，
+但不会改变信任授权或批准操作。
 新模板不会生成空表或推测性能力清单。`--unrestricted` 会添加可选的 unrestricted 作者说明，
 但无论是否使用，所有任意代码都未隔离。
 

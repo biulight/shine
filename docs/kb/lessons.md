@@ -3278,3 +3278,15 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Regression**: extend production CLI/child-process capture tests, retaining exact binary stdout,
   selected raw paths, verified plaintext removal, replacement protection and child exit 42. Keep
   warning-only save/sync success, nested error causes, ordinary quoting and profile idempotence.
+
+## 2026-10-21 — Auxiliary review output shares the terminal boundary
+
+- **Symptom**: migration headings/diff headers, generator failure labels, update relocation rows and
+  appended trust notices still emitted raw controls after the main catalog/Plan views were fixed.
+- **Fix**: encode human data at each final output boundary and reuse trust command guidance;
+  keep original selectors for grouping, diff lookup, trust evaluation and mutation. Migration diffs
+  preserve structural LF and display CR/TAB explicitly; they are not patch input.
+- **Regression**: snapshot compatibility reports and real CLI migration, generator, update/status
+  and blocked lifecycle checks retain JSON/candidate hashes, redaction, exit codes and file bytes.
+  Migration's pre-existing CRLF normalization is checked through candidate hashes, not redefined by
+  display tests. Explicit artifacts retain inherited process I/O and their existing failure policy.
