@@ -25,7 +25,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.5.0 sh install.sh
+SHINE_VERSION=2.6.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -39,7 +39,7 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.5.0"; .\install.ps1
+$env:SHINE_VERSION = "2.6.0"; .\install.ps1
 ```
 
 ## Install with cargo-binstall
@@ -126,6 +126,20 @@ successful `shine self upgrade`, the same behavior applies when syncing a separa
 destination. Shine cannot currently elevate to replace the running binary itself when that binary
 is in a protected directory; install and run it from a user-writable location instead. On Windows,
 installing or upgrading in a protected location requires a terminal with the necessary permissions.
+
+## Upgrade to Shine 2.6
+
+Shine 2.6 removes `--purge` from `uninstall`, `app uninstall`, and `shell uninstall`.
+Remove that option from scripts; commands that still contain it fail before loading configuration.
+Uninstall now includes internal cache cleanup in the Plan you approve. Preview removals with
+`--dry-run`, especially before removing a whole App category or all Shell presets. External preset
+sources are preserved. See [App removal](./guides/app-presets.md) and
+[Shell removal](./guides/shell-presets.md) for scope and retained-file behavior.
+
+Shine 2.6 also adds persistent secret-file export with
+`shine env workspace export --format files --mode <MODE> --file-group <GROUP>`.
+Unlike temporary files supplied to `env run`, exported plaintext stays on disk until you remove it.
+Read the [secret-file guide](./guides/environment.md#workspace-secret-files) before use.
 
 ## Retire an older local HTTP service
 

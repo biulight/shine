@@ -23,7 +23,7 @@ shine --version
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.5.0 sh install.sh
+SHINE_VERSION=2.6.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -36,7 +36,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.5.0"; .\install.ps1
+$env:SHINE_VERSION = "2.6.0"; .\install.ps1
 ```
 
 ## 使用 cargo-binstall 安装
@@ -111,6 +111,19 @@ Shine 2.5 或更高版本；旧客户端会拒绝新格式。Windows 上新建�
 同步结果路径和警告详情会转义终端控制字符，已记录的目标保持不变。
 
 在 Unix 系统上，如果 `shine self install` 要把二进制文件复制到当前用户不可写的位置，Shine 会交互式请求授权，并通过 `sudo` 完成安装。`shine self upgrade` 成功后同步另一个已记录的安装目标时，也会采用相同方式。不过，如果当前运行的 Shine 本身位于受保护目录，Shine 暂时无法自动提权替换该二进制文件；请改为安装并运行用户可写位置中的 Shine。Windows 在受保护位置安装或升级时，仍需使用具备相应权限的终端。
+
+## 升级到 Shine 2.6
+
+Shine 2.6 从 `uninstall`、`app uninstall` 和 `shell uninstall` 中移除了 `--purge`。
+请从脚本中删除该选项；仍含此选项的命令会在加载配置前失败。
+卸载现在默认将内部缓存清理纳入待审批的 Plan。先用 `--dry-run` 预览，尤其是在删除整个
+App 分类或所有 Shell 预设前。外部预设源会保留。清理范围和文件保留规则见
+[App 卸载](./guides/app-presets.md)和 [Shell 卸载](./guides/shell-presets.md)。
+
+Shine 2.6 还新增了持久化机密文件导出：
+`shine env workspace export --format files --mode <MODE> --file-group <GROUP>`。
+与 `env run` 提供的临时文件不同，导出的明文会留在磁盘上，直到你自行删除。
+使用前请阅读[机密文件指南](./guides/environment.md#workspace-secret-files)。
 
 ## 清理旧版本的本地 HTTP 服务
 

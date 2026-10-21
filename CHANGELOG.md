@@ -5,6 +5,53 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [2.6.0] — 2026-10-22
+
+### Breaking Changes
+
+- Remove `--purge` from top-level, App, and Shell uninstall commands. Remove the option from
+  existing scripts: uninstall now includes internal cleanup in its reviewed Plan and dry-run.
+  App category removal includes the entire internal category cache; whole-App and whole-Shell
+  removal include their internal cache trees. Targeted Shell removal preserves extra cache files
+  and sibling dependencies. External preset sources remain untouched, and protected or failed
+  removals retain records and backups needed for retry.
+
+### Features
+
+- Export selected workspace secret file groups persistently with `env workspace export --format
+  files --mode <MODE> --file-group <GROUP>`. All selected files decrypt before creation begins;
+  existing targets and concurrent writes are preserved. Exported plaintext remains until you remove
+  it, unlike temporary `env run` credentials. Git exclusion and private-file protections still apply.
+- Support official prebuilt release binaries through `cargo binstall shine-cli`, with metadata for
+  the six macOS, Linux glibc, and Windows targets. Use `--strategies crate-meta-data` to require
+  official release assets.
+
+### Fixes
+
+- Escape terminal control characters in CLI reports, reviews, paths, labels, diffs, and failure
+  notices. Preserve native path identities and whitespace; omit unsafe copyable hints instead of
+  suggesting a different target. Configuration parser diagnostics no longer echo input values.
+- Preserve PowerShell export values through pipelines, reject NUL-containing exports, retain
+  helper failures, and propagate Unix signal exit status through environment proxies.
+- Correct incomplete-install and update summaries, dry-run counts, retained-resource status, and
+  receipt-based Sys status. Preserve underlying upgrade errors and report synchronization warnings.
+- Include external preset overlays in completion and clarify effective source, export, and unlink
+  behavior. Reject unsupported source paths and non-directory bundle-output ancestors safely.
+- Preserve uninstall retry and recovery boundaries; reject invalid migration documents without
+  mutation and validate App destination paths consistently.
+- Align preset test fixture paths with native authoring behavior, including Windows.
+- Update TLS certificate-validation dependencies for security advisories.
+
+### Internal
+
+- Consolidate runtime responsibilities and remove obsolete adapters and duplicate test logic while
+  retaining lifecycle, approval, ownership, and recovery regression coverage.
+
+### Docs
+
+- Refresh English and Simplified Chinese manuals, add 2.6 upgrade guidance, and replace the 2.5
+  documentation snapshot with 2.6 while retaining the 1.8 manual.
+
 ## [2.5.0] — 2026-10-16
 
 ### Features

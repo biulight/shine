@@ -41,6 +41,12 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   optional HTTP service and changing env precedence and write targets. Keep the current behavior,
   disclose incompatibilities and manual migration in CHANGELOG and both manual locales, and retain
   `clear serve` for legacy service cleanup. This exception does not change the general rule above.
+- **2.6.0 release exception (2026-10-22):** the maintainer chose a minor release for the limited
+  CLI compatibility change that removes `--purge` and includes internal cache cleanup in default
+  uninstall. Most work is internal refactoring and bug fixes; persistent secret-file export and
+  cargo-binstall support justify a minor rather than patch release. Keep the implemented behavior
+  and disclose the cleanup scope and removal of `--purge` from scripts in CHANGELOG and both manual
+  locales. This exception does not change the general versioning rule above.
 - A versioned release candidate uses `X.Y.Z-rc.N`. It is a reproducible prerelease, does not
   replace the latest stable release, and does not trigger the stable `release` → `main` sync.
 - Generated RC notes cover the immediately preceding versioned tag; generated stable notes cover

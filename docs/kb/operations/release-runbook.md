@@ -23,6 +23,8 @@ How to cut a stable release. Prerequisite reading:
 5. **Verify public documentation** when the release changes user-visible behavior: update both the
    English default manual and Simplified Chinese locale. Publish only the latest stable
    documentation within each major, plus `Next` ([ADR 0089](../decisions/0089-documentation-version-retention.md)).
+   For a new major release, add its major.minor snapshot in both locales and retain the latest
+   snapshot of each older major; move the previous stable version to its major.minor URL.
    For a new minor release, replace the previous same-major snapshot in `website/versions.json`
    and the Docusaurus version configuration; remove its English and Chinese snapshot directories,
    versioned sidebar, and Chinese version metadata. Patch releases refresh the existing
