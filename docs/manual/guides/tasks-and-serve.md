@@ -27,7 +27,9 @@ shine task info kill-port
 ```
 
 Tasks are stored in `tasks.toml` under the active Shine runtime directory. `SHINE_CONFIG_DIR` or the
-global `--config-dir` selects the corresponding task list. A task saved with `--cwd` always starts
+global `--config-dir` selects the corresponding task list. Malformed task TOML reports a parse
+error without printing stored commands; the failed operation leaves the list unchanged.
+A task saved with `--cwd` always starts
 there; without it, the task uses the caller's current directory.
 
 `--cwd` expands a leading `~` and saves the resolved absolute directory. If that directory's path
@@ -46,7 +48,9 @@ shell in the task, such as `sh -c '...'`. Windows does not include `sh`; that fo
 On Unix, saved-command displays use POSIX shell quoting, including executable names such as `if` or
 `MODE=test` that would otherwise be parsed as shell syntax. These quotes are for display; task
 execution continues to use the original argument array. The run announcement goes to stderr,
-leaving the child's stdout available for piping.
+leaving the child's stdout available for piping. On Windows, these displays use PowerShell quoting
+and its `&` invocation operator. Stored task names escape controls in human output, and list
+columns use terminal display widths; lookup and deletion still use the original name.
 
 Replace or delete a task:
 

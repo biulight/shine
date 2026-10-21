@@ -1,5 +1,25 @@
 # Lessons Learned
 
+## 2026-10-21 — Registry, migration and task displays retain their own compatibility boundaries
+
+- **Evidence**: malformed task and proxy documents exposed supplied markers through parser errors;
+  task reads/writes and proxy install/uninstall still correctly failed before mutation. The task
+  persistence helper also carries I/O failures, so replacing every error would lose compatibility.
+- **Fix**: translate only task TOML errors at its CLI owner and reuse the static config mapper for
+  proxy captured rules, typed rule conversion and both manifest readers. Retain the shared reader,
+  missing-file default, locks, exact snapshots, preflight, rollback and write order.
+- **Display evidence**: runtime migration actions/current-schema notices and release-cache warnings
+  split rows on control-bearing paths. Existing task names split labels and misaligned Unicode
+  columns. Encode these fields at display without feeding the encoding back into identities.
+- **Windows boundary**: POSIX single-quote escaping produced three PowerShell parse errors for a
+  saved task. Reuse native command program/argument encoders; test the displayed command through
+  real PowerShell against direct execution, including literal syntax and child exit 17. The test's
+  outer `powershell -Command` must explicitly forward `$LASTEXITCODE`: its default maps a native
+  nonzero status to 1, unlike the task runner's direct child-status propagation.
+- **Coverage**: syntax/type failures preserve all inputs, task reads/mutations/run aliases retain
+  exit 1, migration preview/apply cover old/current schema and every input file, cached warnings
+  remain nonfatal, and task lookup/deletion retain original stored names.
+
 ## 2026-10-21 — Document readers need the same diagnostic boundary as configuration readers
 
 - **Evidence**: typed and syntax errors in workspace, personal preference, compiled cache, Broker

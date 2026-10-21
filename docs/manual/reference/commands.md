@@ -233,7 +233,11 @@ Tab completion does not execute Preset code or grant trust.
 `state migrate` validates project configuration and workspace files before cleanup or writes.
 Invalid TOML syntax or workspace `env`/`env.encryption` fields that are not tables produce an
 error with the file location and exit code 1, without quoting file contents. Correct the file
-and retry; `--dry-run` uses the same validation.
+and retry; `--dry-run` uses the same validation. Migration preview and completion notices escape
+control characters in displayed paths without changing migration targets.
+
+Release-cache failure warnings escape control characters in their error text. Cache writes remain
+best-effort and do not turn a successful release check into a failure.
 
 If the Shine release check cannot finish, `update` prints a warning and still reports configuration
 updates. When no configuration updates are found, it explicitly says the version check is incomplete

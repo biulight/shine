@@ -49,6 +49,292 @@ fn display_path_fixture() -> Fixture {
 }
 
 #[test]
+fn stored_task_names_encode_controls_align_columns_and_retain_lookup_identity() {
+    let f = Fixture::new();
+    let state = f.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    fs::write(state.join("update-check.json"),serde_json::to_vec(&serde_json::json!({
+        "latest_version":env!("CARGO_PKG_VERSION"),"checked_at_unix_secs":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+    })).unwrap()).unwrap();
+    let names = ["ascii", "任务", "e\u{301}", "old\nFORGED=name\r\t\u{1b}"];
+    let mut manifest = cli::task::manifest::TaskManifest::default();
+    for name in names {
+        manifest.upsert(
+            name,
+            vec![env!("CARGO_BIN_EXE_shine").into(), "--version".into()],
+            None,
+        );
+    }
+    let original = toml::to_string(&manifest).unwrap();
+    fs::write(state.join("tasks.toml"), &original).unwrap();
+    let list = f
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["task", "list"])
+        .output()
+        .unwrap();
+    assert!(list.status.success(), "{list:?}");
+    let text = String::from_utf8(list.stdout).unwrap();
+    assert_eq!(text.lines().count(), names.len() + 1, "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    let mut columns = Vec::new();
+    for name in names {
+        let info = f
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["task", "info", name])
+            .output()
+            .unwrap();
+        assert!(info.status.success(), "{info:?}");
+        let info = String::from_utf8(info.stdout).unwrap();
+        assert_eq!(info.lines().count(), 2, "{info:?}");
+        let display: String = name
+            .chars()
+            .flat_map(|ch| {
+                if ch.is_control() {
+                    ch.escape_debug().collect::<Vec<_>>()
+                } else {
+                    vec![ch]
+                }
+            })
+            .collect();
+        assert!(info.lines().next().unwrap().ends_with(&display), "{info:?}");
+        let command = info
+            .lines()
+            .nth(1)
+            .unwrap()
+            .strip_prefix("Command")
+            .unwrap()
+            .trim_start();
+        let row = text
+            .lines()
+            .find(|line| line.starts_with(&display))
+            .unwrap();
+        columns.push(console::measure_text_width(
+            row.strip_suffix(command).unwrap(),
+        ));
+        let run = f
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["task", "run", name])
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{run:?}");
+        assert!(run.stdout.starts_with(b"shine "), "{run:?}");
+        let error = String::from_utf8(run.stderr).unwrap();
+        assert_eq!(error.lines().count(), 1, "{error:?}");
+        assert!(!error.contains(['\r', '\t', '\u{1b}']), "{error:?}");
+        assert_eq!(
+            fs::read_to_string(state.join("tasks.toml")).unwrap(),
+            original
+        );
+    }
+    assert!(
+        columns.iter().all(|column| *column == columns[0]),
+        "{columns:?}"
+    );
+    let deleted = f
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["task", "delete", names[3]])
+        .output()
+        .unwrap();
+    assert!(deleted.status.success(), "{deleted:?}");
+    let text = String::from_utf8(deleted.stdout).unwrap();
+    assert_eq!(text.lines().count(), 1, "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    let after: cli::task::manifest::TaskManifest =
+        toml::from_str(&fs::read_to_string(state.join("tasks.toml")).unwrap()).unwrap();
+    manifest.remove(names[3]);
+    assert_eq!(after, manifest);
+    for args in [
+        vec!["task", "info", names[3]],
+        vec!["task", "run", names[3]],
+        vec!["task", "delete", names[3]],
+        vec!["task", "save", names[3], "--", "never-start"],
+    ] {
+        let out = f.command().args(args).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+        assert!(
+            !stderr.lines().any(|line| line.starts_with("FORGED=name")),
+            "{stderr:?}"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn task_command_displays_round_trip_through_native_powershell_without_changing_execution() {
+    let f = Fixture::new();
+    let state = f.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    fs::write(state.join("update-check.json"), serde_json::to_vec(&serde_json::json!({
+        "latest_version":env!("CARGO_PKG_VERSION"),
+        "checked_at_unix_secs":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+    })).unwrap()).unwrap();
+    let program = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let saved = f
+        .command()
+        .args(["task", "save", "literal", "--"])
+        .arg(&program)
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Console]::Out.Write('it''s:$literal:`tick'); exit 17",
+        ])
+        .output()
+        .unwrap();
+    assert!(saved.status.success(), "{saved:?}");
+    let text = String::from_utf8(saved.stdout).unwrap();
+    let display = text.lines().nth(1).unwrap();
+    let before = fs::read(state.join("tasks.toml")).unwrap();
+    for args in [vec!["task", "info", "literal"], vec!["task", "list"]] {
+        let out = f.command().args(args).output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert!(String::from_utf8(out.stdout).unwrap().contains(display));
+    }
+    let direct = f
+        .command()
+        .args(["task", "run", "literal"])
+        .output()
+        .unwrap();
+    assert_eq!(direct.status.code(), Some(17), "{direct:?}");
+    assert_eq!(direct.stdout, b"it's:$literal:`tick");
+    assert!(String::from_utf8(direct.stderr).unwrap().contains(display));
+    let copied = Command::new(&program)
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        // PowerShell -Command otherwise maps a native nonzero status to 1.
+        .arg(format!("{display}; exit $LASTEXITCODE"))
+        .current_dir(&f.0)
+        .output()
+        .unwrap();
+    assert_eq!(copied.status.code(), Some(17), "{display}: {copied:?}");
+    assert_eq!(copied.stdout, direct.stdout, "{display}");
+    assert!(copied.stderr.is_empty(), "{copied:?}");
+    assert_eq!(fs::read(state.join("tasks.toml")).unwrap(), before);
+}
+
+#[test]
+fn runtime_migration_notices_encode_paths_without_changing_preview_or_apply_scope() {
+    for schema in [0, 2] {
+        for preview in [true, false] {
+            let f = display_path_fixture();
+            let state = f.0.join("state");
+            fs::create_dir_all(&state).unwrap();
+            let config = format!("schema_version={schema}\ngpg_key_id='global-key'\n");
+            let project = "gpg_key_id='project-key'\n";
+            let workspace =
+                "version=1\n[env]\nfiles=[]\n[env.encryption]\nrecipient='workspace-key'\n";
+            for (path, contents) in [
+                (state.join("config.toml"), config.as_str()),
+                (f.0.join("shine.config.toml"), project),
+                (f.0.join("shine.workspace.toml"), workspace),
+            ] {
+                fs::write(path, contents).unwrap();
+            }
+            fs::write(
+                state.join("update-check.json"),
+                b"preserved unless schema cleanup applies",
+            )
+            .unwrap();
+            let mut command = f.command();
+            command.env("NO_COLOR", "1").args(["state", "migrate"]);
+            if preview {
+                command.arg("--dry-run");
+            }
+            let out = command.output().unwrap();
+            assert_eq!(out.status.code(), Some(0), "{out:?}");
+            assert!(out.stderr.is_empty(), "{out:?}");
+            let text = String::from_utf8(out.stdout).unwrap();
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(
+                !text.lines().any(|line| line.starts_with("FORGED=path")),
+                "{text:?}"
+            );
+            assert!(
+                text.contains(if cfg!(unix) {
+                    "display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"
+                } else {
+                    "display中文"
+                }),
+                "{text:?}"
+            );
+            if preview {
+                assert_eq!(
+                    fs::read_to_string(state.join("config.toml")).unwrap(),
+                    config
+                );
+                assert_eq!(
+                    fs::read_to_string(f.0.join("shine.config.toml")).unwrap(),
+                    project
+                );
+                assert_eq!(
+                    fs::read_to_string(f.0.join("shine.workspace.toml")).unwrap(),
+                    workspace
+                );
+            } else {
+                for (path, key) in [
+                    (state.join("config.toml"), "global-key"),
+                    (f.0.join("shine.config.toml"), "project-key"),
+                    (f.0.join("shine.workspace.toml"), "workspace-key"),
+                ] {
+                    let content = fs::read_to_string(path).unwrap();
+                    assert!(content.contains("gpg_recipients"), "{content}");
+                    assert!(content.contains(key));
+                }
+            }
+            assert_eq!(
+                state.join("update-check.json").exists(),
+                preview || schema == 2
+            );
+        }
+    }
+}
+
+#[test]
+fn task_registry_parse_failures_stop_reads_writes_and_execution_without_exposing_contents() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    fs::write(state.join("update-check.json"), serde_json::to_vec(&serde_json::json!({
+        "latest_version": env!("CARGO_PKG_VERSION"),
+        "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+    })).unwrap()).unwrap();
+    for contents in [
+        "[tasks.demo]\ncommand='TASK_DOCUMENT_CANARY'\n",
+        "[tasks.demo]\ncommand=['TASK_DOCUMENT_CANARY'] invalid\n",
+    ] {
+        fs::write(state.join("tasks.toml"), contents).unwrap();
+        for args in [
+            vec!["task", "list"],
+            vec!["task", "info", "demo"],
+            vec!["task", "run", "demo"],
+            vec!["run", "demo"],
+            vec!["task", "save", "new", "--", "never-start"],
+            vec!["task", "delete", "demo"],
+        ] {
+            let out = fixture.command().args(&args).output().unwrap();
+            assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
+            assert!(out.stdout.is_empty(), "{args:?}: {out:?}");
+            let error = String::from_utf8(out.stderr).unwrap();
+            assert!(error.contains("failed to parse tasks.toml"), "{error}");
+            assert!(!error.contains("TASK_DOCUMENT_CANARY"), "{error}");
+            assert_eq!(
+                fs::read_to_string(state.join("tasks.toml")).unwrap(),
+                contents
+            );
+        }
+    }
+}
+
+#[test]
 fn completion_install_encodes_paths_preserving_profile_identity_and_idempotence() {
     for f in [Fixture::new(), display_path_fixture()] {
         let shell = if cfg!(windows) { "pwsh" } else { "/bin/bash" };
@@ -4003,7 +4289,14 @@ fn task_info_aligns_values_with_and_without_working_directory() {
         let text = String::from_utf8(output.stdout).unwrap();
         let lines = text.lines().collect::<Vec<_>>();
         assert_eq!(lines[0], "Task        build");
-        assert_eq!(lines[1], "Command     cargo build");
+        assert_eq!(
+            lines[1],
+            if cfg!(windows) {
+                "Command     & 'cargo' build"
+            } else {
+                "Command     cargo build"
+            }
+        );
         assert_eq!(lines.len(), if fixed { 3 } else { 2 });
         if fixed {
             assert!(lines[2].starts_with("Working dir "), "{text}");

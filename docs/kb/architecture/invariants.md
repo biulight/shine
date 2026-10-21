@@ -861,7 +861,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **CLI configuration parser errors discard both source and value-bearing messages.** Minimal,
   full and layered TOML readers plus comment-preserving writers use one shared CLI error mapper.
   Workspace definitions, personal preferences, compiled cache documents, Broker policy and trust
-  stores reuse it before their existing file context.
+  stores reuse it before their existing file context. Proxy captured-rule and manifest parsers also
+  reuse it before mutation. The task registry retains its shared persistence reader, translating
+  only TOML parse failures at the CLI boundary; its missing-file default and I/O chain stay intact.
   Keep existing file/field context, I/O errors, validation and write order; discard the original
   parser chain, since type errors can quote values even without source excerpts. Silent metadata
   probes remain silent, and serde's direct `Config` interface remains unchanged.
@@ -870,6 +872,8 @@ bugs. Check this list before changing the modules named in each entry.
   rewrite and final schema-state patch in `state migrate` share a file-only TOML parse diagnostic.
   Drop the original parser error, including its source excerpt, duplicate-key text and Debug chain.
   Project/workspace validation still precedes cleanup and writes in both preview and apply modes.
+  Migration action descriptions and current-schema recipient notices encode controls only at
+  print sites, keeping the original paths in their apply closures.
   Workspace `env` and `env.encryption` must be table-like when present: scalar, array and
   array-of-tables inputs return ordinary redacted errors, never panics. Use optional lookups for
   absent settings; do not create encryption tables or expand inline-table recipient conversion.
@@ -1072,6 +1076,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **Task cwd display does not feed execution.** Save/info and the stderr run announcement encode
   terminal controls after home-relative formatting. Preserve stored native path identity, child
   stdout/stderr bytes, exit status and the existing lock, validation and direct-argv policy.
+- **Task displays use the native platform shell.** Reuse program and argument encoders: POSIX on
+  Unix, PowerShell invocation/quoting on Windows. Existing manifest names remain lookup identities;
+  encode their controls only for status/error text and measure list columns by display width.
 
 ## Embedded presets
 
@@ -1431,6 +1438,8 @@ bugs. Check this list before changing the modules named in each entry.
   reports a retry warning and exits nonzero without a completion summary or stale cache writes;
   automatic advisories silently discard superseded results. See ADR 0108.
 
+- **Release-cache warnings encode error chains only when printed.** Cache write, cooldown and
+  invalidation failures retain their best-effort behavior; encoding grants no success or authority.
 - **A failed or rate-limited version check must never fail the user's command** (`main.rs`,
   commits `605fdd8`, `f033a25`). Network errors are tolerated; rate-limit cooldowns are cached.
 - **`preview` is not a release baseline.** Version comparisons and release notes must use the

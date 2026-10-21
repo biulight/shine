@@ -286,7 +286,10 @@ async fn write_cache(cache_path: &Path, cache: &UpdateCache) -> Result<()> {
 
 async fn store_cache_if_possible(cache_path: &Path, latest: &Version, checked_at_unix_secs: u64) {
     if let Err(e) = store_cache(cache_path, latest, checked_at_unix_secs).await {
-        eprintln!("warning: failed to write update cache: {e:#}");
+        eprintln!(
+            "warning: failed to write update cache: {}",
+            crate::output::escape_controls(&format!("{e:#}"))
+        );
     }
 }
 
@@ -298,7 +301,10 @@ async fn store_rate_limit_cache_if_possible(
     if let Err(e) =
         store_rate_limit_cache(cache_path, rate_limited_until_unix_secs, auth_mode).await
     {
-        eprintln!("warning: failed to write update rate-limit cache: {e:#}");
+        eprintln!(
+            "warning: failed to write update rate-limit cache: {}",
+            crate::output::escape_controls(&format!("{e:#}"))
+        );
     }
 }
 
@@ -341,7 +347,10 @@ pub async fn invalidate_update_cache(config: &Config) {
     if let Err(e) = fs::remove_file(&cache_path).await
         && e.kind() != std::io::ErrorKind::NotFound
     {
-        eprintln!("warning: failed to remove update cache: {e:#}");
+        eprintln!(
+            "warning: failed to remove update cache: {}",
+            crate::output::escape_controls(&format!("{e:#}"))
+        );
     }
 }
 
@@ -359,6 +368,56 @@ mod tests {
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-update-check").await
+    }
+
+    #[tokio::test]
+    async fn cache_warning_controls_preserve_best_effort_failure() {
+        const CHILD_ROOT: &str = "SHINE_TEST_UPDATE_WARNING_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            let path = root.join("blocked/cache.json");
+            store_cache_if_possible(&path, &Version::new(2, 5, 0), 1000).await;
+            store_rate_limit_cache_if_possible(&path, 2000, AuthMode::Anonymous).await;
+            invalidate_update_cache(&Config::new_for_test(&root)).await;
+            return;
+        }
+        let original = make_temp_dir().await;
+        let root = original.with_extension(if cfg!(unix) {
+            "warning\nFORGED=cache\r\t\u{1b}\\literal中文"
+        } else {
+            "warning中文"
+        });
+        fs::rename(&original, &root).await.unwrap();
+        fs::write(root.join("blocked"), b"preserved blocker")
+            .await
+            .unwrap();
+        fs::create_dir(root.join(UPDATE_CACHE_FILE)).await.unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "update_check::tests::cache_warning_controls_preserve_best_effort_failure",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, &root)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert_eq!(stderr.lines().count(), 3, "{stderr:?}");
+        assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+        assert!(
+            stderr.contains(&crate::output::escape_controls(&root.display().to_string())),
+            "{stderr:?}"
+        );
+        assert!(stderr.contains("failed to write update cache"));
+        assert!(stderr.contains("failed to write update rate-limit cache"));
+        assert!(stderr.contains("failed to remove update cache"));
+        assert_eq!(
+            fs::read(root.join("blocked")).await.unwrap(),
+            b"preserved blocker"
+        );
+        assert!(root.join(UPDATE_CACHE_FILE).is_dir());
+        fs::remove_dir_all(root).await.unwrap();
     }
 
     #[test]

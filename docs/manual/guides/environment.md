@@ -580,7 +580,9 @@ If a launcher changes while uninstall is running, Shine preserves the changed fi
 Installation validates the rule file, manifest, and complete launcher set before writing. If a
 write fails, Shine attempts to restore previous file contents and Unix permissions and removes new
 files. Concurrent edits are preserved; an incomplete rollback is reported explicitly. This rollback
-covers reported write failures, not abrupt process termination.
+covers reported write failures, not abrupt process termination. TOML parse errors in captured
+proxy rules or the proxy manifest omit document contents; invalid input still blocks the
+operation before launcher, rule, or manifest changes.
 
 Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
 `--project` to scope the rule; a project rule for the same command overrides the global one.

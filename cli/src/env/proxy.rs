@@ -495,7 +495,9 @@ async fn install_proxy_files(
         .transpose()?
         .unwrap_or_default();
     let mut manifest: ProxyManifest = if snapshots[launcher_count + 1].is_some() {
-        toml::from_str(manifest_text).context("parsing env proxy manifest")?
+        toml::from_str(manifest_text)
+            .map_err(crate::config::config_parse_error)
+            .context("parsing env proxy manifest")?
     } else {
         ProxyManifest::default()
     };
@@ -638,11 +640,15 @@ fn render_rules(
     text: &str,
     change: impl FnOnce(&mut Vec<EnvProxyRule>) -> Result<()>,
 ) -> Result<String> {
-    let mut table: toml::Table = toml::from_str(text).context("parsing env proxy rules")?;
+    let mut table: toml::Table = toml::from_str(text)
+        .map_err(crate::config::config_parse_error)
+        .context("parsing env proxy rules")?;
     let mut rules: Vec<EnvProxyRule> = table
         .get("env_proxy")
         .map(|v| v.clone().try_into())
-        .transpose()?
+        .transpose()
+        .map_err(crate::config::config_parse_error)
+        .context("parsing env proxy rules")?
         .unwrap_or_default();
     change(&mut rules)?;
     if rules.is_empty() {
@@ -650,7 +656,10 @@ fn render_rules(
     } else {
         table.insert("env_proxy".into(), toml::Value::try_from(rules)?);
     }
-    let mut doc: toml_edit::DocumentMut = text.parse().context("parsing env proxy rules")?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(crate::config::config_parse_error)
+        .context("parsing env proxy rules")?;
     shine_core::migration::sync_table(doc.as_table_mut(), &table);
     Ok(doc.to_string())
 }
@@ -662,9 +671,9 @@ fn manifest_path(shine_dir: &Path) -> PathBuf {
 async fn load_manifest(shine_dir: &Path) -> Result<ProxyManifest> {
     let path = manifest_path(shine_dir);
     match tokio::fs::read_to_string(&path).await {
-        Ok(contents) => {
-            toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))
-        }
+        Ok(contents) => toml::from_str(&contents)
+            .map_err(crate::config::config_parse_error)
+            .with_context(|| format!("parsing {}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ProxyManifest::default()),
         Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
     }
@@ -811,7 +820,15 @@ mod tests {
     #[tokio::test]
     async fn invalid_proxy_state_preserves_all_installation_files() {
         for windows in [false, true] {
-            for corrupt_manifest in [false, true] {
+            for (rules, manifest) in [
+                ("unknown='PROXY_DOCUMENT_CANARY' invalid\n", "[entries]\n"),
+                ("env_proxy='PROXY_DOCUMENT_CANARY'\n", "[entries]\n"),
+                ("[env]\nKEY='value'\n", "entries='PROXY_DOCUMENT_CANARY'\n"),
+                (
+                    "[env]\nKEY='value'\n",
+                    "unknown='PROXY_DOCUMENT_CANARY' invalid\n",
+                ),
+            ] {
                 let dir = crate::test_support::make_temp_dir("shine-proxy-invalid-state").await;
                 let config = Config::new_for_test(&dir);
                 let rule_path = config.shine_dir().join("config.toml");
@@ -820,26 +837,10 @@ mod tests {
                 tokio::fs::write(&launcher, format!("# {MARKER} original"))
                     .await
                     .unwrap();
-                tokio::fs::write(
-                    &rule_path,
-                    if corrupt_manifest {
-                        "# private config\n[env]\nKEY = 'value'\n"
-                    } else {
-                        "invalid ["
-                    },
-                )
-                .await
-                .unwrap();
-                tokio::fs::write(
-                    manifest_path(config.shine_dir()),
-                    if corrupt_manifest {
-                        "invalid ["
-                    } else {
-                        "[entries]\n"
-                    },
-                )
-                .await
-                .unwrap();
+                tokio::fs::write(&rule_path, rules).await.unwrap();
+                tokio::fs::write(manifest_path(config.shine_dir()), manifest)
+                    .await
+                    .unwrap();
                 let paths = [
                     launcher.clone(),
                     rule_path.clone(),
@@ -849,18 +850,27 @@ mod tests {
                 for path in &paths {
                     before.push(capture_file(path).await.unwrap());
                 }
-                assert!(
-                    install_proxy_files(
-                        &config,
-                        "demo",
-                        &["KEY".into()],
-                        Path::new("/real/demo"),
-                        &rule_path,
-                        windows
-                    )
-                    .await
-                    .is_err()
-                );
+                let error = install_proxy_files(
+                    &config,
+                    "demo",
+                    &["KEY".into()],
+                    Path::new("/real/demo"),
+                    &rule_path,
+                    windows,
+                )
+                .await
+                .unwrap_err();
+                let text = format!("{error:#}\n{error:?}");
+                assert!(!text.contains("PROXY_DOCUMENT_CANARY"), "{text}");
+                assert!(text.contains("parsing env proxy"), "{text}");
+                if manifest != "[entries]\n" {
+                    let error = uninstall_for_platform(&config, "demo", windows)
+                        .await
+                        .unwrap_err();
+                    let text = format!("{error:#}\n{error:?}");
+                    assert!(!text.contains("PROXY_DOCUMENT_CANARY"), "{text}");
+                    assert!(text.contains("proxy-manifest.toml"), "{text}");
+                }
                 for (path, previous) in paths.iter().zip(before) {
                     assert!(capture_file(path).await.unwrap() == previous);
                 }

@@ -102,6 +102,33 @@ fn output_path_fixture() -> Fixture {
 }
 
 #[test]
+fn proxy_uninstall_omits_invalid_manifest_contents_without_mutating_rules_or_launchers() {
+    let f = Fixture::new();
+    let config = "schema_version=2\n[[env_proxy]]\ncommand='demo'\nwith=['TOKEN']\n";
+    f.write("state/config.toml", config);
+    fs::create_dir_all(f.0.join("state/bin")).unwrap();
+    f.write("state/bin/demo", "# shine-env-proxy original\n");
+    for contents in [
+        "entries='PROXY_DOCUMENT_CANARY'\n",
+        "unknown='PROXY_DOCUMENT_CANARY' invalid\n",
+    ] {
+        f.write("state/proxy-manifest.toml", contents);
+        let out = f.run(false, &["proxy", "uninstall", "demo"]);
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(out.stdout.is_empty(), "{out:?}");
+        let error = String::from_utf8(out.stderr).unwrap();
+        assert!(!error.contains("PROXY_DOCUMENT_CANARY"), "{error}");
+        assert!(
+            error.contains("parsing ") && error.contains("proxy-manifest.toml"),
+            "{error}"
+        );
+        assert_eq!(f.read("state/config.toml"), config);
+        assert_eq!(f.read("state/proxy-manifest.toml"), contents);
+        assert_eq!(f.read("state/bin/demo"), "# shine-env-proxy original\n");
+    }
+}
+
+#[test]
 fn workspace_readers_omit_invalid_document_contents_before_execution_or_export() {
     let mut leaks = Vec::new();
     for (file, invalid) in [

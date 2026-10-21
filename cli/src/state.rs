@@ -32,13 +32,13 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
                 if dry_run {
                     println!(
                         "[dry-run] migrate recipient configuration in {} ({age_count} age1se recipient(s) to age1tag)",
-                        path.display(),
+                        crate::output::escape_controls(&path.display().to_string()),
                     );
                 } else {
                     migrate_config_gpg_recipient(&path).await?;
                     println!(
                         "Migrated recipient configuration in {} ({age_count} age1se recipient(s) to age1tag)",
-                        path.display()
+                        crate::output::escape_controls(&path.display().to_string())
                     );
                 }
                 if age_count > 0 {
@@ -56,13 +56,13 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
             if dry_run {
                 println!(
                     "[dry-run] migrate workspace format and recipients in {} ({age_count} age1se recipient(s) to age1tag)",
-                    path.display()
+                    crate::output::escape_controls(&path.display().to_string())
                 );
             } else {
                 migrate_workspace_gpg_recipient(&path).await?;
                 println!(
                     "Migrated workspace format and recipients in {} ({age_count} age1se recipient(s) to age1tag)",
-                    path.display()
+                    crate::output::escape_controls(&path.display().to_string())
                 );
             }
             if age_count > 0 {
@@ -94,9 +94,12 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
         println!("{}", colors::dim(&format!("schema {}", step.to_version)));
         for action in actions_for_step(config, step).await? {
             if dry_run {
-                println!("  [dry-run] {}", action.description);
+                println!(
+                    "  [dry-run] {}",
+                    crate::output::escape_controls(&action.description)
+                );
             } else {
-                println!("  {}", action.description);
+                println!("  {}", crate::output::escape_controls(&action.description));
                 (action.apply).await?;
             }
         }
