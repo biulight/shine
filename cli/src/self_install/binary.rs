@@ -97,7 +97,7 @@ pub async fn handle_self_install(
             };
             bail!(
                 "source and destination are the same binary: {}. Run the newer binary by full path, e.g. `{example}`, to overwrite this copy.",
-                dest.display()
+                escape_controls(&dest.display().to_string())
             );
         }
     }
@@ -126,7 +126,10 @@ pub async fn handle_self_install(
 }
 
 fn self_install_failure_hint(dest: &std::path::Path) -> String {
-    format!("failed to copy to {}", dest.display())
+    format!(
+        "failed to copy to {}",
+        escape_controls(&dest.display().to_string())
+    )
 }
 
 fn print_self_install_activation_hint(dest: &std::path::Path) {
@@ -153,18 +156,25 @@ fn print_self_install_activation_hint(dest: &std::path::Path) {
 fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
     use anyhow::Context as _;
 
-    let parent = dest
-        .parent()
-        .with_context(|| format!("destination has no parent: {}", dest.display()))?;
-    std::fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create destination dir: {}", parent.display()))?;
+    let parent = dest.parent().with_context(|| {
+        format!(
+            "destination has no parent: {}",
+            escape_controls(&dest.display().to_string())
+        )
+    })?;
+    std::fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "failed to create destination dir: {}",
+            escape_controls(&parent.display().to_string())
+        )
+    })?;
 
     let temp = parent.join(format!(".shine-self-install-{}", uuid::Uuid::new_v4()));
     std::fs::copy(src, &temp).with_context(|| {
         format!(
             "failed to stage binary from {} to {}",
-            src.display(),
-            temp.display()
+            escape_controls(&src.display().to_string()),
+            escape_controls(&temp.display().to_string())
         )
     })?;
 
@@ -174,16 +184,26 @@ fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> R
         let mode = std::fs::metadata(src)
             .map(|m| m.permissions().mode())
             .unwrap_or(0o755);
-        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(mode))
-            .with_context(|| format!("failed to set permissions on {}", temp.display()))?;
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(mode)).with_context(
+            || {
+                format!(
+                    "failed to set permissions on {}",
+                    escape_controls(&temp.display().to_string())
+                )
+            },
+        )?;
     }
 
     match std::fs::rename(&temp, dest) {
         Ok(()) => Ok(()),
         Err(err) => {
             let _ = std::fs::remove_file(&temp);
-            Err(err)
-                .with_context(|| format!("failed to replace {} with staged binary", dest.display()))
+            Err(err).with_context(|| {
+                format!(
+                    "failed to replace {} with staged binary",
+                    escape_controls(&dest.display().to_string())
+                )
+            })
         }
     }
 }
@@ -219,9 +239,12 @@ async fn install_binary_privileged(src: &std::path::Path, dest: &std::path::Path
         anyhow::bail!("administrator permission was not granted");
     }
 
-    let parent = dest
-        .parent()
-        .with_context(|| format!("destination has no parent: {}", dest.display()))?;
+    let parent = dest.parent().with_context(|| {
+        format!(
+            "destination has no parent: {}",
+            escape_controls(&dest.display().to_string())
+        )
+    })?;
     let mode = std::fs::metadata(src)
         .map(|m| m.permissions().mode())
         .unwrap_or(0o755);

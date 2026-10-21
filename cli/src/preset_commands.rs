@@ -80,9 +80,12 @@ pub async fn handle_preset_export(
     use anyhow::Context as _;
 
     let target = dir.unwrap_or_else(|| config.presets_dir().to_owned());
-    tokio::fs::create_dir_all(&target)
-        .await
-        .with_context(|| format!("creating export directory: {}", target.display()))?;
+    tokio::fs::create_dir_all(&target).await.with_context(|| {
+        format!(
+            "creating export directory: {}",
+            escape_controls(&target.display().to_string())
+        )
+    })?;
 
     println!(
         "Exporting {} to {} ...",

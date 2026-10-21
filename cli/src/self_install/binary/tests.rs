@@ -216,3 +216,21 @@ async fn sync_output_preserves_warning_stream_and_success_behavior() {
     );
     tokio::fs::remove_dir_all(root).await.unwrap();
 }
+
+#[test]
+fn staged_binary_copy_error_encodes_source_and_preserves_io_error_chain() {
+    let root = std::env::temp_dir().join(format!("shine-stage-error-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let source = root.join("missing\nFORGED\r\t\u{1b}");
+    let error = install_binary_atomically(&source, &root.join("shine")).unwrap_err();
+    assert!(
+        error
+            .chain()
+            .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+    );
+    let text = format!("{error:#}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert!(text.contains(r"missing\nFORGED\r\t\u{1b}"), "{text}");
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+    std::fs::remove_dir(root).unwrap();
+}

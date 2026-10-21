@@ -1246,6 +1246,8 @@ bugs. Check this list before changing the modules named in each entry.
   paths and omit the copyable assignment for unrepresentable paths.
   Identity list and ordinary/Touch ID generation result rows encode display paths and recipients;
   native argv, source comments and copyable TOML hints (including multiline values) remain raw.
+  Identity preflight/read errors, including public phone-stub reads, encode only display paths and
+  invalid policy labels. Error chains retain typed I/O causes and never include identity contents.
 
 - **Sealing replaces only regular source files.** Reject symbolic links before capturing any
   sources and recheck before replacement; on Unix require exactly one hard link. Atomic rename

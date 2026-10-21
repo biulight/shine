@@ -1,3 +1,4 @@
+use crate::output::escape_controls;
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -238,7 +239,7 @@ async fn prepare_extraction_parents(root: &Path, dest: &Path) -> Result<()> {
     if !root_metadata.is_dir() || is_extraction_link(&root_metadata) {
         bail!(
             "preset output root must remain a regular directory: {}",
-            root.display()
+            escape_controls(&root.display().to_string())
         );
     }
     let parent = dest.parent().context("preset output has no parent")?;
@@ -251,14 +252,19 @@ async fn prepare_extraction_parents(root: &Path, dest: &Path) -> Result<()> {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => {
-                return Err(error).with_context(|| format!("creating {}", current.display()));
+                return Err(error).with_context(|| {
+                    format!(
+                        "creating {}",
+                        escape_controls(&current.display().to_string())
+                    )
+                });
             }
         }
         let metadata = fs::symlink_metadata(&current).await?;
         if !metadata.is_dir() || is_extraction_link(&metadata) {
             bail!(
                 "preset output parent must not be a link or special file: {}",
-                current.display()
+                escape_controls(&current.display().to_string())
             );
         }
     }
@@ -270,10 +276,11 @@ async fn extraction_file_metadata(path: &Path) -> Result<Option<std::fs::Metadat
         Ok(metadata) if metadata.is_file() && !is_extraction_link(&metadata) => Ok(Some(metadata)),
         Ok(_) => bail!(
             "preset output must be a regular file, not a link or special file: {}",
-            path.display()
+            escape_controls(&path.display().to_string())
         ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("checking {}", path.display())),
+        Err(error) => Err(error)
+            .with_context(|| format!("checking {}", escape_controls(&path.display().to_string()))),
     }
 }
 
@@ -342,7 +349,12 @@ async fn write_extracted_file(
         {
             Ok(false)
         }
-        Err(error) => Err(error).with_context(|| format!("writing preset: {}", dest.display())),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "writing preset: {}",
+                escape_controls(&dest.display().to_string())
+            )
+        }),
     }
 }
 
@@ -392,7 +404,7 @@ mod tests {
             (true, false, true),
         ] {
             let root = make_temp_dir().await;
-            let target = root.join("output");
+            let target = root.join("output\nFORGED\r\t\u{1b}");
             let outside = root.join("outside");
             fs::create_dir_all(target.join("app/demo")).await.unwrap();
             fs::create_dir_all(&outside).await.unwrap();
@@ -414,7 +426,12 @@ mod tests {
                 force,
             )
             .await;
-            assert!(result.is_err(), "linked extraction was accepted");
+            let message = result
+                .err()
+                .expect("linked extraction was accepted")
+                .to_string();
+            assert!(!message.contains(['\r', '\t', '\u{1b}']), "{message:?}");
+            assert!(message.contains(r"output\nFORGED\r\t\u{1b}"), "{message}");
             if dangling {
                 assert!(!victim.exists());
             } else {

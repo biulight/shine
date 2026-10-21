@@ -145,13 +145,16 @@ pub async fn handle_identity_init(
     if output_path.exists() && !force {
         bail!(
             "{} already exists; pass --force to overwrite",
-            output_path.display()
+            escape_controls(&output_path.display().to_string())
         );
     }
     if let Some(parent) = output_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("creating {}", parent.display()))?;
+        tokio::fs::create_dir_all(parent).await.with_context(|| {
+            format!(
+                "creating {}",
+                escape_controls(&parent.display().to_string())
+            )
+        })?;
     }
 
     // Capture presentation data before keygen can change the working directory's
@@ -386,13 +389,23 @@ async fn validate_phone_setup_result(
     }
     let metadata = tokio::fs::symlink_metadata(&result.identity_path)
         .await
-        .with_context(|| format!("reading {}", result.identity_path.display()))?;
+        .with_context(|| {
+            format!(
+                "reading {}",
+                escape_controls(&result.identity_path.display().to_string())
+            )
+        })?;
     if !metadata.file_type().is_file() {
         bail!("age-plugin-phone identity stub is not a regular file");
     }
     let contents = tokio::fs::read_to_string(&result.identity_path)
         .await
-        .with_context(|| format!("reading {}", result.identity_path.display()))?;
+        .with_context(|| {
+            format!(
+                "reading {}",
+                escape_controls(&result.identity_path.display().to_string())
+            )
+        })?;
     if !contents
         .lines()
         .map(str::trim)
@@ -461,7 +474,8 @@ fn ensure_touch_id_supported(touch_id: bool, os: &str) -> Result<()> {
 fn validate_access_control(value: &str) -> Result<()> {
     if !VALID_ACCESS_CONTROLS.contains(&value) {
         bail!(
-            "unknown --access-control \"{value}\"; expected one of: {}",
+            "unknown --access-control \"{}\"; expected one of: {}",
+            escape_controls(value),
             VALID_ACCESS_CONTROLS.join(", ")
         );
     }
@@ -555,7 +569,12 @@ async fn set_owner_only_permissions(path: &Path) -> Result<()> {
     let permissions = std::fs::Permissions::from_mode(0o600);
     tokio::fs::set_permissions(path, permissions)
         .await
-        .with_context(|| format!("setting permissions on {}", path.display()))
+        .with_context(|| {
+            format!(
+                "setting permissions on {}",
+                escape_controls(&path.display().to_string())
+            )
+        })
 }
 
 /// Extract an `age1...` recipient from an identity file's leading comment, as
@@ -563,7 +582,7 @@ async fn set_owner_only_permissions(path: &Path) -> Result<()> {
 async fn extract_recipient(path: &Path) -> Result<String> {
     let contents = tokio::fs::read_to_string(path)
         .await
-        .with_context(|| format!("reading {}", path.display()))?;
+        .with_context(|| format!("reading {}", escape_controls(&path.display().to_string())))?;
     contents
         .lines()
         .filter_map(|line| line.strip_prefix('#'))
@@ -573,7 +592,12 @@ async fn extract_recipient(path: &Path) -> Result<String> {
                 .find(|token| token.starts_with("age1"))
         })
         .map(str::to_string)
-        .with_context(|| format!("no recipient found in {}", path.display()))
+        .with_context(|| {
+            format!(
+                "no recipient found in {}",
+                escape_controls(&path.display().to_string())
+            )
+        })
 }
 
 #[cfg(test)]
@@ -685,16 +709,62 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn identity_read_diagnostics_encode_paths_without_leaking_or_mutating_contents() {
+        let root =
+            std::env::temp_dir().join(format!("shine-identity-errors-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir(&root).await.unwrap();
+        let missing = root.join("missing\nFORGED\r\t\u{1b}");
+        let result = PhoneSetupResult {
+            schema_version: PHONE_SETUP_RESULT_VERSION,
+            identity_path: missing.clone(),
+            recipient: PHONE.to_string(),
+        };
+        for error in [
+            extract_recipient(&missing).await.unwrap_err(),
+            validate_phone_setup_result(&result, PhoneRecipientType::Phone)
+                .await
+                .unwrap_err(),
+        ] {
+            assert!(
+                error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+            );
+            let message = format!("{error:#}");
+            assert!(!message.contains(['\r', '\t', '\u{1b}']), "{message:?}");
+            assert!(
+                message.contains(r"missing\nFORGED\r\t\u{1b}"),
+                "{message:?}"
+            );
+        }
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        let path = root.join(if cfg!(unix) {
+            "invalid\nFORGED\r\t\u{1b}"
+        } else {
+            "invalid中文"
+        });
+        let contents = "PRIVATE_IDENTITY_CONTENT\n";
+        tokio::fs::write(&path, contents).await.unwrap();
+        let error = extract_recipient(&path).await.unwrap_err().to_string();
+        assert!(error.contains("no recipient found"));
+        assert!(!error.contains(['\r', '\t', '\u{1b}']), "{error:?}");
+        assert!(!error.contains("\nFORGED") && !error.contains("PRIVATE_IDENTITY_CONTENT"));
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), contents);
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
     #[test]
     fn access_control_validates_known_values() {
         for value in VALID_ACCESS_CONTROLS {
             assert!(validate_access_control(value).is_ok());
         }
-        let err = validate_access_control("bogus").unwrap_err();
-        assert!(
-            err.to_string().contains("unknown --access-control"),
-            "{err:#}"
-        );
+        for value in ["bogus", "bad\nFORGED\r\t\u{1b}"] {
+            let err = validate_access_control(value).unwrap_err().to_string();
+            assert!(err.contains("unknown --access-control"), "{err}");
+            assert!(!err.contains(['\r', '\t', '\u{1b}']), "{err:?}");
+            assert!(!err.contains("\nFORGED"), "{err:?}");
+        }
     }
 
     #[test]

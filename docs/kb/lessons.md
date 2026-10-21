@@ -3302,3 +3302,15 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Regression**: real CLI cases retain generator opt-in/redaction/nonzero failures, manual refresh
   selection, receipt bytes and source config; Git tests reject dirty/no-upstream/detached inputs before
   fetch and retain HEAD/payloads. Captured and inherited Git process output keeps its existing contract.
+
+## 2026-10-21 — Failure paths need the same display boundary as success receipts
+
+- **Symptom**: self-install, identity initialization/reads and preset export/extraction success rows
+  encoded controls, but their error contexts could still split terminal lines or emit ESC.
+- **Fix**: use the existing display encoder in error fields; keep native paths, original policy
+  lookup, I/O causes, failure timing and administrator fallback classification intact. Never format
+  identity-file contents into diagnostics or expand Shine's public phone-handoff responsibility.
+- **Regression**: real CLI failures preserve existing files/config, self-copy refusal and rename-error
+  staging cleanup; owner tests retain I/O error types, absent-file behavior and private-content
+  non-disclosure. Link extraction tests retain dangling/parent/force rejection and untouched referents.
+  Preset export still initializes empty bin/presets directories; early env failures do not.

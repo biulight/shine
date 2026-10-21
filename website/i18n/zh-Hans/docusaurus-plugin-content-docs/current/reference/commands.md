@@ -305,6 +305,7 @@ Git 自身输出的格式保持不变。
 `preset export` 创建、覆盖及跳过的文件数。
 来源链接错误、未知复制目标及 Git 前置检查错误会转义所显示的参数；路径解析、来源优先级和
 Git 拒绝规则保持不变。
+预设导出和提取错误也会转义输出路径，链接拒绝规则及 `--force` 行为保持不变。
 JSON 字段名和退出规则保持不变，包括 `lint --deny-warnings` 的警告退出策略。
 `preset pack` 文本报告会转义目标名中的控制字符，将目标保留在同一行。
 JSON 报告和包内容保留原始目标名。
@@ -358,6 +359,8 @@ shine env secret identity list
 
 缺失键和解密诊断会转义键名中的控制字符。`env get` 和 `env secret decrypt` 成功时仍输出原始值。
 Broker 策略查找错误及本地 `env broker describe` 的来源行也会转义控制字符；来源摘要和策略匹配不变。
+身份文件错误会显示转义后的路径，不打印文件内容；无效的 Touch ID 策略名也会转义。
+支持的平台、策略校验和已有文件保护规则保持不变。
 
 Broker policy 命令及完整远程流程见
 [SSH 会话、密钥代理与文件传输](../guides/ssh-transfer.md)。本地变量、工作区加密、命令包装和 hybrid
@@ -456,6 +459,9 @@ SSH 连接错误和会话清理提示会转义诊断文本及路径中的终端�
 shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
+
+自安装失败提示会转义源路径和目标路径。失败状态和管理员权限检查保持不变；复制失败时不会
+保存新的安装位置。
 
 `stable` 跟随正式发布，`preview` 跟随会被持续替换的预览构建。参见
 [安装与升级](../installation.md)。

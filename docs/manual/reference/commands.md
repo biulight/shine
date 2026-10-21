@@ -368,6 +368,8 @@ Text summaries use singular or plural counts, such as `1 category`, `1 case`, an
 This includes created, overwritten and skipped counts from `preset copy` and `preset export`.
 Source-link errors, unknown copy targets and Git preflight errors escape their displayed operands;
 path resolution, source precedence and Git refusal rules remain unchanged.
+Preset export and extraction errors also escape output paths; link rejection and `--force` behavior
+remain unchanged.
 JSON field names and exit rules, including `lint --deny-warnings`, are unchanged.
 `preset pack` text reports escape control characters in target names to keep the target on one
 line. JSON reports and bundle contents retain the original target name.
@@ -425,6 +427,8 @@ put secrets directly in command arguments or documentation.
 Missing-key and decryption diagnostics escape control characters in key names. Successful `env get`
 and `env secret decrypt` output retains the original value. Broker policy lookup errors and local
 `env broker describe` source rows also escape controls; source hashes and policy matching are unchanged.
+Identity-file errors show escaped paths without printing file contents. Invalid Touch ID policy names
+are escaped too; supported platforms, policy validation and existing-file protection are unchanged.
 
 Broker policy commands are documented with the complete remote workflow in
 [SSH sessions, secret brokering, and file transfer](../guides/ssh-transfer.md). For local values,
@@ -529,6 +533,9 @@ See [SSH sessions, secret brokering, and file transfer](../guides/ssh-transfer.m
 shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
+
+Self-install failure messages escape source and destination paths. Failure status and administrator
+checks are unchanged; a failed copy does not save a new installation destination.
 
 `stable` follows released versions. `preview` follows the replaceable preview build. See
 [Installation and upgrades](../installation.md).

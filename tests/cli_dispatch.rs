@@ -5311,6 +5311,182 @@ fn preset_export_reports_overlay_sources_and_preserves_export_semantics() {
 }
 
 #[test]
+fn creation_preflight_errors_encode_paths_without_replacing_files_or_configuration() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    let config = "schema_version=2\n";
+    fs::write(state.join("config.toml"), config).unwrap();
+    let blocked = fixture.0.join(if cfg!(unix) {
+        "blocked\nFORGED\r\t\u{1b}"
+    } else {
+        "blocked中文"
+    });
+    fs::write(&blocked, "PRIVATE_CONTENT_MUST_NOT_BE_PRINTED").unwrap();
+    for (args, path, reason) in [
+        (
+            vec!["env", "secret", "identity", "init", "--output"],
+            blocked.clone(),
+            "already exists; pass --force",
+        ),
+        (
+            vec!["env", "secret", "identity", "init", "--output"],
+            blocked.join("identity.txt"),
+            "creating",
+        ),
+        (
+            vec!["preset", "export"],
+            blocked.clone(),
+            "creating export directory",
+        ),
+    ] {
+        let output = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(&args)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stderr).unwrap();
+        assert!(text.contains(reason), "{text}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(
+            !text.contains("\nFORGED") && !text.contains("PRIVATE_CONTENT_MUST_NOT_BE_PRINTED")
+        );
+        assert_eq!(
+            fs::read_to_string(&blocked).unwrap(),
+            "PRIVATE_CONTENT_MUST_NOT_BE_PRINTED"
+        );
+        assert_eq!(
+            fs::read_to_string(state.join("config.toml")).unwrap(),
+            config
+        );
+        let initializes_state = args[0] == "preset";
+        assert_eq!(
+            fs::read_dir(&state).unwrap().count(),
+            if initializes_state { 3 } else { 1 }
+        );
+        if initializes_state {
+            for initialized in ["bin", "presets"] {
+                assert_eq!(fs::read_dir(state.join(initialized)).unwrap().count(), 0);
+            }
+        }
+    }
+    let output = fixture
+        .command()
+        .env("NO_COLOR", "1")
+        .args([
+            "env",
+            "secret",
+            "identity",
+            "init",
+            "--touch-id",
+            "--access-control",
+            "bad\nFORGED\r\t\u{1b}",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let text = String::from_utf8(output.stderr).unwrap();
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    if cfg!(target_os = "macos") {
+        assert!(
+            text.contains(r#"unknown --access-control "bad\nFORGED\r\t\u{1b}""#),
+            "{text}"
+        );
+    } else {
+        assert!(
+            text.contains("Secure Enclave identities require macOS"),
+            "{text}"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(state.join("config.toml")).unwrap(),
+        config
+    );
+    assert!(!state.join("age").exists());
+}
+
+#[test]
+fn self_install_failure_notices_encode_paths_and_preserve_refusal_and_cleanup() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    fs::create_dir(&state).unwrap();
+    let config = "schema_version=2\n";
+    fs::write(state.join("config.toml"), config).unwrap();
+    let root = fixture.0.join(if cfg!(unix) {
+        "install\nFORGED\r\t\u{1b}"
+    } else {
+        "install中文"
+    });
+    fs::create_dir(&root).unwrap();
+    let blocked = root.join("parent-file");
+    fs::write(&blocked, "retain").unwrap();
+    let directory = root.join("occupied-directory");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("keep"), "retain").unwrap();
+    for dest in [blocked.join("shine"), directory.clone()] {
+        let output = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["self", "install", "--dest"])
+            .arg(&dest)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            text.contains("failed to copy to") && text.contains("Caused by:"),
+            "{text}"
+        );
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(!text.contains("\nFORGED"));
+        assert_eq!(fs::read_to_string(&blocked).unwrap(), "retain");
+        assert_eq!(
+            fs::read_to_string(directory.join("keep")).unwrap(),
+            "retain"
+        );
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            2,
+            "staged binary leaked"
+        );
+        assert_eq!(
+            fs::read_to_string(state.join("config.toml")).unwrap(),
+            config
+        );
+    }
+    let binary = root.join(if cfg!(windows) { "shine.exe" } else { "shine" });
+    fs::copy(env!("CARGO_BIN_EXE_shine"), &binary).unwrap();
+    let before = shine_core::digest::sha256_hex(&fs::read(&binary).unwrap());
+    let output = fixture
+        .configure(Command::new(&binary))
+        .env("NO_COLOR", "1")
+        .args(["self", "install", "--dest"])
+        .arg(&binary)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let text = String::from_utf8(output.stderr).unwrap();
+    assert!(text.contains("source and destination are the same binary"));
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert!(!text.contains("\nFORGED"));
+    assert_eq!(
+        shine_core::digest::sha256_hex(&fs::read(&binary).unwrap()),
+        before
+    );
+    assert_eq!(
+        fs::read_to_string(state.join("config.toml")).unwrap(),
+        config
+    );
+}
+
+#[test]
 fn preset_failures_escape_operands_and_preserve_source_configuration() {
     let fixture = Fixture::new();
     let state = fixture.0.join("state");
