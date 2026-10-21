@@ -226,8 +226,9 @@ impl Drop for SshSession {
             && error.kind() != std::io::ErrorKind::NotFound
         {
             eprintln!(
-                "Warning: could not clean SSH session {}: {error}",
-                self.directory.display()
+                "Warning: could not clean SSH session {}: {}",
+                crate::output::escape_controls(&self.directory.display().to_string()),
+                crate::output::escape_controls(&error.to_string())
             );
         }
     }
@@ -534,6 +535,44 @@ async fn bind_local_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn session_cleanup_warning_encodes_paths_without_removing_replacements() {
+        const CHILD: &str = "SHINE_TEST_SSH_CLEANUP_ROOT";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let directory = PathBuf::from(root).join(if cfg!(unix) {
+                "session\nFORGED\r\t\u{1b}"
+            } else {
+                "session中文"
+            });
+            let session = SshSession::create(directory.clone()).await.unwrap();
+            tokio::fs::remove_dir(&directory).await.unwrap();
+            tokio::fs::write(&directory, b"replacement").await.unwrap();
+            drop(session);
+            assert_eq!(tokio::fs::read(&directory).await.unwrap(), b"replacement");
+            return;
+        }
+        let root = crate::test_support::make_temp_dir("shine-session-warning").await;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ssh::tests::session_cleanup_warning_encodes_paths_without_removing_replacements",
+                "--nocapture",
+            ])
+            .env(CHILD, &root)
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(stderr.lines().count(), 1, "{stderr:?}");
+        assert!(stderr.starts_with("Warning: could not clean SSH session "));
+        assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+        if cfg!(unix) {
+            assert!(stderr.contains(r"session\nFORGED\r\t\u{1b}"));
+        }
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
 
     #[tokio::test]
     async fn session_creation_preserves_an_existing_directory() {

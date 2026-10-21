@@ -189,12 +189,19 @@ fn run_task_command(name: &str, argv: &[String], cwd: Option<&Path>) -> Result<(
             {
                 bail!(
                     "Failed to run task {name}: working directory is unavailable: {}",
-                    path_display::format(cwd)
+                    escape_controls(&path_display::format(cwd))
                 );
             }
-            bail!("Failed to run task {name}: command not found: {program}");
+            bail!(
+                "Failed to run task {name}: command not found: {}",
+                escape_controls(program)
+            );
         }
-        Err(e) => bail!("Failed to run task {name}: {program}: {e}"),
+        Err(e) => bail!(
+            "Failed to run task {name}: {}: {}",
+            escape_controls(program),
+            escape_controls(&e.to_string())
+        ),
     };
 
     if status.success() {
@@ -240,17 +247,18 @@ fn resolve_task_cwd(config: &Config, cwd: Option<&Path>) -> Result<Option<PathBu
         Ok(canonical) => canonical,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => bail!(
             "Failed to save task: working directory does not exist: {}",
-            path_display::format(&absolute)
+            escape_controls(&path_display::format(&absolute))
         ),
         Err(error) => bail!(
-            "Failed to save task: cannot resolve working directory: {}: {error}",
-            path_display::format(&absolute)
+            "Failed to save task: cannot resolve working directory: {}: {}",
+            escape_controls(&path_display::format(&absolute)),
+            escape_controls(&error.to_string())
         ),
     };
     if !canonical.is_dir() {
         bail!(
             "Failed to save task: working directory is not a directory: {}",
-            path_display::format(&canonical)
+            escape_controls(&path_display::format(&canonical))
         );
     }
     canonical
@@ -265,11 +273,12 @@ fn validate_run_cwd(name: &str, cwd: &Path) -> Result<()> {
         Ok(metadata) if metadata.is_dir() => Ok(()),
         Ok(_) => bail!(
             "Failed to run task {name}: working directory is not a directory: {}",
-            path_display::format(cwd)
+            escape_controls(&path_display::format(cwd))
         ),
         Err(error) => bail!(
-            "Failed to run task {name}: working directory is unavailable: {}: {error}",
-            path_display::format(cwd)
+            "Failed to run task {name}: working directory is unavailable: {}: {}",
+            escape_controls(&path_display::format(cwd)),
+            escape_controls(&error.to_string())
         ),
     }
 }
@@ -616,7 +625,11 @@ mod tests {
     async fn save_rejects_missing_or_non_directory_cwd() {
         let dir = temp_dir().await;
         let config = config_in(&dir);
-        let file = dir.join("not-a-directory");
+        let file = dir.join(if cfg!(unix) {
+            "not-a-directory\nFORGED\r\t\u{1b}"
+        } else {
+            "not-a-directory中文"
+        });
         tokio::fs::write(&file, "x").await.unwrap();
 
         let missing = handle_save(
@@ -640,6 +653,16 @@ mod tests {
         .await
         .unwrap_err();
         assert!(not_dir.to_string().contains("not a directory"));
+        let run_error = validate_run_cwd("demo", &file).unwrap_err();
+        let disappeared = dir.join("missing\nFORGED\r\t\u{1b}");
+        let race_error =
+            run_task_command("demo", &["unused-program".into()], Some(&disappeared)).unwrap_err();
+        for error in [not_dir, run_error, race_error] {
+            let text = error.to_string();
+            assert!(!text.chars().any(char::is_control), "{text:?}");
+        }
+        assert_eq!(tokio::fs::read(&file).await.unwrap(), b"x");
+        assert!(!config.shine_dir().join("tasks.toml").exists());
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 

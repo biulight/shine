@@ -345,6 +345,9 @@ shine env secret identity list
 `env list --reveal`、`env get`、`env secret decrypt`、带 `--include-secrets` 的导出，以及 `env run`
 启动的子进程都可能接触明文。只在可信终端运行，也不要把密钥直接写入命令参数或文档。
 
+缺失键和解密诊断会转义键名中的控制字符。`env get` 和 `env secret decrypt` 成功时仍输出原始值。
+Broker 策略查找错误及本地 `env broker describe` 的来源行也会转义控制字符；来源摘要和策略匹配不变。
+
 Broker policy 命令及完整远程流程见
 [SSH 会话、密钥代理与文件传输](../guides/ssh-transfer.md)。本地变量、工作区加密、命令包装和 hybrid
 后端见 [管理环境变量与密钥](../guides/environment.md)。
@@ -363,6 +366,8 @@ shine theme sync [--auto] [--quiet]
 ```
 
 任务会运行保存的命令，并可使用保存的工作目录。
+Shine 的任务启动及工作目录错误会转义名称和路径中的控制字符；保存的 argv、工作目录选择、
+子进程输出和退出状态保持原有行为。
 
 参见 [任务与应用构建产物](../guides/tasks-and-serve.md)和
 [同步终端主题](../guides/terminal-theme-sync.md)。
@@ -428,6 +433,9 @@ shine local status
 
 Shine 的转发与 broker 选项必须写在 SSH 目标之前。直接转发密钥会让远程会话接触明文。文件传输
 仅适用于 POSIX 远端；覆盖现有内容前先使用 `--dry-run`。
+
+SSH 连接错误和会话清理提示会转义诊断文本及路径中的终端控制字符。
+传输输出仍保留外部工具的原始格式和退出状态。
 
 参见 [SSH 会话、密钥代理与文件传输](../guides/ssh-transfer.md)。
 

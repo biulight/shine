@@ -927,6 +927,8 @@ bugs. Check this list before changing the modules named in each entry.
   List/explain path headings, directed-write receipts and proxy-toggle paths also encode controls
   only at display. Proxy installation targets and post-save warnings, plus self-install sync results
   and warnings, also encode controls before styling without changing original errors or status.
+  Missing-key/decrypt diagnostics encode only the displayed key; successful raw get/decrypt bytes
+  and original key lookup remain unchanged.
   Explain's control-bearing encrypted-key hint requests the original key instead
   of offering a display-escaped alias. Raw get/export/injection and save/reload exits remain unchanged.
 
@@ -1088,6 +1090,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **Task displays use the native platform shell.** Reuse program and argument encoders: POSIX on
   Unix, PowerShell invocation/quoting on Windows. Existing manifest names remain lookup identities;
   encode their controls only for status/error text and measure list columns by display width.
+  Startup/cwd failure fields encode controls after raw path lookup and process construction;
+  shell-quoted command previews remain independently copyable and never feed execution.
 
 ## Embedded presets
 
@@ -1325,6 +1329,11 @@ bugs. Check this list before changing the modules named in each entry.
   Encode status session/host/directory fields, connection observations and rejection messages only
   at display sites; retain raw socket/token data, configuration startup and timeout/exit boundaries.
 
+- **SSH diagnostics are encoded independently of transfer frames.** Connection-task errors and
+  session cleanup warnings encode terminal controls only at printing. Protocol parsing, task
+  tracking/draining, replacement-file preservation, cleanup best-effort policy and raw child Log
+  frames remain unchanged.
+
 - **SSH session resources are owned from the first setup step.** Listener binding, context
   persistence, spawn/wait failures and cancellation must release the listener and session
   directory. Stop and await the accept loop before draining connection tasks; finish cleanup
@@ -1368,6 +1377,10 @@ bugs. Check this list before changing the modules named in each entry.
   protocol argument protection from ambient settings. SCP retains its own operand handling.
 
 ## SSH secret broker
+
+- **Broker CLI descriptions retain snapshot identity.** Local describe encodes source paths only
+  in text rows; workspace/source hashes, payload bytes and policy matching remain raw. Missing
+  policy diagnostics encode the supplied selector without validating it as a new policy name.
 
 - **Policy writers share a persistent `ssh-secret-broker.lock`.** Add, remove, local update and
   remote enrollment lock before the final store read and retain the guard through private atomic

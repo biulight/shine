@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-21 — Failure diagnostics need their own display boundary
+
+- **Evidence**: actual env reads, task cwd failures and missing Broker policy queries split stderr
+  on supplied control characters. Local Broker describe split a source row while still returning 0.
+  Captured SSH cleanup and malformed-frame tests independently split nonfatal warning lines.
+- **Fix**: reuse the CLI control encoder at these display/error-context boundaries. Retain raw
+  key/path/selector lookup, command construction, snapshot hashes, wire parsing and task draining.
+  Do not encode successful env reads, decrypted values or relayed subprocess output.
+- **Coverage**: regressions retain exit 1 and unchanged config/registry/policy state on failure;
+  describe retains exact source/workspace hashes without decryption or command execution. SSH
+  diagnostics remain nonfatal and replacement session files survive cleanup failure. Task
+  startup races and non-directory cwd paths retain their original failure policy.
+
 ## 2026-10-21 — Lifecycle reviews and results need encoding after identity decisions
 
 - **Evidence**: a real App install/upgrade/uninstall with a control-bearing destination split

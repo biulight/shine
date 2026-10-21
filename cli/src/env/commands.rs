@@ -345,7 +345,10 @@ pub async fn handle_get(config: &Config, key: &str) -> Result<()> {
         None => {
             eprintln!(
                 "{}",
-                colors::yellow_stderr(&format!("{key} is not set in the active config [env]"))
+                colors::yellow_stderr(&format!(
+                    "{} is not set in the active config [env]",
+                    escape_controls(key)
+                ))
             );
             std::process::exit(1);
         }
@@ -356,11 +359,14 @@ pub async fn handle_get(config: &Config, key: &str) -> Result<()> {
 pub async fn handle_decrypt(config: &Config, key: &str) -> Result<()> {
     let env = EnvConfig::from_config(config);
     let Some(value) = env.get(key) else {
-        bail!("{key} is not set in the active config [env]");
+        bail!(
+            "{} is not set in the active config [env]",
+            escape_controls(key)
+        );
     };
     let plaintext = secret::decrypt_with_config(value, config)
         .await
-        .with_context(|| format!("decrypting {key}"))?;
+        .with_context(|| format!("decrypting {}", escape_controls(key)))?;
     write_decrypted_plaintext(std::io::stdout().lock(), &plaintext)?;
     Ok(())
 }

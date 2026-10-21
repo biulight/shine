@@ -1506,3 +1506,45 @@ API_TOKEN = { value = "hidden\nvalue", description = "marker-secret" }
     assert_eq!(f.read("project/shine.config.toml"), project);
     assert_eq!(f.read("state/config.toml"), before);
 }
+
+#[test]
+fn env_read_errors_encode_key_labels_without_changing_lookup_or_plain_output() {
+    let f = Fixture::new();
+    let key = "key\nFORGED\r\t\u{1b}";
+    let value = "value\nRAW\r\t\u{1b}";
+    let original = format!(
+        "schema_version=2\n[env]\n{}={}\n",
+        serde_json::to_string(key).unwrap(),
+        serde_json::to_string(value).unwrap()
+    );
+    f.write("state/config.toml", &original);
+    let found = f.run(false, &["get", key]);
+    assert_eq!(found.status.code(), Some(0), "{found:?}");
+    assert_eq!(found.stdout, format!("{value}\n").as_bytes());
+    assert!(found.stderr.is_empty());
+    let missing = "missing\nFORGED\r\t\u{1b}";
+    for args in [
+        vec!["get", missing],
+        vec!["secret", "decrypt", missing],
+        vec!["secret", "decrypt", key],
+    ] {
+        let output = f
+            .command(false)
+            .env("NO_COLOR", "1")
+            .env("PATH", f.0.join("tools"))
+            .arg("env")
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+        assert!(
+            !stderr.lines().any(|line| line.starts_with("FORGED")),
+            "{stderr:?}"
+        );
+        assert!(stderr.contains(r"\nFORGED\r\t\u{1b}"), "{stderr:?}");
+        assert_eq!(f.read("state/config.toml"), original);
+    }
+}

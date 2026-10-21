@@ -134,7 +134,59 @@ async fn spawn_connection(
 ) {
     tasks.lock().await.spawn(async move {
         if let Err(error) = handle_connection(stream, &token, &context, broker.as_deref()).await {
-            eprintln!("shine ssh: transfer agent connection error: {error:#}");
+            eprintln!(
+                "shine ssh: transfer agent connection error: {}",
+                crate::output::escape_controls(&format!("{error:#}"))
+            );
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn connection_error_notice_encodes_peer_data_and_drains_the_task() {
+        const CHILD: &str = "SHINE_TEST_SSH_CONNECTION_NOTICE";
+        if std::env::var_os(CHILD).is_some() {
+            use tokio::io::AsyncReadExt;
+            let (mut peer, stream) = tokio::io::duplex(2048);
+            let tasks = new_connection_tasks();
+            let context = Arc::new(SessionContext {
+                host: "never-connect.invalid".into(),
+                ssh_options: vec![],
+                local_dir: std::env::temp_dir(),
+                control_path: None,
+            });
+            spawn_connection(stream, "secret-session-token".into(), context, None, &tasks).await;
+            crate::ssh::protocol::write_message(
+                &mut peer,
+                &serde_json::json!({"type":"unknown\nFORGED\r\t\u{1b}"}),
+            )
+            .await
+            .unwrap();
+            drain_connection_tasks(&tasks, Duration::from_secs(2)).await;
+            assert!(tasks.lock().await.is_empty());
+            assert_eq!(peer.read(&mut [0_u8; 1]).await.unwrap(), 0);
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ssh::agent::tests::connection_error_notice_encodes_peer_data_and_drains_the_task",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(stderr.lines().count(), 1, "{stderr:?}");
+        assert!(!stderr.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+        assert!(stderr.contains(r"unknown\nFORGED\r\t\u{1b}"), "{stderr:?}");
+        assert!(stderr.contains("failed to parse protocol message"));
+        assert!(!stderr.contains("secret-session-token"));
+    }
 }

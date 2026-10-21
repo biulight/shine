@@ -49,6 +49,171 @@ fn display_path_fixture() -> Fixture {
 }
 
 #[test]
+fn broker_lookup_errors_encode_names_without_repairing_or_creating_policies() {
+    let f = Fixture::new();
+    let state = f.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    let name = "missing\nFORGED\r\t\u{1b}";
+    for args in [
+        vec!["env", "broker", "policy", "info", name],
+        vec!["env", "broker", "policy", "remove", name],
+        vec![
+            "env",
+            "broker",
+            "policy",
+            "diff",
+            name,
+            "--workspace",
+            "not-read.toml",
+            "--mode",
+            "dev",
+            "--release-all-declared",
+            "--",
+            "not-executed",
+        ],
+    ] {
+        let out = f
+            .command()
+            .env("NO_COLOR", "1")
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(out.stdout.is_empty());
+        let text = String::from_utf8(out.stderr).unwrap();
+        assert_eq!(
+            text,
+            "Error: policy missing\\nFORGED\\r\\t\\u{1b} does not exist\n"
+        );
+        assert!(!state.join("ssh-secret-broker.toml").exists());
+    }
+}
+
+#[test]
+fn broker_describe_encodes_source_rows_without_decrypting_or_rewriting_snapshot() {
+    let f = Fixture::new();
+    let source_name = if cfg!(unix) {
+        "source\nFORGED\r\t\u{1b}中文.toml"
+    } else {
+        "source中文.toml"
+    };
+    let workspace = f.0.join("shine.workspace.toml");
+    let manifest = format!(
+        "version=2\n[env]\nfiles=[{}]\n",
+        toml::Value::String(source_name.into())
+    );
+    let source = "version=1\n[secret]\nTOKEN=true\n[payload]\ndata='DESCRIBE_MUST_NOT_DECRYPT'\n";
+    fs::write(&workspace, &manifest).unwrap();
+    fs::write(f.0.join(source_name), source).unwrap();
+    let out = f
+        .command()
+        .env("NO_COLOR", "1")
+        .env_remove("SHINE_SSH_REMOTE_SOCK")
+        .env_remove("SHINE_SSH_TOKEN")
+        .args(["env", "broker", "describe", "--workspace"])
+        .arg(&workspace)
+        .args([
+            "--mode",
+            "dev",
+            "--release",
+            "TOKEN",
+            "--",
+            "never-execute-probe",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stderr.is_empty());
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(text.lines().count(), 5, "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert!(!text.contains("DESCRIBE_MUST_NOT_DECRYPT"));
+    assert!(text.contains(&format!(
+        "workspace_sha256 = \"{}\"",
+        shine_core::digest::sha256_hex(manifest.as_bytes())
+    )));
+    assert!(text.lines().last().unwrap().ends_with(&format!(
+        "{} [\"TOKEN\"]",
+        shine_core::digest::sha256_hex(source.as_bytes())
+    )));
+    assert!(text.contains(r#"argv = ["never-execute-probe"]"#));
+    if cfg!(unix) {
+        assert!(text.contains(r"source source\nFORGED\r\t\u{1b}中文.toml "));
+    }
+    assert_eq!(fs::read_to_string(workspace).unwrap(), manifest);
+    assert_eq!(fs::read_to_string(f.0.join(source_name)).unwrap(), source);
+    assert!(!f.0.join("state/ssh-secret-broker.toml").exists());
+}
+
+#[test]
+fn task_failure_diagnostics_encode_operands_without_changing_registry_or_exit() {
+    let f = Fixture::new();
+    let state = f.0.join("state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    fs::write(state.join("update-check.json"), serde_json::to_vec(&serde_json::json!({
+        "latest_version": env!("CARGO_PKG_VERSION"),
+        "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+    })).unwrap()).unwrap();
+    let bad = f.0.join("missing\nFORGED\r\t\u{1b}");
+    for cwd in [true, false] {
+        let mut manifest = cli::task::manifest::TaskManifest::default();
+        manifest.upsert(
+            "demo",
+            vec![if cwd {
+                "unused-program".into()
+            } else {
+                bad.to_string_lossy().into_owned()
+            }],
+            if cwd { Some(bad.clone()) } else { None },
+        );
+        let original = toml::to_string(&manifest).unwrap();
+        fs::write(state.join("tasks.toml"), &original).unwrap();
+        let out = f
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["task", "run", "demo"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(out.stdout.is_empty());
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        // The preceding command preview remains literal shell code; inspect only the failure diagnostic.
+        let error = stderr.split_once("Error: ").unwrap().1;
+        assert!(!error.contains(['\r', '\t', '\u{1b}']), "{stderr:?}");
+        assert!(
+            !error.lines().any(|line| line.starts_with("FORGED")),
+            "{stderr:?}"
+        );
+        assert!(error.contains(r"missing\nFORGED\r\t\u{1b}"));
+        assert_eq!(
+            fs::read_to_string(state.join("tasks.toml")).unwrap(),
+            original
+        );
+        let saved = f
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["task", "save", "new", "--cwd"])
+            .arg(&bad)
+            .args(["--", "unused-program"])
+            .output()
+            .unwrap();
+        assert_eq!(saved.status.code(), Some(1), "{saved:?}");
+        let error = String::from_utf8(saved.stderr).unwrap();
+        assert!(!error.contains(['\r', '\t', '\u{1b}']), "{error:?}");
+        assert!(
+            !error.lines().any(|line| line.starts_with("FORGED")),
+            "{error:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(state.join("tasks.toml")).unwrap(),
+            original
+        );
+    }
+}
+
+#[test]
 fn verbose_pull_non_repository_notice_encodes_selected_path() {
     let f = display_path_fixture();
     let state = f.0.join("state");

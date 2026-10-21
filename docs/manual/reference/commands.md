@@ -409,6 +409,10 @@ both the saved file and current effective source. The old `--force` for `set`, `
 commands started by `env run` can expose plaintext. Run them only in a trusted terminal and never
 put secrets directly in command arguments or documentation.
 
+Missing-key and decryption diagnostics escape control characters in key names. Successful `env get`
+and `env secret decrypt` output retains the original value. Broker policy lookup errors and local
+`env broker describe` source rows also escape controls; source hashes and policy matching are unchanged.
+
 Broker policy commands are documented with the complete remote workflow in
 [SSH sessions, secret brokering, and file transfer](../guides/ssh-transfer.md). For local values,
 workspace encryption, command wrappers, and hybrid backends, see
@@ -428,6 +432,8 @@ shine theme sync [--auto] [--quiet]
 ```
 
 Saved tasks execute the stored command, optionally from its stored working directory.
+Shine's task startup and working-directory errors escape controls in names and paths. Stored argv,
+working-directory selection, child output, and child exit status retain their original behavior.
 
 See [Tasks and application artifacts](../guides/tasks-and-serve.md) and
 [Synchronize the terminal theme](../guides/terminal-theme-sync.md).
@@ -498,6 +504,9 @@ shine local status
 Place Shine forwarding and broker options before the SSH destination. Direct secret forwarding
 makes plaintext available to the remote session. File transfer is available only in POSIX remote
 mode; preview overwrites with `--dry-run`.
+
+SSH connection-error and session-cleanup notices escape terminal controls in diagnostic text and
+paths. Transfer output retains the external tool's original format and exit status.
 
 See [SSH sessions, secret brokering, and file transfer](../guides/ssh-transfer.md).
 

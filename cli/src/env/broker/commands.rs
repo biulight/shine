@@ -4,6 +4,7 @@ use super::policy::{
     allow_from_snapshot, resolve_release, sha256, validate_name, validate_wire_string,
 };
 use super::store::{apply_remote_enrollment, load_store, save_store};
+use crate::output::escape_controls;
 use crate::{config::Config, env::workspace};
 use anyhow::{Context, Result, bail};
 use shine_core::runtime::{FileSystemHost, RealHost};
@@ -167,7 +168,7 @@ pub async fn handle_policy_info(config: &Config, name: &str) -> Result<()> {
         .policies
         .iter()
         .find(|item| item.name == name)
-        .with_context(|| format!("policy {name} does not exist"))?;
+        .with_context(|| format!("policy {} does not exist", escape_controls(name)))?;
     print!("{}", toml::to_string_pretty(policy)?);
     Ok(())
 }
@@ -180,7 +181,7 @@ pub async fn handle_policy_remove(config: &Config, name: &str) -> Result<()> {
     let before = store.policies.len();
     store.policies.retain(|item| item.name != name);
     if store.policies.len() == before {
-        bail!("policy {name} does not exist");
+        bail!("policy {} does not exist", escape_controls(name));
     }
     save_store(config, &store).await?;
     println!("removed SSH secret broker policy {name}");
@@ -201,7 +202,7 @@ pub async fn handle_policy_diff(
         .policies
         .iter()
         .find(|item| item.name == name)
-        .with_context(|| format!("policy {name} does not exist"))?;
+        .with_context(|| format!("policy {} does not exist", escape_controls(name)))?;
     let candidate = policy_from_workspace(
         name,
         &existing.ssh_target,
@@ -257,7 +258,9 @@ fn print_description(snapshot: &WorkspaceSnapshot, allow: &BrokerAllow) {
     for source in &allow.sources {
         println!(
             "source {} {} {:?}",
-            source.path, source.sha256, source.declared_secrets
+            escape_controls(&source.path),
+            source.sha256,
+            source.declared_secrets
         );
     }
 }
