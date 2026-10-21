@@ -650,9 +650,9 @@ async fn changed_source_or_permissions_in_fresh_capture_invalidates_approval() {
 #[tokio::test]
 async fn prevalidated_approval_is_rechecked_before_apply() {
     let host = InMemoryHost::new();
-    let trusted = service(host.clone()).into_trusted();
+    let mut trusted = service(host.clone()).into_trusted();
     let approved = trusted
-        .review(ReviewRequest::App(app_plan_request()))
+        .review_with_code_confirmation(ReviewRequest::App(app_plan_request()))
         .await
         .unwrap()
         .approve_after_human_confirmation()

@@ -1005,6 +1005,121 @@ async fn app_upgrade_prune_blocks_stale_copy_with_noncanonical_backup() {
 }
 
 #[tokio::test]
+async fn stale_app_hashing_preserves_destination_admission_and_prune_semantics() {
+    for (json, current, released, pruned) in [
+        (false, Some("managed"), true, true),
+        (false, Some("user edit"), false, false),
+        (false, None, false, true),
+        (true, Some(r#"{"managed":true,"unowned":42}"#), true, true),
+        (true, Some(r#"{"managed":false}"#), false, false),
+        (true, Some(r#"{"unowned":42}"#), false, false),
+        (true, Some("invalid JSON"), false, false),
+        (true, None, false, true),
+    ] {
+        let runtime = runtime(
+            PresetSnapshot::builder(PresetSourceKind::Embedded)
+                .file(
+                    "app/demo/shine.toml",
+                    b"dest = '~/.config/demo'\n[[files]]\nsource = 'new'\ntarget = 'config'\n"
+                        .to_vec(),
+                )
+                .file("app/demo/new", b"replacement".to_vec())
+                .build(),
+        );
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        if let Some(current) = current {
+            runtime
+                .host()
+                .put_file(&destination, current.as_bytes().to_vec());
+        }
+        let keys = vec!["managed".to_string()];
+        let manifest = AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/old".into(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: if json {
+                    crate::runtime::managed_json::managed_json_hash(br#"{"managed":true}"#, &keys)
+                        .unwrap()
+                } else {
+                    crate::install::hash_content(b"managed")
+                },
+                install_strategy: if json {
+                    crate::install::AppInstallStrategy::JsonMerge { managed_keys: keys }
+                } else {
+                    crate::install::AppInstallStrategy::Copy
+                },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        };
+        manifest
+            .save(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let since = runtime.host().operations().len();
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo".into()),
+                force: false,
+                purge: false,
+                prune_stale: true,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        let new = plan
+            .steps
+            .iter()
+            .find(|step| step.resource.as_deref() == Some("new"))
+            .unwrap();
+        assert_eq!(
+            new.diagnostic_codes
+                .iter()
+                .any(|code| code == "app_destination_occupied"),
+            !released,
+            "json={json}, current={current:?}"
+        );
+        let old = plan
+            .steps
+            .iter()
+            .find(|step| step.resource.as_deref() == Some("old"))
+            .unwrap();
+        assert_eq!(
+            old.action,
+            if pruned {
+                PlanActionV1::Remove
+            } else {
+                PlanActionV1::Preserve
+            },
+            "json={json}, current={current:?}"
+        );
+        assert_eq!(old.kind, pruned.then_some(PlanStepKindV1::AppStalePrune));
+        assert_eq!(
+            read_optional(runtime.host(), &destination)
+                .await
+                .unwrap()
+                .as_deref(),
+            current.map(str::as_bytes)
+        );
+        assert_eq!(
+            AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .entries,
+            manifest.entries
+        );
+        assert!(
+            runtime.host().operations()[since..]
+                .iter()
+                .all(|op| matches!(op, HostOperation::Read(_)))
+        );
+    }
+}
+
+#[tokio::test]
 async fn preserved_privileged_app_file_does_not_request_admin() {
     let runtime = runtime(privileged_static_copy_app_snapshot());
     let (destination, _) = seed_privileged_static_copy_app(&runtime, b"user-modified", None).await;

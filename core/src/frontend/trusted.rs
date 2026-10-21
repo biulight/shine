@@ -178,8 +178,9 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> TrustedFrontend<H> 
         request: ReviewRequest,
     ) -> Result<HumanReview, FrontendServiceError> {
         self.service.runtime.operation_code_grants.clear();
-        let initial = self.service.review(&request).await?;
+        let initial = self.review(request).await?;
         let targets = initial
+            .report
             .plan
             .code_boundaries
             .iter()
@@ -211,8 +212,12 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> TrustedFrontend<H> 
                 }
             }
         }
+        // Only changed trust inputs need another review; apply still revalidates fresh state.
+        if operation_code_grants.is_empty() {
+            return Ok(initial);
+        }
         self.service.runtime.operation_code_grants = operation_code_grants;
-        let review = self.review(request).await;
+        let review = self.review(initial.request).await;
         self.service.runtime.operation_code_grants.clear();
         review
     }

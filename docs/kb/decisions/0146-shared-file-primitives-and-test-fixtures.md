@@ -16,6 +16,10 @@ Desired JSON hashing remains distinct: absent managed keys and invalid content m
 existing installed-versus-desired behavior. Share only the CLI test event recorder; App and Shell
 uninstall guidance assertions continue to exercise their own production handlers.
 
+Stale destination admission and stale pruning also use the installed-strategy hash helper. Retain
+their distinct missing-file policies and treat invalid JSON as a mismatch at both call sites;
+neither caller propagates that parse failure or substitutes desired-content hashing.
+
 Extract App/Sys privileged byte installation and removal into private `runtime::privileged_files`.
 The helper holds the host admin lock through comparison, backup, write/remove and failure restore.
 Domain callers retain lifecycle approval, receipt persistence, dry-run and non-privileged routing.

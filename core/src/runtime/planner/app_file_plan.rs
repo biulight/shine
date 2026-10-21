@@ -136,13 +136,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     read_optional(self.host(), &entry.destination)
                         .await?
                         .as_deref()
-                        .and_then(|bytes| match &entry.install_strategy {
-                            crate::install::AppInstallStrategy::Copy => {
-                                Some(crate::install::hash_content(bytes))
-                            }
-                            crate::install::AppInstallStrategy::JsonMerge { managed_keys } => {
-                                installed_json_hash(bytes, managed_keys).ok().flatten()
-                            }
+                        .and_then(|bytes| {
+                            installed_strategy_hash(&entry.install_strategy, bytes)
+                                .ok()
+                                .flatten()
                         })
                         .is_some_and(|hash| hash == entry.content_hash)
                 } else {

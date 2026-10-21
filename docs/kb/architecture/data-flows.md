@@ -1620,3 +1620,7 @@ No persistent grant is written. Automatic `--yes` and read-only/AI review use th
 remain blocked without persistent trust. Shell live always needs Development trust. Explicit
 info/update generator evaluation retains its persistent-grant requirement. Author statements are
 review data, not trust identity; env/admin remain per-operation executor contracts. See ADR 0091.
+
+Human review reuses its initial report when no temporary code grants are added. When grants change
+the trust inputs, it re-plans before presenting the review. This reuse is local to review: execution
+prevalidation, apply-time validation and lock-protected final planning remain independent.

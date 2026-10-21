@@ -52,18 +52,12 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         )
                         .await?;
                     }
-                    let current_matches_receipt =
-                        current
-                            .as_deref()
-                            .is_none_or(|bytes| match &entry.install_strategy {
-                                crate::install::AppInstallStrategy::Copy => {
-                                    crate::install::hash_content(bytes) == entry.content_hash
-                                }
-                                crate::install::AppInstallStrategy::JsonMerge { managed_keys } => {
-                                    installed_json_hash(bytes, managed_keys).ok().flatten()
-                                        == Some(entry.content_hash)
-                                }
-                            });
+                    let current_matches_receipt = current.as_deref().is_none_or(|bytes| {
+                        installed_strategy_hash(&entry.install_strategy, bytes)
+                            .ok()
+                            .flatten()
+                            == Some(entry.content_hash)
+                    });
                     let removal_supported = current.is_none()
                         || match &entry.install_strategy {
                             crate::install::AppInstallStrategy::Copy => {

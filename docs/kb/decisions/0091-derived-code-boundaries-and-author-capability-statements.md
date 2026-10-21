@@ -77,6 +77,11 @@ nor serializable, and is revalidated against fresh configuration, source and sta
 The review runtime clears temporary grants; nothing is saved in the trust store. Shell live remains
 blocked without Development trust. Shared affected Shell targets participate in the same review.
 
+When no temporary grants are needed, retain the initial human review instead of observing the same
+inputs twice. Added grants still require a new Plan. This does not reuse review observations during
+apply or remove any execution prevalidation or lock-protected freshness check. A blocked Live Plan
+remains blocked on the no-grant path.
+
 Automatic `--yes` uses ordinary review and requires existing trust. Read-only/AI adapters receive
 only reports, never the trusted frontend or approval constructor. This is a host capability boundary,
 not a defense against arbitrary Rust callers or agents with unrestricted shell access. Such hosts
