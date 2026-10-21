@@ -1,3 +1,4 @@
+use crate::output::escape_controls;
 use shine_core::plan::{
     CodeEntryKindV2, CodeSourceV2, CodeTargetRoleV2, CodeTimingV2, CodeTrustStateV2, PlanV1,
 };
@@ -45,7 +46,7 @@ pub(in crate::lifecycle_plan) fn render_code_boundaries(
         };
         lines.push(format!(
             "{indent}  - {} · {role} · {kind} · {timing} · {source} · {trust}",
-            boundary.target
+            escape_controls(&boundary.target)
         ));
     }
     lines.push(format!(

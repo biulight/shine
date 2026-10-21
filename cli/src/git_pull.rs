@@ -7,6 +7,7 @@ use tokio::process::Command;
 
 use crate::colors;
 use crate::config::Config;
+use crate::output::escape_controls;
 
 // Keep authentication/transport settings, but never let inherited repository
 // selectors redirect commands away from the explicitly selected checkout.
@@ -53,14 +54,20 @@ pub async fn handle_pull(config: &Config, verbose: bool) -> Result<()> {
                 "  {} {} ({})",
                 colors::dim("skipped"),
                 target.label,
-                colors::dim(&format!("same repository: {}", root.display()))
+                colors::dim(&format!(
+                    "same repository: {}",
+                    escape_controls(&root.display().to_string())
+                ))
             ),
             Some(_) => {}
             None if verbose => println!(
                 "  {} {} ({})",
                 colors::dim("skipped"),
                 target.label,
-                colors::dim(&format!("not a Git repository: {}", target.path.display()))
+                colors::dim(&format!(
+                    "not a Git repository: {}",
+                    escape_controls(&target.path.display().to_string())
+                ))
             ),
             None => {}
         }
@@ -87,7 +94,10 @@ pub async fn handle_pull(config: &Config, verbose: bool) -> Result<()> {
 
     for (label, root) in repositories {
         if verbose {
-            println!("Pulling {label} from {} ...", root.display());
+            println!(
+                "Pulling {label} from {} ...",
+                escape_controls(&root.display().to_string())
+            );
         }
         let summary = pull_ff_only(&root, verbose).await?;
         print_pull_summary(label, &summary);

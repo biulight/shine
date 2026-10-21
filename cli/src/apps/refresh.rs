@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::colors;
 use crate::config::Config;
+use crate::output::escape_controls;
 use crate::presentation::TerminalInteraction;
 use shine_core::runtime::{
     AppFileAction, AppRefreshPlanRequest, PlanningInputVersions, RuntimeEvent, RuntimeObserver,
@@ -42,7 +43,10 @@ pub async fn handle_refresh_approved(
 
     println!(
         "{}",
-        colors::bold(&format!("Refreshing app generators: {category}"))
+        colors::bold(&format!(
+            "Refreshing app generators: {}",
+            escape_controls(category)
+        ))
     );
     let mut observer = RefreshObserver;
     let mut interaction = TerminalInteraction;
@@ -76,6 +80,7 @@ pub async fn handle_refresh_approved(
                 updated += 1;
             }
             AppFileAction::Unchanged => {
+                let label = escape_controls(&label);
                 println!(
                     "  {} {label}  {}",
                     colors::dim("-"),
@@ -85,8 +90,11 @@ pub async fn handle_refresh_approved(
             }
             AppFileAction::UserModified => {
                 eprintln!(
-                    "  {} {label}: user-modified, kept (use --force to overwrite)",
-                    colors::symbol_stderr("!")
+                    "{}",
+                    super::report::warning_text(
+                        &label,
+                        "user-modified, kept (use --force to overwrite)"
+                    )
                 );
                 kept += 1;
             }
@@ -129,6 +137,7 @@ fn refresh_summary_text(
     if total == 1
         && let Some(label) = single_label
     {
+        let label = escape_controls(label);
         if failed == 1 {
             return format!(
                 "{} {}",
@@ -181,7 +190,11 @@ impl RuntimeObserver for RefreshObserver {
     fn emit(&mut self, event: RuntimeEvent) {
         match event {
             RuntimeEvent::Warning { detail, .. } => {
-                eprintln!("  {} {detail}", colors::symbol_stderr("!"))
+                eprintln!(
+                    "  {} {}",
+                    colors::symbol_stderr("!"),
+                    escape_controls(&detail)
+                )
             }
             RuntimeEvent::ProcessOutput { stream, text, .. } => {
                 crate::presentation::emit_process_output(
@@ -197,7 +210,7 @@ impl RuntimeObserver for RefreshObserver {
                 println!(
                     "  {} {}: post-upgrade hook completed",
                     colors::symbol("✓"),
-                    target.trim_start_matches("app/")
+                    escape_controls(target.trim_start_matches("app/"))
                 );
             }
             _ => {}
@@ -584,5 +597,72 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         );
         assert_eq!(fs::read(&dest).await.unwrap(), b"first-v1\n");
         fs::remove_dir_all(root).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_summary_controls_keep_all_outcome_conclusions() {
+        for (counts, conclusion) in [
+            ([1, 0, 0, 0], "Refresh complete"),
+            ([0, 1, 0, 0], "Already up to date"),
+            ([0, 0, 1, 0], "Refresh incomplete"),
+            ([0, 0, 0, 1], "Refresh incomplete"),
+        ] {
+            let text = refresh_summary_text(
+                Some("item\nFORGED\r\t\u{1b}"),
+                counts[0],
+                counts[1],
+                counts[2],
+                counts[3],
+            );
+            assert!(!text.chars().any(char::is_control), "{text:?}");
+            assert!(text.contains(conclusion) && text.contains(r"item\nFORGED\r\t\u{1b}"));
+        }
+    }
+
+    #[test]
+    fn refresh_observer_encodes_notices_but_preserves_process_streams() {
+        const CHILD: &str = "SHINE_TEST_REFRESH_OBSERVER";
+        let value = "item\nFORGED\r\t\u{1b}";
+        if std::env::var_os(CHILD).is_some() {
+            let mut observer = RefreshObserver;
+            observer.emit(RuntimeEvent::Warning {
+                code: "probe",
+                target: None,
+                detail: value.into(),
+            });
+            observer.emit(RuntimeEvent::Progress {
+                code: "app_hook_completed",
+                target: format!("app/{value}"),
+            });
+            for stream in ["stdout", "stderr"] {
+                observer.emit(RuntimeEvent::ProcessOutput {
+                    code: "probe",
+                    target: "app/demo".into(),
+                    stream,
+                    text: "RAW\r\t\u{1b}\n".into(),
+                });
+            }
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "apps::refresh::display_tests::refresh_observer_encodes_notices_but_preserves_process_streams", "--nocapture"])
+            .env(CHILD, "1").env("NO_COLOR", "1").output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert_eq!(
+            stderr,
+            "  ! item\\nFORGED\\r\\t\\u{1b}\n     RAW\r\t\u{1b}\n"
+        );
+        assert!(
+            stdout.contains("  ✓ item\\nFORGED\\r\\t\\u{1b}: post-upgrade hook completed\n"),
+            "{stdout:?}"
+        );
+        assert!(stdout.contains("RAW\r\t\u{1b}\n"), "{stdout:?}");
     }
 }

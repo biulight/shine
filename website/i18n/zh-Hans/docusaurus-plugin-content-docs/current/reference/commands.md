@@ -63,6 +63,11 @@ App 安装／修复、upgrade、artifact、refresh、卸载、Shell 修复及信
 位置参数名称以 `-` 开头时，这些提示会把选项放在 `--` 前、名称放在其后，
 例如 `shine app uninstall --dry-run -- -demo`。
 
+Security Plan 文本、App 文件结果、refresh 摘要、升级标题及重启提示，
+会将终端控制字符显示为转义文本。原始目标、审批、文件操作和退出状态保持不变。分类名含控制字符时，
+App artifact 和来源缺失提示不提供可复制命令，请使用原始分类参数。
+目标解析错误也会转义输入的名称，匹配和拒绝规则保持不变。
+
 Security Plan 默认显示用户文件的具体路径，并按用途汇总安装产物、Shine 内部维护及关联的备份/回滚文件，注明访问类型和路径数量。安装、升级、卸载、恢复、App refresh/artifact 和 Sys bootstrap/profile/apply 的审批都支持 `--verbose`，可展开已显示审阅范围中的文件路径、步骤、快照标识和诊断。
 
 文件系统权限路径使用常见形式：绝对路径显示为 `/etc/docker/daemon.json`，用户主目录下的路径显示为 `~/.zshrc`，已配置的 Shine 状态目录下显示为 `Shine state/...`，平台应用数据目录下显示为 `App data/...`。Windows 盘符和网络共享路径保留根路径。这些显示标签不会扩大所列权限。
@@ -243,6 +248,8 @@ shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 ```
 
 `sys list --all` 将其他操作系统标记为 `catalog only`（仅供浏览），只为当前系统显示 apply 提示。
+Bootstrap 预览也会转义 profile 名称、代理值和脚本路径中的控制字符；预览不会执行安装器。
+
 目录 list/info 中的描述与条目标签一样，将终端控制字符显示为转义文本；存储的描述和条目选择不变。
 `sys info`、`bootstrap`、`apply` 和 `uninstall` 始终按当前系统查找项目；其他系统存在同名项目时
 也不会切换查找范围。
@@ -283,6 +290,8 @@ shine preset pull
 `SHINE_PRESETS` 仍具有更高优先级。`preset unlink` 移除保存的设置，但环境覆盖和继承设置
 仍然适用，因此下次运行可能继续使用外部预设目录。
 公共 `Preset Source` 与 `Presets Overlay` 提示会转义所显示路径中的控制字符。
+`update --pull` 和 `upgrade --pull` 的 verbose 输出也会转义 Shine 的 Git 进度及跳过提示中的路径；
+Git 自身输出的格式保持不变。
 保存的路径及来源优先级保持原有含义。
 
 发布预设前使用 `validate`、`lint`、`plan` 和 `test`。这些命令只检查创作输入，不会安装预设。

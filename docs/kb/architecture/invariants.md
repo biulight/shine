@@ -126,6 +126,15 @@ bugs. Check this list before changing the modules named in each entry.
   fed back into approval. External-code confirmation wording comes from typed code boundaries;
   plans without external/overlay code still require normal snapshot-bound approval.
 
+- **Lifecycle display encoding follows identity matching.** Security Plan permission groups,
+  backup associations, step classification, code boundaries and fingerprints use original values.
+  Compact/detailed/bootstrap text encodes controls only at rendering. App result paths, labels,
+  error chains, refresh notices and restart hints use the same encoder before styling, preserving
+  stream choice and original error-chain depth. Control-bearing artifact and stale-source hints
+  request the original category argument rather than constructing an escaped operand. Bootstrap
+  preview encoding never changes injected proxy values; Git notices never rewrite process paths
+  or captured Git output.
+
 - **App install file failures remain visible at the CLI boundary.** Render all file results and
   hints before returning the typed already-reported failure for any `AppFileAction::Failed`.
   The footer counts failed files and says `Install incomplete`, including partial success.

@@ -143,7 +143,11 @@ pub async fn handle_config_upgrade(
         println!("{}", colors::dim("Nothing to upgrade."));
     }
     for hint in &app_report.restart_hints {
-        println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
+        println!(
+            "  {} {}",
+            colors::symbol("!"),
+            colors::yellow(&output::escape_controls(hint))
+        );
     }
 
     if fatal_app_failures > 0 {
@@ -174,11 +178,17 @@ async fn handle_config_target_upgrade(
     }
 
     let mut sep = if verbose {
-        println!("{}", colors::bold(&format!("Upgrading {target}")));
+        println!(
+            "{}",
+            colors::bold(&format!("Upgrading {}", output::escape_controls(target)))
+        );
         config::print_presets_note(config);
         output::SectionSeparator::new()
     } else {
-        output::SectionSeparator::with_preamble(colors::bold(&format!("Upgrading {target}")))
+        output::SectionSeparator::with_preamble(colors::bold(&format!(
+            "Upgrading {}",
+            output::escape_controls(target)
+        )))
     };
 
     let TargetUpgradeSummary {
@@ -262,7 +272,11 @@ async fn handle_config_target_upgrade(
         println!("{}", colors::dim("Nothing to upgrade."));
     }
     for hint in restart_hints {
-        println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+        println!(
+            "  {} {}",
+            colors::symbol("!"),
+            colors::yellow(&output::escape_controls(&hint))
+        );
     }
     if failed > 0 {
         bail!("{failed} managed configuration item(s) failed");

@@ -1,5 +1,22 @@
 # Lessons Learned
 
+## 2026-10-21 — Lifecycle reviews and results need encoding after identity decisions
+
+- **Evidence**: a real App install/upgrade/uninstall with a control-bearing destination split
+  Security Plan permissions, backup summaries and outcome rows; restart hints split rows too.
+  Sys previews exposed raw profile/proxy/path controls, and verbose Git notices exposed checkout
+  path controls. Refresh warning and summary regressions failed independently. A rejected upgrade
+  target also exposed raw controls through the shared target-resolution error, after its title
+  had already been encoded. Encode only the diagnostic operands, keeping parsing and lookup raw.
+- **Fix**: encode fields at the existing CLI renderer boundaries; preserve Plan grouping and
+  fingerprints, Core requests, native paths, copied-command argument identity and process output.
+  Do not encode an already styled transform label or broaden an uninstall error to a full chain.
+- **Coverage**: every review layout retains serialized Plan/fingerprint identity and blockers;
+  ready permission summaries retain backup associations/counts. Actual App preview/install/upgrade/
+  protected uninstall/forced restore preserve contents, backups, receipts and exits. Sys previews
+  retain config/metadata and create no receipt; Git tests retain dirty refusal, fast-forward,
+  deduplication and neighbor isolation. Observer tests distinguish notices from child output.
+
 ## 2026-10-21 — Registry, migration and task displays retain their own compatibility boundaries
 
 - **Evidence**: malformed task and proxy documents exposed supplied markers through parser errors;

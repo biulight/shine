@@ -24,7 +24,10 @@ pub(super) fn print_run_header(os_id: &str, sys_shell: &str, selection: &Resolve
     println!("{}", colors::bold("System Init"));
     println!("  OS: {os_id}");
     println!("  Shell: {sys_shell}");
-    println!("  Selection: {}", selection.source.describe());
+    println!(
+        "  Selection: {}",
+        escape_controls(&selection.source.describe())
+    );
     println!("  Items: {} selected", selection.item_ids.len());
     println!("  {}", colors::dim(&format_item_ids(&selection.item_ids)));
     println!();

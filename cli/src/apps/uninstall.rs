@@ -331,15 +331,22 @@ impl shine_core::runtime::RuntimeObserver for UninstallObserver<'_> {
                 .as_deref()
                 .and_then(|value| value.strip_prefix("app/"))
                 .unwrap_or("app");
-            if code == "app_artifact_permission_required" {
+            if code == "app_artifact_permission_required" && category.chars().any(char::is_control)
+            {
+                self.reporter.emit(PresentationEvent::stdout(format!(
+                    "  {} {}: artifact teardown skipped; review trust and use `shine app artifact remove` with the original category argument (copyable command omitted)",
+                    report::symbol("!"), crate::output::escape_controls(category)
+                )));
+            } else if code == "app_artifact_permission_required" {
                 let target_arg = crate::shell_quote::command_arg(&format!("app/{category}"));
                 let category_arg = crate::shell_quote::command_positionals(&[category]);
                 self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: artifact teardown skipped (run `shine trust grant {target_arg}` after review; manual: shine app artifact remove {category_arg})", report::symbol("!"))));
             } else {
-                self.reporter.emit(PresentationEvent::stderr(format!(
-                    "  {} {category}: artifact teardown failed: {detail}",
-                    crate::colors::symbol_stderr("!")
-                )));
+                self.reporter
+                    .emit(PresentationEvent::stderr(report::warning_text(
+                        category,
+                        format!("artifact teardown failed: {detail}"),
+                    )));
             }
         }
     }
@@ -357,6 +364,54 @@ mod tests {
     use tokio::fs;
 
     use crate::test_support::RecordingReporter;
+
+    #[test]
+    fn artifact_teardown_notices_preserve_streams_and_omit_control_operands() {
+        use crate::presentation::PresentationStream;
+        use shine_core::runtime::{RuntimeEvent, RuntimeObserver};
+        for (code, stream) in [
+            (
+                "app_artifact_permission_required",
+                PresentationStream::Stdout,
+            ),
+            ("app_artifact_failed", PresentationStream::Stderr),
+        ] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut reporter =
+                crate::presentation::TerminalRenderer::new(&mut stdout, &mut stderr, None);
+            let mut observer = UninstallObserver {
+                reporter: &mut reporter,
+            };
+            observer.emit(RuntimeEvent::Warning {
+                code,
+                target: Some("app/item\nFORGED\r\t\u{1b}".into()),
+                detail: "failure\nFORGED\r\t\u{1b}".into(),
+            });
+            let bytes = if stream == PresentationStream::Stdout {
+                assert!(stderr.is_empty());
+                stdout
+            } else {
+                assert!(stdout.is_empty());
+                stderr
+            };
+            let text = String::from_utf8(bytes).unwrap();
+            assert_eq!(text.lines().count(), 1);
+            assert!(
+                !text.trim_end_matches('\n').chars().any(char::is_control),
+                "{text:?}"
+            );
+            assert!(text.contains(r"item\nFORGED\r\t\u{1b}"));
+            if stream == PresentationStream::Stdout {
+                assert!(
+                    text.contains("artifact teardown skipped")
+                        && text.contains("copyable command omitted")
+                );
+            } else {
+                assert!(text.contains(r"artifact teardown failed: failure\nFORGED\r\t\u{1b}"));
+            }
+        }
+    }
 
     #[tokio::test]
     async fn protected_uninstall_reports_partial_completion_and_strategy_specific_guidance() {

@@ -65,6 +65,12 @@ PowerShell on Windows; the quotes preserve each original argument.
 For positional names beginning with `-`, these hints put options before `--` and the names after it,
 for example `shine app uninstall --dry-run -- -demo`.
 
+Security Plan text, App file results, refresh summaries, upgrade headings, and restart notices
+display terminal control characters as escapes. The original targets,
+approvals, file operations, and exit statuses are unchanged. App artifact and missing-source hints
+omit copyable commands for categories containing controls; supply the original category argument.
+Target-resolution errors also escape supplied names without changing matching or rejection rules.
+
 Security Plans show user file paths explicitly and summarize installed files, Shine maintenance,
 and associated backup/recovery files by purpose, with access types and path counts. Installation,
 upgrade, uninstall, recovery, App refresh/artifact, and Sys bootstrap/profile/apply reviews accept
@@ -302,6 +308,8 @@ shine sys uninstall <ITEM> [--dry-run] [--yes] [--verbose]
 `sys list --all` marks other operating systems as `catalog only` and shows apply hints only for
 the current OS. `sys info`, `bootstrap`, `apply`, and `uninstall` always resolve items for the
 current OS, including when another OS has an item with the same name.
+Bootstrap previews also escape controls in profile names, proxy values, and script paths; they do not execute installers.
+
 Catalog list/info descriptions display terminal control characters as escapes, like item labels;
 the stored descriptions and item selection remain unchanged.
 
@@ -343,6 +351,8 @@ does not override a directory selected by `preset link`; `SHINE_PRESETS` still t
 `preset unlink` removes the saved setting. Environment overrides and inherited settings still
 apply, so the next run may continue to use an external presets directory.
 Shared `Preset Source` and `Presets Overlay` notes escape control characters in displayed paths.
+Verbose `update --pull` and `upgrade --pull` also escape paths in Shine’s Git progress and skip notices;
+Git’s own output retains its existing format.
 Saved paths and source priority retain their original meaning.
 
 Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These commands inspect

@@ -5,6 +5,7 @@ use crate::lifecycle_plan::{
     LifecyclePlanRequest,
     classification::{upgrade_plan_has_review_content, upgrade_step_has_review_content},
 };
+use crate::output::escape_controls;
 use anyhow::Result;
 use shine_core::plan::PlanV1;
 
@@ -57,17 +58,17 @@ pub(in crate::lifecycle_plan) fn render_plan_lines_with_steps(
         let resource = step
             .resource
             .as_deref()
-            .map(|value| format!(" · {value}"))
+            .map(|value| format!(" · {}", escape_controls(value)))
             .unwrap_or_default();
         let diagnostics = if step.diagnostic_codes.is_empty() {
             String::new()
         } else {
-            format!(" [{}]", step.diagnostic_codes.join(", "))
+            format!(" [{}]", escape_controls(&step.diagnostic_codes.join(", ")))
         };
         lines.push(format!(
             "    {} {}{}{}",
             styled_action_name(step.action),
-            step.target,
+            escape_controls(&step.target),
             resource,
             diagnostics
         ));
@@ -98,6 +99,7 @@ pub(in crate::lifecycle_plan) fn render_plan_lines_with_steps(
         ));
     }
     for code in &plan.permissions.uncomputable_codes {
+        let code = escape_controls(code);
         lines.push(format!(
             "    {} {code}",
             crate::colors::red("! uncomputable:")

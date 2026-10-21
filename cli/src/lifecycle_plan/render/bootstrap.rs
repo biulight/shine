@@ -2,6 +2,7 @@ use super::{
     permission_name, render_bootstrap_permissions, render_code_boundaries, render_plan_lines,
     render_scope_summary, styled_action_name,
 };
+use crate::output::escape_controls;
 use anyhow::Result;
 use shine_core::plan::{NetworkScopeV1, PermissionV1, PlanV1};
 
@@ -98,13 +99,13 @@ pub(in crate::lifecycle_plan) fn render_bootstrap_plan_lines(
             lines.push(format!(
                 "\n    {}  {}",
                 styled_action_name(step.action),
-                step.resource.as_deref().unwrap_or("profile")
+                escape_controls(step.resource.as_deref().unwrap_or("profile"))
             ));
         } else {
             item_index += 1;
             lines.push(format!(
                 "\n    {item_index:02}  {}  {}",
-                step.target.strip_prefix("sys/").unwrap_or(&step.target),
+                escape_controls(step.target.strip_prefix("sys/").unwrap_or(&step.target)),
                 styled_action_name(step.action)
             ));
         }
@@ -136,6 +137,8 @@ pub(in crate::lifecycle_plan) fn render_bootstrap_plan_lines(
             } else {
                 String::new()
             };
+            let message = escape_controls(message);
+            let suffix = escape_controls(&suffix);
             lines.push(format!(
                 "        {} {message}{suffix}",
                 crate::colors::yellow("!")
@@ -167,7 +170,10 @@ pub(in crate::lifecycle_plan) fn render_bootstrap_plan_lines(
             .iter()
             .any(|scope| scope.permissions.uncomputable_codes.contains(code))
         {
-            lines.push(format!("  ! Uncomputable permissions: {code}"));
+            lines.push(format!(
+                "  ! Uncomputable permissions: {}",
+                escape_controls(code)
+            ));
         }
     }
     if verbose {

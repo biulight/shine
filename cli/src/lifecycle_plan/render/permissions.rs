@@ -1,4 +1,5 @@
 use super::permission_name;
+use crate::output::escape_controls;
 use shine_core::plan::{
     CodeEntryKindV2, EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1,
     OpaqueCodeScopeV1, PermissionV1, PlanV1,
@@ -54,7 +55,11 @@ pub(in crate::lifecycle_plan) fn render_compact_permissions(plan: &PlanV1) -> Ve
             crate::colors::red("Uncomputable permissions")
         ));
         for code in &plan.permissions.uncomputable_codes {
-            lines.push(format!("      {} {code}", crate::colors::red("!")));
+            lines.push(format!(
+                "      {} {}",
+                crate::colors::red("!"),
+                escape_controls(code)
+            ));
         }
     }
     lines
@@ -165,14 +170,14 @@ pub(in crate::lifecycle_plan) fn render_permission_summary(
         .collect::<BTreeSet<_>>();
     let mut lines = Vec::new();
     for (group, values) in explicit {
-        lines.push(format!("{indent}{group}"));
+        lines.push(format!("{indent}{}", escape_controls(&group)));
         lines.extend(values.into_iter().map(|value| {
             let display = if group.starts_with("filesystem ") {
                 crate::path_display::permission_path(&value)
             } else {
                 value
             };
-            format!("{indent}  - {display}")
+            format!("{indent}  - {}", escape_controls(&display))
         }));
     }
     for (label, summary) in summaries {
@@ -194,6 +199,8 @@ pub(in crate::lifecycle_plan) fn render_permission_summary(
             } else {
                 String::new()
             };
+        let label = escape_controls(&label);
+        let backups = escape_controls(&backups);
         lines.push(format!(
             "{indent}{label}{count} · {} ({} {}{backups})",
             summary.accesses.into_iter().collect::<Vec<_>>().join("/"),
@@ -313,11 +320,14 @@ pub(in crate::lifecycle_plan) fn render_bootstrap_permissions(
     let mut lines = Vec::new();
     for (label, values) in groups {
         if label == "Commands" {
-            lines.push(format!("{indent}{label:<12}{}", values.join(", ")));
+            lines.push(format!(
+                "{indent}{label:<12}{}",
+                escape_controls(&values.join(", "))
+            ));
         } else {
             for (index, value) in values.iter().enumerate() {
                 let label = if index == 0 { &label } else { "" };
-                lines.push(format!("{indent}{label:<12}{value}"));
+                lines.push(format!("{indent}{label:<12}{}", escape_controls(value)));
             }
         }
     }
@@ -331,7 +341,10 @@ pub(in crate::lifecycle_plan) fn render_bootstrap_permissions(
         ));
     }
     for code in &permissions.uncomputable_codes {
-        lines.push(format!("{indent}! Uncomputable permissions: {code}"));
+        lines.push(format!(
+            "{indent}! Uncomputable permissions: {}",
+            escape_controls(code)
+        ));
     }
     lines
 }

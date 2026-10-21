@@ -10,6 +10,7 @@ use super::{
     style_plan_action, styled_action_name,
 };
 use crate::lifecycle_plan::LifecyclePlanRequest;
+use crate::output::escape_controls;
 use anyhow::Result;
 use shine_core::plan::{FilesystemAccessV1, PermissionV1, PlanActionV1, PlanV1};
 
@@ -88,11 +89,11 @@ pub(in crate::lifecycle_plan) fn render_compact_plan_lines(
                 let resource = step
                     .resource
                     .as_deref()
-                    .map(|resource| format!(" · {resource}"))
+                    .map(|resource| format!(" · {}", escape_controls(resource)))
                     .unwrap_or_default();
                 lines.push(format!(
                     "  ! {}{resource}: modified, will be preserved",
-                    step.target
+                    escape_controls(&step.target)
                 ));
             }
             continue;
@@ -227,7 +228,7 @@ pub(in crate::lifecycle_plan) fn render_compact_steps(plan: &PlanV1) -> Vec<Stri
             lines.push(format!(
                 "      {} {} · preset cache ({})",
                 styled_action_name(action),
-                step.target,
+                escape_controls(&step.target),
                 compact_action_counts(cache_steps, upgrade),
             ));
             continue;
@@ -254,7 +255,7 @@ pub(in crate::lifecycle_plan) fn render_compact_steps(plan: &PlanV1) -> Vec<Stri
         let resource = step
             .resource
             .as_deref()
-            .map(|value| format!(" · {value}"))
+            .map(|value| format!(" · {}", escape_controls(value)))
             .unwrap_or_default();
         // Only known routine transaction codes are presentation details. Unknown,
         // preservation and blocking diagnostics always remain visible.
@@ -270,12 +271,12 @@ pub(in crate::lifecycle_plan) fn render_compact_steps(plan: &PlanV1) -> Vec<Stri
         let diagnostics = if diagnostics.is_empty() {
             String::new()
         } else {
-            format!(" [{}]", diagnostics.join(", "))
+            format!(" [{}]", escape_controls(&diagnostics.join(", ")))
         };
         lines.push(format!(
             "      {} {}{}{}",
             styled_action_name(step.action),
-            step.target,
+            escape_controls(&step.target),
             resource,
             diagnostics
         ));
@@ -317,8 +318,9 @@ pub(in crate::lifecycle_plan) fn render_compact_steps(plan: &PlanV1) -> Vec<Stri
             let diagnostics = if diagnostics.is_empty() {
                 String::new()
             } else {
-                format!(" [{}]", diagnostics.join(", "))
+                format!(" [{}]", escape_controls(&diagnostics.join(", ")))
             };
+            let label = escape_controls(label);
             lines.push(format!(
                 "      {} {label}{diagnostics}",
                 styled_action_name(step.action)

@@ -49,6 +49,201 @@ fn display_path_fixture() -> Fixture {
 }
 
 #[test]
+fn verbose_pull_non_repository_notice_encodes_selected_path() {
+    let f = display_path_fixture();
+    let state = f.0.join("state");
+    fs::create_dir_all(state.join("presets")).unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    fs::write(state.join("update-check.json"), serde_json::to_vec(&serde_json::json!({
+        "latest_version": env!("CARGO_PKG_VERSION"),
+        "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+    })).unwrap()).unwrap();
+    let out = f
+        .command()
+        .env("NO_COLOR", "1")
+        .args(["update", "--pull", "--verbose"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("not a Git repository:") && text.contains("Nothing to pull."));
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert!(
+        !text.lines().any(|line| line.starts_with("FORGED=")),
+        "{text:?}"
+    );
+    assert!(!state.join("presets/.git").exists());
+}
+
+#[test]
+fn sys_bootstrap_preview_encodes_data_without_executing_or_mutating_inputs() {
+    let fixture = display_path_fixture();
+    let state = fixture.0.join("state");
+    let os = if cfg!(target_os = "linux") {
+        fs::read_to_string("/etc/os-release")
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix("ID="))
+            .unwrap()
+            .trim_matches('"')
+            .to_lowercase()
+    } else {
+        std::env::consts::OS.to_string()
+    };
+    let preset = state.join("presets/sys").join(os);
+    fs::create_dir_all(&preset).unwrap();
+    let profile = "profile\nFORGED=profile\r\t\u{1b}";
+    let metadata = format!(
+        "version=2\ndefault_profile={}\n[[items]]\nid='probe'\nlabel='Probe'\npermissions={{schema_version=1}}\ndetect={{kind='path',path='$HOME/.missing-probe'}}\ninstall={{kind='script',path='probe.sh'}}\n[profiles.{}]\nitems=['probe']\n",
+        toml::Value::String(profile.into()),
+        serde_json::to_string(profile).unwrap()
+    );
+    fs::write(preset.join("shine.toml"), &metadata).unwrap();
+    fs::write(
+        preset.join("probe.sh"),
+        "# Must never execute in this preview\nexit 99\n",
+    )
+    .unwrap();
+    let config = "schema_version=2\n[env]\nPROXY_HOST=\"host\\nFORGED=proxy\\r\\t\\u001b\"\nPROXY_NO_PROXY=\"local\\nFORGED=no_proxy\\r\\t\\u001b\"\n";
+    fs::write(state.join("config.toml"), config).unwrap();
+    for explicit in [false, true] {
+        let mut command = fixture.command();
+        command
+            .env("NO_COLOR", "1")
+            .args(["sys", "bootstrap", "--dry-run", "--proxy"]);
+        if explicit {
+            command.args(["--preset", profile]);
+        }
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert!(out.stderr.is_empty(), "{out:?}");
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(
+            !text.lines().any(|line| line.starts_with("FORGED=")),
+            "{text:?}"
+        );
+        for expected in [
+            r"profile\nFORGED=profile\r\t\u{1b}",
+            r"host\nFORGED=proxy\r\t\u{1b}",
+            r"local\nFORGED=no_proxy\r\t\u{1b}",
+            "requires scoped external-code trust",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text:?}");
+        }
+        assert_eq!(
+            fs::read_to_string(state.join("config.toml")).unwrap(),
+            config
+        );
+        assert_eq!(
+            fs::read_to_string(preset.join("shine.toml")).unwrap(),
+            metadata
+        );
+        assert!(!state.join("sys-manifest.toml").exists());
+        assert!(!state.join("trust.toml").exists());
+        assert!(!fixture.0.join("home/.shine").exists());
+    }
+}
+
+#[test]
+fn app_lifecycle_display_preserves_raw_destinations_backups_and_exit_policy() {
+    let f = Fixture::new();
+    let state = f.0.join("state");
+    let preset = state.join("presets/app/demo");
+    let destination = f.0.join(if cfg!(unix) {
+        "destination\nFORGED=path\r\t\u{1b}\\literal中文"
+    } else {
+        "destination中文"
+    });
+    fs::create_dir_all(&preset).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    fs::write(state.join("update-check.json"), serde_json::to_vec(&serde_json::json!({
+        "latest_version": env!("CARGO_PKG_VERSION"),
+        "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+    })).unwrap()).unwrap();
+    let metadata = format!(
+        "metadata_schema_version=2\ndest={}\n[[files]]\nsource='config.txt'\nrestart_hint=\"Restart\\nFORGED=hint\\r\\t\\u001b\"\n",
+        toml::Value::String(destination.to_str().unwrap().into())
+    );
+    fs::write(preset.join("shine.toml"), &metadata).unwrap();
+    fs::write(preset.join("config.txt"), b"one\n").unwrap();
+    let target = destination.join("config.txt");
+    let backup = destination.join("config.txt.shine.bak");
+    let receipt = state.join("app-manifest.toml");
+    fs::write(&target, b"original\n").unwrap();
+    let run = |args: &[&str], status| {
+        let output = f
+            .command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(status), "{args:?}: {output:?}");
+        for bytes in [&output.stdout, &output.stderr] {
+            let text = String::from_utf8_lossy(bytes);
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{args:?}: {text:?}");
+            assert!(
+                !text.lines().any(|line| line.starts_with("FORGED=")),
+                "{args:?}: {text:?}"
+            );
+        }
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let preview = run(&["app", "install", "demo", "--dry-run"], 0);
+    assert!(preview.contains("1 would install"), "{preview}");
+    assert_eq!(fs::read(&target).unwrap(), b"original\n");
+    assert!(!receipt.exists() && !backup.exists());
+    let installed = run(&["app", "install", "demo", "--yes"], 0);
+    assert!(installed.contains(r"Restart\nFORGED=hint\r\t\u{1b}"));
+    assert!(installed.contains("backups for") && installed.contains("1 backed up"));
+    assert_eq!(fs::read(&target).unwrap(), b"one\n");
+    assert_eq!(fs::read(&backup).unwrap(), b"original\n");
+    let unchanged = run(&["app", "install", "demo", "--yes"], 0);
+    assert!(unchanged.contains("already up to date"));
+    for (bytes, args) in [
+        (
+            b"two\n".as_slice(),
+            vec!["upgrade", "app/demo", "--yes", "--verbose"],
+        ),
+        (b"three\n".as_slice(), vec!["upgrade", "--yes"]),
+    ] {
+        fs::write(preset.join("config.txt"), bytes).unwrap();
+        let updated = run(&args, 0);
+        assert!(updated.contains(r"Restart\nFORGED=hint\r\t\u{1b}"));
+        assert_eq!(fs::read(&target).unwrap(), bytes);
+        assert_eq!(fs::read(&backup).unwrap(), b"original\n");
+    }
+    fs::write(&target, b"user modification\n").unwrap();
+    let receipt_before = fs::read(&receipt).unwrap();
+    run(&["app", "uninstall", "demo", "--dry-run"], 0);
+    assert_eq!(fs::read(&receipt).unwrap(), receipt_before);
+    let kept = run(&["app", "uninstall", "demo", "--yes"], 1);
+    assert!(kept.contains("Uninstall incomplete") && kept.contains("protected"));
+    assert_eq!(fs::read(&target).unwrap(), b"user modification\n");
+    assert_eq!(fs::read(&receipt).unwrap(), receipt_before);
+    let removed = run(&["app", "uninstall", "demo", "--force", "--yes"], 0);
+    assert!(removed.contains("restored"));
+    assert_eq!(fs::read(&target).unwrap(), b"original\n");
+    assert!(!backup.exists());
+    assert_eq!(
+        fs::read_to_string(preset.join("shine.toml")).unwrap(),
+        metadata
+    );
+    assert_eq!(fs::read(preset.join("config.txt")).unwrap(), b"three\n");
+    let rejected = run(
+        &[
+            "upgrade",
+            "app/missing\nFORGED=target\r\t\u{1b}",
+            "--yes",
+            "--verbose",
+        ],
+        1,
+    );
+    assert!(rejected.starts_with(r"Upgrading app/missing\nFORGED=target\r\t\u{1b}"));
+}
+
+#[test]
 fn stored_task_names_encode_controls_align_columns_and_retain_lookup_identity() {
     let f = Fixture::new();
     let state = f.0.join("state");
@@ -2350,73 +2545,102 @@ fn preset_pack_rejects_file_parent_traversal_in_text_and_json() {
 #[cfg(unix)]
 #[test]
 fn preset_pull_preserves_selected_path_and_exit_contract() {
-    let fixture = Fixture::new();
-    let source = fixture.0.join("source");
-    let selected = fixture.0.join("selected ");
-    let neighbor = fixture.0.join("selected");
-    let git = |dir: &std::path::Path, args: &[&str]| {
-        let output = fixture
-            .configure(Command::new("git"))
-            .current_dir(dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git {args:?}: {output:?}");
-    };
-    git(&fixture.0, &["init", source.to_str().unwrap()]);
-    git(&source, &["config", "user.name", "Shine Tests"]);
-    git(&source, &["config", "user.email", "shine@example.invalid"]);
-    fs::write(source.join("preset.txt"), "one\n").unwrap();
-    git(&source, &["add", "preset.txt"]);
-    git(&source, &["commit", "-m", "initial"]);
-    for dir in [&selected, &neighbor] {
-        git(
-            &fixture.0,
-            &["clone", source.to_str().unwrap(), dir.to_str().unwrap()],
-        );
-    }
-    let state = fixture.0.join("state");
-    fs::create_dir_all(&state).unwrap();
-    // SHINE_CONFIG_DIR selects state/presets before SHINE_PRESETS in global mode.
-    std::os::unix::fs::symlink(&selected, state.join("presets")).unwrap();
-    fs::write(state.join("update-check.json"), serde_json::to_vec(&serde_json::json!({
+    for selected_name in ["selected ", "selected\nFORGED=git\r\t\u{1b} "] {
+        let fixture = Fixture::new();
+        let source = fixture.0.join("source");
+        let selected = fixture.0.join(selected_name);
+        let neighbor = fixture.0.join("selected");
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let output = fixture
+                .configure(Command::new("git"))
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}: {output:?}");
+        };
+        git(&fixture.0, &["init", source.to_str().unwrap()]);
+        git(&source, &["config", "user.name", "Shine Tests"]);
+        git(&source, &["config", "user.email", "shine@example.invalid"]);
+        fs::write(source.join("preset.txt"), "one\n").unwrap();
+        git(&source, &["add", "preset.txt"]);
+        git(&source, &["commit", "-m", "initial"]);
+        for dir in [&selected, &neighbor] {
+            git(
+                &fixture.0,
+                &["clone", source.to_str().unwrap(), dir.to_str().unwrap()],
+            );
+        }
+        let state = fixture.0.join("state");
+        fs::create_dir_all(&state).unwrap();
+        fs::write(
+            state.join("config.toml"),
+            format!(
+                "schema_version=2\npresets_overlay_dir={}\n",
+                toml::Value::String(selected.to_str().unwrap().into())
+            ),
+        )
+        .unwrap();
+        // SHINE_CONFIG_DIR selects state/presets before SHINE_PRESETS in global mode.
+        std::os::unix::fs::symlink(&selected, state.join("presets")).unwrap();
+        fs::write(state.join("update-check.json"), serde_json::to_vec(&serde_json::json!({
         "latest_version": env!("CARGO_PKG_VERSION"),
         "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
     })).unwrap()).unwrap();
-    let pull = || {
-        fixture
+        let pull = || {
+            fixture
+                .command()
+                .env("NO_COLOR", "1")
+                .args(["preset", "pull"])
+                .output()
+                .unwrap()
+        };
+        fs::write(selected.join("preset.txt"), "user changes\n").unwrap();
+
+        let refused = pull();
+
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let stderr = String::from_utf8(refused.stderr).unwrap();
+        assert!(stderr.contains("uncommitted changes"), "{stderr}");
+        assert!(!selected.join(".git/FETCH_HEAD").exists());
+        assert!(!neighbor.join(".git/FETCH_HEAD").exists());
+        assert_eq!(
+            fs::read(selected.join("preset.txt")).unwrap(),
+            b"user changes\n"
+        );
+        git(&selected, &["checkout", "--", "preset.txt"]);
+        fs::write(source.join("preset.txt"), "two\n").unwrap();
+        git(&source, &["commit", "-am", "update"]);
+
+        let updated = pull();
+
+        assert_eq!(updated.status.code(), Some(0), "{updated:?}");
+        assert!(updated.stderr.is_empty(), "{updated:?}");
+        let stdout = String::from_utf8(updated.stdout).unwrap();
+        assert!(stdout.contains("preset source updated"), "{stdout}");
+        assert_eq!(fs::read(selected.join("preset.txt")).unwrap(), b"two\n");
+        assert_eq!(fs::read(neighbor.join("preset.txt")).unwrap(), b"one\n");
+        assert!(!neighbor.join(".git/FETCH_HEAD").exists());
+        let verbose = fixture
             .command()
             .env("NO_COLOR", "1")
-            .args(["preset", "pull"])
+            .args(["update", "--pull", "--verbose"])
             .output()
-            .unwrap()
-    };
-    fs::write(selected.join("preset.txt"), "user changes\n").unwrap();
-
-    let refused = pull();
-
-    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
-    let stderr = String::from_utf8(refused.stderr).unwrap();
-    assert!(stderr.contains("uncommitted changes"), "{stderr}");
-    assert!(!selected.join(".git/FETCH_HEAD").exists());
-    assert!(!neighbor.join(".git/FETCH_HEAD").exists());
-    assert_eq!(
-        fs::read(selected.join("preset.txt")).unwrap(),
-        b"user changes\n"
-    );
-    git(&selected, &["checkout", "--", "preset.txt"]);
-    fs::write(source.join("preset.txt"), "two\n").unwrap();
-    git(&source, &["commit", "-am", "update"]);
-
-    let updated = pull();
-
-    assert_eq!(updated.status.code(), Some(0), "{updated:?}");
-    assert!(updated.stderr.is_empty(), "{updated:?}");
-    let stdout = String::from_utf8(updated.stdout).unwrap();
-    assert!(stdout.contains("preset source updated"), "{stdout}");
-    assert_eq!(fs::read(selected.join("preset.txt")).unwrap(), b"two\n");
-    assert_eq!(fs::read(neighbor.join("preset.txt")).unwrap(), b"one\n");
-    assert!(!neighbor.join(".git/FETCH_HEAD").exists());
+            .unwrap();
+        assert!(verbose.status.success(), "{verbose:?}");
+        let text = String::from_utf8(verbose.stdout).unwrap();
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(
+            !text.lines().any(|line| line.starts_with("FORGED=")),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("same repository:") && text.contains("Pulling preset source from"),
+            "{text}"
+        );
+        assert_eq!(fs::read(selected.join("preset.txt")).unwrap(), b"two\n");
+        assert_eq!(fs::read(neighbor.join("preset.txt")).unwrap(), b"one\n");
+    }
 }
 
 #[test]

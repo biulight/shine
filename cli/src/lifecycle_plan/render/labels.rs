@@ -1,4 +1,5 @@
 use crate::lifecycle_plan::classification::is_stale_app_preservation;
+use crate::output::escape_controls;
 use shine_core::plan::{
     EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, OpaqueCodeScopeV1, PermissionV1,
     PlanActionV1,
@@ -50,7 +51,7 @@ pub(crate) fn styled_action_name(action: PlanActionV1) -> String {
 }
 
 pub(crate) fn permission_name(permission: &PermissionV1) -> String {
-    match permission {
+    let name = match permission {
         PermissionV1::OpaqueCode {
             scope: OpaqueCodeScopeV1::Unrestricted,
         } => "opaque Preset code with unrestricted effects".to_string(),
@@ -84,7 +85,8 @@ pub(crate) fn permission_name(permission: &PermissionV1) -> String {
             || format!("system {capability}"),
             |resource| format!("system {capability} {resource}"),
         ),
-    }
+    };
+    escape_controls(&name)
 }
 
 pub(in crate::lifecycle_plan) fn stale_app_source_guidance(
@@ -95,6 +97,14 @@ pub(in crate::lifecycle_plan) fn stale_app_source_guidance(
         return Vec::new();
     }
     let category = step.target.strip_prefix("app/").unwrap_or_default();
+    if category.chars().any(char::is_control) {
+        return vec![
+            format!("{indent}Preset source missing; installed content and receipt retained."),
+            format!(
+                "{indent}Preview uninstall: run `shine app uninstall --dry-run` with the original category argument (copyable command omitted)."
+            ),
+        ];
+    }
     let category = crate::shell_quote::command_positionals(&[category]);
     vec![
         format!("{indent}Preset source missing; installed content and receipt retained."),

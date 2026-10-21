@@ -1034,6 +1034,93 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_review_data_controls_leave_plan_and_fingerprint_intact() {
+        use shine_core::plan::EnvironmentSensitivityV1;
+        let value = "data\nFORGED\r\t\u{1b}\\literal中文";
+        let mut plan = bootstrap_display_plan();
+        plan.steps[0].target = format!("sys/{value}");
+        plan.permission_scopes[0].target = Some(plan.steps[0].target.clone());
+        plan.steps[2].resource = Some(value.into());
+        plan.steps[0].diagnostic_codes.push(value.into());
+        let permissions = [
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: format!("home:{value}"),
+            },
+            PermissionV1::Network {
+                scope: NetworkScopeV1::Host(value.into()),
+            },
+            PermissionV1::Command {
+                program: value.into(),
+            },
+            PermissionV1::Environment {
+                name: value.into(),
+                sensitivity: EnvironmentSensitivityV1::Secret,
+            },
+            PermissionV1::System {
+                capability: value.into(),
+                resource: Some(value.into()),
+            },
+        ];
+        for permission in permissions {
+            plan.permissions.required.insert(permission.clone());
+            plan.permission_scopes[0]
+                .permissions
+                .required
+                .insert(permission.clone());
+            plan.author_capabilities.insert(permission.clone());
+            plan.permissions.missing_declarations.insert(permission);
+        }
+        plan.permissions.uncomputable_codes.insert(value.into());
+        plan.code_boundaries.push(shine_core::plan::CodeBoundaryV2 {
+            target: value.into(),
+            entry_kind: CodeEntryKindV2::SysBootstrapScript,
+            timing: CodeTimingV2::ExecuteNow,
+            source: CodeSourceV2::ExternalOrOverlay,
+            trust: CodeTrustStateV2::MissingOrStale,
+            unisolated: true,
+            shared_resource: None,
+            target_role: CodeTargetRoleV2::Selected,
+        });
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
+        let request = LifecyclePlanRequest::SysBootstrap {
+            request: SysBootstrapPlanRequest {
+                os_id: "ubuntu".into(),
+                item_ids: vec![],
+                sys_shell: "bash".into(),
+                force_profile: false,
+                input_versions: PlanningInputVersions::default(),
+            },
+            proxy_env: Default::default(),
+        };
+        let planned = vec![(request, plan.clone())];
+        let layouts = [
+            render_plan_lines(&plan, "config").unwrap(),
+            render_compact_plan_lines(&planned, "config").unwrap(),
+            render_upgrade_detailed_plan_lines(&planned, "config").unwrap(),
+            render_bootstrap_plan_lines(&plan, "config", false).unwrap(),
+            render_bootstrap_plan_lines(&plan, "config", true).unwrap(),
+        ];
+        for lines in layouts {
+            let text = lines.join("\n");
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(
+                !text.lines().any(|line| line.starts_with("FORGED")),
+                "{text:?}"
+            );
+            assert!(
+                text.contains(r"data\nFORGED\r\t\u{1b}\literal中文"),
+                "{text:?}"
+            );
+            assert!(text.contains("trust missing or stale"));
+            assert!(text.to_lowercase().contains("administrator"));
+        }
+        assert_eq!(serde_json::to_value(&plan).unwrap(), before);
+        assert_eq!(plan.fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
     fn renderer_includes_steps_permissions_and_fingerprint() {
         let permission = PermissionV1::Command {
             program: "demo".to_string(),
@@ -1135,6 +1222,39 @@ mod tests {
     }
 
     #[test]
+    fn permission_summary_controls_preserve_backup_association_and_counts() {
+        let mut plan = filesystem_summary_fixture();
+        let suffix = "\nFORGED\r\t\u{1b}";
+        for group in &mut plan.filesystem_review {
+            group.target.push_str(suffix);
+            group.permissions =
+                PermissionSetV1::new(group.permissions.iter().cloned().map(|permission| {
+                    let PermissionV1::Filesystem { access, mut path } = permission else {
+                        panic!("filesystem fixture")
+                    };
+                    path.push_str(suffix);
+                    PermissionV1::Filesystem { access, path }
+                }));
+        }
+        plan.permissions.required = PermissionSetV1::new(
+            plan.filesystem_review
+                .iter()
+                .flat_map(|group| group.permissions.iter().cloned()),
+        );
+        let before = serde_json::to_value(&plan).unwrap();
+        let fingerprint = plan.fingerprint().unwrap();
+        let compact = render_compact_permissions(&plan).join("\n");
+        assert!(!compact.contains(['\r', '\t', '\u{1b}']), "{compact:?}");
+        assert!(compact.contains(r"Installed files · shell/test/mytool\nFORGED\r\t\u{1b}"));
+        assert!(
+            compact.contains(r"remove/write (6 paths; backups for ~/.zshrc\nFORGED\r\t\u{1b})"),
+            "{compact:?}"
+        );
+        assert_eq!(serde_json::to_value(&plan).unwrap(), before);
+        assert_eq!(plan.fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
     fn filesystem_summary_preserves_exact_permissions_and_verbose_details() {
         let plan = filesystem_summary_fixture();
         let fingerprint = plan.fingerprint().unwrap();
@@ -1152,6 +1272,20 @@ mod tests {
             assert!(full.contains(&permission_name(permission)));
         }
         assert_eq!(plan.fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
+    fn stale_source_guidance_never_copies_a_display_escape_as_an_operand() {
+        let step = PlanStepV1::new(
+            "app/item\nFORGED\r\t\u{1b}",
+            Some("preset-cache:config"),
+            PlanActionV1::Preserve,
+        )
+        .with_diagnostic_code("app_stale_source_preserved");
+        let lines = render::stale_app_source_guidance(&step, "  ");
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].contains("original category argument (copyable command omitted)"));
+        assert!(!lines.join("").chars().any(char::is_control));
     }
 
     #[test]
