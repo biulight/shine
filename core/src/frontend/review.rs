@@ -9,7 +9,7 @@ use crate::runtime::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PLAN_REVIEW_SCHEMA_VERSION: u32 = 2;
+pub const PLAN_REVIEW_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReviewRequest {

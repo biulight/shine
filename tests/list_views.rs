@@ -61,7 +61,7 @@ impl Fixture {
         fs::create_dir_all(&preset).unwrap();
         let destination = self.0.join("destination");
         // Rust's quoted path escaping also forms a TOML basic string on supported hosts.
-        fs::write(preset.join("shine.toml"), format!("metadata_schema_version = 2\ndest = {:?}\nlist_mode = 'files'\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.txt'\n[[files]]\nsource = 'manual.txt'\n{}", destination.to_str().unwrap(), if generated { "generator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = ['ENABLE'], auto = false }\n" } else { "" })).unwrap();
+        fs::write(preset.join("shine.toml"), format!("metadata_schema_version = 2\ndest = {:?}\nlist_mode = 'files'\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\nfilesystem = [{{ access = ['write'], base = 'absolute', path = {:?} }}]\n[[files]]\nsource = 'config.txt'\n[[files]]\nsource = 'manual.txt'\n{}", destination.to_str().unwrap(), self.0.join("generator-ran").to_str().unwrap(), if generated { "generator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = ['ENABLE'], auto = false }\n" } else { "" })).unwrap();
         fs::write(preset.join("config.txt"), "static-v1\n").unwrap();
         fs::write(preset.join("manual.txt"), "manual-v1\n").unwrap();
         fs::write(
@@ -2192,4 +2192,52 @@ fn shell_update_columns_use_unicode_display_width_without_changing_receipts() {
         fs::read(fixture.0.join("state/shell-manifest.toml")).unwrap(),
         receipt
     );
+}
+
+#[test]
+fn code_analysis_blocks_supported_scripts_before_execution_in_every_cli_evaluation() {
+    for code in [
+        "fetch('https://private.example/SECRET_LITERAL');",
+        "const broken = ;",
+    ] {
+        let fixture = Fixture::new();
+        fixture.app(false);
+        success(&fixture.run(&["app", "install", "demo", "--yes"]));
+        fixture.app(true);
+        let preset = fixture.0.join("state/presets/app/demo");
+        fs::write(preset.join("generate.ts"), code).unwrap();
+        success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+        let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+        let content = fs::read(fixture.0.join("destination/manual.txt")).unwrap();
+        let ordinary = fixture.run(&["app", "info", "demo"]);
+        success(&ordinary);
+        assert!(!stdout(&ordinary).contains("code_analysis_"));
+        for args in [
+            vec!["app", "info", "demo", "--run-generators"],
+            vec!["info", "app/demo", "--run-generators"],
+            vec!["update", "app/demo", "--run-generators"],
+            vec!["update", "--run-generators"],
+            vec!["app", "install", "demo", "--replace-managed", "--yes"],
+        ] {
+            let output = fixture.run(&args);
+            assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+            let text = format!(
+                "{}{}",
+                stdout(&output),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(text.contains("code_analysis_"), "{args:?}: {text}");
+            assert!(!text.contains("SECRET_LITERAL"));
+            assert!(!text.contains("private.example"));
+            assert!(!fixture.0.join("state/runtime/app").exists());
+            assert_eq!(
+                fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+                receipt
+            );
+            assert_eq!(
+                fs::read(fixture.0.join("destination/manual.txt")).unwrap(),
+                content
+            );
+        }
+    }
 }

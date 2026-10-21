@@ -1,8 +1,8 @@
 # 0150 — Snapshot-bound App code analysis admission
 
-- **Status**: Accepted design; implementation and validation in progress
+- **Status**: Accepted; implemented and validated
 - **Date**: 2026-10-22
-- **Partially supersedes on implementation**: ADR 0091 (optional author statements)
+- **Partially supersedes**: ADR 0091 (optional author statements)
 - **Extends**: ADRs 0040, 0080, 0092
 - **Requirements**: [Code analysis PRD](../../preset-code-analysis-prd.md)
 

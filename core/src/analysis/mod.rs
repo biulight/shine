@@ -10,6 +10,7 @@ mod tests;
 use crate::digest::sha256_hex;
 use crate::permission::PermissionDeclarationV1;
 use crate::plan::{EnvironmentSensitivityV1, FilesystemAccessV1, PermissionV1};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{
@@ -18,9 +19,12 @@ use std::sync::{
 };
 
 pub const RULE_VERSION: u32 = 1;
+pub const ANALYZER_VERSION: &str = "tree-sitter-0.25.10/js-0.23.1/ts-0.23.2/language-0.1.9";
 pub const SCHEMA_VERSION: u32 = 1;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, Eq, PartialEq, Ord, PartialOrd,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum DiagnosticKind {
     Difference,
@@ -29,7 +33,7 @@ pub enum DiagnosticKind {
     Uncorroborated,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Diagnostic {
     pub kind: DiagnosticKind,
     pub code: String,
@@ -44,7 +48,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    fn new(
+    pub(crate) fn new(
         kind: DiagnosticKind,
         code: &str,
         file: &str,
@@ -68,15 +72,49 @@ impl Diagnostic {
             DiagnosticKind::Difference | DiagnosticKind::Failure
         )
     }
+
+    pub fn explanation(&self) -> &'static str {
+        match self.kind {
+            DiagnosticKind::Difference => {
+                "Detected behavior is not covered by the declarations; add an accurate declaration or change the script to fit its declarations."
+            }
+            DiagnosticKind::Failure => {
+                "Analysis evidence is unavailable or failed; fix the reported source or limit before continuing."
+            }
+            DiagnosticKind::CoverageGap => {
+                "This behavior is outside verified coverage; existing code trust is still required."
+            }
+            DiagnosticKind::Uncorroborated => {
+                "This declaration was not corroborated within the analyzed scope; it does not block admission."
+            }
+        }
+    }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct Report {
+    pub analyzer_version: String,
     pub schema_version: u32,
     pub rule_version: u32,
     pub files: Vec<String>,
     pub diagnostics: Vec<Diagnostic>,
     pub allowed: bool,
+}
+
+/// Safe author/frontend projection. It is not execution evidence.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
+pub struct Scope {
+    pub target: String,
+    pub entry: String,
+    pub script: Option<String>,
+    pub report: Report,
+}
+
+/// The digest binds a Plan; only Core's private prepared report can satisfy it.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
+pub struct Binding {
+    pub identity: String,
+    pub scope: Scope,
 }
 
 /// Captured identity only. Fixed variables take precedence over injection mappings.
@@ -186,6 +224,10 @@ impl Session {
     pub fn parsed_files(&self) -> usize {
         self.files
     }
+    pub(crate) fn charge_diagnostics(&mut self, count: usize) -> Result<(), TerminalFailure> {
+        self.findings = self.findings.saturating_add(count);
+        self.budget()
+    }
     pub fn check(&mut self) -> Result<(), TerminalFailure> {
         if self.cancelled.load(Ordering::Relaxed) {
             self.terminal = Some(TerminalFailure::Cancelled);
@@ -208,9 +250,9 @@ impl Session {
         self.check()
     }
     /// `sources` contains category-relative names and captured bytes only.
-    pub fn analyze(
+    pub fn analyze<S: AsRef<[u8]>>(
         &mut self,
-        sources: &BTreeMap<String, Vec<u8>>,
+        sources: &BTreeMap<String, S>,
         entry: &str,
         declaration: Option<&PermissionDeclarationV1>,
         env: &EnvironmentContract,
@@ -222,9 +264,9 @@ impl Session {
         result
     }
 
-    fn analyze_inner(
+    fn analyze_inner<S: AsRef<[u8]>>(
         &mut self,
-        sources: &BTreeMap<String, Vec<u8>>,
+        sources: &BTreeMap<String, S>,
         entry: &str,
         declaration: Option<&PermissionDeclarationV1>,
         env: &EnvironmentContract,
@@ -267,6 +309,7 @@ impl Session {
                 ));
                 continue;
             };
+            let bytes = bytes.as_ref();
             if bytes.len() > self.limits.file_bytes {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticKind::Failure,
@@ -412,6 +455,7 @@ impl Session {
         diagnostics.sort();
         diagnostics.dedup();
         Ok(Report {
+            analyzer_version: ANALYZER_VERSION.into(),
             schema_version: SCHEMA_VERSION,
             rule_version: RULE_VERSION,
             files: visited.into_iter().collect(),
@@ -457,8 +501,8 @@ fn file_permission(access: FilesystemAccessV1, path: &str) -> Option<PermissionV
     })
 }
 
-fn resolve(
-    sources: &BTreeMap<String, Vec<u8>>,
+fn resolve<S>(
+    sources: &BTreeMap<String, S>,
     file: &str,
     spec: &str,
 ) -> Result<Option<String>, &'static str> {

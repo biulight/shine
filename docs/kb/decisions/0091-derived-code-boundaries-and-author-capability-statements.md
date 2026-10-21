@@ -7,6 +7,11 @@
 - **Supersedes in part**: ADR 0041, ADR 0046, ADR 0088, ADR 0090
 - **Extends**: ADR 0064
 
+App supported-code admission is partially superseded by
+[ADR 0150](0150-preset-code-analysis-admission.md): statically identified undeclared App Bun effects
+now block execution. Unisolated-code classification, scoped trust and the absence of runtime
+confinement remain unchanged.
+
 ## Context
 
 Shine can derive its own structured file, launcher, environment-injection and elevation operations,

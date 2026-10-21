@@ -1,6 +1,6 @@
 //! Declarative Preset authoring fixtures over synthetic planning state.
 
-use super::authoring::{PresetAuthoringSyntheticState, plan_preset_source_scope_with_state};
+use super::authoring::{PresetAuthoringSyntheticState, plan_preset_source_scope_with_analysis};
 use super::path_text::private_absolute_path as private_absolute_fixture_path;
 use super::validation::load_preset_source_scope;
 use super::{FileSystemObservationHost, InMemoryHost, RuntimePlatform};
@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
-pub const PRESET_TEST_SCHEMA_VERSION: u32 = 1;
+pub const PRESET_TEST_SCHEMA_VERSION: u32 = 2;
+pub const PRESET_TEST_FIXTURE_SCHEMA_VERSION: u32 = 1;
 pub const PRESET_TEST_FIXTURE_FILE: &str = "shine.test.toml";
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -139,6 +140,7 @@ pub struct FixtureExpectationV1 {
     pub plan_kinds: Option<Vec<String>>,
     pub diagnostic_codes: Option<Vec<String>>,
     pub step_diagnostic_codes: Option<Vec<String>>,
+    pub analysis_diagnostic_codes: Option<Vec<String>>,
     pub actions: Option<Vec<String>>,
     pub required_permissions: Option<Vec<String>>,
     pub missing_permissions: Option<Vec<String>>,
@@ -155,6 +157,7 @@ pub struct PresetTestCaseResultV1 {
     pub actual_plan_kinds: Vec<String>,
     pub actual_diagnostic_codes: Vec<String>,
     pub actual_step_diagnostic_codes: Vec<String>,
+    pub actual_analysis_diagnostic_codes: Vec<String>,
     pub actual_actions: Vec<String>,
     pub actual_required_permissions: Vec<String>,
     pub actual_missing_permissions: Vec<String>,
@@ -174,6 +177,8 @@ pub struct PresetTestSummaryV1 {
 pub struct PresetTestReportV1 {
     pub schema_version: u32,
     pub valid: bool,
+    pub complete: bool,
+    pub unfinished_cases: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<String>,
     pub summary: PresetTestSummaryV1,
@@ -184,6 +189,21 @@ pub async fn test_preset_path(
     source_host: &impl FileSystemObservationHost,
     cwd: &Path,
     path: &Path,
+) -> PresetTestReportV1 {
+    test_preset_path_with_analysis(
+        source_host,
+        cwd,
+        path,
+        super::CodeAnalysisSession::default(),
+    )
+    .await
+}
+
+pub(super) async fn test_preset_path_with_analysis(
+    source_host: &impl FileSystemObservationHost,
+    cwd: &Path,
+    path: &Path,
+    analysis: super::CodeAnalysisSession,
 ) -> PresetTestReportV1 {
     let scope = match load_preset_source_scope(source_host, cwd, path).await {
         Ok(scope) => scope,
@@ -204,7 +224,7 @@ pub async fn test_preset_path(
         return invalid("fixture_missing");
     };
     let fixture = match toml::from_slice::<FixtureDocumentV1>(bytes) {
-        Ok(fixture) if fixture.schema_version == PRESET_TEST_SCHEMA_VERSION => fixture,
+        Ok(fixture) if fixture.schema_version == PRESET_TEST_FIXTURE_SCHEMA_VERSION => fixture,
         Ok(_) => return invalid("fixture_schema_unsupported"),
         Err(_) => return invalid("fixture_invalid"),
     };
@@ -221,13 +241,50 @@ pub async fn test_preset_path(
     }
 
     let mut results = Vec::new();
-    for case in fixture.cases {
+    let mut cases = fixture.cases.into_iter();
+    while let Some(case) = cases.next() {
         let platform = case.platform.runtime();
         let state = match materialize_host_state(&case.host) {
             Ok(state) => state,
             Err(code) => return invalid(code),
         };
-        let report = plan_preset_source_scope_with_state(scope.clone(), platform, state).await;
+        let report = plan_preset_source_scope_with_analysis(
+            scope.clone(),
+            platform,
+            state,
+            analysis.clone(),
+        )
+        .await;
+        if !report.complete {
+            let mut unfinished_cases = vec![case.name];
+            unfinished_cases.extend(cases.map(|case| case.name));
+            let passed = results
+                .iter()
+                .filter(|case: &&PresetTestCaseResultV1| case.passed)
+                .count();
+            return PresetTestReportV1 {
+                schema_version: PRESET_TEST_SCHEMA_VERSION,
+                valid: false,
+                complete: false,
+                diagnostics: report.diagnostics.into_iter().map(|d| d.code).collect(),
+                summary: PresetTestSummaryV1 {
+                    cases: results.len() + unfinished_cases.len(),
+                    passed,
+                    failed: results.len() - passed,
+                },
+                cases: results,
+                unfinished_cases,
+            };
+        }
+        let actual_analysis_diagnostics = sorted(
+            report
+                .plans
+                .iter()
+                .flat_map(|p| &p.code_analysis)
+                .flat_map(|s| &s.report.diagnostics)
+                .map(|d| d.code.clone())
+                .collect(),
+        );
         let actual_plan_kinds = sorted(report.plans.iter().map(|plan| plan.kind.clone()).collect());
         let actual_diagnostics = sorted(
             report
@@ -276,6 +333,12 @@ pub async fn test_preset_path(
                 .collect(),
         );
         let mut failures = Vec::new();
+        compare_list(
+            case.expect.analysis_diagnostic_codes,
+            &actual_analysis_diagnostics,
+            "expected_analysis_diagnostic_codes_mismatch",
+            &mut failures,
+        );
         compare(
             case.expect.valid,
             report.valid,
@@ -339,6 +402,7 @@ pub async fn test_preset_path(
             actual_plan_kinds,
             actual_diagnostic_codes: actual_diagnostics,
             actual_step_diagnostic_codes: actual_step_diagnostics,
+            actual_analysis_diagnostic_codes: actual_analysis_diagnostics,
             actual_actions,
             actual_required_permissions,
             actual_missing_permissions,
@@ -351,6 +415,8 @@ pub async fn test_preset_path(
     PresetTestReportV1 {
         schema_version: PRESET_TEST_SCHEMA_VERSION,
         valid: failed == 0,
+        complete: true,
+        unfinished_cases: Vec::new(),
         diagnostics: Vec::new(),
         summary: PresetTestSummaryV1 {
             cases: results.len(),
@@ -625,6 +691,8 @@ fn invalid(code: &str) -> PresetTestReportV1 {
     PresetTestReportV1 {
         schema_version: PRESET_TEST_SCHEMA_VERSION,
         valid: false,
+        complete: true,
+        unfinished_cases: Vec::new(),
         diagnostics: vec![code.to_string()],
         summary: PresetTestSummaryV1 {
             cases: 0,

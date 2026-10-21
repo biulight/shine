@@ -107,6 +107,31 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 未使用 `--force` 时，如果其他进程在打包期间创建了输出文件，Shine 会保留该文件并以
 `output_exists` 失败。
 
+## 执行前检查 App 代码
+
+Shine 会自动检查 App 的 Bun generator、脚本 hook、artifact 和 teardown，以及能够解析的本地
+JavaScript/TypeScript 依赖。源码行为与声明存在确定差异，或受支持的源码解析失败时，会阻止执行。
+根据报告的文件和位置修复：准确声明预期行为，或修改脚本使其符合声明。trust、`--yes` 和
+`opaque_code = "unrestricted"` 都不能绕过此检查。
+
+使用 `shine preset lint <PATH>` 检查所有 App 代码入口，包括当前缺少触发输入的 generator。
+`preset plan` 和 `preset test` 只检查假设输入下选中的入口，并在报告中显示范围；跳过的入口不算匹配。
+这些检查不会执行脚本、下载依赖或读取真实环境值。
+
+动态目标、包依赖、子进程效果和不支持的语言等覆盖缺口只作提示；未被源码印证的声明也不阻断，
+可在详细审阅中查看。这些结果都不代表代码安全或已被完整分析。没有诊断时，常规审阅不增加分析
+输出；原有 trust 和批准检查仍然适用。
+
+使用 `SOURCE=TARGET` 环境映射时，声明源变量名及其 `plain`/`secret` 敏感度，脚本读取目标名。
+只有文档列出的固定变量可以免于重复声明，任意 `SHINE_` 前缀名称不能获得豁免。不要把环境值或
+URL 凭据写入能力声明。源码位置采用从 1 开始的行号和 UTF-8 字节列号。
+
+工具集成在升级后应重新读取 `preset schema`：lint 报告使用 schema 2，作者 Plan 报告使用 schema 3，
+fixture 报告使用 schema 2。Fixture 输入仍为 schema 1；可用 `expect.analysis_diagnostic_codes`
+配合 `ready` 断言诊断。正确预期阻断的用例可以通过，但取消或命令累计预算耗尽不能成为成功的负向
+测试。`complete = false` 表示作者报告未完成，fixture 报告还会列出 `unfinished_cases`。
+生命周期 Plan／批准／审阅契约使用 schema 3；应重新审阅，不能复用旧批准。
+
 ## 迁移 1.x 来源
 
 可预览当前激活的 external source 与 overlay，也可以指定仓库、类别或 manifest：
@@ -133,7 +158,7 @@ App 可以补齐当前 metadata，而不添加能力说明。缺少可选能力�
 权限 schema v1/v2 表是可选的作者能力说明。App 在类别根部使用 `[permissions]`；Shell 的每个
 `[[files]]` 命令可使用 `[files.permissions]`；Sys 的每个 `[[items]]` target 可使用
 `[items.permissions]`。Shine 会校验任何显式提供的表，但缺表或空表不会隐藏或约束任意代码。
-不支持的版本、未知字段、非法 identity 和重复项均为错误。
+受支持的 App 代码仍须准确声明静态分析识别出的行为。不支持的版本、未知字段、非法 identity 和重复项均为错误。
 
 ```toml
 [permissions]
@@ -179,8 +204,8 @@ target = "bar"
 Filesystem base 只接受 `home`、`shine`、`data-dir`、`preset` 或 `absolute`；非绝对路径必须是
 规范化相对路径，`.` 表示所选 base 的根。Command 只能填写一个不带参数的 program identity。
 Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。不要重复 typed metadata
-已表达的命令、脚本路径、普通 destination 或固定 package provider；只有在有助于审阅时才添加
-可选说明。
+已表达的命令、脚本路径、普通 destination 或固定 package provider。App 脚本中被静态分析识别的
+行为仍须声明；其他说明可用于帮助审阅者理解预期效果。
 
 `opaque_code = "unrestricted"` 是可选的审阅 metadata。即使省略该字段或整张表，Core 仍会把
 App hook、generator、artifact、安装或 source 的 Shell 命令，以及 Sys script/profile code 自动

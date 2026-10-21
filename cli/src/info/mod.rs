@@ -100,6 +100,13 @@ fn print_generator_notice(
         .iter()
         .filter(|file| categories.is_empty() || categories.contains(&file.category.name))
         .collect::<Vec<_>>();
+    for file in &relevant {
+        if let Some(scope) = &file.code_analysis {
+            for line in crate::code_analysis::lines(scope, false) {
+                println!("{line}");
+            }
+        }
+    }
     let not_evaluated = relevant.iter().any(|file| {
         file.assessment_diagnostic == Some("app_generator_not_evaluated")
             && refs.iter().any(|item| match item {

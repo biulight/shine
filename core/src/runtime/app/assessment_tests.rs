@@ -358,6 +358,7 @@ async fn assessment_policies_keep_preview_fallback_and_manual_generator_executio
     let runtime = generated_runtime(PresetSourceKind::Embedded, true);
     let mut categories = runtime.app_categories(None).unwrap();
     categories[0].files[0].generator.as_mut().unwrap().auto = false;
+    runtime.lint_app_code(&categories[0]).await.unwrap();
     for (policy, expected, runs) in [
         (
             AppAssessmentPolicy::InstallPreview,

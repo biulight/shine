@@ -802,7 +802,9 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             }
         }
     }
+}
 
+impl<H> CoreRuntime<H> {
     pub(super) fn fixed_app_contract_env(
         &self,
         category: &str,
@@ -1105,6 +1107,7 @@ mod lifecycle_tests {
             .insert("TOKEN".to_string(), "opaque".to_string());
         let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
         let categories = runtime.app_categories(Some("demo")).unwrap();
+        runtime.lint_app_code(&categories[0]).await.unwrap();
         runtime
             .host()
             .queue_process_output(Ok(crate::runtime::ProcessOutput {

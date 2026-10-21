@@ -111,6 +111,10 @@ pub(super) fn parse(
         let mut cursor = node.walk();
         pending.extend(node.named_children(&mut cursor));
     }
+    let module = matches!(extension, "mjs" | "mts")
+        || nodes
+            .iter()
+            .any(|n| matches!(n.kind(), "import_statement" | "export_statement"));
     let mut bindings = Bindings::default();
     for node in &nodes {
         match node.kind() {
@@ -121,7 +125,7 @@ pub(super) fn parse(
                 else {
                     continue;
                 };
-                if text(*node, bytes).starts_with("import type ") {
+                if has_token(*node, "type") {
                     continue;
                 }
                 let p = node.start_position();
@@ -131,7 +135,7 @@ pub(super) fn parse(
                 let module = builtin(&source);
                 for child in descendants(*node) {
                     let binding = match child.kind() {
-                        "import_specifier" => {
+                        "import_specifier" if !has_token(child, "type") => {
                             let name = child.child_by_field_name("name");
                             let alias = child.child_by_field_name("alias").or(name);
                             alias.map(|alias| {
@@ -195,7 +199,14 @@ pub(super) fn parse(
             }
             "function_declaration" | "class_declaration" => {
                 if let Some(name) = node.child_by_field_name("name") {
-                    let scope = scope(node.parent().unwrap_or(*node));
+                    let mut scope = scope(node.parent().unwrap_or(*node));
+                    if node.kind() == "function_declaration" && !module && scope.kind() != "program"
+                    {
+                        // Sloppy-script block functions can be hoisted (Annex B).
+                        // Without an explicit module boundary, do not claim the
+                        // outer spelling still denotes an unshadowed global.
+                        scope = function_scope(*node);
+                    }
                     bindings.push(Binding {
                         name: text(name, bytes).into(),
                         start: scope.start_byte(),
@@ -235,8 +246,13 @@ pub(super) fn parse(
             }
             "for_in_statement" => {
                 if let Some(left) = node.child_by_field_name("left") {
-                    let scope = if text(*node, bytes).starts_with("for (var ") {
+                    let scope = if node
+                        .child_by_field_name("kind")
+                        .is_some_and(|n| n.kind() == "var")
+                    {
                         function_scope(*node)
+                    } else if node.child_by_field_name("kind").is_none() {
+                        tree.root_node()
                     } else {
                         *node
                     };
@@ -294,11 +310,7 @@ pub(super) fn parse(
         ) else {
             continue;
         };
-        if name.kind() != "identifier"
-            || !node
-                .parent()
-                .is_some_and(|p| text(p, bytes).starts_with("const "))
-        {
+        if name.kind() != "identifier" || !node.parent().is_some_and(|p| has_token(p, "const")) {
             continue;
         }
         let value = expression(value, bytes, &bindings);
@@ -628,14 +640,29 @@ fn function_scope(mut node: Node<'_>) -> Node<'_> {
     node
 }
 fn scope(mut node: Node<'_>) -> Node<'_> {
-    while let Some(parent) = node.parent() {
-        node = parent;
-        if matches!(node.kind(), "statement_block" | "program") {
-            break;
+    loop {
+        if matches!(
+            node.kind(),
+            "statement_block"
+                | "program"
+                | "for_statement"
+                | "for_in_statement"
+                | "switch_body"
+                | "catch_clause"
+        ) {
+            return node;
+        }
+        match node.parent() {
+            Some(parent) => node = parent,
+            None => return node,
         }
     }
-    node
 }
+fn has_token(node: Node<'_>, kind: &str) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(|child| child.kind() == kind)
+}
+
 fn text<'a>(node: Node<'_>, bytes: &'a [u8]) -> &'a str {
     std::str::from_utf8(&bytes[node.byte_range()]).unwrap_or("")
 }

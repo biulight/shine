@@ -61,6 +61,7 @@ pub struct AppFileInspection {
     pub desired_content: Option<Vec<u8>>,
     pub current_content: Option<Vec<u8>>,
     pub changes: Vec<InspectionChange>,
+    pub code_analysis: Option<crate::analysis::Scope>,
     pub assessment_error: Option<String>,
     pub assessment_diagnostic: Option<&'static str>,
 }

@@ -20,6 +20,20 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         if !request.explicit && !request.generator.auto {
             return Ok(None);
         }
+        let entry = format!("generator:{}", request.source);
+        let script = request
+            .generator
+            .script
+            .to_str()
+            .context("App script path is not UTF-8")?
+            .replace('\\', "/");
+        self.require_app_script_analysis(
+            &request.category,
+            &entry,
+            &script,
+            request.generator.runtime,
+            &request.generator.env,
+        )?;
         self.ensure_app_code_allowed(&request.category, "generator")?;
         let logical = format!(
             "app/{}/{}",
@@ -42,6 +56,8 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 &request.category,
                 &logical,
                 request.generator.runtime,
+                &entry,
+                &request.generator.env,
                 ProcessRequest {
                     env,
                     timeout: Some(GENERATOR_TIMEOUT),

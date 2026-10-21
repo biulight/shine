@@ -55,12 +55,44 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         let mut assessed = Vec::new();
         for category in categories {
             for file in &category.files {
+                self.check_analysis_command()?;
                 let destination = self.app_destination(category, file)?;
-                let raw = if file.generator.is_none() {
-                    self.app_source_bytes(category.name.as_str(), file)?
-                        .to_vec()
-                } else {
+                let raw = if let Some(generator) = &file.generator {
+                    let triggered = self.context.env.contains_key(&generator.when_env)
+                        && (policy != AppAssessmentPolicy::Upgrade || generator.auto);
+                    if preserve_errors && triggered {
+                        let binding = self.generator_analysis(
+                            category,
+                            file.source_rel
+                                .to_str()
+                                .context("App source is not UTF-8")?,
+                            generator,
+                        )?;
+                        self.prepare_code_analysis(&[binding]).await?;
+                        let binding = self.generator_analysis(
+                            category,
+                            file.source_rel
+                                .to_str()
+                                .context("App source is not UTF-8")?,
+                            generator,
+                        )?;
+                        if let Err(error) = self.require_code_analysis(&binding) {
+                            if error.is::<crate::analysis::TerminalFailure>() {
+                                return Err(error);
+                            }
+                            assessed.push(AssessedAppFile {
+                                category: category.clone(),
+                                file: file.clone(),
+                                destination,
+                                content: AppContentAssessment::EvaluationFailed {
+                                    error: format!("{error:#}"),
+                                },
+                            });
+                            continue;
+                        }
+                    }
                     if preserve_errors
+                        && triggered
                         && let Err(error) =
                             self.ensure_app_code_allowed(&category.name, "generator")
                     {
@@ -88,6 +120,9 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                     {
                         Ok(Some(bytes)) => bytes,
                         Ok(None) => self.app_source_bytes(&category.name, file)?.to_vec(),
+                        Err(error) if error.is::<crate::analysis::TerminalFailure>() => {
+                            return Err(error);
+                        }
                         Err(error)
                             if preserve_errors
                                 || (manifest.find_by_dest(&destination).is_some()
@@ -105,6 +140,9 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                         }
                         Err(error) => return Err(error),
                     }
+                } else {
+                    self.app_source_bytes(category.name.as_str(), file)?
+                        .to_vec()
                 };
                 let content =
                     crate::install::transforms::apply(&file.transforms, &raw, &self.context.env)

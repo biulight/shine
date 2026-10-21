@@ -262,6 +262,7 @@ mod tests {
     fn installer_exit_failures_keep_logs_and_windows_admin_guidance() {
         let result = execution_result(
             Ok(crate::runtime::ProcessOutput {
+                interrupted: false,
                 exit_code: Some(5),
                 stdout: b"installer output".to_vec(),
                 stderr: b"failure detail".to_vec(),

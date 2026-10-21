@@ -410,6 +410,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
     let plan = runtime.plan_app_refresh(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime.host().queue_process_output(Ok(ProcessOutput {
+        interrupted: false,
         exit_code: Some(0),
         stdout: b"generated".to_vec(),
         stderr: vec![],

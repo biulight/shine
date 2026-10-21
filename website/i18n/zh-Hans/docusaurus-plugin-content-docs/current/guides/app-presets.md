@@ -37,7 +37,7 @@ shine upgrade
 
 重新安装类别时会保留安装后被修改的文件，包括受管 JSON 键。对于审阅过的 Plan 标为保留的文件，
 Shine 也会跳过其 generator。若要显式覆盖已修改的受管内容，先使用
-`shine app install starship --force --dry-run` 预览，再审阅 `shine app install starship --force`。
+`shine app install starship --replace-managed --dry-run` 预览，再审阅 `shine app install starship --replace-managed`。
 
 使用同一配置目录的 App 改动会依次执行。等待结束后，Shine 会重新校验审阅过的 Plan；如果相关
 状态已经变化，需要审阅新 Plan 后重试。锁等待超过 30 秒会报错，等待中的操作不会执行改动。
@@ -146,6 +146,11 @@ shine update --run-generators
 全局形式会评估所有已安装 App 类别；定向形式只评估选中的 App。由于该参数已经表达明确意图，自动
 generator 和 `auto = false` 的手动 generator 都会参与。外部或 overlay generator 仍需要匹配的
 scoped trust。单项失败不会阻止其余 generator 继续评估，但命令会在报告不完整结果后返回非零状态。
+用户取消、命令累计分析预算耗尽，或无法安全继续的分析器故障会停止剩余工作。
+
+受支持的 App Bun 代码会在执行前与声明核对；确定差异或解析失败会阻止该脚本启动，已有 trust
+不能绕过检查。其余独立选中文件仍可继续评估。修复方法、覆盖限制和作者工具见
+[App 代码检查](custom-presets.md#执行前检查-app-代码)。评估仍不会安装文件、更新 receipt 或运行 hook、artifact。
 
 refresh 只处理已由 App manifest 记录的生成文件。新增带 generator 的 `[[files]]` 项后，先运行一次
 `shine install app/<CATEGORY>`，然后才能刷新该 source。

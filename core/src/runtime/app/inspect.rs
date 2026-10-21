@@ -88,14 +88,32 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 },
                 None => None,
             };
-            files.push(project_app_inspection(
+            let mut inspection = project_app_inspection(
                 assessment,
                 direct_entry,
                 source_entry,
                 current_content,
                 &installed_categories,
                 mode,
-            )?);
+            )?;
+            if mode == AppInspectionMode::Evaluated
+                && let Some(generator) = &inspection.file.generator
+                && self.context().env.contains_key(&generator.when_env)
+            {
+                inspection.code_analysis = Some(
+                    self.generator_analysis(
+                        &inspection.category,
+                        inspection
+                            .file
+                            .source_rel
+                            .to_str()
+                            .context("App source is not UTF-8")?,
+                        generator,
+                    )?
+                    .scope,
+                );
+            }
+            files.push(inspection);
         }
         Ok(files)
     }
@@ -222,6 +240,7 @@ fn project_app_inspection(
         desired_content: content.bytes().map(<[u8]>::to_vec),
         current_content,
         changes,
+        code_analysis: None,
         assessment_error: content.error().map(str::to_owned),
         assessment_diagnostic: content.diagnostic(),
     })

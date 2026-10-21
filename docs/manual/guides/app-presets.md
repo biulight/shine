@@ -43,8 +43,8 @@ check the reported results before retrying. Post-install hook warnings retain th
 
 Reinstalling a category preserves files changed since installation, including managed JSON keys.
 Shine also skips the generator for a file that the reviewed Plan marks for preservation. To
-explicitly replace modified managed content, preview `shine app install starship --force --dry-run`
-and then review `shine app install starship --force`.
+explicitly replace modified managed content, preview `shine app install starship --replace-managed --dry-run`
+and then review `shine app install starship --replace-managed`.
 
 App changes using the same configuration directory run one at a time. After waiting, Shine checks
 the reviewed Plan again; if the affected state changed, review a new Plan before retrying. A lock
@@ -174,7 +174,14 @@ only the selected App. Both automatic and `auto = false` manual generators parti
 flag is explicit. External or overlay generator evaluation with `--run-generators` still requires matching scoped trust;
 interactive lifecycle operations can obtain one-time code consent. Generator
 failures do not stop evaluation of the remaining selection, but the command returns nonzero after
-reporting incomplete results.
+reporting incomplete results. Cancellation, command-wide analysis budget exhaustion, or an analyzer
+failure that prevents safe continuation stops the remaining work.
+
+Before execution, supported App Bun code is checked against its declarations. A definite difference
+or parse failure prevents that script from starting; existing trust does not override it. Other
+independent selected files may still be evaluated. See [App code checks](custom-presets.md#check-app-code-before-execution)
+for fixes, coverage limits and author tools. Evaluation still does not install files, update receipts,
+or run hooks or artifacts.
 
 Refresh applies only to generated files already tracked by the App manifest. After adding a new
 generated `[[files]]` entry, run `shine install app/<CATEGORY>` once before refreshing that source.

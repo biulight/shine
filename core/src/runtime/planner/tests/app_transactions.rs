@@ -1250,6 +1250,7 @@ async fn generated_relocation_restores_backup_and_checks_old_admin_identity() {
         runtime
             .host()
             .queue_process_output(Ok(crate::runtime::ProcessOutput {
+                interrupted: false,
                 exit_code: Some(0),
                 stdout: b"generated".to_vec(),
                 stderr: Vec::new(),

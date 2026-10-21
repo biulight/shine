@@ -16,6 +16,7 @@ pub(crate) struct AppInfoFile {
     pub(crate) desired_content: Option<Vec<u8>>,
     pub(crate) current_content: Option<Vec<u8>>,
     pub(crate) changes: Vec<UpdateChange>,
+    pub(crate) code_analysis: Option<shine_core::analysis::Scope>,
     pub(crate) assessment_error: Option<String>,
     pub(crate) assessment_diagnostic: Option<&'static str>,
 }
@@ -78,6 +79,7 @@ pub(crate) fn app_info_file_from_inspection(
         desired_content: file.desired_content,
         current_content: file.current_content,
         changes: file.changes,
+        code_analysis: file.code_analysis,
         assessment_error: file.assessment_error,
         assessment_diagnostic: file.assessment_diagnostic,
     })

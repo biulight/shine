@@ -433,3 +433,88 @@ fn file_comparison_reuses_declaration_normalization_and_retains_object_gaps() {
     assert_eq!(differences(&r), 1);
     assert!(has(&r, "code_analysis_file_object"));
 }
+
+#[test]
+fn binding_grammar_is_independent_of_comments_and_loop_spacing() {
+    for source in [
+        "for(var fetch of callbacks) {} fetch('https://example.org');",
+        "{ function fetch() {} } fetch('https://example.org');",
+        "for (fetch of callbacks) {} fetch('https://example.org');",
+        "import/*comment*/type {readFileSync} from 'node:fs'; readFileSync('file');",
+        "import {type readFileSync} from 'node:fs'; readFileSync('file');",
+    ] {
+        let r = report(source, None);
+        assert_eq!(differences(&r), 0, "{source}: {r:?}");
+        assert!(has(&r, "code_analysis_call_unknown"));
+    }
+    for source in [
+        "const/**/request=fetch; request('https://example.org');",
+        "for (let fetch of callbacks) { fetch('https://inside.invalid'); } fetch('https://outside.example');",
+        "export {}; { function fetch() {} fetch('https://inside.invalid'); } fetch('https://outside.example');",
+    ] {
+        let r = report(source, None);
+        assert_eq!(differences(&r), 1, "{source}: {r:?}");
+    }
+}
+
+#[test]
+fn advisory_diagnostics_coexist_without_granting_or_blocking_admission() {
+    let extra = declaration("commands=['unused']");
+    for code in ["export {};", "unknownCall();"] {
+        let r = report(code, Some(&extra));
+        assert!(r.allowed);
+        assert!(has(&r, "code_analysis_declaration_uncorroborated"));
+        assert_eq!(
+            has(&r, "code_analysis_call_unknown"),
+            code.contains("unknownCall")
+        );
+    }
+    let gaps = report("unknownCall();", None);
+    assert!(gaps.allowed);
+    assert!(has(&gaps, "code_analysis_call_unknown"));
+    let mut input = sources("import './broken'; fetch('https://missing.example'); unknownCall();");
+    input.insert("broken.ts".into(), b"const broken = ;".to_vec());
+    let r = Session::default()
+        .analyze(
+            &input,
+            "main.ts",
+            Some(&extra),
+            &EnvironmentContract::default(),
+        )
+        .unwrap();
+    assert!(!r.allowed);
+    for kind in [
+        DiagnosticKind::Difference,
+        DiagnosticKind::Failure,
+        DiagnosticKind::CoverageGap,
+        DiagnosticKind::Uncorroborated,
+    ] {
+        assert!(
+            r.diagnostics.iter().any(|d| d.kind == kind),
+            "{kind:?}: {r:?}"
+        );
+    }
+}
+
+#[test]
+fn fixed_environment_exemption_is_exact_and_overrides_aliases() {
+    let env = EnvironmentContract {
+        fixed: BTreeSet::from(["SHINE_APP_ID".into()]),
+        mappings: BTreeMap::from([(
+            "SHINE_APP_ID".into(),
+            ("UNDECLARED".into(), Some(EnvironmentSensitivityV1::Secret)),
+        )]),
+    };
+    let r = Session::default()
+        .analyze(
+            &sources("process.env.SHINE_APP_ID; process.env.SHINE_FORGED; process.env[dynamic];"),
+            "main.ts",
+            None,
+            &env,
+        )
+        .unwrap();
+    assert!(r.allowed);
+    assert_eq!(differences(&r), 0);
+    assert!(has(&r, "code_analysis_identity_unknown"));
+    assert!(has(&r, "code_analysis_dynamic_target"));
+}

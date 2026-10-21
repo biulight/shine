@@ -28,6 +28,13 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 [LifecycleEffect::CodeExecutionPreviewed],
             ));
         }
+        self.require_app_script_analysis(
+            &request.category,
+            "artifact",
+            script,
+            request.artifact.runtime,
+            &request.artifact.env,
+        )?;
         if request.implicit
             && let Err(error) = self.ensure_app_code_allowed(&request.category, resource)
         {
@@ -70,6 +77,8 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 &request.category,
                 &logical,
                 request.artifact.runtime,
+                "artifact",
+                &request.artifact.env,
                 ProcessRequest {
                     env: request
                         .artifact

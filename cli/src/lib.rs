@@ -1,6 +1,7 @@
 mod admin_fs;
 pub mod apps;
 pub mod bin_links;
+mod code_analysis;
 pub mod colors;
 pub mod commands;
 pub mod completion;

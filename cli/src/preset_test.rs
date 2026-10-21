@@ -37,6 +37,9 @@ fn print_text_report(report: &PresetTestReportV1) {
             println!("    ! {failure}");
         }
     }
+    for name in &report.unfinished_cases {
+        println!("  INCOMPLETE {}", crate::output::escape_controls(name));
+    }
     println!(
         "Summary: {}, {} passed, {} failed",
         crate::preset_report::count_phrase(report.summary.cases, "case", "cases"),

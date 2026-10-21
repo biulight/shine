@@ -43,14 +43,18 @@ Follow the user's language for questions and results.
 4. Keep explicit `shine.toml` metadata and referenced sources, scripts, fragments, and dependency
    files inside the category. Do not add empty permission tables or repeat commands/script paths
    already expressed by typed metadata. Optional capability statements stay at the proper target
-   boundary. Environment inputs and Administrator requirements remain explicit executor contracts.
+   boundary. Supported App Bun code must accurately declare statically identified effects;
+   `opaque_code = "unrestricted"` never bypasses analysis. Environment inputs and Administrator
+   requirements remain explicit executor contracts.
    Never put argv, values, ciphertext, credentials, or physical checkout paths in these tables.
 
 ## Verify and deliver
 
 - For changed preset sources, run `shine preset validate <category-path> --format json` and
   `shine preset lint <category-path> --format json`. Fix validation errors and review lint
-  findings by stable code; explain accepted warnings. Validation errors block a ready deliverable.
+  findings by stable code; explain accepted warnings. Validation errors and definite code-analysis
+  differences or parse failures block a ready deliverable. Lint checks all App entries; Plan and
+  fixture analysis follows their synthetic trigger inputs. Coverage gaps are not proof of safety.
   Rerun after fixes, not indefinitely when a missing tool or external input prevents progress.
 - Run `shine preset plan <category-path> --platform <macos|linux|windows> --format json` for
   each requested target platform. Review steps, derived permissions, author statements,

@@ -20,6 +20,7 @@ pub(super) fn finish_specialized_plan<H>(
     steps: Vec<PlanStepV1>,
 ) -> Result<PlanV1> {
     let code_entries = std::mem::take(&mut state.code_entries);
+    let analysis = std::mem::take(&mut state.analysis).into_values().collect();
     let filesystem_review = permissions.review_groups();
     let (required, declared, author, uncomputable) = permissions.finish();
     let mut plan = PlanV1::new(
@@ -34,6 +35,7 @@ pub(super) fn finish_specialized_plan<H>(
         uncomputable,
     );
     plan.filesystem_review = filesystem_review;
+    plan.code_analysis = analysis;
     plan.author_capabilities = author;
     attach_code_boundaries(runtime, &mut plan, code_entries)?;
     Ok(plan)

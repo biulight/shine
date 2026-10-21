@@ -15,6 +15,9 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             .collect::<BTreeMap<_, _>>();
         let mut report = AppHookReport::default();
         for category_name in request.changed {
+            if self.check_analysis_command().is_err() {
+                return report;
+            }
             let Some(category) = categories.get(&category_name) else {
                 continue;
             };
@@ -48,7 +51,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             }
             let mut completed = true;
             let mut notes = Vec::new();
-            for hook in hooks {
+            for (index, hook) in hooks.iter().enumerate() {
                 let mut env: BTreeMap<String, String> = hook
                     .env
                     .iter()
@@ -70,18 +73,45 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 };
                 let output = match &hook.action {
                     AppHookAction::Command(command) => {
-                        self.host
-                            .run(ProcessRequest {
-                                program: command.clone(),
-                                ..process
-                            })
-                            .await
+                        let admission = self
+                            .app_analysis_binding(
+                                category,
+                                &format!("hook:{index}"),
+                                None,
+                                ArtifactRuntime::Native,
+                                &hook.env,
+                            )
+                            .and_then(|binding| self.require_code_analysis(&binding));
+                        if let Err(error) = admission {
+                            report.outcomes.push(
+                                LifecycleOutcomeV1::new(
+                                    format!("app/{category_name}"),
+                                    Some(resource),
+                                    LifecycleStatus::Failed,
+                                    [],
+                                )
+                                .with_diagnostic_code("code_analysis_blocked"),
+                            );
+                            observer.emit(RuntimeEvent::Warning {
+                                code: "code_analysis_blocked",
+                                target: Some(format!("app/{category_name}")),
+                                detail: error.to_string(),
+                            });
+                            return report;
+                        }
+                        self.run_app_process(ProcessRequest {
+                            program: command.clone(),
+                            ..process
+                        })
+                        .await
                     }
                     AppHookAction::Script { script, runtime } => {
                         self.run_app_script(
                             &category_name,
                             &format!("app/{}/{}", category_name, script.display()),
                             *runtime,
+                            &format!("hook:{index}"),
+                            &hook.env,
                             process,
                         )
                         .await

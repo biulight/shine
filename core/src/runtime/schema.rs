@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub const PRESET_SCHEMA_REFERENCE_VERSION: u32 = 3;
+pub const PRESET_SCHEMA_REFERENCE_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PresetSchemaReferenceV2 {
@@ -22,11 +22,11 @@ pub struct PresetSchemaReferenceV2 {
 pub fn preset_schema_reference_v2() -> PresetSchemaReferenceV2 {
     let mut schemas = BTreeMap::new();
     insert::<PresetValidationReportV1>(&mut schemas, "preset-validation-report-v1");
-    insert::<PresetLintReportV1>(&mut schemas, "preset-lint-report-v1");
+    insert::<PresetLintReportV1>(&mut schemas, "preset-lint-report-v2");
     insert::<PresetMigrationReportV1>(&mut schemas, "preset-migration-report-v1");
-    insert::<PresetAuthoringPlanReportV1>(&mut schemas, "preset-authoring-plan-report-v2");
+    insert::<PresetAuthoringPlanReportV1>(&mut schemas, "preset-authoring-plan-report-v3");
     insert::<FixtureDocumentV1>(&mut schemas, "preset-test-fixture-v1");
-    insert::<PresetTestReportV1>(&mut schemas, "preset-test-report-v1");
+    insert::<PresetTestReportV1>(&mut schemas, "preset-test-report-v2");
     insert::<PresetPackReportV3>(&mut schemas, "preset-pack-report-v3");
     insert::<BundleManifestV3>(&mut schemas, "preset-bundle-manifest-v3");
     PresetSchemaReferenceV2 {
@@ -58,14 +58,14 @@ mod tests {
         let second = serde_json::to_vec(&preset_schema_reference_v2()).unwrap();
         assert_eq!(first, second);
         let encoded = String::from_utf8(first).unwrap();
-        assert_eq!(preset_schema_reference_v2().schema_version, 3);
+        assert_eq!(preset_schema_reference_v2().schema_version, 4);
         for name in [
             "preset-validation-report-v1",
-            "preset-lint-report-v1",
+            "preset-lint-report-v2",
             "preset-migration-report-v1",
-            "preset-authoring-plan-report-v2",
+            "preset-authoring-plan-report-v3",
             "preset-test-fixture-v1",
-            "preset-test-report-v1",
+            "preset-test-report-v2",
             "preset-pack-report-v3",
             "preset-bundle-manifest-v3",
         ] {

@@ -122,6 +122,37 @@ Existing ancestors must be directories: a path such as `file/../bundle.tar.gz` f
 Without `--force`, an output created by another process during packing is preserved and the command
 fails with `output_exists`.
 
+## Check App code before execution
+
+Shine automatically checks App Bun generators, script hooks, artifacts and teardown scripts,
+including resolvable local JavaScript/TypeScript dependencies. A definite difference between the
+code and its declarations, or a supported-source parse failure, blocks execution. Fix the reported
+file and position: declare the intended behavior accurately, or change the script to fit its
+declarations. Trust, `--yes`, and `opaque_code = "unrestricted"` do not bypass this check.
+
+Run `shine preset lint <PATH>` to examine all App code entries, including generators whose inputs
+are absent. `preset plan` and `preset test` examine only entries selected by their hypothetical
+inputs. Their reports show that scope; skipped entries are not reported as matches. These checks
+do not run scripts, download dependencies, or read real environment values.
+
+Coverage gaps, such as dynamic targets, package dependencies, subprocess effects and unsupported
+languages, are advisory. Declarations not corroborated by the analyzed source are also advisory
+and appear in detailed review. Neither means the code is safe or fully analyzed. Reports without
+diagnostics add no ordinary output; existing trust and approval checks still apply.
+
+For `SOURCE=TARGET` environment mappings, declare the source name and its `plain`/`secret`
+sensitivity; the script reads the target name. Only documented fixed variables are exempt, not
+arbitrary names beginning with `SHINE_`. Never put environment values or URL credentials in a
+capability declaration. Source locations use one-based lines and UTF-8 byte columns.
+
+Tool consumers should read `preset schema` again after upgrading: lint reports use schema 2,
+author Plan reports schema 3, and fixture reports schema 2. Fixture input schema 1 is unchanged;
+`expect.analysis_diagnostic_codes` can assert diagnostic codes alongside `ready`. A correctly
+expected blocked case can pass, but cancellation or command-wide budget exhaustion cannot become
+a successful negative test. `complete = false` identifies incomplete author reports, and fixture
+reports list `unfinished_cases`. Lifecycle Plan/approval/review contracts use schema 3; obtain a
+new review instead of reusing an older approval.
+
 ## Migrate a 1.x source
 
 Preview the active external source and overlay, or name a repository, category, or manifest:
@@ -151,7 +182,8 @@ upstream checkout, commit there, and pull the mirror again.
 Permission schema v1/v2 tables are optional author capability statements. App statements belong to
 the category root, each Shell `[[files]]` command can have `[files.permissions]`, and each Sys
 `[[items]]` target can have `[items.permissions]`. Shine validates any table you provide, but a
-missing or empty table does not hide or constrain arbitrary code. Unsupported versions, unknown
+missing or empty table does not hide or confine arbitrary code. Supported App code still needs
+accurate declarations for statically identified behavior. Unsupported versions, unknown
 fields, invalid identities, and duplicates are errors.
 
 ```toml
@@ -201,8 +233,8 @@ Filesystem bases are `home`, `shine`, `data-dir`, `preset`, or `absolute`; non-a
 normalized relative paths, with `.` meaning the selected base root. Commands contain one program
 identity without arguments. Environment entries contain names and `plain`/`secret` sensitivity,
 never values or ciphertext. Do not repeat commands, script paths, ordinary destinations, or fixed
-package providers already present in typed metadata. Add optional statements only when they help a
-reviewer understand intended effects.
+package providers already present in typed metadata. Declare statically identified App script
+effects; additional statements can help reviewers understand intended effects.
 
 `opaque_code = "unrestricted"` is optional review metadata. Core automatically marks App hooks,
 generators and artifacts, installed or sourced Shell commands, and Sys scripts/profile code as

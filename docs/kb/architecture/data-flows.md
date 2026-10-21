@@ -1624,3 +1624,14 @@ review data, not trust identity; env/admin remain per-operation executor contrac
 Human review reuses its initial report when no temporary code grants are added. When grants change
 the trust inputs, it re-plans before presenting the review. This reuse is local to review: execution
 prevalidation, apply-time validation and lock-protected final planning remain independent.
+
+## App code analysis admission
+
+Typed App planning discovers triggered generator/hook/artifact entries, then Core prepares missing
+analysis outside the lifecycle lock and re-observes the Plan. Source facts and per-entry evidence
+share one command session across frontend review/apply. Locked approved methods only revalidate
+prepared evidence; changed source, declarations, environment mappings or entry scope require renewed
+preparation/review. Explicit evaluation has the same preparation and launch gates without creating
+lifecycle approval. The final script launcher rejects absent/stale/blocking evidence before writing
+its UUID invocation snapshot. Cancellation uses parser checks and existing Host process supervision;
+normal cleanup and forced-abort residue retain ADR 0092 semantics. See [code analysis](code-analysis.md).

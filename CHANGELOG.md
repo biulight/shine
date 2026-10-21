@@ -10,6 +10,17 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 ### Breaking Changes
 
 - Building from source now requires Rust 1.90 or later.
+- App Bun scripts and local JavaScript/TypeScript dependencies now undergo declaration analysis
+  before execution. Definite differences and parse failures block lifecycle operations and explicit
+  generator evaluation, including with existing trust or `--yes`. Fix the declaration or script;
+  coverage gaps remain advisory and do not imply runtime confinement.
+- Version lifecycle Plan/approval/review and author Plan reports as schema 3, and lint/fixture
+  reports as schema 2. Fixture input schema 1 remains supported; old approvals require a new review.
+
+### Features
+
+- Share bounded static analysis across App planning, explicit evaluation and `preset lint/plan/test`,
+  with safe source locations, per-entry environment comparison and incomplete-report diagnostics.
 
 ## [2.6.0] — 2026-10-22
 

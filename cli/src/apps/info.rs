@@ -153,6 +153,13 @@ pub async fn handle_info(
             )
         );
     }
+    for inspection in &selected {
+        if let Some(scope) = &inspection.code_analysis {
+            for line in crate::code_analysis::lines(scope, false) {
+                println!("{line}");
+            }
+        }
+    }
     let generator_failures = selected
         .iter()
         .filter(|inspection| {

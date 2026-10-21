@@ -51,24 +51,27 @@ where
             bail!("approved App install requires an install Plan");
         }
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
-        let plan = self.plan_apps(request.clone()).await?;
+        let plan = self.plan_apps_prepared(request.clone()).await?;
         approval.validate(&plan)?;
         let action_irs = self
             .approved_app_file_action_irs(&request, &plan, approval)
             .await?;
-        self.install_apps_with_approved_actions(
-            AppLifecycleRequest {
-                target: request.target,
-                dry_run: false,
-                force: request.force,
-            },
-            &plan,
-            approval,
-            action_irs,
-            observer,
-            interaction,
-        )
-        .await
+        let result = self
+            .install_apps_with_approved_actions(
+                AppLifecycleRequest {
+                    target: request.target,
+                    dry_run: false,
+                    force: request.force,
+                },
+                &plan,
+                approval,
+                action_irs,
+                observer,
+                interaction,
+            )
+            .await;
+        self.check_analysis_command()?;
+        result
     }
 }
 
@@ -87,25 +90,28 @@ where
             bail!("approved App uninstall requires an uninstall Plan");
         }
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
-        let plan = self.plan_apps(request.clone()).await?;
+        let plan = self.plan_apps_prepared(request.clone()).await?;
         approval.validate(&plan)?;
         let action_irs = self
             .approved_app_file_action_irs(&request, &plan, approval)
             .await?;
-        self.uninstall_apps_with_approved_actions(
-            AppUninstallLifecycleRequest {
-                target: request.target,
-                dry_run: false,
-                force: request.force,
-                purge: request.purge,
-            },
-            &plan,
-            approval,
-            action_irs,
-            observer,
-            interaction,
-        )
-        .await
+        let result = self
+            .uninstall_apps_with_approved_actions(
+                AppUninstallLifecycleRequest {
+                    target: request.target,
+                    dry_run: false,
+                    force: request.force,
+                    purge: request.purge,
+                },
+                &plan,
+                approval,
+                action_irs,
+                observer,
+                interaction,
+            )
+            .await;
+        self.check_analysis_command()?;
+        result
     }
 }
 
@@ -125,25 +131,28 @@ where
             bail!("approved App upgrade requires an upgrade Plan");
         }
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
-        let plan = self.plan_apps(request.clone()).await?;
+        let plan = self.plan_apps_prepared(request.clone()).await?;
         approval.validate(&plan)?;
         let action_irs = self
             .approved_app_file_action_irs(&request, &plan, approval)
             .await?;
-        self.upgrade_apps(
-            AppUpgradeRequest {
-                category: request.target,
-                prune_stale: request.prune_stale,
-                prompt_stale: false,
-                show_hook_success: options.show_hook_success,
-            },
-            &plan,
-            approval,
-            action_irs,
-            observer,
-            interaction,
-        )
-        .await
+        let result = self
+            .upgrade_apps(
+                AppUpgradeRequest {
+                    category: request.target,
+                    prune_stale: request.prune_stale,
+                    prompt_stale: false,
+                    show_hook_success: options.show_hook_success,
+                },
+                &plan,
+                approval,
+                action_irs,
+                observer,
+                interaction,
+            )
+            .await;
+        self.check_analysis_command()?;
+        result
     }
 }
 
@@ -159,17 +168,20 @@ where
         interaction: &mut impl RuntimeInteraction,
     ) -> Result<AppLifecycleReport> {
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
-        approval.validate(&self.plan_app_refresh(request.clone()).await?)?;
-        self.refresh_app_generators(
-            AppRefreshRequest {
-                category: request.category,
-                file: request.file,
-                force: request.force,
-            },
-            observer,
-            interaction,
-        )
-        .await
+        approval.validate(&self.plan_app_refresh_prepared(request.clone()).await?)?;
+        let result = self
+            .refresh_app_generators(
+                AppRefreshRequest {
+                    category: request.category,
+                    file: request.file,
+                    force: request.force,
+                },
+                observer,
+                interaction,
+            )
+            .await;
+        self.check_analysis_command()?;
+        result
     }
 }
 
@@ -184,7 +196,7 @@ where
         observer: &mut impl RuntimeObserver,
     ) -> Result<crate::lifecycle::LifecycleOutcomeV1> {
         let _lifecycle_guard = self.acquire_app_lifecycle_operation().await?;
-        approval.validate(&self.plan_app_artifact(request.clone()).await?)?;
+        approval.validate(&self.plan_app_artifact_prepared(request.clone()).await?)?;
         let category = self
             .app_categories(Some(&request.category))?
             .into_iter()
@@ -196,17 +208,20 @@ where
                 request.category
             )
         })?;
-        self.run_app_artifact(
-            AppArtifactRequest {
-                category: request.category,
-                artifact,
-                action: request.action,
-                implicit: false,
-                dry_run: false,
-            },
-            observer,
-        )
-        .await
+        let result = self
+            .run_app_artifact(
+                AppArtifactRequest {
+                    category: request.category,
+                    artifact,
+                    action: request.action,
+                    implicit: false,
+                    dry_run: false,
+                },
+                observer,
+            )
+            .await;
+        self.check_analysis_command()?;
+        result
     }
 }
 

@@ -310,7 +310,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **A Preset capability statement is not a grant or sandbox.** App categories, Shell commands, and
   Sys items may declare versioned command, filesystem, network, and system identities for review.
   They are optional, unverified author statements and never restrict arbitrary code. Missing or
-  empty statements do not block planning or trust enrollment. Explicit statements remain validated,
+  empty statements do not block trust enrollment. Supported App code with statically identified
+  undeclared effects does block admission under ADR 0150. Explicit statements remain validated,
   enter the Plan fingerprint, and are not trust identity. Environment declarations and Administrator
   authorization retain executor semantics: required managed injection or elevation without the
   corresponding declaration remains fail-closed. No declaration creates external-code trust or
@@ -1516,3 +1517,11 @@ No persistent grant is written. Automatic `--yes` and read-only/AI review use th
 remain blocked without persistent trust. Shell live always needs Development trust. Explicit
 info/update generator evaluation retains its persistent-grant requirement. Author statements are
 review data, not trust identity; env/admin remain per-operation executor contracts. See ADR 0091.
+
+- **App code analysis is private preparation, not executable report input (ADR 0150).** Typed
+  triggers select entries; Core prepares bounded source facts outside lifecycle locks and compares
+  each entry's declaration/environment contract independently. Locked replanning only consumes
+  exact evidence. No-Plan explicit evaluation and the final script launcher require it before
+  snapshot materialization. File-local failures may preserve independent evaluation; terminal
+  cancellation/budget/analyzer failures stop new work. Unsupported code retains coverage gaps and
+  existing trust requirements. See [code analysis](code-analysis.md) for rules and validation scope.

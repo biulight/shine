@@ -5,7 +5,7 @@ use crate::runtime::{
     RuntimePlatform,
 };
 
-fn runtime(kind: PresetSourceKind) -> CoreRuntime<InMemoryHost> {
+async fn runtime(kind: PresetSourceKind) -> CoreRuntime<InMemoryHost> {
     let root = std::env::temp_dir().join("shine-app-execution-contracts");
     let mut context = RuntimeContext::isolated(
         root.join("home"),
@@ -47,7 +47,14 @@ generator = { script = 'code.sh', env = ['ENABLE', 'VALUE=MAPPED'], when_env = '
         )
         .file("app/other/config", b"other".to_vec())
         .build();
-    CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
+    let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
+    runtime.lint_app_code(&category).await.unwrap();
+    let binding = runtime
+        .generator_analysis(&category, "config", &generator(true).generator)
+        .unwrap();
+    runtime.prepare_code_analysis(&[binding]).await.unwrap();
+    runtime
 }
 
 fn mappings() -> Vec<EnvVarSpec> {
@@ -93,7 +100,7 @@ fn artifact(implicit: bool) -> AppArtifactRequest {
 
 #[tokio::test]
 async fn generator_gates_before_effects_and_retains_bounded_allowlisted_execution() {
-    let runtime = runtime(PresetSourceKind::Embedded);
+    let runtime = runtime(PresetSourceKind::Embedded).await;
     assert!(
         runtime
             .run_app_generator(generator(false), &mut NullObserver)
@@ -157,7 +164,7 @@ async fn generator_gates_before_effects_and_retains_bounded_allowlisted_executio
 
 #[tokio::test]
 async fn hook_failure_stops_its_category_preserves_prior_notes_and_continues_other_categories() {
-    let runtime = runtime(PresetSourceKind::Embedded);
+    let runtime = runtime(PresetSourceKind::Embedded).await;
     let mut category = runtime.app_categories(Some("demo")).unwrap().remove(0);
     let hook = |name: &str| AppHook {
         action: AppHookAction::Command(name.into()),
@@ -169,6 +176,8 @@ async fn hook_failure_stops_its_category_preserves_prior_notes_and_continues_oth
     let mut other = category.clone();
     other.name = "other".into();
     other.post_install = vec![hook("other-category")];
+    runtime.lint_app_code(&category).await.unwrap();
+    runtime.lint_app_code(&other).await.unwrap();
     for (exit_code, stdout) in [(0, " first note \n"), (1, "ignored"), (0, "other note")] {
         runtime.host().queue_process_output(Ok(ProcessOutput {
             exit_code: Some(exit_code),
@@ -215,7 +224,7 @@ async fn hook_failure_stops_its_category_preserves_prior_notes_and_continues_oth
 #[tokio::test]
 async fn artifact_retains_preview_implicit_failure_and_explicit_io_contracts() {
     for implicit in [true, false] {
-        let runtime = runtime(PresetSourceKind::Embedded);
+        let runtime = runtime(PresetSourceKind::Embedded).await;
         let mut request = artifact(implicit);
         request.dry_run = true;
         assert_eq!(
@@ -265,7 +274,7 @@ async fn artifact_retains_preview_implicit_failure_and_explicit_io_contracts() {
 
 #[tokio::test]
 async fn untrusted_entrypoints_reject_or_skip_without_any_host_effects() {
-    let runtime = runtime(PresetSourceKind::External);
+    let runtime = runtime(PresetSourceKind::External).await;
     assert!(
         runtime
             .run_app_generator(generator(true), &mut NullObserver)
@@ -318,7 +327,7 @@ async fn untrusted_entrypoints_reject_or_skip_without_any_host_effects() {
 async fn script_hook_keeps_fixed_environment_and_cleans_only_its_failed_invocation() {
     use crate::runtime::FileSystemObservationHost;
 
-    let runtime = runtime(PresetSourceKind::Embedded);
+    let runtime = runtime(PresetSourceKind::Embedded).await;
     let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
     let retained = runtime
         .context()

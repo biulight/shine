@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use super::validation::{PresetDiagnostic, PresetDiagnosticSeverity};
 
-pub const PRESET_AUTHORING_PLAN_SCHEMA_VERSION: u32 = 2;
+pub const PRESET_AUTHORING_PLAN_SCHEMA_VERSION: u32 = 3;
 
 pub(super) fn synthetic_root() -> PathBuf {
     // Path semantics follow the compiling host, independently of the simulated platform.
@@ -62,12 +62,14 @@ pub struct PresetAuthoringPlanSectionV1 {
     pub permissions: PermissionResolutionV1,
     pub author_capabilities: crate::plan::PermissionSetV1,
     pub code_boundaries: Vec<CodeBoundaryV2>,
+    pub code_analysis: Vec<crate::analysis::Scope>,
 }
 
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetAuthoringPlanReportV1 {
     pub schema_version: u32,
     pub valid: bool,
+    pub complete: bool,
     pub ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
@@ -86,6 +88,7 @@ impl PresetAuthoringPlanReportV1 {
         Self {
             schema_version: PRESET_AUTHORING_PLAN_SCHEMA_VERSION,
             valid: false,
+            complete: true,
             ready: false,
             target: None,
             platform: platform.as_str().to_string(),
@@ -199,6 +202,21 @@ pub(super) async fn plan_preset_source_scope_with_state(
     scope: PresetSourceScope,
     platform: RuntimePlatform,
     state: PresetAuthoringSyntheticState,
+) -> PresetAuthoringPlanReportV1 {
+    plan_preset_source_scope_with_analysis(
+        scope,
+        platform,
+        state,
+        super::CodeAnalysisSession::default(),
+    )
+    .await
+}
+
+pub(super) async fn plan_preset_source_scope_with_analysis(
+    scope: PresetSourceScope,
+    platform: RuntimePlatform,
+    state: PresetAuthoringSyntheticState,
+    analysis: super::CodeAnalysisSession,
 ) -> PresetAuthoringPlanReportV1 {
     let mut report = PresetAuthoringPlanReportV1::empty(platform);
     report.assumptions = state.assumptions();
@@ -323,7 +341,8 @@ pub(super) async fn plan_preset_source_scope_with_state(
     for (name, version) in &state.secret_versions {
         input_versions.insert_secret_version(name, OpaqueSecretVersion::new(version));
     }
-    let runtime = CoreRuntime::new(state.host, context, scope.snapshot);
+    let mut runtime = CoreRuntime::new(state.host, context, scope.snapshot);
+    runtime.analysis = analysis;
     let planned = build_sections(&runtime, category.kind, &category.name, &input_versions).await;
     match planned {
         Ok(plans) if !plans.is_empty() => {
@@ -337,12 +356,26 @@ pub(super) async fn plan_preset_source_scope_with_state(
             message: format!("{target} contains no lifecycle items to plan"),
             path: None,
         }),
-        Err(_) => report.diagnostics.push(PresetDiagnostic {
-            severity: PresetDiagnosticSeverity::Error,
-            code: "authoring_plan_failed".to_string(),
-            message: format!("Core could not build a hypothetical first-install plan for {target}"),
-            path: None,
-        }),
+        Err(error) => {
+            if let Some(terminal) = error.downcast_ref::<crate::analysis::TerminalFailure>() {
+                report.complete = false;
+                report.diagnostics.push(PresetDiagnostic {
+                    severity: PresetDiagnosticSeverity::Error,
+                    code: terminal.to_string(),
+                    message: "Analysis terminated; this hypothetical plan is incomplete.".into(),
+                    path: None,
+                });
+                return report;
+            }
+            report.diagnostics.push(PresetDiagnostic {
+                severity: PresetDiagnosticSeverity::Error,
+                code: "authoring_plan_failed".to_string(),
+                message: format!(
+                    "Core could not build a hypothetical first-install plan for {target}"
+                ),
+                path: None,
+            });
+        }
     }
     report
 }
@@ -442,6 +475,7 @@ fn section(kind: &str, target: String, plan: PlanV1) -> PresetAuthoringPlanSecti
         permissions: plan.permissions,
         author_capabilities: plan.author_capabilities,
         code_boundaries: plan.code_boundaries,
+        code_analysis: plan.code_analysis.into_iter().map(|b| b.scope).collect(),
     }
 }
 
