@@ -55,6 +55,7 @@ shine preset new sys --unrestricted
 并运行 `shine preset copy <kind>/<name>`；命令会创建类型与类别路径。
 `preset new`、`preset copy` 和 `preset export` 的路径进度消息会转义终端控制字符。
 文件位置及现有的 `--force` 替换规则保持不变。
+重复关联的提示也会转义来源路径中的控制字符，已有链接保持不变。
 
 `preset validate` 也接受仓库根目录、单个类别目录或其中的 `shine.toml`。根目录模式只扫描
 `app/`、`shell/`、`sys/` 下的直接类别目录；空仓库会失败。无论当前宿主是什么系统，它都会
@@ -119,6 +120,7 @@ hash，并在写入前创建完整的私有备份集；payload、脚本、值、
 改变。若 executable identity 未变化，精确匹配已发布 1.x 内置 metadata 的文件可 rebase；旧版
 App 可以补齐当前 metadata，而不添加能力说明。缺少可选能力表无需迁移，含 opaque code
 时也一样；外部代码信任仍需单独审阅。Sys v1 dispatcher 仍须人工迁移。
+文本中的备份路径会转义终端控制字符，备份内容和 JSON 报告标识保持不变。
 
 `--yes` 仅适合审阅后使用，且仍显示 text diff。JSON 是不含内容和 diff 的版本化报告：检查时使用
 `--format json --dry-run`，JSON 写入则必须同时指定 `--yes`。Git 管理的 overlay 只诊断、不修改；
@@ -342,7 +344,9 @@ shine preset pull
 shine preset overlay info
 ```
 
-关联命令会在 `~/.shine/overlay/` 浅克隆仓库；以后会把该目录镜像到远端分支的最新状态。此目录是缓存，任何本地修改都会在下次拉取时丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
+关联命令会在 `~/.shine/overlay/` 浅克隆仓库；以后会把该目录镜像到远端分支的最新状态。
+`overlay info` 报告托管目录是否存在。Git 来源、分支、目录和保留 checkout 的消息会转义终端控制字符。
+此目录是缓存，任何本地修改都会在下次拉取时丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
 
 使用不同的 Git URL 重新链接时，现有镜像会切换到该仓库。未指定 `--branch` 时，每次同步都跟随所配置远端的默认分支。拉取失败会保留之前的 checkout。
 

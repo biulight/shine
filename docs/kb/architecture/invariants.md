@@ -909,6 +909,9 @@ bugs. Check this list before changing the modules named in each entry.
   change the successful write's exit status. Self-upgrade failures preserve the error chain after
   the existing cache invalidation, without changing installation or recovery behavior.
   Proxy list fields encode stored command/with text without applying install-time validation.
+  List/explain path headings, directed-write receipts and proxy-toggle paths also encode controls
+  only at display. Explain's control-bearing encrypted-key hint requests the original key instead
+  of offering a display-escaped alias. Raw get/export/injection and save/reload exits remain unchanged.
 
 - **Configuration edits preserve comments and unrelated raw definitions.** Whole-table saves use
   `shine_core::sync_table`; directed env and runtime-schema edits patch `toml_edit` entries. Never

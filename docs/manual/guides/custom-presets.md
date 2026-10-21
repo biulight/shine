@@ -62,6 +62,7 @@ the repository or overlay root and run `shine preset copy <kind>/<name>`; the co
 kind/category path.
 Path progress messages for `preset new`, `preset copy`, and `preset export` escape terminal control
 characters. File locations and the existing `--force` replacement rules are unchanged.
+Repeated-link notices also escape controls in the source path; they keep the existing link unchanged.
 
 `preset validate` also accepts a repository root, one category directory, or its `shine.toml`. Root
 validation scans only direct category directories below `app/`, `shell/`, and `sys/`; an empty root
@@ -132,6 +133,7 @@ shine preset migrate ./my-presets
 The migrator shows unified metadata diffs and confirmation defaults to No. It edits only
 `shine.toml`, validates the candidate, rechecks source hashes, and creates a complete private backup
 set before writing. Payloads, scripts, values, runtime manifests, and trust grants are untouched.
+Text backup paths escape terminal controls; backup contents and JSON report identifiers are unchanged.
 Exact released 1.x built-in metadata may be rebased when its executable identity is unchanged;
 legacy Apps may receive current metadata without adding capability statements. Missing optional
 capability tables do not require migration, including for opaque code; external-code trust remains
@@ -387,7 +389,10 @@ shine preset overlay info
 ```
 
 The link command shallow-clones the repository under `~/.shine/overlay/`. Later pulls
-mirror that directory to the latest state of the remote branch. It is a disposable cache: the next
+mirror that directory to the latest state of the remote branch. `overlay info` reports managed
+directory presence. Git source, branch, directory and retained-checkout messages escape terminal
+control characters.
+It is a disposable cache: the next
 pull discards local edits. Make changes and push them in an upstream checkout, then synchronize each
 device with `shine preset pull`, `shine update --pull`, or `shine upgrade --pull`.
 Relinking with a different Git URL switches the existing mirror to that repository. Without

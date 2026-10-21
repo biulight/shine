@@ -40,6 +40,9 @@ and project env file, with actual file paths and the current project root. `env 
 that storage key's definitions from low to high, its winning layer and description source, hiding
 all values by default. `--reveal` never decrypts. Explicit injection still prefers `KEY_SECRET`
 over `KEY`; explain and write output point out an existing encrypted key.
+List/explain paths and env-write/proxy-toggle receipts escape terminal control characters while
+preserving stored paths. For control-bearing keys, explain requests the original key instead of
+printing a copyable command with a different spelling.
 
 Defaults are runtime fallbacks: queries create no configuration. Setting a value equal to a builtin
 still records an explicit entry.
@@ -323,6 +326,7 @@ Without a file argument, `seal` processes existing sources referenced by the wor
 configured modes, including `default_mode`. Use `shine env secret seal <FILE>` to process only one
 source. If sealing stops with an error, some files may already be updated; resolve the reported
 error and rerun it before sharing the result.
+Completed source paths in ordinary `seal` output display terminal control characters as escapes.
 
 Commit the updated workspace configuration together with the resealed shared source files. Each
 listed recipient can independently decrypt the new ciphertext; have new members verify access on

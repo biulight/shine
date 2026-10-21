@@ -3,7 +3,7 @@
 use crate::config::Config;
 #[cfg(unix)]
 use crate::privilege;
-use crate::{colors, platform};
+use crate::{colors, output::escape_controls, platform};
 use anyhow::Result;
 
 /// After a successful self-upgrade, try to sync the new binary to the self-install destination.
@@ -112,7 +112,10 @@ pub async fn handle_self_install(
 
     println!(
         "{}",
-        colors::green(&format!("installed to {}", dest.display()))
+        colors::green(&format!(
+            "installed to {}",
+            escape_controls(&dest.display().to_string())
+        ))
     );
     print_self_install_activation_hint(&dest);
 
@@ -137,7 +140,7 @@ fn print_self_install_activation_hint(dest: &std::path::Path) {
             "{}",
             colors::yellow(&format!(
                 "Install directory is not on PATH: {}",
-                dir.display()
+                escape_controls(&dir.display().to_string())
             ))
         );
         println!("{}", colors::dim(&platform::path_install_hint(dir)));

@@ -106,7 +106,7 @@ pub async fn set_enabled(
         } else {
             "global config"
         },
-        path.display(),
+        escape_controls(&path.display().to_string()),
     );
     // Observational only: a successful save must not become a failed command
     // because a subsequent read races another editor or encounters invalid config.

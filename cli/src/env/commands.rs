@@ -7,6 +7,7 @@ use shine_core::shell_quote::powershell_single_quote as powershell_string_quote;
 
 use super::{EnvConfig, StoredValue, resolve_stored_value, secret_key};
 use crate::config::{Config, EnvLayerKind, EnvWriteOptions, EnvWritePlan};
+use crate::output::escape_controls;
 use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{colors, path_display, secret, shells};
 
@@ -30,7 +31,7 @@ pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
     if config.is_project_config() {
         println!(
             "Project root: {}",
-            config.config_path().parent().unwrap().display()
+            escape_controls(&config.config_path().parent().unwrap().display().to_string())
         );
     } else {
         println!("Scope: global (no active project)");
@@ -54,7 +55,7 @@ pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
             layer
                 .path
                 .as_ref()
-                .map(|p| path_display::format(p))
+                .map(|p| escape_controls(&path_display::format(p)))
                 .unwrap_or_default()
         );
         for k in keys {
@@ -99,7 +100,9 @@ pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
     println!(
         "  {}  {}",
         colors::dim("Config"),
-        colors::dim(&path_display::format(config.config_path()))
+        colors::dim(&escape_controls(&path_display::format(
+            config.config_path()
+        )))
     );
     println!(
         "  {}",
@@ -173,7 +176,7 @@ fn truncate_text(value: &str, max_width: usize) -> String {
 }
 
 pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<()> {
-    println!("Key: {key}");
+    println!("Key: {}", escape_controls(key));
     let winner = config.env_value_layer(key).map(|l| l.kind);
     for kind in [
         EnvLayerKind::Builtin,
@@ -197,7 +200,7 @@ pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<
         let path = layer
             .path
             .as_ref()
-            .map(|p| path_display::format(p))
+            .map(|p| escape_controls(&path_display::format(p)))
             .unwrap_or_default();
         println!("  {:<18} {}  {status}", layer.kind.label(), path);
         if reveal && let Some(value) = layer.values.get(key) {
@@ -214,7 +217,8 @@ pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<
         println!(
             "Description source: {} {}",
             kind.label(),
-            path.map(|p| path_display::format(p)).unwrap_or_default()
+            path.map(|p| escape_controls(&path_display::format(p)))
+                .unwrap_or_default()
         );
     } else {
         let catalog = super::catalog::load(config).await?;
@@ -238,12 +242,12 @@ pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<
         } else {
             "global config"
         },
-        config.config_path().display()
+        escape_controls(&config.config_path().display().to_string())
     );
     if config.is_project_config() {
         println!(
             "Project root: {}",
-            config.config_path().parent().unwrap().display()
+            escape_controls(&config.config_path().parent().unwrap().display().to_string())
         );
     } else {
         println!("Scope: global (no active project)");
@@ -255,6 +259,13 @@ pub async fn handle_explain(config: &Config, key: &str, reveal: bool) -> Result<
 fn print_secret_preference(config: &Config, key: &str) {
     let encrypted = secret_key(key);
     if config.env.contains_key(&encrypted) {
+        if encrypted.chars().any(char::is_control) {
+            println!(
+                "Explicit injection prefers {}; inspect it with `shine env explain` using the original key.",
+                escape_controls(&encrypted)
+            );
+            return;
+        }
         println!(
             "Explicit injection prefers {encrypted}; run `shine env explain {encrypted}` to inspect its source."
         );
@@ -270,7 +281,7 @@ async fn report_saved(
     println!(
         "{} {key} in {} ({})",
         if deleted { "Deleted" } else { "Saved" },
-        plan.target.path.display(),
+        escape_controls(&plan.target.path.display().to_string()),
         plan.kind.label()
     );
     let current = Config::load_read_only()
@@ -283,7 +294,7 @@ async fn report_saved(
             layer
                 .path
                 .as_ref()
-                .map(|p| path_display::format(p))
+                .map(|p| escape_controls(&path_display::format(p)))
                 .unwrap_or_default(),
             if layer.kind > plan.kind {
                 "; selected layer remains shadowed"

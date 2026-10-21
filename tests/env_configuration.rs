@@ -89,6 +89,94 @@ impl Drop for Fixture {
     }
 }
 
+fn output_path_fixture() -> Fixture {
+    let mut fixture = Fixture::new();
+    let root = fixture.0.with_extension(if cfg!(unix) {
+        "display\nFORGED=path\r\t\u{1b}\\literal中文"
+    } else {
+        "display中文"
+    });
+    fs::rename(&fixture.0, &root).unwrap();
+    fixture.0 = root;
+    fixture
+}
+
+#[test]
+fn explain_encodes_local_fields_without_decrypting_or_changing_sources() {
+    let f = output_path_fixture();
+    f.layers();
+    let key = "missing\nFORGED=key\r\t\u{1b}\\literal中文";
+    let mut table: toml::Table = toml::from_str(&f.read("state/config.toml")).unwrap();
+    let values = table["env"].as_table_mut().unwrap();
+    values.insert(key.into(), toml::Value::String("plain".into()));
+    values.insert(
+        format!("{key}_SECRET"),
+        toml::Value::String("gpg:PRIVATE_EXPLAIN_CANARY".into()),
+    );
+    let config = toml::to_string(&table).unwrap();
+    f.write("state/config.toml", &config);
+    for selected in ["HTTP_PROXY_PORT", key] {
+        for reveal in [false, true] {
+            let mut args = vec!["explain", selected];
+            if reveal {
+                args.push("--reveal");
+            }
+            let output = f.run(true, &args);
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let text = String::from_utf8(output.stdout).unwrap();
+            assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+            assert!(!text.contains("PRIVATE_EXPLAIN_CANARY"), "{text:?}");
+            assert_eq!(text.contains("    value:"), reveal, "{text:?}");
+            if selected == key {
+                assert!(
+                    text.starts_with("Key: missing\\nFORGED=key\\r\\t\\u{1b}\\literal中文\n"),
+                    "{text:?}"
+                );
+                assert!(!text.contains("run `shine env explain missing"), "{text:?}");
+                assert!(text.contains("original key"), "{text:?}");
+            }
+            if cfg!(unix) {
+                assert!(
+                    text.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
+                    "{text:?}"
+                );
+            }
+        }
+    }
+    assert_eq!(f.read("state/config.toml"), config);
+    assert!(!f.0.join("state/update-check.json").exists());
+}
+
+#[test]
+fn env_write_receipts_encode_paths_preserving_explicit_target_and_inheritance() {
+    let f = output_path_fixture();
+    f.layers();
+    let project = f.read("project/shine.env.toml");
+    for args in [
+        vec!["set", "HTTP_PROXY_PORT", "new-global", "--global"],
+        vec!["delete", "HTTP_PROXY_PORT", "--global"],
+    ] {
+        let output = f.run(true, &args);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        if cfg!(unix) {
+            assert!(
+                text.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
+                "{text:?}"
+            );
+        }
+        assert!(text.contains("selected layer remains shadowed"), "{text:?}");
+        assert!(text.contains("Current value unchanged."), "{text:?}");
+        assert_eq!(f.read("project/shine.env.toml"), project);
+        assert_eq!(f.ok(true, &["get", "HTTP_PROXY_PORT"]), "project-env\n");
+    }
+    assert!(f.read("state/config.toml").contains("# global comment"));
+    assert!(!f.0.join("state/update-check.json").exists());
+}
+
 #[test]
 fn configuration_parse_failures_omit_values_without_writing_any_layer() {
     let paths = [
@@ -1053,7 +1141,7 @@ fn proxy_toggle_reports_write_scope_and_effective_project_override() {
     for (action, global_enabled, project_enabled) in
         [("disable", false, true), ("enable", true, false)]
     {
-        let f = Fixture::new();
+        let f = output_path_fixture();
         f.write("state/config.toml", &format!("schema_version = 2\n[[env_proxy]]\ncommand = 'demo'\nwith = ['DEMO']\nenabled = {}\n", !global_enabled));
         let project = format!(
             "schema_version = 2\n[[env_proxy]]\ncommand = 'demo'\nwith = ['DEMO']\nenabled = {project_enabled}\n"
@@ -1064,6 +1152,13 @@ fn proxy_toggle_reports_write_scope_and_effective_project_override() {
         assert!(output.stderr.is_empty(), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains("in global config"), "{text}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        if cfg!(unix) {
+            assert!(
+                text.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
+                "{text:?}"
+            );
+        }
         let effective = if project_enabled {
             "enabled"
         } else {
@@ -1086,6 +1181,7 @@ fn proxy_toggle_reports_write_scope_and_effective_project_override() {
         let global_bytes = f.read("state/config.toml");
         let text = f.ok(true, &["proxy", action, "demo", "--project"]);
         assert!(text.contains("in project config"), "{text}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
         let effective = if global_enabled {
             "enabled"
         } else {
@@ -1106,7 +1202,7 @@ fn proxy_toggle_reports_write_scope_and_effective_project_override() {
 
 #[test]
 fn env_list_escapes_cells_aligns_display_columns_and_preserves_raw_values() {
-    let f = Fixture::new();
+    let f = output_path_fixture();
     f.write(
         "state/config.toml",
         r#"schema_version = 2
@@ -1120,6 +1216,13 @@ API_TOKEN = { value = "hidden\nvalue", description = "marker-secret" }
     );
     let before = f.read("state/config.toml");
     let output = f.ok(false, &["list"]);
+    assert!(!output.contains(['\r', '\t', '\u{1b}']), "{output:?}");
+    if cfg!(unix) {
+        assert!(
+            output.contains("display\\nFORGED=path\\r\\t\\u{1b}\\literal中文"),
+            "{output:?}"
+        );
+    }
     let rows: Vec<_> = output
         .lines()
         .filter(|line| line.contains("marker-"))
@@ -1140,5 +1243,12 @@ API_TOKEN = { value = "hidden\nvalue", description = "marker-secret" }
     let revealed = f.ok(false, &["list", "--reveal"]);
     assert!(revealed.contains(r"hidden\nvalue"), "{revealed}");
     assert_eq!(f.ok(false, &["get", "MULTILINE"]), "first\nsecond\tend\n");
+    assert_eq!(f.read("state/config.toml"), before);
+    let project = "schema_version=2\n[env]\nPROJECT='public'\n";
+    f.write("project/shine.config.toml", project);
+    let listed = f.ok(true, &["list"]);
+    assert!(listed.contains("Project root:"), "{listed:?}");
+    assert!(!listed.contains(['\r', '\t', '\u{1b}']), "{listed:?}");
+    assert_eq!(f.read("project/shine.config.toml"), project);
     assert_eq!(f.read("state/config.toml"), before);
 }

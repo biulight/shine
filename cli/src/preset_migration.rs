@@ -113,7 +113,10 @@ pub async fn handle_migrate(
     } else {
         println!();
         println!("Migrated {} Preset metadata file(s).", plan.edits.len());
-        println!("Backup: {}", backup.display());
+        println!(
+            "Backup: {}",
+            crate::output::escape_controls(&backup.display().to_string())
+        );
         if plan.report.summary.blockers > 0 {
             println!(
                 "Manual migration is still required for {} blocker(s).",

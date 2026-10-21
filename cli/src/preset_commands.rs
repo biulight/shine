@@ -183,7 +183,7 @@ async fn handle_link(
             LinkKind::Presets => format!("already linked: {}", absolute.display()),
             LinkKind::Overlay => format!("overlay already linked: {}", absolute.display()),
         };
-        println!("{}", colors::dim(&message));
+        println!("{}", colors::dim(&crate::output::escape_controls(&message)));
         return Ok(());
     }
 
@@ -326,12 +326,23 @@ async fn handle_overlay_link_git(
         .expect("overlay Git source was just set");
     println!(
         "{}",
-        colors::green(&format!("Overlay Git source set: {url}"))
+        colors::green(&format!(
+            "Overlay Git source set: {}",
+            crate::output::escape_controls(url)
+        ))
     );
     if let Some(branch) = branch {
-        println!("  {} {branch}", colors::dim("branch:"));
+        println!(
+            "  {} {}",
+            colors::dim("branch:"),
+            crate::output::escape_controls(branch)
+        );
     }
-    println!("  {} {}", colors::dim("managed dir:"), dir.display());
+    println!(
+        "  {} {}",
+        colors::dim("managed dir:"),
+        crate::output::escape_controls(&dir.display().to_string())
+    );
 
     // Clone (or mirror, if already present) now so the overlay is usable right
     // away instead of waiting for the next `shine preset pull`.
@@ -372,7 +383,7 @@ pub async fn handle_overlay_unlink(config: &Config) -> Result<()> {
             "{}",
             colors::dim(&format!(
                 "The managed overlay checkout remains at {}. Remove it manually if unwanted.",
-                dir.display()
+                crate::output::escape_controls(&dir.display().to_string())
             ))
         );
     }
@@ -384,13 +395,27 @@ pub fn handle_overlay_info(config: &Config) -> Result<()> {
     if config.presets_overlay_dir_override.is_none()
         && let Some((url, branch, dir)) = config.overlay_git_source()
     {
-        println!("{}", colors::green(&format!("Overlay Git source: {url}")));
+        println!(
+            "{}",
+            colors::green(&format!(
+                "Overlay Git source: {}",
+                crate::output::escape_controls(url)
+            ))
+        );
         if let Some(branch) = branch {
-            println!("  {} {branch}", colors::dim("branch:"));
+            println!(
+                "  {} {}",
+                colors::dim("branch:"),
+                crate::output::escape_controls(branch)
+            );
         }
-        println!("  {} {}", colors::dim("managed dir:"), dir.display());
+        println!(
+            "  {} {}",
+            colors::dim("managed dir:"),
+            crate::output::escape_controls(&dir.display().to_string())
+        );
         if dir.exists() {
-            println!("{}", colors::green("Cloned"));
+            println!("{}", colors::green("Managed directory exists"));
         } else {
             println!(
                 "{}",

@@ -110,7 +110,10 @@ pub async fn handle_seal(
         }
         .await;
         result.with_context(|| format!("sealing stopped: {completed} completed, current file {} not updated, {} unprocessed; retry after resolving the error", path.display(), captured.len() - completed - 1))?;
-        println!("sealed {}", path.display());
+        println!(
+            "sealed {}",
+            crate::output::escape_controls(&path.display().to_string())
+        );
     }
     Ok(())
 }

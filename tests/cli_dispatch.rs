@@ -36,6 +36,256 @@ impl Drop for Fixture {
     }
 }
 
+fn display_path_fixture() -> Fixture {
+    let mut fixture = Fixture::new();
+    let root = fixture.0.with_extension(if cfg!(unix) {
+        "display\nFORGED=path\r\t\u{1b}\\literal中文"
+    } else {
+        "display中文"
+    });
+    fs::rename(&fixture.0, &root).unwrap();
+    fixture.0 = root;
+    fixture
+}
+
+#[test]
+fn managed_overlay_info_encodes_fields_and_reports_directory_presence() {
+    let f = display_path_fixture();
+    let state = f.0.join("state");
+    fs::create_dir(&state).unwrap();
+    let url = "https://example.invalid/repo\nFORGED=url\r\t\u{1b}\\literal中文";
+    let branch = "branch\nFORGED=branch\u{1b}";
+    let config = format!(
+        "schema_version=2\npresets_overlay_git={}\npresets_overlay_git_branch={}\n",
+        toml::Value::String(url.into()),
+        toml::Value::String(branch.into())
+    );
+    fs::write(state.join("config.toml"), &config).unwrap();
+    for present in [false, true] {
+        if present {
+            fs::create_dir(state.join("overlay")).unwrap();
+        }
+        let output = f
+            .command()
+            .env("NO_COLOR", "1")
+            .env("PATH", "")
+            .args(["preset", "overlay", "info"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            text.contains("repo\\nFORGED=url\\r\\t\\u{1b}\\literal中文"),
+            "{text:?}"
+        );
+        assert!(text.contains("branch\\nFORGED=branch\\u{1b}"), "{text:?}");
+        assert_eq!(text.lines().count(), 4, "{text:?}");
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        if present {
+            assert!(text.contains("Managed directory exists"), "{text:?}");
+            assert!(!text.contains("Cloned"), "{text:?}");
+        } else {
+            assert!(text.contains("Not cloned yet"), "{text:?}");
+            assert!(!state.join("overlay").exists());
+        }
+        assert_eq!(
+            fs::read_to_string(state.join("config.toml")).unwrap(),
+            config
+        );
+    }
+    // No Git on PATH: saving the source still precedes a failed synchronization.
+    let failed = f
+        .command()
+        .env("NO_COLOR", "1")
+        .env("PATH", "")
+        .args([
+            "preset", "overlay", "link", "--git", url, "--branch", branch,
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(1), "{failed:?}");
+    assert!(!failed.stderr.is_empty(), "{failed:?}");
+    let text = String::from_utf8(failed.stdout).unwrap();
+    assert_eq!(text.lines().count(), 3, "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert!(
+        text.contains("repo\\nFORGED=url\\r\\t\\u{1b}\\literal中文"),
+        "{text:?}"
+    );
+    let saved: toml::Value =
+        toml::from_str(&fs::read_to_string(state.join("config.toml")).unwrap()).unwrap();
+    assert_eq!(saved["presets_overlay_git"].as_str(), Some(url));
+    assert_eq!(saved["presets_overlay_git_branch"].as_str(), Some(branch));
+}
+
+#[test]
+fn managed_overlay_unlink_encodes_retained_path_without_deleting_checkout() {
+    let f = display_path_fixture();
+    let state = f.0.join("state");
+    fs::create_dir_all(state.join("overlay")).unwrap();
+    fs::write(state.join("overlay/marker"), b"unrelated checkout content").unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\npresets_overlay_git='https://example.invalid/repo'\n[env]\n# preserve comment\nKEEP='value'\n").unwrap();
+    let output = f
+        .command()
+        .env("NO_COLOR", "1")
+        .env("PATH", "")
+        .args(["preset", "overlay", "unlink"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(text.lines().count(), 3, "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert!(text.contains("checkout remains at"), "{text:?}");
+    let config = fs::read_to_string(state.join("config.toml")).unwrap();
+    assert!(config.contains("# preserve comment"));
+    let parsed: toml::Value = toml::from_str(&config).unwrap();
+    assert!(
+        !parsed
+            .as_table()
+            .unwrap()
+            .contains_key("presets_overlay_git")
+    );
+    assert_eq!(parsed["env"]["KEEP"].as_str(), Some("value"));
+    assert_eq!(
+        fs::read(state.join("overlay/marker")).unwrap(),
+        b"unrelated checkout content"
+    );
+}
+
+#[test]
+fn self_install_encodes_receipts_and_omits_control_path_commands_preserving_target() {
+    let f = display_path_fixture();
+    let dir = f.0.join("install-dir");
+    let dest = dir.join(if cfg!(windows) { "shine.exe" } else { "shine" });
+    for on_path in [false, true] {
+        let mut command = f.command();
+        command
+            .env("NO_COLOR", "1")
+            .args(["self", "install", "--dest"])
+            .arg(&dest);
+        if on_path {
+            command.env("PATH", &dir);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        assert!(text.starts_with("installed to "), "{text:?}");
+        if on_path {
+            assert!(text.contains("already on PATH"), "{text:?}");
+        } else if cfg!(unix) {
+            assert!(text.contains("original directory"), "{text:?}");
+            assert!(!text.contains("export PATH="), "{text:?}");
+        }
+        let config: toml::Value =
+            toml::from_str(&fs::read_to_string(f.0.join("state/config.toml")).unwrap()).unwrap();
+        assert_eq!(
+            PathBuf::from(config["self_install_dest"].as_str().unwrap()),
+            dest
+        );
+        assert!(dest.is_file());
+    }
+}
+
+#[test]
+fn migration_backup_notice_encodes_path_preserving_backup_and_json_report() {
+    for json in [false, true] {
+        let f = display_path_fixture();
+        let state = f.0.join("state");
+        let app = f.0.join("source/app/demo");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir(&state).unwrap();
+        fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+        let original = "dest='~/.demo'\n[[files]]\nsource='config.toml'\ntarget='config.toml'\n";
+        fs::write(app.join("shine.toml"), original).unwrap();
+        fs::write(app.join("config.toml"), b"unrelated payload").unwrap();
+        let output = f
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["preset", "migrate"])
+            .arg(f.0.join("source"))
+            .args(["--yes", "--format", if json { "json" } else { "text" }])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+        let backup = if json {
+            let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(report["status"], "applied");
+            state.join(report["backup_set"].as_str().unwrap())
+        } else {
+            assert!(
+                text.lines().any(|line| line.starts_with("Backup: ")),
+                "{text:?}"
+            );
+            fs::read_dir(state.join("preset-migration-backups"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path()
+        };
+        assert_eq!(
+            fs::read_to_string(backup.join("app/demo/shine.toml")).unwrap(),
+            original
+        );
+        let migrated: toml::Value =
+            toml::from_str(&fs::read_to_string(app.join("shine.toml")).unwrap()).unwrap();
+        assert_eq!(migrated["metadata_schema_version"].as_integer(), Some(2));
+        assert_eq!(
+            fs::read(app.join("config.toml")).unwrap(),
+            b"unrelated payload"
+        );
+        assert_eq!(
+            fs::read(state.join("config.toml")).unwrap(),
+            b"schema_version=2\n"
+        );
+    }
+}
+
+#[test]
+fn secretless_seal_encodes_result_path_without_tools_or_changing_plain_values() {
+    let f = display_path_fixture();
+    let state = f.0.join("state");
+    let tools = f.0.join("empty-tools");
+    fs::create_dir(&state).unwrap();
+    fs::create_dir(&tools).unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    let source = f.0.join("env.public");
+    fs::write(&source, "[plain]\nVALUE='PUBLIC_SOURCE_CANARY'\n").unwrap();
+    let output = f
+        .command()
+        .env("NO_COLOR", "1")
+        .env("PATH", tools)
+        .args(["env", "secret", "seal"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(text.lines().count(), 1, "{text:?}");
+    assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
+    assert!(text.starts_with("sealed "), "{text:?}");
+    assert!(!text.contains("PUBLIC_SOURCE_CANARY"), "{text:?}");
+    let sealed: toml::Value = toml::from_str(&fs::read_to_string(source).unwrap()).unwrap();
+    assert_eq!(
+        sealed["plain"]["VALUE"].as_str(),
+        Some("PUBLIC_SOURCE_CANARY")
+    );
+    assert_eq!(sealed["payload"]["data"].as_str(), Some(""));
+    assert_eq!(
+        fs::read(state.join("config.toml")).unwrap(),
+        b"schema_version=2\n"
+    );
+}
+
 #[test]
 fn init_encodes_prompt_and_result_preserving_consent_and_project_path() {
     use std::io::Write as _;
@@ -460,12 +710,17 @@ fn preset_links_keep_utf8_expansion_create_modes_and_noop_persistence() {
             "schema_version = 2\n# preserve comment\n[env]\nKEY = 'unchanged'\n",
         )
         .unwrap();
-        let selected = fixture.0.join("home/source ' spaces\u{a0}");
+        let leaf = if cfg!(unix) {
+            "source ' spaces\u{a0}\nFORGED=source\r\t\u{1b}\\literal中文"
+        } else {
+            "source ' spaces\u{a0}"
+        };
+        let selected = fixture.0.join("home").join(leaf);
         let run = |operand| {
             fixture
                 .command()
                 .env_remove("SUDO_USER")
-                .env("SHINE_LINK_LEAF", "source ' spaces\u{a0}")
+                .env("SHINE_LINK_LEAF", leaf)
                 .args(&args)
                 .arg(operand)
                 .arg("--create")
@@ -495,6 +750,10 @@ fn preset_links_keep_utf8_expansion_create_modes_and_noop_persistence() {
         assert_eq!(result.status.code(), Some(0), "{result:?}");
         assert!(
             String::from_utf8_lossy(&result.stdout).contains("already linked"),
+            "{result:?}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&result.stdout).contains(['\r', '\t', '\u{1b}']),
             "{result:?}"
         );
         assert_eq!(fs::read(&config).unwrap(), before);

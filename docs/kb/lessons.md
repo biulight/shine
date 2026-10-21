@@ -129,6 +129,19 @@
   refusal, unchanged source bytes and absent state initialization. Existing non-UTF-8 collision and
   shell-round-trip tests retain independent coverage.
 
+## 2026-10-21 — Path notices must preserve operation and observation boundaries
+
+- **Symptoms**: env path headings/receipts, repeated-link notices, managed overlay fields and
+  retained paths, self-install receipts/PATH examples, migration backup paths and seal results
+  emitted terminal controls. Overlay info called any existing managed directory `Cloned`.
+- **Fix**: reuse the shared display encoder; keep resolution, saved sources, source synchronization,
+  backup contents, raw values, seal publication, authorization and exits unchanged. Directory
+  presence is described as presence. Control-bearing PATH/key hints request the original operand.
+- **Coverage**: isolated CLI regressions preserve env redaction, reveal-without-decrypt, directed
+  writes/inheritance, proxy scope, link no-op bytes, source saving before missing-Git failure,
+  retained checkout content, native install/PATH identity, text/JSON backup bytes and tool-free
+  secretless sealing. Fixtures attach preserved comments to retained configuration entries.
+
 ## 2026-10-21 — Encode result rows without rewriting usable data
 
 - **Symptoms**: identity paths/recipient comments, stored proxy fields, recorded Sys details and

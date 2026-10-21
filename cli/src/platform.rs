@@ -85,6 +85,10 @@ pub fn current_path_contains_dir(dir: &Path) -> bool {
 }
 
 pub fn path_install_hint(dir: &Path) -> String {
+    if dir.to_string_lossy().chars().any(char::is_control) {
+        return "Install path contains control characters; add the original directory to PATH manually."
+            .to_string();
+    }
     if cfg!(windows) {
         let escaped = dir.display().to_string().replace('\'', "''");
         format!(

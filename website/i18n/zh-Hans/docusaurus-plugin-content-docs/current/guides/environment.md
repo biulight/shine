@@ -38,6 +38,8 @@ shine env delete HTTP_PROXY_PORT
 及当前项目根。`env explain KEY` 从低到高展示同一存储键的定义、胜出层和描述来源，默认隐藏
 所有值；`--reveal` 不会自动解密。显式注入仍先查找 `KEY_SECRET`，再查找 `KEY`；来源说明和
 写入输出会提示已有的密文键。
+list／explain 的路径及环境变量写入、代理启停回执会转义终端控制字符，存储路径保持原值。
+键名包含控制字符时，explain 会要求使用原键名，不生成可能指向另一种拼写的可复制命令。
 
 默认值只在运行时兜底，查询不会创建配置。保存显式值时，即使与内置值相同也会记录该项。
 
@@ -686,6 +688,7 @@ shine env run --mode production -- bun run build
 
 `seal` 默认处理 workspace 引用的环境文件。可用 `shine env secret seal <FILE>` 只处理一个文件，
 或通过 `--workspace <FILE>` 指定其他 workspace；`-r/--recipient` 可临时覆盖接收者。
+普通 `seal` 的完成消息会将来源路径中的终端控制字符显示为转义文本。
 
 默认情况下，当前进程已经存在的环境变量优先于 workspace。设置
 `env.override_process_env = true` 后改由 workspace 值覆盖；显式 `--with` 始终具有最高

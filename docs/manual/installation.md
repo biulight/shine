@@ -114,7 +114,9 @@ target options. Keep private backups and check important projects with `shine en
 `shine self install --dest <PATH>` resolves a relative path from the current directory and remembers
 the absolute destination, so later upgrades sync the same installed copy from any directory.
 If the directory is not on PATH, the printed POSIX shell example preserves special characters in
-the directory name. If an upgrade succeeds but syncing this separate copy fails, Shine prints a
+the directory name. `self install` result paths escape terminal controls; a directory containing
+controls gets a manual PATH instruction using the original directory instead of a copyable example.
+If an upgrade succeeds but syncing this separate copy fails, Shine prints a
 warning with the cause to stderr; the upgrade still returns success.
 
 On Unix, if `shine self install` copies the binary to a location the current user cannot modify,
