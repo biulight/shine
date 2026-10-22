@@ -297,7 +297,6 @@ pub(super) struct SealLock(std::fs::File);
 
 impl SealLock {
     pub(super) fn acquire(scope: &Path) -> Result<Self> {
-        use fs2::FileExt;
         let scope = std::fs::canonicalize(scope).context("resolving seal lock scope")?;
         // Preserve the extension: env.dev and env.prod are distinct lock scopes.
         let mut path = scope.into_os_string();
@@ -310,7 +309,7 @@ impl SealLock {
             options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
         }
         let file = options.open(path).context("opening seal lock")?;
-        file.try_lock_exclusive()
+        file.try_lock()
             .context("another Shine seal is active; retry when it finishes")?;
         Ok(Self(file))
     }
@@ -318,7 +317,7 @@ impl SealLock {
 
 impl Drop for SealLock {
     fn drop(&mut self) {
-        let _ = fs2::FileExt::unlock(&self.0);
+        let _ = self.0.unlock();
     }
 }
 

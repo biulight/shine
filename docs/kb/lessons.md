@@ -537,6 +537,8 @@
 - **Verification**: preserve test names with `--status-level leak`, inspect subprocess ownership,
   and compare the same binaries with a fixed runner at the same timeout. Do not weaken leak
   detection or change production code solely to suppress this symptom.
+- **Prevention (2026-10-22)**: `.config/nextest.toml` requires 0.9.145 or newer and fails real leaked
+  output handles at the default 100 ms timeout. This also applies to CI and pre-commit runs.
 
 ## 2026-10-19 — Command hints and summaries retain argument and outcome boundaries
 

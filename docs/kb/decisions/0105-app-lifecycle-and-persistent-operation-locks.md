@@ -17,13 +17,17 @@ the replacement owner's lock.
   replanning and approval validation, retaining the guard through effects and receipt saves.
 - Keep privileged transaction serialization separate. Acquire the App lock first, then the global
   privileged lock where required; privileged self-install shares only the latter.
-- Implement both RealHost locks with `fs2` exclusive OS locks on persistent regular files. Poll
+- Implement both RealHost locks with standard-library exclusive OS locks on persistent regular files. Poll
   contention for at most 30 seconds and fail without deleting or replacing the lock file. Dropping
   the file handle or exiting the process releases ownership. InMemoryHost uses keyed async mutexes.
 - Use `$TMPDIR/shine-admin.lockfile` for the privileged lock, avoiding collision with a legacy
   `shine-admin.lock` directory. On Unix reject symlink lock files and create files with mode 0600.
 - Preserve existing snapshot-bound approval: waiting is not authorization for changed state.
   Files marked Preserve are removed from execution assessment before any generator can run.
+
+With the Rust 1.90 MSRV (2026-10-22), all file-lock consumers use `File::try_lock` and
+`File::unlock` (stable since 1.89) instead of `fs2`. Contention uses `TryLockError::WouldBlock`;
+other I/O failures remain errors. This preserves lock paths, ordering, timeouts and guard lifetimes.
 
 ## Consequences
 

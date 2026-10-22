@@ -61,6 +61,9 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 
 - Runner: `cargo nextest run --workspace --all-features` (each test is its own OS process — in-process
   locks do not serialize across tests).
+  `.config/nextest.toml` requires nextest 0.9.145 or newer to avoid macOS sibling capture-pipe
+  inheritance. Update older runners with `cargo nextest self update`. Leaked output handles fail
+  the run at the unchanged 100 ms timeout; do not hide them with longer waits or ignored tests.
 - Any test that mutates environment variables or cwd must hold `crate::test_support::env_lock()`;
   the guard restores both before unlocking, including during panic unwinding.
   This serializes participating tests only: unguarded ambient-env reads and PATH-based child

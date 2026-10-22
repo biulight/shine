@@ -39,7 +39,7 @@ test("Rust regression hook covers preset content and integration-test inputs", a
   const hook = config.repos.flatMap((repo) => repo.hooks).find((hook) => hook.id === "cargo-test");
   expect(hook?.files).toBeDefined();
   const filter = new RegExp(hook!.files!);
-  const paths = ["Cargo.toml", "Cargo.lock", ".pre-commit-config.yaml", "mise.toml",
+  const paths = ["Cargo.toml", "Cargo.lock", ".config/nextest.toml", ".pre-commit-config.yaml", "mise.toml",
     "tests/builtin_presets.rs", "tests/builtin_presets/support.rs", "core/src/runtime/mod.rs"];
   for await (const path of new Bun.Glob("presets/**/*").scan({ cwd: ROOT, onlyFiles: true })) {
     paths.push(path.replaceAll("\\", "/"));
