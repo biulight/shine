@@ -1,7 +1,8 @@
 # Preset code analysis implementation
 
-Status: analysis core, author tools, explicit evaluation and launch admission implemented and
-validated through Core, Frontend, CLI and native Windows/Linux checks.
+Status: first-release implementation and acceptance complete. Stages A–D are implemented; stage E
+scope assessment is complete. Core, Frontend, CLI and native checks are supplemented by successful
+Windows/Linux/macOS CI, Rust 1.90 MSRV and documentation validation at `39edf006` (2026-10-22).
 Contract: [ADR 0150](../decisions/0150-preset-code-analysis-admission.md).
 
 ## Source rules, version 2
@@ -226,4 +227,27 @@ The uploaded review archive SHA-256 was
 Final inline-type refinements were then synchronized and rerun on both instances:
 `analysis/syntax.rs` SHA-256 `95f36f7963b3f2d9350ba5a702bc7f380c8ade1084cb5e7fa7fc0dc1864e2f63`,
 `analysis/tests.rs` SHA-256 `0e45eb3d5dec4253ba7ad49c96e83cc7421e98a269a296c70390e627ac6c5850`.
-This follow-up is local-only; no push was performed.
+The follow-up was committed as `39edf006` and pushed to `release`; final CI evidence follows.
+
+## Final release-branch CI acceptance (2026-10-22)
+
+Verified remote `release` SHA: `39edf006a41ef75a31305f48ab4e195b73446cbe`.
+All runs below target that exact commit and finished with `completed / success`; no CI repair or
+rerun was needed. Stage C–D integration is recorded in `9907fa47`, followed by the review fixes in
+`39edf006`. This closes the first-release implementation and acceptance record for all 27 PRD
+scenarios indexed above. Stage E remains an assessment to retain the initial scope, not an
+implementation of additional languages or a separate package.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,733 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405660) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 1,994 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405851) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 1,996 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405894) |
+| Quality | Bun TypeScript checks, formatting, compilation, preset authoring examples, Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405849) |
+| MSRV | Rust 1.90.0 `cargo check --locked --workspace` passed | [MSRV run](https://github.com/biulight/shine/actions/runs/39713599318) |
+| Documentation | Typecheck, version checks, locale parity and all-locale builds passed; Pages and server deployment succeeded | [Documentation run](https://github.com/biulight/shine/actions/runs/39713599319) |
+
+The [CI workflow](https://github.com/biulight/shine/actions/runs/39713599387), MSRV and documentation
+workflows all completed successfully. These results apply to the tested commit and complement the
+local and isolated native evidence above; they do not claim exhaustive script-effect coverage or
+constitute a tagged product release.

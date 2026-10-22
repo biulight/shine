@@ -1,6 +1,6 @@
 # Shine 预设代码分析与声明一致性审查 PRD
 
-> **状态：** 实施中；阶段 A 契约与阶段 B 分析核心已落地，阶段 C–D 准入集成尚未完成。
+> **状态：** 首版已完成并通过验收；阶段 A–D 已落地，阶段 E 范围扩展评估完成；三平台 CI、MSRV 和文档验证全部通过。
 > **日期：** 2026-10-22。
 > **前置条件：** App 哈希规则复用、无新增临时信任时省略重复审查规划两项优化已完成。
 > **定位：** 内置静态分析与声明一致性检查，不提供运行时权限隔离。
@@ -410,6 +410,26 @@ lint 的 `--deny-warnings` 仍是独立的作者 CI 退出策略，不改变运�
 
 2026-10-22 二次完整 review 发现并修复了语法恢复节点、静态模块覆盖、环境删除识别、
 取消后卸载、Windows 路径及 lint 部分报告遗漏；规则版本升为 2，细节及回归证据见下列记录。
+
+### 最终 CI 验收（2026-10-22）
+
+阶段 C–D 集成提交为 `9907fa47`，二次 review 修复提交为 `39edf006`。
+后者已推送至 `release`，核验远端完整 SHA 为
+`39edf006a41ef75a31305f48ab4e195b73446cbe`；下列运行均对应该提交，状态均为
+`completed / success`，没有失败或追加修复。
+
+| 验证 | 结果 | 运行证据 |
+|---|---|---|
+| Windows `x86_64-pc-windows-msvc` | workspace 全 feature 测试 1,733 项通过，0 项跳过 | [CI / Windows](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405660) |
+| Linux `x86_64-unknown-linux-gnu` | workspace 全 feature 测试 1,994 项通过，2 项跳过 | [CI / Linux](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405851) |
+| macOS `aarch64-apple-darwin` | workspace 全 feature 测试 1,996 项通过，2 项跳过 | [CI / macOS](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405894) |
+| quality | Bun TypeScript 检查、格式、编译、作者示例、Clippy 和安全审计通过 | [CI / quality](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405849) |
+| Rust 1.90 MSRV | `cargo check --locked --workspace` 通过 | [MSRV](https://github.com/biulight/shine/actions/runs/39713599318) |
+| 文档 | 类型检查、版本检查、双语一致性及全部语言构建通过；Pages 和服务器部署成功 | [docs](https://github.com/biulight/shine/actions/runs/39713599319) |
+
+第 14 节 27 项验收的测试映射、二次 review 修复及最终 CI 证据均已归档，首版实施与验收完成。
+阶段 E 的完成仅指范围评估，不代表新增语言或独立包已经实现。以上为该提交的验证结果，
+不等同于正式版本发布，也不证明静态分析覆盖所有脚本效果。
 
 规则范围、资源阈值和样本证据见 [分析核心实施记录](kb/architecture/code-analysis.md)。
 
