@@ -58,6 +58,36 @@ reported zero LEAK results under the committed strict policy.
 These are native CI results for the committed changes. The earlier local Nextest 0.9.149 run and
 deliberately leaking `LEAK-FAIL` probe are separate local validation evidence.
 
+## Let-else cleanup acceptance (2026-10-22)
+
+Accepted `release` commit:
+[`e3d1c165f0533044d92a0295dcdc60d8f96eeba3`](https://github.com/biulight/shine/commit/e3d1c165f0533044d92a0295dcdc60d8f96eeba3).
+Compared with its parent `2e8e1712`, this replaces 12 simple early-return matches with `let ... else`
+across seven Rust files: info diff rendering, self-install synchronization, SSH listener accepts,
+Preset fixture loading and packing, permission validation, and sentinel removal. Production code
+changed by +34/-55 lines (net -21); tests/support and documentation were unchanged in that commit.
+Complex action-enum matches and the existing crate publication workflow remain unchanged.
+The Rust 1.90 MSRV remains unchanged.
+
+The [CI run](https://github.com/biulight/shine/actions/runs/39761350589) and
+[MSRV run](https://github.com/biulight/shine/actions/runs/39761350622) both target that exact commit
+and finished with `completed / success`. All three native Nextest jobs reported zero LEAK results
+under the existing strict policy.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,735 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/39761350589/job/119766024578) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 1,996 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/39761350589/job/119766024504) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 1,998 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/39761350589/job/119766024925) |
+| MSRV | Rust 1.90.0 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/39761350622/job/119766024123) |
+| Quality | Bun typecheck and 78 tests, formatting, compilation, Preset authoring examples, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/39761350589/job/119766024347) |
+
+The code review preserved successful bindings, early-return values, error codes, output text, and
+sentinel offset/CRLF handling. Local Rust 1.90 all-target/all-feature compilation and commit hooks
+also passed. An initial sandboxed test run could not create local sockets; the permitted local
+rerun reported 1,998 passed and 2 skipped. The table records native CI evidence separately from that
+local rerun.
+
 ## Documentation server deployment
 
 `docs.yml` always keeps GitHub Pages deployment enabled. A second deployment uploads the same

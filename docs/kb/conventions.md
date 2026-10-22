@@ -134,6 +134,11 @@ future understanding, modification and verification easier, and what evidence su
 - Keep lasting decisions in existing KB/ADRs, not repeated execution diaries. Preserve unrelated
   work and honor the separate authorization boundaries for edits, commits and pushes.
 
+The accepted `let ... else` cleanup at `e3d1c165` illustrates this scope: simplify direct
+`Some`/`Ok` bindings with unchanged early returns, retain complex action-enum matches, and review
+crate publication changes separately. Native Windows/Linux/macOS, Rust 1.90 MSRV and quality
+checks passed; see the [CI acceptance record](operations/ci-pipelines.md#let-else-cleanup-acceptance-2026-10-22).
+
 ## File size
 
 File size is a navigation guideline, not a reason by itself to split code. Test/support code still
