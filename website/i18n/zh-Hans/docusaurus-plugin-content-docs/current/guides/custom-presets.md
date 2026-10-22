@@ -142,7 +142,9 @@ shine preset migrate ./my-presets --dry-run
 shine preset migrate ./my-presets
 ```
 
-迁移器显示 unified metadata diff，确认默认是 No。它只修改 `shine.toml`，校验候选内容、复查来源
+迁移器显示 unified metadata diff，确认默认是 No。支持颜色的终端以绿色显示新增、红色显示删除。
+自动颜色遵循 `NO_COLOR`；重定向时使用纯文本，除非显式强制颜色，例如设置 `FORCE_COLOR=1`。
+它只修改 `shine.toml`，校验候选内容、复查来源
 hash，并在写入前创建完整的私有备份集；payload、脚本、值、runtime manifest 与 trust grant 都不会
 改变。若 executable identity 未变化，精确匹配已发布 1.x 内置 metadata 的文件可 rebase；旧版
 App 可以补齐当前 metadata，而不添加能力说明。缺少可选能力表无需迁移，含 opaque code

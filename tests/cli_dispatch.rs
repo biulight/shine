@@ -36,6 +36,63 @@ impl Drop for Fixture {
     }
 }
 
+// These review outputs are small enough to drain after the child exits.
+#[cfg(unix)]
+fn output_with_terminal(
+    mut command: Command,
+    terminal_stdout: bool,
+) -> (std::process::Output, Vec<u8>) {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    let (mut master, mut slave) = (-1, -1);
+    // SAFETY: openpty initializes both descriptors; defaults are sufficient.
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        },
+        0
+    );
+    for fd in [master, slave] {
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+            0
+        );
+    }
+    // SAFETY: each descriptor returned by openpty is owned exactly once.
+    let mut master = unsafe { fs::File::from_raw_fd(master) };
+    let slave = unsafe { fs::File::from_raw_fd(slave) };
+    // Keep unread macOS PTY data alive until after the child exits.
+    let keep_alive = slave.try_clone().unwrap();
+    if terminal_stdout {
+        command.stdout(Stdio::from(slave));
+    } else {
+        command.stderr(Stdio::from(slave));
+    }
+    let output = command.output().unwrap();
+    drop(command);
+    assert_eq!(
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
+        0
+    );
+    let mut terminal = Vec::new();
+    match master.read_to_end(&mut terminal) {
+        Ok(_) => {}
+        Err(error)
+            if error.raw_os_error() == Some(libc::EIO)
+                || error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) => panic!("reading test PTY: {error}"),
+    }
+    drop(keep_alive);
+    (output, terminal)
+}
+
 fn display_path_fixture() -> Fixture {
     let mut fixture = Fixture::new();
     let root = fixture.0.with_extension(if cfg!(unix) {
@@ -167,6 +224,90 @@ fn structured_env_migration_is_explicit_backup_first_and_idempotent() {
     assert_eq!(result["summary"]["changes"], 0);
     assert_eq!(fs::read_to_string(app.join("config")).unwrap(), "unchanged");
     assert!(!f.0.join("state/app-manifest.toml").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn migration_diff_colors_follow_stdout_and_leave_json_and_sources_unchanged() {
+    let fixture = Fixture::new();
+    let root = fixture.0.join("presets");
+    let category = root.join("shell/demo");
+    fs::create_dir_all(&category).unwrap();
+    let original = "# control\tcomment\n[[files]]\nsource='run.ts'\nruntime='bun'\nenv=['TOKEN']\n[files.permissions]\nschema_version=1\nenvironment=[{name='TOKEN',sensitivity='secret'}]\n";
+    fs::write(category.join("shine.toml"), original).unwrap();
+    fs::write(category.join("run.ts"), "throw new Error('must not run');").unwrap();
+
+    for (terminal_stdout, no_color, force_color, json) in [
+        (true, false, None, false),
+        (true, true, None, false),
+        (false, false, None, false),
+        (true, false, None, true),
+        (false, true, Some("FORCE_COLOR"), false),
+        (false, true, Some("CLICOLOR_FORCE"), false),
+        (false, true, Some("FORCE_COLOR"), true),
+    ] {
+        let mut command = fixture.command();
+        command
+            .args(["preset", "migrate"])
+            .arg(&root)
+            .arg("--dry-run")
+            .env("TERM", "xterm-256color")
+            .env_remove("NO_COLOR")
+            .env_remove("FORCE_COLOR")
+            .env_remove("CLICOLOR")
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("IGNORE_IS_TERMINAL");
+        if no_color {
+            command.env("NO_COLOR", "1");
+        }
+        if let Some(key) = force_color {
+            command.env(key, "1");
+        }
+        if json {
+            command.args(["--format", "json"]);
+        }
+        let (output, terminal) = output_with_terminal(command, terminal_stdout);
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8_lossy(if terminal_stdout {
+            &terminal
+        } else {
+            &output.stdout
+        });
+        if json {
+            let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(report["summary"]["changes"], 1);
+            assert!(!text.contains("\x1b["));
+            assert!(!text.contains("--- a/"));
+        } else {
+            for prefix in [
+                "--- a/shell/demo/shine.toml",
+                "+++ b/shell/demo/shine.toml",
+                "@@ ",
+                "+env",
+                "-env",
+            ] {
+                assert!(text.contains(prefix), "{text:?}");
+            }
+            let colored = force_color.is_some() || (terminal_stdout && !no_color);
+            assert_eq!(text.contains("\x1b["), colored, "{text:?}");
+            if colored {
+                for prefix in [
+                    "\x1b[36m--- a/",
+                    "\x1b[36m+++ b/",
+                    "\x1b[36m@@ ",
+                    "\x1b[32m+env",
+                    "\x1b[31m-env",
+                ] {
+                    assert!(text.contains(prefix), "{text:?}");
+                }
+            }
+        }
+        assert_eq!(
+            fs::read_to_string(category.join("shine.toml")).unwrap(),
+            original
+        );
+        assert!(!fixture.0.join("state").exists());
+    }
 }
 
 #[test]
@@ -4682,38 +4823,9 @@ fn app_install_preview_and_unchanged_install_keep_distinct_counts() {
 #[cfg(unix)]
 #[test]
 fn stderr_warning_color_follows_its_own_terminal_and_no_color() {
-    use std::io::Read;
-    use std::os::fd::{AsRawFd, FromRawFd};
-
     for stderr_terminal in [false, true] {
         for no_color in [false, true] {
             let fixture = Fixture::new();
-            let mut master = -1;
-            let mut slave = -1;
-            // SAFETY: openpty initializes both descriptors; defaults are sufficient.
-            assert_eq!(
-                unsafe {
-                    libc::openpty(
-                        &mut master,
-                        &mut slave,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                    )
-                },
-                0
-            );
-            for fd in [master, slave] {
-                assert_eq!(
-                    unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
-                    0
-                );
-            }
-            // SAFETY: each successful openpty descriptor is owned exactly once.
-            let mut master = unsafe { fs::File::from_raw_fd(master) };
-            let slave = unsafe { fs::File::from_raw_fd(slave) };
-            // Keep unread macOS PTY data alive until after the child exits.
-            let keep_alive = slave.try_clone().unwrap();
             let mut command = fixture.command();
             command
                 .args(["env", "get", "SHINE_OUTPUT_TEST_MISSING"])
@@ -4724,27 +4836,8 @@ fn stderr_warning_color_follows_its_own_terminal_and_no_color() {
             if no_color {
                 command.env("NO_COLOR", "1");
             }
-            if stderr_terminal {
-                command.stderr(Stdio::from(slave));
-            } else {
-                command.stdout(Stdio::from(slave));
-            }
-            let output = command.output().unwrap();
-            drop(command);
+            let (output, terminal) = output_with_terminal(command, !stderr_terminal);
             assert_eq!(output.status.code(), Some(1), "{output:?}");
-            assert_eq!(
-                unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
-                0
-            );
-            let mut terminal = Vec::new();
-            match master.read_to_end(&mut terminal) {
-                Ok(_) => {}
-                Err(error)
-                    if error.raw_os_error() == Some(libc::EIO)
-                        || error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => panic!("reading warning PTY: {error}"),
-            }
-            drop(keep_alive);
             let warning = if stderr_terminal {
                 &terminal
             } else {

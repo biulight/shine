@@ -163,7 +163,9 @@ shine preset migrate ./my-presets --dry-run
 shine preset migrate ./my-presets
 ```
 
-The migrator shows unified metadata diffs and confirmation defaults to No. It edits only
+The migrator shows unified metadata diffs and confirmation defaults to No. Supported terminals
+show additions in green and deletions in red. Automatic colors respect `NO_COLOR`; redirected
+output is plain unless color is explicitly forced, for example with `FORCE_COLOR=1`. It edits only
 `shine.toml`, validates the candidate, rechecks source hashes, and creates a complete private backup
 set before writing. Payloads, scripts, values, runtime manifests, and trust grants are untouched.
 Text backup paths escape terminal controls; backup contents and JSON report identifiers are unchanged.

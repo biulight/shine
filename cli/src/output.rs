@@ -33,6 +33,32 @@ pub(crate) fn escape_controls(value: &str) -> String {
         .collect()
 }
 
+/// Render a single-file unified diff for stdout, escaping source controls before styling.
+pub(crate) fn colorize_unified_diff(diff: &str) -> String {
+    let mut out = String::with_capacity(diff.len());
+    let mut in_hunk = false;
+    for line in diff.split_inclusive('\n') {
+        let escaped = escape_controls(line.trim_end_matches('\n'));
+        let colored = if line.starts_with("@@ ") {
+            in_hunk = true;
+            colors::cyan(&escaped)
+        } else if !in_hunk && (line.starts_with("--- ") || line.starts_with("+++ ")) {
+            colors::cyan(&escaped)
+        } else if line.starts_with('+') {
+            colors::green(&escaped)
+        } else if line.starts_with('-') {
+            colors::red(&escaped)
+        } else {
+            escaped
+        };
+        out.push_str(&colored);
+        if line.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Tracks whether any upgrade section has printed content yet, so a run
 /// covering several optional sections (shell presets, app configs, managed
 /// system configs) can emit exactly one blank-line separator between two
@@ -226,6 +252,22 @@ fn pad_plain(visible_len: usize, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unified_diff_styles_headers_and_hunk_content_without_trusting_source_controls() {
+        let diff =
+            "--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n--- old\t\u{1b}[2J\n+++ new\r\n context";
+        let expected = [
+            colors::cyan("--- a/file"),
+            colors::cyan("+++ b/file"),
+            colors::cyan("@@ -1,2 +1,2 @@"),
+            colors::red("--- old\\t\\u{1b}[2J"),
+            colors::green("+++ new\\r"),
+            " context".into(),
+        ]
+        .join("\n");
+        assert_eq!(colorize_unified_diff(diff), expected);
+    }
 
     #[test]
     fn join_summary_uses_default_for_empty_parts() {

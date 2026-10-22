@@ -27,6 +27,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Share bounded static analysis across App planning, explicit evaluation and `preset lint/plan/test`,
   with safe source locations, per-entry environment comparison and incomplete-report diagnostics.
 
+### Bug Fixes
+
+- Highlight preset migration diffs with green additions, red deletions, and cyan headers on
+  supported terminals, following existing terminal detection, `NO_COLOR`, and forced-color overrides.
+
 ## [2.6.0] — 2026-10-22
 
 ### Breaking Changes

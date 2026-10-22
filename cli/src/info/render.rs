@@ -2,7 +2,7 @@ use super::collect::{AppInfoFile, ShellInfoFile};
 use crate::apps::{AppCategory, AppFile};
 use crate::colors;
 use crate::config::Config;
-use crate::output::escape_controls;
+use crate::output::{colorize_unified_diff, escape_controls};
 use crate::path_display;
 use crate::status::{FileStatus, UpdateChange};
 use anyhow::{Context, Result};
@@ -458,28 +458,6 @@ fn render_diff_or_note(
         .header(current_label, expected_label)
         .to_string();
     colorize_unified_diff(&unified)
-}
-
-fn colorize_unified_diff(diff: &str) -> String {
-    let mut out = String::with_capacity(diff.len());
-    for line in diff.split_inclusive('\n') {
-        let escaped = crate::output::escape_controls(line.trim_end_matches('\n'));
-        let colored =
-            if line.starts_with("@@") || line.starts_with("---") || line.starts_with("+++") {
-                colors::cyan(&escaped)
-            } else if line.starts_with('+') && !line.starts_with("+++") {
-                colors::green(&escaped)
-            } else if line.starts_with('-') && !line.starts_with("---") {
-                colors::red(&escaped)
-            } else {
-                escaped
-            };
-        out.push_str(&colored);
-        if line.ends_with('\n') {
-            out.push('\n');
-        }
-    }
-    out
 }
 
 #[cfg(test)]

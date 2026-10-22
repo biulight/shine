@@ -320,12 +320,7 @@ pub(super) fn print_diffs(edits: &[PresetMigrationEdit]) {
             .unified_diff()
             .header(&format!("a/{path}"), &format!("b/{path}"))
             .to_string();
-        for line in diff.split_inclusive('\n') {
-            print!("{}", escape_controls(line.trim_end_matches('\n')));
-            if line.ends_with('\n') {
-                println!();
-            }
-        }
+        print!("{}", crate::output::colorize_unified_diff(&diff));
         println!();
     }
 }

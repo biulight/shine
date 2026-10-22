@@ -285,7 +285,9 @@ bugs. Check this list before changing the modules named in each entry.
   are diagnostic-only; a source change, backup/write failure, refusal, or remaining blocker fails the
   command even when independent safe edits have converged. Terminal summaries encode data before
   wrapping; diff headers encode logical paths before diff construction and body rendering preserves
-  structural newlines while encoding CR/TAB/ESC. Display escapes never enter candidates or JSON.
+  structural newlines while encoding CR/TAB/ESC. Migration and info share stdout-aware diff colors
+  after encoding, retaining existing forced-color overrides as well as `NO_COLOR` and ordinary
+  redirection detection. Display escapes and colors never enter candidates or JSON.
   Control-bearing remediation targets require original operands rather than escaped command aliases.
 - **Preset bundle bytes exclude host identity and author-only state.** `shine preset pack` uses one
   validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical
