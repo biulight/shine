@@ -27,7 +27,7 @@ identified effects of App Bun scripts: definite declaration differences and pars
 execution. Additional command/filesystem/network/system entries are review context. Environment
 names and Administrator authorization remain required when Shine injects or elevates them.
 
-Environment entries contain only a name and `plain`/`secret` sensitivity.
+Additional `[permissions].environment` entries contain only a name and `plain`/`secret` sensitivity.
 Filesystem entries use `access`, a structured `base` (`home`, `shine`,
 `data-dir`, `preset`, or `absolute`), and a normalized path. A statement does not
 enable, restrict, or sandbox code: external/overlay executable entries require separate
@@ -45,8 +45,9 @@ target-scoped trust for the complete effective category snapshot.
   declare required environment inputs there; Core derives script/runtime execution identities.
   Never launch `shine app artifact apply` from a hook or add `--yes` to compose nested approvals.
 - `[artifact]` may declare `script`, optional `teardown`, `runtime`, and an
-  explicit `env` allowlist. Every environment source must also have a
-  sensitivity entry in the category permission declaration. Artifact apply/remove remains
+  explicit structured `env` allowlist: `source`, optional `target`, and required `sensitivity`.
+  Core derives category environment permissions from these inputs; no duplicate
+  `[permissions].environment` declaration is needed. Artifact apply/remove remains
   an explicit operation with its own reviewed Plan, outside this authoring workflow.
 - Bun code uses `.ts`, `.js`, `.mts`, or `.mjs`. If dependencies are needed,
   place both `package.json` and `bun.lock` at the category root; never declare
