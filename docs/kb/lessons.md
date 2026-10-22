@@ -539,6 +539,10 @@
   detection or change production code solely to suppress this symptom.
 - **Prevention (2026-10-22)**: `.config/nextest.toml` requires 0.9.145 or newer and fails real leaked
   output handles at the default 100 ms timeout. This also applies to CI and pre-commit runs.
+- **Acceptance (2026-10-22)**: `4ece7d6b` passed all three native suites with Nextest 0.9.148 and
+  zero LEAK results, including `copy_sets_executable_bit_on_sh_files` on macOS. Rust 1.90 MSRV
+  and quality checks also passed; counts and job links are in the
+  [CI acceptance record](operations/ci-pipelines.md#rust-190-and-nextest-acceptance-2026-10-22).
 
 ## 2026-10-19 — Command hints and summaries retain argument and outcome boundaries
 

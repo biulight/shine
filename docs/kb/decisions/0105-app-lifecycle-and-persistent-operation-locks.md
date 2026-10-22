@@ -35,5 +35,7 @@ Concurrent unrelated App changes retain all receipts; relevant changes require a
 Long-running operations can make another command time out, but do not lose their lock. Persistent
 lock files are infrastructure, not abandoned operation journals, and must not be removed to unlock
 a running process. Old binaries using the directory-lock protocol do not coordinate with the new
-privileged lock. Cross-process lock behavior is covered by real file-lock tests; native Windows
-execution still requires platform validation.
+privileged lock. Cross-process lock behavior is covered by real file-lock tests. The Rust 1.90
+standard-library migration at `4ece7d6b` passed native Windows, Linux and macOS suites, Rust 1.90
+MSRV compilation and quality checks; see the
+[CI acceptance record](../operations/ci-pipelines.md#rust-190-and-nextest-acceptance-2026-10-22).

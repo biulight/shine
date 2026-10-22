@@ -34,6 +34,30 @@ Notes:
   Rust and Bun versions and invokes nextest through `mise exec`, so subprocesses launched from
   temporary directories inherit concrete runtime paths instead of context-dependent mise shims.
 
+## Rust 1.90 and Nextest acceptance (2026-10-22)
+
+Accepted `release` commit:
+[`4ece7d6bd9164c551a2e7daf0f9aa23644a94ffd`](https://github.com/biulight/shine/commit/4ece7d6bd9164c551a2e7daf0f9aa23644a94ffd).
+The Rust API cleanup replaces `fs2` with standard-library file locks and manual Result flattening
+with `Result::flatten()`. The Nextest policy requires 0.9.145 or newer and fails leaked output
+handles at the unchanged 100 ms timeout; pre-commit also tests changes to that policy.
+
+The [CI run](https://github.com/biulight/shine/actions/runs/39722135944) and
+[MSRV run](https://github.com/biulight/shine/actions/runs/39722135836) both target that exact commit
+and finished with `completed / success`. All three native test jobs used Nextest 0.9.148 and
+reported zero LEAK results under the committed strict policy.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,735 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/39722135944/job/119637785774) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 1,996 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/39722135944/job/119637785642) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 1,998 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/39722135944/job/119637785686) |
+| MSRV | Rust 1.90.0 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/39722135836/job/119637785170) |
+| Quality | Bun typecheck and 78 tests, formatting, compilation, Preset authoring examples, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/39722135944/job/119637785471) |
+
+These are native CI results for the committed changes. The earlier local Nextest 0.9.149 run and
+deliberately leaking `LEAK-FAIL` probe are separate local validation evidence.
+
 ## Documentation server deployment
 
 `docs.yml` always keeps GitHub Pages deployment enabled. A second deployment uploads the same
