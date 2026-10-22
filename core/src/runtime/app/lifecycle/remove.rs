@@ -35,7 +35,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
             || interaction.authorize_admin(admin_count).await?;
 
         self.run_app_teardown(&categories, request.dry_run, &mut state.report, observer)
-            .await;
+            .await?;
         for entry in selected {
             self.remove_app_file(entry, &request, &mut approved, admin_authorized, &mut state)
                 .await?;
@@ -89,14 +89,15 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
         dry_run: bool,
         report: &mut AppLifecycleReport,
         observer: &mut impl RuntimeObserver,
-    ) {
+    ) -> Result<()> {
         // Teardown belongs to uninstall and always precedes file removal. It is
-        // intentionally non-fatal for implicit uninstall execution.
+        // non-fatal for ordinary script failures, never for command cancellation.
         for category in categories {
+            self.check_analysis_command()?;
             if let Some(artifact) = category.artifact.clone()
                 && artifact.teardown.is_some()
             {
-                let outcome = self
+                let outcome = match self
                     .run_app_artifact(
                         AppArtifactRequest {
                             category: category.name.clone(),
@@ -108,7 +109,12 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
                         observer,
                     )
                     .await
-                    .unwrap_or_else(|error| {
+                {
+                    Ok(outcome) => outcome,
+                    Err(error) if error.is::<crate::analysis::TerminalFailure>() => {
+                        return Err(error);
+                    }
+                    Err(error) => {
                         observer.emit(RuntimeEvent::Warning {
                             code: "app_artifact_teardown_failed",
                             target: Some(format!("app/{}", category.name)),
@@ -121,10 +127,12 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost> CoreRuntime<H> 
                             [],
                         )
                         .with_diagnostic_code("app_teardown_setup_failed")
-                    });
+                    }
+                };
                 report.lifecycle.push(outcome);
             }
         }
+        Ok(())
     }
 
     async fn remove_app_file(

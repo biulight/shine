@@ -119,7 +119,10 @@ fn environment_mapping_is_per_entry_and_source_cache_is_shared() {
 
 #[test]
 fn environment_writes_and_deletes_are_not_reads() {
-    let r = report("process.env.TOKEN = 'new'; delete Bun.env.TOKEN;", None);
+    let r = report(
+        "process.env.TOKEN = 'new'; delete Bun.env.TOKEN; delete/*gap*/process.env.TOKEN; delete\nBun.env.TOKEN;",
+        None,
+    );
     assert!(!has(&r, "code_analysis_identity_unknown"), "{r:?}");
     let r = report("process.env.TOKEN += 'suffix'; ++Bun.env.TOKEN;", None);
     assert!(has(&r, "code_analysis_identity_unknown"), "{r:?}");
@@ -517,4 +520,36 @@ fn fixed_environment_exemption_is_exact_and_overrides_aliases() {
     assert_eq!(differences(&r), 0);
     assert!(has(&r, "code_analysis_identity_unknown"));
     assert!(has(&r, "code_analysis_dynamic_target"));
+}
+
+#[test]
+fn review_missing_punctuation_and_escaped_static_modules_are_not_silent() {
+    for code in [
+        "const x = { a: 1",
+        "fetch('https://example.org'",
+        "function f() { return 1;",
+    ] {
+        let r = report(
+            code,
+            Some(&declaration("network=[{scope='host',host='example.org'}]")),
+        );
+        assert!(has(&r, "code_analysis_parse_failure"), "{code}: {r:?}");
+        assert!(!r.allowed);
+    }
+    for code in [r"import './\u0062ad';", r"export * from './\u0062ad';"] {
+        let r = report(code, None);
+        assert!(
+            has(&r, "code_analysis_dependency_unsupported"),
+            "{code}: {r:?}"
+        );
+    }
+    let mut input = sources(
+        "export type { X } from './broken'; export { type X } from './broken'; import { type X } from './broken';",
+    );
+    input.insert("broken.ts".into(), b"const broken = ;".to_vec());
+    let r = Session::default()
+        .analyze(&input, "main.ts", None, &EnvironmentContract::default())
+        .unwrap();
+    assert!(r.allowed, "{r:?}");
+    assert_eq!(r.files, ["main.ts"]);
 }

@@ -30,6 +30,11 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         specs: &[crate::env::EnvVarSpec],
         mut request: ProcessRequest,
     ) -> Result<ProcessOutput> {
+        // Snapshot keys use logical separators even when metadata uses native Windows paths.
+        #[cfg(windows)]
+        let normalized_logical = logical.replace('\\', "/");
+        #[cfg(windows)]
+        let logical = normalized_logical.as_str();
         validate_relative(category)?;
         ensure!(
             Path::new(category).components().count() == 1,

@@ -55,6 +55,21 @@ pub async fn lint_preset_path(
     cwd: &Path,
     path: &Path,
 ) -> PresetLintReportV1 {
+    lint_preset_path_with_analysis(
+        source_host,
+        cwd,
+        path,
+        super::CodeAnalysisSession::default(),
+    )
+    .await
+}
+
+pub(super) async fn lint_preset_path_with_analysis(
+    source_host: &impl FileSystemObservationHost,
+    cwd: &Path,
+    path: &Path,
+    analysis: super::CodeAnalysisSession,
+) -> PresetLintReportV1 {
     let scope = match load_preset_source_scope(source_host, cwd, path).await {
         Ok(scope) => scope,
         Err(diagnostic) => {
@@ -94,7 +109,6 @@ pub async fn lint_preset_path(
     let home = root.join("home");
     let shine = home.join(".shine");
     let mut unique = BTreeMap::new();
-    let analysis = super::CodeAnalysisSession::default();
     for category in &scope.categories {
         for platform in RuntimePlatform::ALL {
             let mut context = RuntimeContext::isolated(
@@ -128,6 +142,13 @@ pub async fn lint_preset_path(
                 Err(error) => {
                     if let Some(terminal) = error.downcast_ref::<crate::analysis::TerminalFailure>()
                     {
+                        // The current category may have completed entries before a later
+                        // entry exhausted the shared budget. Preserve their diagnostics too.
+                        for scope in analysis.completed_scopes().unwrap_or_default() {
+                            for diagnostic in analysis_diagnostics(scope) {
+                                unique.entry(diagnostic.clone()).or_insert(diagnostic);
+                            }
+                        }
                         let mut findings = unique.into_values().collect::<Vec<_>>();
                         findings.push(PresetLintDiagnosticV1 {
                             severity: PresetLintSeverity::Error,
@@ -160,6 +181,28 @@ pub async fn lint_preset_path(
     let mut report = finish(scope.categories.len(), unique.into_values().collect());
     report.analyzed_entries = analysis.analyzed_entries().unwrap_or_default();
     report
+}
+
+fn analysis_diagnostics(scope: crate::analysis::Scope) -> Vec<PresetLintDiagnosticV1> {
+    scope
+        .report
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| PresetLintDiagnosticV1 {
+            severity: if diagnostic.blocking() {
+                PresetLintSeverity::Error
+            } else {
+                PresetLintSeverity::Warning
+            },
+            code: diagnostic.code.clone(),
+            target: Some(scope.target.clone()),
+            resource: Some(format!(
+                "{}:{}:{} ({})",
+                diagnostic.file, diagnostic.line, diagnostic.column, scope.entry
+            )),
+            message: format!("{}: {}", diagnostic.behavior, diagnostic.explanation()),
+        })
+        .collect()
 }
 
 async fn lint_app(
@@ -201,22 +244,7 @@ async fn lint_app(
         ));
     }
     for scope in runtime.lint_app_code(&category).await? {
-        for diagnostic in scope.report.diagnostics {
-            diagnostics.push(PresetLintDiagnosticV1 {
-                severity: if diagnostic.blocking() {
-                    PresetLintSeverity::Error
-                } else {
-                    PresetLintSeverity::Warning
-                },
-                code: diagnostic.code.clone(),
-                target: Some(target.clone()),
-                resource: Some(format!(
-                    "{}:{}:{} ({})",
-                    diagnostic.file, diagnostic.line, diagnostic.column, scope.entry
-                )),
-                message: format!("{}: {}", diagnostic.behavior, diagnostic.explanation()),
-            });
-        }
+        diagnostics.extend(analysis_diagnostics(scope));
     }
     for file in category.files {
         let resource = file.source_rel.to_string_lossy().replace('\\', "/");

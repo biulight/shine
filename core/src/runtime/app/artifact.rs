@@ -129,6 +129,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 request.category,
                 display_exit_code(output.exit_code)
             ),
+            Err(error) if error.is::<crate::analysis::TerminalFailure>() => Err(error),
             Err(error) if request.implicit => {
                 observer.emit(RuntimeEvent::Warning {
                     code: "app_artifact_teardown_failed",

@@ -1525,3 +1525,10 @@ review data, not trust identity; env/admin remain per-operation executor contrac
   snapshot materialization. File-local failures may preserve independent evaluation; terminal
   cancellation/budget/analyzer failures stop new work. Unsupported code retains coverage gaps and
   existing trust requirements. See [code analysis](code-analysis.md) for rules and validation scope.
+
+- **Non-fatal teardown errors exclude command termination.** Cancellation and terminal analysis
+  failures propagate through implicit artifact/teardown orchestration before uninstall removes any
+  further file or receipt. An outer approved-method error check after removal is too late.
+- **Recovered syntax is never usable evidence.** Check anonymous missing punctuation as well as
+  named syntax errors. Unsupported static module spelling must retain a coverage gap; erased
+  type-only module references do not expand the runtime dependency graph (analysis rule version 2).

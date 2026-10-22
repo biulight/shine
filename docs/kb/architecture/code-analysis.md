@@ -4,7 +4,7 @@ Status: analysis core, author tools, explicit evaluation and launch admission im
 validated through Core, Frontend, CLI and native Windows/Linux checks.
 Contract: [ADR 0150](../decisions/0150-preset-code-analysis-admission.md).
 
-## Source rules, version 1
+## Source rules, version 2
 
 `core/src/analysis/` accepts captured category-relative source bytes, parsed declarations and an
 environment identity contract. It has no filesystem/process Host, ambient environment lookup,
@@ -191,3 +191,39 @@ package-count target. This completes the requested expansion assessment without 
   manual pages contain the new code-check anchors. Skill frontmatter and local links were checked.
 - Sandbox-only Unix socket failures were rerun successfully with socket access. Initial pnpm
   tool-cache lock write failure was resolved by allowing the pinned package-manager cache setup.
+
+## Follow-up review against the PRD (2026-10-22)
+
+Review baseline: `9907fa47`, including the three implementation commits. The second pass rechecked
+all 27 acceptance items across analyzer, typed trigger selection, private evidence, locked approval,
+explicit evaluation, author reports and native platform paths. It found gaps in the first pass:
+
+| Finding | PRD items | Repair and regression |
+| --- | --- | --- |
+| Anonymous missing delimiters were not visited, so `function f() { return 1;` could be admitted | 7, 16, 24 | Traverse all syntax children for error/missing nodes; keep behavior analysis on named nodes |
+| Escaped static import/export specifiers could silently disappear; pure type exports could spuriously analyze runtime dependencies | 6, 22, 25 | Explicit unsupported-dependency gaps; skip only provably type-only module clauses, including inline type specifiers |
+| `delete` separated from its operand by comments/newlines was treated as an environment read | 19 | Recognize the grammar token rather than a source-text prefix |
+| Implicit teardown swallowed command cancellation and uninstall removed files before the outer error check | 26 | Propagate terminal failures through artifact and teardown orchestration before file/receipt removal; ordinary teardown failure policy is unchanged |
+| Native Windows script separators differed between snapshot lookup, analysis identity and launcher | 12, 16, 20 | Use existing logical-path conventions for planner references and normalize native Windows launcher/entry names |
+| Lint lost diagnostics from completed entries when a later entry in the same category exhausted the budget | 26 | Recover completed safe scope diagnostics from the command session, retaining incomplete status and terminal failure |
+
+Rule version is now 2, invalidating comparison identities under the old rules without changing the
+report schema. New regressions reproduce the malformed-source admission and post-cancellation
+file deletion before repair. Native separator and cumulative-budget tests exercise the production
+planning/evaluation and lint paths. The fixes restore the already documented public contracts;
+no new permission, bypass option, confirmation or runtime sandbox is introduced.
+
+Final follow-up verification: all 1,996 workspace all-feature tests passed (two intentionally
+skipped). Two tests were marked non-failing `LEAK` under parallel load; both passed serially without
+that marker (`install_dry_run_uses_generator_fallback_without_executing_code` and
+`overlay_permission_error_identifies_cause_and_global_config`). Windows passed 41 analysis/admission
+tests plus the interrupted-teardown test; Linux passed 42 plus that test. Final Clippy, locked
+Rust 1.90 workspace compilation, formatting and typos passed. Built-in lint remains complete with
+zero errors. Remote task-owned validation copies were removed after verification.
+
+The uploaded review archive SHA-256 was
+`2bee7ef5eb8eae3ebf24fcf00c4e4016abe6b3a986b2b9c5fac6101b02316824`.
+Final inline-type refinements were then synchronized and rerun on both instances:
+`analysis/syntax.rs` SHA-256 `95f36f7963b3f2d9350ba5a702bc7f380c8ade1084cb5e7fa7fc0dc1864e2f63`,
+`analysis/tests.rs` SHA-256 `0e45eb3d5dec4253ba7ad49c96e83cc7421e98a269a296c70390e627ac6c5850`.
+This follow-up is local-only; no push was performed.

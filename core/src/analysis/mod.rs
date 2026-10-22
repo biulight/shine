@@ -18,7 +18,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-pub const RULE_VERSION: u32 = 1;
+pub const RULE_VERSION: u32 = 2;
 pub const ANALYZER_VERSION: &str = "tree-sitter-0.25.10/js-0.23.1/ts-0.23.2/language-0.1.9";
 pub const SCHEMA_VERSION: u32 = 1;
 

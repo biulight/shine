@@ -828,3 +828,110 @@ source='config'
             .all(|op| matches!(op, HostOperation::Read(_)))
     );
 }
+
+#[tokio::test]
+async fn windows_separator_scripts_use_the_same_snapshot_and_analysis_identity() {
+    let base = runtime("", "", true);
+    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+        .file(
+            "app/demo/shine.toml",
+            r#"metadata_schema_version=2
+dest='~/.demo'
+[permissions]
+schema_version=1
+environment=[{name='ENABLE',sensitivity='plain'}]
+[[files]]
+source='config'
+generator={script='nested\gen.ts',runtime='bun',env=['ENABLE'],when_env='ENABLE'}
+"#
+            .replace(
+                r"nested\gen.ts",
+                if cfg!(windows) {
+                    r"nested\gen.ts"
+                } else {
+                    "nested/gen.ts"
+                },
+            )
+            .into_bytes(),
+        )
+        .file("app/demo/config", b"fallback".to_vec())
+        .file("app/demo/nested/gen.ts", b"export {};".to_vec())
+        .build();
+    let runtime = CoreRuntime::new(InMemoryHost::new(), base.context().clone(), snapshot);
+    let plan = runtime
+        .plan_apps(request(LifecycleOperation::Install))
+        .await
+        .unwrap();
+    assert!(plan.is_ready(), "{plan:?}");
+    assert_eq!(
+        plan.code_analysis[0].scope.script.as_deref(),
+        Some("nested/gen.ts")
+    );
+    runtime.host().queue_process_output(Ok(ProcessOutput {
+        exit_code: Some(0),
+        stdout: b"generated".to_vec(),
+        ..Default::default()
+    }));
+    let inspected = runtime
+        .inspect_apps_with_options(
+            AppInspectionOptions {
+                run_generators: true,
+                ..Default::default()
+            },
+            &mut NullObserver,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        inspected[0].desired_content.as_deref(),
+        Some(b"generated".as_slice())
+    );
+    assert_eq!(runtime.analysis.0.lock().unwrap().sources.parsed_files(), 1);
+}
+
+#[tokio::test]
+async fn lint_budget_failure_retains_completed_entry_differences() {
+    let source = InMemoryHost::new();
+    let live = runtime("fetch('https://missing.example');", "", true);
+    for (path, bytes) in live.presets().files() {
+        let bytes = if path.ends_with("shine.toml") {
+            let mut metadata = String::from_utf8(bytes.clone()).unwrap();
+            metadata.push_str("\n[[files]]\nsource='other'\ngenerator={script='other.ts',runtime='bun',env=['ENABLE'],when_env='ENABLE'}\n");
+            metadata.into_bytes()
+        } else {
+            bytes.clone()
+        };
+        source.put_file(format!("/repo/{path}"), bytes);
+    }
+    source.put_file("/repo/app/demo/other", b"fallback".to_vec());
+    source.put_file("/repo/app/demo/other.ts", b"export {};".to_vec());
+    let session = CodeAnalysisSession::default();
+    session.0.lock().unwrap().sources = Session::new(
+        analysis::Limits {
+            command_files: 1,
+            ..Default::default()
+        },
+        session.1.clone(),
+    );
+    let report = crate::runtime::lint::lint_preset_path_with_analysis(
+        &source,
+        Path::new("/repo"),
+        Path::new("app/demo"),
+        session,
+    )
+    .await;
+    assert!(!report.complete);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "code_analysis_command_budget")
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "code_analysis_declaration_difference")
+    );
+    assert_eq!(report.analyzed_entries.len(), 1);
+}

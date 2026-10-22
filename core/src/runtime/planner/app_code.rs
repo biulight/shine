@@ -129,7 +129,11 @@ pub(super) async fn add_app_hook_permissions<H: FileSystemObservationHost>(
             program: "bun".to_string(),
         });
     }
-    let logical = format!("app/{}/{}", category.name, script.display());
+    let logical = format!(
+        "app/{}/{}",
+        category.name,
+        crate::runtime::path_text::preset_path(script)
+    );
     runtime
         .presets()
         .file(&logical)
@@ -176,7 +180,11 @@ pub(super) async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
             program: "bun".to_string(),
         });
     }
-    let logical = format!("app/{}/{script}", category.name);
+    let logical = format!(
+        "app/{}/{}",
+        category.name,
+        crate::runtime::path_text::preset_path(Path::new(script))
+    );
     runtime
         .presets()
         .file(&logical)
@@ -270,7 +278,11 @@ pub(super) async fn add_generator_permissions<H: FileSystemObservationHost>(
             program: "bun".to_string(),
         });
     }
-    let logical = format!("app/{}/{}", category.name, generator.script.display());
+    let logical = format!(
+        "app/{}/{}",
+        category.name,
+        crate::runtime::path_text::preset_path(&generator.script)
+    );
     runtime
         .presets()
         .file(&logical)
@@ -339,7 +351,11 @@ pub(super) fn app_code_blocked<H>(
     category: &AppCategory,
     script: &Path,
 ) -> Result<bool> {
-    let logical = format!("app/{}/{}", category.name, script.display());
+    let logical = format!(
+        "app/{}/{}",
+        category.name,
+        crate::runtime::path_text::preset_path(script)
+    );
     if runtime
         .presets()
         .origin(&logical)

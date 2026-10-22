@@ -107,9 +107,12 @@ pub(super) fn parse(
             // No definite behavior is claimed from a recovered/partial tree.
             return Ok(facts);
         }
-        nodes.push(node);
+        if node.is_named() {
+            nodes.push(node);
+        }
         let mut cursor = node.walk();
-        pending.extend(node.named_children(&mut cursor));
+        // Missing delimiters are anonymous nodes too; never accept a recovered tree.
+        pending.extend(node.children(&mut cursor));
     }
     let module = matches!(extension, "mjs" | "mts")
         || nodes
@@ -119,15 +122,22 @@ pub(super) fn parse(
     for node in &nodes {
         match node.kind() {
             "import_statement" => {
+                if type_only_module(*node) {
+                    continue;
+                }
                 let Some(source) = node
                     .child_by_field_name("source")
                     .and_then(|n| literal(n, bytes))
                 else {
+                    gap(
+                        &mut facts,
+                        file,
+                        Some(*node),
+                        "code_analysis_dependency_unsupported",
+                        "dependency",
+                    );
                     continue;
                 };
-                if has_token(*node, "type") {
-                    continue;
-                }
                 let p = node.start_position();
                 facts
                     .imports
@@ -559,7 +569,7 @@ pub(super) fn parse(
             if matches!(
                 expression(object, bytes, &bindings).as_deref(),
                 Some("process.env" | "Bun.env")
-            ) && is_read(node, bytes)
+            ) && is_read(node)
             {
                 if let Some(name) = member_key(node, bytes) {
                     finding(&mut facts, node, Behavior::Environment(name));
@@ -589,13 +599,22 @@ pub(super) fn parse(
                 "environment",
             );
         }
-        if matches!(node.kind(), "export_statement")
-            && let Some(source) = node
-                .child_by_field_name("source")
-                .and_then(|n| literal(n, bytes))
+        if node.kind() == "export_statement"
+            && !type_only_module(node)
+            && let Some(source) = node.child_by_field_name("source")
         {
-            let p = node.start_position();
-            facts.imports.push((source, p.row + 1, p.column + 1));
+            if let Some(source) = literal(source, bytes) {
+                let p = node.start_position();
+                facts.imports.push((source, p.row + 1, p.column + 1));
+            } else {
+                gap(
+                    &mut facts,
+                    file,
+                    Some(node),
+                    "code_analysis_dependency_unsupported",
+                    "dependency",
+                );
+            }
         }
     }
     Ok(facts)
@@ -658,6 +677,24 @@ fn scope(mut node: Node<'_>) -> Node<'_> {
         }
     }
 }
+fn type_only_module(node: Node<'_>) -> bool {
+    if has_token(node, "type") {
+        return true;
+    }
+    let nodes = descendants(node);
+    if nodes.iter().any(|n| {
+        n.kind() == "namespace_import"
+            || (n.kind() == "identifier" && n.parent().is_some_and(|p| p.kind() == "import_clause"))
+    }) {
+        return false;
+    }
+    let specifiers = nodes
+        .iter()
+        .filter(|n| matches!(n.kind(), "import_specifier" | "export_specifier"))
+        .collect::<Vec<_>>();
+    !specifiers.is_empty() && specifiers.iter().all(|n| has_token(**n, "type"))
+}
+
 fn has_token(node: Node<'_>, kind: &str) -> bool {
     let mut cursor = node.walk();
     node.children(&mut cursor).any(|child| child.kind() == kind)
@@ -773,10 +810,10 @@ fn gap(facts: &mut Facts, file: &str, node: Option<Node<'_>>, code: &str, behavi
         behavior,
     ));
 }
-fn is_read(node: Node<'_>, bytes: &[u8]) -> bool {
+fn is_read(node: Node<'_>) -> bool {
     !node.parent().is_some_and(|p| {
         (p.kind() == "assignment_expression" && p.child_by_field_name("left") == Some(node))
-            || (p.kind() == "unary_expression" && text(p, bytes).starts_with("delete "))
+            || (p.kind() == "unary_expression" && has_token(p, "delete"))
     })
 }
 fn host(value: &str) -> Option<String> {

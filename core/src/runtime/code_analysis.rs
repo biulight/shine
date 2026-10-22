@@ -69,6 +69,17 @@ impl CodeAnalysisSession {
         notified.await;
     }
 
+    pub(super) fn completed_scopes(&self) -> Result<Vec<Scope>> {
+        Ok(self
+            .0
+            .lock()
+            .map_err(|_| TerminalFailure::Analyzer)?
+            .evidence
+            .values()
+            .map(|binding| binding.scope.clone())
+            .collect())
+    }
+
     pub(super) fn analyzed_entries(&self) -> Result<Vec<String>> {
         let state = self.0.lock().map_err(|_| TerminalFailure::Analyzer)?;
         Ok(state
@@ -283,6 +294,13 @@ impl<H> CoreRuntime<H> {
         runtime: ArtifactRuntime,
         specs: &[EnvVarSpec],
     ) -> Result<Binding> {
+        #[cfg(windows)]
+        let normalized_entry = entry.replace('\\', "/");
+        #[cfg(windows)]
+        let entry = normalized_entry.as_str();
+        let normalized_script =
+            script.map(|script| super::path_text::preset_path(Path::new(script)));
+        let script = normalized_script.as_deref();
         let source = if let Some(source) = self.analysis_source.get() {
             *source
         } else {

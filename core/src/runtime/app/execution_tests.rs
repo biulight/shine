@@ -378,3 +378,57 @@ async fn script_hook_keeps_fixed_environment_and_cleans_only_its_failed_invocati
     );
     assert_eq!(runtime.host().read(&retained).await.unwrap(), b"retained");
 }
+
+#[tokio::test]
+async fn interrupted_teardown_stops_uninstall_before_file_and_receipt_removal() {
+    use crate::runtime::{AppPlanRequest, FileSystemObservationHost, PlanningInputVersions};
+    let runtime = runtime(PresetSourceKind::Embedded).await;
+    let destination = runtime.context().home_dir.join(".config/demo/config");
+    runtime.host().put_file(&destination, b"fallback".to_vec());
+    AppManifest {
+        entries: vec![AppEntry {
+            source: "app/demo/config".into(),
+            destination: destination.clone(),
+            backup: None,
+            content_hash: hash_content(b"fallback"),
+            install_strategy: AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        }],
+        ..Default::default()
+    }
+    .save(runtime.host(), &runtime.context().shine_dir)
+    .await
+    .unwrap();
+    let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
+    let before = runtime.host().read(&manifest_path).await.unwrap();
+    let request = AppPlanRequest {
+        operation: LifecycleOperation::Uninstall,
+        target: Some("demo".into()),
+        force: false,
+        purge: false,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let plan = runtime.plan_apps(request.clone()).await.unwrap();
+    let approval = crate::plan::PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    runtime.host().queue_process_output(Ok(ProcessOutput {
+        interrupted: true,
+        ..Default::default()
+    }));
+    let error = runtime
+        .uninstall_apps_approved(
+            request,
+            &approval,
+            &mut NullObserver,
+            &mut super::lifecycle_tests::Interaction,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.is::<crate::analysis::TerminalFailure>(), "{error:#}");
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        b"fallback"
+    );
+    assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), before);
+}
