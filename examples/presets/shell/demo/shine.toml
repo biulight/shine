@@ -5,10 +5,9 @@ source = "hello.ts"
 target = "shine-demo-hello"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["DEMO_GREETING"]
+env = [{ source = "DEMO_GREETING", sensitivity = "plain" }]
 description = "Print a configurable example greeting."
 
 [files.permissions]
 schema_version = 1
 commands = ["bun"]
-environment = [{ name = "DEMO_GREETING", sensitivity = "plain" }]

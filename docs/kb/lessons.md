@@ -1,5 +1,14 @@
 # Lessons Learned
 
+## 2026-10-23 — Metadata grammar changes include shipped authoring examples
+
+- **Evidence**: push CI for `27feeeca` rejected the Shell example's legacy string `env` during
+  `Verify Preset authoring example`; lifecycle tests and local pre-commit checks had passed.
+- **Fix**: use the structured input declaration in `examples/presets/shell/demo/shine.toml` and
+  remove its redundant environment permission statement.
+- **Coverage**: run the CI example validation, lint, fixture-test and pack commands when changing
+  metadata grammar. Example fixtures exercise the shipped source files without executing presets.
+
 ## 2026-10-21 — Fixture observations must share the planner's native root
 
 - **Evidence**: Windows seeded `/shine-author/home` while planning read `C:\shine-author\home`.
