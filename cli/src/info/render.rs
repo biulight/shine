@@ -350,11 +350,8 @@ fn colored_shell_status(status: &str) -> String {
 }
 
 async fn app_diff_output(_config: &Config, item: &AppInfoFile) -> Result<String> {
-    let expected = match &item.desired_content {
-        Some(bytes) => bytes,
-        None => {
-            return Ok("Unable to render expected content from the active preset.\n".to_string());
-        }
+    let Some(expected) = &item.desired_content else {
+        return Ok("Unable to render expected content from the active preset.\n".to_string());
     };
 
     let current_path = app_current_path(item);
@@ -396,23 +393,15 @@ async fn shell_diff_output(
             item.installed_source_path.display()
         ));
     }
-    let expected = match &item.desired_content {
-        Some(bytes) => bytes,
-        None => {
-            return Ok(
-                "Unable to render expected shell content from the active preset.\n".to_string(),
-            );
-        }
+    let Some(expected) = &item.desired_content else {
+        return Ok("Unable to render expected shell content from the active preset.\n".to_string());
     };
 
-    let current = match &item.current_content {
-        Some(bytes) => bytes,
-        None => {
-            return Ok(format!(
-                "Current script is missing: {}.\n",
-                current_path.display()
-            ));
-        }
+    let Some(current) = &item.current_content else {
+        return Ok(format!(
+            "Current script is missing: {}.\n",
+            current_path.display()
+        ));
     };
 
     Ok(render_diff_or_note(

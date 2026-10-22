@@ -188,17 +188,14 @@ fn validate_permission_value(
     target: &str,
     path: &Path,
 ) -> Option<PresetDiagnostic> {
-    let declaration = match value.clone().try_into::<PermissionDeclarationV1>() {
-        Ok(declaration) => declaration,
-        Err(_) => {
-            return Some(permission_error_diagnostic(
-                "invalid_permission_declaration",
-                format!(
-                    "{target} has malformed permission fields or fields unsupported by this schema"
-                ),
-                path,
-            ));
-        }
+    let Ok(declaration) = value.clone().try_into::<PermissionDeclarationV1>() else {
+        return Some(permission_error_diagnostic(
+            "invalid_permission_declaration",
+            format!(
+                "{target} has malformed permission fields or fields unsupported by this schema"
+            ),
+            path,
+        ));
     };
     declaration.validate().err().map(|error| {
         permission_error_diagnostic(error.diagnostic_code(), format!("{target}: {error}"), path)

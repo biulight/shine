@@ -205,9 +205,8 @@ pub(super) async fn test_preset_path_with_analysis(
     path: &Path,
     analysis: super::CodeAnalysisSession,
 ) -> PresetTestReportV1 {
-    let scope = match load_preset_source_scope(source_host, cwd, path).await {
-        Ok(scope) => scope,
-        Err(_) => return invalid("invalid_input"),
+    let Ok(scope) = load_preset_source_scope(source_host, cwd, path).await else {
+        return invalid("invalid_input");
     };
     if scope.categories.len() != 1
         || (scope.canonical != scope.categories[0].root
