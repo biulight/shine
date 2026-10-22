@@ -49,6 +49,127 @@ fn display_path_fixture() -> Fixture {
 }
 
 #[test]
+fn structured_env_migration_is_explicit_backup_first_and_idempotent() {
+    let f = Fixture::new();
+    let root = f.0.join("presets");
+    let app = root.join("app/demo");
+    let shell = root.join("shell/demo");
+    fs::create_dir_all(&app).unwrap();
+    fs::create_dir_all(&shell).unwrap();
+    let app_metadata = "metadata_schema_version=2\ndest='~/.demo'\n[artifact]\nscript='build.ts'\nruntime='bun'\nenv=['TOKEN=ALIAS']\n[permissions]\nschema_version=1\nenvironment=[{name='TOKEN',sensitivity='secret'}]\n[[files]]\nsource='config'\n";
+    let shell_metadata = "[[files]]\nsource='run.ts'\nruntime='bun'\nenv=['VALUE']\n[files.permissions]\nschema_version=1\nenvironment=[{name='VALUE',sensitivity='plain'}]\n";
+    fs::write(app.join("shine.toml"), app_metadata).unwrap();
+    fs::write(shell.join("shine.toml"), shell_metadata).unwrap();
+    fs::write(app.join("config"), "unchanged").unwrap();
+    fs::write(app.join("build.ts"), "console.log(process.env.ALIAS);").unwrap();
+    fs::write(shell.join("run.ts"), "console.log(process.env.VALUE);").unwrap();
+
+    let rejected = f
+        .command()
+        .args(["preset", "validate"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success(), "{rejected:?}");
+    let report = String::from_utf8(rejected.stdout).unwrap();
+    assert!(
+        report.contains("shine preset migrate --dry-run"),
+        "{report}"
+    );
+    let preview = f
+        .command()
+        .args(["preset", "migrate"])
+        .arg(&root)
+        .args(["--dry-run", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(!f.0.join("state").exists());
+    assert_eq!(
+        fs::read_to_string(app.join("shine.toml")).unwrap(),
+        app_metadata
+    );
+
+    fs::create_dir_all(f.0.join("state")).unwrap();
+    let active = f.0.join("state/presets");
+    fs::rename(&root, &active).unwrap();
+    let root = active;
+    let app = root.join("app/demo");
+    fs::write(
+        f.0.join("state/config.toml"),
+        "schema_version=2\n[env]\nVALUE='available'\n",
+    )
+    .unwrap();
+    let unrelated = f
+        .command()
+        .env("SHINE_PRESETS", &root)
+        .args(["env", "get", "VALUE"])
+        .output()
+        .unwrap();
+    assert!(unrelated.status.success(), "{unrelated:?}");
+    assert_eq!(
+        fs::read_to_string(app.join("shine.toml")).unwrap(),
+        app_metadata
+    );
+
+    for args in [["app", "list"], ["shell", "list"]] {
+        let output = f
+            .command()
+            .env("SHINE_PRESETS", &root)
+            .args(args)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.status.success(), "{text}");
+        assert!(text.contains("shine preset migrate --dry-run"), "{text}");
+    }
+    let applied = f
+        .command()
+        .args(["preset", "migrate"])
+        .arg(&root)
+        .args(["--yes", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(applied.status.success(), "{applied:?}");
+    let result: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
+    assert_eq!(result["summary"]["changes"], 2);
+    let backup =
+        f.0.join("state")
+            .join(result["backup_set"].as_str().unwrap());
+    assert_eq!(
+        fs::read_to_string(backup.join("app/demo/shine.toml")).unwrap(),
+        app_metadata
+    );
+    assert_eq!(
+        fs::read_to_string(backup.join("shell/demo/shine.toml")).unwrap(),
+        shell_metadata
+    );
+    let valid = f
+        .command()
+        .args(["preset", "validate"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(valid.status.success(), "{valid:?}");
+    let repeated = f
+        .command()
+        .args(["preset", "migrate"])
+        .arg(&root)
+        .args(["--dry-run", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(repeated.status.success(), "{repeated:?}");
+    let result: serde_json::Value = serde_json::from_slice(&repeated.stdout).unwrap();
+    assert_eq!(result["summary"]["changes"], 0);
+    assert_eq!(fs::read_to_string(app.join("config")).unwrap(), "unchanged");
+    assert!(!f.0.join("state/app-manifest.toml").exists());
+}
+
+#[test]
 fn broker_lookup_errors_encode_names_without_repairing_or_creating_policies() {
     let f = Fixture::new();
     let state = f.0.join("state");
@@ -2921,7 +3042,7 @@ fn app_generator_notes_keep_stderr_and_hook_notes_keep_stdout() {
     fs::create_dir_all(&preset).unwrap();
     let dest = toml::Value::String(destination.to_string_lossy().into_owned());
     fs::write(preset.join("shine.toml"), format!(
-        "metadata_schema_version = 2\ndest = {dest}\npost_install = {{ command = '/bin/sh', args = ['-c', 'printf HOOK_STDOUT_NOTE'], show_output = true }}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'printf HOOK_STDOUT_NOTE'], show_output = true }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n"
+        "metadata_schema_version = 2\ndest = {dest}\npost_install = {{ command = '/bin/sh', args = ['-c', 'printf HOOK_STDOUT_NOTE'], show_output = true }}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'printf HOOK_STDOUT_NOTE'], show_output = true }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\ngenerator = {{ script = 'generate.sh', env = [{{ source = 'ENABLE', sensitivity = 'plain' }}], when_env = 'ENABLE' }}\n"
     )).unwrap();
     fs::write(preset.join("config.txt"), "fallback").unwrap();
     let script = preset.join("generate.sh");
@@ -4212,7 +4333,7 @@ fn targeted_upgrade_distinguishes_nonfatal_hook_and_generator_failures() {
     .unwrap();
     let dest = toml::Value::String(destination.to_string_lossy().into_owned()).to_string();
     let metadata = format!(
-        "metadata_schema_version = 2\ndest = {dest}\npost_install = {{ command = '/bin/sh', args = ['-c', 'exit 6'] }}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'exit 7'] }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\nrestart_hint = 'Restart demo'\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n"
+        "metadata_schema_version = 2\ndest = {dest}\npost_install = {{ command = '/bin/sh', args = ['-c', 'exit 6'] }}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'exit 7'] }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\nrestart_hint = 'Restart demo'\ngenerator = {{ script = 'generate.sh', env = [{{ source = 'ENABLE', sensitivity = 'plain' }}], when_env = 'ENABLE' }}\n"
     );
     fs::write(preset.join("shine.toml"), metadata).unwrap();
     fs::write(preset.join("config.txt"), "fallback").unwrap();
@@ -4429,7 +4550,7 @@ fn app_install_reports_file_failures_without_hiding_partial_success() {
             ""
         };
         fs::write(preset.join("shine.toml"), format!(
-            "metadata_schema_version = 2\ndest = {dest}\n[permissions]\nschema_version = 1\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['demo']\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n{extra}"
+            "metadata_schema_version = 2\ndest = {dest}\n[permissions]\nschema_version = 1\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['demo']\ngenerator = {{ script = 'generate.sh', env = [{{ source = 'ENABLE', sensitivity = 'plain' }}], when_env = 'ENABLE' }}\n{extra}"
         )).unwrap();
         fs::write(preset.join("config.json"), r#"{"demo":1}"#).unwrap();
         fs::write(preset.join("good.txt"), "good").unwrap();
@@ -6089,7 +6210,7 @@ fn blocked_plan_and_development_notice_encode_targets_without_executing() {
         "schema_version=2\n[env]\nENABLE='1'\n",
     )
     .unwrap();
-    fs::write(app.join("shine.toml"), "metadata_schema_version=2\ndest='~/.demo'\n[permissions]\nschema_version=2\nopaque_code='unrestricted'\n[[files]]\nsource='config.txt'\ngenerator={script='generate.ts', runtime='bun', env=['ENABLE'], when_env='ENABLE'}\n").unwrap();
+    fs::write(app.join("shine.toml"), "metadata_schema_version=2\ndest='~/.demo'\n[permissions]\nschema_version=2\nopaque_code='unrestricted'\n[[files]]\nsource='config.txt'\ngenerator={script='generate.ts', runtime='bun', env=[{ source='ENABLE', sensitivity='plain' }], when_env='ENABLE'}\n").unwrap();
     fs::write(app.join("config.txt"), "original\n").unwrap();
     let sentinel = fixture.0.join("must-not-run");
     fs::write(
@@ -6119,7 +6240,10 @@ fn blocked_plan_and_development_notice_encode_targets_without_executing() {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains("security Plan is blocked; no changes were made"));
-        assert!(stderr.contains("environment plain ENABLE"));
+        assert!(
+            stderr.contains("code analysis blocked this operation"),
+            "{stderr}"
+        );
         assert!(!sentinel.exists());
         assert!(!fixture.0.join("state/app-manifest.toml").exists());
         assert!(!fixture.0.join("home/.demo/config.txt").exists());

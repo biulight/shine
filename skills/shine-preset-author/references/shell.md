@@ -29,7 +29,7 @@ from Shell metadata. Every external/overlay command requires target-scoped trust
 For cross-platform TypeScript or JavaScript helpers, set `runtime = "bun"` and
 use a `.ts`, `.js`, `.mts`, or `.mjs` source. Bun entries may declare `env` and
 `transforms`; native entries cannot declare runtime environment injection. The
-source name in an `env = ["SOURCE=TARGET"]` alias is the permission identity.
+source name in a structured `env` entry is the permission identity; declare `source`, optional `target`, and required `sensitivity` together.
 
 If Bun dependencies are needed, include both `package.json` and `bun.lock` at
 the category root. Do not declare `trustedDependencies`. Shine does not install

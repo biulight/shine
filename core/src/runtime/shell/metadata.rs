@@ -19,7 +19,7 @@ pub(super) struct ShellFileToml {
     pub(super) platforms: Option<Vec<String>>,
     pub(super) runtime: Option<String>,
     pub(super) transforms: Option<Vec<String>>,
-    pub(super) env: Option<Vec<String>>,
+    pub(super) env: Option<Vec<crate::env::EnvDeclaration>>,
     pub(super) permissions: Option<PermissionDeclarationV1>,
 }
 
@@ -139,16 +139,19 @@ impl<H> CoreRuntime<H> {
             let transforms = entry.transforms.clone().unwrap_or_default();
             crate::install::transforms::validate(&transforms)
                 .with_context(|| format!("invalid transforms in {metadata_path}"))?;
-            let env = crate::env::parse_env_specs(entry.env.as_deref().unwrap_or_default())
-                .with_context(|| format!("invalid env in {metadata_path}"))?;
-            if runtime != LinkRuntime::Bun && !env.is_empty() {
-                bail!("{metadata_path}: `env` is only valid when `runtime = \"bun\"`");
-            }
-            let permissions = entry.permissions.as_ref().or(defaults);
-            if let Some(permissions) = permissions {
+            let mut permissions = entry.permissions.as_ref().or(defaults).cloned();
+            if let Some(permissions) = &permissions {
                 permissions
                     .validate()
                     .with_context(|| format!("invalid permissions in {metadata_path}"))?;
+            }
+            let env = crate::env::resolve_env_declarations(
+                entry.env.as_deref().unwrap_or_default(),
+                &mut permissions,
+            )
+            .with_context(|| format!("invalid env in {metadata_path}"))?;
+            if runtime != LinkRuntime::Bun && !env.is_empty() {
+                bail!("{metadata_path}: `env` is only valid when `runtime = \"bun\"`");
             }
             let logical = format!("{prefix}{}", shell_logical_path(&source_rel));
             let bytes = self.presets().get(&logical).ok_or_else(|| {
@@ -172,7 +175,7 @@ impl<H> CoreRuntime<H> {
                 runtime,
                 transforms,
                 env,
-                permissions: permissions.cloned(),
+                permissions,
             });
         }
         Ok(files)

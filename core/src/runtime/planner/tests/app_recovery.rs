@@ -76,8 +76,23 @@ async fn second_install_receipt_failure_recovers_only_the_uncommitted_file() {
     assert_eq!(runtime.host().read(&journal).await.unwrap(), interrupted);
 
     let recovery = runtime.plan_app_operation_recovery().await.unwrap();
+    let previous_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+    let legacy = PresetSnapshot::builder(PresetSourceKind::Embedded)
+        .file("app/demo/shine.toml", b"dest='~/.config/demo'\npost_install={script='hook.ts',env=['TOKEN']}\n[permissions]\nschema_version=1\n[[files]]\nsource='a.toml'\n[[files]]\nsource='b.toml'\n".to_vec())
+        .file("app/demo/a.toml", b"first".to_vec())
+        .file("app/demo/b.toml", b"second".to_vec())
+        .file("app/demo/hook.ts", b"console.log('hook')".to_vec())
+        .build();
+    let recovery_runtime =
+        CoreRuntime::new(runtime.host().clone(), runtime.context().clone(), legacy);
+    assert!(recovery_runtime.app_categories(Some("demo")).is_err());
+    let recovery = recovery_runtime
+        .plan_app_operation_recovery()
+        .await
+        .unwrap();
+    assert!(previous_approval.validate(&recovery).is_err());
     let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
-    runtime
+    recovery_runtime
         .recover_app_operation_approved(&recovery_approval)
         .await
         .unwrap();

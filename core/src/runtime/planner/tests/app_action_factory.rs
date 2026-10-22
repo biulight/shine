@@ -99,7 +99,7 @@ managed_keys = ['owned']
 source = 'f-preserve'
 [[files]]
 source = 'g-generated'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['ENABLE'], when_env = 'ENABLE' }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'ENABLE', sensitivity = 'plain' }], when_env = 'ENABLE' }
 "#
             .to_vec(),
         )

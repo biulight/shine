@@ -27,6 +27,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/frontend/{operations,events}.rs` | Safe journal-state/recovery projection and explicit progress-event redaction; domain executors retain journal parsing and recovery decisions |
 | `core/src/frontend/{bootstrap,read_only,trusted}.rs` | Shared source capture, restricted safe report facade, human review and one-shot approval, exact validation and lifecycle/recovery dispatch; `conformance.rs` checks adapter equivalence |
 | `core/src/permission.rs` | Versioned target-local Preset permission declarations, normalization, and payload-free identity validation |
+| `core/src/env.rs` | Strict structured Shell/App input declarations and derived environment permissions; separate string mapping protocol for launchers and `env run --with` |
 | `core/src/trust.rs` | Versioned target-local external-code trust grants, exact matching, and stale-scope decisions |
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
 | `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
@@ -111,6 +112,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/validation/{source,permissions,destinations,sys}.rs` | Observation-only scope capture; target-local permission diagnostics; portable destination paths; snapshot-only Sys references and metadata |
 | `core/src/runtime/metadata_diagnostic.rs` | Typed metadata error origins mapped to stable validation codes; message prose is not a classifier |
 | `core/src/runtime/preset_migration.rs` | Immutable legacy compatibility assessment, safe metadata candidate generation, released-1.x fingerprints, and versioned content-free migration reports |
+| `core/src/runtime/preset_migration/env.rs` | Migration-only legacy input conversion using explicit effective sensitivity; preserves entry mappings and shared platform contracts |
 | `core/src/runtime/inspection.rs` | Typed App/Shell inspection status and structural change vocabulary |
 | `core/src/install/` | Core-owned transforms, EOL handling, host-required App manifest persistence and shared in-memory schema normalization, and host-neutral managed-file operations |
 | `core/src/persist.rs` | Core-owned synced atomic replacement and no-clobber publication, mode preservation, Windows write-through moves, and versioned TOML helpers |

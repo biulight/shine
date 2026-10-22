@@ -1090,7 +1090,7 @@ mod lifecycle_tests {
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "app/demo/shine.toml",
-                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = ['TOKEN'] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }]\n[[files]]\nsource = 'config'\n".to_vec(),
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = [{ source = 'TOKEN', sensitivity = 'plain' }] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }]\n[[files]]\nsource = 'config'\n".to_vec(),
             )
             .file("app/demo/config", b"one".to_vec())
             .file("app/demo/refresh.ts", b"export {};".to_vec())

@@ -893,7 +893,7 @@ source = "config.txt"
 [files.generator]
 script = "generate.sh"
 when_env = "GENERATE"
-env = ["GENERATE"]
+env = [{ source = 'GENERATE', sensitivity = 'plain' }]
 auto = false
 "#
                 .to_vec(),

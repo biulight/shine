@@ -404,8 +404,8 @@ bugs. Check this list before changing the modules named in each entry.
   already-applied refresh writes; hooks do not run (ADR 0130).
 - **App executable environment is explicit.** Generators receive only fixed `SHINE_APP_*` contract
   variables plus their `generator.env` mappings. Artifacts receive only the fixed contract plus
-  their `[artifact].env` mappings, whose sources must be declared by the category's
-  `[permissions].environment`. They never inherit the full active `[env]` table. Plain values are
+  their `[artifact].env` mappings. Shell and App runtime inputs declare `source`, optional `target`,
+  and required `sensitivity` together; Core derives their effective environment permissions. They never inherit the full active `[env]` table. Plain values are
   fingerprinted by hash and secret values require opaque versions; neither value form is serialized
   into the Plan.
 

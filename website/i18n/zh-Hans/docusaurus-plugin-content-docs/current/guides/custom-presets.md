@@ -122,7 +122,7 @@ JavaScript/TypeScript 依赖。源码行为与声明存在确定差异，或受�
 可在详细审阅中查看。这些结果都不代表代码安全或已被完整分析。没有诊断时，常规审阅不增加分析
 输出；原有 trust 和批准检查仍然适用。
 
-使用 `SOURCE=TARGET` 环境映射时，声明源变量名及其 `plain`/`secret` 敏感度，脚本读取目标名。
+使用结构化 `env` 映射时，在同一项中声明 `source`、可选 `target` 与 `plain`/`secret` 敏感性；脚本读取目标名。
 只有文档列出的固定变量可以免于重复声明，任意 `SHINE_` 前缀名称不能获得豁免。不要把环境值或
 URL 凭据写入能力声明。源码位置采用从 1 开始的行号和 UTF-8 字节列号。
 
@@ -286,21 +286,21 @@ source = "compress.ts"
 target = "img-compress"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 
 [[files]]
 source = "resize.ts"
 target = "img-resize"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }, { source = "IMAGE_MAX_WIDTH", sensitivity = "plain" }, { source = "IMAGE_MAX_HEIGHT", sensitivity = "plain" }]
 
 [[files]]
 source = "convert.ts"
 target = "img-convert"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 ```
 
 这个类别包含三个入口文件和一个共享实现，使用
@@ -539,6 +539,35 @@ dest = { base = "data-dir", path = "com.example.my-app" }
 
 如果两个条目最终指向同一路径，Shine 会在写入前拒绝整个操作。后续 metadata 若移动已受管 source，`shine upgrade` 只会在旧文件未被修改且新目标不存在时迁移；否则保留两端现状并提示用户处理。
 
+## 声明运行时环境输入
+
+Shell Bun 命令与 App 的 generator、hook 和 artifact 使用结构化 `env`：
+
+```toml
+env = [
+  { source = "API_URL", sensitivity = "plain" },
+  { source = "SERVICE_TOKEN", target = "API_TOKEN", sensitivity = "secret" },
+]
+```
+
+`target` 默认为 `source`。只声明名称与敏感性，不填写值或密文。每个入口只接收自身声明的 Shine
+输入，不会获得同类别其他入口的输入。同一有效权限范围内，同一来源的敏感性必须一致。
+敏感性描述权限契约，本身不会加密或解密变量。App 保留现有配置值读取行为，Shell 保留密文优先读取。
+generator 的 `when_env` 仍填写其 `env` 列表中的来源名称，继续作为独立的启用条件。
+
+预设元数据不再接受 `env = ["SOURCE=TARGET"]` 等旧字符串数组。相关命令会提示迁移，其他命令不会
+自动迁移文件。请显式预览并应用转换：
+
+```bash
+shine preset migrate ./my-presets --dry-run
+shine preset migrate ./my-presets
+```
+
+迁移读取旧声明中的显式敏感性，保留别名和条件，并在写入前备份元数据。缺少或冲突的敏感性需要人工
+修正。Git 管理的 overlay 必须在上游 checkout 中迁移。迁移不会运行脚本、解密值、授予信任或更新
+已安装 launcher 及恢复记录。外部快照变化后需重新审阅信任；迁移后通过正常 install/upgrade 更新安装。
+命令行 `shine env run --with SOURCE=TARGET` 语法保持不变。
+
 ## 可选运行时的 Shell 入口
 
 `runtime` 用于选择 Shell 预设命令入口的运行时，而不是新增交互式 shell。未声明时使用原生 `.sh` 或 `.ps1` 入口；当前唯一可选值是 `bun`。请在类别的 `shine.toml` 中显式声明：
@@ -549,7 +578,7 @@ source = "my-tool.ts"
 target = "my-tool"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
+env = [{ source = "API_URL", sensitivity = "plain" }, { source = "SERVICE_TOKEN", target = "API_TOKEN", sensitivity = "secret" }]
 ```
 
 支持 `.ts`、`.js`、`.mts` 和 `.mjs`。安装后，Shine 会创建无扩展名的受管入口，用户仍以 `my-tool` 调用它；现有 `.sh` 和 `.ps1` 原生入口保持兼容。
@@ -558,7 +587,7 @@ env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
 `node_modules`；外部类别可以按上文约定启用由 Bun 管理的锁定依赖。`runtime = "bun"` 也不能与
 `needs_source = true` 组合使用。
 
-可选的 `env` 只适用于 Bun 入口。每项写成 `KEY` 或 `SOURCE=TARGET`；入口启动时会通过 `shine env run --no-workspace --with ...` 注入值，因此优先解密 `SOURCE_SECRET`，不存在时读取明文 `SOURCE`。声明 `env` 后，运行机器的 `PATH` 中还必须有 `shine`。不要在元数据中填写值或密文，只声明键名。
+可选的 `env` 只适用于 Bun 入口。每项声明 `source`、可选 `target`（默认为来源名称）及必填的 `sensitivity = "plain"` 或 `"secret"`；入口启动时会通过 `shine env run --no-workspace --with ...` 注入值，因此优先解密 `SOURCE_SECRET`，不存在时读取明文 `SOURCE`。声明 `env` 后，运行机器的 `PATH` 中还必须有 `shine`。不要在元数据中填写值或密文，只声明键名。
 
 后续支持的运行时会在本节逐项记录其支持值、文件类型、前提条件和限制。Python、Node 与 Deno 目前均不可配置为 `runtime`。
 
@@ -622,13 +651,12 @@ App 类别的 `[artifact]` 也可选择 Bun，使 `build` 与 `unbuild` 脚本�
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
-env = ["PROFILE_PATH", "API_TOKEN"]
+env = [{ source = "PROFILE_PATH", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }]
 ```
 
 `runtime` 省略时为 `native`，直接执行脚本；`bun` 仅接受 `.ts`、`.js`、`.mts` 或 `.mjs`，并要求
-运行机器已安装 Bun。只有 `env` allowlist 中的 Shine `[env]` 变量会传给 artifact，也可写成
-`SOURCE=TARGET` alias；每个 source 及其敏感度还必须在类别
-`[permissions].environment` 中声明。allowlist 中未配置的可选值会被省略；固定 app 路径变量会
+运行机器已安装 Bun。只有 `env` allowlist 中的 Shine `[env]` 变量会传给 artifact；每项同时声明来源、
+可选目标别名与敏感性，无需在 `[permissions].environment` 重复声明。allowlist 中未配置的可选值会被省略；固定 app 路径变量会
 另外加入。若希望安装或升级实际改动
 文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设须人工确认生命周期 Plan
 或已有匹配 grant。钩子不能递归调用 artifact 生命周期命令；应使用受支持的 artifact 配置和显式操作。

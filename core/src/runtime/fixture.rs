@@ -805,7 +805,7 @@ environment = [{ name = "TOKEN", sensitivity = "secret" }]
 [[files]]
 source = "config.toml"
 description = "Generated config"
-generator = { script = "gen.ts", runtime = "bun", env = ["TOKEN"], when_env = "TOKEN" }
+generator = { script = "gen.ts", runtime = "bun", env = [{ source = 'TOKEN', sensitivity = 'secret' }], when_env = "TOKEN" }
 "#
             .to_vec(),
         );

@@ -9,6 +9,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Breaking Changes
 
+- Shell Bun and App generator, hook, and artifact `env` entries now require structured `source`,
+  optional `target`, and `sensitivity` fields. Environment permissions are derived from those inputs.
+  Legacy string arrays are rejected with migration guidance. Review `shine preset migrate --dry-run`
+  before applying the explicit metadata conversion; commands do not automatically migrate sources.
+  Installed launcher, receipt, recovery, and `env run --with` formats remain unchanged.
 - Building from source now requires Rust 1.90 or later.
 - App Bun scripts and local JavaScript/TypeScript dependencies now undergo declaration analysis
   before execution. Definite differences and parse failures block lifecycle operations and explicit

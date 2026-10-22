@@ -140,8 +140,8 @@ languages, are advisory. Declarations not corroborated by the analyzed source ar
 and appear in detailed review. Neither means the code is safe or fully analyzed. Reports without
 diagnostics add no ordinary output; existing trust and approval checks still apply.
 
-For `SOURCE=TARGET` environment mappings, declare the source name and its `plain`/`secret`
-sensitivity; the script reads the target name. Only documented fixed variables are exempt, not
+For structured `env` mappings, declare `source`, optional `target`, and `plain`/`secret`
+`sensitivity` together; the script reads the target name. Only documented fixed variables are exempt, not
 arbitrary names beginning with `SHINE_`. Never put environment values or URL credentials in a
 capability declaration. Source locations use one-based lines and UTF-8 byte columns.
 
@@ -330,21 +330,21 @@ source = "compress.ts"
 target = "img-compress"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 
 [[files]]
 source = "resize.ts"
 target = "img-resize"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }, { source = "IMAGE_MAX_WIDTH", sensitivity = "plain" }, { source = "IMAGE_MAX_HEIGHT", sensitivity = "plain" }]
 
 [[files]]
 source = "convert.ts"
 target = "img-convert"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 ```
 
 The category includes three entry files plus a shared implementation using
@@ -634,6 +634,40 @@ metadata revision moves an already managed source, `shine upgrade` moves it only
 is unmodified and the new destination is free. Otherwise both locations are left untouched for the
 user to resolve.
 
+## Declare runtime environment inputs
+
+Shell Bun commands and App generators, hooks, and artifacts use structured `env` entries:
+
+```toml
+env = [
+  { source = "API_URL", sensitivity = "plain" },
+  { source = "SERVICE_TOKEN", target = "API_TOKEN", sensitivity = "secret" },
+]
+```
+
+`target` defaults to `source`. Declare names and sensitivity only, never values or ciphertext.
+Each entry receives only its own declared Shine inputs; a category's other inputs are not added.
+Sensitivity must agree wherever the same source is declared in the effective permission scope.
+It describes the permission contract and does not itself encrypt or decrypt a value. App inputs
+keep their existing configured-value behavior; Shell inputs retain encrypted-first lookup.
+Generator `when_env` still names a source from its `env` list and remains a separate condition.
+
+Legacy string arrays such as `env = ["SOURCE=TARGET"]` are no longer accepted in preset metadata.
+Relevant commands report a migration hint; unrelated commands do not automatically migrate files.
+Review and apply the conversion explicitly:
+
+```bash
+shine preset migrate ./my-presets --dry-run
+shine preset migrate ./my-presets
+```
+
+Migration reads the old explicit sensitivity declarations, preserves aliases and conditions, and
+backs up metadata before applying changes. Missing or conflicting sensitivity requires manual
+correction. Git-managed overlays must be migrated in their upstream checkout. Migration does not
+run scripts, decrypt values, grant trust, or update installed launchers and recovery records.
+Changed external snapshots require renewed trust review. Use normal install/upgrade after migration.
+The command-line `shine env run --with SOURCE=TARGET` syntax is unchanged.
+
 ## Shell entries with an optional runtime
 
 `runtime` selects the runtime for a shell preset command entry; it does not add an interactive shell.
@@ -646,7 +680,7 @@ source = "my-tool.ts"
 target = "my-tool"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
+env = [{ source = "API_URL", sensitivity = "plain" }, { source = "SERVICE_TOKEN", target = "API_TOKEN", sensitivity = "secret" }]
 ```
 
 Supported extensions are `.ts`, `.js`, `.mts`, and `.mjs`. Shine creates a managed entry without an
@@ -657,7 +691,7 @@ Every device that runs the command needs Bun in `PATH`. Shine does not install B
 `node_modules`; external categories may opt into Bun-managed locked packages as described above.
 `runtime = "bun"` cannot be combined with `needs_source = true`.
 
-The optional `env` list applies only to Bun entries. Each item is `KEY` or `SOURCE=TARGET`. The entry
+The optional `env` list applies only to Bun entries. Each item declares `source`, optional `target` (defaults to `source`), and required `sensitivity = "plain"` or `"secret"`. The entry
 injects values through `shine env run --no-workspace --with ...`, preferring `SOURCE_SECRET` and then
 plain `SOURCE`. When `env` is declared, the machine must also have `shine` in `PATH`. Declare only key
 names in metadata—never values or ciphertext.
@@ -730,13 +764,13 @@ An application's `[artifact]` can also use Bun for cross-platform apply and tear
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
-env = ["PROFILE_PATH", "API_TOKEN"]
+env = [{ source = "PROFILE_PATH", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }]
 ```
 
 The default is `native`, which executes the script directly. `bun` accepts only `.ts`, `.js`, `.mts`,
 or `.mjs` and requires Bun on the machine. `env` is the only Shine `[env]` allowlist passed to the
-artifact and supports `SOURCE=TARGET` aliases; declare each source and sensitivity again under the
-category's `[permissions].environment`. Listed sources are forwarded only when configured; missing
+artifact. Each entry declares its source, optional target alias, and sensitivity together; no duplicate
+`[permissions].environment` entry is needed. Listed sources are forwarded only when configured; missing
 optional values are omitted. Fixed application path variables are added separately. To
 run an artifact automatically after installation or upgrade actually changes files, declare
 `post_install` or `post_upgrade`; external presets require human confirmation of the lifecycle Plan

@@ -344,7 +344,7 @@ mod tests {
         let mut context = base.context().clone();
         context.is_external_presets = true;
         context.external_shell_mode = super::super::ExternalShellMode::Live;
-        let metadata = b"[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\nenvironment = [{ name = 'VALUE', sensitivity = 'plain' }]\n[[files]]\nsource = 'run.ts'\ntarget = 'run'\nruntime = 'bun'\ntransforms = ['template']\nenv = ['VALUE']\n";
+        let metadata = b"[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\nenvironment = [{ name = 'VALUE', sensitivity = 'plain' }]\n[[files]]\nsource = 'run.ts'\ntarget = 'run'\nruntime = 'bun'\ntransforms = ['template']\nenv = [{ source = 'VALUE', sensitivity = 'plain' }]\n";
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
             .base_root(&context.presets_dir)
             .file("shell/demo/shine.toml", metadata.to_vec())

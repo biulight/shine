@@ -1672,7 +1672,7 @@ commands = ['bun']
 environment = [{ name = 'SOURCE', sensitivity = 'plain' }]
 [[files]]
 source = 'generated.txt'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE' }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE' }
 "#
             .to_vec(),
         )
@@ -1827,7 +1827,7 @@ async fn targeted_app_refresh_points_uninstalled_generator_to_install() {
                 br#"dest = '~/.config/demo'
 [[files]]
 source = 'generated.txt'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE', auto = false }
 "#
                 .to_vec(),
             )

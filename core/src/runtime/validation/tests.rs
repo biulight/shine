@@ -171,37 +171,6 @@ fn app_rejects_shell_and_sys_permission_defaults_placement() {
     }));
 }
 
-#[test]
-fn app_artifact_environment_sources_require_permission_declarations() {
-    let category = CategoryPath {
-        kind: "app",
-        name: "demo".to_string(),
-        root: PathBuf::from("app/demo"),
-    };
-    let missing = PresetSnapshot::builder(PresetSourceKind::External)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[artifact]\nscript = 'build.sh'\nenv = ['TOKEN=API_TOKEN']\n[permissions]\nschema_version = 1\n"
-                    .to_vec(),
-            )
-            .build();
-    let diagnostics = permission_declaration_diagnostics(&missing, &category);
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "undeclared_artifact_environment")
-    );
-
-    let declared = PresetSnapshot::builder(PresetSourceKind::External)
-            .file(
-                "app/demo/shine.toml",
-                b"dest = '~/.config/demo'\n[artifact]\nscript = 'build.sh'\nenv = ['TOKEN=API_TOKEN']\n[permissions]\nschema_version = 1\nenvironment = [{ name = 'TOKEN', sensitivity = 'secret' }]\n"
-                    .to_vec(),
-            )
-            .build();
-    assert!(permission_declaration_diagnostics(&declared, &category).is_empty());
-}
-
 // This wrapper deliberately has no mutation or process capability.
 struct ObservationOnly(InMemoryHost);
 type ReadFuture<'a, T> = std::pin::Pin<

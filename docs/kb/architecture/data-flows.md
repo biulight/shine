@@ -168,6 +168,7 @@ table per Shell command/platform variant, and one table per Sys item. Static val
 version, placement, structured paths, payload-free identities, and duplicates without executing
 Preset code. Typed metadata describes Core-bounded effects; explicit command, filesystem, network,
 and system entries remain unverified author statements. Their absence does not block planning.
+Shell/App structured `env` entries derive their source/sensitivity permissions before planning and code analysis; only `preset migrate` converts legacy string entries. Runtime mapping and receipt formats remain unchanged.
 Environment input identities and Administrator authorization keep executor semantics, so a missing
 required contract remains non-ready. Shell/Sys defaults resolve per target before fingerprinting.
 

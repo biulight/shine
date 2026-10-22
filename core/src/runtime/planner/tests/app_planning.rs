@@ -171,7 +171,7 @@ async fn app_script_hook_is_bound_into_the_parent_plan() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "app/demo/shine.toml",
-                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = ['TOKEN', 'OPTIONAL_TOKEN'] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\nnetwork = [{ scope = 'any' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }, { name = 'OPTIONAL_TOKEN', sensitivity = 'secret' }]\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = [{ source = 'TOKEN', sensitivity = 'plain' }, { source = 'OPTIONAL_TOKEN', sensitivity = 'secret' }] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\nnetwork = [{ scope = 'any' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }, { name = 'OPTIONAL_TOKEN', sensitivity = 'secret' }]\n[[files]]\nsource = 'config.toml'\n".to_vec(),
             )
             .file("app/demo/config.toml", b"updated".to_vec())
             .file("app/demo/refresh.ts", b"export {};".to_vec())
@@ -262,7 +262,7 @@ async fn legacy_overlay_metadata_blocks_recursive_artifact_hook_before_trust() {
 #[tokio::test]
 async fn missing_permission_and_secret_identity_fail_closed() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-            .file("app/demo/shine.toml", b"dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\ngenerator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'TOKEN' }\n".to_vec())
+            .file("app/demo/shine.toml", b"dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\ngenerator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'TOKEN', sensitivity = 'plain' }], when_env = 'TOKEN' }\n".to_vec())
             .file("app/demo/config.toml", b"fallback".to_vec())
             .file("app/demo/gen.ts", b"process.stdout.write('x')".to_vec())
             .build();
@@ -300,7 +300,7 @@ commands = ['bun']
 environment = [{ name = 'TOKEN', sensitivity = 'secret' }]
 [[files]]
 source = 'config.toml'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'TOKEN' }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'TOKEN', sensitivity = 'secret' }], when_env = 'TOKEN' }
 "#
             .to_vec(),
         )
@@ -441,7 +441,7 @@ async fn app_plan_fingerprint_binds_manifest_and_live_state() {
 #[tokio::test]
 async fn app_upgrade_permissions_exclude_current_files_and_bind_their_state() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file("app/demo/shine.toml", b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\nenvironment = [{ name = 'SOURCE', sensitivity = 'plain' }]\n[[files]]\nsource = 'changed'\n[[files]]\nsource = 'current'\n[[files]]\nsource = 'manual'\ngenerator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }\n".to_vec())
+            .file("app/demo/shine.toml", b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\nenvironment = [{ name = 'SOURCE', sensitivity = 'plain' }]\n[[files]]\nsource = 'changed'\n[[files]]\nsource = 'current'\n[[files]]\nsource = 'manual'\ngenerator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE', auto = false }\n".to_vec())
             .file("app/demo/changed", b"next".to_vec())
             .file("app/demo/current", b"current".to_vec())
             .file("app/demo/manual", b"fallback".to_vec())
@@ -620,7 +620,7 @@ commands = ['bun']
 environment = [{{ name = 'SOURCE', sensitivity = 'plain' }}]
 [[files]]
 source = 'generated.txt'
-generator = {{ script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE' }}
+generator = {{ script = 'gen.ts', runtime = 'bun', env = [{{ source = 'SOURCE', sensitivity = 'plain' }}], when_env = 'SOURCE' }}
 "#
                 )
                 .into_bytes(),
@@ -693,7 +693,7 @@ commands = ['bun']
 environment = [{ name = 'SOURCE', sensitivity = 'plain' }]
 [[files]]
 source = 'generated.txt'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE', auto = false }
 "#
                 .to_vec(),
             )
@@ -790,7 +790,7 @@ async fn app_artifact_plan_scopes_secrets_and_rejects_changed_runtime_state() {
 script = 'build.ts'
 teardown = 'unbuild.ts'
 runtime = 'bun'
-env = ['TOKEN']
+env = [{ source = 'TOKEN', sensitivity = 'secret' }]
 [permissions]
 schema_version = 1
 filesystem = [

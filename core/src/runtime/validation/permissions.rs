@@ -62,35 +62,7 @@ fn validate_app_permissions(
             path,
         ));
     }
-    if let Some(artifact) = table.get("artifact").and_then(toml::Value::as_table) {
-        let declared = table
-            .get("permissions")
-            .and_then(toml::Value::as_table)
-            .and_then(|permissions| permissions.get("environment"))
-            .and_then(toml::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| entry.get("name").and_then(toml::Value::as_str))
-            .collect::<std::collections::BTreeSet<_>>();
-        for source in artifact
-            .get("env")
-            .and_then(toml::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(toml::Value::as_str)
-            .map(|spec| spec.split_once('=').map_or(spec, |(source, _)| source))
-        {
-            if !declared.contains(source) {
-                diagnostics.push(permission_error_diagnostic(
-                    "undeclared_artifact_environment",
-                    format!(
-                        "{target} artifact environment source `{source}` must appear in `[permissions].environment`"
-                    ),
-                    path,
-                ));
-            }
-        }
-    }
+
     diagnostics
 }
 

@@ -88,7 +88,7 @@ variables:
 | `SHINE_CACHE_DIR` | Current application cache directory |
 | `SHINE_STATE_DIR` | Current application state directory |
 
-Each environment source must also appear in `[permissions].environment`; missing optional sources
+Each structured `env` entry declares its source, optional target alias, and sensitivity together; missing optional sources
 are omitted. Values are passed as stored. Secret-classified inputs are Plan-bound by an opaque
 version but are not decrypted automatically and do not trigger GPG, age, or Touch ID prompts.
 

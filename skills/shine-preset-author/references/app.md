@@ -63,6 +63,6 @@ JavaScript/TypeScript dependencies are analyzed without downloading packages or 
 Fix definite differences at the reported source position by correcting the declaration or script.
 Dynamic targets, unsupported languages/packages and subprocess effects remain explicit coverage
 gaps; neither trust nor unrestricted metadata removes them. Missing corroboration is advisory.
-For `SOURCE=TARGET`, declare the source identity/sensitivity, not the target alias. Fixed-variable
+For structured `env`, declare `source`, optional `target`, and `sensitivity` together; permissions use the source identity. Fixed-variable
 exemptions use exact documented keys, not a general `SHINE_` prefix. Do not use real values to make
 analysis or synthetic planning succeed. Positions use one-based lines and UTF-8 byte columns.

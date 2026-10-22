@@ -5,40 +5,33 @@ source = "compress.ts"
 target = "img-compress"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 description = "Compress JPEG, PNG, and WebP images without modifying the originals."
 
 [files.permissions]
 schema_version = 1
 commands = ["bun"]
-environment = [{ name = "IMAGE_QUALITY", sensitivity = "plain" }]
 
 [[files]]
 source = "resize.ts"
 target = "img-resize"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }, { source = "IMAGE_MAX_WIDTH", sensitivity = "plain" }, { source = "IMAGE_MAX_HEIGHT", sensitivity = "plain" }]
 description = "Resize JPEG, PNG, and WebP images to fit configured bounds."
 
 [files.permissions]
 schema_version = 1
 commands = ["bun"]
-environment = [
-  { name = "IMAGE_QUALITY", sensitivity = "plain" },
-  { name = "IMAGE_MAX_WIDTH", sensitivity = "plain" },
-  { name = "IMAGE_MAX_HEIGHT", sensitivity = "plain" },
-]
 
 [[files]]
 source = "convert.ts"
 target = "img-convert"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 description = "Convert images to JPEG, PNG, or WebP."
 
 [files.permissions]
 schema_version = 1
 commands = ["bun"]
-environment = [{ name = "IMAGE_QUALITY", sensitivity = "plain" }]

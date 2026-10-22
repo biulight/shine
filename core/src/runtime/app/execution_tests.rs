@@ -25,18 +25,18 @@ async fn runtime(kind: PresetSourceKind) -> CoreRuntime<InMemoryHost> {
             "app/demo/shine.toml",
             br#"metadata_schema_version = 2
 dest = '~/.config/demo'
-post_install = { script = 'code.sh', env = ['VALUE=MAPPED'] }
+post_install = { script = 'code.sh', env = [{ source = 'VALUE', target = 'MAPPED', sensitivity = 'plain' }] }
 [artifact]
 script = 'code.sh'
 teardown = 'code.sh'
-env = ['VALUE=MAPPED']
+env = [{ source = 'VALUE', target = 'MAPPED', sensitivity = 'plain' }]
 [permissions]
 schema_version = 1
 filesystem = [{ access = ['execute'], base = 'preset', path = 'code.sh' }]
 environment = [{ name = 'ENABLE', sensitivity = 'plain' }, { name = 'VALUE', sensitivity = 'plain' }]
 [[files]]
 source = 'config'
-generator = { script = 'code.sh', env = ['ENABLE', 'VALUE=MAPPED'], when_env = 'ENABLE', auto = false }
+generator = { script = 'code.sh', env = [{ source = 'ENABLE', sensitivity = 'plain' }, { source = 'VALUE', target = 'MAPPED', sensitivity = 'plain' }], when_env = 'ENABLE', auto = false }
 "#.to_vec(),
         )
         .file("app/demo/config", b"fallback".to_vec())

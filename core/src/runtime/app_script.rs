@@ -350,7 +350,7 @@ schema_version = 1
 environment = [{ name = "ENABLE", sensitivity = "plain" }]
 [[files]]
 source = "fallback.txt"
-generator = { script = "scripts/generate.sh", env = ["ENABLE", "ENABLE=SHINE_APP_SOURCE_DIR", "ENABLE=SHINE_APP_ID"], when_env = "ENABLE" }
+generator = { script = "scripts/generate.sh", env = [{ source = 'ENABLE', sensitivity = 'plain' }, { source = 'ENABLE', target = 'SHINE_APP_SOURCE_DIR', sensitivity = 'plain' }, { source = 'ENABLE', target = 'SHINE_APP_ID', sensitivity = 'plain' }], when_env = "ENABLE" }
 "#,
         )
         .unwrap();

@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use toml_edit::{DocumentMut, Item, Value, value};
 
+mod env;
+
 pub const PRESET_MIGRATION_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
@@ -181,7 +183,14 @@ pub fn plan_preset_migration(
                 &mut edits,
                 &mut diagnostics,
             ),
-            Some("shell") => plan_shell(target, original, &mut diagnostics),
+            Some("shell") => plan_shell(
+                snapshot,
+                target,
+                &metadata_path,
+                original,
+                &mut edits,
+                &mut diagnostics,
+            ),
             Some("sys") => plan_sys(target, original, &mut diagnostics),
             _ => {}
         }
@@ -426,6 +435,18 @@ fn plan_app(
             ));
         }
     }
+    match env::migrate("app", &mut document) {
+        Ok(true) => {
+            changed = true;
+            operations.push("structure_env_declarations".to_string());
+        }
+        Ok(false) => {}
+        Err(_) => {
+            diagnostics.push(diagnostic(PresetMigrationSeverityV1::Blocker, "env_manual_migration_required", target,
+                "env migration needs valid mappings and explicit, consistent sensitivity; correct permissions before migration"));
+            return;
+        }
+    }
     if changed {
         push_edit(
             snapshot,
@@ -463,8 +484,18 @@ fn is_recursive_artifact_hook(hook: &toml::Value, category: &str) -> bool {
     command == Some("shine") && args == ["app", "artifact", "apply", category]
 }
 
-fn plan_shell(target: &str, original: &[u8], diagnostics: &mut Vec<PresetMigrationDiagnosticV1>) {
-    let Ok(value) = toml::from_slice::<toml::Value>(original) else {
+fn plan_shell(
+    snapshot: &PresetSnapshot,
+    target: &str,
+    logical: &str,
+    original: &[u8],
+    edits: &mut Vec<PresetMigrationEdit>,
+    diagnostics: &mut Vec<PresetMigrationDiagnosticV1>,
+) {
+    let Some(mut document) = std::str::from_utf8(original)
+        .ok()
+        .and_then(|text| text.parse::<DocumentMut>().ok())
+    else {
         diagnostics.push(diagnostic(
             PresetMigrationSeverityV1::Blocker,
             "invalid_shell_metadata",
@@ -473,7 +504,12 @@ fn plan_shell(target: &str, original: &[u8], diagnostics: &mut Vec<PresetMigrati
         ));
         return;
     };
-    let _ = (target, value);
+    match env::migrate("shell", &mut document) {
+        Ok(true) => push_edit(snapshot, logical, original, Some(document.to_string().into_bytes()), vec!["structure_env_declarations".into()], edits, diagnostics),
+        Ok(false) => {},
+        Err(_) => diagnostics.push(diagnostic(PresetMigrationSeverityV1::Blocker, "env_manual_migration_required", target,
+            "env migration needs valid mappings and explicit, consistent sensitivity; correct permissions before migration")),
+    }
 }
 
 fn plan_sys(target: &str, original: &[u8], diagnostics: &mut Vec<PresetMigrationDiagnosticV1>) {

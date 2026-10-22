@@ -30,7 +30,7 @@ environment = [{ name = 'ENABLE', sensitivity = 'plain' }, { name = 'VALUE', sen
 [[files]]
 source = 'config'
 transforms = ['template']
-generator = { script = 'gen.sh', env = ['ENABLE'], when_env = 'ENABLE', auto = true }
+generator = { script = 'gen.sh', env = [{ source = 'ENABLE', sensitivity = 'plain' }], when_env = 'ENABLE', auto = true }
 "#.to_vec())
         .file("app/demo/config", b"fallback @@VALUE@@".to_vec())
         .file("app/demo/gen.sh", b"#!/bin/sh\nprintf generated".to_vec())
@@ -416,7 +416,7 @@ async fn evaluated_inspection_assesses_selected_files_once_before_installed_read
     for (logical, bytes) in original.presets().files() {
         let bytes = if logical == "app/demo/shine.toml" {
             let mut metadata = bytes.clone();
-            metadata.extend_from_slice(b"\n[[files]]\nsource = 'two'\ntransforms = ['template']\ngenerator = { script = 'gen.sh', env = ['ENABLE'], when_env = 'ENABLE', auto = true }\n");
+            metadata.extend_from_slice(b"\n[[files]]\nsource = 'two'\ntransforms = ['template']\ngenerator = { script = 'gen.sh', env = [{ source = 'ENABLE', sensitivity = 'plain' }], when_env = 'ENABLE', auto = true }\n");
             metadata
         } else {
             bytes.clone()
@@ -425,7 +425,7 @@ async fn evaluated_inspection_assesses_selected_files_once_before_installed_read
     }
     // This category is valid but excluded from the requested assessment.
     let snapshot = builder.file("app/demo/two", b"fallback two".to_vec())
-        .file("app/other/shine.toml", b"dest = '~/.other'\n[[files]]\nsource = 'config'\ngenerator = { script = 'gen.sh', env = ['ENABLE'], when_env = 'ENABLE', auto = true }\n".to_vec())
+        .file("app/other/shine.toml", b"dest = '~/.other'\n[[files]]\nsource = 'config'\ngenerator = { script = 'gen.sh', env = [{ source = 'ENABLE', sensitivity = 'plain' }], when_env = 'ENABLE', auto = true }\n".to_vec())
         .file("app/other/config", b"other".to_vec())
         .file("app/other/gen.sh", b"echo other".to_vec()).build();
     let runtime = CoreRuntime::new(

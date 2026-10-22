@@ -53,7 +53,7 @@ environment = [{ name = 'ENABLE', sensitivity = 'plain' }]
 source = 'a-static'
 [[files]]
 source = 'b-generated'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['ENABLE'], when_env = 'ENABLE', auto = true }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'ENABLE', sensitivity = 'plain' }], when_env = 'ENABLE', auto = true }
 "#.to_vec())
             .file("app/demo/a-static", b"next static".to_vec())
             .file("app/demo/b-generated", b"fallback".to_vec())

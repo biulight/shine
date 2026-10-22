@@ -272,8 +272,7 @@ Preset authors should call the underlying script from a lifecycle hook rather th
 `app artifact apply` inside the hook.
 When an install or upgrade changes managed files for a category that declares an artifact, Shine
 prints the explicit apply command. It prints nothing when no managed files changed.
-Scripts receive configured `[artifact].env` sources only, and those sources must also be listed in
-the category's `[permissions].environment`, plus path variables such as
+Scripts receive configured sources from their structured `[artifact].env` entries, plus path variables such as
 `SHINE_CACHE_DIR` and `SHINE_STATE_DIR`. See
 [Tasks and application artifacts](./tasks-and-serve.md) for the complete variable list.
 
@@ -379,8 +378,8 @@ Preset authors can declare `post_install` and `post_upgrade`. The former runs af
 actually writes files. The latter runs only when `shine upgrade` updates at least one file in that
 category. Unchanged categories do not trigger hooks.
 
-Bind every environment input a hook consumes with its `env` list and declare the same names under
-the category permission declaration. Values are not displayed in the Plan. Missing required
+Declare each environment input a hook consumes with `source`, optional `target`, and `sensitivity`
+in its structured `env` list; no duplicate category environment declaration is needed. Values are not displayed in the Plan. Missing required
 environment inputs block approval; optional script inputs are omitted from the child environment.
 
 Each hook declares exactly one action. `command` runs the declared command and arguments. `script`
@@ -390,31 +389,23 @@ rules as artifacts and generators.
 
 ```toml
 post_upgrade = [
-  { command = "my-reloader", env = ["API_URL", "API_TOKEN"] },
+  { command = "my-reloader", env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }] },
 ]
 
 [permissions]
 schema_version = 1
-environment = [
-  { name = "API_URL", sensitivity = "plain" },
-  { name = "API_TOKEN", sensitivity = "secret" },
-]
 ```
 
 ```toml
 post_upgrade = [{
   script = "refresh.ts",
   runtime = "bun",
-  env = ["API_URL", "API_TOKEN"],
+  env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }],
 }]
 
 [permissions]
 schema_version = 1
 network = [{ scope = "any" }]
-environment = [
-  { name = "API_URL", sensitivity = "plain" },
-  { name = "API_TOKEN", sensitivity = "secret" },
-]
 ```
 
 For persistent authorization of external hooks and generators, use target-scoped trust.

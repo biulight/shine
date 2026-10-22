@@ -335,7 +335,7 @@ script = "danger.sh"
 runtime = "native"
 [[files]]
 source = "config.toml"
-generator = { script = "generate.sh", env = ["SOURCE"], when_env = "SOURCE" }
+generator = { script = "generate.sh", env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = "SOURCE" }
 "#,
         );
         write(category.join("config.toml"), "enabled = true\n");

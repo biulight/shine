@@ -222,8 +222,7 @@ Shine 不会隐式运行 artifact 命令。每次手动 apply/remove 都会显�
 失败。自动化调用只有在审阅该操作后才应添加 `--yes`。预设作者应让生命周期钩子直接调用底层脚本，
 不要在钩子中嵌套 `app artifact apply`。
 当某个声明 artifact 的类别在安装或升级中确实改动了受管文件时，Shine 会打印显式 apply 命令；没有受管文件
-发生变化时则不提示。脚本只会收到 `[artifact].env` 列出且已配置的 source，并且
-这些 source 还必须在类别 `[permissions].environment` 中声明；此外会加入
+发生变化时则不提示。脚本只会收到结构化 `[artifact].env` 列出且已配置的 source；此外会加入
 `SHINE_CACHE_DIR`、`SHINE_STATE_DIR` 等固定路径变量。完整变量说明见
 [任务与应用构建产物](./tasks-and-serve.md)。
 
@@ -284,7 +283,7 @@ artifact 和 post-upgrade 脚本都使用 Bun，运行机器必须已安装 Bun�
 
 预设作者可以声明 `post_install` 和 `post_upgrade` 钩子：前者在安装实际写入文件后运行，后者只在 `shine upgrade` 实际更新该类别至少一个文件后运行；未变化的类别不会触发。
 
-钩子读取的每个环境输入都必须列入钩子的 `env`，并在类别权限声明中声明同名变量；Plan 不会显示
+钩子读取的每个环境输入都必须在结构化 `env` 中声明 `source`、可选 `target` 与 `sensitivity`，无需重复声明类别环境权限；Plan 不会显示
 变量值。缺少必需环境输入时不能批准；脚本型 hook 的可选输入缺失时不会注入子进程。
 
 每个钩子必须且只能声明一种动作。`command` 运行声明的命令和参数；`script` 运行 native 或 Bun 脚本，
@@ -293,31 +292,23 @@ artifact 和 generator 的扩展名及锁定依赖规则。
 
 ```toml
 post_upgrade = [
-  { command = "my-reloader", env = ["API_URL", "API_TOKEN"] },
+  { command = "my-reloader", env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }] },
 ]
 
 [permissions]
 schema_version = 1
-environment = [
-  { name = "API_URL", sensitivity = "plain" },
-  { name = "API_TOKEN", sensitivity = "secret" },
-]
 ```
 
 ```toml
 post_upgrade = [{
   script = "refresh.ts",
   runtime = "bun",
-  env = ["API_URL", "API_TOKEN"],
+  env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }],
 }]
 
 [permissions]
 schema_version = 1
 network = [{ scope = "any" }]
-environment = [
-  { name = "API_URL", sensitivity = "plain" },
-  { name = "API_TOKEN", sensitivity = "secret" },
-]
 ```
 
 外部钩子和 generator 可通过交互式生命周期确认获得本次授权。需要持久授权时使用 target-scoped trust：

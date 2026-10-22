@@ -61,7 +61,7 @@ impl Fixture {
         fs::create_dir_all(&preset).unwrap();
         let destination = self.0.join("destination");
         // Rust's quoted path escaping also forms a TOML basic string on supported hosts.
-        fs::write(preset.join("shine.toml"), format!("metadata_schema_version = 2\ndest = {:?}\nlist_mode = 'files'\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\nfilesystem = [{{ access = ['write'], base = 'absolute', path = {:?} }}]\n[[files]]\nsource = 'config.txt'\n[[files]]\nsource = 'manual.txt'\n{}", destination.to_str().unwrap(), self.0.join("generator-ran").to_str().unwrap(), if generated { "generator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = ['ENABLE'], auto = false }\n" } else { "" })).unwrap();
+        fs::write(preset.join("shine.toml"), format!("metadata_schema_version = 2\ndest = {:?}\nlist_mode = 'files'\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\nfilesystem = [{{ access = ['write'], base = 'absolute', path = {:?} }}]\n[[files]]\nsource = 'config.txt'\n[[files]]\nsource = 'manual.txt'\n{}", destination.to_str().unwrap(), self.0.join("generator-ran").to_str().unwrap(), if generated { "generator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = [{ source = 'ENABLE', sensitivity = 'plain' }], auto = false }\n" } else { "" })).unwrap();
         fs::write(preset.join("config.txt"), "static-v1\n").unwrap();
         fs::write(preset.join("manual.txt"), "manual-v1\n").unwrap();
         fs::write(
@@ -889,7 +889,7 @@ fn refresh_summary_distinguishes_preservation_failure_and_partial_progress() {
             fixture.0.join("destination").to_str().unwrap()
         );
         for id in 0..if mixed { 3 } else { 1 } {
-            metadata.push_str(&format!("[[files]]\nsource = '{id}.txt'\ngenerator = {{ script = '{id}.ts', runtime = 'bun', when_env = 'ENABLE', env = ['ENABLE'], auto = false }}\n"));
+            metadata.push_str(&format!("[[files]]\nsource = '{id}.txt'\ngenerator = {{ script = '{id}.ts', runtime = 'bun', when_env = 'ENABLE', env = [{{ source = 'ENABLE', sensitivity = 'plain' }}], auto = false }}\n"));
             fs::write(preset.join(format!("{id}.txt")), "fallback\n").unwrap();
             fs::write(preset.join(format!("{id}.ts")), "console.log('v1');\n").unwrap();
         }
@@ -1943,7 +1943,7 @@ fn generator_summary_preserves_unknown_trust_and_failure_states() {
     let metadata = fixture.0.join("state/presets/app/demo/shine.toml");
     fs::write(&metadata, fs::read_to_string(&metadata).unwrap().replace(
         "source = 'config.txt'\n",
-        "source = 'config.txt'\ngenerator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = ['ENABLE'], auto = false }\n",
+        "source = 'config.txt'\ngenerator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = [{ source = 'ENABLE', sensitivity = 'plain' }], auto = false }\n",
     )).unwrap();
     for (args, expected) in [
         (

@@ -115,7 +115,7 @@ dest = '~/.config/demo'
 schema_version = 1
 [[files]]
 source = 'generated.txt'
-generator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = ['ENABLE'], auto = false }
+generator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = [{ source = 'ENABLE', sensitivity = 'plain' }], auto = false }
 "#.to_vec())
         .file("app/demo/generated.txt", b"fallback".to_vec())
         .file("app/demo/generate.ts", b"throw new Error('must never execute');".to_vec())

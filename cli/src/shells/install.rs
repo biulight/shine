@@ -38,15 +38,11 @@ needs_source = false
 # platforms = ["unix", "windows"]
 # description = "What mytool does."  # or a `// ...` header at the top of my_tool.ts
 # transforms = ["template"] # opt into @@VAR@@ env substitution (static, needs `shine upgrade`)
-# env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]  # inject shine values at launch; read via Bun.env
+# env = [{ source = 'API_URL', sensitivity = 'plain' }, { source = 'SERVICE_TOKEN', target = 'API_TOKEN', sensitivity = 'secret' }]  # inject shine values at launch; read via Bun.env
 # Optional author capability notes. Shine automatically classifies installed commands as
 # unisolated code; these notes do not restrict the script:
 # [files.permissions]
 # schema_version = 1
-# environment = [
-#   { name = "API_URL", sensitivity = "plain" },
-#   { name = "SERVICE_TOKEN", sensitivity = "secret" },
-# ]
 "#;
 
 pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()> {
@@ -2062,7 +2058,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\nenv = [\"API_URL\", \"SERVICE_TOKEN=API_TOKEN\"]\n[files.permissions]\nschema_version = 1\nenvironment = [{ name = \"API_URL\", sensitivity = \"plain\" }, { name = \"SERVICE_TOKEN\", sensitivity = \"plain\" }]\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\nenv = [{ source = 'API_URL', sensitivity = 'plain' }, { source = 'SERVICE_TOKEN', target = 'API_TOKEN', sensitivity = 'plain' }]\n[files.permissions]\nschema_version = 1\nenvironment = [{ name = \"API_URL\", sensitivity = \"plain\" }, { name = \"SERVICE_TOKEN\", sensitivity = \"plain\" }]\n",
         )
         .await
         .unwrap();

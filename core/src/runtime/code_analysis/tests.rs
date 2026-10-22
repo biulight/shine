@@ -16,7 +16,7 @@ fn runtime(code: &str, permissions: &str, enabled: bool) -> CoreRuntime<InMemory
         context.env.insert("ENABLE".into(), "yes".into());
     }
     CoreRuntime::new(InMemoryHost::new(),context,PresetSnapshot::builder(PresetSourceKind::Embedded)
-        .file("app/demo/shine.toml",format!("metadata_schema_version=2\ndescription='demo'\ndest='~/.demo'\n[permissions]\nschema_version=1\nenvironment=[{{name='ENABLE',sensitivity='plain'}}]\n{permissions}\n[[files]]\nsource='config'\ngenerator={{script='gen.ts',runtime='bun',env=['ENABLE'],when_env='ENABLE',auto=false}}\n").into_bytes())
+        .file("app/demo/shine.toml",format!("metadata_schema_version=2\ndescription='demo'\ndest='~/.demo'\n[permissions]\nschema_version=1\nenvironment=[{{name='ENABLE',sensitivity='plain'}}]\n{permissions}\n[[files]]\nsource='config'\ngenerator={{script='gen.ts',runtime='bun',env=[{{ source='ENABLE', sensitivity='plain' }}],when_env='ENABLE',auto=false}}\n").into_bytes())
         .file("app/demo/config",b"fallback".to_vec()).file("app/demo/gen.ts",code.as_bytes().to_vec()).build())
 }
 fn request(operation: LifecycleOperation) -> AppPlanRequest {
@@ -330,10 +330,10 @@ async fn explicit_inspection_blocks_bad_file_but_evaluates_independent_file() {
  environment=[{name='ENABLE',sensitivity='plain'}]
  [[files]]
  source='bad'
- generator={script='bad.ts',runtime='bun',env=['ENABLE'],when_env='ENABLE'}
+ generator={script='bad.ts',runtime='bun',env=[{ source='ENABLE', sensitivity='plain' }],when_env='ENABLE'}
  [[files]]
  source='good'
- generator={script='good.ts',runtime='bun',env=['ENABLE'],when_env='ENABLE'}
+ generator={script='good.ts',runtime='bun',env=[{ source='ENABLE', sensitivity='plain' }],when_env='ENABLE'}
  "#
                 .to_vec(),
             )
@@ -584,7 +584,7 @@ async fn shared_source_keeps_entry_declarations_and_environment_mapping_independ
         ),
     ] {
         let metadata = format!(
-            "metadata_schema_version=2\ndest='~/.{category}'\n[permissions]\nschema_version=1\nenvironment=[{{name='{source}',sensitivity='{sensitivity}'}}]\n{network}\n[[files]]\nsource='config'\ngenerator={{script='gen.ts',runtime='bun',env=['{source}=MAPPED'],when_env='{source}'}}\n"
+            "metadata_schema_version=2\ndest='~/.{category}'\n[permissions]\nschema_version=1\nenvironment=[{{name='{source}',sensitivity='{sensitivity}'}}]\n{network}\n[[files]]\nsource='config'\ngenerator={{script='gen.ts',runtime='bun',env=[{{source='{source}',target='MAPPED',sensitivity='{sensitivity}'}}],when_env='{source}'}}\n"
         );
         snapshot = snapshot
             .file(format!("app/{category}/shine.toml"), metadata.into_bytes())
@@ -662,7 +662,10 @@ async fn changed_mapping_sensitivity_and_newly_triggered_scope_require_fresh_evi
         .unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     for (from, to) in [
-        ("env=['ENABLE']", "env=['ENABLE=OTHER']"),
+        (
+            "env=[{ source='ENABLE', sensitivity='plain' }]",
+            "env=[{ source='ENABLE', target='OTHER', sensitivity='plain' }]",
+        ),
         ("sensitivity='plain'", "sensitivity='secret'"),
     ] {
         let mut snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded);
@@ -842,7 +845,7 @@ schema_version=1
 environment=[{name='ENABLE',sensitivity='plain'}]
 [[files]]
 source='config'
-generator={script='nested\gen.ts',runtime='bun',env=['ENABLE'],when_env='ENABLE'}
+generator={script='nested\gen.ts',runtime='bun',env=[{ source='ENABLE', sensitivity='plain' }],when_env='ENABLE'}
 "#
             .replace(
                 r"nested\gen.ts",
@@ -896,7 +899,7 @@ async fn lint_budget_failure_retains_completed_entry_differences() {
     for (path, bytes) in live.presets().files() {
         let bytes = if path.ends_with("shine.toml") {
             let mut metadata = String::from_utf8(bytes.clone()).unwrap();
-            metadata.push_str("\n[[files]]\nsource='other'\ngenerator={script='other.ts',runtime='bun',env=['ENABLE'],when_env='ENABLE'}\n");
+            metadata.push_str("\n[[files]]\nsource='other'\ngenerator={script='other.ts',runtime='bun',env=[{ source='ENABLE', sensitivity='plain' }],when_env='ENABLE'}\n");
             metadata.into_bytes()
         } else {
             bytes.clone()

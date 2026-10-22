@@ -75,7 +75,7 @@ shine app artifact apply surge
 | `SHINE_CACHE_DIR` | 当前 app 的缓存目录 |
 | `SHINE_STATE_DIR` | 当前 app 的状态目录 |
 
-每个环境 source 还必须出现在 `[permissions].environment`；未配置的可选 source 会被省略。值按
+每个结构化 `env` 项同时声明来源、可选目标别名和敏感性；未配置的可选 source 会被省略。值按
 存储内容传入；secret 分类输入通过 opaque version 绑定到 Plan，但不会自动解密，也不会触发
 GPG、age 或 Touch ID 提示。
 
