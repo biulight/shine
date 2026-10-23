@@ -223,8 +223,43 @@ still match the native-verified archive; no further Rust changes or full test re
 Local Cargo checks bypassed sandbox-incompatible sccache with `RUSTC_WRAPPER=`; the full test run
 had permission to bind its test sockets. Documentation builds retained non-failing notices about
 untracked snapshot update dates, the local update-check store and Node localStorage.
-These are uncommitted preparation results, not new CI or publication evidence. No tag, push,
-crate publication or deployment was performed; a later release candidate must pass its own gates.
+These checks ran on the preparation working copy, before commit or push; they are not CI or
+publication evidence. The later commit and push passed the
+[CI acceptance below](#270-release-preparation-ci-acceptance-2026-10-24).
+
+## 2.7.0 release-preparation CI acceptance (2026-10-24)
+
+Accepted `release` commit:
+[`0c7d9162a8a2f26e1c513c26f69b19867d312829`](https://github.com/biulight/shine/commit/0c7d9162a8a2f26e1c513c26f69b19867d312829)
+(`chore(release): prepare v2.7.0`). The remote branch matched this SHA after the push. The commit
+contains the version and CHANGELOG updates, compatibility exception and Rust-consumer review fix,
+bilingual upgrade guidance and 2.7 snapshots, Windows warning cleanup, and KB evidence.
+
+The [CI run](https://github.com/biulight/shine/actions/runs/39988694418),
+[MSRV run](https://github.com/biulight/shine/actions/runs/39988694289), and
+[documentation run](https://github.com/biulight/shine/actions/runs/39988694488) all target that exact
+SHA and finished with `completed / success` on attempt 1. No repair commit or rerun was needed.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,769 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/39988694418/job/120534513780) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 2,032 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/39988694418/job/120534513512) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 2,034 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/39988694418/job/120534513649) |
+| Quality | Bun typecheck and 78 tests, formatting, compilation, Preset authoring examples, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/39988694418/job/120534513104) |
+| MSRV | Rust 1.90.0 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/39988694289/job/120534512319) |
+| Documentation build | Typecheck, version checks, locale parity and all-locale build passed | [Build job](https://github.com/biulight/shine/actions/runs/39988694488/job/120534514082) |
+| GitHub Pages deployment | Succeeded | [Pages job](https://github.com/biulight/shine/actions/runs/39988694488/job/120535130868) |
+| Documentation server deployment | Succeeded | [Server job](https://github.com/biulight/shine/actions/runs/39988694488/job/120535130752) |
+
+All three native nextest logs reported zero LEAK results. The Windows CI log no longer contains
+the previously recorded unused imports/functions or compiler-warning summaries, confirming the
+conditional-compilation cleanup in native CI as well as the earlier isolated compile check.
+
+These results apply to the accepted commit and supplement the earlier working-copy checks; they
+do not validate subsequent commits. Documentation deployment completed, but no `v2.7.0` tag or
+crate/binary release was created by this push. Tagged release builds, crate publication and
+cargo-binstall verification remain separate release gates. This internal KB-only update does not
+match the documentation workflow's path filters.
 
 ## Documentation server deployment
 
