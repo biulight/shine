@@ -2,7 +2,9 @@ use crate::config::Config;
 use anyhow::Result;
 
 #[cfg(test)]
-pub(crate) use shine_core::runtime::{ShellManifest, ShellManifestEntry};
+pub(crate) use shine_core::runtime::ShellManifest;
+#[cfg(all(test, unix))]
+pub(crate) use shine_core::runtime::ShellManifestEntry;
 
 pub async fn handle_render_live(config: &Config, target: &str) -> Result<()> {
     let runtime = crate::core_runtime::from_config(config).await?;

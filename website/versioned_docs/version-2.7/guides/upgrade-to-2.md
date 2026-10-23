@@ -5,14 +5,14 @@ sidebar_position: 1
 
 # Upgrade from Shine 1.x
 
-Shine 2.0 is the current stable release. It introduces a stricter lifecycle security and recovery
-boundary, so review the compatibility changes below before upgrading an existing 1.x installation.
+This guide covers upgrading an existing 1.x installation to Shine 2.7. Review the lifecycle security
+and recovery changes below, plus the [2.7 migration steps](../installation.md#upgrade-to-shine-27).
 
 Interactive lifecycle Plan confirmation can authorize the listed external code for that operation only,
 without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
 Development trust; explicit `--run-generators` inspection also requires a grant.
 
-## Install stable 2.0
+## Install Shine 2.7
 
 On macOS or Linux, install the latest stable release:
 
@@ -26,7 +26,7 @@ On Windows PowerShell:
 irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
-Or install from crates.io with Rust 1.88 or later:
+Or install from crates.io with Rust 1.90 or later:
 
 ```bash
 cargo install shine-cli
@@ -77,9 +77,11 @@ Read-only status and info commands no longer execute App generators by default. 
 `--run-generators` when you intentionally want generator code to run. Lifecycle commands evaluate
 only generators required by the selected operation and show their permissions in the Plan.
 
-Hook and generator environments are narrowed to declared inputs. Each required environment source
-must also be listed in the target's permission declaration; undeclared values are not inherited
-from the parent process. Secret values never appear in a Plan or trust record.
+Hook and generator environments are narrowed to their own structured `env` inputs. Declare
+`source`, optional `target`, and `sensitivity` together; environment permissions are derived from
+these inputs, without a duplicate permission entry. Undeclared values are not inherited from the
+parent process. Secret values never appear in a Plan or trust record. Convert legacy string arrays
+with the [explicit migration steps](custom-presets.md#declare-runtime-environment-inputs).
 
 ## Sys profile and state migration
 
@@ -135,7 +137,9 @@ upstream checkout with an explicit path, commit it there, then pull again.
 
 Sys v1 dispatchers require manual migration. Follow the reported target and validate the updated
 source with `shine preset validate <PATH>` and `shine preset plan <PATH> --platform <PLATFORM>`.
-Missing optional capability tables do not require migration, even for opaque App/Shell/Sys code.
+Missing optional capability tables alone do not require metadata conversion. Supported App code
+still needs accurate declarations for statically identified behavior; see
+[App code checks](custom-presets.md#check-app-code-before-execution).
 A managed Git overlay remains read-only; its report points back to the upstream checkout.
 
 Trust enrollment applies to external App hook/generator/artifact code, Sys bootstrap/profile code,
@@ -162,6 +166,6 @@ shine preset test <CATEGORY>
 shine preset pack <CATEGORY> --output <FILE>
 ```
 
-Please report 2.0 compatibility problems at the
+Please report upgrade compatibility problems at the
 [Shine issue tracker](https://github.com/biulight/shine/issues), including the rendered Plan and
 platform but excluding secrets and private file contents.

@@ -5,13 +5,13 @@ sidebar_position: 1
 
 # 从 Shine 1.x 升级
 
-Shine 2.0 已是当前稳定版。它引入了更严格的生命周期安全与恢复边界；从既有 1.x 安装升级前，
-请先阅读下列兼容性变化。
+本页说明如何从既有 1.x 安装升级到 Shine 2.7。请先阅读下列生命周期安全与恢复变化，
+以及 [2.7 迁移步骤](../installation.md#升级到-shine-27)。
 
 交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
 必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
 
-## 安装稳定版 2.0
+## 安装 Shine 2.7
 
 在 macOS 或 Linux 上安装最新稳定版：
 
@@ -74,9 +74,10 @@ shine trust list
 时使用 `--run-generators`。生命周期命令只计算所选操作需要的 generator，并在 Plan 中显示
 权限。
 
-hook 和 generator 的环境已收窄到声明的输入。每个必需的环境来源还必须列入 target 的
-permission declaration；未声明的值不会从父进程继承。Plan 和信任记录永远不会包含 secret
-明文。
+hook 和 generator 的环境已收窄到各自的结构化 `env` 输入。在同一项中声明 `source`、可选
+`target` 和 `sensitivity`；环境权限会从这些输入派生，无需重复声明。未声明的值不会从父进程
+继承，Plan 和信任记录也不会包含 secret 明文。旧字符串数组须按
+[显式迁移步骤](custom-presets.md#声明运行时环境输入)转换。
 
 ## Sys profile 与状态迁移
 
@@ -129,7 +130,8 @@ payload、脚本、环境值、运行状态或 trust grant。Git 管理的 overl
 
 Sys v1 dispatcher 必须人工迁移。根据报告中的 target 更新来源后，运行
 `shine preset validate <PATH>` 和 `shine preset plan <PATH> --platform <PLATFORM>` 校验。
-缺少可选能力表无需迁移，含 opaque App/Shell/Sys 代码时也一样。Git 管理的 overlay 仍为只读镜像，
+仅缺少可选能力表无需转换元数据；但受支持的 App 代码仍须为静态识别到的行为提供准确声明，
+见 [App 代码检查](custom-presets.md#执行前检查-app-代码)。Git 管理的 overlay 仍为只读镜像，
 报告会指向上游 checkout。
 
 trust enrollment 适用于外部 App hook/generator/artifact 代码、Sys bootstrap/profile 代码，以及
@@ -154,5 +156,5 @@ shine preset test <CATEGORY>
 shine preset pack <CATEGORY> --output <FILE>
 ```
 
-请在 [Shine issue tracker](https://github.com/biulight/shine/issues) 反馈 RC 兼容问题，附上
+请在 [Shine issue tracker](https://github.com/biulight/shine/issues) 反馈升级兼容问题，附上
 渲染后的 Plan 和平台信息，但不要包含 secret 或私有文件内容。

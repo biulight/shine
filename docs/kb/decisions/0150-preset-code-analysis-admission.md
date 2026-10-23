@@ -130,6 +130,11 @@ incompatible behavior change under the repository's versioning rules and therefo
 major release unless the maintainer explicitly grants a separate exception. Prior minor-release
 exceptions do not cover this feature. Implementation does not authorize tagging or publication.
 
+The maintainer subsequently chose 2.7.0; the
+[2026-10-24 compatibility exception](../conventions.md#versioning) covers metadata, report,
+Rust library source and admission changes. Consumers constructing public structs must adapt
+to added analysis fields as well as the serialized schema versions.
+
 Stages B–D must establish parser/alias/dependency/privacy tests, same-scope author/runtime parity,
 all execution entry gates, stale evidence/approval rejection, cache reuse, accumulated budgets,
 partial evaluation and cancellation. Retain existing ownership/lock/recovery regressions.

@@ -148,6 +148,10 @@ shine env broker policy update \
 包括原有的 project 或远端 workspace 限制；详见 `shine env broker policy update --help`。
 策略发生变化时仍需审阅并确认。
 
+本机 `policy diff` 和 `policy update` 在支持颜色的终端以绿色显示新增、红色显示删除。
+自动颜色遵循 `NO_COLOR`；重定向输出为纯文本，除非通过 `FORCE_COLOR=1` 等方式显式强制颜色。
+diff 显示会转义控制字符，不改变存储的策略值或匹配规则。
+
 `shine env broker policy list` 每行显示一项策略。SSH target 或 project 中的控制字符以
 `\n`、`\t` 等转义形式显示。需要查看策略的 TOML 表示时，使用
 `shine env broker policy info <NAME>`；列表显示不会修改存储值或匹配规则。
@@ -193,7 +197,7 @@ shine env broker describe --mode development \
   --release-all-declared -- bun run build
 ```
 
-Shine 还会要求该策略属于当前 SSH target；若策略限定了远端 workspace 路径，本次报告也必须一致。确认界面会显示完整 TOML diff；批准后只替换命中的 allow 并刷新 workspace/source 摘要，保留策略名、project、远端路径约束及其它 allow。预览后策略若被其它进程修改，写入会失败，需重新检查。`--update-policy` 不会降低远端元数据的信任风险，优先使用可信本机 checkout 的 `policy diff` / `policy update`。
+Shine 还会要求该策略属于当前 SSH target；若策略限定了远端 workspace 路径，本次报告也必须一致。确认界面会显示完整 TOML diff，保留长行、转义控制字符，不使用颜色高亮；批准后只替换命中的 allow 并刷新 workspace/source 摘要，保留策略名、project、远端路径约束及其它 allow。预览后策略若被其它进程修改，写入会失败，需重新检查。`--update-policy` 不会降低远端元数据的信任风险，优先使用可信本机 checkout 的 `policy diff` / `policy update`。
 
 ## 连接 Windows 远端
 

@@ -14,7 +14,7 @@ use shine_core::lifecycle::{
 };
 use shine_core::runtime::{PlanningInputVersions, ShellPlanRequest};
 use std::collections::BTreeSet;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::path::Path;
 
 const SHELL_TEMPLATE: &str = r#"# Shell preset metadata for shine.

@@ -380,7 +380,7 @@ Windows emitted six unused-item warnings for the CLI library test build and one 
 for `sudo_command`, all in code unchanged by the P1 commit. Linux emitted no compilation warnings.
 These are targeted native results, not full workspace, native Clippy, MSRV or CI acceptance for
 `14eac507`. They found no new regression and required no source changes. P2 diagnostic aggregation
-remains deferred. Task-owned remote source/build directories were removed after verification;
+was deferred at this checkpoint. Task-owned remote source/build directories were removed after verification;
 no production preset was activated and no repository push was performed.
 
 The later push of `14eac507` and `aa9b81f8` passed full Windows/Linux/macOS workspace CI, quality

@@ -171,6 +171,11 @@ Adding an existing policy name fails without replacing it. To update it, use `--
 the policy parameters again, including any project or remote-workspace constraints; see
 `shine env broker policy update --help`. Changed policies still require review and confirmation.
 
+Local `policy diff` and `policy update` show additions in green and deletions in red on supported
+terminals. Automatic colors respect `NO_COLOR`; redirected output is plain unless color is
+explicitly forced, for example with `FORCE_COLOR=1`. Diff displays escape control characters;
+stored policy values and matching rules are unchanged.
+
 `shine env broker policy list` shows one policy per line. Control characters in the SSH target or
 project are displayed as escapes, such as `\n` and `\t`. Use `shine env broker policy info <NAME>`
 for the policy's TOML representation; listing does not change stored values or matching rules.
@@ -221,7 +226,8 @@ shine env broker describe --mode development \
 ```
 
 The policy must belong to the current SSH target, and any constrained remote workspace path must
-match. Confirmation shows the full TOML diff. Approval replaces only the matched allow entry and
+match. Confirmation shows the full TOML diff, including long lines, with control characters escaped
+and no color highlighting. Approval replaces only the matched allow entry and
 refreshes digests while preserving the policy name, project, remote-path constraint, and other
 entries. A concurrent modification after preview makes the write fail. This option does not reduce
 the trust risk of remote metadata.

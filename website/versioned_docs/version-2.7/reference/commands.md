@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 2.6.0. Run `shine <COMMAND> --help` for every option supported by the
+This page reflects Shine 2.7.0. Run `shine <COMMAND> --help` for every option supported by the
 installed version. The task guides explain complete workflows; this page is a compact command index.
 
 ## Targets
@@ -237,6 +237,9 @@ shine completions <bash|zsh|powershell>
 
 Dynamic completion includes candidates from the selected Preset source and its active overlay.
 Tab completion does not execute Preset code or grant trust.
+
+When a Shell script or managed snapshot is missing, `info --diff` reports the missing path with
+control characters escaped. Inspection does not repair the file or change its receipt or trust.
 
 `state migrate` validates project configuration and workspace files before cleanup or writes.
 Invalid TOML syntax or workspace `env`/`env.encryption` fields that are not tables produce an

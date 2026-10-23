@@ -185,6 +185,47 @@ and apply to the accepted head, not subsequent documentation commits. The biling
 triggered the documentation workflow and both deployments; this internal KB update alone does not
 match that workflow's path filters.
 
+## 2.7.0 local release preparation (2026-10-24)
+
+Prepared on top of `e28f316c`: synchronized crate/dependency/lockfile versions to 2.7.0,
+recorded the [compatibility exception](../conventions.md#versioning), completed the hand-written
+release notes and bilingual upgrade guidance, and replaced the 2.6 documentation snapshots with
+2.7 while retaining 1.8 and Next. Third-party lockfile entries are unchanged.
+
+The only Rust changes gate Unix-only administrator/test helpers and imports by their actual
+platform consumers. No runtime logic, analysis rules, trust or approval behavior changed.
+
+| Local/native check | Result |
+| --- | --- |
+| macOS, Rust 1.96.0 | Workspace all-target/all-feature check and strict Clippy passed; all-feature nextest: 2,034 passed, 2 skipped |
+| Windows `x86_64-pc-windows-msvc`, Rust 1.96.0 | `RUSTFLAGS='-D warnings' cargo check --locked --workspace --all-targets --all-features --target-dir target` passed; the previously recorded unused-item compiler warnings are gone |
+| MSRV on macOS | Rust 1.90.0 `cargo check --locked --workspace` passed with a separate target directory |
+| Formatting and dependency policy | fmt, typos and cargo-deny bans/licenses/sources passed; existing duplicate-dependency and unmatched-license-allowance warnings remain |
+| Documentation | Frozen dependency install, version checks (8 tests), locale parity (21 files per locale), typecheck and both locale builds passed |
+| Snapshot and generated-page inspection | Both 2.7 snapshots exactly match their current sources; 1.8 is unchanged. Twelve stable/Next English/Chinese pages retain version labels, locale/canonical metadata, migration anchors and full-diagnostic guidance; retired 2.6 routes are absent |
+
+Windows used an isolated working-copy archive with SHA-256
+`cbd015a555dc162e416956be8fa1e5e10f13740d7ca396710e934bf32f624ef4`, including the final Rust and
+Cargo changes; later edits only changed documentation. The remote checksum matched,
+the command exited 0, and its task directory was removed after preserving the log locally.
+This is native compilation evidence, not a new Windows runtime test run. Linux was not rerun.
+
+Release-preparation review found that the compatibility notes omitted Rust source breaks from
+added public report fields. A compile-only external consumer using the v2.6.0 `PlanV1` field list
+failed with `E0063: missing field code_analysis`; adapting the field list compiled successfully.
+The exception, ADR 0150, CHANGELOG and both installation guides/snapshots now disclose this
+separately from serialized schema changes. An isolated old-env source passed migration preview,
+explicit apply, validation and lint without executing its generator. The rebuilt site passed
+all 3,748 local links/anchors across 72 stable/Next bilingual pages. Snapshot byte parity, version
+checks, locale parity, typecheck and typos also passed after review. All modified Rust/Cargo files
+still match the native-verified archive; no further Rust changes or full test reruns were needed.
+
+Local Cargo checks bypassed sandbox-incompatible sccache with `RUSTC_WRAPPER=`; the full test run
+had permission to bind its test sockets. Documentation builds retained non-failing notices about
+untracked snapshot update dates, the local update-check store and Node localStorage.
+These are uncommitted preparation results, not new CI or publication evidence. No tag, push,
+crate publication or deployment was performed; a later release candidate must pass its own gates.
+
 ## Documentation server deployment
 
 `docs.yml` always keeps GitHub Pages deployment enabled. A second deployment uploads the same

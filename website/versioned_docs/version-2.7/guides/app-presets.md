@@ -43,8 +43,8 @@ check the reported results before retrying. Post-install hook warnings retain th
 
 Reinstalling a category preserves files changed since installation, including managed JSON keys.
 Shine also skips the generator for a file that the reviewed Plan marks for preservation. To
-explicitly replace modified managed content, preview `shine app install starship --force --dry-run`
-and then review `shine app install starship --force`.
+explicitly replace modified managed content, preview `shine app install starship --replace-managed --dry-run`
+and then review `shine app install starship --replace-managed`.
 
 App changes using the same configuration directory run one at a time. After waiting, Shine checks
 the reviewed Plan again; if the affected state changed, review a new Plan before retrying. A lock
@@ -174,7 +174,14 @@ only the selected App. Both automatic and `auto = false` manual generators parti
 flag is explicit. External or overlay generator evaluation with `--run-generators` still requires matching scoped trust;
 interactive lifecycle operations can obtain one-time code consent. Generator
 failures do not stop evaluation of the remaining selection, but the command returns nonzero after
-reporting incomplete results.
+reporting incomplete results. Cancellation, command-wide analysis budget exhaustion, or an analyzer
+failure that prevents safe continuation stops the remaining work.
+
+Before execution, supported App Bun code is checked against its declarations. A definite difference
+or parse failure prevents that script from starting; existing trust does not override it. Other
+independent selected files may still be evaluated. See [App code checks](custom-presets.md#check-app-code-before-execution)
+for fixes, coverage limits and author tools. Evaluation still does not install files, update receipts,
+or run hooks or artifacts.
 
 Refresh applies only to generated files already tracked by the App manifest. After adding a new
 generated `[[files]]` entry, run `shine install app/<CATEGORY>` once before refreshing that source.
@@ -265,8 +272,7 @@ Preset authors should call the underlying script from a lifecycle hook rather th
 `app artifact apply` inside the hook.
 When an install or upgrade changes managed files for a category that declares an artifact, Shine
 prints the explicit apply command. It prints nothing when no managed files changed.
-Scripts receive configured `[artifact].env` sources only, and those sources must also be listed in
-the category's `[permissions].environment`, plus path variables such as
+Scripts receive configured sources from their structured `[artifact].env` entries, plus path variables such as
 `SHINE_CACHE_DIR` and `SHINE_STATE_DIR`. See
 [Tasks and application artifacts](./tasks-and-serve.md) for the complete variable list.
 
@@ -372,8 +378,8 @@ Preset authors can declare `post_install` and `post_upgrade`. The former runs af
 actually writes files. The latter runs only when `shine upgrade` updates at least one file in that
 category. Unchanged categories do not trigger hooks.
 
-Bind every environment input a hook consumes with its `env` list and declare the same names under
-the category permission declaration. Values are not displayed in the Plan. Missing required
+Declare each environment input a hook consumes with `source`, optional `target`, and `sensitivity`
+in its structured `env` list; no duplicate category environment declaration is needed. Values are not displayed in the Plan. Missing required
 environment inputs block approval; optional script inputs are omitted from the child environment.
 
 Each hook declares exactly one action. `command` runs the declared command and arguments. `script`
@@ -383,31 +389,23 @@ rules as artifacts and generators.
 
 ```toml
 post_upgrade = [
-  { command = "my-reloader", env = ["API_URL", "API_TOKEN"] },
+  { command = "my-reloader", env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }] },
 ]
 
 [permissions]
 schema_version = 1
-environment = [
-  { name = "API_URL", sensitivity = "plain" },
-  { name = "API_TOKEN", sensitivity = "secret" },
-]
 ```
 
 ```toml
 post_upgrade = [{
   script = "refresh.ts",
   runtime = "bun",
-  env = ["API_URL", "API_TOKEN"],
+  env = [{ source = "API_URL", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }],
 }]
 
 [permissions]
 schema_version = 1
 network = [{ scope = "any" }]
-environment = [
-  { name = "API_URL", sensitivity = "plain" },
-  { name = "API_TOKEN", sensitivity = "secret" },
-]
 ```
 
 For persistent authorization of external hooks and generators, use target-scoped trust.

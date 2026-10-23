@@ -21,7 +21,7 @@ pub use recovery::handle_recover_approved;
 pub use refresh::handle_refresh_approved;
 pub use uninstall::handle_uninstall_approved;
 pub use upgrade::AppUpgradeReport;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) use upgrade::handle_upgrade_installed_target_with_result;
 pub(crate) use upgrade::{
     handle_upgrade_installed_target_with_result_approved,

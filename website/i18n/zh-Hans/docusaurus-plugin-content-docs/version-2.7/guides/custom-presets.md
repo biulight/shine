@@ -107,6 +107,41 @@ shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 未使用 `--force` 时，如果其他进程在打包期间创建了输出文件，Shine 会保留该文件并以
 `output_exists` 失败。
 
+## 执行前检查 App 代码
+
+Shine 会自动检查 App 的 Bun generator、脚本 hook、artifact 和 teardown，以及能够解析的本地
+JavaScript/TypeScript 依赖。源码行为与声明存在确定差异，或受支持的源码解析失败时，会阻止执行。
+根据报告的文件和位置修复：准确声明预期行为，或修改脚本使其符合声明。trust、`--yes` 和
+`opaque_code = "unrestricted"` 都不能绕过此检查。
+
+使用 `shine preset lint <PATH>` 检查所有 App 代码入口，包括当前缺少触发输入的 generator。
+`preset plan` 和 `preset test` 只检查假设输入下选中的入口，并在报告中显示范围；跳过的入口不算匹配。
+这些检查不会执行脚本、下载依赖或读取真实环境值。
+
+动态目标、包依赖、子进程效果和不支持的语言等覆盖缺口只作提示；未被源码印证的声明也不阻断，
+可在详细审阅中查看。这些结果都不代表代码安全或已被完整分析。没有诊断时，常规审阅不增加分析
+输出；原有 trust 和批准检查仍然适用。
+
+普通审阅会在每个入口内汇总重复的覆盖缺口，显示数量和一个示例位置。详细生命周期审阅
+（`--verbose`）及作者 Plan 仍保留全部位置。显式检查时，`info --verbose` 或 `--diff`、`update`
+详细视图和 `app info` 也会显示其求值范围内的全部位置。这些展示模式不会启用执行；generator
+求值仍须显式传入 `--run-generators`，并通过原有信任检查。
+`preset lint` 文本按类别和诊断含义汇总重复分析告警；
+使用 `shine preset lint <PATH> --format json` 可查看被检查源码入口的全部诊断。
+错误始终逐条展示。汇总计数仍包含每条诊断，`--deny-warnings` 的退出行为不变；
+显示行数减少不代表覆盖缺口减少。
+Lint 会检查所有受支持的源码入口，因此其报告可能与运行时检查所选入口及环境映射不同。
+
+使用结构化 `env` 映射时，在同一项中声明 `source`、可选 `target` 与 `plain`/`secret` 敏感性；脚本读取目标名。
+只有文档列出的固定变量可以免于重复声明，任意 `SHINE_` 前缀名称不能获得豁免。不要把环境值或
+URL 凭据写入能力声明。源码位置采用从 1 开始的行号和 UTF-8 字节列号。
+
+工具集成在升级后应重新读取 `preset schema`：lint 报告使用 schema 2，作者 Plan 报告使用 schema 3，
+fixture 报告使用 schema 2。Fixture 输入仍为 schema 1；可用 `expect.analysis_diagnostic_codes`
+配合 `ready` 断言诊断。正确预期阻断的用例可以通过，但取消或命令累计预算耗尽不能成为成功的负向
+测试。`complete = false` 表示作者报告未完成，fixture 报告还会列出 `unfinished_cases`。
+生命周期 Plan／批准／审阅契约使用 schema 3；应重新审阅，不能复用旧批准。
+
 ## 迁移 1.x 来源
 
 可预览当前激活的 external source 与 overlay，也可以指定仓库、类别或 manifest：
@@ -117,7 +152,9 @@ shine preset migrate ./my-presets --dry-run
 shine preset migrate ./my-presets
 ```
 
-迁移器显示 unified metadata diff，确认默认是 No。它只修改 `shine.toml`，校验候选内容、复查来源
+迁移器显示 unified metadata diff，确认默认是 No。支持颜色的终端以绿色显示新增、红色显示删除。
+自动颜色遵循 `NO_COLOR`；重定向时使用纯文本，除非显式强制颜色，例如设置 `FORCE_COLOR=1`。
+它只修改 `shine.toml`，校验候选内容、复查来源
 hash，并在写入前创建完整的私有备份集；payload、脚本、值、runtime manifest 与 trust grant 都不会
 改变。若 executable identity 未变化，精确匹配已发布 1.x 内置 metadata 的文件可 rebase；旧版
 App 可以补齐当前 metadata，而不添加能力说明。缺少可选能力表无需迁移，含 opaque code
@@ -133,7 +170,7 @@ App 可以补齐当前 metadata，而不添加能力说明。缺少可选能力�
 权限 schema v1/v2 表是可选的作者能力说明。App 在类别根部使用 `[permissions]`；Shell 的每个
 `[[files]]` 命令可使用 `[files.permissions]`；Sys 的每个 `[[items]]` target 可使用
 `[items.permissions]`。Shine 会校验任何显式提供的表，但缺表或空表不会隐藏或约束任意代码。
-不支持的版本、未知字段、非法 identity 和重复项均为错误。
+受支持的 App 代码仍须准确声明静态分析识别出的行为。不支持的版本、未知字段、非法 identity 和重复项均为错误。
 
 ```toml
 [permissions]
@@ -179,8 +216,8 @@ target = "bar"
 Filesystem base 只接受 `home`、`shine`、`data-dir`、`preset` 或 `absolute`；非绝对路径必须是
 规范化相对路径，`.` 表示所选 base 的根。Command 只能填写一个不带参数的 program identity。
 Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。不要重复 typed metadata
-已表达的命令、脚本路径、普通 destination 或固定 package provider；只有在有助于审阅时才添加
-可选说明。
+已表达的命令、脚本路径、普通 destination 或固定 package provider。App 脚本中被静态分析识别的
+行为仍须声明；其他说明可用于帮助审阅者理解预期效果。
 
 `opaque_code = "unrestricted"` 是可选的审阅 metadata。即使省略该字段或整张表，Core 仍会把
 App hook、generator、artifact、安装或 source 的 Shell 命令，以及 Sys script/profile code 自动
@@ -261,21 +298,21 @@ source = "compress.ts"
 target = "img-compress"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 
 [[files]]
 source = "resize.ts"
 target = "img-resize"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }, { source = "IMAGE_MAX_WIDTH", sensitivity = "plain" }, { source = "IMAGE_MAX_HEIGHT", sensitivity = "plain" }]
 
 [[files]]
 source = "convert.ts"
 target = "img-convert"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 ```
 
 这个类别包含三个入口文件和一个共享实现，使用
@@ -514,6 +551,35 @@ dest = { base = "data-dir", path = "com.example.my-app" }
 
 如果两个条目最终指向同一路径，Shine 会在写入前拒绝整个操作。后续 metadata 若移动已受管 source，`shine upgrade` 只会在旧文件未被修改且新目标不存在时迁移；否则保留两端现状并提示用户处理。
 
+## 声明运行时环境输入
+
+Shell Bun 命令与 App 的 generator、hook 和 artifact 使用结构化 `env`：
+
+```toml
+env = [
+  { source = "API_URL", sensitivity = "plain" },
+  { source = "SERVICE_TOKEN", target = "API_TOKEN", sensitivity = "secret" },
+]
+```
+
+`target` 默认为 `source`。只声明名称与敏感性，不填写值或密文。每个入口只接收自身声明的 Shine
+输入，不会获得同类别其他入口的输入。同一有效权限范围内，同一来源的敏感性必须一致。
+敏感性描述权限契约，本身不会加密或解密变量。App 保留现有配置值读取行为，Shell 保留密文优先读取。
+generator 的 `when_env` 仍填写其 `env` 列表中的来源名称，继续作为独立的启用条件。
+
+预设元数据不再接受 `env = ["SOURCE=TARGET"]` 等旧字符串数组。相关命令会提示迁移，其他命令不会
+自动迁移文件。请显式预览并应用转换：
+
+```bash
+shine preset migrate ./my-presets --dry-run
+shine preset migrate ./my-presets
+```
+
+迁移读取旧声明中的显式敏感性，保留别名和条件，并在写入前备份元数据。缺少或冲突的敏感性需要人工
+修正。Git 管理的 overlay 必须在上游 checkout 中迁移。迁移不会运行脚本、解密值、授予信任或更新
+已安装 launcher 及恢复记录。外部快照变化后需重新审阅信任；迁移后通过正常 install/upgrade 更新安装。
+命令行 `shine env run --with SOURCE=TARGET` 语法保持不变。
+
 ## 可选运行时的 Shell 入口
 
 `runtime` 用于选择 Shell 预设命令入口的运行时，而不是新增交互式 shell。未声明时使用原生 `.sh` 或 `.ps1` 入口；当前唯一可选值是 `bun`。请在类别的 `shine.toml` 中显式声明：
@@ -524,7 +590,7 @@ source = "my-tool.ts"
 target = "my-tool"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
+env = [{ source = "API_URL", sensitivity = "plain" }, { source = "SERVICE_TOKEN", target = "API_TOKEN", sensitivity = "secret" }]
 ```
 
 支持 `.ts`、`.js`、`.mts` 和 `.mjs`。安装后，Shine 会创建无扩展名的受管入口，用户仍以 `my-tool` 调用它；现有 `.sh` 和 `.ps1` 原生入口保持兼容。
@@ -533,7 +599,7 @@ env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
 `node_modules`；外部类别可以按上文约定启用由 Bun 管理的锁定依赖。`runtime = "bun"` 也不能与
 `needs_source = true` 组合使用。
 
-可选的 `env` 只适用于 Bun 入口。每项写成 `KEY` 或 `SOURCE=TARGET`；入口启动时会通过 `shine env run --no-workspace --with ...` 注入值，因此优先解密 `SOURCE_SECRET`，不存在时读取明文 `SOURCE`。声明 `env` 后，运行机器的 `PATH` 中还必须有 `shine`。不要在元数据中填写值或密文，只声明键名。
+可选的 `env` 只适用于 Bun 入口。每项声明 `source`、可选 `target`（默认为来源名称）及必填的 `sensitivity = "plain"` 或 `"secret"`；入口启动时会通过 `shine env run --no-workspace --with ...` 注入值，因此优先解密 `SOURCE_SECRET`，不存在时读取明文 `SOURCE`。声明 `env` 后，运行机器的 `PATH` 中还必须有 `shine`。不要在元数据中填写值或密文，只声明键名。
 
 后续支持的运行时会在本节逐项记录其支持值、文件类型、前提条件和限制。Python、Node 与 Deno 目前均不可配置为 `runtime`。
 
@@ -597,13 +663,12 @@ App 类别的 `[artifact]` 也可选择 Bun，使 `build` 与 `unbuild` 脚本�
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
-env = ["PROFILE_PATH", "API_TOKEN"]
+env = [{ source = "PROFILE_PATH", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }]
 ```
 
 `runtime` 省略时为 `native`，直接执行脚本；`bun` 仅接受 `.ts`、`.js`、`.mts` 或 `.mjs`，并要求
-运行机器已安装 Bun。只有 `env` allowlist 中的 Shine `[env]` 变量会传给 artifact，也可写成
-`SOURCE=TARGET` alias；每个 source 及其敏感度还必须在类别
-`[permissions].environment` 中声明。allowlist 中未配置的可选值会被省略；固定 app 路径变量会
+运行机器已安装 Bun。只有 `env` allowlist 中的 Shine `[env]` 变量会传给 artifact；每项同时声明来源、
+可选目标别名与敏感性，无需在 `[permissions].environment` 重复声明。allowlist 中未配置的可选值会被省略；固定 app 路径变量会
 另外加入。若希望安装或升级实际改动
 文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设须人工确认生命周期 Plan
 或已有匹配 grant。钩子不能递归调用 artifact 生命周期命令；应使用受支持的 artifact 配置和显式操作。

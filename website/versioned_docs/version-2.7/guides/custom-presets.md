@@ -122,6 +122,49 @@ Existing ancestors must be directories: a path such as `file/../bundle.tar.gz` f
 Without `--force`, an output created by another process during packing is preserved and the command
 fails with `output_exists`.
 
+## Check App code before execution
+
+Shine automatically checks App Bun generators, script hooks, artifacts and teardown scripts,
+including resolvable local JavaScript/TypeScript dependencies. A definite difference between the
+code and its declarations, or a supported-source parse failure, blocks execution. Fix the reported
+file and position: declare the intended behavior accurately, or change the script to fit its
+declarations. Trust, `--yes`, and `opaque_code = "unrestricted"` do not bypass this check.
+
+Run `shine preset lint <PATH>` to examine all App code entries, including generators whose inputs
+are absent. `preset plan` and `preset test` examine only entries selected by their hypothetical
+inputs. Their reports show that scope; skipped entries are not reported as matches. These checks
+do not run scripts, download dependencies, or read real environment values.
+
+Coverage gaps, such as dynamic targets, package dependencies, subprocess effects and unsupported
+languages, are advisory. Declarations not corroborated by the analyzed source are also advisory
+and appear in detailed review. Neither means the code is safe or fully analyzed. Reports without
+diagnostics add no ordinary output; existing trust and approval checks still apply.
+
+Ordinary reviews summarize repeated coverage gaps within each entry, showing a count and an
+example location. Detailed lifecycle reviews (`--verbose`) and author Plans retain every location.
+For explicit inspection, `info --verbose` or `--diff`, detailed `update` views, and `app info`
+also show every location in their evaluated scope. These display modes do not enable execution;
+generator evaluation still requires `--run-generators` and the existing trust checks.
+`preset lint` text groups repeated analysis warnings by category and diagnostic meaning; use
+`shine preset lint <PATH> --format json` for all diagnostics across the checked source entries.
+Errors remain individually visible. Summary counts still include every diagnostic, and
+`--deny-warnings` keeps the same exit behavior; fewer displayed rows do not mean fewer coverage gaps.
+Lint checks all supported source entries, so its report can differ from a runtime inspection's
+selected entries and environment mappings.
+
+For structured `env` mappings, declare `source`, optional `target`, and `plain`/`secret`
+`sensitivity` together; the script reads the target name. Only documented fixed variables are exempt, not
+arbitrary names beginning with `SHINE_`. Never put environment values or URL credentials in a
+capability declaration. Source locations use one-based lines and UTF-8 byte columns.
+
+Tool consumers should read `preset schema` again after upgrading: lint reports use schema 2,
+author Plan reports schema 3, and fixture reports schema 2. Fixture input schema 1 is unchanged;
+`expect.analysis_diagnostic_codes` can assert diagnostic codes alongside `ready`. A correctly
+expected blocked case can pass, but cancellation or command-wide budget exhaustion cannot become
+a successful negative test. `complete = false` identifies incomplete author reports, and fixture
+reports list `unfinished_cases`. Lifecycle Plan/approval/review contracts use schema 3; obtain a
+new review instead of reusing an older approval.
+
 ## Migrate a 1.x source
 
 Preview the active external source and overlay, or name a repository, category, or manifest:
@@ -132,7 +175,9 @@ shine preset migrate ./my-presets --dry-run
 shine preset migrate ./my-presets
 ```
 
-The migrator shows unified metadata diffs and confirmation defaults to No. It edits only
+The migrator shows unified metadata diffs and confirmation defaults to No. Supported terminals
+show additions in green and deletions in red. Automatic colors respect `NO_COLOR`; redirected
+output is plain unless color is explicitly forced, for example with `FORCE_COLOR=1`. It edits only
 `shine.toml`, validates the candidate, rechecks source hashes, and creates a complete private backup
 set before writing. Payloads, scripts, values, runtime manifests, and trust grants are untouched.
 Text backup paths escape terminal controls; backup contents and JSON report identifiers are unchanged.
@@ -151,7 +196,8 @@ upstream checkout, commit there, and pull the mirror again.
 Permission schema v1/v2 tables are optional author capability statements. App statements belong to
 the category root, each Shell `[[files]]` command can have `[files.permissions]`, and each Sys
 `[[items]]` target can have `[items.permissions]`. Shine validates any table you provide, but a
-missing or empty table does not hide or constrain arbitrary code. Unsupported versions, unknown
+missing or empty table does not hide or confine arbitrary code. Supported App code still needs
+accurate declarations for statically identified behavior. Unsupported versions, unknown
 fields, invalid identities, and duplicates are errors.
 
 ```toml
@@ -201,8 +247,8 @@ Filesystem bases are `home`, `shine`, `data-dir`, `preset`, or `absolute`; non-a
 normalized relative paths, with `.` meaning the selected base root. Commands contain one program
 identity without arguments. Environment entries contain names and `plain`/`secret` sensitivity,
 never values or ciphertext. Do not repeat commands, script paths, ordinary destinations, or fixed
-package providers already present in typed metadata. Add optional statements only when they help a
-reviewer understand intended effects.
+package providers already present in typed metadata. Declare statically identified App script
+effects; additional statements can help reviewers understand intended effects.
 
 `opaque_code = "unrestricted"` is optional review metadata. Core automatically marks App hooks,
 generators and artifacts, installed or sourced Shell commands, and Sys scripts/profile code as
@@ -298,21 +344,21 @@ source = "compress.ts"
 target = "img-compress"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 
 [[files]]
 source = "resize.ts"
 target = "img-resize"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }, { source = "IMAGE_MAX_WIDTH", sensitivity = "plain" }, { source = "IMAGE_MAX_HEIGHT", sensitivity = "plain" }]
 
 [[files]]
 source = "convert.ts"
 target = "img-convert"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_QUALITY"]
+env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 ```
 
 The category includes three entry files plus a shared implementation using
@@ -602,6 +648,40 @@ metadata revision moves an already managed source, `shine upgrade` moves it only
 is unmodified and the new destination is free. Otherwise both locations are left untouched for the
 user to resolve.
 
+## Declare runtime environment inputs
+
+Shell Bun commands and App generators, hooks, and artifacts use structured `env` entries:
+
+```toml
+env = [
+  { source = "API_URL", sensitivity = "plain" },
+  { source = "SERVICE_TOKEN", target = "API_TOKEN", sensitivity = "secret" },
+]
+```
+
+`target` defaults to `source`. Declare names and sensitivity only, never values or ciphertext.
+Each entry receives only its own declared Shine inputs; a category's other inputs are not added.
+Sensitivity must agree wherever the same source is declared in the effective permission scope.
+It describes the permission contract and does not itself encrypt or decrypt a value. App inputs
+keep their existing configured-value behavior; Shell inputs retain encrypted-first lookup.
+Generator `when_env` still names a source from its `env` list and remains a separate condition.
+
+Legacy string arrays such as `env = ["SOURCE=TARGET"]` are no longer accepted in preset metadata.
+Relevant commands report a migration hint; unrelated commands do not automatically migrate files.
+Review and apply the conversion explicitly:
+
+```bash
+shine preset migrate ./my-presets --dry-run
+shine preset migrate ./my-presets
+```
+
+Migration reads the old explicit sensitivity declarations, preserves aliases and conditions, and
+backs up metadata before applying changes. Missing or conflicting sensitivity requires manual
+correction. Git-managed overlays must be migrated in their upstream checkout. Migration does not
+run scripts, decrypt values, grant trust, or update installed launchers and recovery records.
+Changed external snapshots require renewed trust review. Use normal install/upgrade after migration.
+The command-line `shine env run --with SOURCE=TARGET` syntax is unchanged.
+
 ## Shell entries with an optional runtime
 
 `runtime` selects the runtime for a shell preset command entry; it does not add an interactive shell.
@@ -614,7 +694,7 @@ source = "my-tool.ts"
 target = "my-tool"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
+env = [{ source = "API_URL", sensitivity = "plain" }, { source = "SERVICE_TOKEN", target = "API_TOKEN", sensitivity = "secret" }]
 ```
 
 Supported extensions are `.ts`, `.js`, `.mts`, and `.mjs`. Shine creates a managed entry without an
@@ -625,7 +705,7 @@ Every device that runs the command needs Bun in `PATH`. Shine does not install B
 `node_modules`; external categories may opt into Bun-managed locked packages as described above.
 `runtime = "bun"` cannot be combined with `needs_source = true`.
 
-The optional `env` list applies only to Bun entries. Each item is `KEY` or `SOURCE=TARGET`. The entry
+The optional `env` list applies only to Bun entries. Each item declares `source`, optional `target` (defaults to `source`), and required `sensitivity = "plain"` or `"secret"`. The entry
 injects values through `shine env run --no-workspace --with ...`, preferring `SOURCE_SECRET` and then
 plain `SOURCE`. When `env` is declared, the machine must also have `shine` in `PATH`. Declare only key
 names in metadata—never values or ciphertext.
@@ -698,13 +778,13 @@ An application's `[artifact]` can also use Bun for cross-platform apply and tear
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
-env = ["PROFILE_PATH", "API_TOKEN"]
+env = [{ source = "PROFILE_PATH", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }]
 ```
 
 The default is `native`, which executes the script directly. `bun` accepts only `.ts`, `.js`, `.mts`,
 or `.mjs` and requires Bun on the machine. `env` is the only Shine `[env]` allowlist passed to the
-artifact and supports `SOURCE=TARGET` aliases; declare each source and sensitivity again under the
-category's `[permissions].environment`. Listed sources are forwarded only when configured; missing
+artifact. Each entry declares its source, optional target alias, and sensitivity together; no duplicate
+`[permissions].environment` entry is needed. Listed sources are forwarded only when configured; missing
 optional values are omitted. Fixed application path variables are added separately. To
 run an artifact automatically after installation or upgrade actually changes files, declare
 `post_install` or `post_upgrade`; external presets require human confirmation of the lifecycle Plan

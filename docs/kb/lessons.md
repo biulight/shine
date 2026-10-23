@@ -11,7 +11,7 @@
   continue using the unchanged report. Lint's all-entry scope is not the runtime triggered scope.
 - **Verification**: [P2 presentation evidence](architecture/code-analysis.md#diagnostic-presentation)
   records byte-identical JSON, shorter built-in output and consumer-boundary regressions.
-- **Follow-up**: wire existing inspection detail modes through to the analysis renderer. An
+- **Follow-up review**: wired existing inspection detail modes through to the analysis renderer. An
   all-entry lint report cannot substitute for full locations in a runtime-selected scope.
 
 ## 2026-10-23 — Operand trivia and binding identity affect admission

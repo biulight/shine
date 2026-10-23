@@ -44,7 +44,7 @@ pub(crate) async fn handle_upgrade_installed_with_output_with_result_prepared(
     .await
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) async fn handle_upgrade_installed_target_with_result(
     config: &Config,
     category_filter: Option<&str>,

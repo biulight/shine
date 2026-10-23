@@ -47,6 +47,15 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   cargo-binstall support justify a minor rather than patch release. Keep the implemented behavior
   and disclose the cleanup scope and removal of `--purge` from scripts in CHANGELOG and both manual
   locales. This exception does not change the general versioning rule above.
+- **2.7.0 release exception (2026-10-24):** the maintainer chose a minor release for structured
+  Preset environment inputs and App code analysis despite incompatible metadata, report, Rust
+  library source and admission changes. New fields in public `shine-core` structs require consumers
+  to adapt direct initializers and exhaustive patterns. Legacy string `env` arrays require explicit
+  migration; definite code differences and analysis failures can block previously executable scripts.
+  Plan/approval/review and author Plan schemas become 3; lint and fixture report schemas become 2, while fixture input
+  schema 1 stays supported. Source builds require Rust 1.90. Disclose these changes and the manual
+  migration path in CHANGELOG and both manual locales; preserve existing runtime state, trust
+  requirements and non-blocking coverage gaps. This exception does not change the general rule above.
 - A versioned release candidate uses `X.Y.Z-rc.N`. It is a reproducible prerelease, does not
   replace the latest stable release, and does not trigger the stable `release` → `main` sync.
 - Generated RC notes cover the immediately preceding versioned tag; generated stable notes cover
