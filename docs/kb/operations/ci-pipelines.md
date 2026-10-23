@@ -126,8 +126,8 @@ Accepted `release` commit:
 The push contained `14eac507` (four P1 fixes, syntax-boundary review repairs and regressions under
 analysis rule version 6) and `aa9b81f8` (isolated native verification evidence). The fixes cover
 operand comments, lexical mutation identity, default-parameter scope and loader identity without
-changing trust, approval or non-blocking coverage-gap semantics. P2 diagnostic aggregation remains
-deferred.
+changing trust, approval or non-blocking coverage-gap semantics. P2 diagnostic aggregation was
+deferred at this checkpoint.
 
 The [CI run](https://github.com/biulight/shine/actions/runs/39962137705) and
 [MSRV run](https://github.com/biulight/shine/actions/runs/39962137736) both target that exact SHA and
@@ -150,6 +150,40 @@ These full workspace CI results supplement the earlier
 at `14eac507`; they apply to the accepted head, not to subsequent documentation commits. The push
 changed no public manual, website or documentation-workflow paths, so `docs.yml` was not triggered
 and no documentation deployment is claimed.
+
+## Code-analysis P2 acceptance (2026-10-23)
+
+Accepted `release` commit:
+[`5da9fa466623d8b53661832f08d2d914169227a6`](https://github.com/biulight/shine/commit/5da9fa466623d8b53661832f08d2d914169227a6).
+The push included `771f3028` (P1 CI evidence) and `5da9fa46` (P2 diagnostic aggregation, detail-view
+review fixes, tests, bilingual manual and KB updates). Ordinary text summarizes repeated advisory
+analysis diagnostics; errors remain individual, and existing detailed inspection modes retain all
+locations. Core reports, JSON, admission, trust and approval contracts are unchanged.
+
+The [CI run](https://github.com/biulight/shine/actions/runs/39976619157),
+[MSRV run](https://github.com/biulight/shine/actions/runs/39976619175), and
+[documentation run](https://github.com/biulight/shine/actions/runs/39976619213) all target that exact
+SHA and finished with `completed / success` on attempt 1. No CI repair commit or workflow rerun
+was required.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,769 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/39976619157/job/120492772336) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 2,032 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/39976619157/job/120492772311) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 2,034 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/39976619157/job/120492772513) |
+| Quality | Bun typecheck and 78 tests, formatting, compilation, Preset authoring examples, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/39976619157/job/120492772092) |
+| MSRV | Rust 1.90.0 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/39976619175/job/120492771688) |
+| Documentation build | Typecheck, version checks, locale parity and all-locale build passed | [Build job](https://github.com/biulight/shine/actions/runs/39976619213/job/120492772674) |
+| GitHub Pages deployment | Succeeded | [Pages job](https://github.com/biulight/shine/actions/runs/39976619213/job/120493321128) |
+| Documentation server deployment | Succeeded | [Server job](https://github.com/biulight/shine/actions/runs/39976619213/job/120493320389) |
+
+All three native test jobs reported zero LEAK results under the existing strict policy. Windows
+retained the known unused-item warnings in unchanged CLI code; Ubuntu quality Clippy passed with
+warnings denied. These full workspace CI results supplement the
+[local and targeted native P2 evidence](../architecture/code-analysis.md#diagnostic-presentation)
+and apply to the accepted head, not subsequent documentation commits. The bilingual manual changes
+triggered the documentation workflow and both deployments; this internal KB update alone does not
+match that workflow's path filters.
 
 ## Documentation server deployment
 

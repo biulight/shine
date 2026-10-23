@@ -5,6 +5,8 @@ scope assessment is complete. Core, Frontend, CLI and native checks are suppleme
 Windows/Linux/macOS CI, Rust 1.90 MSRV and documentation validation at `39edf006` (2026-10-22).
 The subsequent rule-version-6 P1 fixes passed full native CI, quality and MSRV at `aa9b81f8`;
 see the [P1 CI acceptance record](../operations/ci-pipelines.md#code-analysis-p1-acceptance-2026-10-23).
+P2 presentation and detail-view fixes passed native CI, quality, MSRV and documentation build/deploy
+at `5da9fa46`; see the [P2 CI acceptance record](../operations/ci-pipelines.md#code-analysis-p2-acceptance-2026-10-23).
 Contract: [ADR 0150](../decisions/0150-preset-code-analysis-admission.md).
 
 ## Source rules, version 6
@@ -96,7 +98,10 @@ macOS all-feature nextest after review passed 2,034 tests with two skips; strict
 locale parity, website typecheck and both locale builds passed. The initial sandbox run could not
 bind SSH test sockets; the permitted full rerun passed. Renderer and real CLI regressions cover
 distinct behavior groups, error retention, full JSON, warning exits, encoded locations and
-pre-execution rejection. No CI run has been triggered for this P2 change.
+pre-execution rejection. The later push passed full Windows/Linux/macOS workspace CI, quality,
+Rust 1.90 MSRV and documentation build/deploy at `5da9fa46`; the
+[final CI record](../operations/ci-pipelines.md#code-analysis-p2-acceptance-2026-10-23)
+links exact jobs and keeps these earlier local and targeted native checks separate.
 
 Follow-up review found that explicit inspection had hard-coded compact analysis rendering even
 in detailed views. Real CLI regressions reproduced the missing expansion before repair and now
