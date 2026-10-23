@@ -338,31 +338,14 @@ pub(super) fn migration_diff(edit: &PresetMigrationEdit, managed_overlay: Option
     // controls still reach the shared safe renderer; candidate/hash bytes do not.
     let old = old.replace("\r\n", "\n");
     let new = new.replace("\r\n", "\n");
-    let path = escape_controls(&edit.logical_path);
-    // similar's line tokenizer also treats bare CR as a terminator. Split on
-    // LF ourselves and keep bare CR in the content, including at a missing EOF LF.
-    let old_lines = old.split_inclusive('\n').collect::<Vec<_>>();
-    let new_lines = new.split_inclusive('\n').collect::<Vec<_>>();
-    let diff = similar::TextDiff::from_slices(&old_lines, &new_lines);
-    let mut unified = String::new();
-    for hunk in diff.unified_diff().iter_hunks() {
-        if unified.is_empty() {
-            let _ = writeln!(unified, "--- a/{path}\n+++ b/{path}");
-        }
-        let _ = writeln!(unified, "{}", hunk.header());
-        for change in hunk.iter_changes() {
-            let line = change.value();
-            let _ = writeln!(
-                unified,
-                "{}{}",
-                change.tag(),
-                line.strip_suffix('\n').unwrap_or(line)
-            );
-            if !line.ends_with('\n') {
-                let _ = writeln!(unified, "\\ No newline at end of file");
-            }
-        }
-    }
+    let unified = crate::output::unified_text_diff(
+        &old,
+        &new,
+        Some((
+            &format!("a/{}", edit.logical_path),
+            &format!("b/{}", edit.logical_path),
+        )),
+    );
     output.push_str(&crate::output::colorize_unified_diff(&unified));
     output
 }

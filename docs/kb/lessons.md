@@ -1,5 +1,19 @@
 # Lessons Learned
 
+## 2026-10-24 — Share LF-only diff construction without sharing business comparisons
+
+- **Symptom**: App/Shell Info and update previews still replaced every line across CRLF/LF inputs.
+  A standalone CR split `similar::TextDiff::from_lines` tokens but did not supply a rendered LF,
+  joining deletion/addition rows and suppressing the missing-final-LF marker at bare-CR EOF.
+- **Fix**: all CLI text diffs share LF-only tokenization and complete hunk construction in
+  `output::unified_text_diff`. Info/update normalize uniform CRLF only on display copies, identify
+  both styles and report EOL-only changes explicitly; mixed LF/CRLF retains per-line evidence.
+- **Boundary**: keep raw status/hash/write semantics, migration candidate preservation, canonical
+  broker TOML and separate stdout/SSH-TTY encoding. Sys three-way merge remains independent.
+- **Coverage**: exact hunk/EOF/header/multiple-hunk/long-line cases, isolated App/Shell Info and
+  update paths with unchanged files/receipts/trust, canonical policy CR data, and existing rejection,
+  replay, contention, stale-preview and complete long-policy approval tests.
+
 ## 2026-10-24 — Metadata migration preserves checkout line endings before review
 
 - **Symptom**: Windows migration previews replaced every metadata line and displayed `\r` on

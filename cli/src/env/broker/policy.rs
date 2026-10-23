@@ -292,11 +292,7 @@ impl RemoteEnrollmentPlan {
         };
         let old = toml::to_string_pretty(previous)?;
         let new = toml::to_string_pretty(&self.candidate)?;
-        Ok(Some(
-            similar::TextDiff::from_lines(&old, &new)
-                .unified_diff()
-                .to_string(),
-        ))
+        Ok(Some(crate::output::unified_text_diff(&old, &new, None)))
     }
 }
 

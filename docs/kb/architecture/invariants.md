@@ -96,6 +96,11 @@ bugs. Check this list before changing the modules named in each entry.
   verbose content keeps the existing lossy UTF-8 decoding and missing-final-newline behavior.
   Info diff file labels encode controls before unified-diff construction, so path newlines cannot
   become structural diff lines. Missing Shell script/snapshot notices also encode their paths.
+  CLI migration, Info/update and broker policy diffs share LF-only line construction and explicit
+  missing-final-LF markers; bare CR never splits or joins rendered change rows. Info/update display
+  uniform CRLF on LF copies with both styles identified and explicitly report EOL-only changes.
+  Mixed LF/CRLF retains individual terminators in the escaped diff. Raw content/status comparisons,
+  hashes and installation bytes remain exact; Sys merge semantics stay separate.
   Local broker policy diff/update share stdout-aware diff encoding
   and colors; serialized comparison data, default-No confirmation and locked policy revalidation
   remain unchanged. SSH enrollment retains its separate local-TTY rendering and approval boundary.
@@ -296,7 +301,7 @@ bugs. Check this list before changing the modules named in each entry.
   refusal, or remaining blocker fails the command even when independent safe edits have converged.
   Terminal summaries encode data before wrapping; diff headers encode logical paths before diff
   construction and body rendering preserves
-  structural newlines while encoding CR/TAB/ESC. Migration alone displays paired CRLF as LF on
+  structural newlines while encoding CR/TAB/ESC. Migration displays paired CRLF as LF on
   presentation copies with a notice; bare CR/TAB/ESC remain encoded. Migration and info share
   stdout-aware diff colors after encoding, retaining existing forced-color overrides as well as
   `NO_COLOR` and ordinary redirection detection. Display escapes and colors never enter candidates or JSON.

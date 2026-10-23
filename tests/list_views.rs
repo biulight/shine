@@ -161,6 +161,174 @@ fn assert_hint_argv(command: &str, expected: &[&str]) {
 }
 
 #[test]
+fn app_diff_previews_preserve_byte_status_and_files_across_line_endings() {
+    for (current, expected, fragment) in [
+        (
+            "head\r\nold\r\nend\r\n",
+            "head\nnew\nend\n",
+            "@@ -1,3 +1,3 @@\n head\n-old\n+new\n end\n",
+        ),
+        ("same\r\n", "same\n", "Only line endings differ.\n"),
+        (
+            "head\nold\rtail\r",
+            "head\nnew\rtail\r",
+            "@@ -1,2 +1,2 @@\n head\n-old\\rtail\\r\n\\ No newline at end of file\n+new\\rtail\\r\n\\ No newline at end of file\n",
+        ),
+        (
+            "head\r\nend\n",
+            "head\nend\r\n",
+            "@@ -1,2 +1,2 @@\n-head\\r\n-end\n+head\n+end\\r\n",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let preset = fixture.0.join("state/presets/app/demo");
+        let destination_dir = fixture.0.join("destination");
+        fs::create_dir_all(&preset).unwrap();
+        fs::create_dir_all(&destination_dir).unwrap();
+        let metadata = format!(
+            "metadata_schema_version=2\ndest={:?}\n[[files]]\nsource='config.txt'\n",
+            destination_dir.to_str().unwrap()
+        );
+        fs::write(preset.join("shine.toml"), &metadata).unwrap();
+        fs::write(preset.join("config.txt"), expected).unwrap();
+        let destination = destination_dir.join("config.txt");
+        fs::write(&destination, current).unwrap();
+        let receipt = format!(
+            "schema_version=1\n[[entries]]\nsource='app/demo/config.txt'\ndestination={:?}\ncontent_hash={}\n",
+            destination.to_str().unwrap(),
+            shine_core::install::hash_content(current.as_bytes())
+        );
+        let state = fixture.0.join("state");
+        fs::write(state.join("app-manifest.toml"), &receipt).unwrap();
+        let config = fs::read(state.join("config.toml")).unwrap();
+        for args in [
+            vec!["app", "info", "demo", "--diff"],
+            vec!["info", "app/demo", "--diff"],
+            vec!["update", "app/demo", "--diff"],
+            vec!["update", "--diff"],
+        ] {
+            let output = fixture.run(&args);
+            success(&output);
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let text = stdout(&output);
+            assert!(text.contains(fragment), "{args:?}: {text:?}");
+            // Even an EOL-only source update remains a real byte-level update.
+            assert!(text.contains("update available"), "{text:?}");
+            assert!(
+                text.chars().all(|ch| !ch.is_control() || ch == '\n'),
+                "{text:?}"
+            );
+            if fragment.starts_with("Only") {
+                assert!(text.contains("current CRLF, expected LF (displayed as LF)"));
+                assert!(!text.contains("@@ "), "{text:?}");
+            }
+            assert_eq!(fs::read(&destination).unwrap(), current.as_bytes());
+            assert_eq!(
+                fs::read(preset.join("config.txt")).unwrap(),
+                expected.as_bytes()
+            );
+            assert_eq!(
+                fs::read_to_string(preset.join("shine.toml")).unwrap(),
+                metadata
+            );
+            assert_eq!(
+                fs::read_to_string(state.join("app-manifest.toml")).unwrap(),
+                receipt
+            );
+            assert_eq!(fs::read(state.join("config.toml")).unwrap(), config);
+            for absent in ["trust.toml", "shell-manifest.toml", "installed", "rendered"] {
+                assert!(!state.join(absent).exists(), "unexpected {absent}");
+            }
+        }
+    }
+}
+
+#[test]
+fn shell_diff_previews_keep_snapshot_bytes_and_lf_line_structure() {
+    for (current, expected, fragment) in [
+        (
+            "head\r\nold\r\nend\r\n",
+            "head\nnew\nend\n",
+            "@@ -1,3 +1,3 @@\n head\n-old\n+new\n end\n",
+        ),
+        ("same\r\n", "same\n", "Only line endings differ.\n"),
+        (
+            "head\nold\rtail\r",
+            "head\nnew\rtail\r",
+            "@@ -1,2 +1,2 @@\n head\n-old\\rtail\\r\n\\ No newline at end of file\n+new\\rtail\\r\n\\ No newline at end of file\n",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let state = fixture.0.join("state");
+        let preset = state.join("presets/shell/demo");
+        let installed = state.join("installed/shell/demo");
+        for path in [&preset, &installed] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+        let metadata =
+            format!("metadata_schema_version=2\n[[files]]\nsource='{script}'\ntarget='tool'\n");
+        for path in [&preset, &installed] {
+            fs::write(path.join("shine.toml"), &metadata).unwrap();
+        }
+        fs::write(preset.join(script), expected).unwrap();
+        fs::write(installed.join(script), current).unwrap();
+        let receipt = toml::to_string(&serde_json::json!({
+            "schema_version": 2,
+            "entries": [{
+                "category": "demo", "command": "tool", "mode": "snapshot",
+                "source_path": installed.join(script),
+                "rendered_path": state.join("rendered/shell/demo").join(script),
+                "runtime": "native", "content_hash": shine_core::install::hash_content(current.as_bytes())
+            }]
+        })).unwrap();
+        fs::write(state.join("shell-manifest.toml"), &receipt).unwrap();
+        let config = fs::read(state.join("config.toml")).unwrap();
+        for args in [
+            vec!["info", "shell/demo/tool", "--diff"],
+            vec!["update", "shell/demo/tool", "--diff"],
+            vec!["update", "--diff"],
+        ] {
+            let output = fixture.run(&args);
+            success(&output);
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let text = stdout(&output);
+            assert!(text.contains(fragment), "{args:?}: {text:?}");
+            assert!(text.contains("update available"), "{text:?}");
+            assert!(
+                text.chars().all(|ch| !ch.is_control() || ch == '\n'),
+                "{text:?}"
+            );
+            assert_eq!(
+                fs::read(installed.join(script)).unwrap(),
+                current.as_bytes()
+            );
+            assert_eq!(fs::read(preset.join(script)).unwrap(), expected.as_bytes());
+            for path in [&preset, &installed] {
+                assert_eq!(
+                    fs::read_to_string(path.join("shine.toml")).unwrap(),
+                    metadata
+                );
+            }
+            assert_eq!(
+                fs::read_to_string(state.join("shell-manifest.toml")).unwrap(),
+                receipt
+            );
+            assert_eq!(fs::read(state.join("config.toml")).unwrap(), config);
+            for absent in [
+                "trust.toml",
+                "app-manifest.toml",
+                "rendered",
+                "bin/tool",
+                "bin/tool.cmd",
+            ] {
+                assert!(!state.join(absent).exists(), "unexpected {absent}");
+            }
+        }
+    }
+}
+
+#[test]
 fn app_info_diff_escapes_terminal_controls_without_mutating_content_or_state() {
     let fixture = Fixture::new();
     let destination_dir = fixture.0.join(if cfg!(unix) {

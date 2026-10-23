@@ -258,6 +258,10 @@ Installed App/Shell details shown by `info` escape controls in labels, descripti
 headings. `info --verbose` leaves control characters in the displayed file content unchanged.
 Content diffs shown by `info`, `app info`, and `update` escape control characters within lines
 (for example, a tab appears as `\t`). File contents remain unchanged.
+Uniform CRLF is displayed as LF with a notice naming each side's line endings. An EOL-only change
+reports `Only line endings differ` and still counts as an available update. Mixed LF/CRLF keeps
+individual line endings visible as `\r`; standalone CR also stays visible within its line.
+A missing final newline is marked explicitly. These diffs are review previews, not patches.
 
 `info <TARGET>` and `update <TARGET>` limit deferred-generator notices to the selected App category
 or file. Shell queries do not suggest generator evaluation. Explicit `--run-generators` evaluation

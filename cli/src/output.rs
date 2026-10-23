@@ -33,6 +33,44 @@ pub(crate) fn escape_controls(value: &str) -> String {
         .collect()
 }
 
+/// Build a complete plain diff, splitting only on LF so bare CR remains content.
+/// Callers choose comparison/display bytes and render the body with their stdout or TTY encoder.
+pub(crate) fn unified_text_diff(old: &str, new: &str, labels: Option<(&str, &str)>) -> String {
+    use std::fmt::Write as _;
+
+    let old_lines = old.split_inclusive('\n').collect::<Vec<_>>();
+    let new_lines = new.split_inclusive('\n').collect::<Vec<_>>();
+    let diff = similar::TextDiff::from_slices(&old_lines, &new_lines);
+    let mut unified = String::new();
+    for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
+        if unified.is_empty()
+            && let Some((old, new)) = labels
+        {
+            let _ = writeln!(
+                unified,
+                "--- {}\n+++ {}",
+                escape_controls(old),
+                escape_controls(new)
+            );
+        }
+        let _ = writeln!(unified, "{}", hunk.header());
+        for change in hunk.iter_changes() {
+            let line = change.value();
+            let _ = writeln!(
+                unified,
+                "{}{}",
+                change.tag(),
+                line.strip_suffix('\n').unwrap_or(line)
+            );
+            // similar also counts a final bare CR as a newline; only LF terminates our lines.
+            if !line.ends_with('\n') {
+                let _ = writeln!(unified, "\\ No newline at end of file");
+            }
+        }
+    }
+    unified
+}
+
 /// Render a single-file unified diff for stdout, escaping source controls before styling.
 pub(crate) fn colorize_unified_diff(diff: &str) -> String {
     let mut out = String::with_capacity(diff.len());
@@ -252,6 +290,62 @@ fn pad_plain(visible_len: usize, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_diff_uses_lf_lines_and_escapes_headers_before_construction() {
+        let diff = unified_text_diff(
+            "head\nold\rtail\nend\n",
+            "head\nnew\rtail\nend\n",
+            Some(("current\n--- forged\t", "expected\u{1b}")),
+        );
+        assert_eq!(
+            diff,
+            "--- current\\n--- forged\\t\n+++ expected\\u{1b}\n@@ -1,3 +1,3 @@\n head\n-old\rtail\n+new\rtail\n end\n"
+        );
+        let rendered = colorize_unified_diff(&diff);
+        let rendered = console::strip_ansi_codes(&rendered);
+        assert!(rendered.contains("-old\\rtail\n+new\\rtail\n"));
+        assert!(rendered.chars().all(|ch| !ch.is_control() || ch == '\n'));
+    }
+
+    #[test]
+    fn text_diff_preserves_final_newline_changes_and_bare_cr_at_eof() {
+        for (old, new, expected) in [
+            ("", "x", "@@ -0,0 +1 @@\n+x\n\\ No newline at end of file\n"),
+            ("x\n", "", "@@ -1 +0,0 @@\n-x\n"),
+            (
+                "x",
+                "x\n",
+                "@@ -1 +1 @@\n-x\n\\ No newline at end of file\n+x\n",
+            ),
+            (
+                "old\r",
+                "new\r",
+                "@@ -1 +1 @@\n-old\r\n\\ No newline at end of file\n+new\r\n\\ No newline at end of file\n",
+            ),
+        ] {
+            assert_eq!(unified_text_diff(old, new, None), expected);
+        }
+        assert!(unified_text_diff("same\r\n", "same\r\n", Some(("a", "b"))).is_empty());
+    }
+
+    #[test]
+    fn text_diff_keeps_all_hunks_and_long_changed_suffixes() {
+        let middle = (0..20)
+            .map(|i| format!("context {i}\n"))
+            .collect::<String>();
+        let prefix = "x".repeat(8192);
+        let old = format!("old\n{middle}{prefix}OLD");
+        let new = format!("new\n{middle}{prefix}NEW");
+        let diff = unified_text_diff(&old, &new, Some(("a", "b")));
+        assert_eq!(diff.matches("--- a\n+++ b\n").count(), 1);
+        assert_eq!(diff.matches("@@ -").count(), 2);
+        for (sign, suffix) in [('-', "OLD"), ('+', "NEW")] {
+            assert!(diff.contains(&format!(
+                "{sign}{prefix}{suffix}\n\\ No newline at end of file\n"
+            )));
+        }
+    }
 
     #[test]
     fn unified_diff_styles_headers_and_hunk_content_without_trusting_source_controls() {

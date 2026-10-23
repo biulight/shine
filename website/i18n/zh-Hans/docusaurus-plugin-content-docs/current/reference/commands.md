@@ -207,6 +207,9 @@ Shell 脚本或受管快照缺失时，`info --diff` 会报告缺失路径，并
 `info --verbose` 所展示的文件内容中的控制字符保持原样。
 `info`、`app info` 和 `update` 显示内容差异时，会转义行内的控制字符
 （例如将制表符显示为 `\t`），文件内容保持不变。
+统一使用 CRLF 的文件会按 LF 展示，并注明两侧的换行格式。仅换行不同会报告
+`Only line endings differ`，仍计为可用更新。混合 LF/CRLF 会保留逐行差异，将 CR 显示为
+`\r`；独立 CR 也会保留在原行内显示。缺少末尾换行时会明确标记。这些 diff 用于审阅，不能直接作为补丁。
 
 `info <TARGET>` 和 `update <TARGET>` 仅针对选中的 App 分类或文件提示生成器未评估，
 查询 Shell 目标时不会建议评估生成器。显式传入 `--run-generators` 时，即使目标是单个文件，

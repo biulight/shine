@@ -941,6 +941,13 @@ transforms, and manual-generator behavior stay identical to `shine info --diff` 
 operation. Target mode returns after the config check and does not perform the binary release check;
 managed sys resources keep their structured receipt differences instead.
 
+CLI text diffs use `output::unified_text_diff` for LF-only tokenization, safely encoded headers,
+complete hunks and explicit missing-final-LF markers. Info/update alone prepare uniform CRLF display
+copies and annotate each side's style, including EOL-only changes; mixed LF/CRLF stays byte-visible.
+Migration retains its own candidate-preserving display preparation. Local and SSH broker diffs
+still compare canonical TOML without display normalization, then use their existing stdout or
+local-TTY encoder. No display rule changes Core status, raw hashes or approval/recheck ordering.
+
 ## Generated app files
 
 An app `[[files]]` entry may declare
