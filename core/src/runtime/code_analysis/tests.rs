@@ -63,6 +63,54 @@ async fn plan_prepares_once_and_locked_planning_only_consumes() {
 }
 
 #[tokio::test]
+async fn shadowed_and_replaced_builtins_do_not_block_lifecycle_approval() {
+    for code in [
+        "export {}; function* fetch(url) { yield url; } fetch('https://fake.invalid');",
+        "import fs from 'node:fs'; const alias = fs; alias.readFileSync = () => 'ok'; fs.readFileSync('config');",
+    ] {
+        let runtime = runtime(code, "", true);
+        let plan = runtime
+            .plan_apps(request(LifecycleOperation::Install))
+            .await
+            .unwrap();
+        assert!(plan.is_ready(), "{plan:?}");
+        assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_ok());
+        let diagnostics = &plan.code_analysis[0].scope.report.diagnostics;
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.code == "code_analysis_call_unknown")
+        );
+        assert!(!diagnostics.iter().any(Diagnostic::blocking));
+    }
+}
+
+#[tokio::test]
+async fn preserved_builtin_calls_still_block_lifecycle_approval() {
+    for code in [
+        "import fs from 'node:fs'; const read = fs.readFileSync; const alias = fs; alias.readFileSync = () => 'ok'; read('private');",
+        "import fs from 'node:fs'; const alias = fs; alias.custom = 1; fs.readFileSync('private');",
+        "import fs from 'node:fs'; function run() { const read = original; read('private'); } const original = fs.readFileSync; run();",
+    ] {
+        let runtime = runtime(code, "", true);
+        let plan = runtime
+            .plan_apps(request(LifecycleOperation::Install))
+            .await
+            .unwrap();
+        assert!(!plan.is_ready(), "{plan:?}");
+        assert!(PlanApprovalV1::for_reviewed_plan(&plan).is_err());
+        assert!(
+            plan.code_analysis[0]
+                .scope
+                .report
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::Difference)
+        );
+    }
+}
+
+#[tokio::test]
 async fn definite_difference_blocks_approval_with_gaps_retained() {
     let runtime = runtime(
         "fetch('https://example.org'); Bun.spawn(['curl']);",

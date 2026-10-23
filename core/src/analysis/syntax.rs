@@ -19,23 +19,72 @@ struct Binding {
     value: Option<String>,
 }
 
+struct Mutation {
+    first: usize,
+    scope: Option<(usize, usize)>,
+}
+
+fn record_mutation(
+    mutations: &mut BTreeMap<String, Mutation>,
+    path: String,
+    position: (usize, usize, usize),
+) {
+    let (offset, start, end) = position;
+    mutations
+        .entry(path)
+        .and_modify(|mutation| {
+            mutation.first = mutation.first.min(offset);
+            if mutation.scope != Some((start, end)) {
+                mutation.scope = None;
+            }
+        })
+        .or_insert(Mutation {
+            first: offset,
+            scope: Some((start, end)),
+        });
+}
+
 #[derive(Default)]
-struct Bindings(BTreeMap<String, Vec<Binding>>);
+struct Bindings {
+    names: BTreeMap<String, Vec<Binding>>,
+    mutations: BTreeMap<String, Mutation>,
+}
 impl Bindings {
     fn push(&mut self, binding: Binding) {
-        self.0
+        self.names
             .entry(binding.name.clone())
             .or_default()
             .push(binding);
     }
     fn named(&self, name: &str) -> &[Binding] {
-        self.0.get(name).map(Vec::as_slice).unwrap_or(&[])
+        self.names.get(name).map(Vec::as_slice).unwrap_or(&[])
     }
     fn named_mut(&mut self, name: &str) -> &mut [Binding] {
-        self.0
+        self.names
             .get_mut(name)
             .map(Vec::as_mut_slice)
             .unwrap_or(&mut [])
+    }
+
+    fn unchanged(&self, path: &str, capture: Option<(usize, usize, usize)>) -> bool {
+        self.mutations.get(path).is_none_or(|mutation| {
+            // Only a preceding capture in the same function can retain the
+            // original value. Cross-function execution order is unknown.
+            capture.is_some_and(|(at, start, end)| {
+                at < mutation.first && mutation.scope == Some((start, end))
+            })
+        })
+    }
+
+    fn member(
+        &self,
+        object: &str,
+        key: &str,
+        capture: Option<(usize, usize, usize)>,
+    ) -> Option<String> {
+        let member = format!("{object}.{key}");
+        (self.unchanged(&member, capture) && self.unchanged(&format!("{object}.*"), capture))
+            .then_some(member)
     }
 }
 
@@ -207,7 +256,7 @@ pub(super) fn parse(
                     });
                 }
             }
-            "function_declaration" | "class_declaration" => {
+            "function_declaration" | "generator_function_declaration" | "class_declaration" => {
                 if let Some(name) = node.child_by_field_name("name") {
                     let mut scope = scope(node.parent().unwrap_or(*node));
                     if node.kind() == "function_declaration" && !module && scope.kind() != "program"
@@ -308,39 +357,31 @@ pub(super) fn parse(
             _ => {}
         }
     }
-    // Resolve only immutable, direct aliases. Any assignment to a binding below
-    // invalidates it conservatively, independent of traversal order.
-    for node in &nodes {
-        if node.kind() != "variable_declarator" {
-            continue;
-        }
-        let (Some(name), Some(value)) = (
-            node.child_by_field_name("name"),
-            node.child_by_field_name("value"),
-        ) else {
-            continue;
-        };
-        if name.kind() != "identifier" || !node.parent().is_some_and(|p| has_token(p, "const")) {
-            continue;
-        }
-        let value = expression(value, bytes, &bindings);
-        let s = scope(*node);
-        if let Some(binding) = bindings
-            .named_mut(text(name, bytes))
-            .iter_mut()
-            .take(128)
-            .find(|b| {
-                b.name == text(name, bytes) && b.start == s.start_byte() && b.end == s.end_byte()
-            })
-        {
-            binding.value = value;
-        }
-    }
+    let aliases = nodes
+        .iter()
+        .rev()
+        .filter_map(|node| {
+            if node.kind() != "variable_declarator"
+                || !node.parent().is_some_and(|p| has_token(p, "const"))
+            {
+                return None;
+            }
+            let name = node.child_by_field_name("name")?;
+            let value = node.child_by_field_name("value")?;
+            (name.kind() == "identifier").then_some((*node, name, value))
+        })
+        .collect::<Vec<_>>();
+    resolve_aliases(session, &aliases, bytes, &mut bindings, &BTreeSet::new())?;
+    // Capture object identities before invalidating any spelling. Otherwise the
+    // traversal order could hide a later mutation through another alias.
+    let mut mutations: BTreeMap<String, Mutation> = BTreeMap::new();
+    let mut mutated_names = BTreeSet::new();
     for node in &nodes {
         if matches!(
             node.kind(),
             "assignment_expression" | "augmented_assignment_expression" | "update_expression"
-        ) {
+        ) || (node.kind() == "unary_expression" && has_token(*node, "delete"))
+        {
             let target = node
                 .child_by_field_name("left")
                 .or_else(|| node.child_by_field_name("argument"));
@@ -353,36 +394,55 @@ pub(super) fn parse(
                 {
                     continue;
                 }
-                let mut root = target;
-                while let Some(object) = root.child_by_field_name("object") {
-                    root = object;
-                }
-                let name = text(root, bytes);
-                if name == "globalThis" {
-                    for name in ["Bun", "process", "fetch", "eval", "require"] {
-                        bindings.push(Binding {
-                            name: name.into(),
-                            start: 0,
-                            end: bytes.len(),
-                            value: None,
-                        });
+                let location = function_scope(*node);
+                let position = (
+                    node.start_byte(),
+                    location.start_byte(),
+                    location.end_byte(),
+                );
+                if let Some(object_node) = target.child_by_field_name("object") {
+                    if text(object_node, bytes) == "globalThis" {
+                        if let Some(key) = member_key(target, bytes) {
+                            record_mutation(&mut mutations, key, position);
+                        } else {
+                            for name in ["Bun", "process", "fetch", "eval", "require"] {
+                                record_mutation(&mut mutations, name.into(), position);
+                            }
+                        }
+                    } else if let Some(object) = expression(object_node, bytes, &bindings) {
+                        let key = member_key(target, bytes).unwrap_or_else(|| "*".into());
+                        record_mutation(&mut mutations, format!("{object}.{key}"), position);
                     }
-                }
-
-                for b in bindings.named_mut(name) {
-                    b.value = None;
-                }
-                if matches!(name, "Bun" | "process" | "fetch" | "eval" | "require") {
-                    bindings.push(Binding {
-                        name: name.into(),
-                        start: 0,
-                        end: bytes.len(),
-                        value: None,
-                    });
+                } else {
+                    let name = text(target, bytes);
+                    if bindings.named(name).is_empty()
+                        && matches!(name, "Bun" | "process" | "fetch" | "eval" | "require")
+                    {
+                        record_mutation(&mut mutations, name.into(), position);
+                    } else {
+                        mutated_names.insert(name.to_string());
+                    }
                 }
             }
         }
     }
+    for name in &mutated_names {
+        for binding in bindings.named_mut(name) {
+            binding.value = None;
+        }
+    }
+    bindings.mutations = mutations;
+    // Recompute captured values with member mutations applied at each initializer.
+    // Copied function values do not re-read the object's subsequently changed slot.
+    for (node, name, _) in &aliases {
+        let scope = scope(*node);
+        for binding in bindings.named_mut(text(*name, bytes)) {
+            if binding.start == scope.start_byte() && binding.end == scope.end_byte() {
+                binding.value = None;
+            }
+        }
+    }
+    resolve_aliases(session, &aliases, bytes, &mut bindings, &mutated_names)?;
     for node in nodes {
         session.check()?;
         if node.kind() == "call_expression" || node.kind() == "new_expression" {
@@ -620,6 +680,49 @@ pub(super) fn parse(
     Ok(facts)
 }
 
+fn resolve_aliases(
+    session: &mut Session,
+    aliases: &[(Node<'_>, Node<'_>, Node<'_>)],
+    bytes: &[u8],
+    bindings: &mut Bindings,
+    mutated_names: &BTreeSet<String>,
+) -> Result<(), TerminalFailure> {
+    // Bounded fixed point supports closures referring to later initialized consts;
+    // cycles and chains beyond the bound retain unknown-call diagnostics.
+    for _ in 0..64 {
+        let mut changed = false;
+        for &(node, name, value) in aliases {
+            session.nodes += 1;
+            session.budget()?;
+            if mutated_names.contains(text(name, bytes)) {
+                continue;
+            }
+            let function = function_scope(node);
+            let capture = Some((
+                node.start_byte(),
+                function.start_byte(),
+                function.end_byte(),
+            ));
+            let value = expression_at(value, bytes, bindings, capture);
+            let scope = scope(node);
+            if let Some(binding) = bindings
+                .named_mut(text(name, bytes))
+                .iter_mut()
+                .take(128)
+                .find(|b| b.start == scope.start_byte() && b.end == scope.end_byte())
+                && binding.value != value
+            {
+                binding.value = value;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(())
+}
+
 fn descendants(node: Node<'_>) -> Vec<Node<'_>> {
     let mut result = Vec::new();
     let mut pending = vec![node];
@@ -647,6 +750,7 @@ fn function_scope(mut node: Node<'_>) -> Node<'_> {
         if matches!(
             node.kind(),
             "function_declaration"
+                | "generator_function_declaration"
                 | "function_expression"
                 | "arrow_function"
                 | "generator_function"
@@ -725,6 +829,14 @@ fn member_key(node: Node<'_>, bytes: &[u8]) -> Option<String> {
     }
 }
 fn expression(node: Node<'_>, bytes: &[u8], bindings: &Bindings) -> Option<String> {
+    expression_at(node, bytes, bindings, None)
+}
+fn expression_at(
+    node: Node<'_>,
+    bytes: &[u8],
+    bindings: &Bindings,
+    capture: Option<(usize, usize, usize)>,
+) -> Option<String> {
     // Bound recursion independently of hostile expression depth.
     let mut node = node;
     let mut keys = Vec::new();
@@ -745,8 +857,7 @@ fn expression(node: Node<'_>, bytes: &[u8], bindings: &Bindings) -> Option<Strin
                 )?;
                 let mut value = builtin(&spec)?.to_string();
                 for key in keys.into_iter().rev() {
-                    value.push('.');
-                    value.push_str(&key);
+                    value = bindings.member(&value, &key, capture)?;
                 }
                 return Some(value);
             }
@@ -776,13 +887,15 @@ fn expression(node: Node<'_>, bytes: &[u8], bindings: &Bindings) -> Option<Strin
                     name,
                     "process" | "Bun" | "fetch" | "eval" | "require" | "import"
                 ) {
+                    if !bindings.unchanged(name, capture) {
+                        return None;
+                    }
                     name.to_string()
                 } else {
                     return None;
                 };
                 for key in keys.into_iter().rev() {
-                    value.push('.');
-                    value.push_str(&key);
+                    value = bindings.member(&value, &key, capture)?;
                 }
                 return Some(value);
             }

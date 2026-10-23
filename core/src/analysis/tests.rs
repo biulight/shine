@@ -76,6 +76,180 @@ fn builtin_alias_and_parameter_shadowing_are_distinct() {
 }
 
 #[test]
+fn generator_declarations_shadow_globals_without_leaking_local_bindings() {
+    for extension in ["js", "ts"] {
+        for source in [
+            "export {}; function* fetch(url) { yield url; } fetch('https://fake.invalid');",
+            "export {}; async function* fetch(url) { yield url; } fetch('https://fake.invalid');",
+            "export {}; function* run() { var fetch = other; fetch('https://fake.invalid'); }",
+        ] {
+            let input = BTreeMap::from([(format!("main.{extension}"), source.as_bytes())]);
+            let r = Session::default()
+                .analyze(
+                    &input,
+                    &format!("main.{extension}"),
+                    None,
+                    &EnvironmentContract::default(),
+                )
+                .unwrap();
+            assert!(r.allowed, "{source}: {r:?}");
+            assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+            // A generator's local var must not shadow the real global outside it.
+            let source = format!("{source}\nfetch('https://real.invalid');");
+            if source.contains("function* run") {
+                let r = report(&source, None);
+                assert_eq!(differences(&r), 1, "{r:?}");
+            }
+        }
+    }
+    let r = report(
+        "export {}; { function* fetch() {} } fetch('https://real.invalid');",
+        None,
+    );
+    assert_eq!(differences(&r), 1, "{r:?}");
+}
+
+#[test]
+fn object_alias_mutations_invalidate_shared_builtin_identity() {
+    for source in [
+        "import fs from 'node:fs'; const alias = fs; alias.readFileSync = () => 'ok'; fs.readFileSync('config');",
+        "import fs from 'node:fs'; const alias = fs; fs.readFileSync = () => 'ok'; alias.readFileSync('config');",
+        "import fs from 'node:fs'; const first = fs; const second = first; second.readFileSync = () => 'ok'; fs.readFileSync('config');",
+        "import fs from 'node:fs'; const alias = fs; alias.readFileSync = other; fs.writeFileSync = other; alias.readFileSync('config');",
+        "const alias = require('node:fs'); alias.readFileSync = other; require('node:fs').readFileSync('config');",
+        "const alias = Bun; alias.write = other; Bun.write('config', 'ok');",
+        "import fs from 'node:fs'; const alias = fs; delete alias.readFileSync; fs.readFileSync('config');",
+    ] {
+        let r = report(source, None);
+        assert!(r.allowed, "{source}: {r:?}");
+        assert!(has(&r, "code_analysis_call_unknown"), "{source}: {r:?}");
+        // Invalidating one object must not hide an unrelated real network call.
+        let r = report(&format!("{source}\nfetch('https://real.invalid');"), None);
+        assert_eq!(differences(&r), 1, "{source}: {r:?}");
+    }
+    for source in [
+        "import fs from 'node:fs'; const alias = fs; alias.readFileSync('config');",
+        "import fs from 'node:fs'; function local(alias) { alias.readFileSync = other; } fs.readFileSync('config');",
+        "import fs from 'node:fs'; let alias = fs; alias = other; fs.readFileSync('config');",
+    ] {
+        assert_eq!(differences(&report(source, None)), 1, "{source}");
+    }
+}
+
+#[test]
+fn member_mutations_preserve_captured_functions_and_unrelated_members() {
+    for (source, expected) in [
+        (
+            "import fs from 'node:fs'; const read = fs.readFileSync; const alias = fs; alias.readFileSync = () => 'ok'; read('private');",
+            1,
+        ),
+        (
+            "import fs from 'node:fs'; const alias = fs; alias.custom = 1; fs.readFileSync('private');",
+            1,
+        ),
+        (
+            "import fs from 'node:fs'; const alias = fs; alias.readFileSync = other; fs.writeFileSync('private', 'data');",
+            1,
+        ),
+        (
+            "import fs from 'node:fs'; const alias = fs; alias.readFileSync = other; const read = fs.readFileSync; read('private');",
+            0,
+        ),
+        (
+            "import fs from 'node:fs'; const read = fs.readFileSync; delete fs.readFileSync; read('private');",
+            1,
+        ),
+        (
+            "import fs from 'node:fs'; const alias = fs; alias[key] = other; fs.readFileSync('private');",
+            0,
+        ),
+        (
+            "import fs from 'node:fs'; function run() { const read = fs.readFileSync; read('private'); } fs.readFileSync = other; run();",
+            0,
+        ),
+        (
+            "const request = fetch; globalThis.fetch = other; request('https://real.invalid');",
+            1,
+        ),
+        (
+            "globalThis.fetch = other; const request = fetch; request('https://fake.invalid');",
+            0,
+        ),
+        (
+            "import fs from 'node:fs'; function local() { const fs = other; } fs.readFileSync('private');",
+            1,
+        ),
+    ] {
+        for extension in ["js", "ts"] {
+            let file = format!("main.{extension}");
+            let input = BTreeMap::from([(file.clone(), source.as_bytes())]);
+            let r = Session::default()
+                .analyze(&input, &file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert_eq!(differences(&r), expected, "{extension}: {source}: {r:?}");
+            assert!(!has(&r, "code_analysis_parse_failure"), "{r:?}");
+            if expected == 0 {
+                assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn immutable_alias_resolution_handles_forward_closures_chains_and_cycles() {
+    for (source, expected) in [
+        (
+            "import fs from 'node:fs'; function run() { const read = original; read('private'); } const original = fs.readFileSync; run();",
+            1,
+        ),
+        (
+            "import fs from 'node:fs'; const first = fs; const second = first; second.readFileSync('private');",
+            1,
+        ),
+        (
+            "import fs from 'node:fs'; function run() { const read = original; read('private'); } const original = fs.readFileSync; fs.readFileSync = other; run();",
+            1,
+        ),
+        (
+            "import fs from 'node:fs'; function run() { const read = original; read('private'); } fs.readFileSync = other; const original = fs.readFileSync; run();",
+            0,
+        ),
+        (
+            "import fs from 'node:fs'; function run(original) { const read = original; read('private'); } const original = fs.readFileSync;",
+            0,
+        ),
+        (
+            "const first = second; const second = first; first('private');",
+            0,
+        ),
+    ] {
+        let r = report(source, None);
+        assert_eq!(differences(&r), expected, "{source}: {r:?}");
+        assert!(!has(&r, "code_analysis_parse_failure"), "{r:?}");
+    }
+    let mut session = Session::new(
+        Limits {
+            nodes: 200,
+            ..Limits::default()
+        },
+        Arc::new(AtomicBool::new(false)),
+    );
+    let chain = (0..20)
+        .map(|i| format!("const a{i} = a{};", i + 1))
+        .collect::<String>()
+        + "const a20 = fetch; a0('https://real.invalid');";
+    assert_eq!(
+        session.analyze(
+            &sources(&chain),
+            "main.ts",
+            None,
+            &EnvironmentContract::default()
+        ),
+        Err(TerminalFailure::Budget)
+    );
+}
+
+#[test]
 fn environment_mapping_is_per_entry_and_source_cache_is_shared() {
     let mut session = Session::default();
     let code = sources("const value = process.env.TARGET; const fixed = Bun.env.SHINE_APP_ID;");

@@ -26,8 +26,16 @@ paths, behavior classes, codes and optional opaque target hashes; no source exce
 | Bun files | `Bun.write`; direct `Bun.file(literal).text/json/arrayBuffer/bytes/stream/exists/delete/writer` | Constructing a BunFile alone is not a read; indirect BunFile aliases and dynamic paths are gaps |
 | Commands | `Bun.spawn[Sync]`, Node `spawn[Sync]`, `execFile[Sync]`, `fork`; literal executable or first literal array element | `fork` module paths and Node options are not treated as definite executable identities; every subprocess retains an independent effects gap; dynamic executable adds an identity gap; shell `exec[Sync]` is dynamic code |
 | Dynamic code | Unshadowed `eval`, dynamic `require`, `import`, recognized Bun shell invocation | No execution, remote module download or recursive subprocess analysis |
-| Bindings | Builtin namespace/default/named imports and named import aliases; direct immutable `const` aliases; parameter/block/function/catch/loop shadowing | Ambiguous/reassigned bindings and unsupported calls are gaps; no flow-sensitive propagation or interpretation of arbitrary values |
+| Bindings | Builtin namespace/default/named imports and named import aliases; immutable `const` aliases including forward references in closures; parameter/block/function/generator/catch/loop shadowing | Ambiguous/reassigned bindings and unsupported calls are gaps; member mutations propagate across supported object aliases without invalidating unrelated members or previously captured function values; no general control-flow analysis or interpretation of arbitrary values |
 | Dependencies | Static imports/re-exports and literal `require`; category-relative paths, cycles, exact filenames or unique extension/index candidate | Escapes, missing/ambiguous dependencies, unsupported builtin APIs/languages and packages have stable gap codes; no host module resolution |
+
+Rule version 3 includes generator declarations as lexical bindings and function scopes. Alias
+resolution uses at most 64 fixed-point passes, charged to the command node budget; cycles and
+unresolved chains remain gaps. Member mutation identities are collected before invalidating names.
+An initializer preceding a mutation in the same function may retain the original member value;
+cross-function mutation order remains unknown. Dynamic property writes invalidate members of that
+object conservatively. This keeps replaced methods unknown without hiding unrelated members or
+functions already captured before replacement.
 
 Uncorroborated declarations do not block. They also do not remove gaps. Known command identity
 plus a subprocess gap remains incomplete even if file/network declarations are supplied.

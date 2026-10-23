@@ -1,5 +1,19 @@
 # Lessons Learned
 
+## 2026-10-23 — Builtin analysis must account for generator scopes and object aliases
+
+- **Evidence**: isolated `preset lint` rejected a local `function* fetch` as a network call and
+  treated `fs.readFileSync` as a file read after replacement through `const alias = fs`.
+- **Cause**: generator declarations were absent from binding/function-scope recognition; mutation
+  invalidated only the written spelling, leaving aliases of the same object classified as builtins.
+- **Fix**: recognize generator scopes and collect canonical member mutations before invalidating
+  bindings. Whole-object invalidation hid unrelated methods and previously copied functions;
+  one source-order pass missed forward closure references. Use bounded alias resolution and
+  member-level invalidation with initializer capture positions under analysis rule version 3.
+- **Coverage**: parser regressions cover generator/local-var scopes, chained and forward aliases,
+  cycles/budgets, CommonJS, Bun, deletion, capture before/after replacement and unaffected calls;
+  Core Plan regressions verify both approval acceptance and rejection.
+
 ## 2026-10-23 — Metadata grammar changes include shipped authoring examples
 
 - **Evidence**: push CI for `27feeeca` rejected the Shell example's legacy string `env` during
