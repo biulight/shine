@@ -163,9 +163,20 @@ fn assert_hint_argv(command: &str, expected: &[&str]) {
 #[test]
 fn app_info_diff_escapes_terminal_controls_without_mutating_content_or_state() {
     let fixture = Fixture::new();
-    fixture.app(false);
-    let source = fixture.0.join("state/presets/app/demo/config.txt");
-    let destination = fixture.0.join("destination/config.txt");
+    let destination_dir = fixture.0.join(if cfg!(unix) {
+        "destination\nFORGED_HEADER"
+    } else {
+        "destination"
+    });
+    let preset = fixture.0.join("state/presets/app/demo");
+    fs::create_dir_all(&preset).unwrap();
+    let metadata = format!(
+        "metadata_schema_version = 2\ndest = {:?}\n[[files]]\nsource = 'config.txt'\n",
+        destination_dir.to_str().unwrap()
+    );
+    fs::write(preset.join("shine.toml"), &metadata).unwrap();
+    let source = preset.join("config.txt");
+    let destination = destination_dir.join("config.txt");
     fs::create_dir_all(destination.parent().unwrap()).unwrap();
     let current = b"context\x07\nold\x1b[2J\t\nend\n";
     let expected = b"context\x07\nnew\x1b[H\rREPLACED\t\nend\n";
@@ -173,10 +184,22 @@ fn app_info_diff_escapes_terminal_controls_without_mutating_content_or_state() {
     fs::write(&destination, current).unwrap();
     let config = fs::read(fixture.0.join("state/config.toml")).unwrap();
 
-    let output = fixture.run(&["app", "info", "demo", "--diff"]);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+    command
+        .args(["app", "info", "demo", "--diff"])
+        .env_remove("FORCE_COLOR")
+        .env_remove("CLICOLOR_FORCE");
+    let output = fixture.run_command(command);
     success(&output);
     assert!(output.stderr.is_empty(), "{output:?}");
     let text = stdout(&output);
+    assert!(
+        text.contains(&format!(
+            "--- {}\n+++ expected: app/demo/config.txt\n@@ ",
+            destination.display().to_string().replace('\n', "\\n")
+        )),
+        "{text:?}"
+    );
     // Uninstalled App info previews the expected content against an empty file.
     for escaped in ["+context\\u{7}", "+new\\u{1b}[H", "\\r", "REPLACED\\t"] {
         assert!(text.contains(escaped), "missing {escaped:?} in {text:?}");
@@ -186,6 +209,10 @@ fn app_info_diff_escapes_terminal_controls_without_mutating_content_or_state() {
         "raw control character in {text:?}"
     );
     assert_eq!(fs::read(&source).unwrap(), expected);
+    assert_eq!(
+        fs::read_to_string(preset.join("shine.toml")).unwrap(),
+        metadata
+    );
     assert_eq!(fs::read(&destination).unwrap(), current);
     assert_eq!(
         fs::read(fixture.0.join("state/config.toml")).unwrap(),
@@ -193,6 +220,72 @@ fn app_info_diff_escapes_terminal_controls_without_mutating_content_or_state() {
     );
     for state in ["app-manifest.toml", "trust.toml"] {
         assert!(!fixture.0.join("state").join(state).exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_diff_missing_paths_escape_controls_without_repairing_state() {
+    for (mode, notice) in [
+        ("snapshot", "Managed snapshot is missing:"),
+        ("live", "Current script is missing:"),
+    ] {
+        let mut fixture = Fixture::new();
+        let root = fixture.0.with_extension("missing\nFORGED\u{1b}[2J");
+        fs::rename(&fixture.0, &root).unwrap();
+        fixture.0 = root;
+        let state = fixture.0.join("state");
+        let config = format!("schema_version=2\nexternal_shell_mode='{mode}'\n");
+        fs::write(state.join("config.toml"), &config).unwrap();
+        let preset = state.join("presets/shell/demo");
+        fs::create_dir_all(&preset).unwrap();
+        let metadata = "[[files]]\nsource='tool.sh'\ntarget='tool'\ntransforms=['template']\n";
+        fs::write(preset.join("shine.toml"), metadata).unwrap();
+        fs::write(preset.join("tool.sh"), "# never executed\n").unwrap();
+        let receipt = toml::to_string(&serde_json::json!({
+            "schema_version": 2,
+            "entries": [{
+                "category": "demo", "command": "tool", "mode": mode,
+                "source_path": preset.join("tool.sh"),
+                "rendered_path": state.join("rendered/shell/demo/tool.sh"),
+                "runtime": "native", "transforms": ["template"], "content_hash": 0
+            }]
+        }))
+        .unwrap();
+        fs::write(state.join("shell-manifest.toml"), &receipt).unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+        command
+            .args(["info", "shell/demo/tool", "--diff"])
+            .env_remove("FORCE_COLOR")
+            .env_remove("CLICOLOR_FORCE");
+        let output = fixture.run_command(command);
+        success(&output);
+        let text = stdout(&output);
+        let line = text.lines().find(|line| line.starts_with(notice)).unwrap();
+        assert!(line.contains("missing\\nFORGED\\u{1b}[2J"), "{text:?}");
+        assert!(
+            text.chars().all(|ch| !ch.is_control() || ch == '\n'),
+            "{text:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(state.join("shell-manifest.toml")).unwrap(),
+            receipt
+        );
+        assert_eq!(
+            fs::read_to_string(state.join("config.toml")).unwrap(),
+            config
+        );
+        assert_eq!(
+            fs::read_to_string(preset.join("shine.toml")).unwrap(),
+            metadata
+        );
+        assert_eq!(
+            fs::read_to_string(preset.join("tool.sh")).unwrap(),
+            "# never executed\n"
+        );
+        for absent in ["trust.toml", "rendered", "installed", "bin/tool"] {
+            assert!(!state.join(absent).exists(), "unexpected {absent}");
+        }
     }
 }
 

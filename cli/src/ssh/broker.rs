@@ -465,24 +465,24 @@ fn sanitize_label(value: &str) -> String {
 }
 
 fn escape_display(value: &str) -> String {
-    value
-        .chars()
-        .flat_map(|ch| match ch {
-            '\\' => "\\\\".chars().collect::<Vec<_>>(),
-            '\n' => "\\n".chars().collect(),
-            '\r' => "\\r".chars().collect(),
-            '\t' => "\\t".chars().collect(),
-            ch if ch.is_control() => format!("\\u{{{:x}}}", ch as u32).chars().collect(),
-            ch => vec![ch],
-        })
-        .take(4096)
-        .collect()
+    escaped_display_chars(value).take(4096).collect()
+}
+
+fn escaped_display_chars(value: &str) -> impl Iterator<Item = char> + '_ {
+    value.chars().flat_map(|ch| match ch {
+        '\\' => "\\\\".chars().collect::<Vec<_>>(),
+        '\n' => "\\n".chars().collect(),
+        '\r' => "\\r".chars().collect(),
+        '\t' => "\\t".chars().collect(),
+        ch if ch.is_control() => format!("\\u{{{:x}}}", ch as u32).chars().collect(),
+        ch => vec![ch],
+    })
 }
 
 fn escape_multiline(value: &str) -> String {
     value
-        .lines()
-        .map(escape_display)
+        .split('\n')
+        .map(|line| escaped_display_chars(line).collect::<String>())
         .collect::<Vec<_>>()
         .join("\n")
 }

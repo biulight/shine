@@ -94,6 +94,13 @@ bugs. Check this list before changing the modules named in each entry.
   within each line; target lookup, ambiguity and missing-target exits retain their original policy.
   Installed App/Shell `info` encodes metadata labels/descriptions and path headings after inspection;
   verbose content keeps the existing lossy UTF-8 decoding and missing-final-newline behavior.
+  Info diff file labels encode controls before unified-diff construction, so path newlines cannot
+  become structural diff lines. Missing Shell script/snapshot notices also encode their paths.
+  Local broker policy diff/update share stdout-aware diff encoding
+  and colors; serialized comparison data, default-No confirmation and locked policy revalidation
+  remain unchanged. SSH enrollment retains its separate local-TTY rendering and approval boundary.
+  Its diff uses complete escaped lines, preserving structural LF and encoding CR; bounded summary
+  labels must not truncate policy diffs or hide changed suffixes. Request-size limits remain intact.
   Shared source/overlay note values encode controls after source selection; internal label styling,
   column padding, literal backslashes and the saved physical paths stay independent of encoding.
 - **Sys display encoding stays at the CLI boundary.** Suggested item operands use the shared

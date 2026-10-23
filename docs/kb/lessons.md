@@ -3364,3 +3364,15 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Test isolation**: embedded completion checks must not fall back to a user's real global or
   project configuration. An isolated empty project plus explicit temporary config root retains the
   embedded source mode and verifies that completion creates no runtime state.
+
+## 2026-10-23 — Diff fallbacks and long-line reviews need complete display boundaries
+
+- **Symptom**: missing Shell diff content exposed raw path controls; SSH enrollment silently
+  truncated escaped diff lines, hiding changed source-path suffixes from approval prompts.
+- **Fix**: encode missing-path notices and share character escaping between bounded SSH summaries
+  and complete diff lines. Preserve structural LF, encode CR and retain the final newline.
+- **Boundary**: keep request limits, local-TTY color policy, metadata trust acknowledgement, nonce
+  consumption, confirmation and locked policy revalidation unchanged.
+- **Regression**: snapshot/live missing-file inspection preserves files, receipts and trust;
+  long-line review shows both suffixes, rejection preserves policy bytes, nonce reuse fails,
+  and fresh approval stores the original unescaped source path.

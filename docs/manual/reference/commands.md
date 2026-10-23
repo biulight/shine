@@ -238,6 +238,9 @@ shine completions <bash|zsh|powershell>
 Dynamic completion includes candidates from the selected Preset source and its active overlay.
 Tab completion does not execute Preset code or grant trust.
 
+When a Shell script or managed snapshot is missing, `info --diff` reports the missing path with
+control characters escaped. Inspection does not repair the file or change its receipt or trust.
+
 `state migrate` validates project configuration and workspace files before cleanup or writes.
 Invalid TOML syntax or workspace `env`/`env.encryption` fields that are not tables produce an
 error with the file location and exit code 1, without quoting file contents. Correct the file

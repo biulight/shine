@@ -390,7 +390,7 @@ async fn shell_diff_output(
     {
         return Ok(format!(
             "Managed snapshot is missing: {}. Run `shine upgrade` to migrate the installed command.\n",
-            item.installed_source_path.display()
+            escape_controls(&item.installed_source_path.to_string_lossy())
         ));
     }
     let Some(expected) = &item.desired_content else {
@@ -400,7 +400,7 @@ async fn shell_diff_output(
     let Some(current) = &item.current_content else {
         return Ok(format!(
             "Current script is missing: {}.\n",
-            current_path.display()
+            escape_controls(&current_path.to_string_lossy())
         ));
     };
 
@@ -455,7 +455,10 @@ fn render_diff_or_note(
     let unified = TextDiff::from_lines(current_text, expected_text)
         .unified_diff()
         .context_radius(3)
-        .header(current_label, expected_label)
+        .header(
+            &escape_controls(current_label),
+            &escape_controls(expected_label),
+        )
         .to_string();
     colorize_unified_diff(&unified)
 }
@@ -507,12 +510,12 @@ mod tests {
         let diff = render_diff_or_note(
             "context\u{7}\nold\u{1b}[2J\t\n尾行\n".as_bytes(),
             "context\u{7}\nnew\u{1b}[H\t\n尾行\n".as_bytes(),
-            "current\u{1b}[2J",
-            "expected\tfile",
+            "current\n--- forged\u{1b}[2J",
+            "expected\n@@ forged\tfile",
         );
         for line in [
-            "--- current\\u{1b}[2J",
-            "+++ expected\\tfile",
+            "--- current\\n--- forged\\u{1b}[2J",
+            "+++ expected\\n@@ forged\\tfile",
             "@@ -1,3 +1,3 @@",
             " context\\u{7}",
             "-old\\u{1b}[2J\\t",
@@ -525,6 +528,7 @@ mod tests {
         assert!(!diff.contains('\t'));
         assert!(!diff.contains("\u{1b}[2J"));
         assert!(!diff.contains("\u{1b}[H"));
+        assert_eq!(diff.matches('\n').count(), 7);
     }
 
     #[test]

@@ -58,6 +58,7 @@ struct TestInteraction {
     confirmations: AtomicUsize,
     reject: AtomicBool,
     displays: Mutex<Vec<String>>,
+    prompts: Mutex<Vec<String>>,
 }
 struct GuardFile(PathBuf);
 impl Drop for GuardFile {
@@ -67,8 +68,9 @@ impl Drop for GuardFile {
 }
 impl BrokerInteraction for TestInteraction {
     fn set_ssh_pid(&self, _: Option<u32>) {}
-    fn confirm_prompt(&self, _: String) -> TestFuture<'_, LocalConfirmation> {
-        Box::pin(async {
+    fn confirm_prompt(&self, prompt: String) -> TestFuture<'_, LocalConfirmation> {
+        Box::pin(async move {
+            self.prompts.lock().unwrap().push(prompt);
             self.confirmations.fetch_add(1, Ordering::SeqCst);
             if self.reject.load(Ordering::SeqCst) {
                 bail!("test confirmation rejected");
@@ -116,6 +118,7 @@ async fn test_session(
         confirmations: AtomicUsize::new(0),
         reject: AtomicBool::new(false),
         displays: Mutex::new(Vec::new()),
+        prompts: Mutex::new(Vec::new()),
     });
     Arc::get_mut(&mut session).unwrap().interaction = interaction.clone();
     (session, interaction)
@@ -266,6 +269,95 @@ async fn inspect_and_enroll_remain_metadata_only_and_enrollment_requires_confirm
         }
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
+}
+
+#[test]
+fn enrollment_diff_preserves_line_boundaries_and_escapes_controls() {
+    assert_eq!(
+        escape_multiline("-old\\\t\r\n+new\u{85}\u{1b}[2J\n"),
+        "-old\\\\\\t\\r\n+new\\u{85}\\u{1b}[2J\n"
+    );
+}
+
+#[tokio::test]
+async fn enrollment_review_keeps_long_diff_tails_and_requires_fresh_confirmation() {
+    let root = crate::test_support::make_temp_dir("shine-broker-long-review").await;
+    let config = Config::new_for_test(&root);
+    let mut original = snapshot();
+    let prefix = format!("/{}", format!("{}/", "a\t".repeat(80)).repeat(20));
+    original.sources[0].path = format!("{prefix}OLD.toml");
+    let release = vec!["API_TOKEN".into()];
+    let argv = vec!["bun".into(), "start".into()];
+    let initial = broker::plan_remote_enrollment(
+        &PolicyStore::default(),
+        "dev",
+        &original,
+        &release,
+        &argv,
+        None,
+    )
+    .unwrap();
+    broker::apply_remote_enrollment(&config, &initial)
+        .await
+        .unwrap();
+    let path = broker::policy_path(&config);
+    let before = tokio::fs::read(&path).await.unwrap();
+    let (mut session, interaction) = test_session(&root, BrokerMode::EnrollTrusted, false).await;
+    Arc::get_mut(&mut session).unwrap().enroll_update_policy = Some(initial.name);
+    let mut changed = original.clone();
+    changed.sources[0].path = format!("{prefix}NEW.toml");
+    interaction.reject.store(true, Ordering::SeqCst);
+    assert!(
+        session
+            .handle_description(&changed, &release, &argv, "long-review-rejected-0001")
+            .await
+            .is_err()
+    );
+    assert_eq!(tokio::fs::read(&path).await.unwrap(), before);
+    {
+        let prompts = interaction.prompts.lock().unwrap();
+        let diff = prompts[0].split_once("Policy diff:\n").unwrap().1;
+        for (sign, tail) in [('-', "OLD.toml\""), ('+', "NEW.toml\"")] {
+            let line = diff
+                .lines()
+                .find(|line| line.starts_with(&format!("{sign}path = ")))
+                .unwrap();
+            assert!(
+                line.len() > 4096,
+                "the fixture must exercise the old truncation limit"
+            );
+            assert_eq!(
+                line,
+                format!("{sign}path = \"{}{tail}", prefix.replace('\t', "\\\\t"))
+            );
+        }
+        assert!(diff.chars().all(|ch| !ch.is_control() || ch == '\n'));
+        assert!(!diff.contains("not-decrypted-by-inspection"));
+    }
+    interaction.reject.store(false, Ordering::SeqCst);
+    // A rejected request's nonce cannot be reused to reach approval or mutation.
+    assert!(
+        session
+            .handle_description(&changed, &release, &argv, "long-review-rejected-0001")
+            .await
+            .is_err()
+    );
+    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 1);
+    assert_eq!(tokio::fs::read(&path).await.unwrap(), before);
+    session
+        .handle_description(&changed, &release, &argv, "long-review-accepted-0001")
+        .await
+        .unwrap();
+    assert_eq!(interaction.confirmations.load(Ordering::SeqCst), 2);
+    let stored = broker::load_store(&config).await.unwrap();
+    assert_eq!(
+        stored.policies[0].allow[0].sources[0].path,
+        changed.sources[0].path
+    );
+    assert_eq!(stored.policies[0].allow[0].argv, argv);
+    assert!(!interaction.guard_path.exists());
+    assert!(!config.shine_dir().join("trust.toml").exists());
+    tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
 #[cfg(unix)]

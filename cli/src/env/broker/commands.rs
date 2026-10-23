@@ -4,7 +4,7 @@ use super::policy::{
     allow_from_snapshot, resolve_release, sha256, validate_name, validate_wire_string,
 };
 use super::store::{apply_remote_enrollment, load_store, save_store};
-use crate::output::escape_controls;
+use crate::output::{colorize_unified_diff, escape_controls};
 use crate::{config::Config, env::workspace};
 use anyhow::{Context, Result, bail};
 use shine_core::runtime::{FileSystemHost, RealHost};
@@ -121,7 +121,11 @@ pub async fn handle_policy_update(
     }
     println!(
         "{}",
-        similar::TextDiff::from_lines(&old, &new).unified_diff()
+        colorize_unified_diff(
+            &similar::TextDiff::from_lines(&old, &new)
+                .unified_diff()
+                .to_string()
+        )
     );
     let confirmed = dialoguer::Confirm::new()
         .with_prompt(format!("Replace SSH secret broker policy {name}?"))
@@ -222,7 +226,11 @@ pub async fn handle_policy_diff(
     } else {
         println!(
             "{}",
-            similar::TextDiff::from_lines(&old, &new).unified_diff()
+            colorize_unified_diff(
+                &similar::TextDiff::from_lines(&old, &new)
+                    .unified_diff()
+                    .to_string()
+            )
         );
     }
     Ok(())

@@ -6519,6 +6519,114 @@ fn dotenv_export_preview_counts_only_effective_non_secret_values() {
 }
 
 #[test]
+fn broker_policy_diffs_encode_controls_and_preserve_update_approval() {
+    let fixture = Fixture::new();
+    let workspace = fixture.0.join("shine.workspace.toml");
+    fs::write(&workspace, "version = 2\n[env]\nfiles = ['env.toml']\n").unwrap();
+    let source = fixture.0.join("env.toml");
+    let source_bytes = "version = 1\n[secret]\nTOKEN = true\n[payload]\ndata = 'not-decrypted-by-policy-commands'\n";
+    fs::write(&source, source_bytes).unwrap();
+    let input = |operation: &str, argument: &str| {
+        let mut command = fixture.command();
+        command.args(["env", "broker", "policy", operation]);
+        if operation == "diff" {
+            command.arg("review");
+        } else {
+            command.args([
+                "--name",
+                "review",
+                "--ssh-target",
+                "example.invalid",
+                "--project",
+                "project\u{85}\u{9b}31m",
+            ]);
+        }
+        command.arg("--workspace").arg(&workspace).args([
+            "--mode",
+            "dev",
+            "--release",
+            "TOKEN",
+            "--",
+            "echo",
+            argument,
+        ]);
+        command
+    };
+    let added = input("add", "original").output().unwrap();
+    assert!(added.status.success(), "{added:?}");
+    let policy = fixture.0.join("state/ssh-secret-broker.toml");
+    let original = fs::read(&policy).unwrap();
+    // A workspace hash change puts the control-bearing project in both diffs.
+    let workspace_bytes = "# changed\nversion = 2\n[env]\nfiles = ['env.toml']\n";
+    fs::write(&workspace, workspace_bytes).unwrap();
+    let mut modes = vec![
+        (false, false, None),
+        (false, true, None),
+        (false, true, Some("FORCE_COLOR")),
+        (false, true, Some("CLICOLOR_FORCE")),
+    ];
+    if cfg!(unix) {
+        modes.extend([(true, false, None), (true, true, None)]);
+    }
+    for operation in ["diff", "update"] {
+        for &(terminal_stdout, no_color, force_color) in &modes {
+            let mut command = input(operation, "changed\targument");
+            command
+                .env("TERM", "xterm-256color")
+                .env_remove("NO_COLOR")
+                .env_remove("FORCE_COLOR")
+                .env_remove("CLICOLOR_FORCE")
+                .env_remove("CLICOLOR")
+                .env_remove("IGNORE_IS_TERMINAL");
+            if no_color {
+                command.env("NO_COLOR", "1");
+            }
+            if let Some(key) = force_color {
+                command.env(key, "1");
+            }
+            #[cfg(unix)]
+            let (output, terminal) = if terminal_stdout {
+                output_with_terminal(command, true)
+            } else {
+                (command.output().unwrap(), Vec::new())
+            };
+            #[cfg(not(unix))]
+            let (output, terminal) = (command.output().unwrap(), Vec::new());
+            let text = String::from_utf8_lossy(if terminal_stdout {
+                &terminal
+            } else {
+                &output.stdout
+            });
+            assert_eq!(
+                output.status.code(),
+                Some(if operation == "diff" { 0 } else { 1 }),
+                "{output:?}"
+            );
+            if operation == "update" {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .contains("reading policy update confirmation"),
+                    "{output:?}"
+                );
+            }
+            assert!(text.contains("project\\u{85}\\u{9b}31m"), "{text:?}");
+            assert!(!text.contains(['\u{85}', '\u{9b}', '\t']), "{text:?}");
+            let colored = force_color.is_some() || (terminal_stdout && !no_color);
+            assert_eq!(text.contains("\x1b["), colored, "{text:?}");
+            if colored {
+                for prefix in ["\x1b[36m@@ ", "\x1b[32m+", "\x1b[31m-"] {
+                    assert!(text.contains(prefix), "{text:?}");
+                }
+            }
+            assert_eq!(fs::read(&policy).unwrap(), original);
+        }
+    }
+    assert_eq!(fs::read_to_string(&workspace).unwrap(), workspace_bytes);
+    assert_eq!(fs::read_to_string(source).unwrap(), source_bytes);
+    assert!(!fixture.0.join("state/trust.toml").exists());
+}
+
+#[test]
 fn broker_duplicate_policy_hint_preserves_policy_and_update_approval() {
     let fixture = Fixture::new();
     let workspace = fixture.0.join("shine.workspace.toml");
