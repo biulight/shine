@@ -18,6 +18,8 @@
   rules. A loader captured before replacement must still contribute its dependency effects;
   immutable loader aliases must retain their return identity. New regressions also exercise
   no-Plan Frontend evaluation, rejecting differences before invocation writes or process starts.
+- **Native verification**: `14eac507` passed 63 targeted Windows tests and 64 Linux tests, including
+  150 author fixture combinations per host; see the [scope and limits](architecture/code-analysis.md#p1-native-verification-2026-10-23).
 
 ## 2026-10-23 — Binding patterns are not arbitrary identifier subtrees
 

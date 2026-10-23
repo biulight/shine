@@ -63,8 +63,8 @@ Regression coverage includes literal/comment and dynamic/spread pairs, local ver
 JS/TS default parameter scopes, replaced versus captured loaders, and author fixtures for all three
 simulated platforms with and without code trust. Blocking cases also exercise Frontend explicit
 evaluation, rejecting before invocation writes or process starts without a lifecycle approval.
-Existing native CI tables below refer to their recorded commits and do not constitute
-native-platform verification of rule version 6.
+Rule version 6 passed the [targeted native P1 verification](#p1-native-verification-2026-10-23)
+at `14eac507`. Earlier native CI tables below apply only to their recorded commits.
 
 Uncorroborated declarations do not block. They also do not remove gaps. Known command identity
 plus a subprocess gap remains incomplete even if file/network declarations are supplied.
@@ -288,3 +288,47 @@ The [CI workflow](https://github.com/biulight/shine/actions/runs/39713599387), M
 workflows all completed successfully. These results apply to the tested commit and complement the
 local and isolated native evidence above; they do not claim exhaustive script-effect coverage or
 constitute a tagged product release.
+
+## P1 native verification (2026-10-23)
+
+For 2.7.0 preparation, the four P1 fixes and follow-up syntax-boundary repairs were verified at
+`14eac507bb0392029cf558c94b285247e68eaad9` (analysis rule version 6). Both instances used an isolated
+`git archive` of that exact commit, with matching SHA-256
+`a82cf07cf842fb792b42f48259ea29bca42ab9d2e39ce89c67616b014f830ecc`.
+
+| Native target | Core analysis/admission | CLI diagnostics | CLI execution blocking | Built-in Bun samples | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Windows `x86_64-pc-windows-msvc` (10.0.22631) | 60 | 1 | 1 | 1 | 63 passed |
+| Linux `x86_64-unknown-linux-gnu` (kernel 6.8.0-101-generic) | 61 | 1 | 1 | 1 | 64 passed |
+
+All four commands exited successfully on both instances, with zero failed or ignored tests in
+the selected scope. Linux includes one Unix-only real-process cancellation regression.
+Both used rustc 1.96.0 (`ac68faa20`) and cargo 1.96.0 (`30a34c682`):
+
+```bash
+cargo test --locked -p shine-core --all-features --target-dir target analysis::tests
+cargo test --locked -p shine-cli --all-features --target-dir target --lib analysis
+cargo test --locked -p shine-cli --all-features --target-dir target --test list_views code_analysis
+cargo test --locked -p shine-cli --all-features --target-dir target --test builtin_presets builtin_bun_samples
+```
+
+Each command appended `-- --test-threads=4` on Windows or `-- --test-threads=2` on Linux;
+`CARGO_BUILD_JOBS` matched those counts. Builds set `CARGO_INCREMENTAL=0`,
+`CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_PROFILE_TEST_DEBUG=0`, retaining test-profile assertions.
+Windows nextest 0.9.143 was below the repository minimum, so these targeted runs used the
+documented `cargo test` fallback; they did not bypass the nextest version requirement.
+
+The P1 readiness regression covers 25 positive/negative examples across three simulated platforms
+and two trust states: 150 author fixture combinations per native host, within one Rust test.
+It also checks normal Plan approval, non-blocking coverage gaps, observation-only authoring and
+no-Plan Frontend rejection before invocation writes or process starts. The real CLI regression
+checks five evaluation/lifecycle entry points against both a declaration difference and malformed
+source, including persistent trust and `--yes`; receipts and destination content stay unchanged.
+Built-in sample parsing remains deterministic with explicit coverage gaps.
+
+Windows emitted six unused-item warnings for the CLI library test build and one library warning
+for `sudo_command`, all in code unchanged by the P1 commit. Linux emitted no compilation warnings.
+These are targeted native results, not full workspace, native Clippy, MSRV or CI acceptance for
+`14eac507`. They found no new regression and required no source changes. P2 diagnostic aggregation
+remains deferred. Task-owned remote source/build directories were removed after verification;
+no production preset was activated and no repository push was performed.
