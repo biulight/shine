@@ -19,6 +19,14 @@ struct Binding {
     value: Option<String>,
 }
 
+type BindingIdentity = (String, usize, usize);
+
+impl Binding {
+    fn identity(&self) -> BindingIdentity {
+        (self.name.clone(), self.start, self.end)
+    }
+}
+
 struct Mutation {
     first: usize,
     scope: Option<(usize, usize)>,
@@ -64,6 +72,33 @@ impl Bindings {
             .get_mut(name)
             .map(Vec::as_mut_slice)
             .unwrap_or(&mut [])
+    }
+
+    // Distinguish an unbound global from an ambiguous local binding. Reads and
+    // writes must resolve the same lexical identity, not every matching name.
+    fn visible(&self, name: &str, node: Node<'_>) -> Result<Option<&Binding>, ()> {
+        let bindings = self.named(name);
+        if bindings.len() > 128 {
+            return Err(());
+        }
+        let mut closest: Option<&Binding> = None;
+        let mut ambiguous = false;
+        for binding in bindings
+            .iter()
+            .filter(|b| b.start <= node.start_byte() && node.end_byte() <= b.end)
+        {
+            match closest {
+                Some(previous) if previous.end - previous.start < binding.end - binding.start => {}
+                Some(previous) if previous.end - previous.start == binding.end - binding.start => {
+                    ambiguous = true;
+                }
+                _ => {
+                    closest = Some(binding);
+                    ambiguous = false;
+                }
+            }
+        }
+        if ambiguous { Err(()) } else { Ok(closest) }
     }
 
     fn unchanged(&self, path: &str, capture: Option<(usize, usize, usize)>) -> bool {
@@ -206,8 +241,7 @@ pub(super) fn parse(
                                 )
                             })
                         }
-                        "namespace_import" => child
-                            .named_child(0)
+                        "namespace_import" => first_named_child(child)
                             .map(|n| (text(n, bytes), module.map(str::to_string))),
                         "identifier"
                             if child.parent().is_some_and(|p| p.kind() == "import_clause") =>
@@ -232,7 +266,7 @@ pub(super) fn parse(
                         .parent()
                         .is_some_and(|p| p.kind() == "variable_declaration")
                     {
-                        function_scope(*node)
+                        function_binding_scope(*node)
                     } else {
                         scope(*node)
                     };
@@ -264,7 +298,7 @@ pub(super) fn parse(
                         // Sloppy-script block functions can be hoisted (Annex B).
                         // Without an explicit module boundary, do not claim the
                         // outer spelling still denotes an unshadowed global.
-                        scope = function_scope(*node);
+                        scope = function_binding_scope(*node);
                     }
                     bindings.push(Binding {
                         name: text(name, bytes).into(),
@@ -287,7 +321,9 @@ pub(super) fn parse(
                 for id in pattern_names(*node) {
                     bindings.push(Binding {
                         name: text(id, bytes).into(),
-                        start: parent.start_byte(),
+                        // Computed method keys/decorators run in the outer scope,
+                        // before the parameter environment exists.
+                        start: node.start_byte(),
                         end: parent.end_byte(),
                         value: None,
                     });
@@ -304,14 +340,17 @@ pub(super) fn parse(
                 }
             }
             "for_in_statement" => {
+                // Without a declaration keyword this is a write to an existing
+                // binding/member, handled with the other assignment targets.
+                if node.child_by_field_name("kind").is_none() {
+                    continue;
+                }
                 if let Some(left) = node.child_by_field_name("left") {
                     let scope = if node
                         .child_by_field_name("kind")
                         .is_some_and(|n| n.kind() == "var")
                     {
-                        function_scope(*node)
-                    } else if node.child_by_field_name("kind").is_none() {
-                        tree.root_node()
+                        function_binding_scope(*node)
                     } else {
                         *node
                     };
@@ -375,12 +414,13 @@ pub(super) fn parse(
     // Capture object identities before invalidating any spelling. Otherwise the
     // traversal order could hide a later mutation through another alias.
     let mut mutations: BTreeMap<String, Mutation> = BTreeMap::new();
-    let mut mutated_names = BTreeSet::new();
+    let mut mutated_bindings = BTreeSet::new();
     for node in &nodes {
         if matches!(
             node.kind(),
             "assignment_expression" | "augmented_assignment_expression" | "update_expression"
         ) || (node.kind() == "unary_expression" && has_token(*node, "delete"))
+            || (node.kind() == "for_in_statement" && node.child_by_field_name("kind").is_none())
         {
             let target = node
                 .child_by_field_name("left")
@@ -396,12 +436,21 @@ pub(super) fn parse(
                 }
                 let location = function_scope(*node);
                 let position = (
-                    node.start_byte(),
+                    if node.kind() == "for_in_statement" {
+                        // Evaluate the iterable/object before the first target
+                        // write; a loader call in that input is still captured.
+                        node.child_by_field_name("right")
+                            .map_or(node.start_byte(), |right| right.end_byte())
+                    } else {
+                        node.start_byte()
+                    },
                     location.start_byte(),
                     location.end_byte(),
                 );
                 if let Some(object_node) = target.child_by_field_name("object") {
-                    if text(object_node, bytes) == "globalThis" {
+                    if text(object_node, bytes) == "globalThis"
+                        && matches!(bindings.visible("globalThis", object_node), Ok(None))
+                    {
                         if let Some(key) = member_key(target, bytes) {
                             record_mutation(&mut mutations, key, position);
                         } else {
@@ -415,20 +464,26 @@ pub(super) fn parse(
                     }
                 } else {
                     let name = text(target, bytes);
-                    if bindings.named(name).is_empty()
-                        && matches!(name, "Bun" | "process" | "fetch" | "eval" | "require")
-                    {
-                        record_mutation(&mut mutations, name.into(), position);
-                    } else {
-                        mutated_names.insert(name.to_string());
+                    match bindings.visible(name, target) {
+                        Ok(Some(binding)) => {
+                            mutated_bindings.insert(binding.identity());
+                        }
+                        Ok(None)
+                            if matches!(name, "Bun" | "process" | "fetch" | "eval" | "require") =>
+                        {
+                            record_mutation(&mut mutations, name.into(), position);
+                        }
+                        _ => {}
                     }
                 }
             }
         }
     }
-    for name in &mutated_names {
+    for (name, start, end) in &mutated_bindings {
         for binding in bindings.named_mut(name) {
-            binding.value = None;
+            if binding.start == *start && binding.end == *end {
+                binding.value = None;
+            }
         }
     }
     bindings.mutations = mutations;
@@ -442,7 +497,7 @@ pub(super) fn parse(
             }
         }
     }
-    resolve_aliases(session, &aliases, bytes, &mut bindings, &mutated_names)?;
+    resolve_aliases(session, &aliases, bytes, &mut bindings, &mutated_bindings)?;
     for node in nodes {
         session.check()?;
         if node.kind() == "call_expression" || node.kind() == "new_expression" {
@@ -452,9 +507,22 @@ pub(super) fn parse(
             else {
                 continue;
             };
-            let name = expression(function, bytes, &bindings);
+            // A direct loader call before replacement still loads its dependency.
+            // Resolve the callee when it is captured, before evaluating arguments;
+            // cross-function mutation order remains unknown.
+            let name = if function.kind() == "identifier" && text(function, bytes) == "require" {
+                let scope = function_scope(node);
+                expression_at(
+                    function,
+                    bytes,
+                    &bindings,
+                    Some((node.start_byte(), scope.start_byte(), scope.end_byte())),
+                )
+            } else {
+                expression(function, bytes, &bindings)
+            };
             let args = node.child_by_field_name("arguments");
-            let first = args.and_then(|n| n.named_child(0));
+            let first = args.and_then(first_operand);
             match name.as_deref() {
                 Some("fetch") => {
                     if let Some(host) = first.and_then(|n| literal(n, bytes)).and_then(|s| host(&s))
@@ -481,7 +549,7 @@ pub(super) fn parse(
                 ) => {
                     let command = first.and_then(|n| {
                         if n.kind() == "array" {
-                            n.named_child(0).and_then(|n| literal(n, bytes))
+                            first_operand(n).and_then(|n| literal(n, bytes))
                         } else {
                             literal(n, bytes)
                         }
@@ -492,12 +560,15 @@ pub(super) fn parse(
                             .is_some_and(|n| n.starts_with("child_process."))
                             && args.is_some_and(|args| {
                                 let mut cursor = args.walk();
-                                args.named_children(&mut cursor).skip(1).any(|n| {
-                                    !matches!(
-                                        n.kind(),
-                                        "array" | "arrow_function" | "function_expression"
-                                    )
-                                })
+                                args.named_children(&mut cursor)
+                                    .filter(|n| !n.is_extra())
+                                    .skip(1)
+                                    .any(|n| {
+                                        !matches!(
+                                            n.kind(),
+                                            "array" | "arrow_function" | "function_expression"
+                                        )
+                                    })
                             })) {
                         // fork's first argument is a module, not an executable.
                         // Node options may select a shell or another execPath.
@@ -685,7 +756,7 @@ fn resolve_aliases(
     aliases: &[(Node<'_>, Node<'_>, Node<'_>)],
     bytes: &[u8],
     bindings: &mut Bindings,
-    mutated_names: &BTreeSet<String>,
+    mutated_bindings: &BTreeSet<BindingIdentity>,
 ) -> Result<(), TerminalFailure> {
     // Bounded fixed point supports closures referring to later initialized consts;
     // cycles and chains beyond the bound retain unknown-call diagnostics.
@@ -694,7 +765,12 @@ fn resolve_aliases(
         for &(node, name, value) in aliases {
             session.nodes += 1;
             session.budget()?;
-            if mutated_names.contains(text(name, bytes)) {
+            let scope = scope(node);
+            if mutated_bindings.contains(&(
+                text(name, bytes).into(),
+                scope.start_byte(),
+                scope.end_byte(),
+            )) {
                 continue;
             }
             let function = function_scope(node);
@@ -704,7 +780,6 @@ fn resolve_aliases(
                 function.end_byte(),
             ));
             let value = expression_at(value, bytes, bindings, capture);
-            let scope = scope(node);
             if let Some(binding) = bindings
                 .named_mut(text(name, bytes))
                 .iter_mut()
@@ -770,8 +845,18 @@ fn pattern_targets(node: Node<'_>) -> Vec<Node<'_>> {
                 let mut cursor = node.walk();
                 pending.extend(node.named_children(&mut cursor));
             }
-            "parenthesized_expression" | "non_null_expression" => {
-                pending.extend(node.named_child(0));
+            "parenthesized_expression"
+            | "non_null_expression"
+            | "as_expression"
+            | "satisfies_expression" => {
+                pending.extend(first_named_child(node));
+            }
+            "type_assertion" => {
+                let mut cursor = node.walk();
+                pending.extend(
+                    node.named_children(&mut cursor)
+                        .find(|child| !child.is_extra() && child.kind() != "type_arguments"),
+                );
             }
             _ => {}
         }
@@ -780,7 +865,15 @@ fn pattern_targets(node: Node<'_>) -> Vec<Node<'_>> {
 }
 fn function_scope(mut node: Node<'_>) -> Node<'_> {
     while let Some(parent) = node.parent() {
+        let position = node.start_byte();
         node = parent;
+        if node.kind() == "method_definition"
+            && node
+                .child_by_field_name("parameters")
+                .is_some_and(|parameters| position < parameters.start_byte())
+        {
+            continue;
+        }
         if matches!(
             node.kind(),
             "function_declaration"
@@ -789,12 +882,20 @@ fn function_scope(mut node: Node<'_>) -> Node<'_> {
                 | "arrow_function"
                 | "generator_function"
                 | "method_definition"
+                | "class_static_block"
                 | "program"
         ) {
             break;
         }
     }
     node
+}
+fn function_binding_scope(node: Node<'_>) -> Node<'_> {
+    let function = function_scope(node);
+    // Body declarations cannot shadow the enclosing environment used by default
+    // parameters (including closures created there). Parameters themselves retain
+    // the full function range and still shadow globals in both regions.
+    function.child_by_field_name("body").unwrap_or(function)
 }
 fn scope(mut node: Node<'_>) -> Node<'_> {
     loop {
@@ -836,6 +937,22 @@ fn type_only_module(node: Node<'_>) -> bool {
 fn has_token(node: Node<'_>, kind: &str) -> bool {
     let mut cursor = node.walk();
     node.children(&mut cursor).any(|child| child.kind() == kind)
+}
+
+fn first_named_child(node: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find(|child| !child.is_extra())
+}
+
+/// Comments are named extras, not operands. Do not skip a leading array hole
+/// or spread to find a later literal that is not the executable/first argument.
+fn first_operand(node: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = node.walk();
+    let first = node
+        .children(&mut cursor)
+        .find(|child| !child.is_extra() && !matches!(child.kind(), "(" | "["))?;
+    first.is_named().then_some(first)
 }
 
 fn text<'a>(node: Node<'_>, bytes: &'a [u8]) -> &'a str {
@@ -882,11 +999,16 @@ fn expression_at(
             }
             "call_expression" => {
                 let callee = node.child_by_field_name("function")?;
-                if text(callee, bytes) != "require" || !bindings.named("require").is_empty() {
+                // The callee is a single identifier, so this adds no unbounded
+                // expression recursion. Apply the same lexical/mutation checks
+                // as the require call itself, including initializer capture time.
+                if callee.kind() != "identifier"
+                    || expression_at(callee, bytes, bindings, capture).as_deref() != Some("require")
+                {
                     return None;
                 }
                 let spec = literal(
-                    node.child_by_field_name("arguments")?.named_child(0)?,
+                    first_operand(node.child_by_field_name("arguments")?)?,
                     bytes,
                 )?;
                 let mut value = builtin(&spec)?.to_string();
@@ -897,26 +1019,8 @@ fn expression_at(
             }
             "identifier" | "import" => {
                 let name = text(node, bytes);
-                if bindings.named(name).len() > 128 {
-                    return None;
-                }
-                let candidates = bindings
-                    .named(name)
-                    .iter()
-                    .filter(|b| {
-                        b.name == name && b.start <= node.start_byte() && node.end_byte() <= b.end
-                    })
-                    .collect::<Vec<_>>();
-                let mut value = if let Some(min) = candidates.iter().map(|b| b.end - b.start).min()
-                {
-                    let closest = candidates
-                        .into_iter()
-                        .filter(|b| b.end - b.start == min)
-                        .collect::<Vec<_>>();
-                    if closest.len() != 1 {
-                        return None;
-                    }
-                    closest[0].value.clone()?
+                let mut value = if let Some(binding) = bindings.visible(name, node).ok()? {
+                    binding.value.clone()?
                 } else if matches!(
                     name,
                     "process" | "Bun" | "fetch" | "eval" | "require" | "import"
@@ -959,7 +1063,8 @@ fn gap(facts: &mut Facts, file: &str, node: Option<Node<'_>>, code: &str, behavi
 }
 fn is_read(node: Node<'_>) -> bool {
     !node.parent().is_some_and(|p| {
-        (p.kind() == "assignment_expression" && p.child_by_field_name("left") == Some(node))
+        (matches!(p.kind(), "assignment_expression" | "for_in_statement")
+            && p.child_by_field_name("left") == Some(node))
             || (p.kind() == "unary_expression" && has_token(p, "delete"))
     })
 }
@@ -1010,7 +1115,7 @@ fn bun_file_method(
     }
     let path = call
         .child_by_field_name("arguments")
-        .and_then(|n| n.named_child(0))
+        .and_then(first_operand)
         .and_then(|n| literal(n, bytes));
     Some((access, path))
 }

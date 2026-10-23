@@ -76,6 +76,171 @@ fn builtin_alias_and_parameter_shadowing_are_distinct() {
 }
 
 #[test]
+fn comments_preserve_literal_arguments_and_dependency_identity() {
+    for (code, permission, subprocess) in [
+        (
+            "fetch(/* target */ 'https://example.org');",
+            "network=[{scope='host',host='example.org'}]",
+            false,
+        ),
+        (
+            "import { readFileSync as read } from 'node:fs'; read(/* path */ 'config');",
+            "filesystem=[{access=['read'],base='preset',path='config'}]",
+            false,
+        ),
+        (
+            "import fs from 'node:fs'; fs.writeFileSync(/* path */ 'config', 'ok');",
+            "filesystem=[{access=['write'],base='preset',path='config'}]",
+            false,
+        ),
+        (
+            "import fs from 'node:fs'; fs.unlinkSync(/* path */ 'config');",
+            "filesystem=[{access=['remove'],base='preset',path='config'}]",
+            false,
+        ),
+        (
+            "await Bun.file(/* path */ 'config').text();",
+            "filesystem=[{access=['read'],base='preset',path='config'}]",
+            false,
+        ),
+        (
+            "Bun.spawn(/* argv */ [/* program */ 'echo', 'ok']);",
+            "commands=['echo']",
+            true,
+        ),
+        (
+            "import { spawn } from 'node:child_process'; spawn(/* program */ 'echo', /* argv */ []);",
+            "commands=['echo']",
+            true,
+        ),
+        (
+            "const fs = require(/* module */ 'node:fs'); fs.readFileSync(/* path */ 'config');",
+            "filesystem=[{access=['read'],base='preset',path='config'}]",
+            false,
+        ),
+    ] {
+        let missing = report(code, None);
+        assert_eq!(differences(&missing), 1, "{code}: {missing:?}");
+        let matching = report(code, Some(&declaration(permission)));
+        assert!(matching.allowed, "{code}: {matching:?}");
+        assert_eq!(
+            has(&matching, "code_analysis_subprocess_effects"),
+            subprocess
+        );
+        assert!(
+            !has(&matching, "code_analysis_dynamic_target"),
+            "{matching:?}"
+        );
+    }
+    for code in [
+        "fetch(/* target */ url);",
+        "Bun.spawn([/* missing executable */ , 'echo']);",
+        "Bun.spawn([/* dynamic executable */ ...argv, 'echo']);",
+        "import { spawn } from 'node:child_process'; spawn('echo', /* options */ {shell:true});",
+    ] {
+        let r = report(code, None);
+        assert!(r.allowed, "{code}: {r:?}");
+        assert!(has(&r, "code_analysis_dynamic_target"), "{code}: {r:?}");
+    }
+    let input = BTreeMap::from([
+        (
+            "main.ts".into(),
+            b"require(/* local */ './dep');".as_slice(),
+        ),
+        ("dep.ts".into(), b"fetch('https://example.org');".as_slice()),
+    ]);
+    let r = Session::default()
+        .analyze(&input, "main.ts", None, &EnvironmentContract::default())
+        .unwrap();
+    assert_eq!(differences(&r), 1, "{r:?}");
+    assert_eq!(r.files.len(), 2);
+}
+
+#[test]
+fn binding_mutations_and_builtin_lookups_respect_lexical_scope() {
+    for code in [
+        "import {readFileSync} from 'node:fs'; function local(readFileSync) { readFileSync = other; } readFileSync('config');",
+        "import fs from 'node:fs'; const read = fs.readFileSync; function local(read) { read = other; } read('config');",
+        "function local(require) {} const fs = require('node:fs'); fs.readFileSync('config');",
+        "function local(globalThis) { globalThis.fetch = other; } fetch('https://example.org');",
+        "function local(fetch) { fetch = other; } fetch('https://example.org');",
+    ] {
+        let r = report(code, None);
+        assert_eq!(differences(&r), 1, "{code}: {r:?}");
+    }
+    for code in [
+        "function local(require) { const fs = require('node:fs'); fs.readFileSync('config'); }",
+        "import fs from 'node:fs'; const read = fs.readFileSync; function local() { read = other; } read('config');",
+        "function local(fetch) {} fetch = other; fetch('https://example.org');",
+        "function local(globalThis) {} globalThis.fetch = other; fetch('https://example.org');",
+    ] {
+        let r = report(code, None);
+        assert!(r.allowed, "{code}: {r:?}");
+        assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+    }
+}
+
+#[test]
+fn default_parameters_use_outer_bindings_before_function_body_scope() {
+    for extension in ["js", "ts"] {
+        for code in [
+            "function run(x = fetch('https://example.org')) { var fetch = other; }",
+            "function run(x = fetch('https://example.org')) { function fetch() {} }",
+            "export {}; function run(x = fetch('https://example.org')) { function fetch() {} }",
+            "const run = (x = fetch('https://example.org')) => { var fetch = other; };",
+            "function* run(x = fetch('https://example.org')) { var fetch = other; }",
+            "const object = { run(x = fetch('https://example.org')) { for (var fetch of []) {} } };",
+            "function run(x = () => fetch('https://example.org')) { var fetch = other; }",
+        ] {
+            let file = format!("main.{extension}");
+            let input = BTreeMap::from([(file.clone(), code.as_bytes())]);
+            let r = Session::default()
+                .analyze(&input, &file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert_eq!(differences(&r), 1, "{code}: {r:?}");
+        }
+    }
+    for code in [
+        "function run(fetch, x = fetch('https://local.invalid')) {}",
+        "function run(x = other) { var fetch = other; fetch('https://local.invalid'); }",
+        "function run(x = other) { function fetch() {} fetch('https://local.invalid'); }",
+        "const fetch = other; function run(x = fetch('https://local.invalid')) { var fetch; }",
+    ] {
+        let r = report(code, None);
+        assert!(r.allowed, "{code}: {r:?}");
+        assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+    }
+}
+
+#[test]
+fn replaced_require_does_not_produce_builtin_evidence() {
+    for code in [
+        "require = () => ({readFileSync: () => 'ok'}); const fs = require('node:fs'); fs.readFileSync('config');",
+        "globalThis.require = other; require('node:fs').readFileSync('config');",
+        "({require} = input); const fs = require('node:fs'); fs.readFileSync('config');",
+        "function local() { require = other; } const fs = require('node:fs'); fs.readFileSync('config');",
+    ] {
+        let r = report(code, None);
+        assert!(r.allowed, "{code}: {r:?}");
+        assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+    }
+    for code in [
+        "const fs = require('node:fs'); fs.readFileSync('config');",
+        "const fs = require('node:fs'); require = other; fs.readFileSync('config');",
+        "const load = require; require = other; load('./dep');",
+    ] {
+        let input = BTreeMap::from([
+            ("main.ts".into(), code.as_bytes()),
+            ("dep.ts".into(), b"fetch('https://example.org');".as_slice()),
+        ]);
+        let r = Session::default()
+            .analyze(&input, "main.ts", None, &EnvironmentContract::default())
+            .unwrap();
+        assert_eq!(differences(&r), 1, "{code}: {r:?}");
+    }
+}
+
+#[test]
 fn generator_declarations_shadow_globals_without_leaking_local_bindings() {
     for extension in ["js", "ts"] {
         for source in [
@@ -107,6 +272,232 @@ fn generator_declarations_shadow_globals_without_leaking_local_bindings() {
         None,
     );
     assert_eq!(differences(&r), 1, "{r:?}");
+}
+
+#[test]
+fn review_comments_do_not_hide_namespace_bindings_or_assignment_targets() {
+    for extension in ["js", "ts"] {
+        for (code, expected) in [
+            (
+                "import * /* ns */ as fs from 'node:fs'; fs.readFileSync('config');",
+                1,
+            ),
+            (
+                "import * as /* ns */ fs from 'node:fs'; fs.readFileSync('config');",
+                1,
+            ),
+            (
+                "import { /* member */ readFileSync as read } from 'node:fs'; read('config');",
+                1,
+            ),
+            (
+                "import fs from 'node:fs'; (/* target */ fs.readFileSync) = other; fs.readFileSync('config');",
+                0,
+            ),
+            (
+                "(/* target */ fetch) = other; fetch('https://example.org');",
+                0,
+            ),
+            (
+                "import fs from 'node:fs'; (/* target */ fs.other) = other; fs.readFileSync('config');",
+                1,
+            ),
+        ] {
+            let file = format!("main.{extension}");
+            let input = BTreeMap::from([(file.clone(), code.as_bytes())]);
+            let r = Session::default()
+                .analyze(&input, &file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert_eq!(differences(&r), expected, "{code}: {r:?}");
+            if expected == 0 {
+                assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn review_loop_writes_resolve_targets_instead_of_declaring_global_names() {
+    for operator in ["in", "of"] {
+        assert!(
+            report(
+                &format!("for (process.env.KEY {operator} values) {{}}"),
+                None
+            )
+            .diagnostics
+            .is_empty()
+        );
+        assert!(has(
+            &report(
+                &format!("for (const value {operator} process.env.KEY) {{}}"),
+                None
+            ),
+            "code_analysis_identity_unknown"
+        ));
+        for (code, expected) in [
+            (
+                format!(
+                    "import {{readFileSync as read}} from 'node:fs'; function local(read) {{ for (read {operator} []) {{}} }} read('config');"
+                ),
+                1,
+            ),
+            (
+                format!(
+                    "import fs from 'node:fs'; for (fs.readFileSync {operator} []) {{}} fs.readFileSync('config');"
+                ),
+                0,
+            ),
+            (
+                format!("for (globalThis.fetch {operator} []) {{}} fetch('https://example.org');"),
+                0,
+            ),
+            (
+                format!("for (fetch {operator} []) {{}} fetch('https://example.org');"),
+                0,
+            ),
+            (
+                format!(
+                    "import fs from 'node:fs'; const read = fs.readFileSync; for (fs.readFileSync {operator} []) {{}} read('config');"
+                ),
+                1,
+            ),
+            (
+                format!(
+                    "function local(globalThis) {{ for (globalThis.fetch {operator} []) {{}} }} fetch('https://example.org');"
+                ),
+                1,
+            ),
+            (
+                format!(
+                    "for (let fetch {operator} []) {{ fetch('https://local.invalid'); }} fetch('https://example.org');"
+                ),
+                1,
+            ),
+            (
+                format!(
+                    "import fs from 'node:fs'; for (fs.other {operator} []) {{}} fs.readFileSync('config');"
+                ),
+                1,
+            ),
+        ] {
+            let r = report(&code, None);
+            assert_eq!(differences(&r), expected, "{code}: {r:?}");
+            if expected == 0 {
+                assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+            }
+        }
+    }
+    for code in [
+        "import fs from 'node:fs'; for ({read: fs.readFileSync} of values) {} fs.readFileSync('config');",
+        "import fs from 'node:fs'; for ([fs.readFileSync] of values) {} fs.readFileSync('config');",
+        "import fs from 'node:fs'; for await (fs.readFileSync of values) {} fs.readFileSync('config');",
+    ] {
+        let r = report(code, None);
+        assert!(r.allowed, "{code}: {r:?}");
+        assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+    }
+}
+
+#[test]
+fn review_typescript_write_wrappers_do_not_hide_targets_or_visit_type_names() {
+    for target in [
+        "(/* target */ fs.readFileSync)",
+        "(fs.readFileSync as unknown)",
+        "(fs.readFileSync satisfies unknown)",
+        "(<unknown>fs.readFileSync)",
+        "(fs.readFileSync!)",
+    ] {
+        let code =
+            format!("import fs from 'node:fs'; {target} = other; fs.readFileSync('config');");
+        let r = report(&code, None);
+        assert!(r.allowed, "{code}: {r:?}");
+        assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+    }
+    for target in ["(fs.other as typeof fetch)", "(<typeof fetch>fs.other)"] {
+        let code =
+            format!("import fs from 'node:fs'; {target} = other; fetch('https://example.org');");
+        assert_eq!(differences(&report(&code, None)), 1, "{code}");
+    }
+}
+
+#[test]
+fn review_method_keys_and_static_blocks_keep_their_own_binding_scopes() {
+    for extension in ["js", "ts"] {
+        for (code, expected) in [
+            (
+                "const object = { [fetch('https://example.org')](fetch) {} };",
+                1,
+            ),
+            ("class C { [fetch('https://example.org')](fetch) {} }", 1),
+            (
+                "class C { static [fetch('https://example.org')](fetch) {} }",
+                1,
+            ),
+            (
+                "class C { static { var fetch = other; } } fetch('https://example.org');",
+                1,
+            ),
+            (
+                "class C { static { var fetch = other; fetch('https://local.invalid'); } }",
+                0,
+            ),
+            (
+                "const object = { run(fetch, x = fetch('https://local.invalid')) {} };",
+                0,
+            ),
+            (
+                "const fetch = other; const object = { [fetch('https://local.invalid')](x) {} };",
+                0,
+            ),
+        ] {
+            let file = format!("main.{extension}");
+            let input = BTreeMap::from([(file.clone(), code.as_bytes())]);
+            let r = Session::default()
+                .analyze(&input, &file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert_eq!(differences(&r), expected, "{code}: {r:?}");
+        }
+    }
+}
+
+#[test]
+fn review_captured_loaders_keep_dependency_effects_and_builtin_return_identity() {
+    for (code, expected) in [
+        ("for (require of [require('./dep')]) {}", 1),
+        ("for (globalThis.require of [require('./dep')]) {}", 1),
+        ("const dep = require('./dep'); require = other;", 1),
+        ("require('./dep'); require = other;", 1),
+        ("require = other; const dep = require('./dep');", 0),
+        (
+            "function local() { require = other; } const dep = require('./dep');",
+            0,
+        ),
+        (
+            "const load = require; require = other; const fs = load('node:fs'); fs.readFileSync('config');",
+            1,
+        ),
+        ("const load = require; require = other; load('./dep');", 1),
+        (
+            "const load = other; const fs = load('node:fs'); fs.readFileSync('config');",
+            0,
+        ),
+        (
+            "const load = require; function local(load) { const fs = load('node:fs'); fs.readFileSync('config'); }",
+            0,
+        ),
+    ] {
+        let input = BTreeMap::from([
+            ("main.ts".into(), code.as_bytes()),
+            ("dep.ts".into(), b"fetch('https://example.org');".as_slice()),
+        ]);
+        let r = Session::default()
+            .analyze(&input, "main.ts", None, &EnvironmentContract::default())
+            .unwrap();
+        assert_eq!(differences(&r), expected, "{code}: {r:?}");
+        if expected == 0 {
+            assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+        }
+    }
 }
 
 #[test]

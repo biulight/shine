@@ -5,7 +5,7 @@ scope assessment is complete. Core, Frontend, CLI and native checks are suppleme
 Windows/Linux/macOS CI, Rust 1.90 MSRV and documentation validation at `39edf006` (2026-10-22).
 Contract: [ADR 0150](../decisions/0150-preset-code-analysis-admission.md).
 
-## Source rules, version 2
+## Source rules, version 6
 
 `core/src/analysis/` accepts captured category-relative source bytes, parsed declarations and an
 environment identity contract. It has no filesystem/process Host, ambient environment lookup,
@@ -41,6 +41,30 @@ Rule version 4 extracts binding names only from binding positions, excluding def
 computed keys and complete TypeScript type annotations. Destructuring assignments use the same
 pattern traversal to invalidate their actual identifier/member targets. Default expressions still
 participate in runtime behavior analysis; nested/rest patterns preserve real local shadowing.
+
+Rule version 5 repairs four issues found by the v4 sample assessment. Argument and executable-array
+selection skips comments while retaining holes/spreads as unknown. Reads and assignments resolve
+the same bounded lexical binding identity; unrelated local names do not invalidate outer aliases,
+and shadowed `globalThis`/`require` do not change global classification. Function-body declarations
+do not shadow the outer environment used by default parameter initializers. CommonJS return-value
+recognition checks the loader's binding and mutations, preserving values captured before replacement
+but retaining a gap for replaced loaders. The rule bump invalidates old analysis identities; report,
+trust and approval schemas and the non-blocking coverage-gap policy are unchanged.
+
+Rule version 6 closes the follow-up syntax boundaries: namespace-import and assignment-target
+comments do not hide identities; TypeScript write wrappers inspect only the operand, not type
+names. Non-declaring `for in/of/await` targets are writes to existing bindings/members, while loop
+declarations retain their scopes. Method parameters exclude computed keys, and class static-block
+vars stay inside that block. Loader calls captured before replacement retain dependency analysis;
+immutable loader aliases retain builtin return identity. Replaced/shadowed loaders and uncertain
+cross-function mutation order still produce gaps rather than definite builtin effects.
+
+Regression coverage includes literal/comment and dynamic/spread pairs, local versus outer mutation,
+JS/TS default parameter scopes, replaced versus captured loaders, and author fixtures for all three
+simulated platforms with and without code trust. Blocking cases also exercise Frontend explicit
+evaluation, rejecting before invocation writes or process starts without a lifecycle approval.
+Existing native CI tables below refer to their recorded commits and do not constitute
+native-platform verification of rule version 6.
 
 Uncorroborated declarations do not block. They also do not remove gaps. Known command identity
 plus a subprocess gap remains incomplete even if file/network declarations are supplied.

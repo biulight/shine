@@ -1,5 +1,24 @@
 # Lessons Learned
 
+## 2026-10-23 — Operand trivia and binding identity affect admission
+
+- **Evidence**: comments before literal targets changed declaration errors into gaps in seven
+  real-source control pairs. Unrelated same-name parameters suppressed outer builtin calls;
+  body-local declarations hid calls in default initializers. Reassigned `require` still produced
+  definite Node file findings for a local return object.
+- **Cause**: comments are named syntax nodes; name-wide mutation invalidation and spelling-only
+  loader/global checks bypassed lexical resolution. Function binding ranges included parameters.
+- **Fix**: skip operand trivia without skipping holes/spreads; share bounded lexical lookup for
+  reads and writes, keep body bindings out of parameter initializers, and check loader identity
+  and mutation at the capture position. Analysis rule version 5 invalidates earlier evidence.
+- **Coverage**: parser positive/negative pairs and Core approval checks; author readiness across
+  three simulated platforms with and without trust. Gaps remain advisory and never grant trust.
+- **Follow-up review (rule 6)**: include namespace-import comments, wrapped TypeScript write targets,
+  non-declaring loop writes, computed method keys and class static blocks in the same identity
+  rules. A loader captured before replacement must still contribute its dependency effects;
+  immutable loader aliases must retain their return identity. New regressions also exercise
+  no-Plan Frontend evaluation, rejecting differences before invocation writes or process starts.
+
 ## 2026-10-23 — Binding patterns are not arbitrary identifier subtrees
 
 - **Evidence**: default parameters, destructuring defaults and `typeof fetch` annotations made

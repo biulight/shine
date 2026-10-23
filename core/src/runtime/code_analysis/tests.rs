@@ -360,6 +360,268 @@ async fn author_terminal_budget_is_incomplete_instead_of_expected_blocking() {
 }
 
 #[tokio::test]
+async fn p1_rule_fixes_preserve_author_readiness_trust_and_approval_boundaries() {
+    for (code, permissions, allowed, gap) in [
+        (
+            "fetch(/* target */ 'https://example.org');",
+            "",
+            false,
+            false,
+        ),
+        (
+            "fetch(/* target */ 'https://example.org');",
+            "network=[{scope='host',host='example.org'}]",
+            true,
+            false,
+        ),
+        ("fetch(/* target */ url);", "", true, true),
+        ("Bun.spawn([/* program */ 'echo']);", "", false, true),
+        (
+            "Bun.spawn([/* program */ 'echo']);",
+            "commands=['echo']",
+            true,
+            true,
+        ),
+        (
+            "import {readFileSync} from 'node:fs'; function local(readFileSync) { readFileSync = other; } readFileSync('config');",
+            "",
+            false,
+            false,
+        ),
+        (
+            "import fs from 'node:fs'; const read = fs.readFileSync; function local(read) { read = other; } read('config');",
+            "",
+            false,
+            false,
+        ),
+        (
+            "function local(require) {} require('node:fs').readFileSync('config');",
+            "",
+            false,
+            false,
+        ),
+        (
+            "function local(globalThis) { globalThis.fetch = other; } fetch('https://example.org');",
+            "",
+            false,
+            false,
+        ),
+        (
+            "function run(x = fetch('https://example.org')) { var fetch = other; }",
+            "",
+            false,
+            false,
+        ),
+        (
+            "function run(x = fetch('https://example.org')) { function fetch() {} }",
+            "",
+            false,
+            false,
+        ),
+        (
+            "function run(fetch, x = fetch('https://local.invalid')) {}",
+            "",
+            true,
+            true,
+        ),
+        (
+            "require = () => ({readFileSync: () => 'ok'}); const fs = require('node:fs'); fs.readFileSync('config');",
+            "",
+            true,
+            true,
+        ),
+        (
+            "const fs = require('node:fs'); require = other; fs.readFileSync('config');",
+            "",
+            false,
+            false,
+        ),
+        (
+            "import * /* ns */ as fs from 'node:fs'; fs.readFileSync('config');",
+            "",
+            false,
+            false,
+        ),
+        (
+            "import fs from 'node:fs'; (/* target */ fs.readFileSync) = other; fs.readFileSync('config');",
+            "",
+            true,
+            true,
+        ),
+        (
+            "import fs from 'node:fs'; (fs.readFileSync as unknown) = other; fs.readFileSync('config');",
+            "",
+            true,
+            true,
+        ),
+        (
+            "import {readFileSync as read} from 'node:fs'; function local(read) { for (read of []) {} } read('config');",
+            "",
+            false,
+            false,
+        ),
+        (
+            "import fs from 'node:fs'; for (fs.readFileSync of []) {} fs.readFileSync('config');",
+            "",
+            true,
+            true,
+        ),
+        (
+            "const object = { [fetch('https://example.org')](fetch) {} };",
+            "",
+            false,
+            false,
+        ),
+        (
+            "class C { static { var fetch = other; } } fetch('https://example.org');",
+            "",
+            false,
+            false,
+        ),
+        (
+            "const dep = require('./dep'); require = other;",
+            "",
+            false,
+            false,
+        ),
+        ("for (require of [require('./dep')]) {}", "", false, false),
+        (
+            "require = other; const dep = require('./dep');",
+            "",
+            true,
+            true,
+        ),
+        (
+            "const load = require; require = other; const fs = load('node:fs'); fs.readFileSync('config');",
+            "",
+            false,
+            false,
+        ),
+    ] {
+        let base = runtime(code, permissions, true);
+        let mut snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded);
+        for (path, bytes) in base.presets().files() {
+            snapshot = snapshot.file(path, bytes.clone());
+        }
+        let live = CoreRuntime::new(
+            InMemoryHost::new(),
+            base.context().clone(),
+            snapshot
+                .file("app/demo/dep.ts", b"fetch('https://example.org');".to_vec())
+                .build(),
+        );
+        let plan = live
+            .plan_apps(request(LifecycleOperation::Install))
+            .await
+            .unwrap();
+        assert_eq!(plan.is_ready(), allowed, "{code}: {plan:?}");
+        assert_eq!(PlanApprovalV1::for_reviewed_plan(&plan).is_ok(), allowed);
+        let diagnostics = &plan.code_analysis[0].scope.report.diagnostics;
+        assert_eq!(
+            diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::Difference),
+            !allowed,
+            "{code}"
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::CoverageGap),
+            gap,
+            "{code}: {diagnostics:?}"
+        );
+        assert!(live.host().process_requests().is_empty());
+        assert!(
+            live.host()
+                .operations()
+                .iter()
+                .all(|op| matches!(op, HostOperation::Read(_)))
+        );
+
+        let source = InMemoryHost::new();
+        for (path, bytes) in live.presets().files() {
+            source.put_file(format!("/repo/{path}"), bytes.clone());
+        }
+        let mut fixture = String::from("schema_version=1\n");
+        for platform in ["macos", "linux", "windows"] {
+            for trusted in [false, true] {
+                let trust = if trusted {
+                    "trust=[{target='app/demo',capability='app-generator'}]"
+                } else {
+                    "trust=[]"
+                };
+                fixture.push_str(&format!(
+                    "\n[[cases]]\nname='{platform}-{trusted}'\nplatform='{platform}'\n[cases.host]\nenvironment=['ENABLE']\n{trust}\n[cases.expect]\nvalid=true\nready={}\n",
+                    trusted && allowed,
+                ));
+            }
+        }
+        source.put_file("/repo/app/demo/shine.test.toml", fixture.into_bytes());
+        let result = test_preset_path(&source, Path::new("/repo"), Path::new("app/demo")).await;
+        assert!(result.complete && result.valid, "{code}: {result:?}");
+        assert_eq!(result.cases.len(), 6);
+        for case in &result.cases {
+            assert!(case.passed, "{code}: {case:?}");
+            assert_eq!(
+                case.actual_analysis_diagnostic_codes
+                    .iter()
+                    .any(|code| code == "code_analysis_declaration_difference"),
+                !allowed,
+                "{code}: {case:?}",
+            );
+            assert_eq!(
+                case.actual_step_diagnostic_codes
+                    .iter()
+                    .any(|code| code == "app_external_code_not_allowed"),
+                case.name.ends_with("-false"),
+                "{code}: {case:?}",
+            );
+        }
+        assert!(source.process_requests().is_empty());
+        assert!(
+            source
+                .operations()
+                .iter()
+                .all(|op| matches!(op, HostOperation::Read(_)))
+        );
+        if !allowed {
+            // Explicit evaluation has no lifecycle Plan approval. The same
+            // findings must stop it before any invocation write or process.
+            let service = crate::frontend::FrontendService::new(live);
+            let result = service
+                .inspect_apps_with_options(
+                    AppInspectionOptions {
+                        run_generators: true,
+                        ..Default::default()
+                    },
+                    &mut NullObserver,
+                )
+                .await
+                .unwrap();
+            assert!(!result.report.code_analysis.is_empty(), "{code}");
+            assert!(
+                result
+                    .report
+                    .code_analysis
+                    .iter()
+                    .all(|scope| !scope.report.allowed),
+                "{code}"
+            );
+            assert!(
+                service
+                    .runtime()
+                    .host()
+                    .operations()
+                    .iter()
+                    .all(|op| matches!(op, HostOperation::Read(_))),
+                "{code}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn fixture_terminal_failure_preserves_completed_and_marks_remaining_cases() {
     let live = runtime("export {};", "", true);
     let source = InMemoryHost::new();
