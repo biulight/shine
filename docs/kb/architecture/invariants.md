@@ -281,20 +281,25 @@ bugs. Check this list before changing the modules named in each entry.
   redefine the App/Shell/Sys TOML grammar; runtime parsers plus `preset validate` remain authoritative.
 - **Preset source migration is reviewed, metadata-only, and backup-first.** `shine preset migrate`
   derives candidates from one immutable effective snapshot, preserves unchanged TOML formatting,
-  validates candidates authoritatively, renders diffs through a CLI-only side channel, and rechecks
-  source SHA-256 immediately before backup and apply. Its versioned report contains only logical
+  uniform LF/CRLF style and final-newline presence on rewritten metadata, validates candidates
+  authoritatively, renders diffs through a CLI-only side channel, and rechecks source SHA-256
+  immediately before backup and apply. Its versioned report contains only logical
   targets, source layers, actions, stable codes, schema versions, hashes, and summary counts—never
-  file content, diffs, private values, or physical checkout paths. Dry-run creates no directory or
-  file. Apply requires default-No review (or explicit `--yes`) and a complete owner-only backup set
+  file content, diffs, private values, or physical checkout paths. Mixed LF/CRLF blocks rewrites
+  until the author chooses a style. Dry-run creates no directory or file. Apply requires default-No
+  review (or explicit `--yes`) and a complete owner-only backup set
   with hash/mode manifest before the first atomic metadata replacement or removal. Payloads, scripts,
   environment values, runtime manifests, and trust grants are never migrated. Opaque-code
   permissions, broad network access, and Sys v1 dispatchers are never inferred. Managed Git overlays
-  are diagnostic-only; a source change, backup/write failure, refusal, or remaining blocker fails the
-  command even when independent safe edits have converged. Terminal summaries encode data before
-  wrapping; diff headers encode logical paths before diff construction and body rendering preserves
-  structural newlines while encoding CR/TAB/ESC. Migration and info share stdout-aware diff colors
-  after encoding, retaining existing forced-color overrides as well as `NO_COLOR` and ordinary
-  redirection detection. Display escapes and colors never enter candidates or JSON.
+  are diagnostic-only; their retained diffs are explicitly upstream-only previews, excluded from
+  automatic changes, with commit/push-before-pull guidance. A source change, backup/write failure,
+  refusal, or remaining blocker fails the command even when independent safe edits have converged.
+  Terminal summaries encode data before wrapping; diff headers encode logical paths before diff
+  construction and body rendering preserves
+  structural newlines while encoding CR/TAB/ESC. Migration alone displays paired CRLF as LF on
+  presentation copies with a notice; bare CR/TAB/ESC remain encoded. Migration and info share
+  stdout-aware diff colors after encoding, retaining existing forced-color overrides as well as
+  `NO_COLOR` and ordinary redirection detection. Display escapes and colors never enter candidates or JSON.
   Control-bearing remediation targets require original operands rather than escaped command aliases.
 - **Preset bundle bytes exclude host identity and author-only state.** `shine preset pack` uses one
   validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical

@@ -126,7 +126,8 @@ shine preset migrate --yes
 也可以传入 Preset 仓库、类别目录或 `shine.toml`。该命令只改写安全的 `shine.toml` metadata，
 逐文件显示 diff，确认默认是 No；写入前会校验候选内容并创建完整的私有备份集。它绝不会改动
 payload、脚本、环境值、运行状态或 trust grant。Git 管理的 overlay 是只读缓存：请对上游 checkout
-显式执行路径迁移，在上游提交后再 pull。
+显式执行路径迁移，验证并提交修改，推送至配置的远端分支后，在消费设备上运行
+`shine preset pull`。其 diff 仅供上游修改参考，不计入镜像的自动修改数。
 
 Sys v1 dispatcher 必须人工迁移。根据报告中的 target 更新来源后，运行
 `shine preset validate <PATH>` 和 `shine preset plan <PATH> --platform <PLATFORM>` 校验。

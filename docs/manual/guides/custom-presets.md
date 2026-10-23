@@ -181,6 +181,9 @@ output is plain unless color is explicitly forced, for example with `FORCE_COLOR
 `shine.toml`, validates the candidate, rechecks source hashes, and creates a complete private backup
 set before writing. Payloads, scripts, values, runtime manifests, and trust grants are untouched.
 Text backup paths escape terminal controls; backup contents and JSON report identifiers are unchanged.
+Rewritten metadata keeps its LF or CRLF line endings and whether it ends with a newline. CRLF
+diffs display ordinary line breaks with a notice, rather than `\r` on every line. If a file needs
+migration but mixes LF and CRLF, first choose one line-ending style for that file, then rerun.
 Exact released 1.x built-in metadata may be rebased when its executable identity is unchanged;
 legacy Apps may receive current metadata without adding capability statements. Missing optional
 capability tables do not require migration, including for opaque code; external-code trust remains
@@ -188,8 +191,10 @@ a separate review. Sys v1 dispatchers still require manual migration.
 
 `--yes` is appropriate only after review and still prints text diffs. JSON is a versioned report
 without contents or diffs; use `--format json --dry-run` for inspection or combine JSON apply with
-`--yes`. A managed Git overlay is diagnosed but never changed—run the explicit-path command in its
-upstream checkout, commit there, and pull the mirror again.
+`--yes`. A managed Git overlay is diagnosed but never changed. Its diffs are marked as previews
+for upstream edits and do not count as automatic changes. Run the explicit-path command in its
+upstream checkout, validate and commit the changes, push them to the configured remote branch,
+then run `shine preset pull` on the consuming device.
 
 ## Describe capabilities and required inputs {#declare-permissions}
 

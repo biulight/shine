@@ -113,10 +113,11 @@ fn structured_env_migration_is_explicit_backup_first_and_idempotent() {
     let shell = root.join("shell/demo");
     fs::create_dir_all(&app).unwrap();
     fs::create_dir_all(&shell).unwrap();
-    let app_metadata = "metadata_schema_version=2\ndest='~/.demo'\n[artifact]\nscript='build.ts'\nruntime='bun'\nenv=['TOKEN=ALIAS']\n[permissions]\nschema_version=1\nenvironment=[{name='TOKEN',sensitivity='secret'}]\n[[files]]\nsource='config'\n";
-    let shell_metadata = "[[files]]\nsource='run.ts'\nruntime='bun'\nenv=['VALUE']\n[files.permissions]\nschema_version=1\nenvironment=[{name='VALUE',sensitivity='plain'}]\n";
-    fs::write(app.join("shine.toml"), app_metadata).unwrap();
-    fs::write(shell.join("shine.toml"), shell_metadata).unwrap();
+    let app_metadata = "metadata_schema_version=2\ndest='~/.demo'\n[artifact]\nscript='build.ts'\nruntime='bun'\nenv=['TOKEN=ALIAS']\n[permissions]\nschema_version=1\nenvironment=[{name='TOKEN',sensitivity='secret'}]\n[[files]]\nsource='config'\n".replace('\n', "\r\n");
+    let shell_metadata = "[[files]]\nsource='run.ts'\nruntime='bun'\nenv=['VALUE']\n[files.permissions]\nschema_version=1\nenvironment=[{name='VALUE',sensitivity='plain'}]\n".replace('\n', "\r\n");
+    let shell_metadata = shell_metadata.trim_end_matches("\r\n").to_string();
+    fs::write(app.join("shine.toml"), &app_metadata).unwrap();
+    fs::write(shell.join("shine.toml"), &shell_metadata).unwrap();
     fs::write(app.join("config"), "unchanged").unwrap();
     fs::write(app.join("build.ts"), "console.log(process.env.ALIAS);").unwrap();
     fs::write(shell.join("run.ts"), "console.log(process.env.VALUE);").unwrap();
@@ -194,6 +195,22 @@ fn structured_env_migration_is_explicit_backup_first_and_idempotent() {
     assert!(applied.status.success(), "{applied:?}");
     let result: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
     assert_eq!(result["summary"]["changes"], 2);
+    for file in result["files"].as_array().unwrap() {
+        let target = file["target"].as_str().unwrap();
+        let bytes = fs::read(root.join(target)).unwrap();
+        assert_eq!(
+            shine_core::digest::sha256_hex(&bytes),
+            file["candidate_sha256"]
+        );
+        assert!(bytes.windows(2).any(|pair| pair == b"\r\n"));
+        assert_eq!(bytes.ends_with(b"\r\n"), target.starts_with("app/"));
+        assert!(
+            !String::from_utf8(bytes)
+                .unwrap()
+                .replace("\r\n", "")
+                .contains('\n')
+        );
+    }
     let backup =
         f.0.join("state")
             .join(result["backup_set"].as_str().unwrap());
@@ -305,6 +322,106 @@ fn migration_diff_colors_follow_stdout_and_leave_json_and_sources_unchanged() {
         assert_eq!(
             fs::read_to_string(category.join("shine.toml")).unwrap(),
             original
+        );
+        assert!(!fixture.0.join("state").exists());
+    }
+}
+
+#[test]
+fn managed_overlay_migration_crlf_preview_is_read_only_and_explains_upstream_publication() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let shell = state.join("overlay/shell/demo");
+    fs::create_dir_all(&shell).unwrap();
+    fs::create_dir_all(state.join("presets")).unwrap();
+    let config = "schema_version=2\npresets_overlay_git='https://example.invalid/presets.git'\n";
+    let original = "# unchanged heading\r\n[[files]]\r\nsource='run.ts'\r\nruntime='bun'\r\nenv=['TOKEN']\r\n[files.permissions]\r\nschema_version=1\r\nenvironment=[{name='TOKEN',sensitivity='secret'}]\r\n";
+    fs::write(state.join("config.toml"), config).unwrap();
+    fs::write(shell.join("shine.toml"), original).unwrap();
+    fs::write(shell.join("run.ts"), "throw new Error('must not run');").unwrap();
+    for args in [
+        vec!["--dry-run"],
+        vec!["--yes"],
+        vec!["--dry-run", "--format", "json"],
+    ] {
+        let output = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["preset", "migrate"])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        if args.contains(&"json") {
+            let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(report["summary"]["changes"], 0);
+            assert_eq!(report["summary"]["blockers"], 1);
+            assert!(report["files"].as_array().unwrap().is_empty());
+            assert_eq!(
+                report["diagnostics"][0]["code"],
+                "managed_overlay_read_only"
+            );
+            assert!(!text.contains("Preview only"));
+            assert!(!text.contains("--- a/"));
+        } else {
+            assert!(text.contains("0 automatic changes"), "{text}");
+            assert!(text.contains("Preview only: update the upstream checkout; this managed overlay will not be changed."), "{text}");
+            assert!(
+                text.contains(
+                    "Commit and push the upstream changes to the configured remote branch"
+                ),
+                "{text}"
+            );
+            assert!(text.contains("shine preset pull"));
+            assert!(text.contains("Line endings: CRLF (displayed as LF)."));
+            assert!(text.contains(" source='run.ts'\n"), "{text:?}");
+            assert!(!text.contains("-# unchanged heading"), "{text:?}");
+            assert!(!text.contains(r"\r"), "{text:?}");
+        }
+        assert_eq!(
+            fs::read(shell.join("shine.toml")).unwrap(),
+            original.as_bytes()
+        );
+        assert_eq!(
+            fs::read_to_string(state.join("config.toml")).unwrap(),
+            config
+        );
+        assert!(!state.join("preset-migration-backups").exists());
+        assert!(!state.join("trust.toml").exists());
+    }
+}
+
+#[test]
+fn mixed_line_ending_migration_fails_without_initialization_or_source_writes() {
+    let fixture = Fixture::new();
+    let root = fixture.0.join("presets");
+    let app = root.join("app/demo");
+    fs::create_dir_all(&app).unwrap();
+    let original = "# CRLF heading\r\ndest='~/.demo'\n";
+    fs::write(app.join("shine.toml"), original).unwrap();
+    for args in [
+        ["--dry-run", "--format", "json"],
+        ["--yes", "--format", "json"],
+    ] {
+        let output = fixture
+            .command()
+            .args(["preset", "migrate"])
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["summary"]["changes"], 0);
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "mixed_metadata_line_endings"
+        );
+        assert_eq!(
+            fs::read(app.join("shine.toml")).unwrap(),
+            original.as_bytes()
         );
         assert!(!fixture.0.join("state").exists());
     }
@@ -6338,7 +6455,7 @@ fn migration_preview_encodes_diff_without_changing_applied_metadata() {
     fs::create_dir_all(&app).unwrap();
     let original = format!(
         "# preserved\tcomment\r\ndest = '~/.demo'\r\npost_install = {{ command = 'shine', args = ['app', 'artifact', 'apply', {}] }}\r\n[artifact]\r\nscript = 'build.ts'\r\n",
-        toml::Value::String(category.into())
+        serde_json::to_string(category).unwrap()
     );
     fs::write(app.join("shine.toml"), &original).unwrap();
     fs::write(
@@ -6375,7 +6492,10 @@ fn migration_preview_encodes_diff_without_changing_applied_metadata() {
     let text = String::from_utf8(preview.stdout).unwrap();
     assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
     assert!(!text.contains("\nFORGED"), "{text:?}");
-    assert!(text.contains(r"# preserved\tcomment\r"), "{text:?}");
+    assert!(text.contains(r"# preserved\tcomment"), "{text:?}");
+    assert!(!text.contains(r"comment\r"), "{text:?}");
+    assert!(text.contains("Line endings: CRLF (displayed as LF)."));
+    assert!(text.contains(" # preserved\\tcomment\n"), "{text:?}");
     assert_eq!(
         text.lines()
             .filter(|line| line.starts_with("--- a/"))
@@ -6399,8 +6519,8 @@ fn migration_preview_encodes_diff_without_changing_applied_metadata() {
     );
     assert!(
         bytes
-            .windows(b"# preserved\tcomment\n".len())
-            .any(|w| w == b"# preserved\tcomment\n")
+            .windows(b"# preserved\tcomment\r\n".len())
+            .any(|w| w == b"# preserved\tcomment\r\n")
     );
     assert_eq!(
         fs::read_to_string(app.join("build.ts")).unwrap(),

@@ -133,7 +133,9 @@ You can also pass a Preset repository, category directory, or `shine.toml`. The 
 safe `shine.toml` metadata, displays each diff, defaults confirmation to No, validates the candidate,
 and creates a private complete backup set before writing. It never changes payloads, scripts,
 environment values, runtime state, or trust grants. A managed Git overlay is read-only: migrate its
-upstream checkout with an explicit path, commit it there, then pull again.
+upstream checkout with an explicit path, validate and commit the changes, push to the configured
+remote branch, then run `shine preset pull` on the consuming device. Its preview diffs are for
+upstream edits and do not count as automatic changes to the mirror.
 
 Sys v1 dispatchers require manual migration. Follow the reported target and validate the updated
 source with `shine preset validate <PATH>` and `shine preset plan <PATH> --platform <PLATFORM>`.

@@ -368,7 +368,8 @@ Saved paths and source priority retain their original meaning.
 Use `validate`, `lint`, `plan`, and `test` before distributing a Preset. These commands inspect
 authoring input without installing it. `migrate --dry-run` previews legacy metadata changes;
 applying a migration requires review and confirmation. A Git-managed overlay is a disposable mirror,
-so edit its upstream checkout rather than the mirror.
+so its diffs are upstream-edit previews only. Migrate and validate its upstream checkout, commit
+and push to the configured remote branch, then run `shine preset pull` on the consuming device.
 Text summaries use singular or plural counts, such as `1 category`, `1 case`, and `1 file`.
 This includes created, overwritten and skipped counts from `preset copy` and `preset export`.
 Source-link errors, unknown copy targets and Git preflight errors escape their displayed operands;

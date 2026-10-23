@@ -305,7 +305,8 @@ Git 自身输出的格式保持不变。
 
 发布预设前使用 `validate`、`lint`、`plan` 和 `test`。这些命令只检查创作输入，不会安装预设。
 `migrate --dry-run` 用于预览旧 metadata 迁移，实际应用前需要审阅并确认。Git 管理的 overlay 是
-可丢弃镜像，应在上游 checkout 中编辑，而不是修改镜像。
+可丢弃镜像，其 diff 仅供上游修改参考。请在上游 checkout 中迁移、验证并提交修改，推送至配置的
+远端分支后，在消费设备上运行 `shine preset pull`。
 文本汇总按数量使用单复数，例如 `1 category`、`1 case` 和 `1 file`，包括 `preset copy` 和
 `preset export` 创建、覆盖及跳过的文件数。
 来源链接错误、未知复制目标及 Git 前置检查错误会转义所显示的参数；路径解析、来源优先级和

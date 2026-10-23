@@ -1,5 +1,25 @@
 # Lessons Learned
 
+## 2026-10-24 — Metadata migration preserves checkout line endings before review
+
+- **Symptom**: Windows migration previews replaced every metadata line and displayed `\r` on
+  removed lines. Managed-overlay diffs appeared beneath `0 automatic changes` without explaining
+  their scope, and the next-step hint omitted pushing upstream commits before consumer pulls.
+- **Cause**: Git checked out CRLF, `toml_edit` serialized LF, and exact line comparison correctly
+  detected the byte changes. Safe terminal escaping made the CR visible rather than causing it.
+- **Rule**: restore uniform LF/CRLF and final-newline presence on candidate bytes before validation
+  and hashing. Block mixed LF/CRLF rewrites until the author chooses a style. Normalize paired
+  CRLF only on display copies with a notice; split on LF so standalone CR remains escaped data,
+  including at EOF. Retain raw source/hash/backup checks and missing-newline markers.
+- **Coverage**: App/Shell conversion, semantic env mappings, multiline values, source hashes,
+  backup/apply/idempotence, mixed-input refusal, safe colored/plain previews, and managed-overlay
+  refusal remain independent. Overlay previews explicitly require upstream commit/push before pull.
+- **Native acceptance (2026-10-24)**: isolated Rust 1.96.0 builds of `af6c027c` plus the four-file
+  migration fix passed 49 targeted tests on Windows x86_64 and 50 on Linux x86_64 (30 migration
+  unit tests, 10 output tests, and 9/10 CLI tests respectively). An actual Windows managed-overlay
+  dry-run also retained the expected blocker while eliminating whole-file CRLF churn; metadata,
+  config and state-directory entries stayed unchanged. Existing checkouts were preserved.
+
 ## 2026-10-23 — Reduce diagnostic repetition without reducing evidence
 
 - **Evidence**: built-in lint produced 768 warnings across 18 categories; ordinary text repeated
@@ -3374,8 +3394,8 @@ When cutting a release, always diff against the latest stable `v*` tag
   preserve structural LF and display CR/TAB explicitly; they are not patch input.
 - **Regression**: snapshot compatibility reports and real CLI migration, generator, update/status
   and blocked lifecycle checks retain JSON/candidate hashes, redaction, exit codes and file bytes.
-  Migration's pre-existing CRLF normalization is checked through candidate hashes, not redefined by
-  display tests. Explicit artifacts retain inherited process I/O and their existing failure policy.
+  Candidate hashes bind the actual preserved LF/CRLF bytes; display copies alone normalize paired
+  CRLF with a notice. Explicit artifacts retain inherited process I/O and their existing failure policy.
 
 ## 2026-10-21 — Global list output has independent labels and remediation
 
