@@ -3,6 +3,8 @@
 Status: first-release implementation and acceptance complete. Stages A–D are implemented; stage E
 scope assessment is complete. Core, Frontend, CLI and native checks are supplemented by successful
 Windows/Linux/macOS CI, Rust 1.90 MSRV and documentation validation at `39edf006` (2026-10-22).
+The subsequent rule-version-6 P1 fixes passed full native CI, quality and MSRV at `aa9b81f8`;
+see the [P1 CI acceptance record](../operations/ci-pipelines.md#code-analysis-p1-acceptance-2026-10-23).
 Contract: [ADR 0150](../decisions/0150-preset-code-analysis-admission.md).
 
 ## Source rules, version 6
@@ -332,3 +334,8 @@ These are targeted native results, not full workspace, native Clippy, MSRV or CI
 `14eac507`. They found no new regression and required no source changes. P2 diagnostic aggregation
 remains deferred. Task-owned remote source/build directories were removed after verification;
 no production preset was activated and no repository push was performed.
+
+The later push of `14eac507` and `aa9b81f8` passed full Windows/Linux/macOS workspace CI, quality
+and Rust 1.90 MSRV at the latter commit. See the
+[final CI results](../operations/ci-pipelines.md#code-analysis-p1-acceptance-2026-10-23)
+for exact job links, counts and warnings; the targeted results above retain their original scope.

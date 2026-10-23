@@ -119,6 +119,38 @@ tests, built-in Preset sample test and six isolated CLI probes. The public manua
 parent commit triggered `docs.yml`; this internal KB evidence update alone does not match that
 workflow's path filters and does not deploy documentation.
 
+## Code-analysis P1 acceptance (2026-10-23)
+
+Accepted `release` commit:
+[`aa9b81f8445621efb755d23ed11f2666a390c874`](https://github.com/biulight/shine/commit/aa9b81f8445621efb755d23ed11f2666a390c874).
+The push contained `14eac507` (four P1 fixes, syntax-boundary review repairs and regressions under
+analysis rule version 6) and `aa9b81f8` (isolated native verification evidence). The fixes cover
+operand comments, lexical mutation identity, default-parameter scope and loader identity without
+changing trust, approval or non-blocking coverage-gap semantics. P2 diagnostic aggregation remains
+deferred.
+
+The [CI run](https://github.com/biulight/shine/actions/runs/39962137705) and
+[MSRV run](https://github.com/biulight/shine/actions/runs/39962137736) both target that exact SHA and
+finished with `completed / success` on attempt 1. No CI repair or rerun was required.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,766 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/39962137705/job/120442516242) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 2,029 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/39962137705/job/120442516101) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 2,031 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/39962137705/job/120442516018) |
+| Quality | Bun typecheck and 78 tests, formatting, compilation, Preset authoring examples, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/39962137705/job/120442515745) |
+| MSRV | Rust 1.90.0 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/39962137736/job/120442515433) |
+
+All three native test jobs reported zero LEAK results under the existing strict policy. Windows
+retained the previously observed unused-item warnings in unchanged CLI code; these did not fail
+the test job. Quality Clippy ran on Ubuntu with warnings denied.
+
+These full workspace CI results supplement the earlier
+[targeted Windows/Linux verification](../architecture/code-analysis.md#p1-native-verification-2026-10-23)
+at `14eac507`; they apply to the accepted head, not to subsequent documentation commits. The push
+changed no public manual, website or documentation-workflow paths, so `docs.yml` was not triggered
+and no documentation deployment is claimed.
+
 ## Documentation server deployment
 
 `docs.yml` always keeps GitHub Pages deployment enabled. A second deployment uploads the same
