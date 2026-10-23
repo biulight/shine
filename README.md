@@ -80,7 +80,7 @@ With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):
 cargo binstall shine-cli
 ```
 
-From source on crates.io with Rust 1.88 or later:
+From source on crates.io with Rust 1.90 or later:
 
 ```bash
 cargo install shine-cli

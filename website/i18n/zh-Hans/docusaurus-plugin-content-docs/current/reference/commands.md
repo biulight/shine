@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 2.6.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
+本页适用于 Shine 2.7.0。使用 `shine <COMMAND> --help` 查看当前安装版本支持的全部选项。完整操作流程
 请阅读对应指南；本页只提供便于查找的命令索引。
 
 ## 目标名称
@@ -187,6 +187,9 @@ shine completions <bash|zsh|powershell>
 
 动态补全会列出当前预设来源及其生效 overlay 中的候选。
 按 Tab 补全不会执行预设代码或授予信任。
+
+Shell 脚本或受管快照缺失时，`info --diff` 会报告缺失路径，并转义其中的控制字符。
+查看不会修复文件，也不会改变回执或信任记录。
 
 `state migrate` 在清理或写入之前校验项目配置和工作区文件。如果 TOML 语法无效，
 或工作区的 `env`/`env.encryption` 字段不是表，会报告文件位置并以退出码 1 结束，

@@ -58,7 +58,7 @@ async fn specialized_artifact_execution_retains_secret_versions_and_operation_id
 script = 'build.ts'
 teardown = 'unbuild.ts'
 runtime = 'bun'
-env = ['TOKEN']
+env = [{ source = 'TOKEN', sensitivity = 'secret' }]
 [permissions]
 schema_version = 1
 filesystem = [
@@ -93,6 +93,7 @@ source = 'config.toml'
                 input_versions,
             });
             runtime.host().queue_process_output(Ok(ProcessOutput {
+                interrupted: false,
                 exit_code: Some(0),
                 stdout: Vec::new(),
                 stderr: Vec::new(),
@@ -223,7 +224,7 @@ commands = ['bun']
 environment = [{ name = 'SOURCE', sensitivity = 'secret' }]
 [[files]]
 source = 'generated.txt'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'secret' }], when_env = 'SOURCE', auto = false }
 "#.to_vec())
         .file("app/demo/generated.txt", b"fallback".to_vec())
         .file("app/demo/gen.ts", b"process.stdout.write('generated')".to_vec()).build();
@@ -255,6 +256,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
         .await
         .unwrap();
         runtime.host().queue_process_output(Ok(ProcessOutput {
+            interrupted: false,
             exit_code: Some(0),
             stdout: b"generated".to_vec(),
             stderr: Vec::new(),
@@ -650,9 +652,9 @@ async fn changed_source_or_permissions_in_fresh_capture_invalidates_approval() {
 #[tokio::test]
 async fn prevalidated_approval_is_rechecked_before_apply() {
     let host = InMemoryHost::new();
-    let trusted = service(host.clone()).into_trusted();
+    let mut trusted = service(host.clone()).into_trusted();
     let approved = trusted
-        .review(ReviewRequest::App(app_plan_request()))
+        .review_with_code_confirmation(ReviewRequest::App(app_plan_request()))
         .await
         .unwrap()
         .approve_after_human_confirmation()

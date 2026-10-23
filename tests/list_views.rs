@@ -61,7 +61,7 @@ impl Fixture {
         fs::create_dir_all(&preset).unwrap();
         let destination = self.0.join("destination");
         // Rust's quoted path escaping also forms a TOML basic string on supported hosts.
-        fs::write(preset.join("shine.toml"), format!("metadata_schema_version = 2\ndest = {:?}\nlist_mode = 'files'\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\n[[files]]\nsource = 'config.txt'\n[[files]]\nsource = 'manual.txt'\n{}", destination.to_str().unwrap(), if generated { "generator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = ['ENABLE'], auto = false }\n" } else { "" })).unwrap();
+        fs::write(preset.join("shine.toml"), format!("metadata_schema_version = 2\ndest = {:?}\nlist_mode = 'files'\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\nfilesystem = [{{ access = ['write'], base = 'absolute', path = {:?} }}]\n[[files]]\nsource = 'config.txt'\n[[files]]\nsource = 'manual.txt'\n{}", destination.to_str().unwrap(), self.0.join("generator-ran").to_str().unwrap(), if generated { "generator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = [{ source = 'ENABLE', sensitivity = 'plain' }], auto = false }\n" } else { "" })).unwrap();
         fs::write(preset.join("config.txt"), "static-v1\n").unwrap();
         fs::write(preset.join("manual.txt"), "manual-v1\n").unwrap();
         fs::write(
@@ -163,9 +163,20 @@ fn assert_hint_argv(command: &str, expected: &[&str]) {
 #[test]
 fn app_info_diff_escapes_terminal_controls_without_mutating_content_or_state() {
     let fixture = Fixture::new();
-    fixture.app(false);
-    let source = fixture.0.join("state/presets/app/demo/config.txt");
-    let destination = fixture.0.join("destination/config.txt");
+    let destination_dir = fixture.0.join(if cfg!(unix) {
+        "destination\nFORGED_HEADER"
+    } else {
+        "destination"
+    });
+    let preset = fixture.0.join("state/presets/app/demo");
+    fs::create_dir_all(&preset).unwrap();
+    let metadata = format!(
+        "metadata_schema_version = 2\ndest = {:?}\n[[files]]\nsource = 'config.txt'\n",
+        destination_dir.to_str().unwrap()
+    );
+    fs::write(preset.join("shine.toml"), &metadata).unwrap();
+    let source = preset.join("config.txt");
+    let destination = destination_dir.join("config.txt");
     fs::create_dir_all(destination.parent().unwrap()).unwrap();
     let current = b"context\x07\nold\x1b[2J\t\nend\n";
     let expected = b"context\x07\nnew\x1b[H\rREPLACED\t\nend\n";
@@ -173,10 +184,22 @@ fn app_info_diff_escapes_terminal_controls_without_mutating_content_or_state() {
     fs::write(&destination, current).unwrap();
     let config = fs::read(fixture.0.join("state/config.toml")).unwrap();
 
-    let output = fixture.run(&["app", "info", "demo", "--diff"]);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+    command
+        .args(["app", "info", "demo", "--diff"])
+        .env_remove("FORCE_COLOR")
+        .env_remove("CLICOLOR_FORCE");
+    let output = fixture.run_command(command);
     success(&output);
     assert!(output.stderr.is_empty(), "{output:?}");
     let text = stdout(&output);
+    assert!(
+        text.contains(&format!(
+            "--- {}\n+++ expected: app/demo/config.txt\n@@ ",
+            destination.display().to_string().replace('\n', "\\n")
+        )),
+        "{text:?}"
+    );
     // Uninstalled App info previews the expected content against an empty file.
     for escaped in ["+context\\u{7}", "+new\\u{1b}[H", "\\r", "REPLACED\\t"] {
         assert!(text.contains(escaped), "missing {escaped:?} in {text:?}");
@@ -186,6 +209,10 @@ fn app_info_diff_escapes_terminal_controls_without_mutating_content_or_state() {
         "raw control character in {text:?}"
     );
     assert_eq!(fs::read(&source).unwrap(), expected);
+    assert_eq!(
+        fs::read_to_string(preset.join("shine.toml")).unwrap(),
+        metadata
+    );
     assert_eq!(fs::read(&destination).unwrap(), current);
     assert_eq!(
         fs::read(fixture.0.join("state/config.toml")).unwrap(),
@@ -193,6 +220,72 @@ fn app_info_diff_escapes_terminal_controls_without_mutating_content_or_state() {
     );
     for state in ["app-manifest.toml", "trust.toml"] {
         assert!(!fixture.0.join("state").join(state).exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_diff_missing_paths_escape_controls_without_repairing_state() {
+    for (mode, notice) in [
+        ("snapshot", "Managed snapshot is missing:"),
+        ("live", "Current script is missing:"),
+    ] {
+        let mut fixture = Fixture::new();
+        let root = fixture.0.with_extension("missing\nFORGED\u{1b}[2J");
+        fs::rename(&fixture.0, &root).unwrap();
+        fixture.0 = root;
+        let state = fixture.0.join("state");
+        let config = format!("schema_version=2\nexternal_shell_mode='{mode}'\n");
+        fs::write(state.join("config.toml"), &config).unwrap();
+        let preset = state.join("presets/shell/demo");
+        fs::create_dir_all(&preset).unwrap();
+        let metadata = "[[files]]\nsource='tool.sh'\ntarget='tool'\ntransforms=['template']\n";
+        fs::write(preset.join("shine.toml"), metadata).unwrap();
+        fs::write(preset.join("tool.sh"), "# never executed\n").unwrap();
+        let receipt = toml::to_string(&serde_json::json!({
+            "schema_version": 2,
+            "entries": [{
+                "category": "demo", "command": "tool", "mode": mode,
+                "source_path": preset.join("tool.sh"),
+                "rendered_path": state.join("rendered/shell/demo/tool.sh"),
+                "runtime": "native", "transforms": ["template"], "content_hash": 0
+            }]
+        }))
+        .unwrap();
+        fs::write(state.join("shell-manifest.toml"), &receipt).unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_shine"));
+        command
+            .args(["info", "shell/demo/tool", "--diff"])
+            .env_remove("FORCE_COLOR")
+            .env_remove("CLICOLOR_FORCE");
+        let output = fixture.run_command(command);
+        success(&output);
+        let text = stdout(&output);
+        let line = text.lines().find(|line| line.starts_with(notice)).unwrap();
+        assert!(line.contains("missing\\nFORGED\\u{1b}[2J"), "{text:?}");
+        assert!(
+            text.chars().all(|ch| !ch.is_control() || ch == '\n'),
+            "{text:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(state.join("shell-manifest.toml")).unwrap(),
+            receipt
+        );
+        assert_eq!(
+            fs::read_to_string(state.join("config.toml")).unwrap(),
+            config
+        );
+        assert_eq!(
+            fs::read_to_string(preset.join("shine.toml")).unwrap(),
+            metadata
+        );
+        assert_eq!(
+            fs::read_to_string(preset.join("tool.sh")).unwrap(),
+            "# never executed\n"
+        );
+        for absent in ["trust.toml", "rendered", "installed", "bin/tool"] {
+            assert!(!state.join(absent).exists(), "unexpected {absent}");
+        }
     }
 }
 
@@ -889,7 +982,7 @@ fn refresh_summary_distinguishes_preservation_failure_and_partial_progress() {
             fixture.0.join("destination").to_str().unwrap()
         );
         for id in 0..if mixed { 3 } else { 1 } {
-            metadata.push_str(&format!("[[files]]\nsource = '{id}.txt'\ngenerator = {{ script = '{id}.ts', runtime = 'bun', when_env = 'ENABLE', env = ['ENABLE'], auto = false }}\n"));
+            metadata.push_str(&format!("[[files]]\nsource = '{id}.txt'\ngenerator = {{ script = '{id}.ts', runtime = 'bun', when_env = 'ENABLE', env = [{{ source = 'ENABLE', sensitivity = 'plain' }}], auto = false }}\n"));
             fs::write(preset.join(format!("{id}.txt")), "fallback\n").unwrap();
             fs::write(preset.join(format!("{id}.ts")), "console.log('v1');\n").unwrap();
         }
@@ -1943,7 +2036,7 @@ fn generator_summary_preserves_unknown_trust_and_failure_states() {
     let metadata = fixture.0.join("state/presets/app/demo/shine.toml");
     fs::write(&metadata, fs::read_to_string(&metadata).unwrap().replace(
         "source = 'config.txt'\n",
-        "source = 'config.txt'\ngenerator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = ['ENABLE'], auto = false }\n",
+        "source = 'config.txt'\ngenerator = { script = 'generate.ts', runtime = 'bun', when_env = 'ENABLE', env = [{ source = 'ENABLE', sensitivity = 'plain' }], auto = false }\n",
     )).unwrap();
     for (args, expected) in [
         (
@@ -2192,4 +2285,138 @@ fn shell_update_columns_use_unicode_display_width_without_changing_receipts() {
         fs::read(fixture.0.join("state/shell-manifest.toml")).unwrap(),
         receipt
     );
+}
+
+#[test]
+fn code_analysis_blocks_supported_scripts_before_execution_in_every_cli_evaluation() {
+    for code in [
+        "fetch('https://private.example/SECRET_LITERAL');",
+        "const broken = ;",
+        "localCall(); localCall(); localCall(); localCall(); fetch('https://private.example/SECRET_LITERAL'); fetch('https://private.example/SECRET_LITERAL');",
+    ] {
+        let fixture = Fixture::new();
+        fixture.app(false);
+        success(&fixture.run(&["app", "install", "demo", "--yes"]));
+        fixture.app(true);
+        let preset = fixture.0.join("state/presets/app/demo");
+        fs::write(preset.join("generate.ts"), code).unwrap();
+        success(&fixture.run(&["trust", "grant", "app/demo", "--yes"]));
+        let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+        let content = fs::read(fixture.0.join("destination/manual.txt")).unwrap();
+        let ordinary = fixture.run(&["app", "info", "demo"]);
+        success(&ordinary);
+        assert!(!stdout(&ordinary).contains("code_analysis_"));
+        for args in [
+            vec!["app", "info", "demo", "--run-generators"],
+            vec!["info", "app/demo", "--run-generators"],
+            vec!["info", "app/demo", "--run-generators", "--verbose"],
+            vec!["info", "app/demo", "--run-generators", "--diff"],
+            vec!["update", "app/demo", "--run-generators"],
+            vec!["update", "--run-generators"],
+            vec!["update", "--run-generators", "--verbose"],
+            vec!["update", "--run-generators", "--diff"],
+            vec!["app", "install", "demo", "--replace-managed", "--yes"],
+            vec![
+                "app",
+                "install",
+                "demo",
+                "--replace-managed",
+                "--yes",
+                "--verbose",
+            ],
+        ] {
+            let output = fixture.run(&args);
+            assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+            let text = format!(
+                "{}{}",
+                stdout(&output),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(text.contains("code_analysis_"), "{args:?}: {text}");
+            if code.contains("localCall") {
+                let detailed = args.contains(&"--verbose")
+                    || args.contains(&"--diff")
+                    || args.starts_with(&["app", "info"])
+                    || args.starts_with(&["update", "app/demo"]);
+                assert_eq!(
+                    text.contains("4 diagnostics (code)"),
+                    !detailed,
+                    "{args:?}: {text}"
+                );
+                assert_eq!(
+                    text.matches("note[code_analysis_call_unknown]").count(),
+                    if detailed { 4 } else { 1 },
+                    "{args:?}: {text}"
+                );
+                assert_eq!(
+                    text.matches("error[code_analysis_declaration_difference]")
+                        .count(),
+                    2,
+                    "{args:?}: {text}"
+                );
+                assert!(text.contains("existing code trust is still required"));
+            }
+            assert!(!text.contains("SECRET_LITERAL"));
+            assert!(!text.contains("private.example"));
+            assert!(!fixture.0.join("state/runtime/app").exists());
+            assert_eq!(
+                fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+                receipt
+            );
+            assert_eq!(
+                fs::read(fixture.0.join("destination/manual.txt")).unwrap(),
+                content
+            );
+        }
+    }
+}
+
+#[test]
+fn code_analysis_details_do_not_grant_trust_for_advisory_only_code() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fixture.app(true);
+    fs::write(
+        fixture.0.join("state/presets/app/demo/generate.ts"),
+        "function localCall() {} localCall(); localCall(); localCall(); localCall();",
+    )
+    .unwrap();
+    let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    let content = fs::read(fixture.0.join("destination/manual.txt")).unwrap();
+    for base in [
+        vec!["info", "app/demo", "--run-generators"],
+        vec!["update", "--run-generators"],
+        vec!["app", "install", "demo", "--replace-managed", "--yes"],
+    ] {
+        for verbose in [false, true] {
+            let mut args = base.clone();
+            if verbose {
+                args.push("--verbose");
+            }
+            let output = fixture.run(&args);
+            let text = format!(
+                "{}{}",
+                stdout(&output),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.status.code(), Some(1), "{args:?}: {text}");
+            assert_eq!(
+                text.matches("note[code_analysis_call_unknown]").count(),
+                if verbose { 4 } else { 1 },
+                "{args:?}: {text}"
+            );
+            assert!(!text.contains("error[code_analysis_"), "{args:?}: {text}");
+            assert!(text.contains("trust"), "{args:?}: {text}");
+            assert!(!fixture.0.join("state/runtime/app").exists());
+            assert_eq!(
+                fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+                receipt
+            );
+            assert_eq!(
+                fs::read(fixture.0.join("destination/manual.txt")).unwrap(),
+                content
+            );
+        }
+    }
 }

@@ -242,7 +242,7 @@ mod tests {
 
 [[files]]
 source = "second.txt"
-generator = { script = "second.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL", auto = false }
+generator = { script = "second.sh", env = [{ source = 'SOURCE_URL', sensitivity = 'secret' }], when_env = "SOURCE_URL", auto = false }
 "#
         } else {
             ""
@@ -263,7 +263,7 @@ environment = [{{ name = "SOURCE_URL", sensitivity = "secret" }}]
 
 [[files]]
 source = "first.txt"
-generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL", auto = false }}
+generator = {{ script = "first.sh", env = [{{ source = 'SOURCE_URL', sensitivity = 'secret' }}], when_env = "SOURCE_URL", auto = false }}
 {second}"#,
                 root.join("dest").display()
             ),

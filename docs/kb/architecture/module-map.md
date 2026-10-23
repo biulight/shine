@@ -14,8 +14,12 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/` | Main `shine` binary plus its library crate |
 | `cli/build.rs` | Embedded preset rebuild triggers, build metadata, and Windows MSVC executable stack reserve |
 | `core/` | Reusable `shine-core` package with no CLI/Tauri dependency |
+| `core/src/analysis/` | Read-only JS/TS source facts, bounded command-local cache and entry-specific declaration comparison; runtime integration tracked in [code analysis](code-analysis.md) |
 | `core/src/digest.rs` | Raw SHA-256 and lowercase 32-byte digest encoding; each domain retains its own framing, versions, prefixes and validation |
 | `core/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
+| `core/src/analysis/` | Bounded pure JS/TS facts, dependency traversal, entry-specific declaration comparison and safe diagnostics |
+| `core/src/runtime/code_analysis.rs` | Private command evidence, lock-external preparation, launcher admission and cancellation state |
+| `cli/src/code_analysis.rs` | Shared safe analysis text for lifecycle review and explicit evaluation |
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
 | `core/src/action.rs` | Versioned executable Action IR, constructors, opaque provenance and rollback DTOs |
 | `core/src/action/contracts.rs`, `action/contracts/` | Exhaustive resource-family routing and domain validation/permission rules; incompatible input fails closed |
@@ -23,6 +27,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/frontend/{operations,events}.rs` | Safe journal-state/recovery projection and explicit progress-event redaction; domain executors retain journal parsing and recovery decisions |
 | `core/src/frontend/{bootstrap,read_only,trusted}.rs` | Shared source capture, restricted safe report facade, human review and one-shot approval, exact validation and lifecycle/recovery dispatch; `conformance.rs` checks adapter equivalence |
 | `core/src/permission.rs` | Versioned target-local Preset permission declarations, normalization, and payload-free identity validation |
+| `core/src/env.rs` | Strict structured Shell/App input declarations and derived environment permissions; separate string mapping protocol for launchers and `env run --with` |
 | `core/src/trust.rs` | Versioned target-local external-code trust grants, exact matching, and stale-scope decisions |
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
 | `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
@@ -107,6 +112,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/validation/{source,permissions,destinations,sys}.rs` | Observation-only scope capture; target-local permission diagnostics; portable destination paths; snapshot-only Sys references and metadata |
 | `core/src/runtime/metadata_diagnostic.rs` | Typed metadata error origins mapped to stable validation codes; message prose is not a classifier |
 | `core/src/runtime/preset_migration.rs` | Immutable legacy compatibility assessment, safe metadata candidate generation, released-1.x fingerprints, and versioned content-free migration reports |
+| `core/src/runtime/preset_migration/env.rs` | Migration-only legacy input conversion using explicit effective sensitivity; preserves entry mappings and shared platform contracts |
 | `core/src/runtime/inspection.rs` | Typed App/Shell inspection status and structural change vocabulary |
 | `core/src/install/` | Core-owned transforms, EOL handling, host-required App manifest persistence and shared in-memory schema normalization, and host-neutral managed-file operations |
 | `core/src/persist.rs` | Core-owned synced atomic replacement and no-clobber publication, mode preservation, Windows write-through moves, and versioned TOML helpers |

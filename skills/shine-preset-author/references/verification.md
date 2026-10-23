@@ -14,6 +14,11 @@ Model only declared synthetic state: environment-name presence, opaque secret ve
 command detection, versioned receipt documents, exact trust selections, and administrator state.
 Never add executable setup/teardown, real credentials, or private machine paths. Prefer exact
 action, permission, and diagnostic sets when those expectations are intentionally stable.
+Use `expect.analysis_diagnostic_codes` with `ready` for analysis assertions. Correctly expected
+blocked cases can pass; command cancellation/budget exhaustion cannot be accepted as a negative
+case. Reports with `complete = false` or `unfinished_cases` are incomplete. Fixture input remains
+schema 1; lint and fixture reports use schema 2, author Plan reports use schema 3. Obtain the
+installed schema rather than assuming older report shapes.
 
 ## Requested bundles
 

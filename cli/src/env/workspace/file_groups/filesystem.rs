@@ -236,7 +236,6 @@ pub(super) fn check_git(root: &Path, target: &Path) -> Result<()> {
 pub(super) struct PathLocks(Vec<File>);
 impl PathLocks {
     pub fn acquire(root: &Path, workspace: &Path, mappings: &[(PathBuf, PathBuf)]) -> Result<Self> {
-        use fs2::FileExt;
         let base = fs::canonicalize(std::env::temp_dir())?.join(platform::lock_directory()?);
         platform::private_directory(&base)?;
         let paths = std::iter::once(workspace).chain(
@@ -253,7 +252,7 @@ impl PathLocks {
         for key in keys {
             let path = base.join(key);
             let file = platform::lock_file(&path)?;
-            file.try_lock_exclusive()
+            file.try_lock()
                 .context("another Shine file-group operation is active; retry when it finishes")?;
             files.push(file);
         }
@@ -263,7 +262,7 @@ impl PathLocks {
 impl Drop for PathLocks {
     fn drop(&mut self) {
         for file in &self.0 {
-            let _ = fs2::FileExt::unlock(file);
+            let _ = file.unlock();
         }
     }
 }

@@ -94,9 +94,8 @@ impl LocalListener {
         match self {
             #[cfg(unix)]
             LocalListener::Unix(listener) => loop {
-                let stream = match listener.accept().await {
-                    Ok((stream, _addr)) => stream,
-                    Err(_) => return,
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
                 };
                 spawn_connection(
                     stream,
@@ -108,9 +107,8 @@ impl LocalListener {
                 .await;
             },
             LocalListener::Tcp(listener) => loop {
-                let stream = match listener.accept().await {
-                    Ok((stream, _addr)) => stream,
-                    Err(_) => return,
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
                 };
                 spawn_connection(
                     stream,

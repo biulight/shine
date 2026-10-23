@@ -439,7 +439,7 @@ fn contains_control(value: &str) -> bool {
     value.chars().any(char::is_control)
 }
 
-fn normalize_declared_path(path: &str) -> String {
+pub(crate) fn normalize_declared_path(path: &str) -> String {
     if path == "." {
         return path.to_string();
     }

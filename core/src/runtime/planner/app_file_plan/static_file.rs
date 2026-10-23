@@ -49,7 +49,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             None if occupied => PlanActionV1::Update,
             None => PlanActionV1::Create,
             Some(entry)
-                if entry.destination == destination
+                if !(request.operation == LifecycleOperation::Install && request.force)
+                    && entry.destination == destination
                     && current.as_deref().and_then(|bytes| {
                         installed_strategy_hash(&file.install_strategy, bytes)
                             .ok()

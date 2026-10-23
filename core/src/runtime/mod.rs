@@ -10,7 +10,9 @@ mod app_metadata;
 mod app_script;
 mod authoring;
 mod bootstrap;
+mod code_analysis;
 mod command_detection;
+pub(crate) use code_analysis::CodeAnalysisSession;
 mod fixture;
 mod host;
 mod inspection;
@@ -56,8 +58,8 @@ pub use authoring::{
     plan_preset_path,
 };
 pub use fixture::{
-    PRESET_TEST_FIXTURE_FILE, PRESET_TEST_SCHEMA_VERSION, PresetTestCaseResultV1,
-    PresetTestReportV1, PresetTestSummaryV1, test_preset_path,
+    PRESET_TEST_FIXTURE_FILE, PRESET_TEST_FIXTURE_SCHEMA_VERSION, PRESET_TEST_SCHEMA_VERSION,
+    PresetTestCaseResultV1, PresetTestReportV1, PresetTestSummaryV1, test_preset_path,
 };
 pub use host::{
     FileKind, FileMetadata, FileSystemHost, FileSystemObservationHost, HostError, HostOperation,
@@ -243,19 +245,23 @@ impl RuntimePlatform {
 /// Frontend-neutral runtime facade. Domain executors are added behind this
 /// facade as their Phase 2 slices migrate.
 pub struct CoreRuntime<H> {
+    pub(crate) analysis: CodeAnalysisSession,
+    analysis_source: std::sync::OnceLock<crate::plan::SnapshotDigestV1>,
     pub(crate) operation_code_grants: Vec<crate::trust::TrustGrantV1>,
     host: H,
     context: RuntimeContext,
-    presets: PresetSnapshot,
+    presets: std::sync::Arc<PresetSnapshot>,
 }
 
 impl<H> CoreRuntime<H> {
     pub fn new(host: H, context: RuntimeContext, presets: PresetSnapshot) -> Self {
         Self {
             operation_code_grants: Vec::new(),
+            analysis: CodeAnalysisSession::default(),
+            analysis_source: std::sync::OnceLock::new(),
             host,
             context,
-            presets,
+            presets: std::sync::Arc::new(presets),
         }
     }
 

@@ -85,8 +85,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             state,
             permissions,
         )?;
-        let snapshot_cleanup =
-            add_generator_permissions(self, permissions, category, generator, state, steps).await?;
+        let snapshot_cleanup = add_generator_permissions(
+            self,
+            permissions,
+            category,
+            generator,
+            file.source_rel
+                .to_str()
+                .context("App source is not UTF-8")?,
+            state,
+            steps,
+        )
+        .await?;
         let blocked = app_code_blocked(self, category, &generator.script)?;
         steps.push(
             PlanStepV1::new(

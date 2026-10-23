@@ -1,8 +1,7 @@
 //! Persistent OS locks: waiting or dropping a guard never unlinks another lock.
 
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
-use std::{path::Path, time::Duration};
+use std::{fs::TryLockError, path::Path, time::Duration};
 
 impl<H: super::FileSystemHost> super::CoreRuntime<H> {
     pub(super) async fn acquire_shell_lifecycle_operation(
@@ -61,9 +60,9 @@ async fn acquire_with_timeout(
     .await??;
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        match file.try_lock_exclusive() {
+        match file.try_lock() {
             Ok(()) => return Ok(Box::new(file)),
-            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+            Err(TryLockError::WouldBlock) => {
                 if tokio::time::Instant::now() >= deadline {
                     bail!("timed out waiting for operation lock");
                 }
@@ -72,7 +71,9 @@ async fn acquire_with_timeout(
                 )
                 .await;
             }
-            Err(error) => return Err(error).context("acquiring operation lock"),
+            Err(TryLockError::Error(error)) => {
+                return Err(error).context("acquiring operation lock");
+            }
         }
     }
 }

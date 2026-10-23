@@ -36,6 +36,63 @@ impl Drop for Fixture {
     }
 }
 
+// These review outputs are small enough to drain after the child exits.
+#[cfg(unix)]
+fn output_with_terminal(
+    mut command: Command,
+    terminal_stdout: bool,
+) -> (std::process::Output, Vec<u8>) {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    let (mut master, mut slave) = (-1, -1);
+    // SAFETY: openpty initializes both descriptors; defaults are sufficient.
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        },
+        0
+    );
+    for fd in [master, slave] {
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+            0
+        );
+    }
+    // SAFETY: each descriptor returned by openpty is owned exactly once.
+    let mut master = unsafe { fs::File::from_raw_fd(master) };
+    let slave = unsafe { fs::File::from_raw_fd(slave) };
+    // Keep unread macOS PTY data alive until after the child exits.
+    let keep_alive = slave.try_clone().unwrap();
+    if terminal_stdout {
+        command.stdout(Stdio::from(slave));
+    } else {
+        command.stderr(Stdio::from(slave));
+    }
+    let output = command.output().unwrap();
+    drop(command);
+    assert_eq!(
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
+        0
+    );
+    let mut terminal = Vec::new();
+    match master.read_to_end(&mut terminal) {
+        Ok(_) => {}
+        Err(error)
+            if error.raw_os_error() == Some(libc::EIO)
+                || error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) => panic!("reading test PTY: {error}"),
+    }
+    drop(keep_alive);
+    (output, terminal)
+}
+
 fn display_path_fixture() -> Fixture {
     let mut fixture = Fixture::new();
     let root = fixture.0.with_extension(if cfg!(unix) {
@@ -46,6 +103,211 @@ fn display_path_fixture() -> Fixture {
     fs::rename(&fixture.0, &root).unwrap();
     fixture.0 = root;
     fixture
+}
+
+#[test]
+fn structured_env_migration_is_explicit_backup_first_and_idempotent() {
+    let f = Fixture::new();
+    let root = f.0.join("presets");
+    let app = root.join("app/demo");
+    let shell = root.join("shell/demo");
+    fs::create_dir_all(&app).unwrap();
+    fs::create_dir_all(&shell).unwrap();
+    let app_metadata = "metadata_schema_version=2\ndest='~/.demo'\n[artifact]\nscript='build.ts'\nruntime='bun'\nenv=['TOKEN=ALIAS']\n[permissions]\nschema_version=1\nenvironment=[{name='TOKEN',sensitivity='secret'}]\n[[files]]\nsource='config'\n";
+    let shell_metadata = "[[files]]\nsource='run.ts'\nruntime='bun'\nenv=['VALUE']\n[files.permissions]\nschema_version=1\nenvironment=[{name='VALUE',sensitivity='plain'}]\n";
+    fs::write(app.join("shine.toml"), app_metadata).unwrap();
+    fs::write(shell.join("shine.toml"), shell_metadata).unwrap();
+    fs::write(app.join("config"), "unchanged").unwrap();
+    fs::write(app.join("build.ts"), "console.log(process.env.ALIAS);").unwrap();
+    fs::write(shell.join("run.ts"), "console.log(process.env.VALUE);").unwrap();
+
+    let rejected = f
+        .command()
+        .args(["preset", "validate"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success(), "{rejected:?}");
+    let report = String::from_utf8(rejected.stdout).unwrap();
+    assert!(
+        report.contains("shine preset migrate --dry-run"),
+        "{report}"
+    );
+    let preview = f
+        .command()
+        .args(["preset", "migrate"])
+        .arg(&root)
+        .args(["--dry-run", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(!f.0.join("state").exists());
+    assert_eq!(
+        fs::read_to_string(app.join("shine.toml")).unwrap(),
+        app_metadata
+    );
+
+    fs::create_dir_all(f.0.join("state")).unwrap();
+    let active = f.0.join("state/presets");
+    fs::rename(&root, &active).unwrap();
+    let root = active;
+    let app = root.join("app/demo");
+    fs::write(
+        f.0.join("state/config.toml"),
+        "schema_version=2\n[env]\nVALUE='available'\n",
+    )
+    .unwrap();
+    let unrelated = f
+        .command()
+        .env("SHINE_PRESETS", &root)
+        .args(["env", "get", "VALUE"])
+        .output()
+        .unwrap();
+    assert!(unrelated.status.success(), "{unrelated:?}");
+    assert_eq!(
+        fs::read_to_string(app.join("shine.toml")).unwrap(),
+        app_metadata
+    );
+
+    for args in [["app", "list"], ["shell", "list"]] {
+        let output = f
+            .command()
+            .env("SHINE_PRESETS", &root)
+            .args(args)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.status.success(), "{text}");
+        assert!(text.contains("shine preset migrate --dry-run"), "{text}");
+    }
+    let applied = f
+        .command()
+        .args(["preset", "migrate"])
+        .arg(&root)
+        .args(["--yes", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(applied.status.success(), "{applied:?}");
+    let result: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
+    assert_eq!(result["summary"]["changes"], 2);
+    let backup =
+        f.0.join("state")
+            .join(result["backup_set"].as_str().unwrap());
+    assert_eq!(
+        fs::read_to_string(backup.join("app/demo/shine.toml")).unwrap(),
+        app_metadata
+    );
+    assert_eq!(
+        fs::read_to_string(backup.join("shell/demo/shine.toml")).unwrap(),
+        shell_metadata
+    );
+    let valid = f
+        .command()
+        .args(["preset", "validate"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(valid.status.success(), "{valid:?}");
+    let repeated = f
+        .command()
+        .args(["preset", "migrate"])
+        .arg(&root)
+        .args(["--dry-run", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(repeated.status.success(), "{repeated:?}");
+    let result: serde_json::Value = serde_json::from_slice(&repeated.stdout).unwrap();
+    assert_eq!(result["summary"]["changes"], 0);
+    assert_eq!(fs::read_to_string(app.join("config")).unwrap(), "unchanged");
+    assert!(!f.0.join("state/app-manifest.toml").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn migration_diff_colors_follow_stdout_and_leave_json_and_sources_unchanged() {
+    let fixture = Fixture::new();
+    let root = fixture.0.join("presets");
+    let category = root.join("shell/demo");
+    fs::create_dir_all(&category).unwrap();
+    let original = "# control\tcomment\n[[files]]\nsource='run.ts'\nruntime='bun'\nenv=['TOKEN']\n[files.permissions]\nschema_version=1\nenvironment=[{name='TOKEN',sensitivity='secret'}]\n";
+    fs::write(category.join("shine.toml"), original).unwrap();
+    fs::write(category.join("run.ts"), "throw new Error('must not run');").unwrap();
+
+    for (terminal_stdout, no_color, force_color, json) in [
+        (true, false, None, false),
+        (true, true, None, false),
+        (false, false, None, false),
+        (true, false, None, true),
+        (false, true, Some("FORCE_COLOR"), false),
+        (false, true, Some("CLICOLOR_FORCE"), false),
+        (false, true, Some("FORCE_COLOR"), true),
+    ] {
+        let mut command = fixture.command();
+        command
+            .args(["preset", "migrate"])
+            .arg(&root)
+            .arg("--dry-run")
+            .env("TERM", "xterm-256color")
+            .env_remove("NO_COLOR")
+            .env_remove("FORCE_COLOR")
+            .env_remove("CLICOLOR")
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("IGNORE_IS_TERMINAL");
+        if no_color {
+            command.env("NO_COLOR", "1");
+        }
+        if let Some(key) = force_color {
+            command.env(key, "1");
+        }
+        if json {
+            command.args(["--format", "json"]);
+        }
+        let (output, terminal) = output_with_terminal(command, terminal_stdout);
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8_lossy(if terminal_stdout {
+            &terminal
+        } else {
+            &output.stdout
+        });
+        if json {
+            let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(report["summary"]["changes"], 1);
+            assert!(!text.contains("\x1b["));
+            assert!(!text.contains("--- a/"));
+        } else {
+            for prefix in [
+                "--- a/shell/demo/shine.toml",
+                "+++ b/shell/demo/shine.toml",
+                "@@ ",
+                "+env",
+                "-env",
+            ] {
+                assert!(text.contains(prefix), "{text:?}");
+            }
+            let colored = force_color.is_some() || (terminal_stdout && !no_color);
+            assert_eq!(text.contains("\x1b["), colored, "{text:?}");
+            if colored {
+                for prefix in [
+                    "\x1b[36m--- a/",
+                    "\x1b[36m+++ b/",
+                    "\x1b[36m@@ ",
+                    "\x1b[32m+env",
+                    "\x1b[31m-env",
+                ] {
+                    assert!(text.contains(prefix), "{text:?}");
+                }
+            }
+        }
+        assert_eq!(
+            fs::read_to_string(category.join("shine.toml")).unwrap(),
+            original
+        );
+        assert!(!fixture.0.join("state").exists());
+    }
 }
 
 #[test]
@@ -2921,7 +3183,7 @@ fn app_generator_notes_keep_stderr_and_hook_notes_keep_stdout() {
     fs::create_dir_all(&preset).unwrap();
     let dest = toml::Value::String(destination.to_string_lossy().into_owned());
     fs::write(preset.join("shine.toml"), format!(
-        "metadata_schema_version = 2\ndest = {dest}\npost_install = {{ command = '/bin/sh', args = ['-c', 'printf HOOK_STDOUT_NOTE'], show_output = true }}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'printf HOOK_STDOUT_NOTE'], show_output = true }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n"
+        "metadata_schema_version = 2\ndest = {dest}\npost_install = {{ command = '/bin/sh', args = ['-c', 'printf HOOK_STDOUT_NOTE'], show_output = true }}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'printf HOOK_STDOUT_NOTE'], show_output = true }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\ngenerator = {{ script = 'generate.sh', env = [{{ source = 'ENABLE', sensitivity = 'plain' }}], when_env = 'ENABLE' }}\n"
     )).unwrap();
     fs::write(preset.join("config.txt"), "fallback").unwrap();
     let script = preset.join("generate.sh");
@@ -3107,6 +3369,124 @@ fn preset_lint_text_counts_preserve_json_and_warning_exits() {
                     serde_json::json!({"categories": 1, "errors": 0, "warnings": 1})
                 }
             );
+        }
+    }
+    assert!(!fixture.0.join("state").exists());
+}
+
+#[test]
+fn preset_lint_summarizes_only_advisory_analysis_without_changing_json_or_exits() {
+    let fixture = Fixture::new();
+    let root = fixture.0.join("presets");
+    let categories = [
+        ("alpha", "alpha"),
+        #[cfg(unix)]
+        ("beta\nFORGED", "beta\\nFORGED"),
+        #[cfg(windows)]
+        ("beta", "beta"),
+    ];
+    let metadata = "metadata_schema_version=2\ndescription='Demo'\ndest='~/.demo'\n[permissions]\nschema_version=2\nopaque_code='unrestricted'\n[[files]]\nsource='first.txt'\ngenerator={script='generate.ts',runtime='bun',when_env='ENABLE',env=[{source='ENABLE',sensitivity='plain'}]}\n[[files]]\nsource='second.txt'\ngenerator={script='generate.ts',runtime='bun',when_env='ENABLE',env=[{source='ENABLE',sensitivity='plain'}]}\n";
+    for (name, _) in categories {
+        let category = root.join("app").join(name);
+        fs::create_dir_all(&category).unwrap();
+        fs::write(category.join("shine.toml"), metadata).unwrap();
+        for source in ["first.txt", "second.txt"] {
+            fs::write(category.join(source), "fallback").unwrap();
+        }
+    }
+    for blocked in [false, true] {
+        let code = format!(
+            "localCall();\nlocalCall();\nlocalCall();\nlocalCall();\nfetch(url); fetch(url);\nBun.write(path, 'x'); Bun.write(path, 'x');\n{}",
+            if blocked {
+                "fetch('https://private.example/SECRET_LITERAL');\nfetch('https://private.example/SECRET_LITERAL');\n"
+            } else {
+                ""
+            }
+        );
+        for (name, _) in categories {
+            fs::write(root.join("app").join(name).join("generate.ts"), &code).unwrap();
+        }
+        let core_report = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(shine_core::runtime::lint_preset_path(
+                &shine_core::runtime::RealHost,
+                &fixture.0,
+                &root,
+            ));
+        let expected = serde_json::to_value(&core_report).unwrap();
+        for deny in [false, true] {
+            let run = |format| {
+                let mut command = fixture.command();
+                command
+                    .env("NO_COLOR", "1")
+                    .args(["preset", "lint"])
+                    .arg(&root)
+                    .args(["--format", format]);
+                if deny {
+                    command.arg("--deny-warnings");
+                }
+                command.output().unwrap()
+            };
+            let text = run("text");
+            let json = run("json");
+            assert_eq!(
+                text.status.code(),
+                Some(i32::from(blocked || deny)),
+                "{text:?}"
+            );
+            assert_eq!(json.status.code(), text.status.code());
+            assert!(text.stderr.is_empty() && json.stderr.is_empty());
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&json.stdout).unwrap(),
+                expected
+            );
+            let text = String::from_utf8(text.stdout).unwrap();
+            for (name, display) in categories {
+                let target = format!("app/{name}");
+                let count = core_report
+                    .diagnostics
+                    .iter()
+                    .filter(|d| {
+                        d.target.as_deref() == Some(&target)
+                            && d.code == "code_analysis_call_unknown"
+                    })
+                    .count();
+                assert!(count >= 8, "{core_report:?}");
+                let target = format!("app/{display}");
+                assert_eq!(text.matches(&format!("warning[code_analysis_call_unknown]: {target} · {count} diagnostics; example:")).count(), 1, "{text}");
+                // The same code can describe distinct behavior classes. Keep both groups.
+                assert_eq!(
+                    text.matches(&format!("warning[code_analysis_dynamic_target]: {target}"))
+                        .count(),
+                    2,
+                    "{text}"
+                );
+                assert_eq!(
+                    fs::read_to_string(root.join("app").join(name).join("generate.ts")).unwrap(),
+                    code
+                );
+            }
+            let errors = core_report
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == "code_analysis_declaration_difference")
+                .count();
+            assert_eq!(
+                text.matches("error[code_analysis_declaration_difference]")
+                    .count(),
+                errors,
+                "{text}"
+            );
+            assert_eq!(errors > 0, blocked);
+            assert!(text.contains("--format json"));
+            assert!(text.contains(&format!(
+                "Summary: 2 categories, {} errors, {} warnings",
+                core_report.summary.errors, core_report.summary.warnings
+            )));
+            assert!(!text.contains("\nFORGED"));
+            assert!(!text.contains("SECRET_LITERAL") && !text.contains("private.example"));
         }
     }
     assert!(!fixture.0.join("state").exists());
@@ -4212,7 +4592,7 @@ fn targeted_upgrade_distinguishes_nonfatal_hook_and_generator_failures() {
     .unwrap();
     let dest = toml::Value::String(destination.to_string_lossy().into_owned()).to_string();
     let metadata = format!(
-        "metadata_schema_version = 2\ndest = {dest}\npost_install = {{ command = '/bin/sh', args = ['-c', 'exit 6'] }}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'exit 7'] }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\nrestart_hint = 'Restart demo'\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n"
+        "metadata_schema_version = 2\ndest = {dest}\npost_install = {{ command = '/bin/sh', args = ['-c', 'exit 6'] }}\npost_upgrade = {{ command = '/bin/sh', args = ['-c', 'exit 7'] }}\n[permissions]\nschema_version = 1\ncommands = ['/bin/sh']\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.txt'\nrestart_hint = 'Restart demo'\ngenerator = {{ script = 'generate.sh', env = [{{ source = 'ENABLE', sensitivity = 'plain' }}], when_env = 'ENABLE' }}\n"
     );
     fs::write(preset.join("shine.toml"), metadata).unwrap();
     fs::write(preset.join("config.txt"), "fallback").unwrap();
@@ -4429,7 +4809,7 @@ fn app_install_reports_file_failures_without_hiding_partial_success() {
             ""
         };
         fs::write(preset.join("shine.toml"), format!(
-            "metadata_schema_version = 2\ndest = {dest}\n[permissions]\nschema_version = 1\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['demo']\ngenerator = {{ script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE' }}\n{extra}"
+            "metadata_schema_version = 2\ndest = {dest}\n[permissions]\nschema_version = 1\nfilesystem = [{{ access = ['execute'], base = 'preset', path = 'generate.sh' }}]\nenvironment = [{{ name = 'ENABLE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'config.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['demo']\ngenerator = {{ script = 'generate.sh', env = [{{ source = 'ENABLE', sensitivity = 'plain' }}], when_env = 'ENABLE' }}\n{extra}"
         )).unwrap();
         fs::write(preset.join("config.json"), r#"{"demo":1}"#).unwrap();
         fs::write(preset.join("good.txt"), "good").unwrap();
@@ -4561,38 +4941,9 @@ fn app_install_preview_and_unchanged_install_keep_distinct_counts() {
 #[cfg(unix)]
 #[test]
 fn stderr_warning_color_follows_its_own_terminal_and_no_color() {
-    use std::io::Read;
-    use std::os::fd::{AsRawFd, FromRawFd};
-
     for stderr_terminal in [false, true] {
         for no_color in [false, true] {
             let fixture = Fixture::new();
-            let mut master = -1;
-            let mut slave = -1;
-            // SAFETY: openpty initializes both descriptors; defaults are sufficient.
-            assert_eq!(
-                unsafe {
-                    libc::openpty(
-                        &mut master,
-                        &mut slave,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                    )
-                },
-                0
-            );
-            for fd in [master, slave] {
-                assert_eq!(
-                    unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
-                    0
-                );
-            }
-            // SAFETY: each successful openpty descriptor is owned exactly once.
-            let mut master = unsafe { fs::File::from_raw_fd(master) };
-            let slave = unsafe { fs::File::from_raw_fd(slave) };
-            // Keep unread macOS PTY data alive until after the child exits.
-            let keep_alive = slave.try_clone().unwrap();
             let mut command = fixture.command();
             command
                 .args(["env", "get", "SHINE_OUTPUT_TEST_MISSING"])
@@ -4603,27 +4954,8 @@ fn stderr_warning_color_follows_its_own_terminal_and_no_color() {
             if no_color {
                 command.env("NO_COLOR", "1");
             }
-            if stderr_terminal {
-                command.stderr(Stdio::from(slave));
-            } else {
-                command.stdout(Stdio::from(slave));
-            }
-            let output = command.output().unwrap();
-            drop(command);
+            let (output, terminal) = output_with_terminal(command, !stderr_terminal);
             assert_eq!(output.status.code(), Some(1), "{output:?}");
-            assert_eq!(
-                unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
-                0
-            );
-            let mut terminal = Vec::new();
-            match master.read_to_end(&mut terminal) {
-                Ok(_) => {}
-                Err(error)
-                    if error.raw_os_error() == Some(libc::EIO)
-                        || error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => panic!("reading warning PTY: {error}"),
-            }
-            drop(keep_alive);
             let warning = if stderr_terminal {
                 &terminal
             } else {
@@ -6089,7 +6421,7 @@ fn blocked_plan_and_development_notice_encode_targets_without_executing() {
         "schema_version=2\n[env]\nENABLE='1'\n",
     )
     .unwrap();
-    fs::write(app.join("shine.toml"), "metadata_schema_version=2\ndest='~/.demo'\n[permissions]\nschema_version=2\nopaque_code='unrestricted'\n[[files]]\nsource='config.txt'\ngenerator={script='generate.ts', runtime='bun', env=['ENABLE'], when_env='ENABLE'}\n").unwrap();
+    fs::write(app.join("shine.toml"), "metadata_schema_version=2\ndest='~/.demo'\n[permissions]\nschema_version=2\nopaque_code='unrestricted'\n[[files]]\nsource='config.txt'\ngenerator={script='generate.ts', runtime='bun', env=[{ source='ENABLE', sensitivity='plain' }], when_env='ENABLE'}\n").unwrap();
     fs::write(app.join("config.txt"), "original\n").unwrap();
     let sentinel = fixture.0.join("must-not-run");
     fs::write(
@@ -6119,7 +6451,10 @@ fn blocked_plan_and_development_notice_encode_targets_without_executing() {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains("security Plan is blocked; no changes were made"));
-        assert!(stderr.contains("environment plain ENABLE"));
+        assert!(
+            stderr.contains("code analysis blocked this operation"),
+            "{stderr}"
+        );
         assert!(!sentinel.exists());
         assert!(!fixture.0.join("state/app-manifest.toml").exists());
         assert!(!fixture.0.join("home/.demo/config.txt").exists());
@@ -6299,6 +6634,114 @@ fn dotenv_export_preview_counts_only_effective_non_secret_values() {
             }
         }
     }
+}
+
+#[test]
+fn broker_policy_diffs_encode_controls_and_preserve_update_approval() {
+    let fixture = Fixture::new();
+    let workspace = fixture.0.join("shine.workspace.toml");
+    fs::write(&workspace, "version = 2\n[env]\nfiles = ['env.toml']\n").unwrap();
+    let source = fixture.0.join("env.toml");
+    let source_bytes = "version = 1\n[secret]\nTOKEN = true\n[payload]\ndata = 'not-decrypted-by-policy-commands'\n";
+    fs::write(&source, source_bytes).unwrap();
+    let input = |operation: &str, argument: &str| {
+        let mut command = fixture.command();
+        command.args(["env", "broker", "policy", operation]);
+        if operation == "diff" {
+            command.arg("review");
+        } else {
+            command.args([
+                "--name",
+                "review",
+                "--ssh-target",
+                "example.invalid",
+                "--project",
+                "project\u{85}\u{9b}31m",
+            ]);
+        }
+        command.arg("--workspace").arg(&workspace).args([
+            "--mode",
+            "dev",
+            "--release",
+            "TOKEN",
+            "--",
+            "echo",
+            argument,
+        ]);
+        command
+    };
+    let added = input("add", "original").output().unwrap();
+    assert!(added.status.success(), "{added:?}");
+    let policy = fixture.0.join("state/ssh-secret-broker.toml");
+    let original = fs::read(&policy).unwrap();
+    // A workspace hash change puts the control-bearing project in both diffs.
+    let workspace_bytes = "# changed\nversion = 2\n[env]\nfiles = ['env.toml']\n";
+    fs::write(&workspace, workspace_bytes).unwrap();
+    let mut modes = vec![
+        (false, false, None),
+        (false, true, None),
+        (false, true, Some("FORCE_COLOR")),
+        (false, true, Some("CLICOLOR_FORCE")),
+    ];
+    if cfg!(unix) {
+        modes.extend([(true, false, None), (true, true, None)]);
+    }
+    for operation in ["diff", "update"] {
+        for &(terminal_stdout, no_color, force_color) in &modes {
+            let mut command = input(operation, "changed\targument");
+            command
+                .env("TERM", "xterm-256color")
+                .env_remove("NO_COLOR")
+                .env_remove("FORCE_COLOR")
+                .env_remove("CLICOLOR_FORCE")
+                .env_remove("CLICOLOR")
+                .env_remove("IGNORE_IS_TERMINAL");
+            if no_color {
+                command.env("NO_COLOR", "1");
+            }
+            if let Some(key) = force_color {
+                command.env(key, "1");
+            }
+            #[cfg(unix)]
+            let (output, terminal) = if terminal_stdout {
+                output_with_terminal(command, true)
+            } else {
+                (command.output().unwrap(), Vec::new())
+            };
+            #[cfg(not(unix))]
+            let (output, terminal) = (command.output().unwrap(), Vec::new());
+            let text = String::from_utf8_lossy(if terminal_stdout {
+                &terminal
+            } else {
+                &output.stdout
+            });
+            assert_eq!(
+                output.status.code(),
+                Some(if operation == "diff" { 0 } else { 1 }),
+                "{output:?}"
+            );
+            if operation == "update" {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .contains("reading policy update confirmation"),
+                    "{output:?}"
+                );
+            }
+            assert!(text.contains("project\\u{85}\\u{9b}31m"), "{text:?}");
+            assert!(!text.contains(['\u{85}', '\u{9b}', '\t']), "{text:?}");
+            let colored = force_color.is_some() || (terminal_stdout && !no_color);
+            assert_eq!(text.contains("\x1b["), colored, "{text:?}");
+            if colored {
+                for prefix in ["\x1b[36m@@ ", "\x1b[32m+", "\x1b[31m-"] {
+                    assert!(text.contains(prefix), "{text:?}");
+                }
+            }
+            assert_eq!(fs::read(&policy).unwrap(), original);
+        }
+    }
+    assert_eq!(fs::read_to_string(&workspace).unwrap(), workspace_bytes);
+    assert_eq!(fs::read_to_string(source).unwrap(), source_bytes);
+    assert!(!fixture.0.join("state/trust.toml").exists());
 }
 
 #[test]

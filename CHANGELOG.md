@@ -5,6 +5,52 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [2.7.0] — 2026-10-24
+
+### Breaking Changes
+
+- Shell Bun and App generator, hook, and artifact `env` entries now require structured `source`,
+  optional `target`, and `sensitivity` fields. Environment permissions are derived from those inputs.
+  Legacy string arrays are rejected with migration guidance. Review `shine preset migrate --dry-run`
+  before applying the explicit metadata conversion; commands do not automatically migrate sources.
+  Installed launcher, receipt, recovery, and `env run --with` formats remain unchanged.
+- Building from source now requires Rust 1.90 or later.
+- App Bun scripts and local JavaScript/TypeScript dependencies now undergo declaration analysis
+  before execution. Definite differences and parse failures block lifecycle operations and explicit
+  generator evaluation, including with existing trust or `--yes`. Fix the declaration or script;
+  coverage gaps remain advisory and do not imply runtime confinement.
+- Version lifecycle Plan/approval/review and author Plan reports as schema 3, and lint/fixture
+  reports as schema 2. Fixture input schema 1 remains supported; old approvals require a new review.
+- Rust integrations using `shine-core` must adapt direct initializers and exhaustive patterns for
+  public structs with new analysis fields, including `PlanV1` and `InspectionReportV1`. Updating
+  serialized schema handling alone does not provide Rust source compatibility.
+
+### Features
+
+- Share bounded static analysis across App planning, explicit evaluation and `preset lint/plan/test`,
+  with safe source locations, per-entry environment comparison and incomplete-report diagnostics.
+- Summarize repeated advisory analysis diagnostics in ordinary text while retaining individual
+  errors and full locations in detailed views. Grouping preserves full JSON diagnostics, original
+  counts and warning exit behavior; it does not grant trust or approval, or reduce coverage gaps.
+
+### Bug Fixes
+
+- Highlight preset migration diffs with green additions, red deletions, and cyan headers on
+  supported terminals, following existing terminal detection, `NO_COLOR`, and forced-color overrides.
+- Preserve full diff content, including long lines, while escaping terminal controls in local and
+  remote policy review. Report missing Shell scripts and snapshots during diff inspection without
+  changing files, receipts or trust.
+
+### Internal
+
+- Modernize Rust APIs and enforce reliable test leak detection. Compile Unix-only administrator
+  and test helpers only on Unix, removing unused-item warnings from Windows builds.
+
+### Docs
+
+- Add English and Simplified Chinese 2.7 upgrade guidance for metadata migration, App code checks
+  and report consumers. Replace the 2.6 documentation snapshot with 2.7 while retaining 1.8 and Next.
+
 ## [2.6.0] — 2026-10-22
 
 ### Breaking Changes

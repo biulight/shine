@@ -37,7 +37,7 @@ struct ArtifactToml {
     teardown: Option<String>,
     runtime: Option<ArtifactRuntimeToml>,
     #[serde(default)]
-    env: Vec<String>,
+    env: Vec<crate::env::EnvDeclaration>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -47,11 +47,30 @@ enum ArtifactRuntimeToml {
     Bun,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 enum HookSpecToml {
     Single(HookToml),
     Multiple(Vec<HookToml>),
+}
+
+impl<'de> Deserialize<'de> for HookSpecToml {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Preserve the concrete entry error (including legacy-env migration
+        // guidance), which serde's untagged-enum fallback would discard.
+        let value = toml::Value::deserialize(deserializer)?;
+        if let toml::Value::Array(values) = value {
+            values
+                .into_iter()
+                .map(|value| value.try_into().map_err(serde::de::Error::custom))
+                .collect::<Result<Vec<HookToml>, _>>()
+                .map(Self::Multiple)
+        } else {
+            value
+                .try_into()
+                .map(Self::Single)
+                .map_err(serde::de::Error::custom)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,7 +83,7 @@ struct HookToml {
     #[serde(default)]
     show_output: bool,
     #[serde(default)]
-    env: Vec<String>,
+    env: Vec<crate::env::EnvDeclaration>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,7 +152,7 @@ struct GeneratorToml {
     script: String,
     runtime: Option<ArtifactRuntimeToml>,
     #[serde(default)]
-    env: Vec<String>,
+    env: Vec<crate::env::EnvDeclaration>,
     when_env: String,
     #[serde(default = "default_true")]
     auto: bool,
@@ -218,7 +237,7 @@ impl<H> CoreRuntime<H> {
                 .validate()
                 .with_context(|| format!("invalid permissions in {metadata_path}"))?;
         }
-        let permissions = parsed.permissions.clone();
+        let mut permissions = parsed.permissions.clone();
         let Some(destination_root) = parsed.dest.select(name, self.context().platform)? else {
             return Ok(None);
         };
@@ -258,7 +277,7 @@ impl<H> CoreRuntime<H> {
                 }
                 let transforms = transforms(&file, &metadata_path)?;
                 let install_strategy = install_strategy(&file, &metadata_path)?;
-                let generator = generator(file.generator, &metadata_path)?;
+                let generator = generator(file.generator, &metadata_path, &mut permissions)?;
                 if let Some(generator) = &generator {
                     let generator_path = format!("{prefix}{}", logical(&generator.script));
                     if self.presets().get(&generator_path).is_none() {
@@ -325,11 +344,21 @@ impl<H> CoreRuntime<H> {
                     ListModeToml::Files => AppListMode::Files,
                 },
             ),
-            post_upgrade: hooks(parsed.post_upgrade, "post_upgrade", &metadata_path)?,
-            post_install: hooks(parsed.post_install, "post_install", &metadata_path)?,
+            post_upgrade: hooks(
+                parsed.post_upgrade,
+                "post_upgrade",
+                &metadata_path,
+                &mut permissions,
+            )?,
+            post_install: hooks(
+                parsed.post_install,
+                "post_install",
+                &metadata_path,
+                &mut permissions,
+            )?,
             uses_metadata: true,
             has_explicit_files: explicit,
-            artifact: artifact(parsed.artifact, &metadata_path)?,
+            artifact: artifact(parsed.artifact, &metadata_path, &mut permissions)?,
             permissions,
             metadata_schema_version: parsed.metadata_schema_version,
             metadata_is_overlay: self.presets().is_overlay(&metadata_path),
@@ -466,7 +495,12 @@ fn install_strategy(file: &FileToml, context: &str) -> Result<AppInstallStrategy
     }
 }
 
-fn hooks(value: Option<HookSpecToml>, field: &str, context: &str) -> Result<Vec<AppHook>> {
+fn hooks(
+    value: Option<HookSpecToml>,
+    field: &str,
+    context: &str,
+    permissions: &mut Option<PermissionDeclarationV1>,
+) -> Result<Vec<AppHook>> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
@@ -510,14 +544,18 @@ fn hooks(value: Option<HookSpecToml>, field: &str, context: &str) -> Result<Vec<
                 action,
                 args: hook.args,
                 show_output: hook.show_output,
-                env: crate::env::parse_env_specs(&hook.env)
+                env: crate::env::resolve_env_declarations(&hook.env, permissions)
                     .with_context(|| format!("{context}: invalid {field}.env"))?,
             })
         })
         .collect()
 }
 
-fn artifact(value: Option<ArtifactToml>, context: &str) -> Result<Option<AppArtifact>> {
+fn artifact(
+    value: Option<ArtifactToml>,
+    context: &str,
+    permissions: &mut Option<PermissionDeclarationV1>,
+) -> Result<Option<AppArtifact>> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -535,7 +573,7 @@ fn artifact(value: Option<ArtifactToml>, context: &str) -> Result<Option<AppArti
     {
         require_bun_extension(teardown, context)?;
     }
-    let env = crate::env::parse_env_specs(&value.env)
+    let env = crate::env::resolve_env_declarations(&value.env, permissions)
         .with_context(|| format!("{context}: invalid artifact.env"))?;
     Ok(Some(AppArtifact {
         script: value.script,
@@ -545,14 +583,18 @@ fn artifact(value: Option<ArtifactToml>, context: &str) -> Result<Option<AppArti
     }))
 }
 
-fn generator(value: Option<GeneratorToml>, context: &str) -> Result<Option<AppGenerator>> {
+fn generator(
+    value: Option<GeneratorToml>,
+    context: &str,
+    permissions: &mut Option<PermissionDeclarationV1>,
+) -> Result<Option<AppGenerator>> {
     let Some(value) = value else {
         return Ok(None);
     };
     let script = normalize_relative(&value.script)
         .with_context(|| format!("{context}: invalid generator.script"))?;
     let runtime = artifact_runtime(value.runtime, &value.script, context)?;
-    let env = crate::env::parse_env_specs(&value.env)
+    let env = crate::env::resolve_env_declarations(&value.env, permissions)
         .with_context(|| format!("{context}: invalid generator.env"))?;
     crate::env::validate_env_key(&value.when_env)
         .with_context(|| format!("{context}: invalid generator.when_env"))?;
@@ -785,6 +827,35 @@ mod tests {
         )
     }
 
+    #[test]
+    fn structured_app_env_derives_category_permissions_without_widening_entry_inputs() {
+        let runtime = destination_runtime(PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("app/demo/shine.toml", br#"metadata_schema_version=2
+dest='~/.demo'
+post_install=[{command='reload',env=[{source='HOOK',sensitivity='plain'}]}]
+[artifact]
+script='build.ts'
+runtime='bun'
+env=[{source='PROFILE',sensitivity='plain'}]
+[[files]]
+source='config'
+generator={script='gen.ts',runtime='bun',env=[{source='URL',target='INPUT',sensitivity='secret'}],when_env='URL',auto=false}
+"#.to_vec())
+            .file("app/demo/config", b"fallback".to_vec())
+            .file("app/demo/gen.ts", b"console.log(process.env.INPUT)".to_vec())
+            .file("app/demo/build.ts", b"console.log(process.env.PROFILE)".to_vec())
+            .build());
+        let categories = runtime.app_categories(Some("demo")).unwrap();
+        let category = &categories[0];
+        let generator = category.files[0].generator.as_ref().unwrap();
+        assert_eq!(generator.env.len(), 1);
+        assert_eq!(generator.env[0].source, "URL");
+        assert_eq!(generator.env[0].target, "INPUT");
+        assert_eq!(category.artifact.as_ref().unwrap().env[0].source, "PROFILE");
+        assert_eq!(category.post_install[0].env[0].source, "HOOK");
+        assert_eq!(category.permissions.as_ref().unwrap().environment.len(), 3);
+    }
+
     fn legacy_destination(annotation: Option<&str>, relative: &str) -> Result<PathBuf> {
         let content = annotation.map_or_else(
             || b"value = true\n".to_vec(),
@@ -921,7 +992,11 @@ target = 'same.toml'
             runtime,
             args: Vec::new(),
             show_output: false,
-            env: vec!["TOKEN=API_TOKEN".to_string()],
+            env: vec![crate::env::EnvDeclaration {
+                source: "TOKEN".into(),
+                target: Some("API_TOKEN".into()),
+                sensitivity: crate::plan::EnvironmentSensitivityV1::Secret,
+            }],
         }
     }
 
@@ -931,6 +1006,7 @@ target = 'same.toml'
             Some(HookSpecToml::Single(hook_toml(Some("reload"), None, None))),
             "post_upgrade",
             "app/demo/shine.toml",
+            &mut None,
         )
         .unwrap();
         assert!(
@@ -945,6 +1021,7 @@ target = 'same.toml'
             ))),
             "post_upgrade",
             "app/demo/shine.toml",
+            &mut None,
         )
         .unwrap();
         assert!(matches!(
@@ -956,6 +1033,22 @@ target = 'same.toml'
         ));
         assert_eq!(script[0].env[0].source, "TOKEN");
         assert_eq!(script[0].env[0].target, "API_TOKEN");
+    }
+
+    #[test]
+    fn legacy_hook_env_keeps_migration_guidance_for_single_and_multiple_hooks() {
+        for hook in [
+            "{ command = 'reload', env = ['TOKEN'] }",
+            "[{ command = 'reload', env = ['TOKEN'] }]",
+        ] {
+            let error =
+                toml::from_str::<CategoryToml>(&format!("dest = '~/.demo'\npost_install = {hook}"))
+                    .unwrap_err();
+            assert!(
+                error.to_string().contains("shine preset migrate --dry-run"),
+                "{error}"
+            );
+        }
     }
 
     #[test]
@@ -971,6 +1064,7 @@ target = 'same.toml'
                     Some(HookSpecToml::Single(hook)),
                     "post_upgrade",
                     "app/demo/shine.toml",
+                    &mut None,
                 )
                 .is_err()
             );

@@ -118,7 +118,7 @@ impl Fixture {
         )
         .unwrap();
         fs::write(state.join("presets/shell/demo/run.ts"), "@@VALUE@@\n").unwrap();
-        fs::write(state.join("presets/shell/demo/shine.toml"), format!("[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\nenvironment = [{{ name = 'TOKEN', sensitivity = 'plain' }}, {{ name = 'VALUE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'run.ts'\ntarget = 'run'\nruntime = 'bun'\ntransforms = ['template']\nenv = {}\n", if env { "['TOKEN=ALIAS']" } else { "[]" })).unwrap();
+        fs::write(state.join("presets/shell/demo/shine.toml"), format!("[permission_defaults]\nschema_version = 2\nopaque_code = 'unrestricted'\nenvironment = [{{ name = 'TOKEN', sensitivity = 'plain' }}, {{ name = 'VALUE', sensitivity = 'plain' }}]\n[[files]]\nsource = 'run.ts'\ntarget = 'run'\nruntime = 'bun'\ntransforms = ['template']\nenv = {}\n", if env { "[{ source = 'TOKEN', target = 'ALIAS', sensitivity = 'plain' }]" } else { "[]" })).unwrap();
         for name in ["bun", "shine"] {
             fs::copy(
                 PROBE_BINARY.0.join(executable("probe")),

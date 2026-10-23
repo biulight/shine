@@ -214,7 +214,6 @@ mod tests {
 
     #[tokio::test]
     async fn admin_test_lock_survives_contention_and_is_released_by_process_exit() {
-        use fs2::FileExt;
         const PATH: &str = "SHINE_TEST_ADMIN_LOCK_PATH";
         const ROLE: &str = "SHINE_TEST_ADMIN_LOCK_ROLE";
         if let Some(path) = std::env::var_os(PATH) {
@@ -225,12 +224,9 @@ mod tests {
                     .open(path)
                     .unwrap();
                 let error = file
-                    .try_lock_exclusive()
+                    .try_lock()
                     .expect_err("live owner must retain its lock");
-                assert_eq!(
-                    error.raw_os_error(),
-                    fs2::lock_contended_error().raw_os_error()
-                );
+                assert!(matches!(error, std::fs::TryLockError::WouldBlock));
                 return;
             }
             let _guard = admin_category_test_lock_at(Path::new(&path)).await.unwrap();

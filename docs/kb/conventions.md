@@ -47,6 +47,15 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   cargo-binstall support justify a minor rather than patch release. Keep the implemented behavior
   and disclose the cleanup scope and removal of `--purge` from scripts in CHANGELOG and both manual
   locales. This exception does not change the general versioning rule above.
+- **2.7.0 release exception (2026-10-24):** the maintainer chose a minor release for structured
+  Preset environment inputs and App code analysis despite incompatible metadata, report, Rust
+  library source and admission changes. New fields in public `shine-core` structs require consumers
+  to adapt direct initializers and exhaustive patterns. Legacy string `env` arrays require explicit
+  migration; definite code differences and analysis failures can block previously executable scripts.
+  Plan/approval/review and author Plan schemas become 3; lint and fixture report schemas become 2, while fixture input
+  schema 1 stays supported. Source builds require Rust 1.90. Disclose these changes and the manual
+  migration path in CHANGELOG and both manual locales; preserve existing runtime state, trust
+  requirements and non-blocking coverage gaps. This exception does not change the general rule above.
 - A versioned release candidate uses `X.Y.Z-rc.N`. It is a reproducible prerelease, does not
   replace the latest stable release, and does not trigger the stable `release` → `main` sync.
 - Generated RC notes cover the immediately preceding versioned tag; generated stable notes cover
@@ -54,13 +63,16 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   one stable release section.
 - Release commits use `chore(release): ...` (e.g. `chore(release): prepare v0.35.0`).
 - Keep `shine-cli` and `shine-core` crate versions in sync (see commit `e14d5f9`).
-- The minimum supported Rust version is 1.88. The `mise.toml` toolchain may be newer for
-  development, but changes to dependencies must keep the Rust 1.88 CI check passing.
+- The minimum supported Rust version is 1.90. The `mise.toml` toolchain may be newer for
+  development, but changes to dependencies must keep the Rust 1.90 CI check passing.
 
 ## Testing
 
 - Runner: `cargo nextest run --workspace --all-features` (each test is its own OS process — in-process
   locks do not serialize across tests).
+  `.config/nextest.toml` requires nextest 0.9.145 or newer to avoid macOS sibling capture-pipe
+  inheritance. Update older runners with `cargo nextest self update`. Leaked output handles fail
+  the run at the unchanged 100 ms timeout; do not hide them with longer waits or ignored tests.
 - Any test that mutates environment variables or cwd must hold `crate::test_support::env_lock()`;
   the guard restores both before unlocking, including during panic unwinding.
   This serializes participating tests only: unguarded ambient-env reads and PATH-based child
@@ -130,6 +142,11 @@ future understanding, modification and verification easier, and what evidence su
   `git status --short`. Do not repeat passing suites without a changed input or unresolved concern.
 - Keep lasting decisions in existing KB/ADRs, not repeated execution diaries. Preserve unrelated
   work and honor the separate authorization boundaries for edits, commits and pushes.
+
+The accepted `let ... else` cleanup at `e3d1c165` illustrates this scope: simplify direct
+`Some`/`Ok` bindings with unchanged early returns, retain complex action-enum matches, and review
+crate publication changes separately. Native Windows/Linux/macOS, Rust 1.90 MSRV and quality
+checks passed; see the [CI acceptance record](operations/ci-pipelines.md#let-else-cleanup-acceptance-2026-10-22).
 
 ## File size
 

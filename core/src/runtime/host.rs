@@ -205,6 +205,8 @@ pub enum ProcessIo {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ProcessOutput {
+    /// The child was terminated by an interrupt or termination signal.
+    pub interrupted: bool,
     pub exit_code: Option<i32>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -665,11 +667,29 @@ impl ProcessHost for RealHost {
                 scope.stop();
             }
             Ok(ProcessOutput {
+                interrupted: process_interrupted(status),
                 exit_code: status.code(),
                 stdout: stdout_bytes,
                 stderr: stderr_bytes,
             })
         })
+    }
+}
+
+fn process_interrupted(status: std::process::ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        matches!(status.signal(), Some(libc::SIGINT | libc::SIGTERM))
+    }
+    #[cfg(windows)]
+    {
+        status.code() == Some(-1073741510)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = status;
+        false
     }
 }
 
@@ -1192,7 +1212,9 @@ mod tests {
                             .contains("process timed out")
                     );
                 } else {
-                    assert_ne!(result.unwrap().exit_code, Some(0));
+                    let output = result.unwrap();
+                    assert_ne!(output.exit_code, Some(0));
+                    assert!(output.interrupted);
                 }
             }
             assert_eq!(unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) }, original);

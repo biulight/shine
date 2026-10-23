@@ -1,5 +1,7 @@
 pub mod action;
 #[doc(hidden)]
+pub mod analysis;
+#[doc(hidden)]
 pub mod digest;
 pub mod env;
 #[doc(hidden)]

@@ -32,6 +32,7 @@ impl<H> FrontendService<H> {
 
 /// Local review context. Read-only adapters receive only `PlanReviewReportV1`.
 pub struct HumanReview {
+    analysis: CodeAnalysisSession,
     report: PlanReviewReportV1,
     request: ReviewRequest,
     configuration_revision: Option<String>,
@@ -61,6 +62,7 @@ impl HumanReview {
         let approval = PlanApprovalV1::for_reviewed_plan(&self.report.plan)
             .map_err(|error| FrontendServiceError::new("frontend_approval_rejected", error))?;
         Ok(ApprovedOperation {
+            analysis: self.analysis,
             request: self.request,
             approval,
             configuration_revision: self.configuration_revision,
@@ -88,6 +90,7 @@ impl HumanReview {
 /// ```
 #[derive(Debug)]
 pub struct ApprovedOperation {
+    analysis: CodeAnalysisSession,
     request: ReviewRequest,
     approval: PlanApprovalV1,
     configuration_revision: Option<String>,
@@ -164,6 +167,7 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> TrustedFrontend<H> 
         request: ReviewRequest,
     ) -> Result<HumanReview, FrontendServiceError> {
         Ok(HumanReview {
+            analysis: self.service.runtime.analysis.clone(),
             report: self.service.review(&request).await?,
             request,
             configuration_revision: self.service.configuration_revision.clone(),
@@ -178,8 +182,9 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> TrustedFrontend<H> 
         request: ReviewRequest,
     ) -> Result<HumanReview, FrontendServiceError> {
         self.service.runtime.operation_code_grants.clear();
-        let initial = self.service.review(&request).await?;
+        let initial = self.review(request).await?;
         let targets = initial
+            .report
             .plan
             .code_boundaries
             .iter()
@@ -211,8 +216,12 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> TrustedFrontend<H> 
                 }
             }
         }
+        // Only changed trust inputs need another review; apply still revalidates fresh state.
+        if operation_code_grants.is_empty() {
+            return Ok(initial);
+        }
         self.service.runtime.operation_code_grants = operation_code_grants;
-        let review = self.review(request).await;
+        let review = self.review(initial.request).await;
         self.service.runtime.operation_code_grants.clear();
         review
     }
@@ -220,6 +229,7 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> TrustedFrontend<H> 
     /// Reinstall only the exact, process-local code identities carried by human approval.
     pub fn with_approved_code(mut self, approved: &ApprovedOperation) -> Self {
         self.service.runtime.operation_code_grants = approved.operation_code_grants.clone();
+        self.service.runtime.analysis = approved.analysis.clone();
         self
     }
 
@@ -264,6 +274,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost + ProcessHost> 
         safe: &mut impl FrontendEventSink,
     ) -> Result<OperationExecution, FrontendServiceError> {
         self.service.runtime.operation_code_grants = approved.operation_code_grants.clone();
+        self.service.runtime.analysis = approved.analysis.clone();
         let current = self.validated_plan(&approved).await?;
         let ApprovedOperation {
             request, approval, ..

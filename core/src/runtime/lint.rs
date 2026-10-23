@@ -12,7 +12,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub const PRESET_LINT_SCHEMA_VERSION: u32 = 1;
+pub const PRESET_LINT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -43,6 +43,8 @@ pub struct PresetLintSummaryV1 {
 pub struct PresetLintReportV1 {
     pub schema_version: u32,
     pub valid: bool,
+    pub complete: bool,
+    pub analyzed_entries: Vec<String>,
     pub clean: bool,
     pub summary: PresetLintSummaryV1,
     pub diagnostics: Vec<PresetLintDiagnosticV1>,
@@ -52,6 +54,21 @@ pub async fn lint_preset_path(
     source_host: &impl FileSystemObservationHost,
     cwd: &Path,
     path: &Path,
+) -> PresetLintReportV1 {
+    lint_preset_path_with_analysis(
+        source_host,
+        cwd,
+        path,
+        super::CodeAnalysisSession::default(),
+    )
+    .await
+}
+
+pub(super) async fn lint_preset_path_with_analysis(
+    source_host: &impl FileSystemObservationHost,
+    cwd: &Path,
+    path: &Path,
+    analysis: super::CodeAnalysisSession,
 ) -> PresetLintReportV1 {
     let scope = match load_preset_source_scope(source_host, cwd, path).await {
         Ok(scope) => scope,
@@ -107,9 +124,11 @@ pub async fn lint_preset_path(
                 super::ShellType::Zsh
             };
             context.is_external_presets = true;
-            let runtime = CoreRuntime::new(InMemoryHost::new(), context, scope.snapshot.clone());
+            let mut runtime =
+                CoreRuntime::new(InMemoryHost::new(), context, scope.snapshot.clone());
+            runtime.analysis = analysis.clone();
             let findings = match category.kind {
-                "app" => lint_app(&runtime, &category.name),
+                "app" => lint_app(&runtime, &category.name).await,
                 "shell" => lint_shell(&runtime, &category.name),
                 "sys" => lint_sys(&runtime, &category.name).await,
                 _ => unreachable!("validated preset kind"),
@@ -120,7 +139,30 @@ pub async fn lint_preset_path(
                         unique.entry(diagnostic.clone()).or_insert(diagnostic);
                     }
                 }
-                Err(_) => {
+                Err(error) => {
+                    if let Some(terminal) = error.downcast_ref::<crate::analysis::TerminalFailure>()
+                    {
+                        // The current category may have completed entries before a later
+                        // entry exhausted the shared budget. Preserve their diagnostics too.
+                        for scope in analysis.completed_scopes().unwrap_or_default() {
+                            for diagnostic in analysis_diagnostics(scope) {
+                                unique.entry(diagnostic.clone()).or_insert(diagnostic);
+                            }
+                        }
+                        let mut findings = unique.into_values().collect::<Vec<_>>();
+                        findings.push(PresetLintDiagnosticV1 {
+                            severity: PresetLintSeverity::Error,
+                            code: terminal.to_string(),
+                            target: Some(format!("{}/{}", category.kind, category.name)),
+                            resource: None,
+                            message: "Analysis terminated; remaining entries were not checked."
+                                .into(),
+                        });
+                        let mut report = finish(scope.categories.len(), findings);
+                        report.complete = false;
+                        report.analyzed_entries = analysis.analyzed_entries().unwrap_or_default();
+                        return report;
+                    }
                     let diagnostic = PresetLintDiagnosticV1 {
                         severity: PresetLintSeverity::Error,
                         code: "lint_metadata_unavailable".to_string(),
@@ -136,10 +178,34 @@ pub async fn lint_preset_path(
             }
         }
     }
-    finish(scope.categories.len(), unique.into_values().collect())
+    let mut report = finish(scope.categories.len(), unique.into_values().collect());
+    report.analyzed_entries = analysis.analyzed_entries().unwrap_or_default();
+    report
 }
 
-fn lint_app(
+fn analysis_diagnostics(scope: crate::analysis::Scope) -> Vec<PresetLintDiagnosticV1> {
+    scope
+        .report
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| PresetLintDiagnosticV1 {
+            severity: if diagnostic.blocking() {
+                PresetLintSeverity::Error
+            } else {
+                PresetLintSeverity::Warning
+            },
+            code: diagnostic.code.clone(),
+            target: Some(scope.target.clone()),
+            resource: Some(format!(
+                "{}:{}:{} ({})",
+                diagnostic.file, diagnostic.line, diagnostic.column, scope.entry
+            )),
+            message: format!("{}: {}", diagnostic.behavior, diagnostic.explanation()),
+        })
+        .collect()
+}
+
+async fn lint_app(
     runtime: &CoreRuntime<InMemoryHost>,
     name: &str,
 ) -> anyhow::Result<Vec<PresetLintDiagnosticV1>> {
@@ -176,6 +242,9 @@ fn lint_app(
             None,
             "category destination appears to contain a private machine home path",
         ));
+    }
+    for scope in runtime.lint_app_code(&category).await? {
+        diagnostics.extend(analysis_diagnostics(scope));
     }
     for file in category.files {
         let resource = file.source_rel.to_string_lossy().replace('\\', "/");
@@ -357,6 +426,8 @@ fn finish(categories: usize, mut diagnostics: Vec<PresetLintDiagnosticV1>) -> Pr
     PresetLintReportV1 {
         schema_version: PRESET_LINT_SCHEMA_VERSION,
         valid: errors == 0,
+        complete: true,
+        analyzed_entries: Vec::new(),
         clean: errors == 0 && warnings == 0,
         summary: PresetLintSummaryV1 {
             categories,

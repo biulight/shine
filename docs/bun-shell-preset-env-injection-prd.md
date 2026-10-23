@@ -1,5 +1,13 @@
 # Bun Shell Preset Runtime Environment Injection PRD
 
+> **Historical design.** The string-array `env` metadata below describes the original Bun
+> injection interface. Its metadata grammar is superseded by
+> [ADR 0151](kb/decisions/0151-structured-preset-environment-inputs.md) and the
+> [current authoring guide](kb/preset-authoring.md#bun-shell-entries): declare `source`, optional
+> `target`, and required `sensitivity` together; Core derives the environment permissions.
+> Legacy metadata conversion is available only through `shine preset migrate`. Launcher receipts
+> and the `shine env run --with SOURCE=TARGET` command syntax retain their string mappings.
+
 ## 1. Background
 
 The completed [Bun shell preset v1](bun-shell-presets-prd.md) gives a TypeScript or

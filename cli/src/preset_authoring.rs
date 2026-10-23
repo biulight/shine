@@ -124,6 +124,11 @@ fn authoring_text(report: &PresetAuthoringPlanReportV1) -> String {
             crate::output::escape_controls(&plan.target)
         );
         write_plan_blockers(&mut output, &plan.steps, &plan.permissions);
+        for scope in &plan.code_analysis {
+            for line in crate::code_analysis::lines(scope, true) {
+                let _ = writeln!(output, "{line}");
+            }
+        }
         let _ = writeln!(output);
         let _ = writeln!(
             output,
@@ -143,7 +148,9 @@ fn authoring_text(report: &PresetAuthoringPlanReportV1) -> String {
         }
         write_grouped_permissions(&mut output, &plan.permissions);
     }
-    let result = if !report.valid {
+    let result = if !report.complete {
+        crate::colors::red("incomplete; analysis terminated")
+    } else if !report.valid {
         crate::colors::red("invalid")
     } else if report.ready {
         crate::colors::green("hypothetical plan ready")
@@ -289,6 +296,7 @@ mod tests {
     #[test]
     fn invalid_text_shows_validation_details_without_irrelevant_assumptions() {
         let report = PresetAuthoringPlanReportV1 {
+            complete: true,
             schema_version: PRESET_AUTHORING_PLAN_SCHEMA_VERSION,
             valid: false,
             ready: false,
@@ -324,6 +332,7 @@ mod tests {
     #[test]
     fn valid_text_wraps_all_hypothetical_assumptions_across_two_lines() {
         let report = PresetAuthoringPlanReportV1 {
+            complete: true,
             schema_version: PRESET_AUTHORING_PLAN_SCHEMA_VERSION,
             valid: true,
             ready: false,
@@ -389,6 +398,7 @@ mod tests {
             uncomputable_codes: Default::default(),
         };
         let report = PresetAuthoringPlanReportV1 {
+            complete: true,
             schema_version: PRESET_AUTHORING_PLAN_SCHEMA_VERSION,
             valid: true,
             ready: false,
@@ -397,6 +407,7 @@ mod tests {
             assumptions: PresetAuthoringPlanAssumptionsV1::default(),
             diagnostics: Vec::new(),
             plans: vec![PresetAuthoringPlanSectionV1 {
+                code_analysis: Vec::new(),
                 kind: "lifecycle-install".to_string(),
                 target: "shell/test".to_string(),
                 operation: PlanOperationV1::Install,

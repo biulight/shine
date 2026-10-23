@@ -275,7 +275,7 @@ pub async fn handle_status() -> Result<()> {
     )
     .await
     .context("local status connection timed out after 5 seconds")
-    .and_then(|result| result);
+    .flatten();
     match connection {
         Ok(mut stream) => {
             let response = tokio::time::timeout(STATUS_PHASE_TIMEOUT, async {

@@ -4,7 +4,7 @@ default-members = ["."]
 resolver = "2"
 
 [workspace.package]
-version = "2.6.0"
+version = "2.7.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Felix Jiang <biulight007@gmail.com>"]
@@ -16,13 +16,13 @@ anyhow = "1.0.102"
 directories = "6.0.0"
 toml = "1.1.2"
 toml_edit = "0.25.11"
-shine-core = { path = "core", version = "2.6.0" }
+shine-core = { path = "core", version = "2.7.0" }
 
 [package]
 name = "shine-cli"
 version.workspace = true
 edition.workspace = true
-rust-version = "1.88"
+rust-version = "1.90"
 license.workspace = true
 description = "Give personal automation a reviewable lifecycle"
 readme = "README.md"
@@ -105,7 +105,6 @@ sha2 = "0.10.9"
 zeroize = "1.8"
 chacha20poly1305 = "0.10.1"
 getrandom = "0.2"
-fs2 = "0.4"
 unicode-normalization = "0.1.24"
 
 [target.'cfg(unix)'.dependencies]

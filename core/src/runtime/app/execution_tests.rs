@@ -5,7 +5,7 @@ use crate::runtime::{
     RuntimePlatform,
 };
 
-fn runtime(kind: PresetSourceKind) -> CoreRuntime<InMemoryHost> {
+async fn runtime(kind: PresetSourceKind) -> CoreRuntime<InMemoryHost> {
     let root = std::env::temp_dir().join("shine-app-execution-contracts");
     let mut context = RuntimeContext::isolated(
         root.join("home"),
@@ -25,18 +25,18 @@ fn runtime(kind: PresetSourceKind) -> CoreRuntime<InMemoryHost> {
             "app/demo/shine.toml",
             br#"metadata_schema_version = 2
 dest = '~/.config/demo'
-post_install = { script = 'code.sh', env = ['VALUE=MAPPED'] }
+post_install = { script = 'code.sh', env = [{ source = 'VALUE', target = 'MAPPED', sensitivity = 'plain' }] }
 [artifact]
 script = 'code.sh'
 teardown = 'code.sh'
-env = ['VALUE=MAPPED']
+env = [{ source = 'VALUE', target = 'MAPPED', sensitivity = 'plain' }]
 [permissions]
 schema_version = 1
 filesystem = [{ access = ['execute'], base = 'preset', path = 'code.sh' }]
 environment = [{ name = 'ENABLE', sensitivity = 'plain' }, { name = 'VALUE', sensitivity = 'plain' }]
 [[files]]
 source = 'config'
-generator = { script = 'code.sh', env = ['ENABLE', 'VALUE=MAPPED'], when_env = 'ENABLE', auto = false }
+generator = { script = 'code.sh', env = [{ source = 'ENABLE', sensitivity = 'plain' }, { source = 'VALUE', target = 'MAPPED', sensitivity = 'plain' }], when_env = 'ENABLE', auto = false }
 "#.to_vec(),
         )
         .file("app/demo/config", b"fallback".to_vec())
@@ -47,7 +47,14 @@ generator = { script = 'code.sh', env = ['ENABLE', 'VALUE=MAPPED'], when_env = '
         )
         .file("app/other/config", b"other".to_vec())
         .build();
-    CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
+    let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
+    runtime.lint_app_code(&category).await.unwrap();
+    let binding = runtime
+        .generator_analysis(&category, "config", &generator(true).generator)
+        .unwrap();
+    runtime.prepare_code_analysis(&[binding]).await.unwrap();
+    runtime
 }
 
 fn mappings() -> Vec<EnvVarSpec> {
@@ -93,7 +100,7 @@ fn artifact(implicit: bool) -> AppArtifactRequest {
 
 #[tokio::test]
 async fn generator_gates_before_effects_and_retains_bounded_allowlisted_execution() {
-    let runtime = runtime(PresetSourceKind::Embedded);
+    let runtime = runtime(PresetSourceKind::Embedded).await;
     assert!(
         runtime
             .run_app_generator(generator(false), &mut NullObserver)
@@ -157,7 +164,7 @@ async fn generator_gates_before_effects_and_retains_bounded_allowlisted_executio
 
 #[tokio::test]
 async fn hook_failure_stops_its_category_preserves_prior_notes_and_continues_other_categories() {
-    let runtime = runtime(PresetSourceKind::Embedded);
+    let runtime = runtime(PresetSourceKind::Embedded).await;
     let mut category = runtime.app_categories(Some("demo")).unwrap().remove(0);
     let hook = |name: &str| AppHook {
         action: AppHookAction::Command(name.into()),
@@ -169,6 +176,8 @@ async fn hook_failure_stops_its_category_preserves_prior_notes_and_continues_oth
     let mut other = category.clone();
     other.name = "other".into();
     other.post_install = vec![hook("other-category")];
+    runtime.lint_app_code(&category).await.unwrap();
+    runtime.lint_app_code(&other).await.unwrap();
     for (exit_code, stdout) in [(0, " first note \n"), (1, "ignored"), (0, "other note")] {
         runtime.host().queue_process_output(Ok(ProcessOutput {
             exit_code: Some(exit_code),
@@ -215,7 +224,7 @@ async fn hook_failure_stops_its_category_preserves_prior_notes_and_continues_oth
 #[tokio::test]
 async fn artifact_retains_preview_implicit_failure_and_explicit_io_contracts() {
     for implicit in [true, false] {
-        let runtime = runtime(PresetSourceKind::Embedded);
+        let runtime = runtime(PresetSourceKind::Embedded).await;
         let mut request = artifact(implicit);
         request.dry_run = true;
         assert_eq!(
@@ -265,7 +274,7 @@ async fn artifact_retains_preview_implicit_failure_and_explicit_io_contracts() {
 
 #[tokio::test]
 async fn untrusted_entrypoints_reject_or_skip_without_any_host_effects() {
-    let runtime = runtime(PresetSourceKind::External);
+    let runtime = runtime(PresetSourceKind::External).await;
     assert!(
         runtime
             .run_app_generator(generator(true), &mut NullObserver)
@@ -318,7 +327,7 @@ async fn untrusted_entrypoints_reject_or_skip_without_any_host_effects() {
 async fn script_hook_keeps_fixed_environment_and_cleans_only_its_failed_invocation() {
     use crate::runtime::FileSystemObservationHost;
 
-    let runtime = runtime(PresetSourceKind::Embedded);
+    let runtime = runtime(PresetSourceKind::Embedded).await;
     let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
     let retained = runtime
         .context()
@@ -368,4 +377,58 @@ async fn script_hook_keeps_fixed_environment_and_cleans_only_its_failed_invocati
             .is_err()
     );
     assert_eq!(runtime.host().read(&retained).await.unwrap(), b"retained");
+}
+
+#[tokio::test]
+async fn interrupted_teardown_stops_uninstall_before_file_and_receipt_removal() {
+    use crate::runtime::{AppPlanRequest, FileSystemObservationHost, PlanningInputVersions};
+    let runtime = runtime(PresetSourceKind::Embedded).await;
+    let destination = runtime.context().home_dir.join(".config/demo/config");
+    runtime.host().put_file(&destination, b"fallback".to_vec());
+    AppManifest {
+        entries: vec![AppEntry {
+            source: "app/demo/config".into(),
+            destination: destination.clone(),
+            backup: None,
+            content_hash: hash_content(b"fallback"),
+            install_strategy: AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        }],
+        ..Default::default()
+    }
+    .save(runtime.host(), &runtime.context().shine_dir)
+    .await
+    .unwrap();
+    let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
+    let before = runtime.host().read(&manifest_path).await.unwrap();
+    let request = AppPlanRequest {
+        operation: LifecycleOperation::Uninstall,
+        target: Some("demo".into()),
+        force: false,
+        purge: false,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let plan = runtime.plan_apps(request.clone()).await.unwrap();
+    let approval = crate::plan::PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    runtime.host().queue_process_output(Ok(ProcessOutput {
+        interrupted: true,
+        ..Default::default()
+    }));
+    let error = runtime
+        .uninstall_apps_approved(
+            request,
+            &approval,
+            &mut NullObserver,
+            &mut super::lifecycle_tests::Interaction,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.is::<crate::analysis::TerminalFailure>(), "{error:#}");
+    assert_eq!(
+        runtime.host().read(&destination).await.unwrap(),
+        b"fallback"
+    );
+    assert_eq!(runtime.host().read(&manifest_path).await.unwrap(), before);
 }

@@ -71,5 +71,5 @@ repos:
         description: unit test for the project
         entry: bash -c 'unset $(git rev-parse --local-env-vars) && cargo nextest run --workspace --all-features'
         language: rust
-        files: (\.rs$|^presets/|^Cargo\.(toml|lock)$|^\.pre-commit-config\.yaml$|^mise\.toml$)
+        files: (\.rs$|^presets/|^Cargo\.(toml|lock)$|^\.config/nextest\.toml$|^\.pre-commit-config\.yaml$|^mise\.toml$)
         pass_filenames: false

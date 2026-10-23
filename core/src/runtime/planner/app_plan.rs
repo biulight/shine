@@ -4,6 +4,18 @@ use super::*;
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
     pub async fn plan_apps(&self, request: AppPlanRequest) -> Result<PlanV1> {
+        let initial = self.plan_apps_prepared(request.clone()).await?;
+        if self.prepare_code_analysis(&initial.code_analysis).await? {
+            self.plan_apps_prepared(request).await
+        } else {
+            Ok(initial)
+        }
+    }
+
+    pub(in crate::runtime) async fn plan_apps_prepared(
+        &self,
+        request: AppPlanRequest,
+    ) -> Result<PlanV1> {
         validate_app_request(&request)?;
         let selected_categories = if request.operation == LifecycleOperation::Uninstall {
             None
@@ -187,6 +199,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     .as_deref()
                     .map(|teardown| (artifact, teardown))
             }) {
+                state.analysis(self.app_analysis_binding(
+                    &category,
+                    "artifact",
+                    Some(teardown),
+                    artifact.runtime,
+                    &artifact.env,
+                )?);
                 let blocked = app_code_blocked(self, &category, Path::new(teardown))?;
                 if blocked {
                     steps.push(

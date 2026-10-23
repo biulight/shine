@@ -58,6 +58,8 @@ pub struct InspectionItemV1 {
 pub struct InspectionReportV1 {
     pub schema_version: u32,
     pub items: Vec<InspectionItemV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_analysis: Vec<crate::analysis::Scope>,
     pub diagnostics: Vec<FrontendDiagnosticV1>,
 }
 
@@ -66,6 +68,7 @@ impl Default for InspectionReportV1 {
         Self {
             schema_version: INSPECTION_REPORT_SCHEMA_VERSION,
             items: Vec::new(),
+            code_analysis: Vec::new(),
             diagnostics: Vec::new(),
         }
     }
@@ -190,6 +193,7 @@ impl<H: crate::runtime::FileSystemObservationHost> FrontendService<H> {
     ) -> Result<AppInspection, FrontendServiceError> {
         let mut report = InspectionReportV1::default();
         for file in &files {
+            report.code_analysis.extend(file.code_analysis.clone());
             let operations = if file.status == FileStatus::NotInstalled {
                 vec![InspectionOperationV1::Install]
             } else {

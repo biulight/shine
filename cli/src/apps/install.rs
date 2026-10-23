@@ -740,7 +740,7 @@ source = \"file.conf\"\n",
         fs::write(
             category.join("shine.toml"),
             format!(
-                "dest = {:?}\n[[files]]\nsource = \"fallback.txt\"\ngenerator = {{ script = \"generate.sh\", env = [\"RUN\"], when_env = \"RUN\" }}\n",
+                "dest = {:?}\n[[files]]\nsource = \"fallback.txt\"\ngenerator = {{ script = \"generate.sh\", env = [{{ source = 'RUN', sensitivity = 'plain' }}], when_env = \"RUN\" }}\n",
                 destination.to_string_lossy()
             ),
         )

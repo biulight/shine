@@ -1,5 +1,76 @@
 # Lessons Learned
 
+## 2026-10-23 — Reduce diagnostic repetition without reducing evidence
+
+- **Evidence**: built-in lint produced 768 warnings across 18 categories; ordinary text repeated
+  explanations and locations for each entry comparison, obscuring distinct diagnostic kinds.
+- **Rule**: aggregate only advisory analysis rows in CLI text, retaining counts and an example
+  location. Keep errors individual, detailed reports complete, and grouping scoped by entry or
+  category and diagnostic meaning. Never deduplicate Core evidence to shorten terminal output.
+- **Boundaries**: JSON, readiness, trust, approval, incomplete reports and `--deny-warnings`
+  continue using the unchanged report. Lint's all-entry scope is not the runtime triggered scope.
+- **Verification**: [P2 presentation evidence](architecture/code-analysis.md#diagnostic-presentation)
+  records byte-identical JSON, shorter built-in output and consumer-boundary regressions.
+- **Follow-up review**: wired existing inspection detail modes through to the analysis renderer. An
+  all-entry lint report cannot substitute for full locations in a runtime-selected scope.
+
+## 2026-10-23 — Operand trivia and binding identity affect admission
+
+- **Evidence**: comments before literal targets changed declaration errors into gaps in seven
+  real-source control pairs. Unrelated same-name parameters suppressed outer builtin calls;
+  body-local declarations hid calls in default initializers. Reassigned `require` still produced
+  definite Node file findings for a local return object.
+- **Cause**: comments are named syntax nodes; name-wide mutation invalidation and spelling-only
+  loader/global checks bypassed lexical resolution. Function binding ranges included parameters.
+- **Fix**: skip operand trivia without skipping holes/spreads; share bounded lexical lookup for
+  reads and writes, keep body bindings out of parameter initializers, and check loader identity
+  and mutation at the capture position. Analysis rule version 5 invalidates earlier evidence.
+- **Coverage**: parser positive/negative pairs and Core approval checks; author readiness across
+  three simulated platforms with and without trust. Gaps remain advisory and never grant trust.
+- **Follow-up review (rule 6)**: include namespace-import comments, wrapped TypeScript write targets,
+  non-declaring loop writes, computed method keys and class static blocks in the same identity
+  rules. A loader captured before replacement must still contribute its dependency effects;
+  immutable loader aliases must retain their return identity. New regressions also exercise
+  no-Plan Frontend evaluation, rejecting differences before invocation writes or process starts.
+- **Native verification**: `14eac507` passed 63 targeted Windows tests and 64 Linux tests, including
+  150 author fixture combinations per host; see the [scope and limits](architecture/code-analysis.md#p1-native-verification-2026-10-23).
+
+## 2026-10-23 — Binding patterns are not arbitrary identifier subtrees
+
+- **Evidence**: default parameters, destructuring defaults and `typeof fetch` annotations made
+  real global `fetch` calls appear locally shadowed; destructuring assignment to `fetch` left the
+  replaced global classified as a network API.
+- **Cause**: declaration collection walked all descendant identifiers, while mutation collection
+  treated a whole destructuring target as a single variable name.
+- **Fix**: share a pattern traversal that follows binding/write positions and preserves member
+  targets, skipping property keys, default expressions and type annotations. Rule version 4 keeps
+  runtime analysis of default expressions separate from declaration and mutation collection.
+- **Coverage**: JS/TS parser and Core Plan regressions cover defaults, type queries, nested/rest
+  patterns, identifier/member reassignment, real local shadowing and preserved builtin calls.
+
+## 2026-10-23 — Builtin analysis must account for generator scopes and object aliases
+
+- **Evidence**: isolated `preset lint` rejected a local `function* fetch` as a network call and
+  treated `fs.readFileSync` as a file read after replacement through `const alias = fs`.
+- **Cause**: generator declarations were absent from binding/function-scope recognition; mutation
+  invalidated only the written spelling, leaving aliases of the same object classified as builtins.
+- **Fix**: recognize generator scopes and collect canonical member mutations before invalidating
+  bindings. Whole-object invalidation hid unrelated methods and previously copied functions;
+  one source-order pass missed forward closure references. Use bounded alias resolution and
+  member-level invalidation with initializer capture positions under analysis rule version 3.
+- **Coverage**: parser regressions cover generator/local-var scopes, chained and forward aliases,
+  cycles/budgets, CommonJS, Bun, deletion, capture before/after replacement and unaffected calls;
+  Core Plan regressions verify both approval acceptance and rejection.
+
+## 2026-10-23 — Metadata grammar changes include shipped authoring examples
+
+- **Evidence**: push CI for `27feeeca` rejected the Shell example's legacy string `env` during
+  `Verify Preset authoring example`; lifecycle tests and local pre-commit checks had passed.
+- **Fix**: use the structured input declaration in `examples/presets/shell/demo/shine.toml` and
+  remove its redundant environment permission statement.
+- **Coverage**: run the CI example validation, lint, fixture-test and pack commands when changing
+  metadata grammar. Example fixtures exercise the shipped source files without executing presets.
+
 ## 2026-10-21 — Fixture observations must share the planner's native root
 
 - **Evidence**: Windows seeded `/shine-author/home` while planning read `C:\shine-author\home`.
@@ -537,6 +608,12 @@
 - **Verification**: preserve test names with `--status-level leak`, inspect subprocess ownership,
   and compare the same binaries with a fixed runner at the same timeout. Do not weaken leak
   detection or change production code solely to suppress this symptom.
+- **Prevention (2026-10-22)**: `.config/nextest.toml` requires 0.9.145 or newer and fails real leaked
+  output handles at the default 100 ms timeout. This also applies to CI and pre-commit runs.
+- **Acceptance (2026-10-22)**: `4ece7d6b` passed all three native suites with Nextest 0.9.148 and
+  zero LEAK results, including `copy_sets_executable_bit_on_sh_files` on macOS. Rust 1.90 MSRV
+  and quality checks also passed; counts and job links are in the
+  [CI acceptance record](operations/ci-pipelines.md#rust-190-and-nextest-acceptance-2026-10-22).
 
 ## 2026-10-19 — Command hints and summaries retain argument and outcome boundaries
 
@@ -3349,3 +3426,15 @@ When cutting a release, always diff against the latest stable `v*` tag
 - **Test isolation**: embedded completion checks must not fall back to a user's real global or
   project configuration. An isolated empty project plus explicit temporary config root retains the
   embedded source mode and verifies that completion creates no runtime state.
+
+## 2026-10-23 — Diff fallbacks and long-line reviews need complete display boundaries
+
+- **Symptom**: missing Shell diff content exposed raw path controls; SSH enrollment silently
+  truncated escaped diff lines, hiding changed source-path suffixes from approval prompts.
+- **Fix**: encode missing-path notices and share character escaping between bounded SSH summaries
+  and complete diff lines. Preserve structural LF, encode CR and retain the final newline.
+- **Boundary**: keep request limits, local-TTY color policy, metadata trust acknowledgement, nonce
+  consumption, confirmation and locked policy revalidation unchanged.
+- **Regression**: snapshot/live missing-file inspection preserves files, receipts and trust;
+  long-line review shows both suffixes, rejection preserves policy bytes, nonce reuse fails,
+  and fresh approval stores the original unescaped source path.

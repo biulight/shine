@@ -48,7 +48,7 @@ async fn reinstall_preserves_modified_copy_json_and_generated_files_before_execu
         );
         context.env.insert("SOURCE".into(), "yes".into());
         let generator = if generated {
-            "generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }\n"
+            "generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE', auto = false }\n"
         } else {
             ""
         };
@@ -348,7 +348,7 @@ schema_version = 1
 environment = [{ name = 'SOURCE', sensitivity = 'plain' }]
 [[files]]
 source = 'generated.txt'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE', auto = false }
 "#.to_vec())
         .file("app/demo/generated.txt", b"fallback".to_vec())
         .file("app/demo/gen.ts", b"process.stdout.write('generated')".to_vec()).build();
@@ -410,6 +410,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = '
     let plan = runtime.plan_app_refresh(request.clone()).await.unwrap();
     let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
     runtime.host().queue_process_output(Ok(ProcessOutput {
+        interrupted: false,
         exit_code: Some(0),
         stdout: b"generated".to_vec(),
         stderr: vec![],

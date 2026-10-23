@@ -9,9 +9,8 @@ use anyhow::Result;
 /// After a successful self-upgrade, try to sync the new binary to the self-install destination.
 /// If the copy fails due to permissions, print a targeted hint instead of failing.
 pub(super) async fn sync_self_install_dest(config: &Config, src: &std::path::Path) {
-    let dest = match &config.self_install_dest {
-        Some(d) => d,
-        None => return,
+    let Some(dest) = &config.self_install_dest else {
+        return;
     };
     match sync_self_install_dest_from(src, dest).await {
         Ok(SelfInstallSync::Synced) => println!(

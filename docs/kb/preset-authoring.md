@@ -138,15 +138,18 @@ Rules:
 A Bun entry may request runtime env injection:
 
 ```toml
-env = ["KEY", "SOURCE=TARGET"]
+env = [{ source = "KEY", sensitivity = "plain" }, { source = "SOURCE", target = "TARGET", sensitivity = "plain" }]
 ```
 
-The ordered mapping uses the `shine env run --with` grammar. Names are validated and duplicate
-targets are rejected at metadata load. At launch the managed wrapper runs through
+Each ordered entry requires `source` and `sensitivity`; optional `target` defaults to `source`.
+Core derives environment permissions from these inputs. Legacy string entries are accepted only
+by `preset migrate`, which reads their explicit permission sensitivity. Names are validated and
+duplicate targets are rejected at metadata load. At launch the managed wrapper runs through
 `shine env run --no-workspace --with ... -- bun <script>`; `KEY_SECRET` is decrypted per invocation.
 This requires both `shine` and `bun` on `PATH`. Runtime `env` and static `template` transforms are
-independent and may be combined. See
-[`../bun-shell-preset-env-injection-prd.md`](../bun-shell-preset-env-injection-prd.md).
+independent and may be combined. Current input rules follow
+[ADR 0151](decisions/0151-structured-preset-environment-inputs.md); the
+[original launcher design](../bun-shell-preset-env-injection-prd.md) predates structured inputs.
 
 ### Shell verification
 
@@ -222,7 +225,7 @@ An app file may declare:
 generator = {
   script = "generate.ts",
   runtime = "bun",
-  env = ["SOURCE_URL"],
+  env = [{ source = "SOURCE_URL", sensitivity = "plain" }],
   when_env = "SOURCE_URL",
   auto = false,
 }
@@ -256,7 +259,7 @@ An app category can expose explicit artifact commands:
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
-env = ["PROFILE_PATH", "API_TOKEN"]
+env = [{ source = "PROFILE_PATH", sensitivity = "plain" }, { source = "API_TOKEN", sensitivity = "secret" }]
 ```
 
 - `runtime` is `native` by default. Native executes the file directly and relies on its shebang;
@@ -268,9 +271,8 @@ env = ["PROFILE_PATH", "API_TOKEN"]
 - Explicit artifact commands require a reviewed security Plan and propagate nonzero exit. Implicit
   uninstall teardown is included in the lifecycle Plan, remains non-fatal, and is safely skipped
   when external code is not allowed.
-- `env` is an explicit source or `SOURCE=TARGET` allowlist. Scripts receive only that allowlist plus
-  the fixed `SHINE_APP_*` contract; every source must also appear in the category's
-  `[permissions].environment`. Plain values are Plan-bound by hash; secret-classified names require
+- `env` is a structured allowlist of `source`, optional `target`, and required `sensitivity`. Scripts receive only that allowlist plus
+  the fixed `SHINE_APP_*` contract; Core derives the category environment declarations. Plain values are Plan-bound by hash; secret-classified names require
   opaque versions and are not decrypted by artifact execution.
 - An overlay script wins only when that exact artifact path exists; otherwise the active base
   preset script remains available.

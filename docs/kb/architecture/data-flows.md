@@ -168,6 +168,7 @@ table per Shell command/platform variant, and one table per Sys item. Static val
 version, placement, structured paths, payload-free identities, and duplicates without executing
 Preset code. Typed metadata describes Core-bounded effects; explicit command, filesystem, network,
 and system entries remain unverified author statements. Their absence does not block planning.
+Shell/App structured `env` entries derive their source/sensitivity permissions before planning and code analysis; only `preset migrate` converts legacy string entries. Runtime mapping and receipt formats remain unchanged.
 Environment input identities and Administrator authorization keep executor semantics, so a missing
 required contract remains non-ready. Shell/Sys defaults resolve per target before fingerprinting.
 
@@ -1620,3 +1621,18 @@ No persistent grant is written. Automatic `--yes` and read-only/AI review use th
 remain blocked without persistent trust. Shell live always needs Development trust. Explicit
 info/update generator evaluation retains its persistent-grant requirement. Author statements are
 review data, not trust identity; env/admin remain per-operation executor contracts. See ADR 0091.
+
+Human review reuses its initial report when no temporary code grants are added. When grants change
+the trust inputs, it re-plans before presenting the review. This reuse is local to review: execution
+prevalidation, apply-time validation and lock-protected final planning remain independent.
+
+## App code analysis admission
+
+Typed App planning discovers triggered generator/hook/artifact entries, then Core prepares missing
+analysis outside the lifecycle lock and re-observes the Plan. Source facts and per-entry evidence
+share one command session across frontend review/apply. Locked approved methods only revalidate
+prepared evidence; changed source, declarations, environment mappings or entry scope require renewed
+preparation/review. Explicit evaluation has the same preparation and launch gates without creating
+lifecycle approval. The final script launcher rejects absent/stale/blocking evidence before writing
+its UUID invocation snapshot. Cancellation uses parser checks and existing Host process supervision;
+normal cleanup and forced-abort residue retain ADR 0092 semantics. See [code analysis](code-analysis.md).

@@ -4,7 +4,7 @@ dest = "~/.shine/clash-verge"
 list_mode = "files"
 
 post_upgrade = [
-  { script = "build.ts", runtime = "bun", env = ["CLASH_PROFILES_FILE", "CLASH_CONTROLLER_URL", "CLASH_CONTROLLER_TOKEN"], show_output = true },
+  { script = "build.ts", runtime = "bun", env = [{ source = "CLASH_PROFILES_FILE", sensitivity = "plain" }, { source = "CLASH_CONTROLLER_URL", sensitivity = "plain" }, { source = "CLASH_CONTROLLER_TOKEN", sensitivity = "secret" }], show_output = true },
 ]
 
 # `shine app artifact apply clash-verge` runs the artifact script to refresh the mihomo
@@ -32,16 +32,11 @@ post_upgrade = [
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
-env = ["CLASH_PROFILES_FILE", "CLASH_CONTROLLER_URL", "CLASH_CONTROLLER_TOKEN"]
+env = [{ source = "CLASH_PROFILES_FILE", sensitivity = "plain" }, { source = "CLASH_CONTROLLER_URL", sensitivity = "plain" }, { source = "CLASH_CONTROLLER_TOKEN", sensitivity = "secret" }]
 
 [permissions]
 schema_version = 1
 network = [{ scope = "any" }]
-environment = [
-  { name = "CLASH_PROFILES_FILE", sensitivity = "plain" },
-  { name = "CLASH_CONTROLLER_URL", sensitivity = "plain" },
-  { name = "CLASH_CONTROLLER_TOKEN", sensitivity = "secret" },
-]
 
 # The single composite enhancement payload, installed verbatim (plain Copy — no
 # templating, so the file is always valid YAML). build.ts splits its keys into

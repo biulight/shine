@@ -759,7 +759,7 @@ pub(crate) async fn grant_current_for_test(config: &Config, target: &str) {
     save_store(config, &store).await.unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) async fn grant_development_for_test(config: &Config, target: &str) {
     let runtime = core_runtime::from_config(config).await.unwrap();
     let report = match runtime.external_code_requirements(target).await {

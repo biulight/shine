@@ -336,7 +336,7 @@ schema_version = 1
 environment = [{ name = 'SOURCE', sensitivity = 'plain' }]
 [[files]]
 source = 'generated.txt'
-generator = { script = 'gen.sh', env = ['SOURCE'], when_env = 'SOURCE', auto = false }
+generator = { script = 'gen.sh', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE', auto = false }
 "#
                 .to_vec(),
             )

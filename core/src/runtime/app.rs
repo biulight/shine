@@ -802,7 +802,9 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             }
         }
     }
+}
 
+impl<H> CoreRuntime<H> {
     pub(super) fn fixed_app_contract_env(
         &self,
         category: &str,
@@ -1088,7 +1090,7 @@ mod lifecycle_tests {
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "app/demo/shine.toml",
-                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = ['TOKEN'] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }]\n[[files]]\nsource = 'config'\n".to_vec(),
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = [{ source = 'TOKEN', sensitivity = 'plain' }] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }]\n[[files]]\nsource = 'config'\n".to_vec(),
             )
             .file("app/demo/config", b"one".to_vec())
             .file("app/demo/refresh.ts", b"export {};".to_vec())
@@ -1105,6 +1107,7 @@ mod lifecycle_tests {
             .insert("TOKEN".to_string(), "opaque".to_string());
         let runtime = CoreRuntime::new(InMemoryHost::new(), context, snapshot);
         let categories = runtime.app_categories(Some("demo")).unwrap();
+        runtime.lint_app_code(&categories[0]).await.unwrap();
         runtime
             .host()
             .queue_process_output(Ok(crate::runtime::ProcessOutput {

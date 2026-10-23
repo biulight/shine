@@ -22,11 +22,12 @@ the category. Never use absolute source paths or `..`.
 
 An App category may have one top-level `[permissions]` table. Do not create an
 empty table or repeat hook commands, runtime commands, script paths, managed
-destinations, or receipt operations already expressed by typed metadata. Optional
-command/filesystem/network/system entries are unverified review context. Environment
+destinations, or receipt operations already expressed by typed metadata. Declare statically
+identified effects of App Bun scripts: definite declaration differences and parse failures block
+execution. Additional command/filesystem/network/system entries are review context. Environment
 names and Administrator authorization remain required when Shine injects or elevates them.
 
-Environment entries contain only a name and `plain`/`secret` sensitivity.
+Additional `[permissions].environment` entries contain only a name and `plain`/`secret` sensitivity.
 Filesystem entries use `access`, a structured `base` (`home`, `shine`,
 `data-dir`, `preset`, or `absolute`), and a normalized path. A statement does not
 enable, restrict, or sandbox code: external/overlay executable entries require separate
@@ -44,8 +45,9 @@ target-scoped trust for the complete effective category snapshot.
   declare required environment inputs there; Core derives script/runtime execution identities.
   Never launch `shine app artifact apply` from a hook or add `--yes` to compose nested approvals.
 - `[artifact]` may declare `script`, optional `teardown`, `runtime`, and an
-  explicit `env` allowlist. Every environment source must also have a
-  sensitivity entry in the category permission declaration. Artifact apply/remove remains
+  explicit structured `env` allowlist: `source`, optional `target`, and required `sensitivity`.
+  Core derives category environment permissions from these inputs; no duplicate
+  `[permissions].environment` declaration is needed. Artifact apply/remove remains
   an explicit operation with its own reviewed Plan, outside this authoring workflow.
 - Bun code uses `.ts`, `.js`, `.mts`, or `.mjs`. If dependencies are needed,
   place both `package.json` and `bun.lock` at the category root; never declare
@@ -54,3 +56,14 @@ target-scoped trust for the complete effective category snapshot.
 Avoid duplicate effective destinations on any operating system. Keep destination
 ownership narrow and explain required secrets or environment keys without
 placing their values in the preset.
+
+## Static code checks
+
+Run lint for every App entry, including generators not triggered by current inputs. Supported local
+JavaScript/TypeScript dependencies are analyzed without downloading packages or executing code.
+Fix definite differences at the reported source position by correcting the declaration or script.
+Dynamic targets, unsupported languages/packages and subprocess effects remain explicit coverage
+gaps; neither trust nor unrestricted metadata removes them. Missing corroboration is advisory.
+For structured `env`, declare `source`, optional `target`, and `sensitivity` together; permissions use the source identity. Fixed-variable
+exemptions use exact documented keys, not a general `SHINE_` prefix. Do not use real values to make
+analysis or synthetic planning succeed. Positions use one-based lines and UTF-8 byte columns.

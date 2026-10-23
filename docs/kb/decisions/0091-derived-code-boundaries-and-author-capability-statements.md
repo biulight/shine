@@ -7,6 +7,11 @@
 - **Supersedes in part**: ADR 0041, ADR 0046, ADR 0088, ADR 0090
 - **Extends**: ADR 0064
 
+App supported-code admission is partially superseded by
+[ADR 0150](0150-preset-code-analysis-admission.md): statically identified undeclared App Bun effects
+now block execution. Unisolated-code classification, scoped trust and the absence of runtime
+confinement remain unchanged.
+
 ## Context
 
 Shine can derive its own structured file, launcher, environment-injection and elevation operations,
@@ -76,6 +81,11 @@ review into an ApprovedOperation. The handoff carries exact snapshot grants, is 
 nor serializable, and is revalidated against fresh configuration, source and state before execution.
 The review runtime clears temporary grants; nothing is saved in the trust store. Shell live remains
 blocked without Development trust. Shared affected Shell targets participate in the same review.
+
+When no temporary grants are needed, retain the initial human review instead of observing the same
+inputs twice. Added grants still require a new Plan. This does not reuse review observations during
+apply or remove any execution prevalidation or lock-protected freshness check. A blocked Live Plan
+remains blocked on the no-grant path.
 
 Automatic `--yes` uses ordinary review and requires existing trust. Read-only/AI adapters receive
 only reports, never the trusted frontend or approval constructor. This is a host capability boundary,

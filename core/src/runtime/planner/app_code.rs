@@ -13,6 +13,25 @@ pub(super) async fn plan_app_hooks<H: FileSystemObservationHost>(
 ) -> Result<()> {
     for (index, hook) in hooks.iter().enumerate() {
         state.app_code(category, CodeEntryKindV2::AppHook);
+        let (script, language) = match &hook.action {
+            crate::runtime::AppHookAction::Script { script, runtime } => (
+                Some(
+                    script
+                        .to_str()
+                        .context("App script path is not UTF-8")?
+                        .replace('\\', "/"),
+                ),
+                *runtime,
+            ),
+            crate::runtime::AppHookAction::Command(_) => (None, ArtifactRuntime::Native),
+        };
+        state.analysis(runtime.app_analysis_binding(
+            category,
+            &format!("hook:{index}"),
+            script.as_deref(),
+            language,
+            &hook.env,
+        )?);
         if is_recursive_app_artifact_hook(hook, &category.name) {
             steps.push(
                 PlanStepV1::new(
@@ -110,7 +129,11 @@ pub(super) async fn add_app_hook_permissions<H: FileSystemObservationHost>(
             program: "bun".to_string(),
         });
     }
-    let logical = format!("app/{}/{}", category.name, script.display());
+    let logical = format!(
+        "app/{}/{}",
+        category.name,
+        crate::runtime::path_text::preset_path(script)
+    );
     runtime
         .presets()
         .file(&logical)
@@ -137,6 +160,17 @@ pub(super) async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
     steps: &mut Vec<PlanStepV1>,
 ) -> Result<PlanStepV1> {
     state.app_code(category, CodeEntryKindV2::AppArtifact);
+    let artifact = category
+        .artifact
+        .as_ref()
+        .context("App artifact metadata is missing")?;
+    state.analysis(runtime.app_analysis_binding(
+        category,
+        "artifact",
+        Some(script),
+        runtime_kind,
+        &artifact.env,
+    )?);
     permissions.require(PermissionV1::Filesystem {
         access: FilesystemAccessV1::Execute,
         path: format!("preset:{}", script.replace('\\', "/")),
@@ -146,7 +180,11 @@ pub(super) async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
             program: "bun".to_string(),
         });
     }
-    let logical = format!("app/{}/{script}", category.name);
+    let logical = format!(
+        "app/{}/{}",
+        category.name,
+        crate::runtime::path_text::preset_path(Path::new(script))
+    );
     runtime
         .presets()
         .file(&logical)
@@ -212,10 +250,25 @@ pub(super) async fn add_generator_permissions<H: FileSystemObservationHost>(
     permissions: &mut PermissionAccumulator,
     category: &AppCategory,
     generator: &crate::runtime::AppGenerator,
+    source: &str,
     state: &mut StateCapture,
     steps: &mut Vec<PlanStepV1>,
 ) -> Result<PlanStepV1> {
     state.app_code(category, CodeEntryKindV2::AppGenerator);
+    if runtime.context().env.contains_key(&generator.when_env) {
+        let script = generator
+            .script
+            .to_str()
+            .context("App script path is not UTF-8")?
+            .replace('\\', "/");
+        state.analysis(runtime.app_analysis_binding(
+            category,
+            &format!("generator:{source}"),
+            Some(&script),
+            generator.runtime,
+            &generator.env,
+        )?);
+    }
     permissions.require(PermissionV1::Filesystem {
         access: FilesystemAccessV1::Execute,
         path: format!("preset:{}", generator.script.display()),
@@ -225,7 +278,11 @@ pub(super) async fn add_generator_permissions<H: FileSystemObservationHost>(
             program: "bun".to_string(),
         });
     }
-    let logical = format!("app/{}/{}", category.name, generator.script.display());
+    let logical = format!(
+        "app/{}/{}",
+        category.name,
+        crate::runtime::path_text::preset_path(&generator.script)
+    );
     runtime
         .presets()
         .file(&logical)
@@ -294,7 +351,11 @@ pub(super) fn app_code_blocked<H>(
     category: &AppCategory,
     script: &Path,
 ) -> Result<bool> {
-    let logical = format!("app/{}/{}", category.name, script.display());
+    let logical = format!(
+        "app/{}/{}",
+        category.name,
+        crate::runtime::path_text::preset_path(script)
+    );
     if runtime
         .presets()
         .origin(&logical)

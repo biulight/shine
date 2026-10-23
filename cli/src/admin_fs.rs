@@ -1,6 +1,7 @@
 //! CLI-only administrator helpers for self-installation.
 
 use anyhow::Result;
+#[cfg(unix)]
 use std::io::IsTerminal;
 
 pub(crate) async fn admin_lock() -> Result<shine_core::runtime::PrivilegedOperationGuard> {
@@ -11,6 +12,7 @@ pub(crate) async fn admin_lock() -> Result<shine_core::runtime::PrivilegedOperat
 }
 
 /// Builds a sudo command which fails fast rather than prompting without a TTY.
+#[cfg(unix)]
 pub(crate) fn sudo_command() -> tokio::process::Command {
     let mut command = tokio::process::Command::new("sudo");
     if !std::io::stdin().is_terminal() {

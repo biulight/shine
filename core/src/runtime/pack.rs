@@ -60,9 +60,8 @@ pub async fn pack_preset_path(
     cwd: &Path,
     path: &Path,
 ) -> PresetPackArtifactV3 {
-    let scope = match load_preset_source_scope(source_host, cwd, path).await {
-        Ok(scope) => scope,
-        Err(_) => return invalid(None, "invalid_input"),
+    let Ok(scope) = load_preset_source_scope(source_host, cwd, path).await else {
+        return invalid(None, "invalid_input");
     };
     if scope.categories.len() != 1
         || (scope.canonical != scope.categories[0].root
@@ -148,9 +147,8 @@ pub async fn pack_preset_path(
             .collect(),
     };
     let manifest_json = serde_json::to_vec_pretty(&manifest).expect("serializing bundle manifest");
-    let bytes = match archive(&target, &manifest_json, &files) {
-        Ok(bytes) => bytes,
-        Err(_) => return invalid(Some(target), "bundle_encoding_failed"),
+    let Ok(bytes) = archive(&target, &manifest_json, &files) else {
+        return invalid(Some(target), "bundle_encoding_failed");
     };
     PresetPackArtifactV3 {
         report: PresetPackReportV3 {

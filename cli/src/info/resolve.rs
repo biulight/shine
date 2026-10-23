@@ -298,6 +298,7 @@ mod tests {
             desired_content: None,
             current_content: None,
             changes: Vec::new(),
+            code_analysis: None,
             assessment_error: None,
             assessment_diagnostic: None,
         }

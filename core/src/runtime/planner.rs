@@ -159,6 +159,7 @@ struct StateCapture {
     builder: SnapshotDigestBuilderV1,
     seen: BTreeMap<String, Vec<u8>>,
     code_entries: BTreeMap<(String, CodeEntryKindV2), CodeTargetRoleV2>,
+    analysis: BTreeMap<String, crate::analysis::Binding>,
 }
 
 impl StateCapture {
@@ -170,6 +171,7 @@ impl StateCapture {
             builder,
             seen: BTreeMap::new(),
             code_entries: BTreeMap::new(),
+            analysis: BTreeMap::new(),
         })
     }
 
@@ -200,6 +202,10 @@ impl StateCapture {
             (format!("app/{}", category.name), entry_kind),
             CodeTargetRoleV2::Selected,
         );
+    }
+
+    fn analysis(&mut self, binding: crate::analysis::Binding) {
+        self.analysis.insert(binding.identity.clone(), binding);
     }
 
     fn finish(self) -> SnapshotDigestV1 {

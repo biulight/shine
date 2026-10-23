@@ -183,7 +183,19 @@ async fn embedded_shell_cache_receipt_failure_removes_created_files_on_recovery(
         runtime.host().read(&source).await.unwrap(),
         b"#!/bin/sh\necho demo\n"
     );
+    let previous = runtime.plan_shell_operation_recovery().await.unwrap();
+    let previous_approval = PlanApprovalV1::for_reviewed_plan(&previous).unwrap();
+    let legacy = PresetSnapshot::builder(PresetSourceKind::Embedded)
+        .file(
+            "shell/demo/shine.toml",
+            b"[[files]]\nsource='demo.sh'\ntarget='demo'\nenv=['TOKEN']\n".to_vec(),
+        )
+        .file("shell/demo/demo.sh", b"#!/bin/sh\necho demo\n".to_vec())
+        .build();
+    let runtime = CoreRuntime::new(runtime.host().clone(), runtime.context().clone(), legacy);
+    assert!(runtime.shell_categories(Some("demo")).is_err());
     let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+    assert!(previous_approval.validate(&recovery).is_err());
     assert!(recovery.is_ready());
     assert!(recovery.steps.iter().any(|step| {
         step.diagnostic_codes

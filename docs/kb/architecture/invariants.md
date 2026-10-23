@@ -94,6 +94,13 @@ bugs. Check this list before changing the modules named in each entry.
   within each line; target lookup, ambiguity and missing-target exits retain their original policy.
   Installed App/Shell `info` encodes metadata labels/descriptions and path headings after inspection;
   verbose content keeps the existing lossy UTF-8 decoding and missing-final-newline behavior.
+  Info diff file labels encode controls before unified-diff construction, so path newlines cannot
+  become structural diff lines. Missing Shell script/snapshot notices also encode their paths.
+  Local broker policy diff/update share stdout-aware diff encoding
+  and colors; serialized comparison data, default-No confirmation and locked policy revalidation
+  remain unchanged. SSH enrollment retains its separate local-TTY rendering and approval boundary.
+  Its diff uses complete escaped lines, preserving structural LF and encoding CR; bounded summary
+  labels must not truncate policy diffs or hide changed suffixes. Request-size limits remain intact.
   Shared source/overlay note values encode controls after source selection; internal label styling,
   column padding, literal backslashes and the saved physical paths stay independent of encoding.
 - **Sys display encoding stays at the CLI boundary.** Suggested item operands use the shared
@@ -285,7 +292,9 @@ bugs. Check this list before changing the modules named in each entry.
   are diagnostic-only; a source change, backup/write failure, refusal, or remaining blocker fails the
   command even when independent safe edits have converged. Terminal summaries encode data before
   wrapping; diff headers encode logical paths before diff construction and body rendering preserves
-  structural newlines while encoding CR/TAB/ESC. Display escapes never enter candidates or JSON.
+  structural newlines while encoding CR/TAB/ESC. Migration and info share stdout-aware diff colors
+  after encoding, retaining existing forced-color overrides as well as `NO_COLOR` and ordinary
+  redirection detection. Display escapes and colors never enter candidates or JSON.
   Control-bearing remediation targets require original operands rather than escaped command aliases.
 - **Preset bundle bytes exclude host identity and author-only state.** `shine preset pack` uses one
   validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical
@@ -310,7 +319,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **A Preset capability statement is not a grant or sandbox.** App categories, Shell commands, and
   Sys items may declare versioned command, filesystem, network, and system identities for review.
   They are optional, unverified author statements and never restrict arbitrary code. Missing or
-  empty statements do not block planning or trust enrollment. Explicit statements remain validated,
+  empty statements do not block trust enrollment. Supported App code with statically identified
+  undeclared effects does block admission under ADR 0150. Explicit statements remain validated,
   enter the Plan fingerprint, and are not trust identity. Environment declarations and Administrator
   authorization retain executor semantics: required managed injection or elevation without the
   corresponding declaration remains fail-closed. No declaration creates external-code trust or
@@ -403,8 +413,8 @@ bugs. Check this list before changing the modules named in each entry.
   already-applied refresh writes; hooks do not run (ADR 0130).
 - **App executable environment is explicit.** Generators receive only fixed `SHINE_APP_*` contract
   variables plus their `generator.env` mappings. Artifacts receive only the fixed contract plus
-  their `[artifact].env` mappings, whose sources must be declared by the category's
-  `[permissions].environment`. They never inherit the full active `[env]` table. Plain values are
+  their `[artifact].env` mappings. Shell and App runtime inputs declare `source`, optional `target`,
+  and required `sensitivity` together; Core derives their effective environment permissions. They never inherit the full active `[env]` table. Plain values are
   fingerprinted by hash and secret values require opaque versions; neither value form is serialized
   into the Plan.
 
@@ -1516,3 +1526,18 @@ No persistent grant is written. Automatic `--yes` and read-only/AI review use th
 remain blocked without persistent trust. Shell live always needs Development trust. Explicit
 info/update generator evaluation retains its persistent-grant requirement. Author statements are
 review data, not trust identity; env/admin remain per-operation executor contracts. See ADR 0091.
+
+- **App code analysis is private preparation, not executable report input (ADR 0150).** Typed
+  triggers select entries; Core prepares bounded source facts outside lifecycle locks and compares
+  each entry's declaration/environment contract independently. Locked replanning only consumes
+  exact evidence. No-Plan explicit evaluation and the final script launcher require it before
+  snapshot materialization. File-local failures may preserve independent evaluation; terminal
+  cancellation/budget/analyzer failures stop new work. Unsupported code retains coverage gaps and
+  existing trust requirements. See [code analysis](code-analysis.md) for rules and validation scope.
+
+- **Non-fatal teardown errors exclude command termination.** Cancellation and terminal analysis
+  failures propagate through implicit artifact/teardown orchestration before uninstall removes any
+  further file or receipt. An outer approved-method error check after removal is too late.
+- **Recovered syntax is never usable evidence.** Check anonymous missing punctuation as well as
+  named syntax errors. Unsupported static module spelling must retain a coverage gap; erased
+  type-only module references do not expand the runtime dependency graph (analysis rule version 2).

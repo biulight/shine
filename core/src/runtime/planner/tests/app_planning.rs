@@ -171,7 +171,7 @@ async fn app_script_hook_is_bound_into_the_parent_plan() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "app/demo/shine.toml",
-                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = ['TOKEN', 'OPTIONAL_TOKEN'] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\nnetwork = [{ scope = 'any' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }, { name = 'OPTIONAL_TOKEN', sensitivity = 'secret' }]\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+                b"metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'refresh.ts', runtime = 'bun', env = [{ source = 'TOKEN', sensitivity = 'plain' }, { source = 'OPTIONAL_TOKEN', sensitivity = 'secret' }] }\n[permissions]\nschema_version = 1\nfilesystem = [{ access = ['execute'], base = 'preset', path = 'refresh.ts' }]\nnetwork = [{ scope = 'any' }]\ncommands = ['bun']\nenvironment = [{ name = 'TOKEN', sensitivity = 'plain' }, { name = 'OPTIONAL_TOKEN', sensitivity = 'secret' }]\n[[files]]\nsource = 'config.toml'\n".to_vec(),
             )
             .file("app/demo/config.toml", b"updated".to_vec())
             .file("app/demo/refresh.ts", b"export {};".to_vec())
@@ -262,7 +262,7 @@ async fn legacy_overlay_metadata_blocks_recursive_artifact_hook_before_trust() {
 #[tokio::test]
 async fn missing_permission_and_secret_identity_fail_closed() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
-            .file("app/demo/shine.toml", b"dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\ngenerator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'TOKEN' }\n".to_vec())
+            .file("app/demo/shine.toml", b"dest = '~/.config/demo'\n[[files]]\nsource = 'config.toml'\ngenerator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'TOKEN', sensitivity = 'plain' }], when_env = 'TOKEN' }\n".to_vec())
             .file("app/demo/config.toml", b"fallback".to_vec())
             .file("app/demo/gen.ts", b"process.stdout.write('x')".to_vec())
             .build();
@@ -300,7 +300,7 @@ commands = ['bun']
 environment = [{ name = 'TOKEN', sensitivity = 'secret' }]
 [[files]]
 source = 'config.toml'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'TOKEN' }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'TOKEN', sensitivity = 'secret' }], when_env = 'TOKEN' }
 "#
             .to_vec(),
         )
@@ -441,7 +441,7 @@ async fn app_plan_fingerprint_binds_manifest_and_live_state() {
 #[tokio::test]
 async fn app_upgrade_permissions_exclude_current_files_and_bind_their_state() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
-            .file("app/demo/shine.toml", b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\nenvironment = [{ name = 'SOURCE', sensitivity = 'plain' }]\n[[files]]\nsource = 'changed'\n[[files]]\nsource = 'current'\n[[files]]\nsource = 'manual'\ngenerator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }\n".to_vec())
+            .file("app/demo/shine.toml", b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\nenvironment = [{ name = 'SOURCE', sensitivity = 'plain' }]\n[[files]]\nsource = 'changed'\n[[files]]\nsource = 'current'\n[[files]]\nsource = 'manual'\ngenerator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE', auto = false }\n".to_vec())
             .file("app/demo/changed", b"next".to_vec())
             .file("app/demo/current", b"current".to_vec())
             .file("app/demo/manual", b"fallback".to_vec())
@@ -620,7 +620,7 @@ commands = ['bun']
 environment = [{{ name = 'SOURCE', sensitivity = 'plain' }}]
 [[files]]
 source = 'generated.txt'
-generator = {{ script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE' }}
+generator = {{ script = 'gen.ts', runtime = 'bun', env = [{{ source = 'SOURCE', sensitivity = 'plain' }}], when_env = 'SOURCE' }}
 "#
                 )
                 .into_bytes(),
@@ -693,7 +693,7 @@ commands = ['bun']
 environment = [{ name = 'SOURCE', sensitivity = 'plain' }]
 [[files]]
 source = 'generated.txt'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE', auto = false }
 "#
                 .to_vec(),
             )
@@ -790,7 +790,7 @@ async fn app_artifact_plan_scopes_secrets_and_rejects_changed_runtime_state() {
 script = 'build.ts'
 teardown = 'unbuild.ts'
 runtime = 'bun'
-env = ['TOKEN']
+env = [{ source = 'TOKEN', sensitivity = 'secret' }]
 [permissions]
 schema_version = 1
 filesystem = [
@@ -1002,6 +1002,121 @@ async fn app_upgrade_prune_blocks_stale_copy_with_noncanonical_backup() {
                 .diagnostic_codes
                 .contains(&"app_stale_removal_unsupported".to_string())
     }));
+}
+
+#[tokio::test]
+async fn stale_app_hashing_preserves_destination_admission_and_prune_semantics() {
+    for (json, current, released, pruned) in [
+        (false, Some("managed"), true, true),
+        (false, Some("user edit"), false, false),
+        (false, None, false, true),
+        (true, Some(r#"{"managed":true,"unowned":42}"#), true, true),
+        (true, Some(r#"{"managed":false}"#), false, false),
+        (true, Some(r#"{"unowned":42}"#), false, false),
+        (true, Some("invalid JSON"), false, false),
+        (true, None, false, true),
+    ] {
+        let runtime = runtime(
+            PresetSnapshot::builder(PresetSourceKind::Embedded)
+                .file(
+                    "app/demo/shine.toml",
+                    b"dest = '~/.config/demo'\n[[files]]\nsource = 'new'\ntarget = 'config'\n"
+                        .to_vec(),
+                )
+                .file("app/demo/new", b"replacement".to_vec())
+                .build(),
+        );
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        if let Some(current) = current {
+            runtime
+                .host()
+                .put_file(&destination, current.as_bytes().to_vec());
+        }
+        let keys = vec!["managed".to_string()];
+        let manifest = AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/old".into(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: if json {
+                    crate::runtime::managed_json::managed_json_hash(br#"{"managed":true}"#, &keys)
+                        .unwrap()
+                } else {
+                    crate::install::hash_content(b"managed")
+                },
+                install_strategy: if json {
+                    crate::install::AppInstallStrategy::JsonMerge { managed_keys: keys }
+                } else {
+                    crate::install::AppInstallStrategy::Copy
+                },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        };
+        manifest
+            .save(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let since = runtime.host().operations().len();
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo".into()),
+                force: false,
+                purge: false,
+                prune_stale: true,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        let new = plan
+            .steps
+            .iter()
+            .find(|step| step.resource.as_deref() == Some("new"))
+            .unwrap();
+        assert_eq!(
+            new.diagnostic_codes
+                .iter()
+                .any(|code| code == "app_destination_occupied"),
+            !released,
+            "json={json}, current={current:?}"
+        );
+        let old = plan
+            .steps
+            .iter()
+            .find(|step| step.resource.as_deref() == Some("old"))
+            .unwrap();
+        assert_eq!(
+            old.action,
+            if pruned {
+                PlanActionV1::Remove
+            } else {
+                PlanActionV1::Preserve
+            },
+            "json={json}, current={current:?}"
+        );
+        assert_eq!(old.kind, pruned.then_some(PlanStepKindV1::AppStalePrune));
+        assert_eq!(
+            read_optional(runtime.host(), &destination)
+                .await
+                .unwrap()
+                .as_deref(),
+            current.map(str::as_bytes)
+        );
+        assert_eq!(
+            AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .entries,
+            manifest.entries
+        );
+        assert!(
+            runtime.host().operations()[since..]
+                .iter()
+                .all(|op| matches!(op, HostOperation::Read(_)))
+        );
+    }
 }
 
 #[tokio::test]

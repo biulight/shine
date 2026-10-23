@@ -13,11 +13,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-pub const PLAN_SCHEMA_VERSION: u32 = 2;
-pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 2;
+pub const PLAN_SCHEMA_VERSION: u32 = 3;
+pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 3;
 
 const SNAPSHOT_HASH_DOMAIN: &[u8] = b"shine.snapshot.v1";
-const PLAN_HASH_DOMAIN: &[u8] = b"shine.plan.v2";
+const PLAN_HASH_DOMAIN: &[u8] = b"shine.plan.v3";
 
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
@@ -484,6 +484,8 @@ pub struct PlanV1 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub code_boundaries: Vec<CodeBoundaryV2>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_analysis: Vec<crate::analysis::Binding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_scopes: Vec<PlanPermissionScopeV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filesystem_review: Vec<FilesystemReviewGroupV1>,
@@ -503,6 +505,7 @@ impl PlanV1 {
             filesystem_review: Vec::new(),
             author_capabilities: declared_permissions.clone(),
             code_boundaries: Vec::new(),
+            code_analysis: Vec::new(),
             schema_version: PLAN_SCHEMA_VERSION,
             operation: operation.into(),
             inputs,
@@ -518,6 +521,7 @@ impl PlanV1 {
     pub fn is_ready(&self) -> bool {
         self.schema_version == PLAN_SCHEMA_VERSION
             && self.permissions.is_satisfied()
+            && self.code_analysis.iter().all(|e| e.scope.report.allowed)
             && self
                 .steps
                 .iter()
@@ -921,10 +925,10 @@ mod tests {
         let plan_json = serde_json::to_string(&plan).unwrap();
         let approval_toml = toml::to_string(&approval).unwrap();
 
-        assert!(plan_json.contains("\"schema_version\":2"));
+        assert!(plan_json.contains("\"schema_version\":3"));
         assert!(plan_json.contains("\"operation\":\"install\""));
         assert!(plan_json.contains("\"action\":\"create\""));
-        assert!(approval_toml.contains("schema_version = 2"));
+        assert!(approval_toml.contains("schema_version = 3"));
         assert!(approval_toml.contains("plan_fingerprint = \""));
         for private in [
             "preset-content",
@@ -1022,7 +1026,7 @@ mod tests {
         );
         assert_eq!(
             ready_plan().fingerprint().unwrap().as_hex(),
-            "88e33559e1ae272fa92d4a23c10f322723ceb3744fb5f9f49d98853fcd07a35d"
+            "61bb5b87b9baec5254721698095297ef402742ffe24ad6199abba1b33652d03a"
         );
     }
 }

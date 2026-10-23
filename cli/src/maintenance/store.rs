@@ -1,8 +1,7 @@
 use super::{Cache, Scope};
 use anyhow::{Context, Result, ensure};
-use fs2::FileExt;
 use std::{
-    fs::{File, OpenOptions},
+    fs::{File, OpenOptions, TryLockError},
     path::Path,
 };
 
@@ -23,7 +22,7 @@ pub(super) fn lock(path: &Path) -> Result<File> {
         file.metadata()?.is_file(),
         "maintenance lock is not a regular file"
     );
-    file.try_lock_exclusive()?;
+    file.try_lock()?;
     Ok(file)
 }
 
@@ -33,9 +32,8 @@ pub(super) async fn lock_wait(path: &Path) -> Result<File> {
         match lock(path) {
             Ok(file) => return Ok(file),
             Err(error)
-                if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
-                    error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
-                }) && tokio::time::Instant::now() < deadline =>
+                if matches!(error.downcast_ref(), Some(TryLockError::WouldBlock))
+                    && tokio::time::Instant::now() < deadline =>
             {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await
             }
@@ -67,4 +65,51 @@ pub(super) async fn save(scope: &Scope, cache: &Cache) -> Result<()> {
         &serde_json::to_vec(cache)?,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn contention_waits_for_release_and_preserves_the_lock_file() {
+        let root = crate::test_support::make_temp_dir("shine-maintenance-lock").await;
+        let path = root.join("state.lock");
+        let holder = lock(&path).unwrap();
+        let waiter = lock_wait(&path);
+        tokio::pin!(waiter);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), &mut waiter)
+                .await
+                .is_err()
+        );
+        drop(holder);
+        let guard = waiter.await.unwrap();
+        assert!(matches!(
+            lock(&path).unwrap_err().downcast_ref(),
+            Some(TryLockError::WouldBlock)
+        ));
+        drop(guard);
+        assert!(path.is_file());
+        drop(lock(&path).unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn contention_timeout_and_io_failure_remain_distinct() {
+        let root = crate::test_support::make_temp_dir("shine-maintenance-lock-errors").await;
+        let path = root.join("state.lock");
+        let holder = lock(&path).unwrap();
+        let error = lock_wait(&path).await.unwrap_err();
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(TryLockError::WouldBlock)
+        ));
+        assert!(path.is_file());
+        let error = lock_wait(&root).await.unwrap_err();
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        drop(holder);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

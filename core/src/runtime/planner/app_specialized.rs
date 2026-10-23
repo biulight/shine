@@ -4,6 +4,18 @@ use super::*;
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
     pub async fn plan_app_refresh(&self, request: AppRefreshPlanRequest) -> Result<PlanV1> {
+        let initial = self.plan_app_refresh_prepared(request.clone()).await?;
+        if self.prepare_code_analysis(&initial.code_analysis).await? {
+            self.plan_app_refresh_prepared(request).await
+        } else {
+            Ok(initial)
+        }
+    }
+
+    pub(in crate::runtime) async fn plan_app_refresh_prepared(
+        &self,
+        request: AppRefreshPlanRequest,
+    ) -> Result<PlanV1> {
         let category = self
             .app_categories(Some(&request.category))?
             .into_iter()
@@ -104,6 +116,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 &mut permissions,
                 &category,
                 generator,
+                file.source_rel
+                    .to_str()
+                    .context("App source is not UTF-8")?,
                 &mut state,
                 &mut steps,
             )
@@ -186,6 +201,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
     pub async fn plan_app_artifact(&self, request: AppArtifactPlanRequest) -> Result<PlanV1> {
+        let initial = self.plan_app_artifact_prepared(request.clone()).await?;
+        if self.prepare_code_analysis(&initial.code_analysis).await? {
+            self.plan_app_artifact_prepared(request).await
+        } else {
+            Ok(initial)
+        }
+    }
+
+    pub(in crate::runtime) async fn plan_app_artifact_prepared(
+        &self,
+        request: AppArtifactPlanRequest,
+    ) -> Result<PlanV1> {
         let category = self
             .app_categories(Some(&request.category))?
             .into_iter()

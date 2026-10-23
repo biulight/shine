@@ -25,7 +25,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.6.0 sh install.sh
+SHINE_VERSION=2.7.0 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -39,7 +39,7 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.6.0"; .\install.ps1
+$env:SHINE_VERSION = "2.7.0"; .\install.ps1
 ```
 
 ## Install with cargo-binstall
@@ -68,7 +68,7 @@ channel is available through `shine self upgrade --channel preview` instead.
 
 ## Install from source
 
-With **Rust 1.88 or later** installed, you can install from crates.io:
+With **Rust 1.90 or later** installed, you can install from crates.io:
 
 ```bash
 cargo install shine-cli
@@ -126,6 +126,46 @@ successful `shine self upgrade`, the same behavior applies when syncing a separa
 destination. Shine cannot currently elevate to replace the running binary itself when that binary
 is in a protected directory; install and run it from a user-writable location instead. On Windows,
 installing or upgrading in a protected location requires a terminal with the necessary permissions.
+
+## Upgrade to Shine 2.7
+
+When upgrading from 2.6 or earlier, review these compatibility changes before updating external
+Presets or automation. Source builds now require Rust 1.90; prebuilt binaries do not require Rust.
+
+1. **Convert legacy Preset environment inputs.** Shell Bun commands and App generators, hooks and
+   artifacts require structured `env` entries containing `source`, optional `target`, and
+   `sensitivity`. Legacy string arrays are rejected. Keep a private backup of your source, then use
+   Shine 2.7 to preview the conversion before applying it:
+
+   ```bash
+   shine preset migrate ./my-presets --dry-run
+   shine preset migrate ./my-presets
+   shine preset validate ./my-presets
+   shine preset lint ./my-presets
+   ```
+
+   The migrator needs explicit sensitivity from the old declarations; missing or conflicting
+   classifications require manual correction. Migrate Git-managed overlays in their upstream
+   checkout, then pull again. Migration backs up metadata but does not execute scripts, decrypt
+   values, or renew trust. Review changed external snapshots before normal install/upgrade.
+   See [runtime environment inputs](./guides/custom-presets.md#declare-runtime-environment-inputs).
+2. **Review App code diagnostics.** Supported Bun code and local JS/TS dependencies are checked
+   before execution. Definite declaration differences and analysis failures block affected work,
+   even with existing trust or `--yes`. Fix the declarations or code; adding unrestricted-code
+   metadata does not bypass the check. Coverage gaps remain advisory and are not a sandbox or proof
+   of safety. Ordinary text groups repeated gaps; detailed views and lint JSON retain diagnostics.
+   See [App code checks](./guides/custom-presets.md#check-app-code-before-execution).
+3. **Update report consumers and renew approvals.** Run `shine preset schema` after upgrading.
+   Lifecycle Plan/approval/review and author Plan reports use schema 3; lint and fixture reports
+   use schema 2. Fixture input schema 1 remains supported. Obtain a new review instead of reusing
+   an old approval; `--deny-warnings` still counts every warning despite grouped text.
+   Rust integrations using `shine-core` must also adapt direct struct initializers and exhaustive
+   patterns to new analysis fields, including those in `PlanV1` and `InspectionReportV1`, then
+   rebuild. Serialized schema compatibility does not imply Rust source compatibility.
+
+Installed launchers, receipts, recovery records and `shine env run --with SOURCE=TARGET` keep their
+existing formats. Downgrading the binary does not undo metadata conversion: retain the original
+source or migration backup if you need to return to an older client.
 
 ## Upgrade to Shine 2.6
 

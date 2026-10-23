@@ -21,7 +21,7 @@ pub use recovery::handle_recover_approved;
 pub use refresh::handle_refresh_approved;
 pub use uninstall::handle_uninstall_approved;
 pub use upgrade::AppUpgradeReport;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) use upgrade::handle_upgrade_installed_target_with_result;
 pub(crate) use upgrade::{
     handle_upgrade_installed_target_with_result_approved,
@@ -43,7 +43,7 @@ dest = "~/.config/my-app"
 # schema_version = 1
 # commands = ["bun"]
 # network = [{ scope = "host", host = "api.example.com" }]
-# environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
+# Declare script inputs at their entry: env = [{ source = "API_TOKEN", sensitivity = "secret" }]
 
 [[files]]
 source = "config.toml"
@@ -57,7 +57,7 @@ display_name = "config.toml"
 transforms = []
 # Optional generated source. The static `source` above is the fallback.
 # `auto = false` disables implicit status/upgrade runs; use `app refresh`.
-# generator = { script = "generate.ts", runtime = "bun", env = ["SOURCE_URL"], when_env = "SOURCE_URL", auto = false }
+# generator = { script = "generate.ts", runtime = "bun", env = [{ source = 'SOURCE_URL', sensitivity = 'plain' }], when_env = "SOURCE_URL", auto = false }
 "#;
 
 pub async fn handle_init_template(force: bool, unrestricted: bool) -> Result<()> {

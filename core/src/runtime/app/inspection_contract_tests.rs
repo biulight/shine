@@ -306,7 +306,7 @@ async fn app_file_row_status_reports_destination_move_as_update() {
 fn manual_runtime() -> CoreRuntime<InMemoryHost> {
     runtime(
         "~/new",
-        "[[files]]\nsource = 'dest.txt'\ngenerator = { script = 'generate.sh', env = ['ENABLE'], when_env = 'ENABLE', auto = false }\n",
+        "[[files]]\nsource = 'dest.txt'\ngenerator = { script = 'generate.sh', env = [{ source = 'ENABLE', sensitivity = 'plain' }], when_env = 'ENABLE', auto = false }\n",
         &[("dest.txt", b"fallback"), ("generate.sh", b"#!/bin/sh\n")],
     )
 }

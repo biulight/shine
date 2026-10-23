@@ -893,7 +893,7 @@ source = "config.txt"
 [files.generator]
 script = "generate.sh"
 when_env = "GENERATE"
-env = ["GENERATE"]
+env = [{ source = 'GENERATE', sensitivity = 'plain' }]
 auto = false
 "#
                 .to_vec(),
@@ -937,6 +937,7 @@ auto = false
             .runtime()
             .host()
             .queue_process_output(Ok(crate::runtime::ProcessOutput {
+                interrupted: false,
                 exit_code: Some(0),
                 stdout: b"new".to_vec(),
                 stderr: Vec::new(),
@@ -1204,6 +1205,57 @@ package = "tool"
             purge: false,
             input_versions: crate::runtime::PlanningInputVersions::default(),
         })
+    }
+
+    #[tokio::test]
+    async fn human_code_review_without_new_grants_observes_once() {
+        for case in ["static", "trusted-shell", "live-shell"] {
+            let host = InMemoryHost::new();
+            let mut runtime = runtime(host.clone(), snapshot());
+            let request = if case == "static" {
+                ReviewRequest::App(app_plan_request())
+            } else {
+                if case == "trusted-shell" {
+                    runtime.context_mut_for_test().trust_grants = runtime
+                        .external_code_requirements("shell/tools/tool")
+                        .await
+                        .unwrap()
+                        .requirements
+                        .iter()
+                        .map(crate::trust::TrustGrantV1::for_reviewed_requirement)
+                        .collect();
+                } else {
+                    runtime.context_mut_for_test().external_shell_mode =
+                        crate::runtime::ExternalShellMode::Live;
+                }
+                code_review_request()
+            };
+            let grants = runtime.context().trust_grants.clone();
+            let mut trusted = FrontendService::new(runtime).into_trusted();
+            let since = host.operations().len();
+            let ordinary = trusted.review(request.clone()).await.unwrap();
+            let expected_reads = host.operations()[since..].to_vec();
+            assert!(!expected_reads.is_empty());
+            let since = host.operations().len();
+            let review = trusted
+                .review_with_code_confirmation(request)
+                .await
+                .unwrap();
+            assert_eq!(&host.operations()[since..], expected_reads, "{case}");
+            assert_observation_only(&host, since);
+            assert_eq!(
+                serde_json::to_value(review.report()).unwrap(),
+                serde_json::to_value(ordinary.report()).unwrap(),
+                "{case}"
+            );
+            assert_eq!(
+                review.approve_for_automation().is_ok(),
+                case != "live-shell"
+            );
+            let runtime = trusted.into_runtime();
+            assert_eq!(runtime.context().trust_grants, grants);
+            assert!(runtime.operation_code_grants.is_empty());
+        }
     }
 
     #[tokio::test]

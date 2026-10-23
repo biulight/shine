@@ -384,7 +384,7 @@ schema_version = 1
 environment = [{ name = 'ENABLE', sensitivity = 'plain' }]
 [[files]]
 source = 'config.toml'
-generator = { script = 'gen.sh', env = ['ENABLE'], when_env = 'ENABLE', auto = true }
+generator = { script = 'gen.sh', env = [{ source = 'ENABLE', sensitivity = 'plain' }], when_env = 'ENABLE', auto = true }
 "#
             .to_vec(),
         )
@@ -519,7 +519,7 @@ fn trust_current_external_shell(runtime: &mut CoreRuntime<InMemoryHost>) {
 
 async fn relocated_bun_shell_runtime() -> (CoreRuntime<InMemoryHost>, ShellPlanRequest) {
     let metadata = ["compress", "convert", "resize"].map(|name| format!(
-            "[[files]]\nsource = '{name}.ts'\ntarget = 'img-{name}'\nruntime = 'bun'\nenv = ['IMAGE_QUALITY']\n[files.permissions]\nschema_version = 1\nenvironment = [{{ name = 'IMAGE_QUALITY', sensitivity = 'plain' }}]\n"
+            "[[files]]\nsource = '{name}.ts'\ntarget = 'img-{name}'\nruntime = 'bun'\nenv = [{{ source = 'IMAGE_QUALITY', sensitivity = 'plain' }}]\n[files.permissions]\nschema_version = 1\nenvironment = [{{ name = 'IMAGE_QUALITY', sensitivity = 'plain' }}]\n"
         )).join("\n");
     let snapshot = |source| {
         let mut builder = PresetSnapshot::builder(source)

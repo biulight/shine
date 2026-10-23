@@ -7,13 +7,34 @@ use anyhow::{Context, Result, ensure};
 use std::path::{Component, Path};
 
 impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
+    pub(super) async fn run_app_process(&self, request: ProcessRequest) -> Result<ProcessOutput> {
+        self.check_analysis_command()?;
+        let output = tokio::select! {
+            biased;
+            () = self.analysis.cancelled() => return Err(crate::analysis::TerminalFailure::Cancelled.into()),
+            result = self.host().run(request) => result?,
+        };
+        if output.interrupted {
+            self.analysis.cancel();
+            return Err(crate::analysis::TerminalFailure::Cancelled.into());
+        }
+        Ok(output)
+    }
+
     pub(super) async fn run_app_script(
         &self,
         category: &str,
         logical: &str,
         runtime: ArtifactRuntime,
+        entry: &str,
+        specs: &[crate::env::EnvVarSpec],
         mut request: ProcessRequest,
     ) -> Result<ProcessOutput> {
+        // Snapshot keys use logical separators even when metadata uses native Windows paths.
+        #[cfg(windows)]
+        let normalized_logical = logical.replace('\\', "/");
+        #[cfg(windows)]
+        let logical = normalized_logical.as_str();
         validate_relative(category)?;
         ensure!(
             Path::new(category).components().count() == 1,
@@ -24,6 +45,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             .strip_prefix(&prefix)
             .context("App script is outside its category")?;
         validate_relative(relative_script)?;
+        self.require_app_script_analysis(category, entry, relative_script, runtime, specs)?;
         ensure!(
             self.presets().file(logical).is_some(),
             "App script is missing: {logical}"
@@ -121,7 +143,8 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                     .env
                     .insert("SHINE_APP_OVERLAY_DIR".into(), String::new());
             }
-            self.host().run(request).await
+            self.check_analysis_command()?;
+            self.run_app_process(request).await
         }
         .await;
         let cleanup = self.host().remove_dir_all(&invocation).await;
@@ -213,11 +236,24 @@ mod tests {
                 )
                 .build(),
         );
+        let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
+        let binding = runtime
+            .app_analysis_binding(
+                &category,
+                "test",
+                Some("probe.sh"),
+                ArtifactRuntime::Native,
+                &[],
+            )
+            .unwrap();
+        runtime.prepare_code_analysis(&[binding]).await.unwrap();
         let output = runtime
             .run_app_script(
                 "demo",
                 "app/demo/probe.sh",
                 ArtifactRuntime::Native,
+                "test",
+                &[],
                 ProcessRequest {
                     env: std::collections::BTreeMap::from([(
                         "SHINE_APP_OVERLAY_DIR".into(),
@@ -257,11 +293,24 @@ mod tests {
                 .file("app/demo/build.ts", b"export {};".to_vec())
                 .build(),
         );
+        let category = runtime.app_categories(Some("demo")).unwrap().remove(0);
+        let binding = runtime
+            .app_analysis_binding(
+                &category,
+                "test",
+                Some("build.ts"),
+                ArtifactRuntime::Bun,
+                &[],
+            )
+            .unwrap();
+        runtime.prepare_code_analysis(&[binding]).await.unwrap();
         let error = runtime
             .run_app_script(
                 "demo",
                 "app/demo/build.ts",
                 ArtifactRuntime::Bun,
+                "test",
+                &[],
                 ProcessRequest::default(),
             )
             .await
@@ -301,7 +350,7 @@ schema_version = 1
 environment = [{ name = "ENABLE", sensitivity = "plain" }]
 [[files]]
 source = "fallback.txt"
-generator = { script = "scripts/generate.sh", env = ["ENABLE", "ENABLE=SHINE_APP_SOURCE_DIR", "ENABLE=SHINE_APP_ID"], when_env = "ENABLE" }
+generator = { script = "scripts/generate.sh", env = [{ source = 'ENABLE', sensitivity = 'plain' }, { source = 'ENABLE', target = 'SHINE_APP_SOURCE_DIR', sensitivity = 'plain' }, { source = 'ENABLE', target = 'SHINE_APP_ID', sensitivity = 'plain' }], when_env = "ENABLE" }
 "#,
         )
         .unwrap();
@@ -389,6 +438,7 @@ generator = { script = "scripts/generate.sh", env = ["ENABLE", "ENABLE=SHINE_APP
         )
         .unwrap();
         let categories = runtime.app_categories(Some("demo")).unwrap();
+        runtime.lint_app_code(&categories[0]).await.unwrap();
         let generated = runtime
             .run_app_generator(
                 AppGeneratorRequest {

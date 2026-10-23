@@ -44,7 +44,7 @@ async fn runtime(admin: bool) -> CoreRuntime<InMemoryHost> {
         "metadata_schema_version = 2\ndest = '~/.config/demo'\npost_upgrade = { script = 'hook.sh' }\n[permissions]\nschema_version = 2\nopaque_code = 'unrestricted'\nenvironment = [{ name = 'ENABLE', sensitivity = 'plain' }]\n",
     );
     for source in ["first", "second"] {
-        metadata.push_str(&format!("[[files]]\nsource = '{source}'\nrequires_admin = {admin}\ngenerator = {{ script = 'generate.sh', when_env = 'ENABLE', env = ['ENABLE'], auto = false }}\n"));
+        metadata.push_str(&format!("[[files]]\nsource = '{source}'\nrequires_admin = {admin}\ngenerator = {{ script = 'generate.sh', when_env = 'ENABLE', env = [{{ source = 'ENABLE', sensitivity = 'plain' }}], auto = false }}\n"));
     }
     let runtime = CoreRuntime::new(
         InMemoryHost::new(),

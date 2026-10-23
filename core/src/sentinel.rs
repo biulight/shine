@@ -53,14 +53,13 @@ pub fn extract_block_with_newline<'a>(content: &'a str, sentinel: &Sentinel) -> 
 /// deliberately looks for a literal `"\n\n"` tail. CRLF bytes elsewhere in
 /// `content` are left untouched (this function never rewrites line endings).
 pub fn remove_block_bytewise(content: &str, sentinel: &Sentinel) -> String {
-    let start = match content.find(sentinel.start) {
-        Some(i) => i,
-        None => return content.to_string(),
+    let Some(start) = content.find(sentinel.start) else {
+        return content.to_string();
     };
-    let end_marker = match content.find(sentinel.end) {
-        Some(i) => i + sentinel.end.len(),
-        None => return content.to_string(),
+    let Some(end_marker) = content.find(sentinel.end) else {
+        return content.to_string();
     };
+    let end_marker = end_marker + sentinel.end.len();
     let end = if content[end_marker..].starts_with("\r\n") {
         end_marker + 2
     } else if content[end_marker..].starts_with('\n') {

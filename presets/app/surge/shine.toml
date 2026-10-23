@@ -21,16 +21,11 @@ post_install = [
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
-env = ["SURGE_PROFILE"]
+env = [{ source = "SURGE_PROFILE", sensitivity = "plain" }]
 
 [permissions]
 schema_version = 1
 network = [{ scope = "any" }]
-environment = [
-  { name = "SURGE_PROFILE", sensitivity = "plain" },
-  { name = "SURGE_SUBSCRIPTION_URL", sensitivity = "secret" },
-  { name = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL", sensitivity = "secret" },
-]
 
 [[files]]
 source = "local-proxies.conf"
@@ -66,10 +61,10 @@ description = "Local proxy groups merged into [Proxy Group] after provider group
 source = "subscription-proxies.conf"
 target = "subscription-proxies.conf"
 description = "SS/VMess/Trojan policies generated from SURGE_SUBSCRIPTION_URL."
-generator = { script = "generate-subscription.ts", runtime = "bun", env = ["SURGE_SUBSCRIPTION_URL"], when_env = "SURGE_SUBSCRIPTION_URL", auto = false }
+generator = { script = "generate-subscription.ts", runtime = "bun", env = [{ source = "SURGE_SUBSCRIPTION_URL", sensitivity = "secret" }], when_env = "SURGE_SUBSCRIPTION_URL", auto = false }
 
 [[files]]
 source = "sub/wget-cloud-proxies.conf"
 target = "wget-cloud-proxies.conf"
 description = "SS/VMess/Trojan policies generated from W_GET_CLOUD_SURGE_SUBSCRIPTION_URL."
-generator = { script = "generate-subscription.ts", runtime = "bun", env = ["W_GET_CLOUD_SURGE_SUBSCRIPTION_URL=SURGE_SUBSCRIPTION_URL"], when_env = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL", auto = false }
+generator = { script = "generate-subscription.ts", runtime = "bun", env = [{ source = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL", target = "SURGE_SUBSCRIPTION_URL", sensitivity = "secret" }], when_env = "W_GET_CLOUD_SURGE_SUBSCRIPTION_URL", auto = false }

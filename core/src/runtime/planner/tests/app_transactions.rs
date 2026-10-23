@@ -1250,6 +1250,7 @@ async fn generated_relocation_restores_backup_and_checks_old_admin_identity() {
         runtime
             .host()
             .queue_process_output(Ok(crate::runtime::ProcessOutput {
+                interrupted: false,
                 exit_code: Some(0),
                 stdout: b"generated".to_vec(),
                 stderr: Vec::new(),
@@ -1671,7 +1672,7 @@ commands = ['bun']
 environment = [{ name = 'SOURCE', sensitivity = 'plain' }]
 [[files]]
 source = 'generated.txt'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE' }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE' }
 "#
             .to_vec(),
         )
@@ -1826,7 +1827,7 @@ async fn targeted_app_refresh_points_uninstalled_generator_to_install() {
                 br#"dest = '~/.config/demo'
 [[files]]
 source = 'generated.txt'
-generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }
+generator = { script = 'gen.ts', runtime = 'bun', env = [{ source = 'SOURCE', sensitivity = 'plain' }], when_env = 'SOURCE', auto = false }
 "#
                 .to_vec(),
             )

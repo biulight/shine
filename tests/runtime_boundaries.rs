@@ -194,14 +194,13 @@ fi
         serde_json::from_slice(&fs::read(self.cache_root().join("checks.json")).unwrap()).unwrap()
     }
     fn worker_finished(&self) -> bool {
-        use fs2::FileExt;
         let path = self.cache_root().join("worker.lock");
         fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(path)
             .ok()
-            .is_some_and(|file| file.try_lock_exclusive().is_ok())
+            .is_some_and(|file| file.try_lock().is_ok())
     }
     fn release(&self) {
         fs::write(self.0.0.join("release"), "").unwrap();

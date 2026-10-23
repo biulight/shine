@@ -17,7 +17,7 @@ the replacement owner's lock.
   replanning and approval validation, retaining the guard through effects and receipt saves.
 - Keep privileged transaction serialization separate. Acquire the App lock first, then the global
   privileged lock where required; privileged self-install shares only the latter.
-- Implement both RealHost locks with `fs2` exclusive OS locks on persistent regular files. Poll
+- Implement both RealHost locks with standard-library exclusive OS locks on persistent regular files. Poll
   contention for at most 30 seconds and fail without deleting or replacing the lock file. Dropping
   the file handle or exiting the process releases ownership. InMemoryHost uses keyed async mutexes.
 - Use `$TMPDIR/shine-admin.lockfile` for the privileged lock, avoiding collision with a legacy
@@ -25,11 +25,17 @@ the replacement owner's lock.
 - Preserve existing snapshot-bound approval: waiting is not authorization for changed state.
   Files marked Preserve are removed from execution assessment before any generator can run.
 
+With the Rust 1.90 MSRV (2026-10-22), all file-lock consumers use `File::try_lock` and
+`File::unlock` (stable since 1.89) instead of `fs2`. Contention uses `TryLockError::WouldBlock`;
+other I/O failures remain errors. This preserves lock paths, ordering, timeouts and guard lifetimes.
+
 ## Consequences
 
 Concurrent unrelated App changes retain all receipts; relevant changes require a new reviewed Plan.
 Long-running operations can make another command time out, but do not lose their lock. Persistent
 lock files are infrastructure, not abandoned operation journals, and must not be removed to unlock
 a running process. Old binaries using the directory-lock protocol do not coordinate with the new
-privileged lock. Cross-process lock behavior is covered by real file-lock tests; native Windows
-execution still requires platform validation.
+privileged lock. Cross-process lock behavior is covered by real file-lock tests. The Rust 1.90
+standard-library migration at `4ece7d6b` passed native Windows, Linux and macOS suites, Rust 1.90
+MSRV compilation and quality checks; see the
+[CI acceptance record](../operations/ci-pipelines.md#rust-190-and-nextest-acceptance-2026-10-22).

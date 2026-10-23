@@ -300,6 +300,17 @@ async fn review_plans_with_render_mode(
             .flatten()
             .collect(),
     };
+    for (_, plan) in &planned {
+        for binding in &plan.code_analysis {
+            rendered.extend(crate::code_analysis::lines(
+                &binding.scope,
+                matches!(
+                    render_mode,
+                    PlanRenderMode::Detailed | PlanRenderMode::UpgradeDetailed
+                ),
+            ));
+        }
+    }
     if !rendered.is_empty() && !development_trust_targets.is_empty() {
         rendered.push(String::new());
         rendered.push(format!("  {}", crate::colors::bold("Development trust")));
@@ -423,6 +434,13 @@ fn blocked_plan_error(
     }
 
     let mut reasons = Vec::new();
+    if planned.iter().any(|(_, plan)| {
+        plan.code_analysis
+            .iter()
+            .any(|binding| !binding.scope.report.allowed)
+    }) {
+        reasons.push("code analysis blocked this operation; fix the reported declarations or source before retrying".into());
+    }
     if diagnostics.contains("shell_snapshot_contains_missing_preset") {
         reasons.push("a shared Shell snapshot still serves an installed command whose Preset is missing; restore its Preset or explicitly uninstall that command before replacing the snapshot".to_string());
     }
