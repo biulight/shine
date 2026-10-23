@@ -111,6 +111,54 @@ async fn preserved_builtin_calls_still_block_lifecycle_approval() {
 }
 
 #[tokio::test]
+async fn pattern_bindings_and_writes_preserve_lifecycle_admission() {
+    for (code, allowed) in [
+        (
+            "function run(client = fetch) { fetch('https://real.invalid'); } run();",
+            false,
+        ),
+        (
+            "function run(options: { token: typeof fetch }) { fetch('https://real.invalid'); }",
+            false,
+        ),
+        (
+            "const { request = fetch } = {}; fetch('https://real.invalid');",
+            false,
+        ),
+        (
+            "({ fetch } = { fetch: other }); fetch('https://fake.invalid');",
+            true,
+        ),
+        (
+            "import fs from 'node:fs'; const alias = fs; ({ read: alias.readFileSync } = input); fs.readFileSync('private');",
+            true,
+        ),
+    ] {
+        let runtime = runtime(code, "", true);
+        let plan = runtime
+            .plan_apps(request(LifecycleOperation::Install))
+            .await
+            .unwrap();
+        assert_eq!(plan.is_ready(), allowed, "{code}: {plan:?}");
+        assert_eq!(PlanApprovalV1::for_reviewed_plan(&plan).is_ok(), allowed);
+        let diagnostics = &plan.code_analysis[0].scope.report.diagnostics;
+        assert_eq!(
+            diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::Difference),
+            !allowed
+        );
+        if allowed {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.code == "code_analysis_call_unknown")
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn definite_difference_blocks_approval_with_gaps_retained() {
     let runtime = runtime(
         "fetch('https://example.org'); Bun.spawn(['curl']);",

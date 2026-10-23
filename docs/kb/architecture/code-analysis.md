@@ -37,6 +37,11 @@ cross-function mutation order remains unknown. Dynamic property writes invalidat
 object conservatively. This keeps replaced methods unknown without hiding unrelated members or
 functions already captured before replacement.
 
+Rule version 4 extracts binding names only from binding positions, excluding default expressions,
+computed keys and complete TypeScript type annotations. Destructuring assignments use the same
+pattern traversal to invalidate their actual identifier/member targets. Default expressions still
+participate in runtime behavior analysis; nested/rest patterns preserve real local shadowing.
+
 Uncorroborated declarations do not block. They also do not remove gaps. Known command identity
 plus a subprocess gap remains incomplete even if file/network declarations are supplied.
 Only difference and failure diagnostics block, and all diagnostic classes can coexist.

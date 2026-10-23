@@ -385,7 +385,7 @@ pub(super) fn parse(
             let target = node
                 .child_by_field_name("left")
                 .or_else(|| node.child_by_field_name("argument"));
-            if let Some(target) = target {
+            for target in target.into_iter().flat_map(pattern_targets) {
                 // Updating a named env slot does not rebind process/Bun or env.
                 if target
                     .child_by_field_name("object")
@@ -734,15 +734,49 @@ fn descendants(node: Node<'_>) -> Vec<Node<'_>> {
     result
 }
 fn pattern_names(node: Node<'_>) -> Vec<Node<'_>> {
-    descendants(node)
+    pattern_targets(node)
         .into_iter()
         .filter(|n| {
             matches!(
                 n.kind(),
                 "identifier" | "shorthand_property_identifier_pattern"
-            ) && n.parent().is_none_or(|p| p.kind() != "type_annotation")
+            )
         })
         .collect()
+}
+
+/// Visit only binding/write positions, never property keys, default-value
+/// expressions or type annotations. Member targets remain whole for mutation analysis.
+fn pattern_targets(node: Node<'_>) -> Vec<Node<'_>> {
+    let mut targets = Vec::new();
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match node.kind() {
+            "identifier"
+            | "shorthand_property_identifier_pattern"
+            | "member_expression"
+            | "subscript_expression" => targets.push(node),
+            "assignment_pattern" | "object_assignment_pattern" => {
+                pending.extend(node.child_by_field_name("left"));
+            }
+            "pair_pattern" => pending.extend(node.child_by_field_name("value")),
+            "required_parameter" | "optional_parameter" => {
+                pending.extend(
+                    node.child_by_field_name("pattern")
+                        .or_else(|| node.child_by_field_name("name")),
+                );
+            }
+            "formal_parameters" | "object_pattern" | "array_pattern" | "rest_pattern" => {
+                let mut cursor = node.walk();
+                pending.extend(node.named_children(&mut cursor));
+            }
+            "parenthesized_expression" | "non_null_expression" => {
+                pending.extend(node.named_child(0));
+            }
+            _ => {}
+        }
+    }
+    targets
 }
 fn function_scope(mut node: Node<'_>) -> Node<'_> {
     while let Some(parent) = node.parent() {

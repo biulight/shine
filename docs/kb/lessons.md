@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-23 — Binding patterns are not arbitrary identifier subtrees
+
+- **Evidence**: default parameters, destructuring defaults and `typeof fetch` annotations made
+  real global `fetch` calls appear locally shadowed; destructuring assignment to `fetch` left the
+  replaced global classified as a network API.
+- **Cause**: declaration collection walked all descendant identifiers, while mutation collection
+  treated a whole destructuring target as a single variable name.
+- **Fix**: share a pattern traversal that follows binding/write positions and preserves member
+  targets, skipping property keys, default expressions and type annotations. Rule version 4 keeps
+  runtime analysis of default expressions separate from declaration and mutation collection.
+- **Coverage**: JS/TS parser and Core Plan regressions cover defaults, type queries, nested/rest
+  patterns, identifier/member reassignment, real local shadowing and preserved builtin calls.
+
 ## 2026-10-23 — Builtin analysis must account for generator scopes and object aliases
 
 - **Evidence**: isolated `preset lint` rejected a local `function* fetch` as a network call and

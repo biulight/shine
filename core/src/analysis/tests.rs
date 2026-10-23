@@ -250,6 +250,134 @@ fn immutable_alias_resolution_handles_forward_closures_chains_and_cycles() {
 }
 
 #[test]
+fn binding_patterns_exclude_defaults_keys_and_type_queries() {
+    for (source, expected) in [
+        (
+            "function run(client = fetch) { fetch('https://real.invalid'); } run();",
+            1,
+        ),
+        (
+            "const { request = fetch } = {}; fetch('https://real.invalid');",
+            1,
+        ),
+        (
+            "function run({ request = fetch } = {}) { fetch('https://real.invalid'); }",
+            1,
+        ),
+        (
+            "const [request = fetch] = []; fetch('https://real.invalid');",
+            1,
+        ),
+        (
+            "const { [fetch.name]: request } = {}; fetch('https://real.invalid');",
+            1,
+        ),
+        ("function run(client = fetch('https://real.invalid')) {}", 1),
+        ("const { request = fetch('https://real.invalid') } = {};", 1),
+        (
+            "function run(fetch = other) { fetch('https://fake.invalid'); }",
+            0,
+        ),
+        (
+            "function run({ fetch = other }) { fetch('https://fake.invalid'); }",
+            0,
+        ),
+        (
+            "function run({ nested: [{ value: fetch = other }] }) { fetch('https://fake.invalid'); }",
+            0,
+        ),
+        (
+            "function run(...fetch) { fetch('https://fake.invalid'); }",
+            0,
+        ),
+        (
+            "const { network: fetch = other } = {}; fetch('https://fake.invalid');",
+            0,
+        ),
+    ] {
+        for extension in ["js", "ts"] {
+            let file = format!("main.{extension}");
+            let input = BTreeMap::from([(file.clone(), source.as_bytes())]);
+            let r = Session::default()
+                .analyze(&input, &file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert!(!has(&r, "code_analysis_parse_failure"), "{source}: {r:?}");
+            assert_eq!(differences(&r), expected, "{extension}: {source}: {r:?}");
+        }
+    }
+    for source in [
+        "function run(options: { token: typeof fetch }) { fetch('https://real.invalid'); }",
+        "function run(options?: { token: typeof fetch }) { fetch('https://real.invalid'); }",
+        "const run = (options: { token: typeof fetch }) => fetch('https://real.invalid');",
+    ] {
+        let r = report(source, None);
+        assert!(!has(&r, "code_analysis_parse_failure"), "{r:?}");
+        assert_eq!(differences(&r), 1, "{source}: {r:?}");
+    }
+}
+
+#[test]
+fn destructuring_assignments_invalidate_only_written_targets() {
+    for (source, expected) in [
+        (
+            "({ fetch } = { fetch: other }); fetch('https://fake.invalid');",
+            0,
+        ),
+        ("[fetch] = [other]; fetch('https://fake.invalid');", 0),
+        (
+            "({ network: fetch = other } = {}); fetch('https://fake.invalid');",
+            0,
+        ),
+        (
+            "({ nested: [fetch] } = input); fetch('https://fake.invalid');",
+            0,
+        ),
+        ("[...fetch] = input; fetch('https://fake.invalid');", 0),
+        (
+            "import fs from 'node:fs'; ({ read: fs.readFileSync } = input); fs.readFileSync('private');",
+            0,
+        ),
+        (
+            "import fs from 'node:fs'; const alias = fs; [alias.readFileSync] = input; fs.readFileSync('private');",
+            0,
+        ),
+        (
+            "import fs from 'node:fs'; ({ read: fs.readFileSync } = input); fs.writeFileSync('private', 'data');",
+            1,
+        ),
+        (
+            "import fs from 'node:fs'; const read = fs.readFileSync; ({ read: fs.readFileSync } = input); read('private');",
+            1,
+        ),
+        (
+            "let request; ({ request = fetch } = {}); fetch('https://real.invalid');",
+            1,
+        ),
+        (
+            "let request; ({ [fetch.name]: request } = input); fetch('https://real.invalid');",
+            1,
+        ),
+        (
+            "let request; [request = fetch('https://real.invalid')] = [];",
+            1,
+        ),
+    ] {
+        for extension in ["js", "ts"] {
+            let file = format!("main.{extension}");
+            let input = BTreeMap::from([(file.clone(), source.as_bytes())]);
+            let r = Session::default()
+                .analyze(&input, &file, None, &EnvironmentContract::default())
+                .unwrap();
+            assert!(!has(&r, "code_analysis_parse_failure"), "{source}: {r:?}");
+            assert_eq!(differences(&r), expected, "{extension}: {source}: {r:?}");
+            if expected == 0 {
+                assert!(has(&r, "code_analysis_call_unknown"), "{r:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn environment_mapping_is_per_entry_and_source_cache_is_shared() {
     let mut session = Session::default();
     let code = sources("const value = process.env.TARGET; const fixed = Bun.env.SHINE_APP_ID;");
