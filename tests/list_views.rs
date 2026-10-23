@@ -2292,6 +2292,7 @@ fn code_analysis_blocks_supported_scripts_before_execution_in_every_cli_evaluati
     for code in [
         "fetch('https://private.example/SECRET_LITERAL');",
         "const broken = ;",
+        "localCall(); localCall(); localCall(); localCall(); fetch('https://private.example/SECRET_LITERAL'); fetch('https://private.example/SECRET_LITERAL');",
     ] {
         let fixture = Fixture::new();
         fixture.app(false);
@@ -2308,9 +2309,21 @@ fn code_analysis_blocks_supported_scripts_before_execution_in_every_cli_evaluati
         for args in [
             vec!["app", "info", "demo", "--run-generators"],
             vec!["info", "app/demo", "--run-generators"],
+            vec!["info", "app/demo", "--run-generators", "--verbose"],
+            vec!["info", "app/demo", "--run-generators", "--diff"],
             vec!["update", "app/demo", "--run-generators"],
             vec!["update", "--run-generators"],
+            vec!["update", "--run-generators", "--verbose"],
+            vec!["update", "--run-generators", "--diff"],
             vec!["app", "install", "demo", "--replace-managed", "--yes"],
+            vec![
+                "app",
+                "install",
+                "demo",
+                "--replace-managed",
+                "--yes",
+                "--verbose",
+            ],
         ] {
             let output = fixture.run(&args);
             assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
@@ -2320,8 +2333,81 @@ fn code_analysis_blocks_supported_scripts_before_execution_in_every_cli_evaluati
                 String::from_utf8_lossy(&output.stderr)
             );
             assert!(text.contains("code_analysis_"), "{args:?}: {text}");
+            if code.contains("localCall") {
+                let detailed = args.contains(&"--verbose")
+                    || args.contains(&"--diff")
+                    || args.starts_with(&["app", "info"])
+                    || args.starts_with(&["update", "app/demo"]);
+                assert_eq!(
+                    text.contains("4 diagnostics (code)"),
+                    !detailed,
+                    "{args:?}: {text}"
+                );
+                assert_eq!(
+                    text.matches("note[code_analysis_call_unknown]").count(),
+                    if detailed { 4 } else { 1 },
+                    "{args:?}: {text}"
+                );
+                assert_eq!(
+                    text.matches("error[code_analysis_declaration_difference]")
+                        .count(),
+                    2,
+                    "{args:?}: {text}"
+                );
+                assert!(text.contains("existing code trust is still required"));
+            }
             assert!(!text.contains("SECRET_LITERAL"));
             assert!(!text.contains("private.example"));
+            assert!(!fixture.0.join("state/runtime/app").exists());
+            assert_eq!(
+                fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),
+                receipt
+            );
+            assert_eq!(
+                fs::read(fixture.0.join("destination/manual.txt")).unwrap(),
+                content
+            );
+        }
+    }
+}
+
+#[test]
+fn code_analysis_details_do_not_grant_trust_for_advisory_only_code() {
+    let fixture = Fixture::new();
+    fixture.app(false);
+    success(&fixture.run(&["app", "install", "demo", "--yes"]));
+    fixture.app(true);
+    fs::write(
+        fixture.0.join("state/presets/app/demo/generate.ts"),
+        "function localCall() {} localCall(); localCall(); localCall(); localCall();",
+    )
+    .unwrap();
+    let receipt = fs::read(fixture.0.join("state/app-manifest.toml")).unwrap();
+    let content = fs::read(fixture.0.join("destination/manual.txt")).unwrap();
+    for base in [
+        vec!["info", "app/demo", "--run-generators"],
+        vec!["update", "--run-generators"],
+        vec!["app", "install", "demo", "--replace-managed", "--yes"],
+    ] {
+        for verbose in [false, true] {
+            let mut args = base.clone();
+            if verbose {
+                args.push("--verbose");
+            }
+            let output = fixture.run(&args);
+            let text = format!(
+                "{}{}",
+                stdout(&output),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.status.code(), Some(1), "{args:?}: {text}");
+            assert_eq!(
+                text.matches("note[code_analysis_call_unknown]").count(),
+                if verbose { 4 } else { 1 },
+                "{args:?}: {text}"
+            );
+            assert!(!text.contains("error[code_analysis_"), "{args:?}: {text}");
+            assert!(text.contains("trust"), "{args:?}: {text}");
             assert!(!fixture.0.join("state/runtime/app").exists());
             assert_eq!(
                 fs::read(fixture.0.join("state/app-manifest.toml")).unwrap(),

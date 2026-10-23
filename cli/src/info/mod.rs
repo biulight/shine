@@ -94,6 +94,7 @@ fn print_generator_notice(
     files: &[collect::AppInfoFile],
     refs: &[InfoRef],
     run_generators: bool,
+    detailed: bool,
 ) -> (bool, bool) {
     let categories = app_categories_for_refs(refs);
     let relevant = files
@@ -102,7 +103,7 @@ fn print_generator_notice(
         .collect::<Vec<_>>();
     for file in &relevant {
         if let Some(scope) = &file.code_analysis {
-            for line in crate::code_analysis::lines(scope, false) {
+            for line in crate::code_analysis::lines(scope, detailed) {
                 println!("{line}");
             }
         }
@@ -252,7 +253,7 @@ pub async fn handle_update_target(
     }
 
     let (generator_failed, generator_incomplete) =
-        print_generator_notice(&diffs.app_files, &refs, run_generators);
+        print_generator_notice(&diffs.app_files, &refs, run_generators, true);
 
     if !printed && !generator_incomplete && !generator_failed {
         println!(
@@ -400,7 +401,8 @@ pub async fn handle_info(
         }
     }
 
-    let (generator_failed, _) = print_generator_notice(&app_files, &refs, run_generators);
+    let (generator_failed, _) =
+        print_generator_notice(&app_files, &refs, run_generators, verbose || diff);
     if generator_failed {
         bail!("one or more App generators could not be evaluated");
     }

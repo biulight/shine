@@ -1,5 +1,19 @@
 # Lessons Learned
 
+## 2026-10-23 — Reduce diagnostic repetition without reducing evidence
+
+- **Evidence**: built-in lint produced 768 warnings across 18 categories; ordinary text repeated
+  explanations and locations for each entry comparison, obscuring distinct diagnostic kinds.
+- **Rule**: aggregate only advisory analysis rows in CLI text, retaining counts and an example
+  location. Keep errors individual, detailed reports complete, and grouping scoped by entry or
+  category and diagnostic meaning. Never deduplicate Core evidence to shorten terminal output.
+- **Boundaries**: JSON, readiness, trust, approval, incomplete reports and `--deny-warnings`
+  continue using the unchanged report. Lint's all-entry scope is not the runtime triggered scope.
+- **Verification**: [P2 presentation evidence](architecture/code-analysis.md#diagnostic-presentation)
+  records byte-identical JSON, shorter built-in output and consumer-boundary regressions.
+- **Follow-up**: wire existing inspection detail modes through to the analysis renderer. An
+  all-entry lint report cannot substitute for full locations in a runtime-selected scope.
+
 ## 2026-10-23 — Operand trivia and binding identity affect admission
 
 - **Evidence**: comments before literal targets changed declaration errors into gaps in seven

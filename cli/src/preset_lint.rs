@@ -3,6 +3,7 @@
 use crate::commands::PresetReportFormat;
 use anyhow::Result;
 use shine_core::runtime::{PresetLintReportV1, PresetLintSeverity};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub async fn handle_lint(
@@ -43,7 +44,38 @@ fn print_text_report(report: &PresetLintReportV1, path: &Path) {
         None => "preset validate with the original PATH (non-UTF-8; copyable command omitted)"
             .to_string(),
     };
+    // Group only advisory analysis rows. Keep errors and other lint findings intact;
+    // the original Core report still controls JSON, counts and --deny-warnings.
+    let mut groups = BTreeMap::new();
     for diagnostic in &report.diagnostics {
+        if diagnostic.severity == PresetLintSeverity::Warning
+            && diagnostic.code.starts_with("code_analysis_")
+        {
+            *groups
+                .entry((
+                    diagnostic.target.as_deref(),
+                    diagnostic.code.as_str(),
+                    diagnostic.message.as_str(),
+                ))
+                .or_insert(0usize) += 1;
+        }
+    }
+    let mut summarized = false;
+    for diagnostic in &report.diagnostics {
+        let count = if diagnostic.severity == PresetLintSeverity::Warning
+            && diagnostic.code.starts_with("code_analysis_")
+        {
+            let Some(count) = groups.remove(&(
+                diagnostic.target.as_deref(),
+                diagnostic.code.as_str(),
+                diagnostic.message.as_str(),
+            )) else {
+                continue;
+            };
+            count
+        } else {
+            1
+        };
         let severity = match diagnostic.severity {
             PresetLintSeverity::Error => "error",
             PresetLintSeverity::Warning => "warning",
@@ -53,18 +85,34 @@ fn print_text_report(report: &PresetLintReportV1, path: &Path) {
             .as_deref()
             .map(|target| format!(" {}", crate::output::escape_controls(target)))
             .unwrap_or_default();
-        let resource = diagnostic
+        let mut resource = diagnostic
             .resource
             .as_deref()
             .map(|resource| format!(" · {}", crate::output::escape_controls(resource)))
             .unwrap_or_default();
+        if count > 1 {
+            resource = format!(
+                " · {count} diagnostics{}",
+                diagnostic
+                    .resource
+                    .as_deref()
+                    .map(|value| format!("; example: {}", crate::output::escape_controls(value)))
+                    .unwrap_or_default()
+            );
+            summarized = true;
+        }
         println!(
             "  {severity}[{}]:{}{} {}",
-            diagnostic.code,
+            crate::output::escape_controls(&diagnostic.code),
             target,
             resource,
             crate::output::escape_controls(&diagnostic.message)
                 .replace("`shine preset validate`", &validation_hint)
+        );
+    }
+    if summarized {
+        println!(
+            "  Full analysis locations: re-run preset lint with --format json; counts below include every diagnostic."
         );
     }
     println!(

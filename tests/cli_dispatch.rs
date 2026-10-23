@@ -3374,6 +3374,124 @@ fn preset_lint_text_counts_preserve_json_and_warning_exits() {
     assert!(!fixture.0.join("state").exists());
 }
 
+#[test]
+fn preset_lint_summarizes_only_advisory_analysis_without_changing_json_or_exits() {
+    let fixture = Fixture::new();
+    let root = fixture.0.join("presets");
+    let categories = [
+        ("alpha", "alpha"),
+        #[cfg(unix)]
+        ("beta\nFORGED", "beta\\nFORGED"),
+        #[cfg(windows)]
+        ("beta", "beta"),
+    ];
+    let metadata = "metadata_schema_version=2\ndescription='Demo'\ndest='~/.demo'\n[permissions]\nschema_version=2\nopaque_code='unrestricted'\n[[files]]\nsource='first.txt'\ngenerator={script='generate.ts',runtime='bun',when_env='ENABLE',env=[{source='ENABLE',sensitivity='plain'}]}\n[[files]]\nsource='second.txt'\ngenerator={script='generate.ts',runtime='bun',when_env='ENABLE',env=[{source='ENABLE',sensitivity='plain'}]}\n";
+    for (name, _) in categories {
+        let category = root.join("app").join(name);
+        fs::create_dir_all(&category).unwrap();
+        fs::write(category.join("shine.toml"), metadata).unwrap();
+        for source in ["first.txt", "second.txt"] {
+            fs::write(category.join(source), "fallback").unwrap();
+        }
+    }
+    for blocked in [false, true] {
+        let code = format!(
+            "localCall();\nlocalCall();\nlocalCall();\nlocalCall();\nfetch(url); fetch(url);\nBun.write(path, 'x'); Bun.write(path, 'x');\n{}",
+            if blocked {
+                "fetch('https://private.example/SECRET_LITERAL');\nfetch('https://private.example/SECRET_LITERAL');\n"
+            } else {
+                ""
+            }
+        );
+        for (name, _) in categories {
+            fs::write(root.join("app").join(name).join("generate.ts"), &code).unwrap();
+        }
+        let core_report = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(shine_core::runtime::lint_preset_path(
+                &shine_core::runtime::RealHost,
+                &fixture.0,
+                &root,
+            ));
+        let expected = serde_json::to_value(&core_report).unwrap();
+        for deny in [false, true] {
+            let run = |format| {
+                let mut command = fixture.command();
+                command
+                    .env("NO_COLOR", "1")
+                    .args(["preset", "lint"])
+                    .arg(&root)
+                    .args(["--format", format]);
+                if deny {
+                    command.arg("--deny-warnings");
+                }
+                command.output().unwrap()
+            };
+            let text = run("text");
+            let json = run("json");
+            assert_eq!(
+                text.status.code(),
+                Some(i32::from(blocked || deny)),
+                "{text:?}"
+            );
+            assert_eq!(json.status.code(), text.status.code());
+            assert!(text.stderr.is_empty() && json.stderr.is_empty());
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&json.stdout).unwrap(),
+                expected
+            );
+            let text = String::from_utf8(text.stdout).unwrap();
+            for (name, display) in categories {
+                let target = format!("app/{name}");
+                let count = core_report
+                    .diagnostics
+                    .iter()
+                    .filter(|d| {
+                        d.target.as_deref() == Some(&target)
+                            && d.code == "code_analysis_call_unknown"
+                    })
+                    .count();
+                assert!(count >= 8, "{core_report:?}");
+                let target = format!("app/{display}");
+                assert_eq!(text.matches(&format!("warning[code_analysis_call_unknown]: {target} · {count} diagnostics; example:")).count(), 1, "{text}");
+                // The same code can describe distinct behavior classes. Keep both groups.
+                assert_eq!(
+                    text.matches(&format!("warning[code_analysis_dynamic_target]: {target}"))
+                        .count(),
+                    2,
+                    "{text}"
+                );
+                assert_eq!(
+                    fs::read_to_string(root.join("app").join(name).join("generate.ts")).unwrap(),
+                    code
+                );
+            }
+            let errors = core_report
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == "code_analysis_declaration_difference")
+                .count();
+            assert_eq!(
+                text.matches("error[code_analysis_declaration_difference]")
+                    .count(),
+                errors,
+                "{text}"
+            );
+            assert_eq!(errors > 0, blocked);
+            assert!(text.contains("--format json"));
+            assert!(text.contains(&format!(
+                "Summary: 2 categories, {} errors, {} warnings",
+                core_report.summary.errors, core_report.summary.warnings
+            )));
+            assert!(!text.contains("\nFORGED"));
+            assert!(!text.contains("SECRET_LITERAL") && !text.contains("private.example"));
+        }
+    }
+    assert!(!fixture.0.join("state").exists());
+}
+
 fn sys_output_fixture() -> Fixture {
     let mut fixture = Fixture::new();
     fixture.0 = fs::canonicalize(&fixture.0).unwrap();

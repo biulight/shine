@@ -72,6 +72,49 @@ Uncorroborated declarations do not block. They also do not remove gaps. Known co
 plus a subprocess gap remains incomplete even if file/network declarations are supplied.
 Only difference and failure diagnostics block, and all diagnostic classes can coexist.
 
+### Diagnostic presentation
+
+P2 aggregation is confined to CLI text rendering. Ordinary reviews group repeated coverage gaps
+by code and behavior within one entry, showing the original diagnostic count and first location.
+Detailed review and author Plan rendering retain individual diagnostics and opaque identities.
+Explicit inspection uses the existing display modes: `info --verbose/--diff`, detailed `update`
+views and `app info` retain every evaluated location. This changes only rendering of captured
+reports; no display flag enables generator evaluation or changes its trust requirements.
+Lint text groups only `code_analysis_*` warnings with the same target, code and message, retaining
+an example resource including its entry label. Non-analysis warnings and all errors stay individual.
+The text points to lint JSON for all checked source entries; that scope can differ from a runtime
+review's triggered entries and environment contract.
+
+Core reports, JSON, diagnostic ordering/counts, schema/rule versions, admission, evidence binding,
+trust and approval are unchanged. Lint `valid`, `clean`, `complete`, summary and `--deny-warnings`
+still consume the full Core report. Grouping never changes partial/terminated analysis into a
+complete result, and renderers encode diagnostic operands after matching their original identities.
+
+P2 verification (2026-10-23): built-in lint text shrank from 770 to 37 lines (149,353 to 5,489
+bytes), while JSON stayed byte-identical at 18 categories, zero errors and 768 warnings. Local
+macOS all-feature nextest after review passed 2,034 tests with two skips; strict Clippy, formatting, typos,
+locale parity, website typecheck and both locale builds passed. The initial sandbox run could not
+bind SSH test sockets; the permitted full rerun passed. Renderer and real CLI regressions cover
+distinct behavior groups, error retention, full JSON, warning exits, encoded locations and
+pre-execution rejection. No CI run has been triggered for this P2 change.
+
+Follow-up review found that explicit inspection had hard-coded compact analysis rendering even
+in detailed views. Real CLI regressions reproduced the missing expansion before repair and now
+check compact/detailed output, error retention and pre-execution rejection at the public entry
+points. Advisory-only untrusted code also remains blocked in both modes; lint regressions retain
+raw JSON targets while encoding control-bearing category names in grouped text.
+
+The reviewed working-copy archive based on `771f3028` had SHA-256
+`17a6ff1da682292fd25cbe1ca2ce98471d9b1b13697eb1047a17572197b03b55` on both native instances.
+Windows passed 67 targeted tests (60 Core, two renderer, two real CLI analysis, two lint and one
+built-in sample); Linux passed 68, including the Unix-only process cancellation regression.
+Both used Rust 1.96.0, locked dependencies and the same reduced-debug, non-incremental `cargo test`
+configuration as the [P1 native run](#p1-native-verification-2026-10-23), adding
+`--test cli_dispatch preset_lint_` to the CLI selections. Windows retained the known unused-item
+warnings in unchanged code; Linux emitted no compilation warnings. These are targeted native
+checks, not full Windows/Linux workspace or native Clippy runs. Remote task directories were
+removed after preserving logs locally; subsequent edits only recorded this verification evidence.
+
 ## Resource limits
 
 Defaults are 1 MiB per source; 256 files and depth 32 per dependency graph; 16 MiB and 2,048 unique

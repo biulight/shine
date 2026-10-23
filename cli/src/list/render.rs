@@ -2,10 +2,10 @@
 use super::*;
 use query::{InventoryInputs, StatusInputs, UpdateInputs};
 
-fn print_app_analysis(files: &[shine_core::runtime::AppFileInspection]) {
+fn print_app_analysis(files: &[shine_core::runtime::AppFileInspection], detailed: bool) {
     for file in files {
         if let Some(scope) = &file.code_analysis {
-            for line in crate::code_analysis::lines(scope, false) {
+            for line in crate::code_analysis::lines(scope, detailed) {
                 println!("{line}");
             }
         }
@@ -209,14 +209,14 @@ pub(super) async fn update(
         && shell_attention.is_empty()
         && missing_sources.is_empty()
     {
-        print_app_analysis(&app_inspections);
+        print_app_analysis(&app_inspections, diff);
         return Ok(false);
     }
 
     crate::config::print_presets_note(config);
     print_shell_attention(&shell_attention);
     print_missing_app_sources(&missing_sources);
-    print_app_analysis(&app_inspections);
+    print_app_analysis(&app_inspections, diff);
 
     if !diff {
         let shell_names = shell_categories(&update_shell);
@@ -384,7 +384,7 @@ pub(super) async fn status(
         return Ok(());
     }
 
-    print_app_analysis(&app_inspections);
+    print_app_analysis(&app_inspections, true);
     let update_diffs = if diff {
         Some(query::collect_diffs(config, app_inspections).await?)
     } else {

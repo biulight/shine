@@ -140,6 +140,18 @@ languages, are advisory. Declarations not corroborated by the analyzed source ar
 and appear in detailed review. Neither means the code is safe or fully analyzed. Reports without
 diagnostics add no ordinary output; existing trust and approval checks still apply.
 
+Ordinary reviews summarize repeated coverage gaps within each entry, showing a count and an
+example location. Detailed lifecycle reviews (`--verbose`) and author Plans retain every location.
+For explicit inspection, `info --verbose` or `--diff`, detailed `update` views, and `app info`
+also show every location in their evaluated scope. These display modes do not enable execution;
+generator evaluation still requires `--run-generators` and the existing trust checks.
+`preset lint` text groups repeated analysis warnings by category and diagnostic meaning; use
+`shine preset lint <PATH> --format json` for all diagnostics across the checked source entries.
+Errors remain individually visible. Summary counts still include every diagnostic, and
+`--deny-warnings` keeps the same exit behavior; fewer displayed rows do not mean fewer coverage gaps.
+Lint checks all supported source entries, so its report can differ from a runtime inspection's
+selected entries and environment mappings.
+
 For structured `env` mappings, declare `source`, optional `target`, and `plain`/`secret`
 `sensitivity` together; the script reads the target name. Only documented fixed variables are exempt, not
 arbitrary names beginning with `SHINE_`. Never put environment values or URL credentials in a

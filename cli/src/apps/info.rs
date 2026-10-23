@@ -155,7 +155,7 @@ pub async fn handle_info(
     }
     for inspection in &selected {
         if let Some(scope) = &inspection.code_analysis {
-            for line in crate::code_analysis::lines(scope, false) {
+            for line in crate::code_analysis::lines(scope, true) {
                 println!("{line}");
             }
         }
