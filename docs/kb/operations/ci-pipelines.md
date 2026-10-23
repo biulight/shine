@@ -258,8 +258,87 @@ conditional-compilation cleanup in native CI as well as the earlier isolated com
 These results apply to the accepted commit and supplement the earlier working-copy checks; they
 do not validate subsequent commits. Documentation deployment completed, but no `v2.7.0` tag or
 crate/binary release was created by this push. Tagged release builds, crate publication and
-cargo-binstall verification remain separate release gates. This internal KB-only update does not
-match the documentation workflow's path filters.
+cargo-binstall verification were separate release gates, subsequently completed in the
+[formal release acceptance below](#270-formal-release-and-main-sync-acceptance-2026-10-24).
+Internal KB-only updates do not match the documentation workflow's path filters.
+
+## 2.7.0 formal release and main-sync acceptance (2026-10-24)
+
+The annotated `v2.7.0` tag and remote `release` branch resolved to
+[`c7fe24c6e6d189c38525ae3985988477c035850f`](https://github.com/biulight/shine/commit/c7fe24c6e6d189c38525ae3985988477c035850f).
+The [formal release workflow](https://github.com/biulight/shine/actions/runs/39994310595)
+finished with `completed / success` on attempt 1: all 20 jobs passed, including six asset builds,
+crate publication, GitHub Release creation, six cargo-binstall checks, and sync PR creation.
+No repair commit or rerun was needed. Dates in this record use Asia/Shanghai; GitHub timestamps
+for these runs are on October 23 UTC.
+
+| Release gate | Result | Evidence |
+| --- | --- | --- |
+| Windows x86_64 | All-feature workspace nextest: 1,769 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/39994310595/job/120553737272) |
+| Linux x86_64 | All-feature workspace nextest: 2,032 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/39994310595/job/120553737327) |
+| macOS arm64 | All-feature workspace nextest: 2,034 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/39994310595/job/120553737291) |
+| Quality | Bun checks, formatting, compilation, authoring examples, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/39994310595/job/120553737333) |
+| MSRV | Rust 1.90.0 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/39994310595/job/120553736992) |
+| crates.io | `shine-core` and `shine-cli` 2.7.0 published | [Publish job](https://github.com/biulight/shine/actions/runs/39994310595/job/120556721172) |
+
+All three native nextest logs reported zero LEAK results. The
+[public v2.7.0 release](https://github.com/biulight/shine/releases/tag/v2.7.0) was confirmed as the
+latest stable release, with `draft=false`, `prerelease=false`, six target archives and both
+`install.sh` / `install.ps1`. Independent downloads of all eight assets matched the GitHub asset
+sizes and SHA-256 digests. Each archive contained exactly the expected regular `shine` or
+`shine.exe` binary; ELF, Mach-O or PE headers matched its advertised architecture.
+
+Cargo-binstall 1.12.7 used the published 2.7.0 crate metadata with
+`--strategies crate-meta-data`. All six targets passed download/extraction checks; three also
+installed into isolated runner directories and executed `shine --version`:
+
+| Published archive | cargo-binstall verification | Evidence |
+| --- | --- | --- |
+| `shine-v2.7.0-linux-x86_64.tar.gz` | Download, install and native execution passed | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832602) |
+| `shine-v2.7.0-linux-aarch64.tar.gz` | Download/extraction passed; no native execution | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832672) |
+| `shine-v2.7.0-darwin-aarch64.tar.gz` | Download, install and native execution passed | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832634) |
+| `shine-v2.7.0-darwin-x86_64.tar.gz` | Download/extraction passed; no native execution | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832641) |
+| `shine-v2.7.0-windows-x86_64.tar.gz` | Download, install and native execution passed | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832710) |
+| `shine-v2.7.0-windows-aarch64.tar.gz` | Download/extraction passed; no native execution | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832762) |
+
+All three native cargo-binstall jobs printed `shine 2.7.0 (c7fe24c6e 2026-10-24)`.
+An independent local run of the downloaded macOS arm64 binary printed the same version under a
+fresh `SHINE_CONFIG_DIR`, without creating configuration. Download-only checks do not establish
+native runtime coverage for the other three targets.
+
+The official sparse-index records independently confirmed version 2.7.0 with `yanked=false`:
+
+| Crate | Published checksum |
+| --- | --- |
+| [shine-core](https://index.crates.io/sh/in/shine-core) | `dda8d11d5c88fd8f8da2e1d9e83d932a1993744f53be5970a43c1dac0600b231` |
+| [shine-cli](https://index.crates.io/sh/in/shine-cli) | `4cd665f7cb4beca14e5a0f9d09af643eefdbe9cf650b2647f78ef8ce91a265b2` |
+
+The published CLI depends on `shine-core ^2.7.0`. The public English and Simplified Chinese Pages
+sites returned HTTP 200 and exposed 2.7.0, Next and 1.8. An isolated official v2.6.0 macOS arm64
+binary running `shine update --refresh-release --verbose` exited successfully and detected
+`2.6.0 -> 2.7.0`; this checked release discovery without performing an upgrade.
+
+### PR #79 and post-merge checks
+
+The release workflow created [PR #79](https://github.com/biulight/shine/pull/79),
+`chore(release): merge v2.7.0 into main`, from the exact tagged commit. Its CI, MSRV and docs runs
+initially stopped at `action_required` with no jobs. After authorized approval, all three finished
+with `completed / success` on attempt 2; this was approval recovery, not a test-failure rerun.
+
+| Sync check | Result | Evidence |
+| --- | --- | --- |
+| CI | Windows 1,769/0, Linux 2,032/2 and macOS 2,034/2 passed/skipped; quality passed | [CI run](https://github.com/biulight/shine/actions/runs/39997363455) |
+| MSRV | Rust 1.90 workspace check passed | [MSRV run](https://github.com/biulight/shine/actions/runs/39997363433) |
+| Documentation | Typecheck, version checks, parity (21 files per locale) and both locale builds passed; deployment jobs correctly skipped for the PR event | [Docs run](https://github.com/biulight/shine/actions/runs/39997363469) |
+| Post-merge MSRV | Passed on the resulting `main` merge commit | [MSRV run](https://github.com/biulight/shine/actions/runs/39999602514) |
+
+After all PR checks passed and the head was revalidated, PR #79 was merged as
+[`343110270f5218bed4b88da97a1e108726bf811e`](https://github.com/biulight/shine/commit/343110270f5218bed4b88da97a1e108726bf811e).
+Remote `main` at that merge commit and `release` at `c7fe24c6e6d189c38525ae3985988477c035850f`
+had the identical Git tree `fd13613579966763937a88f9ffd4b321b3efbe3b`. This is content equality,
+not commit-SHA equality. These acceptance results apply to those recorded commits and published
+assets; later KB commits are outside the tag and the synchronized tree. No implementation repair
+was required, and unrelated working-tree files were preserved.
 
 ## Documentation server deployment
 
