@@ -88,6 +88,37 @@ also passed. An initial sandboxed test run could not create local sockets; the p
 rerun reported 1,998 passed and 2 skipped. The table records native CI evidence separately from that
 local rerun.
 
+## Code-analysis bindings and CLI diff acceptance (2026-10-23)
+
+Accepted `release` commit:
+[`c781b1ecf369ba240f5dbde056c2650cf90214cf`](https://github.com/biulight/shine/commit/c781b1ecf369ba240f5dbde056c2650cf90214cf).
+The push also included parent commit `3b2a8346` (complete, safely escaped CLI diff output and
+public manual updates). The accepted head fixes generator-function shadowing and builtin member
+mutation analysis, preserves captured functions and unrelated members, and resolves immutable
+aliases with bounded retries. Parser and Core Plan regressions cover both false positives and
+missed declaration differences.
+
+The [CI run](https://github.com/biulight/shine/actions/runs/39922126760),
+[MSRV run](https://github.com/biulight/shine/actions/runs/39922126713), and
+[documentation run](https://github.com/biulight/shine/actions/runs/39922126667) all target that exact
+head SHA and finished with `completed / success`.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,753 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/39922126760/job/120309616598) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 2,016 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/39922126760/job/120309616693) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 2,018 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/39922126760/job/120309616855) |
+| Quality | Bun checks, formatting, compilation, Preset authoring examples, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/39922126760/job/120309616345) |
+| MSRV | Rust 1.90 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/39922126713/job/120309615878) |
+| Documentation build | Typecheck, version checks, locale parity and all-locale build passed | [Build job](https://github.com/biulight/shine/actions/runs/39922126667/job/120309616317) |
+| GitHub Pages deployment | Succeeded | [Pages job](https://github.com/biulight/shine/actions/runs/39922126667/job/120309981777) |
+| Documentation server deployment | Succeeded | [Server job](https://github.com/biulight/shine/actions/runs/39922126667/job/120309981834) |
+
+These are native CI results for the accepted head, separate from the local 48 analysis-related
+tests, built-in Preset sample test and six isolated CLI probes. The public manual changes in the
+parent commit triggered `docs.yml`; this internal KB evidence update alone does not match that
+workflow's path filters and does not deploy documentation.
+
 ## Documentation server deployment
 
 `docs.yml` always keeps GitHub Pages deployment enabled. A second deployment uploads the same
