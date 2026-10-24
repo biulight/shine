@@ -374,6 +374,29 @@ on native CI, separately from the earlier local checks; they do not establish a 
 binary release. This later internal KB-only evidence update is outside the accepted commit and
 does not match `docs.yml`'s public-documentation path filters.
 
+### KB acceptance-record follow-up (2026-10-24)
+
+The subsequent KB-only `release` commit
+[`6e4bc5f4468297fd4477ed6e525f109bd9bdafb0`](https://github.com/biulight/shine/commit/6e4bc5f4468297fd4477ed6e525f109bd9bdafb0)
+(`docs(kb): record shell diff ordering CI acceptance`) records the preceding acceptance without
+changing production code. Its own [CI run](https://github.com/biulight/shine/actions/runs/40094163754)
+and [MSRV run](https://github.com/biulight/shine/actions/runs/40094163753) both target that exact SHA
+and finished with `completed / success` on attempt 1. All five jobs passed; no repair or rerun
+was needed.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,792 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/40094163754/job/120872836909) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 2,054 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/40094163754/job/120872836835) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 2,056 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/40094163754/job/120872836885) |
+| Quality | Bun checks, formatting, compilation, Preset authoring example, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/40094163754/job/120872836680) |
+| MSRV | Rust 1.90 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/40094163753/job/120872836760) |
+
+All three native logs show the output-order regression passing and no LEAK results. These are
+results for `6e4bc5f4`, distinct from the preceding implementation commit and this later evidence
+addition. No documentation workflow or deployment ran for the KB-only push because it did not
+match `docs.yml`'s public-documentation path filters.
+
 ## Documentation server deployment
 
 `docs.yml` always keeps GitHub Pages deployment enabled. A second deployment uploads the same
