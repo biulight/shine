@@ -256,6 +256,18 @@ instead of claiming there is nothing to update. A release-check failure alone re
 
 Installed App/Shell details shown by `info` escape controls in labels, descriptions, and path
 headings. `info --verbose` leaves control characters in the displayed file content unchanged.
+
+For external Shell presets in `snapshot` mode, `update --diff` also shows changes to category
+snapshot files such as `shine.toml`, helpers, and dependency files. Each category is shown once,
+including added and removed files and, on Unix, executable-flag changes. `content: unchanged`
+refers to the command script; other category files can still require an update. Text files show
+content diffs; binary, non-UTF-8, and files over the inline limit are identified without printing
+their contents. An unreadable snapshot or a symbolic link prevents the detailed comparison.
+`update <TARGET>` already shows update details, including these category diffs, with or without
+`--diff` or `--verbose`; selecting one command still shows its shared category snapshot changes.
+Identical command and snapshot diffs are shown once, including commands sharing a script.
+When transforms produce different output, both the raw source and rendered-content diffs remain visible.
+
 Content diffs shown by `info`, `app info`, and `update` escape control characters within lines
 (for example, a tab appears as `\t`). File contents remain unchanged.
 Uniform CRLF is displayed as LF with a notice naming each side's line endings. An EOL-only change

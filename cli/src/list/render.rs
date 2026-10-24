@@ -246,6 +246,7 @@ pub(super) async fn update(
     }
 
     let update_diffs = query::collect_diffs(config, app_inspections).await?;
+    let mut shell_diff_state = crate::info::ShellDiffState::default();
 
     if !update_shell.is_empty() {
         println!("{}", colors::bold("Shell Presets"));
@@ -268,7 +269,7 @@ pub(super) async fn update(
                 colors::status_label(row.status_text, row.status_sym),
             );
             update_diffs
-                .print_shell_for_row(config, &row.selector())
+                .print_shell_for_row(config, &row.selector(), &mut shell_diff_state)
                 .await?;
         }
     }
@@ -390,6 +391,7 @@ pub(super) async fn status(
     } else {
         None
     };
+    let mut shell_diff_state = crate::info::ShellDiffState::default();
     let shell_statuses = if diff {
         installed_shell
             .iter()
@@ -460,7 +462,9 @@ pub(super) async fn status(
                 && row.status == ShellRowStatus::UpdateAvail
                 && let Some(diffs) = &update_diffs
             {
-                diffs.print_shell_for_row(config, &row.selector).await?;
+                diffs
+                    .print_shell_for_row(config, &row.selector, &mut shell_diff_state)
+                    .await?;
             }
         }
     }

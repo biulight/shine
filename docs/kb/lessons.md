@@ -1,5 +1,23 @@
 # Lessons Learned
 
+## 2026-10-24 — Explain category snapshot updates beyond command content
+
+- **Symptom**: `update test --diff` reported `snapshot: installed layout -> active preset layout`
+  with `content: unchanged` after only `shine.toml` changed, without showing the metadata diff.
+- **Cause**: snapshot convergence compares every category file and Unix executable intent, while
+  detailed update rendering only diffed the command's content.
+- **Rule**: retain the Shell inspection runtime's effective source capture for local category-file
+  diffs, display shared changes once, and preserve targeted checks' default detail behavior.
+  Keep normal status reads, raw comparisons, trust, receipts, approval and execution unchanged.
+- **Coverage**: isolated targeted/global/verbose diffs cover overlay metadata, helpers, additions,
+  removals, empty/binary/large files and escaped paths/content with unchanged installed state.
+  Observation-only Host tests cover executable intent, invalid categories, links and read failures.
+- **Second review**: command-source edits duplicated their hunks in both command and category output;
+  shared scripts multiplied them again. Deduplicate by path and complete byte pairs, preserving raw
+  template versus rendered-output evidence and env-only changes. Empty-file existence changes need
+  their added/removed row without a contradictory `No content differences` note. Additional tests
+  cover aliases, transforms, missing roots, category isolation, mode gates and failed directory reads.
+
 ## 2026-10-24 — Share LF-only diff construction without sharing business comparisons
 
 - **Symptom**: App/Shell Info and update previews still replaced every line across CRLF/LF inputs.

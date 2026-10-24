@@ -34,6 +34,110 @@ struct ShellCommandObservation {
 }
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    /// Observe raw category files only when a local consumer requests a detailed diff.
+    /// The desired side comes from this runtime's captured effective Preset, including overlays.
+    pub async fn inspect_shell_snapshot_changes(
+        &self,
+        category: &str,
+    ) -> Result<Vec<crate::runtime::ShellSnapshotFileInspection>> {
+        use crate::runtime::ShellSnapshotFileInspection;
+
+        if !self.context().is_external_presets
+            || self.context().external_shell_mode != ExternalShellMode::Snapshot
+        {
+            return Ok(Vec::new());
+        }
+        // Admit only a captured category name before joining it to the installed root.
+        let mut components = Path::new(category).components();
+        if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+            || components.next().is_some()
+            || category.contains(['/', '\\'])
+        {
+            bail!("invalid Shell snapshot category");
+        }
+        if !self
+            .shell_categories(None)?
+            .iter()
+            .any(|candidate| candidate.name == category)
+        {
+            bail!("Shell snapshot category is not present in the active Preset");
+        }
+        let mut files = self
+            .shell_snapshot_files(category)
+            .into_iter()
+            .map(|file| {
+                (
+                    file.relative_path.clone(),
+                    ShellSnapshotFileInspection {
+                        relative_path: file.relative_path,
+                        current_content: None,
+                        desired_content: Some(file.bytes),
+                        current_executable: None,
+                        desired_executable: cfg!(unix).then_some(file.executable),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let root = self
+            .context()
+            .shine_dir
+            .join("installed/shell")
+            .join(category);
+        let mut pending = match self.host().metadata(&root).await {
+            Ok(metadata) if metadata.kind == FileKind::Directory => vec![root.clone()],
+            Ok(_) => bail!("Shell snapshot root is not a directory; content diff unavailable"),
+            Err(error) if error.is_not_found() => Vec::new(),
+            Err(error) => return Err(error.into_anyhow("observing Shell snapshot diff root")),
+        };
+        while let Some(directory) = pending.pop() {
+            for path in self
+                .host()
+                .read_dir(&directory)
+                .await
+                .map_err(|error| error.into_anyhow("reading Shell snapshot diff tree"))?
+            {
+                let relative = path
+                    .strip_prefix(&root)
+                    .context("Shell snapshot diff entry escaped its root")?
+                    .to_path_buf();
+                let metadata =
+                    self.host().metadata(&path).await.map_err(|error| {
+                        error.into_anyhow("observing Shell snapshot diff entry")
+                    })?;
+                match metadata.kind {
+                    FileKind::Directory => pending.push(path),
+                    FileKind::Symlink => {
+                        bail!("Shell snapshot contains a symbolic link; content diff unavailable")
+                    }
+                    FileKind::File => {
+                        let bytes = self.host().read(&path).await.map_err(|error| {
+                            error.into_anyhow("reading Shell snapshot diff file")
+                        })?;
+                        let file = files.entry(relative.clone()).or_insert_with(|| {
+                            ShellSnapshotFileInspection {
+                                relative_path: relative,
+                                current_content: None,
+                                desired_content: None,
+                                current_executable: None,
+                                desired_executable: None,
+                            }
+                        });
+                        file.current_content = Some(bytes);
+                        file.current_executable = cfg!(unix)
+                            .then_some(metadata.unix_mode.is_some_and(|mode| mode & 0o111 != 0));
+                    }
+                }
+            }
+        }
+        Ok(files
+            .into_values()
+            .filter(|file| {
+                file.current_content != file.desired_content
+                    || file.current_executable != file.desired_executable
+            })
+            .collect())
+    }
+
     pub async fn shell_snapshot_current(&self, category: &str) -> Result<bool> {
         if !self.context().is_external_presets
             || self.context().external_shell_mode != ExternalShellMode::Snapshot

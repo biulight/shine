@@ -171,16 +171,76 @@ pub(crate) async fn print_app_expected_diff(config: &Config, item: &AppInfoFile)
     Ok(())
 }
 
-pub(super) async fn print_shell_update_diff(config: &Config, item: &ShellInfoFile) -> Result<()> {
+pub(super) async fn print_shell_update_diff(
+    config: &Config,
+    item: &ShellInfoFile,
+    content_note: Option<&str>,
+) -> Result<()> {
     print_update_changes(config, &item.changes);
     if UpdateChange::includes_content(&item.changes) {
-        let content_path = shell_content_path(item);
-        let diff_output = shell_diff_output(config, item, &content_path).await?;
-        print_block("Diff", &content_path, &diff_output);
+        if let Some(note) = content_note {
+            println!("     {}", colors::dim(note));
+        } else {
+            let content_path = shell_content_path(item);
+            let diff_output = shell_diff_output(config, item, &content_path).await?;
+            print_block("Diff", &content_path, &diff_output);
+        }
     } else if !item.changes.is_empty() {
         println!("     {}", colors::dim("content: unchanged"));
     }
     Ok(())
+}
+
+pub(super) fn print_shell_snapshot_diff(
+    category: &str,
+    files: &[shine_core::runtime::ShellSnapshotFileInspection],
+) {
+    if files.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "{}",
+        colors::bold(&escape_controls(&format!(
+            "Category snapshot: shell/{category}"
+        )))
+    );
+    for file in files {
+        let path = format!("shell/{category}/{}", file.relative_path.display());
+        let change = match (&file.current_content, &file.desired_content) {
+            (None, Some(_)) => "added",
+            (Some(_), None) => "removed",
+            _ => "changed",
+        };
+        println!(
+            "     {}",
+            colors::dim(&escape_controls(&format!("{path}: {change}")))
+        );
+        if file.current_executable != file.desired_executable {
+            let flag = |value: Option<bool>| {
+                value.map_or("absent", |flag| if flag { "true" } else { "false" })
+            };
+            println!(
+                "     executable: {} -> {}",
+                flag(file.current_executable),
+                flag(file.desired_executable)
+            );
+        }
+        let current = file.current_content.as_deref().unwrap_or_default();
+        let desired = file.desired_content.as_deref().unwrap_or_default();
+        // The added/removed row is the complete difference for an empty file.
+        if current != desired {
+            print!(
+                "{}",
+                render_diff_or_note(
+                    current,
+                    desired,
+                    &format!("installed: {path}"),
+                    &format!("expected: {path}"),
+                )
+            );
+        }
+    }
 }
 
 fn print_update_changes(config: &Config, changes: &[UpdateChange]) {
@@ -252,7 +312,7 @@ fn print_path_change(config: &Config, field: &str, from: &Path, to: &Path) {
     );
 }
 
-fn shell_content_path(item: &ShellInfoFile) -> std::path::PathBuf {
+pub(super) fn shell_content_path(item: &ShellInfoFile) -> std::path::PathBuf {
     item.link_target
         .as_ref()
         .filter(|target| target.starts_with(&item.rendered_path) || **target == item.rendered_path)

@@ -213,6 +213,14 @@ wording. Inspection and snapshot comparison accept only `FileSystemObservationHo
 operation lock or approval and execute no Preset code. See
 [ADR 0120](../decisions/0120-read-only-shell-inspection-phases.md).
 Receipt-only records are inspection data and never enter execution as reconstructed metadata.
+Detailed CLI updates retain that Shell runtime's captured effective Preset for an on-demand,
+observation-only category snapshot comparison. Local-only file details include raw added/removed
+bytes and Unix executable intent; they never enter serialized frontend reports. Each category
+diff prints once per invocation, including for a single-command target. Link/non-directory and
+read failures fail the detailed comparison rather than following links or claiming no change.
+Invocation-local diff state retains category observations and borrows command byte pairs to avoid
+repeating identical raw/command or shared-script diffs. Rendered changes remain independent of raw
+snapshot changes, including env-only updates. No displayed-text truncation or hash determines deduplication.
 The planner and inspection share the observation-only launcher probe with category, overlay, and
 receipt roots. CLI update separates conflicts/missing Presets from pending updates; detailed views
 keep the same status. Upgrade preserves absent-source commands and blocks shared snapshot

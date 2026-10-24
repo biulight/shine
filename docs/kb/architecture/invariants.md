@@ -67,6 +67,12 @@ bugs. Check this list before changing the modules named in each entry.
   Preset note and Shell attention before App/Sys queries; later errors cannot erase that output.
   Diff reads stay at their original presentation boundary. Manual refresh and upgrade hints remain
   distinct, generator evaluation stays opt-in, and evaluation failures render before nonzero exit.
+  Detailed Shell update diffs compare the entire category snapshot against the captured effective
+  Preset, including overlay bytes, additions/removals and Unix executable intent, once per category.
+  These local-only bytes stay out of public reports; links are never followed and failed detailed
+  observations cannot imply no differences. Command-content status remains separate.
+  Deduplicate only equal file paths and complete current/desired byte pairs; raw source and rendered
+  evidence stay distinct when they differ. Empty-file additions/removals retain their existence rows.
   Global failure labels, detailed status columns and recorded Sys change fields encode controls at
   rendering; widths use the escaped strings. Manual-refresh hints omit copyable commands when
   category/source operands contain controls, without changing the original selected refresh set.
