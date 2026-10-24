@@ -115,6 +115,8 @@ unchanged execution rows. An ordinary fully unchanged run reports `Nothing to up
 It does not initialize configuration, rewrite installed files, or run background maintenance
 and release checks. This also applies with `--yes`, `--verbose`, and
 `--verbose --full-plan`. Pending snapshot or preset-cache maintenance still counts as work.
+This read-only exit also supports canonical Windows configuration paths; foreign launcher
+conflicts still block upgrading.
 `--pull` explicitly synchronizes preset repositories first, so it can change those repositories
 even when no configuration upgrade is needed.
 Both targeted and whole-configuration upgrades count user-modified managed Sys files as kept.

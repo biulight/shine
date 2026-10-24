@@ -1,5 +1,16 @@
 # Lessons Learned
 
+## 2026-10-24 — Windows launcher roots must match their marker spelling
+
+- **Symptom**: the converged-upgrade CLI regression passed on macOS/Linux but failed on Windows
+  after canonicalizing its isolated root. The unchanged Shell Plan reported an ownership conflict.
+- **Cause**: Windows shim generation strips the `\\?\` prefix; ownership compared that marker
+  with a verbatim managed root using native `Path::starts_with`, so the same root failed to match.
+- **Fix**: strip only that prefix on Windows before component-wise containment, reject lossy path
+  conversion, and retain the original markers, source/receipt/trust identities and approval gates.
+- **Regression**: keep the real canonical-root CLI test. Windows-only observation tests cover drive
+  and UNC roots, sibling-prefix rejection, both foreign shim-pair positions and non-Unicode refusal.
+
 ## 2026-10-24 — Converged upgrade must stop before execution authority
 
 - **Symptom**: a ready no-op Plan skipped the prompt but still created approval, prepared execution

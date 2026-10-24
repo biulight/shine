@@ -534,6 +534,9 @@ bugs. Check this list before changing the modules named in each entry.
   matching `# shine-target:`/`REM shine-target:` under the managed root** (Windows `.ps1`/`.cmd`
   shims and Unix `runtime = "bun"` launcher scripts); app
   uninstall is driven by `~/.shine/app-manifest.toml` entries only.
+  Windows compares roots in the same native spelling as shim markers, removing only the verbatim
+  prefix before component-wise containment. Non-Unicode paths fail closed; sibling directories
+  and a foreign member of a shim pair remain conflicts.
 - **Bun launchers are marked regular files, identified only by content, never by name.** A Unix
   `runtime = "bun"` command is a generated executable script (not a symlink); ownership and
   current-ness use production `launcher` Host probes and deterministic prepared resources, with

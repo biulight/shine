@@ -26,6 +26,9 @@ needed to make an already-converged upgrade end without side effects.
 - Managed Sys upgrade planning includes every recorded managed item, matching execution selection.
   `profile_enabled` records Shell integration intent, not whether a managed-file receipt is installed.
   Available but unrecorded items remain excluded from aggregate upgrade.
+- Windows ownership probes compare the native path spelling emitted by shim markers, including
+  canonical verbatim roots. Component containment, non-Unicode refusal and foreign-pair protection
+  remain mandatory; this does not change source, receipt, trust or approval identities.
 - All other cases retain the original route, including compatibility guidance, trust/code consent,
   exact permissions, source/state/config freshness and final lock-protected apply validation.
   Preflight failure cannot imply convergence. No Plan, fingerprint, approval or storage schema changes.
