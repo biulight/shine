@@ -110,8 +110,13 @@ categories, individual cache steps, and exact permissions. The complete Plan sti
 
 After approval, `upgrade --verbose` also omits unchanged App files, already-installed managed Sys
 items, and the total number of installed Shell categories. It still shows changed resources,
-conflicts, warnings, and failures in detail. `upgrade --verbose --full-plan` includes the
-unchanged execution rows. An ordinary fully unchanged run reports `Nothing to upgrade.`
+conflicts, warnings, and failures in detail. When changes are applied, `upgrade --verbose --full-plan` includes the
+unchanged execution rows. An ordinary fully unchanged run reports `Nothing to upgrade.` and stops after read-only planning.
+It does not initialize configuration, rewrite installed files, or run background maintenance
+and release checks. This also applies with `--yes`, `--verbose`, and
+`--verbose --full-plan`. Pending snapshot or preset-cache maintenance still counts as work.
+`--pull` explicitly synchronizes preset repositories first, so it can change those repositories
+even when no configuration upgrade is needed.
 Both targeted and whole-configuration upgrades count user-modified managed Sys files as kept.
 If configuration items fail, the footer says `Upgrade incomplete` and includes their failure
 count; the command still exits nonzero. Non-fatal hook warnings retain their existing behavior.

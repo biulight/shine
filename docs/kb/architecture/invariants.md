@@ -248,6 +248,15 @@ bugs. Check this list before changing the modules named in each entry.
   original scope. The
   complete Plan always binds approval (ADRs 0094, 0097, 0099). No display mode creates directory-wide
   access.
+- **Converged CLI upgrade is read-only.** Except for explicitly requested `--pull`, upgrade first
+  loads config read-only and observes the same canonical target requests through Core. Only a ready
+  Upgrade Plan with all `None` steps, no required permissions/code boundaries/analysis work, and no
+  exceptional diagnostics can finish without approval or prepare/apply. A skipped manual-refresh
+  notice alone is not work. Snapshot/cache transactions, preserve/block steps and unknown effects
+  retain the normal path. This decision is independent of terminal/rendering mode and `--yes`.
+  The fast path precedes config initialization, advisory workers and release-cache checks. Failed
+  preflight observations never claim convergence; the original route retains its diagnostics and
+  fresh review/approval/lock-time checks. It creates no approval or reusable reviewed handoff (ADR 0153).
 - **No-op capabilities are decided by Core, never hidden by the renderer.** Current App files
   and current managed Sys items do not contribute operation permissions. Their observations and
   author statements remain bound; generators, hooks, shared transactions, and blocked Sys items
@@ -347,7 +356,7 @@ bugs. Check this list before changing the modules named in each entry.
   layer still match; Preset content cannot create that grant. Trust grant schemas older than v2 are
   inspection/revocation state only and require a new review before execution.
   Untargeted upgrade includes declarations only from installed App categories, installed Shell
-  commands, and enabled managed Sys items; merely available embedded, external, or overlay Presets
+  commands, and recorded managed Sys items; merely available embedded, external, or overlay Presets
   cannot contribute required permissions or trust blockers. A fully current Shell
   command contributes no command-local mutation permissions; shared cache, snapshot, rendered, or
   profile actions contribute only their own exact transaction permissions.

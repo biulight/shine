@@ -19,7 +19,8 @@ boundary, missing declaration, uncomputable permission, or exceptional diagnosti
 and skipped manual App generator diagnostics do not make a scope visible; they are also omitted from
 visible scopes. [ADR 0097](0097-relevant-verbose-upgrade-review.md) applies the same relevance
 rule to `--verbose`. If every scope is omitted, the CLI shows no Security Plan and the normal
-lifecycle result says `Nothing to upgrade.` without confirmation.
+result says `Nothing to upgrade.` without confirmation. ADR 0153 adds an earlier read-only
+convergence exit; it does not create approval or enter lifecycle execution.
 
 Actual effects, preservation, blockers, required permissions, code boundaries, and unknown
 diagnostics remain visible. The complete Plans still bind approval, are regenerated before apply,

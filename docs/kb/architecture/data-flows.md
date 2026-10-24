@@ -87,6 +87,13 @@ bootstrap layouts, permissions, code boundaries and labels. Bootstrap retains it
 and distinct permission formatting; incomplete attribution falls back to the full detailed review.
 No rendering module creates approval or changes the reviewed Plan (ADR 0126).
 
+Before ordinary upgrade dispatch can initialize configuration or run advisory/release checks, a
+read-only load and Core review test complete upgrade convergence. Positive convergence prints the
+existing no-op result and stops without approval, preparation, locks, journals or execution. Full
+Plan rendering remains available. Work, blockers, preservation or failed observations fall through
+to the original upgrade route; it recaptures inputs and retains normal approval and apply-time
+validation. Explicit `--pull` retains its separate source synchronization behavior (ADR 0153).
+
 CLI review creates approval for one exact ready Plan. Apply deliberately follows:
 
 ```text

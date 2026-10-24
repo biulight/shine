@@ -2,6 +2,28 @@
 use super::*;
 
 pub(super) async fn dispatch(cli: &Cli) -> Result<std::ops::ControlFlow<()>> {
+    // A converged upgrade must finish before initialization, advisory workers,
+    // release-cache writes, approval construction or lifecycle execution.
+    // Only positive convergence can return early; failed observations retain the
+    // normal route's diagnostics and approval gates.
+    // Explicit --pull retains its separately authorized synchronization behavior.
+    if let Commands::Upgrade(command) = &cli.command
+        && !command.pull
+    {
+        let config = Config::load_read_only().await?;
+        if cli::self_install::finish_converged_upgrade(
+            &config,
+            command.target.as_deref(),
+            command.prune_stale,
+            command.verbose,
+        )
+        .await
+        .unwrap_or(false)
+        {
+            return Ok(std::ops::ControlFlow::Break(()));
+        }
+    }
+
     if let Commands::MaintenanceWorker { scope, ticket } = &cli.command {
         cli::maintenance::handle_worker(scope, *ticket).await?;
         return Ok(std::ops::ControlFlow::Break(()));

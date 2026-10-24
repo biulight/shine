@@ -1,5 +1,25 @@
 # Lessons Learned
 
+## 2026-10-24 — Converged upgrade must stop before execution authority
+
+- **Symptom**: a ready no-op Plan skipped the prompt but still created approval, prepared execution
+  and acquired lifecycle locks. Config initialization and advisory/cache work ran even earlier.
+- **Fix**: ordinary upgrade first reads config and canonical requests without initialization. Core
+  recognizes complete convergence before CLI approval; only this positive result exits early.
+- **Boundary**: compare all steps, permissions and code requirements, not changed command bytes or
+  filtered output. Preserve snapshot/cache work, user preservation, blockers, unknown diagnostics,
+  compatibility checks and the original fresh approval/lock-time checks. `--pull` stays explicit.
+- **Scope correction**: bulk Sys planning must select recorded managed items independently of
+  `profile_enabled`, matching execution. Otherwise a preserved or outdated managed file can disappear
+  from the preflight and falsely appear converged. Available-only items remain excluded.
+- **Regression**: empty-state and installed App/Shell/Sys/global process tests compare the complete
+  fixture tree, bytes and timestamps across output modes/`--yes`; snapshot-only work still prompts,
+  approved work applies and changed external code still fails without matching trust.
+- **Second review**: keep profile-only repair and stale-receipt pruning covered at the CLI boundary,
+  with refusal before writes, approved application, category isolation and read-only convergence
+  afterward. Current Shell delivery also remains read-only after removing its trust grant; allowed
+  analysis evidence alone cannot qualify an otherwise effect-free Plan as converged.
+
 ## 2026-10-24 — Explain category snapshot updates beyond command content
 
 - **Symptom**: `update test --diff` reported `snapshot: installed layout -> active preset layout`
