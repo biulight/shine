@@ -48,6 +48,11 @@
   template versus rendered-output evidence and env-only changes. Empty-file existence changes need
   their added/removed row without a contradictory `No content differences` note. Additional tests
   cover aliases, transforms, missing roots, category isolation, mode gates and failed directory reads.
+- **Output order**: printing the shared category diff at its first command split the remaining
+  command rows in targeted, global and verbose updates. Keep the first-command observation/cache,
+  then print the snapshot after all selected rows/details in that category, before the next one.
+  Group receipt-only status siblings too. Process regressions pin category/command ordering,
+  single-command scope, unchanged categories and independent raw/rendered diffs.
 
 ## 2026-10-24 — Share LF-only diff construction without sharing business comparisons
 

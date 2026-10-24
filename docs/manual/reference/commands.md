@@ -265,8 +265,10 @@ Installed App/Shell details shown by `info` escape controls in labels, descripti
 headings. `info --verbose` leaves control characters in the displayed file content unchanged.
 
 For external Shell presets in `snapshot` mode, `update --diff` also shows changes to category
-snapshot files such as `shine.toml`, helpers, and dependency files. Each category is shown once,
-including added and removed files and, on Unix, executable-flag changes. `content: unchanged`
+snapshot files such as `shine.toml`, helpers, and dependency files. Each category's snapshot diff
+appears once, after all selected command rows and their details in that category and before the
+next category. This also applies to `update --verbose --diff`. Diffs include added and removed
+files and, on Unix, executable-flag changes. `content: unchanged`
 refers to the command script; other category files can still require an update. Text files show
 content diffs; binary, non-UTF-8, and files over the inline limit are identified without printing
 their contents. An unreadable snapshot or a symbolic link prevents the detailed comparison.

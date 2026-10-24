@@ -69,6 +69,9 @@ bugs. Check this list before changing the modules named in each entry.
   distinct, generator evaluation stays opt-in, and evaluation failures render before nonzero exit.
   Detailed Shell update diffs compare the entire category snapshot against the captured effective
   Preset, including overlay bytes, additions/removals and Unix executable intent, once per category.
+  Print that shared snapshot diff after every selected command row and its details in the category,
+  before the next category, including targeted, global and verbose update views. Detailed status
+  groups receipt-only siblings with their category too; a category diff cannot split its rows.
   These local-only bytes stay out of public reports; links are never followed and failed detailed
   observations cannot imply no differences. Command-content status remains separate.
   Deduplicate only equal file paths and complete current/desired byte pairs; raw source and rendered

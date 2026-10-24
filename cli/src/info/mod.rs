@@ -34,6 +34,14 @@ pub(crate) struct ShellDiffState<'a> {
     contents: BTreeSet<ShellContent<'a>>,
 }
 
+impl ShellDiffState<'_> {
+    pub(crate) fn print_snapshot(&self, category: &str) {
+        if let Some(files) = self.snapshots.get(category) {
+            render::print_shell_snapshot_diff(category, files);
+        }
+    }
+}
+
 impl UpdateDiffs {
     pub(crate) async fn collect(config: &Config, run_generators: bool) -> Result<Self> {
         let app_files = collect::collect_app_files(config, run_generators, Vec::new()).await?;
@@ -86,8 +94,7 @@ impl UpdateDiffs {
         state: &mut ShellDiffState<'a>,
     ) -> Result<()> {
         let category = &file.category.name;
-        let first = !state.snapshots.contains_key(category);
-        if first {
+        if !state.snapshots.contains_key(category) {
             let files = self
                 .shell_frontend
                 .runtime()
@@ -116,9 +123,6 @@ impl UpdateDiffs {
             None
         };
         render::print_shell_update_diff(config, file, content_note).await?;
-        if first {
-            render::print_shell_snapshot_diff(category, files);
-        }
         Ok(())
     }
 
@@ -309,6 +313,7 @@ pub async fn handle_update_target(
                     }
                     printed = true;
                 }
+                shell_diff_state.print_snapshot(category);
             }
             InfoRef::ShellFile { category, command } => {
                 if let Some(file) = diffs.shell_files.iter().find(|file| {
@@ -322,6 +327,7 @@ pub async fn handle_update_target(
                             .print_shell_update(config, file, &mut shell_diff_state)
                             .await?;
                     }
+                    shell_diff_state.print_snapshot(category);
                     printed = true;
                 }
             }

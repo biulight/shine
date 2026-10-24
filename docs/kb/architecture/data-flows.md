@@ -223,7 +223,10 @@ Receipt-only records are inspection data and never enter execution as reconstruc
 Detailed CLI updates retain that Shell runtime's captured effective Preset for an on-demand,
 observation-only category snapshot comparison. Local-only file details include raw added/removed
 bytes and Unix executable intent; they never enter serialized frontend reports. Each category
-diff prints once per invocation, including for a single-command target. Link/non-directory and
+diff prints once per invocation after that category's selected command rows/details and before
+the next category, including for a single-command target. Detailed status groups receipt-only
+siblings with their category before rendering. Snapshot reads still occur at the first updated
+command; only printing the captured category diff is deferred. Link/non-directory and
 read failures fail the detailed comparison rather than following links or claiming no change.
 Invocation-local diff state retains category observations and borrows command byte pairs to avoid
 repeating identical raw/command or shared-script diffs. Rendered changes remain independent of raw

@@ -244,6 +244,121 @@ fn app_diff_previews_preserve_byte_status_and_files_across_line_endings() {
 }
 
 #[test]
+fn shell_snapshot_diffs_follow_all_selected_commands_in_each_category() {
+    let fixture = Fixture::new();
+    let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+    for category in ["alpha", "beta", "current"] {
+        let preset = fixture.0.join("state/presets/shell").join(category);
+        fs::create_dir_all(&preset).unwrap();
+        // Metadata order differs from command order; both aliases share the snapshot.
+        let metadata = format!(
+            "metadata_schema_version=2\ndescription='before'\n[[files]]\nsource='{script}'\ntarget='{category}-second'\n[[files]]\nsource='{script}'\ntarget='{category}-first'\n"
+        );
+        fs::write(preset.join("shine.toml"), &metadata).unwrap();
+        fs::write(preset.join(script), "# Never executed\n").unwrap();
+        for command in ["first", "second"] {
+            success(&fixture.run(&[
+                "trust",
+                "grant",
+                &format!("shell/{category}/{category}-{command}"),
+                "--yes",
+            ]));
+        }
+        success(&fixture.run(&["shell", "install", category, "--yes"]));
+        if category != "current" {
+            fs::write(
+                preset.join("shine.toml"),
+                metadata.replace("before", "after"),
+            )
+            .unwrap();
+        }
+    }
+
+    for args in [
+        vec!["update", "shell/alpha"],
+        vec!["update", "shell/alpha", "--diff"],
+        vec!["update", "shell/alpha", "--verbose"],
+        vec!["update", "shell/alpha", "--verbose", "--diff"],
+        vec!["update", "shell/alpha/alpha-second", "--diff"],
+        vec!["update", "--diff"],
+        vec!["update", "--verbose", "--diff"],
+    ] {
+        let output = fixture.run(&args);
+        success(&output);
+        let text = stdout(&output);
+        let targeted = args.iter().any(|arg| arg.starts_with("shell/alpha"));
+        let single = args.contains(&"shell/alpha/alpha-second");
+        let categories: &[&str] = if targeted {
+            &["alpha"]
+        } else {
+            &["alpha", "beta"]
+        };
+        let mut previous_end = 0;
+        for category in categories {
+            let heading = format!("Category snapshot: shell/{category}");
+            assert_eq!(text.matches(&heading).count(), 1, "{args:?}: {text}");
+            let snapshot = text.find(&heading).unwrap();
+            let commands: &[&str] = if single {
+                &["second"]
+            } else {
+                &["first", "second"]
+            };
+            for command in commands {
+                let row = text
+                    .find(&format!("  ↑  {category}/{category}-{command} "))
+                    .unwrap();
+                assert!(previous_end < row && row < snapshot, "{args:?}: {text}");
+                let detail = text[row..].find("content: unchanged").unwrap() + row;
+                assert!(detail < snapshot, "{args:?}: {text}");
+                previous_end = row;
+            }
+            let diff = text
+                .find(&format!("+++ expected: shell/{category}/shine.toml"))
+                .unwrap();
+            assert!(snapshot < diff, "{args:?}: {text}");
+            previous_end = diff;
+        }
+        if targeted {
+            assert!(!text.contains("beta/beta-first"), "{text}");
+        }
+        if single {
+            assert!(!text.contains("alpha/alpha-first"), "{text}");
+        }
+        assert!(!text.contains("Category snapshot: shell/current"), "{text}");
+    }
+
+    // Core appends receipt-only siblings after all active categories. Their status rows must
+    // still precede their own category's diff, rather than appearing after another category.
+    let metadata_path = fixture.0.join("state/presets/shell/alpha/shine.toml");
+    let metadata = fs::read_to_string(&metadata_path).unwrap();
+    fs::write(
+        &metadata_path,
+        metadata.replace(
+            &format!("[[files]]\nsource='{script}'\ntarget='alpha-second'\n"),
+            "",
+        ),
+    )
+    .unwrap();
+    let output = fixture.run(&["update", "--verbose", "--diff"]);
+    success(&output);
+    let text = stdout(&output);
+    let first = text.find("  ↑  alpha/alpha-first ").unwrap();
+    let preserved = text.find("  !  alpha/alpha-second ").unwrap();
+    let snapshot = text.find("Category snapshot: shell/alpha").unwrap();
+    let next = text.find("  ↑  beta/beta-first ").unwrap();
+    assert!(
+        first < preserved && preserved < snapshot && snapshot < next,
+        "{text}"
+    );
+    assert!(text.contains("preset missing"), "{text}");
+    assert_eq!(
+        text.matches("Category snapshot: shell/alpha").count(),
+        1,
+        "{text}"
+    );
+}
+
+#[test]
 fn shell_update_diffs_explain_shared_snapshot_files_without_writing_state() {
     let fixture = Fixture::new();
     let state = fixture.0.join("state");
@@ -452,6 +567,12 @@ fn shell_snapshot_diffs_deduplicate_aliases_and_preserve_rendered_changes() {
                 1,
                 "{text}"
             );
+            let snapshot = text.find("Category snapshot: shell/demo").unwrap();
+            let last_command = text.find("  ↑  demo/second ").unwrap();
+            assert!(last_command < snapshot, "{args:?}: {text}");
+            if transformed {
+                assert!(text.find("+# MODIFIED after").unwrap() < snapshot, "{text}");
+            }
             assert_eq!(
                 fs::read(state.join("shell-manifest.toml")).unwrap(),
                 receipt
