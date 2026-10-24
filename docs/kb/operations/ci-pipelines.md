@@ -340,6 +340,40 @@ not commit-SHA equality. These acceptance results apply to those recorded commit
 assets; later KB commits are outside the tag and the synchronized tree. No implementation repair
 was required, and unrelated working-tree files were preserved.
 
+## Shell category diff output-order CI acceptance (2026-10-24)
+
+Accepted `release` commit:
+[`20963601c01dd586b6af666a2d7b7213763000b7`](https://github.com/biulight/shine/commit/20963601c01dd586b6af666a2d7b7213763000b7)
+(`fix(cli): show category snapshot diffs after command details`). The remote `release` branch
+matched this SHA after the push. Targeted, global and verbose update views now print all selected
+command rows/details in a category before its shared snapshot diff, then continue to the next
+category. Detailed status keeps receipt-only siblings with their category. The commit includes
+ordering regressions and aligned English/Simplified Chinese manual and KB updates.
+
+The [CI run](https://github.com/biulight/shine/actions/runs/40089699152),
+[MSRV run](https://github.com/biulight/shine/actions/runs/40089699128), and
+[documentation run](https://github.com/biulight/shine/actions/runs/40089699133) all target that exact
+SHA and finished with `completed / success` on attempt 1. All eight jobs passed; no repair commit
+or workflow rerun was needed.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,792 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/40089699152/job/120859687405) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 2,054 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/40089699152/job/120859687400) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 2,056 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/40089699152/job/120859687421) |
+| Quality | Bun checks, formatting, compilation, Preset authoring example, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/40089699152/job/120859687279) |
+| MSRV | Rust 1.90 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/40089699128/job/120859686998) |
+| Documentation build | Typecheck, version checks, locale parity and all-locale build passed | [Build job](https://github.com/biulight/shine/actions/runs/40089699133/job/120859687185) |
+| GitHub Pages deployment | Succeeded | [Pages job](https://github.com/biulight/shine/actions/runs/40089699133/job/120859911060) |
+| Documentation server deployment | Succeeded | [Server job](https://github.com/biulight/shine/actions/runs/40089699133/job/120859911037) |
+
+All three native logs explicitly show
+`shell_snapshot_diffs_follow_all_selected_commands_in_each_category` passing and contain no LEAK
+results. Skipped cases are not counted as passed. These results validate the committed changes
+on native CI, separately from the earlier local checks; they do not establish a new crate or
+binary release. This later internal KB-only evidence update is outside the accepted commit and
+does not match `docs.yml`'s public-documentation path filters.
+
 ## Documentation server deployment
 
 `docs.yml` always keeps GitHub Pages deployment enabled. A second deployment uploads the same
