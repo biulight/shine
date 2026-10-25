@@ -1,12 +1,7 @@
 # Preset code analysis implementation
 
-Status: first-release implementation and acceptance complete. Stages A–D are implemented; stage E
-scope assessment is complete. Core, Frontend, CLI and native checks are supplemented by successful
-Windows/Linux/macOS CI, Rust 1.90 MSRV and documentation validation at `39edf006` (2026-10-22).
-The subsequent rule-version-6 P1 fixes passed full native CI, quality and MSRV at `aa9b81f8`;
-see the [P1 CI acceptance record](../operations/ci-pipelines.md#code-analysis-p1-acceptance-2026-10-23).
-P2 presentation and detail-view fixes passed native CI, quality, MSRV and documentation build/deploy
-at `5da9fa46`; see the [P2 CI acceptance record](../operations/ci-pipelines.md#code-analysis-p2-acceptance-2026-10-23).
+Implemented for App Bun JS/TS and local dependencies. Expansion to other languages or a separate
+package is deliberately deferred; see the scope decision below.
 Contract: [ADR 0150](../decisions/0150-preset-code-analysis-admission.md).
 
 ## Source rules, version 6
@@ -67,8 +62,6 @@ Regression coverage includes literal/comment and dynamic/spread pairs, local ver
 JS/TS default parameter scopes, replaced versus captured loaders, and author fixtures for all three
 simulated platforms with and without code trust. Blocking cases also exercise Frontend explicit
 evaluation, rejecting before invocation writes or process starts without a lifecycle approval.
-Rule version 6 passed the [targeted native P1 verification](#p1-native-verification-2026-10-23)
-at `14eac507`. Earlier native CI tables below apply only to their recorded commits.
 
 Uncorroborated declarations do not block. They also do not remove gaps. Known command identity
 plus a subprocess gap remains incomplete even if file/network declarations are supplied.
@@ -92,33 +85,15 @@ trust and approval are unchanged. Lint `valid`, `clean`, `complete`, summary and
 still consume the full Core report. Grouping never changes partial/terminated analysis into a
 complete result, and renderers encode diagnostic operands after matching their original identities.
 
-P2 verification (2026-10-23): built-in lint text shrank from 770 to 37 lines (149,353 to 5,489
-bytes), while JSON stayed byte-identical at 18 categories, zero errors and 768 warnings. Local
-macOS all-feature nextest after review passed 2,034 tests with two skips; strict Clippy, formatting, typos,
-locale parity, website typecheck and both locale builds passed. The initial sandbox run could not
-bind SSH test sockets; the permitted full rerun passed. Renderer and real CLI regressions cover
-distinct behavior groups, error retention, full JSON, warning exits, encoded locations and
-pre-execution rejection. The later push passed full Windows/Linux/macOS workspace CI, quality,
-Rust 1.90 MSRV and documentation build/deploy at `5da9fa46`; the
-[final CI record](../operations/ci-pipelines.md#code-analysis-p2-acceptance-2026-10-23)
-links exact jobs and keeps these earlier local and targeted native checks separate.
+Compact-rendering checks retain byte-identical JSON while reducing repeated text. Renderer and
+real CLI regressions cover distinct behavior groups, error retention, warning exits, encoded
+locations and pre-execution rejection.
 
 Follow-up review found that explicit inspection had hard-coded compact analysis rendering even
 in detailed views. Real CLI regressions reproduced the missing expansion before repair and now
 check compact/detailed output, error retention and pre-execution rejection at the public entry
 points. Advisory-only untrusted code also remains blocked in both modes; lint regressions retain
 raw JSON targets while encoding control-bearing category names in grouped text.
-
-The reviewed working-copy archive based on `771f3028` had SHA-256
-`17a6ff1da682292fd25cbe1ca2ce98471d9b1b13697eb1047a17572197b03b55` on both native instances.
-Windows passed 67 targeted tests (60 Core, two renderer, two real CLI analysis, two lint and one
-built-in sample); Linux passed 68, including the Unix-only process cancellation regression.
-Both used Rust 1.96.0, locked dependencies and the same reduced-debug, non-incremental `cargo test`
-configuration as the [P1 native run](#p1-native-verification-2026-10-23), adding
-`--test cli_dispatch preset_lint_` to the CLI selections. Windows retained the known unused-item
-warnings in unchanged code; Linux emitted no compilation warnings. These are targeted native
-checks, not full Windows/Linux workspace or native Clippy runs. Remote task directories were
-removed after preserving logs locally; subsequent edits only recorded this verification evidence.
 
 ## Resource limits
 
@@ -134,23 +109,18 @@ can continue past. Cancellation and cumulative limits latch a terminal failure o
 including for later cache hits. Parser interruption and iterative node traversal check that state.
 Core orchestration must propagate it before scheduling more source work or script processes.
 
-## Evidence so far
+## Rule coverage and limits
 
-- Six real production entry files in Surge and Clash Verge parse successfully. Largest entry:
-  13,979 bytes; largest reached graph: two files. Repeated analysis is identical and adds no parses.
-- Without entry-specific env mapping, these real samples yield zero definite differences and
-  4–213 gap locations per entry. Most targets are dynamic and many calls are user-defined;
-  these numbers are diagnostic inventory, not a security/coverage percentage or proof that their
-  declarations match. Runtime integration must supply each actual environment contract.
-- Manually labelled rule fixtures cover literal host/path/command differences, import aliases,
-  shadowing, source-to-target mappings, env writes versus reads, unknown subprocess effects,
-  dependency cycles/missing/escape/ambiguity, parse failures, privacy and cumulative limits.
-- A real Rust 1.90 `cargo check --locked --workspace` passed on macOS after the MSRV update.
-  Native Windows/Linux parser builds also passed with Rust 1.96; those runs do not replace the
-  separate Rust 1.90 MSRV check.
+Manually labelled rule fixtures cover literal host/path/command differences, import aliases,
+shadowing, source-to-target mappings, env writes versus reads, unknown subprocess effects,
+dependency cycles/missing/escape/ambiguity, parse failures, privacy and cumulative limits.
+Built-in Surge and Clash Verge samples exercise production source parsing and deterministic
+source-cache reuse. Their dynamic targets and user-defined calls retain explicit gaps.
+Comparisons require each entry's actual environment contract; sample diagnostic counts are not
+a security/coverage percentage or proof that declarations match.
 
-Do not describe the bounded analysis as exhaustive enforcement of script behavior. Full acceptance
-requires the consumer-boundary and native-platform checks as well as the pure analyzer tests.
+Do not describe the bounded analysis as exhaustive enforcement of script behavior. Pure analyzer
+tests do not replace consumer-boundary tests or native-platform checks.
 
 ## Core preparation and author integration
 
@@ -175,10 +145,6 @@ Author Plan exit success still describes valid hypothetical planning; `ready` ex
 Lint differences/failures are errors, gaps are warnings, and fixture negative assertions may pass
 only for completed cases. A terminal analysis failure cannot be absorbed as an expected blocker.
 
-Initial integration evidence: eight new Core/author tests, 227 analysis/planner/approval/frontend/
-author-tool tests and 48 CLI review/author-rendering tests passed. Execution admission checks added
-after this checkpoint and the complete acceptance evidence are described below.
-
 ## Execution admission and cancellation
 
 Explicit generator evaluation prepares evidence before trust checks and snapshot materialization.
@@ -196,12 +162,10 @@ its existing invocation cleanup. Approved App methods propagate terminal state e
 ordinary hook error would be non-fatal. `ProcessOutput.interrupted` distinguishes an actual child
 interrupt/termination from an ordinary failure exit; custom Hosts should set it when applicable.
 
-229 focused runtime/planner regressions passed after admission was added. Additional tests passed
-for dropped preparation, child interruption, graceful real-process cancellation, and forced task
-abort: forced abort may retain the old invocation, while the next operation creates a different
-invocation and never executes from the retained directory. The existing inherited-terminal test
-also confirms signal classification and foreground restoration. These tests do not replace the
-consumer-boundary and native checks recorded below.
+Cancellation regressions cover dropped preparation, child interruption, graceful real-process
+cancellation and forced task abort. Forced abort may retain the old invocation, while the next
+operation creates a different invocation and never executes from the retained directory. The
+inherited-terminal regression also checks signal classification and foreground restoration.
 
 ## Acceptance evidence index
 
@@ -247,12 +211,10 @@ analysis. Existing CLI generator fixtures that deliberately write a marker now d
 
 ## Scope decision (stage E)
 
-Integrated lint of the complete built-in collection finishes with no errors and eight analyzed entry
-identities. Surge has five identities and Clash Verge three, counting the typed entry/script pairs
-rather than unique source files. The dominant gaps are unknown calls (508 and 192 diagnostics,
-respectively, across their lint scope/platform comparisons), followed by dynamic targets and unknown
-environment identities. These counts include repeated contexts and are not a coverage percentage.
-No definite built-in declaration mismatch was observed with actual entry environment contracts.
+The initial built-in assessment found unknown calls to be the dominant gaps in Surge and Clash
+Verge, followed by dynamic targets and unknown environment identities. No definite declaration
+mismatch was observed with actual entry environment contracts. Repeated diagnostic contexts do
+not measure a coverage percentage.
 
 Keep the first release limited to App Bun JS/TS and local dependencies. Additional languages would
 not resolve the dominant dynamic-target/call gaps and would add parser, binding and platform costs
@@ -261,30 +223,10 @@ share Core's snapshot, declaration and input contracts; there is no independent 
 Future expansion should start from labelled examples of specific missing rules, not a language or
 package-count target. This completes the requested expansion assessment without expanding scope.
 
-## Integrated verification
+## Admission regression boundaries
 
-- Local workspace all-feature regression run: 1,986 tests passed; its sole new-test failure was an
-  obsolete test command option, corrected from `--force` to `--replace-managed`. The corrected CLI
-  regression and Frontend/admission selection (18 tests), plus subsequent acceptance additions,
-  passed separately. All configured commit hooks passed, including the complete current suite.
-- Native Windows: 34 analysis/Core admission tests and the real CLI blocking regression passed.
-  Native Linux: 35 tests (including Unix process cancel/abort cleanup) and the same CLI regression
-  passed. Both used Rust 1.96 and an isolated uploaded source archive with SHA-256
-  `1b885b9b06c17cdccdc00764e31da19c4e58f888af09cb3d012abe9f606d9912`.
-  Later additions changed tests/documentation only. Windows emitted an existing unused
-  `sudo_command` warning; no production install or user preset activation was performed.
-- Current production sources passed locked Rust 1.90 workspace compilation and all-target,
-  all-feature Clippy with warnings denied. Built-in collection lint completed without errors.
-- English/Chinese locale parity, website typecheck and both locale builds passed; generated next
-  manual pages contain the new code-check anchors. Skill frontmatter and local links were checked.
-- Sandbox-only Unix socket failures were rerun successfully with socket access. Initial pnpm
-  tool-cache lock write failure was resolved by allowing the pinned package-manager cache setup.
-
-## Follow-up review against the PRD (2026-10-22)
-
-Review baseline: `9907fa47`, including the three implementation commits. The second pass rechecked
-all 27 acceptance items across analyzer, typed trigger selection, private evidence, locked approval,
-explicit evaluation, author reports and native platform paths. It found gaps in the first pass:
+Review of the initial integration at `9907fa47` found the following gaps. Retain these independent
+regression scenarios alongside the PRD mapping above:
 
 | Finding | PRD items | Repair and regression |
 | --- | --- | --- |
@@ -295,95 +237,25 @@ explicit evaluation, author reports and native platform paths. It found gaps in 
 | Native Windows script separators differed between snapshot lookup, analysis identity and launcher | 12, 16, 20 | Use existing logical-path conventions for planner references and normalize native Windows launcher/entry names |
 | Lint lost diagnostics from completed entries when a later entry in the same category exhausted the budget | 26 | Recover completed safe scope diagnostics from the command session, retaining incomplete status and terminal failure |
 
-Rule version is now 2, invalidating comparison identities under the old rules without changing the
-report schema. New regressions reproduce the malformed-source admission and post-cancellation
-file deletion before repair. Native separator and cumulative-budget tests exercise the production
+These repairs introduced rule version 2, invalidating older comparison identities without changing
+the report schema. Regressions reproduce malformed-source admission and post-cancellation file
+deletion before repair. Native separator and cumulative-budget tests exercise the production
 planning/evaluation and lint paths. The fixes restore the already documented public contracts;
 no new permission, bypass option, confirmation or runtime sandbox is introduced.
 
-Final follow-up verification: all 1,996 workspace all-feature tests passed (two intentionally
-skipped). Two tests were marked non-failing `LEAK` under parallel load; both passed serially without
-that marker (`install_dry_run_uses_generator_fallback_without_executing_code` and
-`overlay_permission_error_identifies_cause_and_global_config`). Windows passed 41 analysis/admission
-tests plus the interrupted-teardown test; Linux passed 42 plus that test. Final Clippy, locked
-Rust 1.90 workspace compilation, formatting and typos passed. Built-in lint remains complete with
-zero errors. Remote task-owned validation copies were removed after verification.
+Readiness fixtures exercise positive/negative examples across three simulated platforms and both
+trust states, normal Plan approval, non-blocking gaps and observation-only authoring. No-Plan
+Frontend evaluation rejects before invocation writes or process starts. Real CLI regressions cover
+evaluation/lifecycle entry points with declaration differences and malformed source, including
+persistent trust and `--yes`; receipts and destination content stay unchanged.
 
-The uploaded review archive SHA-256 was
-`2bee7ef5eb8eae3ebf24fcf00c4e4016abe6b3a986b2b9c5fac6101b02316824`.
-Final inline-type refinements were then synchronized and rerun on both instances:
-`analysis/syntax.rs` SHA-256 `95f36f7963b3f2d9350ba5a702bc7f380c8ade1084cb5e7fa7fc0dc1864e2f63`,
-`analysis/tests.rs` SHA-256 `0e45eb3d5dec4253ba7ad49c96e83cc7421e98a269a296c70390e627ac6c5850`.
-The follow-up was committed as `39edf006` and pushed to `release`; final CI evidence follows.
+## Platform evidence and limits
 
-## Final release-branch CI acceptance (2026-10-22)
-
-Verified remote `release` SHA: `39edf006a41ef75a31305f48ab4e195b73446cbe`.
-All runs below target that exact commit and finished with `completed / success`; no CI repair or
-rerun was needed. Stage C–D integration is recorded in `9907fa47`, followed by the review fixes in
-`39edf006`. This closes the first-release implementation and acceptance record for all 27 PRD
-scenarios indexed above. Stage E remains an assessment to retain the initial scope, not an
-implementation of additional languages or a separate package.
-
-| Check | Result | Evidence |
-| --- | --- | --- |
-| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,733 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405660) |
-| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 1,994 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405851) |
-| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 1,996 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405894) |
-| Quality | Bun TypeScript checks, formatting, compilation, preset authoring examples, Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/39713599387/job/119610405849) |
-| MSRV | Rust 1.90.0 `cargo check --locked --workspace` passed | [MSRV run](https://github.com/biulight/shine/actions/runs/39713599318) |
-| Documentation | Typecheck, version checks, locale parity and all-locale builds passed; Pages and server deployment succeeded | [Documentation run](https://github.com/biulight/shine/actions/runs/39713599319) |
-
-The [CI workflow](https://github.com/biulight/shine/actions/runs/39713599387), MSRV and documentation
-workflows all completed successfully. These results apply to the tested commit and complement the
-local and isolated native evidence above; they do not claim exhaustive script-effect coverage or
-constitute a tagged product release.
-
-## P1 native verification (2026-10-23)
-
-For 2.7.0 preparation, the four P1 fixes and follow-up syntax-boundary repairs were verified at
-`14eac507bb0392029cf558c94b285247e68eaad9` (analysis rule version 6). Both instances used an isolated
-`git archive` of that exact commit, with matching SHA-256
-`a82cf07cf842fb792b42f48259ea29bca42ab9d2e39ce89c67616b014f830ecc`.
-
-| Native target | Core analysis/admission | CLI diagnostics | CLI execution blocking | Built-in Bun samples | Total |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Windows `x86_64-pc-windows-msvc` (10.0.22631) | 60 | 1 | 1 | 1 | 63 passed |
-| Linux `x86_64-unknown-linux-gnu` (kernel 6.8.0-101-generic) | 61 | 1 | 1 | 1 | 64 passed |
-
-All four commands exited successfully on both instances, with zero failed or ignored tests in
-the selected scope. Linux includes one Unix-only real-process cancellation regression.
-Both used rustc 1.96.0 (`ac68faa20`) and cargo 1.96.0 (`30a34c682`):
-
-```bash
-cargo test --locked -p shine-core --all-features --target-dir target analysis::tests
-cargo test --locked -p shine-cli --all-features --target-dir target --lib analysis
-cargo test --locked -p shine-cli --all-features --target-dir target --test list_views code_analysis
-cargo test --locked -p shine-cli --all-features --target-dir target --test builtin_presets builtin_bun_samples
-```
-
-Each command appended `-- --test-threads=4` on Windows or `-- --test-threads=2` on Linux;
-`CARGO_BUILD_JOBS` matched those counts. Builds set `CARGO_INCREMENTAL=0`,
-`CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_PROFILE_TEST_DEBUG=0`, retaining test-profile assertions.
-Windows nextest 0.9.143 was below the repository minimum, so these targeted runs used the
-documented `cargo test` fallback; they did not bypass the nextest version requirement.
-
-The P1 readiness regression covers 25 positive/negative examples across three simulated platforms
-and two trust states: 150 author fixture combinations per native host, within one Rust test.
-It also checks normal Plan approval, non-blocking coverage gaps, observation-only authoring and
-no-Plan Frontend rejection before invocation writes or process starts. The real CLI regression
-checks five evaluation/lifecycle entry points against both a declaration difference and malformed
-source, including persistent trust and `--yes`; receipts and destination content stay unchanged.
-Built-in sample parsing remains deterministic with explicit coverage gaps.
-
-Windows emitted six unused-item warnings for the CLI library test build and one library warning
-for `sudo_command`, all in code unchanged by the P1 commit. Linux emitted no compilation warnings.
-These are targeted native results, not full workspace, native Clippy, MSRV or CI acceptance for
-`14eac507`. They found no new regression and required no source changes. P2 diagnostic aggregation
-was deferred at this checkpoint. Task-owned remote source/build directories were removed after verification;
-no production preset was activated and no repository push was performed.
-
-The later push of `14eac507` and `aa9b81f8` passed full Windows/Linux/macOS workspace CI, quality
-and Rust 1.90 MSRV at the latter commit. See the
-[final CI results](../operations/ci-pipelines.md#code-analysis-p1-acceptance-2026-10-23)
-for exact job links, counts and warnings; the targeted results above retain their original scope.
+Historical full-workspace native CI checkpoints cover Windows x86_64, Linux x86_64 and macOS arm64:
+[initial admission repairs at `39edf006`](https://github.com/biulight/shine/actions/runs/39713599387),
+[rule-version-6 repairs at `aa9b81f8`](https://github.com/biulight/shine/actions/runs/39962137705), and
+[presentation repairs at `5da9fa46`](https://github.com/biulight/shine/actions/runs/39976619157).
+The separate [Rust 1.90 check](https://github.com/biulight/shine/actions/runs/39713599318) establishes
+MSRV compilation at the initial checkpoint. These records apply only to their recorded commits;
+simulated platforms and cross-target compilation do not establish native execution. Static analysis
+and these regressions do not establish exhaustive script-effect coverage or hardware authorization.

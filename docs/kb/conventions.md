@@ -145,8 +145,7 @@ future understanding, modification and verification easier, and what evidence su
 
 The accepted `let ... else` cleanup at `e3d1c165` illustrates this scope: simplify direct
 `Some`/`Ok` bindings with unchanged early returns, retain complex action-enum matches, and review
-crate publication changes separately. Native Windows/Linux/macOS, Rust 1.90 MSRV and quality
-checks passed; see the [CI acceptance record](operations/ci-pipelines.md#let-else-cleanup-acceptance-2026-10-22).
+crate publication changes separately.
 
 ## File size
 

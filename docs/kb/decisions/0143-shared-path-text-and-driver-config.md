@@ -25,24 +25,15 @@ and receipt readers remain because production upgrade/removal still consumes the
 Name the launcher source-check Host parameter `_host` because only Unix uses it; the existing
 Windows unused-parameter warning disappears without changing platform admission rules.
 
-## Validation
+## Validation boundaries
 
-An isolated harness compares the nine original path functions extracted from `0d28f38` with the
-shared helpers: 1134 comparisons match, including empty, relative, rooted, Unicode, NUL, mixed
-separator and verbatim/UNC strings. Both original Sys config readers have identical bodies;
-the retained implementation changes visibility only. Permanent regressions cover component
-spelling (including non-UTF-8 Unix paths), private-home detection boundaries, Windows prefix
-handling and driver config errors/value retention. Existing consumer suites cover metadata,
-packing, fixtures, launchers/profiles, approved lifecycle execution and recovery.
+Baseline comparison against `0d28f38` covers empty, relative, rooted, Unicode, NUL, mixed separator
+and verbatim/UNC path strings. Both original Sys config readers have identical bodies; the
+retained implementation changes visibility only. Removing moved definitions and imports leaves
+the original consumers unchanged.
 
-Local macOS validation passed all 649 Core and 1066 CLI tests (two CLI tests skipped), plus
-workspace Clippy with warnings denied. After the parameter-only warning cleanup, all 31 launcher
-tests passed again and Windows Core checking, including tests, passed without warnings. Native
-Windows/Linux execution was not performed. Formatting, spelling and KB relative links also pass.
-
-A second review compared the extracted helpers directly with Git baseline `0d28f38` and reran
-all 1134 differential comparisons without differences. Removing only the moved definitions and
-new imports leaves the nine path consumers and managed Sys consumer identical to the baseline.
-The review also verified 107 approval, path-identity, lock, receipt and recovery source files
-unchanged. Existing contention, stale-approval, receipt-failure and explicit-recovery regressions
-remain in the full pre-commit suite; no production correction was needed.
+Permanent regressions cover component spelling (including non-UTF-8 Unix paths), private-home
+detection boundaries, Windows prefix handling and driver config errors/value retention. Consumer
+suites retain metadata, packing, fixtures, launcher/profile, approved lifecycle, contention,
+stale-approval, receipt-failure and explicit-recovery coverage. Local macOS checks and Windows
+Core cross-target compilation do not establish native Windows/Linux execution.

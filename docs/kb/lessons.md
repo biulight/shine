@@ -16,7 +16,7 @@
 - **Native validation**: Windows reproduced the installed binary's false preservation. With the
   same live NRPT rule and isolated state, the fixed binary's targeted and aggregate upgrades both
   returned `Nothing to upgrade.`; state bytes/timestamps, real config/manifest and NRPT rules stayed
-  unchanged. All three native split-DNS tests passed.
+  unchanged.
 
 ## 2026-10-25 — Cache hashes must encode boundaries, and unwrap limits must own stderr
 
@@ -115,11 +115,9 @@
 - **Coverage**: App/Shell conversion, semantic env mappings, multiline values, source hashes,
   backup/apply/idempotence, mixed-input refusal, safe colored/plain previews, and managed-overlay
   refusal remain independent. Overlay previews explicitly require upstream commit/push before pull.
-- **Native acceptance (2026-10-24)**: isolated Rust 1.96.0 builds of `af6c027c` plus the four-file
-  migration fix passed 49 targeted tests on Windows x86_64 and 50 on Linux x86_64 (30 migration
-  unit tests, 10 output tests, and 9/10 CLI tests respectively). An actual Windows managed-overlay
-  dry-run also retained the expected blocker while eliminating whole-file CRLF churn; metadata,
-  config and state-directory entries stayed unchanged. Existing checkouts were preserved.
+- **Native evidence**: the migration fix was checked on Windows and Linux. A Windows managed-overlay
+  dry-run retained its blocker without whole-file CRLF churn; metadata, config and state entries
+  stayed unchanged. These targeted checks do not establish full platform or external-system coverage.
 
 ## 2026-10-23 — Reduce diagnostic repetition without reducing evidence
 
@@ -153,8 +151,8 @@
   rules. A loader captured before replacement must still contribute its dependency effects;
   immutable loader aliases must retain their return identity. New regressions also exercise
   no-Plan Frontend evaluation, rejecting differences before invocation writes or process starts.
-- **Native verification**: `14eac507` passed 63 targeted Windows tests and 64 Linux tests, including
-  150 author fixture combinations per host; see the [scope and limits](architecture/code-analysis.md#p1-native-verification-2026-10-23).
+- **Coverage scope**: see the [admission regression boundaries](architecture/code-analysis.md#admission-regression-boundaries)
+  and [historical platform evidence](architecture/code-analysis.md#platform-evidence-and-limits).
 
 ## 2026-10-23 — Binding patterns are not arbitrary identifier subtrees
 
@@ -731,10 +729,9 @@
   detection or change production code solely to suppress this symptom.
 - **Prevention (2026-10-22)**: `.config/nextest.toml` requires 0.9.145 or newer and fails real leaked
   output handles at the default 100 ms timeout. This also applies to CI and pre-commit runs.
-- **Acceptance (2026-10-22)**: `4ece7d6b` passed all three native suites with Nextest 0.9.148 and
-  zero LEAK results, including `copy_sets_executable_bit_on_sh_files` on macOS. Rust 1.90 MSRV
-  and quality checks also passed; counts and job links are in the
-  [CI acceptance record](operations/ci-pipelines.md#rust-190-and-nextest-acceptance-2026-10-22).
+- **Historical evidence**: [native CI at `4ece7d6b`](https://github.com/biulight/shine/actions/runs/39722135944)
+  reported no LEAK results with the fixed runner and unchanged strict timeout. This distinguishes
+  runner acceptance from the diagnostic method above.
 
 ## 2026-10-19 — Command hints and summaries retain argument and outcome boundaries
 
@@ -845,8 +842,8 @@
   inspection entry, all report assertions and the observation-only Host check (ADR 0138).
 - **Rule**: captured platform and Shell are independent inputs. Set both when a fixture models a
   specific runtime; do not weaken production source filtering to accommodate host defaults.
-- **Evidence**: native Windows reproduced the original zero-row failure; after selecting Bash,
-  all six `runtime_boundary` tests passed under nextest. The same six tests passed on macOS.
+- **Evidence**: native Windows reproduced the zero-row failure; selecting Bash restored the
+  inspection row while retaining the production filter and observation-only assertions.
 
 ## 2026-10-18 — Production-entry fixtures must not pre-satisfy mutation assertions
 

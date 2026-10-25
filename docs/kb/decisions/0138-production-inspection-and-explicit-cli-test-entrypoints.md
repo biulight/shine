@@ -44,24 +44,14 @@ This changes internal ownership and test entry points, not public commands or st
 there is no public manual or portal change. Local tests do not establish native Windows/Linux
 execution or real encryption hardware/provider behavior.
 
-## Follow-up review
+## Production-entry regression boundaries
 
-The review against `d1bb72f` checked all 107 migrated CLI call sites: only the callee and
-explicit `yes = true` changed, preserving arguments, fixtures and assertions. Removing the nine
-forwarders leaves the same production handler bodies. The five restricted helpers retain their
+Migration from `d1bb72f` changes the CLI callee and explicit `yes = true` while preserving
+arguments, fixtures, assertions and production handler bodies. Restricted helpers retain their
 bodies; administrator inference still feeds bootstrap and permission planning. Dispatch, approval,
-locks, receipt/journal formats, compatibility and recovery implementations are unchanged.
+locks, receipt/journal formats, compatibility and recovery retain their existing owners.
 
 The App harness reaches `inspect_apps_read_only`, also used by the CLI's ordinary
 `inspect_apps_with_options` path, and verifies a real receipt/destination relationship. The Shell
-harness calls the same Frontend inspection entry as CLI collection. Existing binary dispatch tests
-retain refusal without consent, user-edit protection and receipt-driven removal after source loss.
-
-On macOS with cargo-nextest 0.9.91, separately recompiled baseline/current workspace runs each
-passed 1700 tests with the same two opt-in tests skipped and no leak warning. The previously
-flagged `embedded_install_dry_run_previews_cache_without_extracting_it` test passed ten isolated
-runs on each revision without a leak warning. Its body and production call path are unchanged.
-There is no evidence tying the earlier warning to this cleanup, but its root cause remains
-unconfirmed because it did not reproduce; no leak threshold or test isolation was weakened.
-Nextest's [leaky-test detection](https://nexte.st/docs/features/leaky-tests/) concerns inherited
-stdout/stderr handles remaining open after test exit, rather than Rust heap-leak detection.
+harness calls the same Frontend inspection entry as CLI collection. Binary dispatch tests retain
+refusal without consent, user-edit protection and receipt-driven removal after source loss.

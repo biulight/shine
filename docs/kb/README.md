@@ -46,3 +46,10 @@ Update the KB in the same PR as the change it documents:
 
 Keep entries short and factual. Cite commits by hash where relevant. Delete entries that become
 wrong rather than letting them rot.
+
+Routine test results belong in delivery reports or PRs. Keep validation evidence in the KB only
+when it explains a design choice, compatibility boundary, risk, or reproducible failure. Prefer a
+short conclusion with a direct commit/CI link or a maintained reproduction entry point. Do not
+append per-commit pass tables, suite counts, timings, temporary archive hashes, environment retry
+logs, or validation of commits whose only purpose was to record earlier validation. Historical
+execution details remain available in Git history, PRs, and CI.

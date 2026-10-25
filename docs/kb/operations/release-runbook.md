@@ -58,6 +58,19 @@ tag. The moving `preview` release remains a separate daily channel.
 - `shine update` on an installed binary detects the new version (cache TTL is 24 h; use
   the force-refresh path when verifying).
 
+## Sync PR approval and merge checks
+
+Bot-created sync PR checks can stop at `action_required` without starting jobs. Inspect that state
+before treating it as a test failure. With explicit user authorization, approve the affected runs
+through GitHub or `POST /repos/biulight/shine/actions/runs/{run_id}/approve`, then wait for the
+required checks on the PR head. Approval recovery is distinct from rerunning failed tests.
+
+Before an authorized merge, re-read the PR head and required checks; use an expected-head SHA guard
+to avoid merging a changed head. After merging, compare the resulting `main` tree with the release
+tag's tree. Merge and tag commit SHAs can differ while their file contents are identical. Later
+KB-only commits are outside the tagged release and do not establish new release validation.
+A post-merge MSRV check establishes compilation at that commit, not another native test run.
+
 ## Checking cargo-binstall metadata before release
 
 The root crate publishes `[package.metadata.binstall]` with exact target overrides for the existing
