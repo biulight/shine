@@ -5,13 +5,8 @@ sidebar_position: 2
 
 # Configuration reference
 
-Shine stores global runtime state under `~/.shine/` and creates `~/.shine/config.toml` when global
-configuration is first needed. Configuration and manifest replacement does not delete the old file
-before renaming the staged file, including on Windows; a failed rename preserves the existing file.
-
-On Unix, when `SUDO_USER` identifies the invoking user, Shine resolves that user's home through
-the system account database, including macOS Directory Services. Home-relative configuration and
-path expansion therefore use the invoking user's home rather than sudo's root `HOME`.
+Shine stores global configuration and state under `~/.shine/` and creates `config.toml` when needed.
+On Unix, when `SUDO_USER` identifies the invoking user, home-relative paths use that user's home.
 
 Interactive lifecycle Plan confirmation can authorize the listed external code for that operation only,
 without saving trust. Automation and `--yes` require an existing grant. Shell live always requires
@@ -76,9 +71,6 @@ recipient. `env run` and `env secret seal` prompt to migrate an old workspace wh
 
 Phone recipients are not converted by `state migrate`. After upgrading and verifying tag support in the plugin and phone app, export with `age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag`, replace the corresponding `age_recipients` value, and reseal while retaining an independent recovery recipient.
 
-When a command reads malformed `trust.toml` or `ssh-secret-broker.toml`, TOML parse errors
-identify the file without printing stored contents. A failed parse does not repair or rewrite it.
-
 ## External-code trust
 
 External App hooks, generators, artifacts, Sys install scripts, executable profile content, and
@@ -101,11 +93,9 @@ complete effective category snapshot. An explicitly
 requested `--development` grant keeps trusting code edits from the displayed local source while
 the target, capability, and source directory/layer remain unchanged.
 This is long-term authorization of future source content, not continuing code review.
-Permission-table presence does not control code classification or grant eligibility.
 A grant does not replace the Plan shown for each operation. Retired `allow_app_hooks` and
 `allow_sys_code` fields are ignored and removed on the next configuration save.
-The `preset` target batches the current active snapshot for review or enrollment but persists
-separate grants for each target. New targets and capabilities require authorization; development
+The `preset` target reviews or authorizes all currently active targets. New targets and capabilities require authorization; development
 grants additionally fail closed when their local source changes.
 Trust grants written by schema v1 remain listable and revocable but require review again.
 
@@ -177,25 +167,14 @@ root link is an error. Symbolic links inside the preset tree remain excluded fro
 Special entries such as FIFOs, sockets, and devices fail snapshot capture with an error; Shine does
 not read them as preset files.
 
-External shell categories default to `snapshot`: Shine copies them to
-`~/.shine/installed/shell/`. On Unix, snapshots retain captured executable flags for scripts and
-helpers without copying ownership or privileged mode bits. Permission-only changes, including
-missing executable flags in an older installed snapshot, appear in `shine update` and are repaired
-by `shine upgrade`. After source edits, inspect with `shine update` and apply with
-`shine upgrade`. Set `external_shell_mode = "live"` only for development; source content takes effect
-on the next invocation, but changes to `target`, `runtime`, `transforms`, or `env` still require
-`shine upgrade` to rebuild managed entries. Live mode requires an explicit development trust grant;
-snapshot trust cannot authorize a launcher that reads mutable source. Existing live launchers are
-preserved, and status marks those missing development trust for review.
+External Shell presets default to `snapshot` mode: source edits take effect only after
+`shine update` and `shine upgrade`. Use `external_shell_mode = "live"` only for development;
+source edits then take effect on the next invocation and require development trust. Changes to
+`target`, `runtime`, `transforms`, or `env` still need `shine upgrade` to refresh installed commands.
 
-After upgrading Shine, run `shine update` and `shine upgrade` to refresh existing transformed Live
-Bun commands. Their refreshed entries use the installation's configuration directory for both
-rendering and declared environment values, even when the caller sets a different `SHINE_CONFIG_DIR`.
-Project configuration and `shine.env.toml` overrides still follow the caller's working directory.
-The refreshed PowerShell entries preserve empty arguments and literal `--`, including on Windows
-PowerShell 5.1.
-This change covers Live Bun commands with transforms, including commands without declared `env`;
-raw Live commands, native/source commands and snapshot commands keep their existing launch behavior.
+After upgrading Shine, refresh existing Live Bun commands with `shine upgrade`. Commands that use
+transforms keep the configuration directory chosen at installation, while project overrides follow
+the caller's working directory.
 
 An overlay replaces files at matching relative paths over the chosen base instead of replacing the
 whole tree. `presets_overlay_dir` and `presets_overlay_git` are mutually exclusive; use
@@ -289,8 +268,7 @@ data = "<GPG ciphertext managed by Shine>"
 ```
 
 `shine env secret seal` merges pending values into the encrypted payload and changes sealed entries
-to `true`. `shine env run` merges `[plain]` and decrypted values in source order. With usable recipients and only single-backend policy/sources, it also maintains an encrypted,
-mode-specific cache.
+to `true`. `shine env run` merges `[plain]` and decrypted values in source order.
 
 `shine env run --with KEY[=ALIAS]` injects a value from current Shine `[env]`, preferring
 `KEY_SECRET` and then `KEY`. Explicit injection overrides workspace and process values.
@@ -335,9 +313,7 @@ preference neither changes single-backend routing nor grants secret release.
 SSH broker does not accept remote personal configuration. Global `secret_backend`
 still accepts only `gpg` or `age`.
 
-Hybrid compilation caches use the final selected backend and its workspace
-recipient list. Configuration changes re-evaluate cache validity without switching
-to another backend. See the [environment guide](../guides/environment.md).
+See the [environment guide](../guides/environment.md) for setup and authorization requirements.
 
 ## Workspace file groups
 

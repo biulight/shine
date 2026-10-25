@@ -26,31 +26,17 @@ shine task list
 shine task info kill-port
 ```
 
-Tasks are stored in `tasks.toml` under the active Shine runtime directory. `SHINE_CONFIG_DIR` or the
-global `--config-dir` selects the corresponding task list. Malformed task TOML reports a parse
-error without printing stored commands; the failed operation leaves the list unchanged.
-A task saved with `--cwd` always starts
-there; without it, the task uses the caller's current directory.
+Tasks are saved in `tasks.toml` under the active Shine configuration directory. Use
+`SHINE_CONFIG_DIR` or `--config-dir` to select a different task list. A task saved with `--cwd`
+always starts in that directory; without it, the task uses your current directory. `--cwd` accepts
+`~` but requires a UTF-8 path.
 
-`--cwd` expands a leading `~` and saves the resolved absolute directory. If that directory's path
-cannot be represented as UTF-8, saving fails without changing the task list, including with `--force`.
-Working-directory displays in save/info and the run announcement escape terminal controls.
-The saved path, child's output and exit status retain their original values.
+If saving or deleting a task times out because another command is updating the list, wait for that
+command to finish and retry. Do not delete `tasks.lock` to force an update.
 
-Concurrent saves and deletions use a shared process lock to preserve each completed update.
-They wait up to 30 seconds for an active writer, then fail without changing the task list.
-The `tasks.lock` file may remain in the runtime directory; do not delete it to unlock an active writer.
-
-Shine stores and executes an argument array directly without adding a shell. Argument boundaries and
-the child exit code are preserved. For pipes, redirection, variable expansion, or globs, include the
-shell in the task, such as `sh -c '...'`. Windows does not include `sh`; that form is Unix-only.
-
-On Unix, saved-command displays use POSIX shell quoting, including executable names such as `if` or
-`MODE=test` that would otherwise be parsed as shell syntax. These quotes are for display; task
-execution continues to use the original argument array. The run announcement goes to stderr,
-leaving the child's stdout available for piping. On Windows, these displays use PowerShell quoting
-and its `&` invocation operator. Stored task names escape controls in human output, and list
-columns use terminal display widths; lookup and deletion still use the original name.
+Tasks do not automatically invoke a shell. For pipes, redirection, variable expansion, or globs,
+include a shell such as `sh -c '...'`. Windows does not include `sh`; choose an installed shell.
+Task output can be piped to other commands, and a failed task returns the program's exit code.
 
 Replace or delete a task:
 
@@ -89,11 +75,8 @@ variables:
 | `SHINE_STATE_DIR` | Current application state directory |
 
 Each structured `env` entry declares its source, optional target alias, and sensitivity together; missing optional sources
-are omitted. Values are passed as stored. Secret-classified inputs are Plan-bound by an opaque
-version but are not decrypted automatically and do not trigger GPG, age, or Touch ID prompts.
+are omitted. Values are passed as stored. Secret-classified inputs are not decrypted automatically and do not trigger GPG, age, or Touch ID prompts.
 
-App generators, script hooks, and artifacts (including teardown) execute from the captured category
-snapshot, with relative helper files from that same snapshot. Source edits after capture do not
-change the code used by the invocation. These directories are cleaned after execution; write persistent
-output to `SHINE_STATE_DIR` or `SHINE_CACHE_DIR` instead of modifying the
-execution snapshot. Scripts still run with the process's existing access and are not sandboxed.
+Generators, hooks, and artifacts run from a temporary copy of the reviewed preset. Write files you
+want to keep to `SHINE_STATE_DIR` or `SHINE_CACHE_DIR`; the temporary copy is removed afterward.
+Scripts run with your permissions and are not sandboxed.

@@ -5,9 +5,8 @@ sidebar_position: 2
 
 # Manage application configuration
 
-Application presets install configuration where the target application expects it and record managed
-files in `~/.shine/app-manifest.toml`. If installation encounters an existing unmanaged file, Shine
-first creates a `*.shine.bak` backup.
+Application presets install configuration where the application expects it. Existing unmanaged files
+are backed up as `*.shine.bak` before replacement.
 
 Presets manage configuration only; they do not install, download, or start the application. See
 [built-in presets](../reference/built-in-presets.md#application-presets) for destinations, platforms,
@@ -22,8 +21,7 @@ shine app install starship --dry-run
 ```
 
 Presets that target system directories may need additional permissions. Use `--dry-run` first to
-confirm destinations and scope. The preview summary counts files that would be installed separately
-from files that are skipped; it does not write application files.
+confirm destinations and scope without writing application files.
 
 ## Install and update
 
@@ -37,18 +35,15 @@ shine upgrade
 `shine update` compares installed results with presets and reports status without applying it.
 `shine upgrade` updates managed shell and application configuration to current preset content.
 
-An `Install incomplete` summary means one or more files failed to install, and the command exits
-with a nonzero status. Errors that stop installation early are reported directly, without this summary. Files successfully installed in the same run remain installed;
-check the reported results before retrying. Post-install hook warnings retain their non-fatal behavior.
+If installation fails, some files may already be installed. Check the reported results before retrying.
 
 Reinstalling a category preserves files changed since installation, including managed JSON keys.
 Shine also skips the generator for a file that the reviewed Plan marks for preservation. To
 explicitly replace modified managed content, preview `shine app install starship --replace-managed --dry-run`
 and then review `shine app install starship --replace-managed`.
 
-App changes using the same configuration directory run one at a time. After waiting, Shine checks
-the reviewed Plan again; if the affected state changed, review a new Plan before retrying. A lock
-wait longer than 30 seconds fails without applying the waiting operation.
+If another App operation is running, wait for it to finish. Review a new Plan if Shine reports
+that the relevant files or settings have changed.
 
 To replace managed files for one category:
 
@@ -91,24 +86,18 @@ restores the original backup when one was created. A destination move also requi
 file to be unchanged and the new path to be free. If either location has changed, Shine leaves both
 untouched for review.
 
-When an automatic generator's destination moves during upgrade, the Plan also includes removal
-of the old managed file and restoration of its backup, including any administrator permission
-needed for the old location. Changes to the backup after review invalidate approval. If a recorded
-backup is missing or is not a regular file at the expected backup path, or the old managed file is
-missing while a backup is recorded, resolve that state before retrying. Generated-file moves
-remain outside the journaled static-file recovery workflow.
+If a generated file moves to another destination, check the old file and its backup before approving
+the move. Missing or changed backups can require manual repair; generated-file moves are not covered
+by `shine app recover`.
 
-`app uninstall --force` explicitly permits deletion of user-modified managed content. Preview it
-with `--dry-run`. Uninstall includes internal cleanup by default. With a category, it removes the
-entire internal category cache, including extra files, and retains the App manifest. Without a
-category, it removes the entire internal App cache tree. The App manifest is deleted only when no
-installation records remain. Protected or failed removals retain their records and recorded backups
-so you can resolve the issue and retry; `--force` still requires explicit approval. Cleanup previews
-say what would be removed, while execution reports only completed cleanup. External preset sources
-are always preserved; managed destinations and manifest records follow normal uninstall rules.
-`shine uninstall app/<category>` uses the same category-limited behavior. `--purge` has been
-removed; omit it from existing commands. Cache cleanup is included in the Plan for approval and
-in the `--dry-run` preview.
+`app uninstall --force` permits deleting user-modified managed content; preview it with `--dry-run`.
+Uninstall also deletes the selected category's entire Shine cache, including any extra files there.
+Without a category, it clears all App caches. External preset sources are preserved. Keep personal
+files outside these caches and review the removal Plan before approval.
+
+`shine uninstall app/<category>` uses the same category-limited behavior. The old `--purge` option
+has been removed. Resolve protected or failed removals before retrying; do not delete installation
+records or backups manually.
 
 During upgrade,
 obsolete managed entries are removed only when `--prune-stale` is part of the approved command;
@@ -147,20 +136,14 @@ Some presets process source files before installation:
 
 ## Generated files and Surge URI subscriptions
 
-An application `[[files]]` entry can declare a generator whose UTF-8 stdout becomes the expected
-managed content. Generated results still pass through normal transforms, hashing, manifest tracking,
-user-modification protection, and uninstall. A script must not bypass Shine and write the destination
-directly.
-
-Generator stdout is limited to 8 MiB and stderr to 64 KiB. Shine enforces these limits while
-reading output and terminates and reaps the child on overflow, including its process group on Unix.
-Output that exceeds a limit is never installed as managed content.
+A `[[files]]` generator writes the intended file content to UTF-8 standard output; Shine applies
+transforms and manages installation and removal. The script must not write the destination directly.
+Output is limited to 8 MiB on stdout and 64 KiB on stderr; exceeding either limit fails the generator.
 
 Generators can be automatic or manual. Neither kind runs during ordinary `list`, `info`, or
 `update`. When Shine cannot determine dynamic desired content without execution, info/update shows
 a prominent `generator not evaluated` warning and does not claim that the installed file is
-current. Use `--run-generators` to execute the selected generators explicitly, apply transforms in
-memory, and inspect status or a final diff without writing destinations or manifests:
+current. Use `--run-generators` to execute the selected generators explicitly and inspect the resulting status or diff without installing the files:
 
 ```bash
 shine app info surge --run-generators
@@ -200,24 +183,20 @@ Installation, including a repair with `--replace-managed`, runs generators enabl
 regardless of their `auto` setting. Refresh displays and revalidates a security Plan; automation
 must add `--yes`.
 
-Generators supplied by external presets or overlays are executable code and require
-`shine trust grant app/<CATEGORY>` after review. Shine passes only explicitly declared environment values and fixed
-`SHINE_APP_*` path variables and limits runtime and output size. Run only presets you have reviewed
-and trust.
+For external or overlay generators, interactive lifecycle confirmation can authorize one operation.
+Automation and `--run-generators` inspection require a matching `shine trust grant app/<CATEGORY>`
+after review. Generators receive declared environment inputs and fixed `SHINE_APP_*` path variables;
+execution time and output size are limited. Run only presets you trust.
 
-The category's optional `[permissions]` table contains unverified author capability statements and
-the enforced environment/admin contracts. Shine already derives hook commands and script paths from
-typed metadata; do not repeat them. Never put a URL token, environment value, command arguments, or
-ciphertext in the declaration. Permission schema v2 supports
-`opaque_code = "unrestricted"`, but Core marks every triggered hook, generator, and artifact as
-unisolated independently. This is review and trust metadata, not a runtime sandbox.
+Permission declarations help you review a preset; they do not sandbox its code. Never include
+secret values or credentials in those declarations. See
+[capability declarations](./custom-presets.md#declare-permissions) when authoring a preset.
 
 ### Surge URI subscriptions
 
 The built-in `surge` preset can convert HTTPS Base64 URI subscriptions into managed proxy files.
 `subscription-proxies.conf` reads `SURGE_SUBSCRIPTION_URL`; `wget-cloud-proxies.conf` reads
-`W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`, which Shine maps to the generator's internal
-`SURGE_SUBSCRIPTION_URL` input. The generator requires Bun and supports compatible `ss://`,
+`W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`. The generator requires Bun and supports compatible `ss://`,
 `vmess://`, and `trojan://` records. Trojan TCP and WebSocket transports are supported. VLESS,
 unsupported transports or security modes, plugins, malformed records, and duplicates are skipped;
 diagnostics contain no credentials. User-maintained `local-proxies.conf` is not rewritten.
@@ -276,11 +255,8 @@ Scripts receive configured sources from their structured `[artifact].env` entrie
 `SHINE_CACHE_DIR` and `SHINE_STATE_DIR`. See
 [Tasks and application artifacts](./tasks-and-serve.md) for the complete variable list.
 
-Generators, script hooks, artifacts, and teardown scripts run from temporary captured category
-copies. On Unix, executable helpers from external presets and overlays remain executable in those
-copies, including helpers without a filename extension. Source edits or permission changes after
-capture do not affect that invocation. Keep persistent output in the state or cache paths;
-the captured source and overlay copies are removed after execution.
+Keep script output that must survive execution in `SHINE_STATE_DIR` or `SHINE_CACHE_DIR`.
+Temporary source copies are removed afterward.
 
 The built-in `surge` preset installs `local-proxies.conf`, `local-proxy-groups.conf`,
 `local-rules.conf`, and the optional subscription file in the Surge Profiles directory. After setting
@@ -417,8 +393,7 @@ shine trust grant app/<CATEGORY>
 shine trust grant app/<CATEGORY> --development
 ```
 
-`trust inspect` is read-only. It groups capabilities that share the same code, source, and
-author-statement scope, then prints the appropriate next step. Snapshot trust binds the complete
+`trust inspect` shows what needs authorization without granting trust. Snapshot trust binds the complete
 effective App category, including helper and data files. Use `--development` only when you intend
 to trust later code edits from the displayed local source. Before granting trust, resolve missing
 environment inputs or Administrator requirements shown by the Plan. If an active overlay's `app/<CATEGORY>/shine.toml` is an old full copy that

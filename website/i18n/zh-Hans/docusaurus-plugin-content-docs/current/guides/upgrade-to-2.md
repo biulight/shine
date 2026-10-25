@@ -123,11 +123,9 @@ shine preset migrate
 shine preset migrate --yes
 ```
 
-也可以传入 Preset 仓库、类别目录或 `shine.toml`。该命令只改写安全的 `shine.toml` metadata，
-逐文件显示 diff，确认默认是 No；写入前会校验候选内容并创建完整的私有备份集。它绝不会改动
-payload、脚本、环境值、运行状态或 trust grant。Git 管理的 overlay 是只读缓存：请对上游 checkout
-显式执行路径迁移，验证并提交修改，推送至配置的远端分支后，在消费设备上运行
-`shine preset pull`。其 diff 仅供上游修改参考，不计入镜像的自动修改数。
+也可以传入仓库、类别目录或 `shine.toml`。确认前请审阅差异。迁移会备份并更新元数据，不修改
+脚本、数据文件、环境值、已安装资源或信任。Git 管理的 overlay 应在上游 checkout 中迁移并验证，
+提交、推送后，再在各设备上运行 `shine preset pull`。
 
 Sys v1 dispatcher 必须人工迁移。根据报告中的 target 更新来源后，运行
 `shine preset validate <PATH>` 和 `shine preset plan <PATH> --platform <PLATFORM>` 校验。
@@ -137,14 +135,10 @@ Sys v1 dispatcher 必须人工迁移。根据报告中的 target 更新来源后
 
 trust enrollment 适用于外部 App hook/generator/artifact 代码、Sys bootstrap/profile 代码，以及
 每个外部 Shell command，与能力表内容无关。验证后使用规范 target，或用 `shine trust inspect preset`
-批量查看当前要求；只有接受所显示范围后才执行 grant。Trust schema v2 绑定完整有效类别快照，因此
-旧 grant 需要重新审阅；live Shell 部署必须使用 development trust。
+批量查看当前要求；只有接受所显示范围后才执行 grant。旧 grant 需要重新审阅；live Shell 部署必须使用 development trust。
 
-`shine update` 会显示简洁的 **Preset compatibility** 摘要，并继续完成可执行的配置检查和 Shine
-release 检查，最后再因 blocker 返回非零。最终错误只给出一次
-`shine preset migrate --dry-run` 入口；该命令再按 manifest 分组显示详细修复步骤。
-`shine upgrade` 会在任何生命周期 Plan 或 mutation 前执行同一 preflight；使用 `--pull` 时则在
-拉取并重新加载后检查，不兼容时不会产生部分升级。
+若 Shine 报告预设不兼容，请运行 `shine preset migrate --dry-run` 查看处理步骤。
+解决兼容性错误后再升级已安装的预设。
 
 权限表是可选的作者能力说明。显式提供的表必须使用受支持的 schema v1 或 v2 并通过校验；
 缺表或有效声明都不会授予代码信任。作者应在分发前运行静态和 fixture 检查：

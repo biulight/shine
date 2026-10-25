@@ -129,11 +129,10 @@ shine preset migrate
 shine preset migrate --yes
 ```
 
-You can also pass a Preset repository, category directory, or `shine.toml`. The command changes only
-safe `shine.toml` metadata, displays each diff, defaults confirmation to No, validates the candidate,
-and creates a private complete backup set before writing. It never changes payloads, scripts,
-environment values, runtime state, or trust grants. A managed Git overlay is read-only: migrate its
-upstream checkout with an explicit path, commit it there, then pull again.
+You can also pass a repository, category directory, or `shine.toml`. Review the diff before
+confirming. Migration backs up and updates metadata without changing scripts, data files,
+environment values, installed resources, or trust. For a Git-managed overlay, migrate and validate
+the upstream checkout, commit and push the changes, then run `shine preset pull` on each device.
 
 Sys v1 dispatchers require manual migration. Follow the reported target and validate the updated
 source with `shine preset validate <PATH>` and `shine preset plan <PATH> --platform <PLATFORM>`.
@@ -145,14 +144,10 @@ A managed Git overlay remains read-only; its report points back to the upstream 
 Trust enrollment applies to external App hook/generator/artifact code, Sys bootstrap/profile code,
 and every external Shell command, independent of capability-table contents. After validation, use
 the canonical target—or `shine trust inspect preset` for the current batch—and grant only after
-accepting the rendered scope. Trust schema v2 binds the complete effective category snapshot, so
-older grants require review again; live Shell deployment requires development trust.
+accepting the rendered scope. Older grants require review again; live Shell deployment requires development trust.
 
-`shine update` prints a concise **Preset compatibility** summary and still completes the available
-configuration and Shine release checks before returning a blocker. Its final error provides the
-single `shine preset migrate --dry-run` entry point; that command groups detailed remediation by
-manifest. `shine upgrade` performs the same preflight—including after `--pull`—and stops before any
-lifecycle Plan or mutation when the source is incompatible.
+If Shine reports an incompatible Preset, run `shine preset migrate --dry-run` for remediation
+steps. Resolve compatibility errors before upgrading installed presets.
 
 Permission tables are optional author capability statements. Explicit tables must use supported
 schema v1 or v2 and pass validation; neither a missing table nor a valid declaration grants code

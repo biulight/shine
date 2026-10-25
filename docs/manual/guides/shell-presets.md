@@ -33,19 +33,11 @@ A category target activates every command available for the current platform. Us
 `category/command` target when you need only one command. Mutation does not accept a bare command
 name because the same name may appear in more than one category.
 
-Generated shell profiles treat directory names literally, including spaces, dollar signs and
-backticks. Paths under your home directory retain the portable `$HOME` reference.
-
 Open a new terminal or reload the shell profile after installation. To install completions, run:
 
 ```bash
 shine completions install
 ```
-
-Profile result paths escape terminal control characters for display. If the shell config path
-contains controls or cannot be represented as UTF-8, the activation hint asks you to open a new
-shell instead of offering a copyable reload command. The generated profile still uses the original
-path. Ordinary paths retain the quoted reload command.
 
 ## Repair an installation
 
@@ -59,27 +51,15 @@ shine install shell/proxy --replace-managed
 `--replace-managed` overwrites the corresponding Shine-managed content. Inspect
 `shine info shell/proxy --diff` first so that intentional local changes are not mistaken for damage.
 
-When a command conflicts during a bulk operation, the repair hint identifies its category,
-including for template-rendered scripts. Conflict rows escape control characters in command names
-and paths. For a category containing control characters, the hint requests the original category
-argument instead of providing a copyable command. Inspect the reported path before removing or replacing it.
-
-After switching preset sources, run `shine upgrade shell/<CATEGORY>` to update installed commands.
-Shine uses their installation records to recognize managed commands at the old paths and move them
-to the current deployment location. This does not adopt unrelated command files. External code still
-requires review and confirmation for the current Plan.
-
-On Windows, native PowerShell commands launched from CMD preserve apostrophes in script paths
-(for example, a user directory named `O'Connor`). Run `shine upgrade shell/<CATEGORY>` to refresh
-existing command launchers; their original installation records remain usable for recovery. After the
-refresh, subsequent upgrade reviews treat unchanged command launchers as current.
+If a command conflicts with an existing file, inspect the reported path before removing or
+replacing it. After switching preset sources or updating Shine, run
+`shine upgrade shell/<CATEGORY>` to refresh installed commands. External code still requires review
+and authorization.
 
 ## If installation, upgrade, or uninstall is interrupted {#recover-an-interrupted-shell-transaction}
 
-Shell changes using the same configuration directory run one at a time, including recovery and
-live rendering. After waiting, Shine checks the reviewed Plan again; if the affected state changed,
-review a new Plan before retrying. Waiting longer than 30 seconds fails without applying the waiting
-operation. Changes to other categories retain their installation records.
+If another Shell operation is still running, wait for it to finish. If Shine reports that the
+reviewed changes are no longer current, review the new Plan before retrying.
 
 If a Shell preset operation is interrupted, Shine may pause later changes and ask you to
 run recovery:
@@ -112,26 +92,19 @@ Non-dry-run install and uninstall, plus `shine upgrade`, show the planned change
 Confirmation defaults to No; automation must pass `--yes`, while the Plan and safety checks still
 run. `--dry-run` remains a separate preview and cannot be combined with `--yes`.
 
-Every installed or sourced Shell entry is delivered as unisolated code. External and overlay
-commands require human confirmation of the current Plan or a matching persistent grant,
-whether the permission table is missing, empty, enumerated, or uses the compatible
-`opaque_code = "unrestricted"` field. Author capability statements are review notes, not file,
-network, or command restrictions. See
-[custom Preset capabilities](./custom-presets.md#declare-permissions).
-During local authoring, add `--development` to the grant only when later code edits from that
-displayed source should remain trusted.
-When a lifecycle Plan is blocked by missing trust, Shine reports the exact command-scoped
-`shine trust inspect shell/<CATEGORY>/<COMMAND>` and `shine trust grant` follow-up commands.
+Shell commands run with your permissions and are not sandboxed. External and overlay commands
+require confirmation of the current Plan or a matching trust grant, regardless of their permission
+declarations. Follow the reported `shine trust inspect` and `shine trust grant` commands to review
+blocked operations. Only use `--development` when you also trust future edits from that source.
+See [custom Preset capabilities](./custom-presets.md#declare-permissions).
 
 Snapshot trust works with the default snapshot deployment. It copies the reviewed category content
 into Shine's managed directory; later source edits do not enter the installed command until an
 explicit reviewed update. `external_shell_mode = "live"` requires development trust because later
-invocations or `source` operations read from a mutable trusted source. Snapshot trust with live
-deployment is blocked, including Bun launchers, Windows shims, and invocation-time transforms.
+invocations or `source` operations read from a mutable trusted source. Snapshot trust cannot be used with live deployment.
 
-One snapshot directory is shared by installed commands in the same category. If an update replaces
-that shared code, the security Plan lists both the selected command and every installed sibling it
-affects. Each affected external command needs one-time human consent or a matching grant for the new snapshot;
+Updating shared files can affect other installed commands in the same category. The Plan lists
+all affected commands for review. Each affected external command needs one-time human consent or a matching grant for the new snapshot;
 uninstalled siblings do not need a grant and are not installed. Existing live launchers are kept
 after upgrading Shine, but `list`/`info` reports `development trust required` until they are reviewed.
 Uninstall and recovery remain available without granting trust to code being removed.

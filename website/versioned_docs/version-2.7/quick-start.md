@@ -18,8 +18,7 @@ shine list --available
 ```
 
 The first three commands list shell commands, application configuration, and initialization items
-for the current operating system. `list --available` uses the unified 1.0 catalog for all three
-resource types; append `app`, `shell`, or `sys` to filter it.
+for the current operating system. `list --available` shows all three resource types; append `app`, `shell`, or `sys` to filter it.
 
 ## 2. Install the proxy commands
 
@@ -28,8 +27,8 @@ shine shell install proxy
 # Equivalent canonical target: shine install shell/proxy
 ```
 
-Shine places the scripts under `~/.shine/presets/shell/`, creates command entries in
-`~/.shine/bin/`, and adds that directory to supported shell profiles.
+Shine makes the commands available through `~/.shine/bin/` and adds that directory to supported
+shell profiles.
 
 Before writing anything, Shine shows the intended changes and required permissions. Confirm
 explicitly; the prompt defaults to No. In automation, add `--yes` only after reviewing the same
@@ -52,7 +51,7 @@ shine list
 shine info shell/proxy
 ```
 
-`shine list` reports the installed lifecycle unit, `proxy`; `shine info shell/proxy` expands it into
+`shine list` shows the installed `proxy` category; `shine info shell/proxy` expands it into
 the managed commands, links, and source details. Use the full target `shell/proxy` in scripts. A bare
 name is accepted only when it is unique across application and shell categories.
 

@@ -26,11 +26,8 @@ mechanism, then ask in ordinary language for an app configuration, shell command
 or customization of a built-in category. Shine does not detect or edit Codex, Claude, Cursor, or
 other client configuration.
 
-The skill checks that the installed Shine supports static validation, selects the matching author
-reference, scaffolds from the current binary, validates the result as JSON, and performs only an
-isolated dry-run. It never links or activates the category and never runs hooks, artifacts,
-generators, installation scripts, or a real bootstrap. The skill instructions are English for
-cross-client portability, but questions and the final report follow the user's language.
+The skill generates a preset, validates it, and previews installation in an isolated directory.
+It does not activate the preset or run its scripts. Review the result before installing it.
 
 You can use the same flow without an AI client:
 
@@ -60,10 +57,6 @@ trust, Plan review, administrator authorization, ownership checks, or explicit e
 Use `shell` or `sys` in `preset new` for the other kinds. To customize an embedded category, enter
 the repository or overlay root and run `shine preset copy <kind>/<name>`; the command creates the
 kind/category path.
-Path progress messages for `preset new`, `preset copy`, and `preset export` escape terminal control
-characters. File locations and the existing `--force` replacement rules are unchanged.
-Repeated-link notices also escape controls in the source path; they keep the existing link unchanged.
-
 `preset validate` also accepts a repository root, one category directory, or its `shine.toml`. Root
 validation scans only direct category directories below `app/`, `shell/`, and `sys/`; an empty root
 is invalid. It evaluates the macOS, Linux, and Windows declarations on any host, verifies referenced
@@ -73,8 +66,6 @@ check for updates, write files, access the network, or execute preset code.
 
 The default output is text. `--format json` is available for tools and CI. Validation errors exit
 with status 1; warnings do not.
-Text validation, lint, and authoring-plan reports escape control characters in paths, identifiers,
-diagnostics, and permission labels. JSON reports retain the original field values.
 Diagnostic codes identify the failed check, independently of category names or message wording.
 For example, a missing referenced file reports `missing_reference`, while a rejected Bun dependency
 declaration reports `bun_dependency_policy`.
@@ -85,11 +76,7 @@ check for App, Shell, and Sys metadata.
 
 Run `preset lint` after validation to find author-quality and portability issues. Warnings are
 advisory by default; CI can add `--deny-warnings` after reviewing them.
-If lint cannot load or validate the input, its text hint includes the original `PATH`; run that
-`preset validate` command from the same directory to inspect the failure. For a non-UTF-8 `PATH`
-or one containing control characters,
-the text explains that the copyable command is omitted; reuse the original argument with
-`preset validate`. JSON reports keep their path-independent diagnostic messages.
+If lint cannot load the input, run `shine preset validate <PATH>` to inspect the failure.
 Lint checks each platform's applicable resources, including PowerShell commands on Windows;
 App categories or files intentionally unavailable on an OS are skipped for that OS.
 
@@ -102,10 +89,7 @@ Add `shine.test.toml` when the category needs repeatable cross-platform expectat
 the starting conditions and expected results without running setup code. Runnable App, Shell, and
 Sys examples are available under `examples/presets`. `preset test` accepts one category, not a
 repository root.
-Declared files and receipts share the planner's virtual directories on every host, including
-Windows. Use relative file bases and receipt placeholders such as `${HOME}` for portable cases.
-Text reports escape control characters in case names so each result stays on one row.
-JSON reports preserve the original names; pass/fail results and exit codes are the same in both formats.
+Use relative file bases and placeholders such as `${HOME}` in fixture receipts for portable tests.
 
 When you need a distributable artifact, pack the reviewed category outside its source tree:
 
@@ -113,14 +97,9 @@ When you need a distributable artifact, pack the reviewed category outside its s
 shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 ```
 
-The returned hash identifies the bundle. `shine.test.toml` remains author-only and is not included.
-A pack-policy failure must be fixed in the source; `--force` only replaces the output file and never
-bypasses validation or policy. The output directory is checked after resolving symbolic links and
-parent components (`..`); it must remain outside the category, even with `--force`.
-Existing ancestors must be directories: a path such as `file/../bundle.tar.gz` fails with
-`output_write_failed` when `file` is a regular file, without creating or replacing a bundle.
-Without `--force`, an output created by another process during packing is preserved and the command
-fails with `output_exists`.
+`shine.test.toml` is for author testing and is not included in the bundle. The output must be
+outside the category directory, including after resolving symbolic links. Use `--force` only to
+replace an existing output; it does not bypass validation or packaging restrictions.
 
 ## Check App code before execution
 
@@ -140,17 +119,10 @@ languages, are advisory. Declarations not corroborated by the analyzed source ar
 and appear in detailed review. Neither means the code is safe or fully analyzed. Reports without
 diagnostics add no ordinary output; existing trust and approval checks still apply.
 
-Ordinary reviews summarize repeated coverage gaps within each entry, showing a count and an
-example location. Detailed lifecycle reviews (`--verbose`) and author Plans retain every location.
-For explicit inspection, `info --verbose` or `--diff`, detailed `update` views, and `app info`
-also show every location in their evaluated scope. These display modes do not enable execution;
-generator evaluation still requires `--run-generators` and the existing trust checks.
-`preset lint` text groups repeated analysis warnings by category and diagnostic meaning; use
-`shine preset lint <PATH> --format json` for all diagnostics across the checked source entries.
-Errors remain individually visible. Summary counts still include every diagnostic, and
-`--deny-warnings` keeps the same exit behavior; fewer displayed rows do not mean fewer coverage gaps.
-Lint checks all supported source entries, so its report can differ from a runtime inspection's
-selected entries and environment mappings.
+Use `--verbose` for detailed review or `shine preset lint <PATH> --format json` for all diagnostics.
+`--deny-warnings` makes lint warnings fail CI. More detailed output does not execute generators;
+that still requires `--run-generators` and trust. Lint checks all supported entries, so it can
+report issues outside the scope of a particular runtime inspection.
 
 For structured `env` mappings, declare `source`, optional `target`, and `plain`/`secret`
 `sensitivity` together; the script reads the target name. Only documented fixed variables are exempt, not
@@ -175,26 +147,18 @@ shine preset migrate ./my-presets --dry-run
 shine preset migrate ./my-presets
 ```
 
-The migrator shows unified metadata diffs and confirmation defaults to No. Supported terminals
-show additions in green and deletions in red. Automatic colors respect `NO_COLOR`; redirected
-output is plain unless color is explicitly forced, for example with `FORCE_COLOR=1`. It edits only
-`shine.toml`, validates the candidate, rechecks source hashes, and creates a complete private backup
-set before writing. Payloads, scripts, values, runtime manifests, and trust grants are untouched.
-Text backup paths escape terminal controls; backup contents and JSON report identifiers are unchanged.
-Rewritten metadata keeps its LF or CRLF line endings and whether it ends with a newline. CRLF
-diffs display ordinary line breaks with a notice, rather than `\r` on every line. If a file needs
-migration but mixes LF and CRLF, first choose one line-ending style for that file, then rerun.
-Exact released 1.x built-in metadata may be rebased when its executable identity is unchanged;
-legacy Apps may receive current metadata without adding capability statements. Missing optional
-capability tables do not require migration, including for opaque code; external-code trust remains
-a separate review. Sys v1 dispatchers still require manual migration.
+Review the metadata diff before confirming; the default answer is No. Migration changes only
+`shine.toml` and backs it up before writing. It does not change scripts, data files, environment
+values, installed resources, or trust. Resolve entries reported as needing manual migration;
+Sys v1 dispatchers require the [v2 migration guide](./sys-preset-v2-migration.md).
 
-`--yes` is appropriate only after review and still prints text diffs. JSON is a versioned report
-without contents or diffs; use `--format json --dry-run` for inspection or combine JSON apply with
-`--yes`. A managed Git overlay is diagnosed but never changed. Its diffs are marked as previews
-for upstream edits and do not count as automatic changes. Run the explicit-path command in its
-upstream checkout, validate and commit the changes, push them to the configured remote branch,
-then run `shine preset pull` on the consuming device.
+Use `--yes` only after review. For automated inspection, use `--format json --dry-run`; applying
+with JSON output also requires `--yes`. JSON reports do not include file contents or diffs.
+
+A Git-managed overlay is read-only. Migrate and validate its upstream checkout, commit and push
+the changes, then run `shine preset pull` on each consuming device.
+
+If migration reports mixed LF/CRLF line endings, choose one style for that file and retry.
 
 ## Describe capabilities and required inputs {#declare-permissions}
 
@@ -252,21 +216,13 @@ Filesystem bases are `home`, `shine`, `data-dir`, `preset`, or `absolute`; non-a
 normalized relative paths, with `.` meaning the selected base root. Commands contain one program
 identity without arguments. Environment entries contain names and `plain`/`secret` sensitivity,
 never values or ciphertext. Do not repeat commands, script paths, ordinary destinations, or fixed
-package providers already present in typed metadata. Declare statically identified App script
+package providers already declared in the preset configuration. Declare statically identified App script
 effects; additional statements can help reviewers understand intended effects.
 
-`opaque_code = "unrestricted"` is optional review metadata. Core automatically marks App hooks,
-generators and artifacts, installed or sourced Shell commands, and Sys scripts/profile code as
-unisolated even when this field or the whole table is absent. It never forwards environment values
-or grants elevation. Environment allowlists and `plain`/`secret` sensitivity, plus Administrator
-requirements, remain explicit because Shine enforces those managed injection/elevation contracts.
-
-The security Plan presents Shine's derived operations, unverified author statements, and code/trust
-boundaries separately. A statement is not an authorization grant or proof that script behavior is
-complete. Arbitrary code runs with the access already available to its process; Shine does not add a
-runtime sandbox or intercept every later Shell command invocation.
-Static App data files are reviewed as file operations. Names beginning with `generator:`, `hook:`,
-or `artifact:` do not by themselves request code execution or external-code consent.
+`opaque_code = "unrestricted"` describes code for review; it does not grant trust or administrator
+access. All scripts run with the access available to their process and are not sandboxed, whether
+this field is present or absent. Declare environment inputs and administrator requirements
+explicitly. Capability statements are not proof that all script effects have been disclosed.
 
 Interactive lifecycle operations can authorize the listed external code when you confirm the Plan.
 This authorization applies only to that operation and captured snapshot; it saves no persistent grant.
@@ -283,14 +239,9 @@ shine trust grant <TARGET>
 shine trust grant <TARGET> --development
 ```
 
-Snapshot trust binds the target, capability, and complete effective category snapshot, including
-logical paths, exact bytes, source layers, and captured Unix executable flags. Changing category
-content or whether a file is executable requires renewed snapshot authorization. Existing snapshot
-grants for categories containing executable files may require review again after upgrading.
-Author statements appear in review and affect the Plan, but are not separately compared as trust identity.
-Editing statements in `shine.toml` still changes the snapshot bytes.
-The snapshot excludes `node_modules`; trust does not constrain interpreters, PATH tools, dependencies,
-downloads, or runtime side effects.
+Snapshot trust covers the reviewed target and effective category content. Changes to files,
+metadata, source layers, or executable permissions require renewed review. Dependencies such as
+`node_modules`, interpreters, external tools, and downloads are not protected by this grant.
 
 Development trust is long-term authorization of future code from the displayed local source for the
 specified target and capability. Source directory/layer changes and new targets or capabilities need
@@ -302,17 +253,11 @@ authorize live deployment.
 `opaque_code = "unrestricted"` does not enable development trust. `trust list`,
 `trust inspect`, and the security Plan label active development trust; the private local trust store
 owns the grant, so a Preset cannot distribute or enable it.
-The default `trust list` view groups capabilities with the same security scope into one row and
-shows whether each stored grant is current. Use `trust list --verbose` for capability names, local
-development-source labels, and stale-grant review guidance.
-Trust command output escapes control characters in targets, source labels, and author capability
-statements. Stored identities remain unchanged. For a target containing control characters, review
-hints omit copyable commands; pass the original target argument to `trust inspect` or `trust grant`.
+Use `trust list` to check grants and `trust list --verbose` for details and review guidance.
 
 Every external Shell command uses the canonical `shell/<CATEGORY>/<COMMAND>` trust target. Use
 `preset` to inspect or trust every executable target
-in the current active Preset snapshot; Shine still stores a separate target-local grant in the
-selected mode for each target. Revoking `preset` clears every stored Preset trust grant:
+in the current active Preset. Revoking `preset` clears every stored Preset trust grant:
 
 ```bash
 shine trust inspect preset
@@ -321,9 +266,7 @@ shine trust grant preset --development
 shine trust revoke preset
 ```
 
-Trust-store schema v2 uses this complete-category boundary. Older v1 grants remain visible and
-revocable, but show that re-review is required and cannot authorize a new operation. A successful
-grant replaces the old record for the same target and capability.
+Older grants marked as needing review cannot authorize new operations. Review and grant them again.
 
 AI tools may generate and statically validate Presets, but cannot approve their own code. Review the
 actual generated changes through a trusted human interface. A changed snapshot invalidates the approval.
@@ -366,8 +309,7 @@ platforms = ["unix", "windows"]
 env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 ```
 
-The category includes three entry files plus a shared implementation using
-[`Bun.Image`](https://bun.com/docs/runtime/image). It compresses, resizes, and converts JPEG, PNG,
+The commands use [`Bun.Image`](https://bun.com/docs/runtime/image) to compress, resize, and convert JPEG, PNG,
 and WebP without ImageMagick, Sharp, or another image library. Every machine that runs the commands
 needs Bun 1.3.14 or newer in `PATH`; Shine does not bundle Bun. The commands detect a missing
 `Bun.Image` API and print an upgrade hint.
@@ -401,8 +343,7 @@ when no output directory was supplied.
 `IMAGE_QUALITY`, `IMAGE_MAX_WIDTH`, and `IMAGE_MAX_HEIGHT` default to `80`, `1920`, and `1080`.
 Command options override them for one invocation; changing the Shine values keeps the preference on
 that machine. In the default snapshot mode, changing a copied or external source still requires
-`shine upgrade` before the installed command changes. This is the boundary between synchronizing a
-script file and operating it as a reusable personal capability.
+`shine upgrade` before the installed command changes.
 
 ## Override selected files with an overlay
 
@@ -443,9 +384,7 @@ shine preset overlay info
 
 The link command shallow-clones the repository under `~/.shine/overlay/`. Later pulls
 mirror that directory to the latest state of the remote branch. `overlay info` reports managed
-directory presence. Git source, branch, directory and retained-checkout messages escape terminal
-control characters.
-It is a disposable cache: the next
+directory presence. It is a disposable cache: the next
 pull discards local edits. Make changes and push them in an upstream checkout, then synchronize each
 device with `shine preset pull`, `shine update --pull`, or `shine upgrade --pull`.
 Relinking with a different Git URL switches the existing mirror to that repository. Without
@@ -485,9 +424,7 @@ Export includes built-in presets plus overrides and additions from the active ov
 copy files that exist only in the external base directory; the progress message identifies whether
 an overlay is included. Copy still extracts the pristine built-in category.
 
-Activation hints use a `<PATH>` placeholder and show the destination separately with display escapes.
-Supply the actual path as one argument, quoting it for your shell; the escaped display is not a
-ready-to-run shell argument.
+Replace `<PATH>` in activation commands with your actual directory, quoted as one shell argument.
 
 Both `preset copy` and `preset export` reject linked or special output files and linked
 subdirectories, including with `--force`. Choose an ordinary directory tree for the output.
@@ -511,7 +448,7 @@ shine preset link ~/dotfiles/shine-presets --live
 ```
 
 In live mode, ordinary shell and Bun source changes take effect on the next invocation. Files with
-`transforms` are rendered atomically before each call; a rendering failure aborts that call rather
+`transforms` are rendered before each call; a rendering failure aborts that call rather
 than executing stale output. Changes to entry metadata such as `target`, `runtime`, `transforms`, or
 `env` still require `shine upgrade` to rebuild the managed entry. Restore snapshot mode by running
 `shine preset link <PATH>` without `--live`, or use `shine preset unlink`.
@@ -588,8 +525,7 @@ shine upgrade --pull
 ```
 
 Shine locates the repositories containing the base presets and active overlay. If both sources are in
-one repository it pulls only once; non-Git sources are skipped. Git repository root detection preserves
-directory-name whitespace, including trailing spaces on systems that support them. `update --pull`
+one repository it pulls only once; non-Git sources are skipped. `update --pull`
 and `upgrade --pull` reload configuration after pulling, so an updated `shine.config.toml` affects later steps.
 
 Every repository processed must meet these conditions before any pull begins:
@@ -614,8 +550,7 @@ shine preset new sys
 
 Existing files require `--force`. Category metadata is a preset-author interface; after editing it,
 first run `shine preset validate . --format json`, then use the relevant isolated installation
-`--dry-run` command. Shell install dry-run resolves intended command links without creating files,
-links, manifests, snapshots, rendered files, or profile edits.
+`--dry-run` command. Shell install dry-run previews command entries without installing or modifying files.
 
 ### Give an application file its own destination
 
@@ -751,9 +686,7 @@ eval = ["mise", "activate", "{shell}"]
 items = ["mise"]
 ```
 
-Detection supports `command`, `path`, and `any` command/path probes. Package installs are fixed
-ensure-present actions: Shine owns argv, elevation, proxy handling, timeout, output limits, and the
-post-install detection, but never upgrades the package. A complex item may use
+Detection supports `command`, `path`, and `any` command/path probes. Package installation ensures the software is present; it does not upgrade an existing installation. A complex item may use
 `[items.install] kind = "script", path = "install/<item>.sh"`; the script handles only that item,
 returns a normal exit code. Every init item must declare both `detect` and `install`; there is no
 platform-wide dispatcher fallback. Version 1 manifests are rejected before detection or profile

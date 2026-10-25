@@ -30,13 +30,8 @@ shine sys bootstrap --dry-run
 shell integration without changing the system. Some items require administrator access or additional environment variables;
 `shine sys info <ITEM>` lists those requirements.
 
-Suggested commands use `--` before item IDs that start with `-`; put options before that separator,
-for example `shine sys apply --dry-run -- -custom`. Detection commands in `sys info` preserve
-quoted arguments. Item labels display control characters as escaped text such as `\n`, keeping
-each result on one line.
-
-When a missing item is about to run, Shine prints its `sys/<ITEM>` identifier and label first, so
-any authorization or password prompt that follows is attributable to the active software.
+For item IDs beginning with `-`, put options before `--`, then the item name, for example
+`shine sys apply --dry-run -- -custom`.
 
 ## Select interactively or apply a profile
 
@@ -62,28 +57,13 @@ After selection, a mutating run displays the planned changes and required permis
 approval defaults to No. Automation must pass `--yes`; this skips only the prompt, while the Plan is
 still shown and validated. `--dry-run` is an earlier preview and cannot be combined with `--yes`.
 
-The security Plan starts with administrator/network warnings and profile recovery limitations,
-then lists derived permissions under each selected bootstrap item. Profile configuration and shared
-runtime or manifest writes have separate sections. Package-provider permissions are derived from
-metadata, so no author capability table is needed for a fixed provider.
-Shared capabilities may appear under multiple items when each needs them. `Permissions none required`
-means only that the planner derived no capabilities for that section; it is not a safety guarantee.
+Review the Plan's administrator access, network access, and recovery limitations before approving.
+Use `--verbose` for detailed paths and steps. A permission declaration is not a safety guarantee:
+custom scripts and executable profile content run with your permissions and are not sandboxed.
+External code requires review and authorization.
 
-Custom script and executable profile items are automatically shown as unisolated code. Optional
-permission tables are unverified author statements; `opaque_code = "unrestricted"` and category
-`permission_defaults` remain compatible but do not change classification. Environment inputs and
-Administrator requirements remain explicit executor contracts. External/overlay code also needs
-target-scoped trust for its complete effective `sys/<os>/` snapshot.
-
-Each script invocation runs from its own captured Preset copy, preserving executable helper files.
-Concurrent invocations cannot replace that copy. Installers can read inherited foreground terminal
-input; Shine restores terminal control when the installer finishes, fails, times out, or is cancelled.
-Cancelling a running operation stops its isolated Unix process group, including child processes.
-
-Snapshot identities are shortened in the default display. Add `--verbose`, for example
-`shine sys bootstrap --preset recommended --verbose`, to show all file paths, full identities, and diagnostic codes.
-Both views review the same complete Plan and use a single confirmation for the selected operation.
-`--verbose` does not change the earlier `--dry-run` preview.
+Installers may prompt for terminal input. Follow the current item's instructions and wait for it to
+finish before starting another operation.
 
 Ubuntu includes a `minimal` profile for production servers. It installs only Neovim, fzf, bat, eza,
 and zoxide, without shell-history synchronization, a prompt, the Node.js toolchain, or Homebrew.
@@ -109,7 +89,6 @@ shine sys status
 This view shows the latest recorded result for each item, including bootstrap and managed system
 operations such as `shine sys apply`. Entries can come from different runs. It does not perform
 live checks of software versions or system configuration.
-`sys info` escapes terminal control characters in recorded status details; the stored result is unchanged.
 
 ## Upgrade bootstrap software with its owner
 
@@ -174,10 +153,8 @@ Non-dry-run managed operations display a snapshot-bound Plan and default to No. 
 the prompt, not Plan rendering, permission blockers, or fresh validation. Administrator access, if
 required, is requested separately after Plan approval.
 
-Sys changes using the same configuration directory run one at a time, including bootstrap, profile
-changes, and recovery. After waiting, Shine checks the reviewed Plan again; changed observations
-require a new review. Waiting longer than 30 seconds fails without applying the waiting operation,
-and completed operations retain their installation records.
+If another Sys operation is running, wait for it to finish. If relevant state changes while waiting,
+review the new Plan before retrying.
 
 If a managed operation is interrupted, later Sys changes stop and ask you to run
 `shine sys recover`. Recovery completes or rolls back only state that has not changed since the

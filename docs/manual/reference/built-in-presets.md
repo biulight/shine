@@ -24,9 +24,7 @@ shine sys info split-dns
 This page reflects the built-in `presets/` directory for Shine 2.7.0. For another version, use
 `shine list --available` and `--help` as the authority.
 
-The platform column below is generated from the same built-in App destination and Shell file
-selectors used at runtime. A conformance test keeps this block synchronized with preset metadata in
-both manual locales.
+The table below shows platform availability.
 
 <!-- BEGIN GENERATED PRESET PLATFORM CAPABILITIES -->
 | Preset capability | macOS | Linux | Windows |
@@ -87,10 +85,8 @@ See [Manage shell presets](../guides/shell-presets.md) and
 
 ## Application presets
 
-Most categories install configuration files. Surge and Clash Verge Rev intentionally go further:
-their provider-specific artifact scripts assemble the application-specific include/editor files
-that users would otherwise have to wire by hand. The generic app lifecycle still owns the declared
-files; the artifact remains an explicit, category-specific capability.
+Most presets install configuration files. Surge and Clash Verge Rev also provide explicit artifact
+commands to connect those files to the active application configuration; follow their setup guides.
 
 <div className="built-in-presets-app-table" aria-hidden="true" />
 
@@ -114,7 +110,7 @@ Surge, Starship, or another application.
 
 ## System presets
 
-`shine sys bootstrap` runs standardized package providers or isolated compatibility scripts for
+`shine sys bootstrap` runs package managers or installation scripts for
 selected development-environment items. Interactive mode selects items, positional IDs run only
 those items, and non-interactive mode uses the platform default profile.
 The recorded result means that the bootstrap step ran; it is not a live assertion that a package is

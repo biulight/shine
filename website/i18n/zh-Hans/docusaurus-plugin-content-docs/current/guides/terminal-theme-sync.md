@@ -16,10 +16,8 @@ eval "$(shine theme sync --quiet)"
 
 第一条命令只显示应写入 shell 的 `export` 语句；第二条才会在当前 shell 生效。已经自行设置的 `BAT_THEME` 不会被覆盖。
 
-Shine 依次使用已有的 `SHINE_TERMINAL_THEME`、终端提供的 `COLORFGBG`，最后才通过 OSC 11 查询终端背景色。无法确定时不会猜测或写入变量。
-
-无法确定主题时退出码为 0。`--quiet` 只隐藏非必要诊断；配置错误仍会输出到 stderr，
-退出码为 1，stdout 不输出任何导出语句。
+Shine 优先使用已有的 `SHINE_TERMINAL_THEME` 或 `COLORFGBG`，再尝试检测终端背景。
+无法确定主题时，不修改变量。`--quiet` 隐藏非必要提示，但仍会报告配置错误。
 
 ## 在受管 profile 中自动同步
 
@@ -44,4 +42,4 @@ eval "$(shine-theme-sync)"
 
 ## SSH 会话
 
-`shine ssh <HOST>` 会在本机连接前读取当前终端主题，并将结果注入远端会话。因此远端无需能响应 OSC 11 查询，且 `bat` 等工具可与本机终端保持一致。
+`shine ssh <HOST>` 会把本机终端主题传给远端会话，让 `bat` 等工具与本机终端保持一致。

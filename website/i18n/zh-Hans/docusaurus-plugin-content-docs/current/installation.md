@@ -53,8 +53,11 @@ shine --version
 （通常为 `~/.cargo/bin`），请确认该目录已加入 `PATH`。
 
 官方二进制文件覆盖 macOS、使用 glibc 的 Linux 和 Windows（MSVC 构建），均提供 x86_64 和
-aarch64 两种架构。暂不提供 Linux musl 二进制文件。找不到适用的二进制文件时，cargo-binstall
-可能尝试第三方二进制文件或从源码编译。如需限定为官方预编译二进制文件，使用：
+aarch64 两种架构。Shine 目前未发布 Linux musl 预编译包。
+
+默认情况下，找不到适用的官方二进制文件时，cargo-binstall 还会查询外部的
+[cargo-quickinstall](https://github.com/cargo-bins/cargo-quickinstall) 构建服务，最后回退到从源码编译。
+如需仅使用官方预编译二进制文件，并在没有适用文件时报错退出，使用：
 
 ```bash
 cargo binstall shine-cli --strategies crate-meta-data
@@ -84,33 +87,29 @@ shine self upgrade --channel stable
 shine self upgrade --channel preview
 ```
 
-显式传入 `--channel stable` 也允许重装相同版本或安装较旧的稳定版。
-成功消息会报告安装后和此前的版本，不会一律称为版本升级。
+不指定通道时，Shine 升级到最新稳定版。使用 `--channel stable` 可重新安装最新稳定版，
+即使当前安装的版本与其相同或更新。
 
-`shine self upgrade` 失败时返回退出码 1，并在 stderr 中保留失败上下文和底层原因，
-便于区分连接、归档文件和安装错误。
+`preview` 是持续滚动的预发布通道，不参与日常自动更新检查。
+运行 `shine update` 可以同时检查已安装配置和稳定版程序更新。
 
-`preview` 是持续滚动的预发布通道，不参与日常自动更新检查。运行 `shine update` 可以同时检查已安装配置和稳定版程序更新。
+从 Shine 1.x 升级前，请先阅读[从 Shine 1.x 升级](./guides/upgrade-to-2.md)。
 
-稳定版通过 `latest` 和 stable 通道提供。从既有 1.x 安装升级前，请先阅读
-[从 Shine 1.x 升级](./guides/upgrade-to-2.md)了解兼容性变化。
+使用[临时机密文件](./guides/environment.md#workspace-secret-files)前，请将所有读取同一工作区的
+客户端升级到 Shine 2.5 或更高版本。Windows 上新建环境代理时，请使用不含可执行文件扩展名的
+名称，例如 `gh` 而非 `gh.exe`。
 
-Shine 2.5 新增[临时机密文件](./guides/environment.md#workspace-secret-files)，可为构建过程提供凭据。
-既有 version 2 工作区继续受支持。采用 workspace version 3 前，请将所有读取它的客户端升级到
-Shine 2.5 或更高版本；旧客户端会拒绝新格式。Windows 上新建环境代理必须使用不含可执行文件
-扩展名的名称（例如 `gh`，而非 `gh.exe`）；已安装的带后缀代理仍可卸载。
+从 2.3.x 或更早版本升级时，请按[环境分层的升级与回退步骤](./guides/environment.md#env-分层变更的人工升级与回退)操作。
+为配置保留私有备份，更新使用环境写入 `--force` 的脚本，并在升级后于重要项目中运行
+`shine env explain KEY`，确认实际生效的值。
 
-从 2.3.x 或更早版本升级时，请先阅读[环境分层的升级与回退步骤](./guides/environment.md#env-分层变更的人工升级与回退)。
-2.4.0 调整了同名变量的层级优先级，并用显式目标选项替代环境写入的 `--force`。
-请保留私有备份，并在重要项目中运行 `shine env explain KEY` 检查实际来源。
+使用 `shine self install --dest <PATH>` 可将 Shine 复制到指定路径。相对路径以当前目录为起点；
+请将目标文件所在目录加入 `PATH`。后续自升级也会更新该副本。如果提示副本更新失败，它可能仍是
+旧版本；请解决提示中的问题，再用升级后的 Shine 重新执行该安装命令。
 
-`shine self install --dest <PATH>` 按当前目录解析相对路径，并记录绝对目标路径，因此之后从任何目录升级时都会同步同一份已安装副本。
-若安装目录不在 PATH 中，输出的 POSIX shell 示例会保留目录名中的特殊字符。
-`self install` 的结果路径会转义终端控制字符；目录包含控制字符时，会要求使用原目录手动设置 PATH，
-不生成可复制示例。若升级成功但同步另一份安装副本失败，Shine 会向 stderr 输出包含原因的警告；升级仍返回成功。
-同步结果路径和警告详情会转义终端控制字符，已记录的目标保持不变。
-
-在 Unix 系统上，如果 `shine self install` 要把二进制文件复制到当前用户不可写的位置，Shine 会交互式请求授权，并通过 `sudo` 完成安装。`shine self upgrade` 成功后同步另一个已记录的安装目标时，也会采用相同方式。不过，如果当前运行的 Shine 本身位于受保护目录，Shine 暂时无法自动提权替换该二进制文件；请改为安装并运行用户可写位置中的 Shine。Windows 在受保护位置安装或升级时，仍需使用具备相应权限的终端。
+Unix 上，安装或同步到受保护位置时会请求 `sudo` 授权。但从受保护目录运行的 Shine 无法自行
+提权升级；如需使用自升级，请安装并运行用户可写目录中的 Shine。Windows 在受保护位置安装
+或升级时，需使用具备相应权限的终端。
 
 ## 升级到 Shine 2.7
 
@@ -135,18 +134,13 @@ Shine 2.5 或更高版本；旧客户端会拒绝新格式。Windows 上新建�
 2. **审阅 App 代码诊断。** 受支持的 Bun 代码及本地 JS/TS 依赖会在执行前检查。
    确定的声明差异和分析失败会阻止相关操作，即使已有信任或使用 `--yes` 也一样。
    请修正声明或代码；添加 unrestricted-code 元数据不能绕过检查。覆盖缺口仍只作提示，
-   不代表沙箱隔离或安全证明。普通文本会汇总重复缺口，详细视图和 lint JSON 保留诊断。
+   不代表沙箱隔离或安全证明。
    详见 [App 代码检查](./guides/custom-presets.md#执行前检查-app-代码)。
-3. **更新报告消费者并重新取得批准。** 升级后运行 `shine preset schema`。
-   生命周期 Plan／批准／审阅及作者 Plan 报告使用 schema 3；lint 和 fixture 报告使用
-   schema 2，fixture 输入 schema 1 继续受支持。应重新审阅，不能复用旧批准。
-   文本汇总后，`--deny-warnings` 仍计算每条告警。
-   使用 `shine-core` 的 Rust 集成还需适配公开结构体新增的分析字段，例如 `PlanV1` 和
-   `InspectionReportV1`：更新直接构造结构体及穷举字段的模式匹配代码，再重新编译。
-   序列化 schema 的兼容性不代表 Rust 源码兼容。
+3. **更新自动化并重新审批。** 若使用结构化报告或维护预设测试，升级后请运行 `shine preset schema`，
+   并查看[作者兼容性说明](./guides/custom-presets.md#执行前检查-app-代码)。请重新取得批准，不要复用旧批准。
+   使用 `shine-core` 的 Rust 集成可能需要适配公开类型变化并重新编译。
 
-已安装的 launcher、receipt、恢复记录及 `shine env run --with SOURCE=TARGET` 保留原有格式。
-降级二进制不会撤销元数据转换；如需回到旧客户端，请保留原始来源或迁移备份。
+降级 Shine 不会撤销元数据转换。如需回到旧版本，请保留原始来源或迁移备份。
 
 ## 升级到 Shine 2.6
 

@@ -56,8 +56,11 @@ The package is named `shine-cli`; the installed command is `shine`. The default 
 `$CARGO_HOME/bin` (usually `~/.cargo/bin`); make sure it is in `PATH`.
 
 Official binaries cover x86_64 and aarch64 on macOS, Linux with glibc, and Windows (MSVC builds).
-Linux musl binaries are not provided. If no suitable binary is found, cargo-binstall may try a
-third-party binary or compile from source. To require an official prebuilt binary, use:
+Shine currently publishes no Linux musl binaries.
+
+By default, if no suitable official binary is found, cargo-binstall also checks the external
+[cargo-quickinstall](https://github.com/cargo-bins/cargo-quickinstall) build service before falling
+back to compiling from source. To use only official prebuilt binaries and fail if none is available, use:
 
 ```bash
 cargo binstall shine-cli --strategies crate-meta-data
@@ -87,45 +90,32 @@ shine self upgrade --channel stable
 shine self upgrade --channel preview
 ```
 
-Explicit `--channel stable` also permits reinstalling the same version or installing an older
-stable release. Its success message reports the installed and previous versions without claiming
-the version increased.
-
-If `shine self upgrade` fails, it returns exit code 1 and reports the failure context and underlying
-cause on stderr. Use that diagnostic to distinguish connection, archive, and installation errors.
+Without a channel option, Shine upgrades to the latest stable release. Use `--channel stable`
+to reinstall the latest stable release, including when the installed version is the same or newer.
 
 `preview` is a continuously updated prerelease channel and is not included in routine automatic
 update checks. `shine update` checks both installed configuration and stable Shine releases.
 
-Stable releases are available through `latest` and the stable channel. Before upgrading an existing
-1.x installation, read [Upgrade from Shine 1.x](./guides/upgrade-to-2.md) for the compatibility changes.
+Before upgrading from Shine 1.x, read [Upgrade from Shine 1.x](./guides/upgrade-to-2.md).
 
-Shine 2.5 adds [temporary secret files](./guides/environment.md#workspace-secret-files) for build
-credentials. Existing version 2 workspaces remain supported. Before adopting workspace version 3,
-upgrade every client that reads it to Shine 2.5 or later; older clients reject the new format.
-On Windows, new environment proxies require names without executable extensions (for example,
-`gh` rather than `gh.exe`); existing suffixed proxies can still be uninstalled.
+Before using [temporary secret files](./guides/environment.md#workspace-secret-files), upgrade all
+clients that read the same workspace to Shine 2.5 or later. On Windows, use names without executable
+extensions for new environment proxies, such as `gh` instead of `gh.exe`.
 
-When upgrading from 2.3.x or earlier, review the
+When upgrading from 2.3.x or earlier, follow the
 [environment-layer migration and rollback steps](./guides/environment.md#manual-upgrade-and-rollback-for-env-layering).
-Version 2.4.0 changes which layer wins when keys overlap and replaces env write `--force` with explicit
-target options. Keep private backups and check important projects with `shine env explain KEY`.
+Back up your configuration privately, update scripts that use env write `--force`, and run
+`shine env explain KEY` in important projects to check which value takes effect after upgrading.
 
-`shine self install --dest <PATH>` resolves a relative path from the current directory and remembers
-the absolute destination, so later upgrades sync the same installed copy from any directory.
-If the directory is not on PATH, the printed POSIX shell example preserves special characters in
-the directory name. `self install` result paths escape terminal controls; a directory containing
-controls gets a manual PATH instruction using the original directory instead of a copyable example.
-If an upgrade succeeds but syncing this separate copy fails, Shine prints a
-warning with the cause to stderr; the upgrade still returns success. Sync result paths and warning
-details escape terminal controls without changing the recorded destination.
+Use `shine self install --dest <PATH>` to copy Shine to a chosen path. Relative paths start from the
+current directory; add the destination's directory to `PATH`. Later self-upgrades also update this
+copy. If Shine warns that the copy could not be updated, it may still be an older version. Resolve
+the reported problem, then rerun the install command using the upgraded Shine executable.
 
-On Unix, if `shine self install` copies the binary to a location the current user cannot modify,
-Shine interactively requests authorization and completes the installation through `sudo`. After a
-successful `shine self upgrade`, the same behavior applies when syncing a separate recorded install
-destination. Shine cannot currently elevate to replace the running binary itself when that binary
-is in a protected directory; install and run it from a user-writable location instead. On Windows,
-installing or upgrading in a protected location requires a terminal with the necessary permissions.
+On Unix, installing or syncing to a protected location requests `sudo` authorization. However,
+Shine cannot elevate itself to upgrade when running from a protected directory. To use self-upgrade,
+install and run Shine from a user-writable directory. On Windows, installing or upgrading in a
+protected location requires a terminal with the necessary permissions.
 
 ## Upgrade to Shine 2.7
 
@@ -153,19 +143,16 @@ Presets or automation. Source builds now require Rust 1.90; prebuilt binaries do
    before execution. Definite declaration differences and analysis failures block affected work,
    even with existing trust or `--yes`. Fix the declarations or code; adding unrestricted-code
    metadata does not bypass the check. Coverage gaps remain advisory and are not a sandbox or proof
-   of safety. Ordinary text groups repeated gaps; detailed views and lint JSON retain diagnostics.
+   of safety.
    See [App code checks](./guides/custom-presets.md#check-app-code-before-execution).
-3. **Update report consumers and renew approvals.** Run `shine preset schema` after upgrading.
-   Lifecycle Plan/approval/review and author Plan reports use schema 3; lint and fixture reports
-   use schema 2. Fixture input schema 1 remains supported. Obtain a new review instead of reusing
-   an old approval; `--deny-warnings` still counts every warning despite grouped text.
-   Rust integrations using `shine-core` must also adapt direct struct initializers and exhaustive
-   patterns to new analysis fields, including those in `PlanV1` and `InspectionReportV1`, then
-   rebuild. Serialized schema compatibility does not imply Rust source compatibility.
+3. **Update automation and renew approvals.** If you consume structured reports or maintain preset
+   tests, run `shine preset schema` after upgrading and follow the
+   [authoring compatibility notes](./guides/custom-presets.md#check-app-code-before-execution).
+   Obtain new approvals instead of reusing old ones. Rust integrations using `shine-core` may need
+   source changes and recompilation for the updated public types.
 
-Installed launchers, receipts, recovery records and `shine env run --with SOURCE=TARGET` keep their
-existing formats. Downgrading the binary does not undo metadata conversion: retain the original
-source or migration backup if you need to return to an older client.
+Downgrading Shine does not undo metadata conversion. Keep the original source or migration backup
+if you need to return to an older version.
 
 ## Upgrade to Shine 2.6
 

@@ -22,10 +22,8 @@ Shine 在源码和 crate 包中提供可移植的 Agent Skill：`skills/shine-pr
 配置、Shell 命令、系统引导流程，或要定制的内置类别。Shine 不会探测或修改 Codex、Claude、
 Cursor 等客户端的配置。
 
-该 skill 会先确认当前安装的 Shine 支持静态校验，再选择对应的作者参考，使用当前二进制生成
-模板，使用 JSON 校验结果，并且只执行隔离 dry-run。它不会 link 或激活类别，也不会运行 hook、
-artifact、generator、安装脚本或真实 bootstrap。为提高跨客户端兼容性，skill 指令使用英文，
-但提问和结果说明会跟随用户语言。
+该 skill 会生成预设、完成校验，并在隔离目录中预览安装，不会激活预设或执行其中的脚本。
+安装前请审阅结果。
 
 不使用 AI 客户端时也可以执行同一流程：
 
@@ -53,10 +51,6 @@ shine preset new sys --unrestricted
 
 其它类型把 `preset new` 的参数换成 `shell` 或 `sys`。定制内置类别时，进入仓库或 overlay 根目录
 并运行 `shine preset copy <kind>/<name>`；命令会创建类型与类别路径。
-`preset new`、`preset copy` 和 `preset export` 的路径进度消息会转义终端控制字符。
-文件位置及现有的 `--force` 替换规则保持不变。
-重复关联的提示也会转义来源路径中的控制字符，已有链接保持不变。
-
 `preset validate` 也接受仓库根目录、单个类别目录或其中的 `shine.toml`。根目录模式只扫描
 `app/`、`shell/`、`sys/` 下的直接类别目录；空仓库会失败。无论当前宿主是什么系统，它都会
 检查 macOS、Linux 与 Windows 声明、引用文件和锁定的 Bun 依赖策略；兼容的无 metadata App/Shell
@@ -64,8 +58,6 @@ shine preset new sys --unrestricted
 检查更新、写文件、联网或执行预设代码。
 
 默认输出文本；工具和 CI 可以使用 `--format json`。校验错误的退出码为 1，warning 不会导致失败。
-校验、lint 和作者 Plan 的文本报告会转义路径、标识符、诊断消息和权限标签中的控制字符。
-JSON 报告保留原始字段值。
 诊断代码表示未通过的检查，不受类别名称或消息措辞影响。例如，引用文件缺失时报告
 `missing_reference`，Bun 依赖声明不符合策略时报告 `bun_dependency_policy`。
 
@@ -75,9 +67,7 @@ JSON 报告保留原始字段值。
 
 校验后运行 `preset lint`，检查作者质量和可移植性。warning 默认只是建议；CI 可在审阅后
 添加 `--deny-warnings`。
-如果 lint 无法加载输入或校验失败，文本提示会带上原始 `PATH`；请在同一目录执行提示中的
-`preset validate` 命令查看原因。若 `PATH` 不是 UTF-8 或包含控制字符，文本会说明已省略可复制命令；
-请将原始参数传给 `preset validate`。JSON 报告仍保留不含输入路径的诊断消息。
+lint 无法加载输入时，请运行 `shine preset validate <PATH>` 查看原因。
 Lint 会检查每个平台适用的资源，包括 Windows 的 PowerShell 命令；明确不适用于某个操作系统的
 App 类别或文件会在该操作系统的检查中跳过。
 
@@ -88,10 +78,7 @@ App 类别或文件会在该操作系统的检查中跳过。
 需要可重复的跨平台预期时，在类别中加入 `shine.test.toml`。测试描述初始条件和预期结果，不会执行
 setup code。`examples/presets` 下提供 App、Shell、Sys 三类可运行示例。`preset test` 只接受单个类别，
 不能传仓库根目录。
-在 Windows 等各宿主系统上，声明的文件和 receipt 都使用规划器的同一组虚拟目录。
-编写跨平台用例时，使用文件的相对路径基准，以及 receipt 中的 `${HOME}` 等占位符。
-文本报告会转义用例名中的控制字符，让每条结果保持在一行内。JSON 报告保留原始名称；
-两种格式的通过／失败判定和退出码相同。
+编写跨平台测试时，使用文件的相对路径基准，以及 fixture receipt 中的 `${HOME}` 等占位符。
 
 需要可分发 artifact 时，把已审查类别打包到 source tree 外部：
 
@@ -99,13 +86,8 @@ setup code。`examples/presets` 下提供 App、Shell、Sys 三类可运行示�
 shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
 ```
 
-返回的 hash 用于标识 bundle。`shine.test.toml` 只供作者使用，不会进入 bundle。Pack policy 失败
-必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。输出目录会在解析
-符号链接和父目录组件（`..`）后检查；即使使用 `--force`，也必须位于类别目录外。
-已有祖先必须是目录：若 `file` 是普通文件，`file/../bundle.tar.gz` 会以
-`output_write_failed` 失败，不会创建或替换 bundle。
-未使用 `--force` 时，如果其他进程在打包期间创建了输出文件，Shine 会保留该文件并以
-`output_exists` 失败。
+`shine.test.toml` 只供作者测试，不会打包。输出必须位于类别目录之外，符号链接解析后也须满足
+此要求。`--force` 只允许替换已有输出，不能绕过校验或打包限制。
 
 ## 执行前检查 App 代码
 
@@ -122,15 +104,9 @@ JavaScript/TypeScript 依赖。源码行为与声明存在确定差异，或受�
 可在详细审阅中查看。这些结果都不代表代码安全或已被完整分析。没有诊断时，常规审阅不增加分析
 输出；原有 trust 和批准检查仍然适用。
 
-普通审阅会在每个入口内汇总重复的覆盖缺口，显示数量和一个示例位置。详细生命周期审阅
-（`--verbose`）及作者 Plan 仍保留全部位置。显式检查时，`info --verbose` 或 `--diff`、`update`
-详细视图和 `app info` 也会显示其求值范围内的全部位置。这些展示模式不会启用执行；generator
-求值仍须显式传入 `--run-generators`，并通过原有信任检查。
-`preset lint` 文本按类别和诊断含义汇总重复分析告警；
-使用 `shine preset lint <PATH> --format json` 可查看被检查源码入口的全部诊断。
-错误始终逐条展示。汇总计数仍包含每条诊断，`--deny-warnings` 的退出行为不变；
-显示行数减少不代表覆盖缺口减少。
-Lint 会检查所有受支持的源码入口，因此其报告可能与运行时检查所选入口及环境映射不同。
+使用 `--verbose` 查看详细审阅，或用 `shine preset lint <PATH> --format json` 获取全部诊断。
+`--deny-warnings` 可让 lint 告警使 CI 失败。详细输出不会执行生成器；执行仍需显式使用
+`--run-generators` 并具有信任授权。Lint 检查所有受支持入口，可能报告某次运行检查范围之外的问题。
 
 使用结构化 `env` 映射时，在同一项中声明 `source`、可选 `target` 与 `plain`/`secret` 敏感性；脚本读取目标名。
 只有文档列出的固定变量可以免于重复声明，任意 `SHINE_` 前缀名称不能获得豁免。不要把环境值或
@@ -152,22 +128,17 @@ shine preset migrate ./my-presets --dry-run
 shine preset migrate ./my-presets
 ```
 
-迁移器显示 unified metadata diff，确认默认是 No。支持颜色的终端以绿色显示新增、红色显示删除。
-自动颜色遵循 `NO_COLOR`；重定向时使用纯文本，除非显式强制颜色，例如设置 `FORCE_COLOR=1`。
-它只修改 `shine.toml`，校验候选内容、复查来源
-hash，并在写入前创建完整的私有备份集；payload、脚本、值、runtime manifest 与 trust grant 都不会
-改变。若 executable identity 未变化，精确匹配已发布 1.x 内置 metadata 的文件可 rebase；旧版
-App 可以补齐当前 metadata，而不添加能力说明。缺少可选能力表无需迁移，含 opaque code
-时也一样；外部代码信任仍需单独审阅。Sys v1 dispatcher 仍须人工迁移。
-文本中的备份路径会转义终端控制字符，备份内容和 JSON 报告标识保持不变。
-改写后的 metadata 保留原文件的 LF 或 CRLF 换行方式，以及是否有末尾换行。CRLF diff 会附带说明，
-用普通换行显示，不会在每行附加 `\r`。若文件需要迁移但混用了 LF 和 CRLF，请先为该文件统一
-换行方式，再重新运行迁移。
+确认前请审阅元数据差异，默认回答为 No。迁移仅修改 `shine.toml`，并在写入前备份；不会修改
+脚本、数据文件、环境值、已安装资源或信任。提示需要手动迁移的条目须自行处理；
+Sys v1 dispatcher 请按 [v2 迁移指南](./sys-preset-v2-migration.md)操作。
 
-`--yes` 仅适合审阅后使用，且仍显示 text diff。JSON 是不含内容和 diff 的版本化报告：检查时使用
-`--format json --dry-run`，JSON 写入则必须同时指定 `--yes`。Git 管理的 overlay 只诊断、不修改；
-其 diff 会明确标记为上游修改预览，不计入自动修改数。请在上游 checkout 对显式路径运行迁移，
-验证并提交修改，推送至配置的远端分支后，在消费设备上运行 `shine preset pull`。
+仅在审阅后使用 `--yes`。自动化检查可用 `--format json --dry-run`；以 JSON 输出执行迁移时
+还须添加 `--yes`。JSON 报告不含文件内容或差异。
+
+Git 管理的 overlay 为只读镜像。请在上游 checkout 中迁移并验证，提交、推送后，
+在各使用设备上运行 `shine preset pull`。
+
+若迁移提示文件混用 LF/CRLF 换行，请为该文件统一换行方式后重试。
 
 ## 说明能力和必需输入 {#声明权限}
 
@@ -219,20 +190,13 @@ target = "bar"
 
 Filesystem base 只接受 `home`、`shine`、`data-dir`、`preset` 或 `absolute`；非绝对路径必须是
 规范化相对路径，`.` 表示所选 base 的根。Command 只能填写一个不带参数的 program identity。
-Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。不要重复 typed metadata
-已表达的命令、脚本路径、普通 destination 或固定 package provider。App 脚本中被静态分析识别的
+Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。不要重复预设配置中
+已声明的命令、脚本路径、普通 destination 或固定 package provider。App 脚本中被静态分析识别的
 行为仍须声明；其他说明可用于帮助审阅者理解预期效果。
 
-`opaque_code = "unrestricted"` 是可选的审阅 metadata。即使省略该字段或整张表，Core 仍会把
-App hook、generator、artifact、安装或 source 的 Shell 命令，以及 Sys script/profile code 自动
-标记为未隔离代码。它不会转发环境值或授予提权。环境 allowlist 及 `plain`/`secret` 敏感度和
-Administrator 要求仍须显式配置，因为 Shine 会执行这些受管注入/提权契约。
-
-安全 Plan 会分别展示 Shine 推导的操作、未经验证的作者说明，以及代码/信任边界。说明不是授权，
-也不能证明脚本已完整披露行为。任意代码可使用其进程已有的系统访问能力；Shine 不新增运行时沙箱，
-也不会在以后每次调用 Shell 命令时逐项拦截。
-静态 App 数据文件按文件操作审阅。文件名以 `generator:`、`hook:` 或 `artifact:` 开头，
-本身不会触发代码执行或外部代码授权。
+`opaque_code = "unrestricted"` 用于说明代码供审阅，不会授予信任或管理员权限。
+无论是否声明此字段，脚本都可使用其进程已有权限，且没有沙箱隔离。请显式声明环境输入和
+管理员要求；能力说明不能证明脚本已完整披露所有影响。
 
 交互式生命周期操作可在用户确认 Plan 时，一并授权其中列出的外部代码。本次授权仅适用于当前
 操作和捕获快照，不保存持久 grant；确认也包含安装 Shell 命令等“交付后运行”的代码。
@@ -248,11 +212,8 @@ shine trust grant <TARGET>
 shine trust grant <TARGET> --development
 ```
 
-Snapshot trust 绑定 target、capability 和完整有效类别快照，包括逻辑路径、精确字节、来源层及
-捕获的 Unix 可执行标记。改变类别文件内容或是否可执行都需要重新进行快照授权；升级后，包含可执行
-文件的类别所持有的旧 snapshot grant 可能需要重新审阅。作者说明仍进入审阅与 Plan，但不再单独作为 trust 身份比较；
-修改 `shine.toml` 中的说明仍会改变快照字节。
-快照排除 `node_modules`；trust 不约束解释器、PATH 工具、依赖、下载内容或运行副作用。
+Snapshot trust 适用于已审阅的目标及有效类别内容。文件、元数据、来源层或可执行权限变化后，
+需要重新审阅。该授权不保证 `node_modules` 等依赖、解释器、外部工具及下载内容的安全。
 
 Development trust 是对所显示本地来源中、指定 target/capability 的未来代码的长期授权，
 不代表持续代码审阅。来源目录/层变化、新 target 或新 capability 需要重新授权。
@@ -262,14 +223,10 @@ Shell live 部署必须使用此模式。live 部署被阻止时，请先运行 
 `opaque_code = "unrestricted"` 不会启用开发信任。`trust list`、
 `trust inspect` 与安全 Plan 都会标注当前有效的开发信任。Grant 只保存在本机私有 trust
 store 中，Preset 不能随自身分发或启用它。
-默认的 `trust list` 会把安全范围相同的 capability 合并为一行，并显示每条已存 grant 当前是否有效；
-使用 `trust list --verbose` 可查看 capability 名称、本地开发来源标签与过期 grant 的复查提示。
-Trust 命令输出会转义 target、来源标签及作者 capability 说明中的控制字符，已存身份不变。
-target 含控制字符时，复查提示会省略可复制命令；请将原始 target 参数传给
-`trust inspect` 或 `trust grant`。
+使用 `trust list` 检查授权，添加 `--verbose` 查看详情及复查指引。
 
 每个外部 Shell command 都采用规范 target `shell/<CATEGORY>/<COMMAND>`。使用 `preset` 可以一次审阅或信任当前激活 Preset 快照中的全部可执行
-target；Shine 底层仍会按所选模式为各 target 保存独立的 target-local grant。撤销 `preset` 会清除所有已保存的
+target。撤销 `preset` 会清除所有已保存的
 Preset trust grant：
 
 ```bash
@@ -279,8 +236,7 @@ shine trust grant preset --development
 shine trust revoke preset
 ```
 
-Trust store schema v2 使用完整类别边界。旧 v1 grant 仍可查看和撤销，但会显示需要重新审阅，
-不能授权新的操作。成功 grant 会替换同一 target/capability 的旧记录。
+旧授权若提示需要重新审阅，就不能批准新操作。请审阅后重新授权。
 
 AI 工具可生成和静态验证 Preset，但不能批准自己生成的代码。用户须通过可信界面审阅实际变更；
 快照修改会使原审批失效。对 AI 可写目录授予 Development trust，意味着允许已登记目标采用以后
@@ -319,7 +275,7 @@ platforms = ["unix", "windows"]
 env = [{ source = "IMAGE_QUALITY", sensitivity = "plain" }]
 ```
 
-这个类别包含三个入口文件和一个共享实现，使用
+这些命令使用
 [`Bun.Image`](https://bun.com/docs/runtime/image) 压缩、缩放和转换 JPEG、PNG、WebP，无需
 ImageMagick、Sharp 或其它图片库。运行命令的每台机器都必须在 `PATH` 中安装 Bun 1.3.14 或更高
 版本；Shine 不内置 Bun。命令会检测缺失的 `Bun.Image` API，并给出升级提示。
@@ -388,7 +344,7 @@ shine preset overlay info
 ```
 
 关联命令会在 `~/.shine/overlay/` 浅克隆仓库；以后会把该目录镜像到远端分支的最新状态。
-`overlay info` 报告托管目录是否存在。Git 来源、分支、目录和保留 checkout 的消息会转义终端控制字符。
+`overlay info` 报告托管目录是否存在。
 此目录是缓存，任何本地修改都会在下次拉取时丢失。请在仓库上游修改并推送，再在设备上运行 `shine preset pull`、`shine update --pull` 或 `shine upgrade --pull` 同步。
 
 使用不同的 Git URL 重新链接时，现有镜像会切换到该仓库。未指定 `--branch` 时，每次同步都跟随所配置远端的默认分支。拉取失败会保留之前的 checkout。
@@ -419,8 +375,7 @@ shine preset export
 导出内容是内置预设加上当前 overlay 的覆盖和新增文件，不包含仅存在于外部基础目录中的文件；
 进度提示会说明是否包含 overlay。Copy 仍只提取原始内置类别。
 
-激活提示使用 `<PATH>` 占位符，并单独显示经过转义的目标路径。请按所用 shell 的规则引用实际
-路径，将其作为一个参数传入；转义后的显示文本不是可直接执行的 shell 参数。
+激活命令中的 `<PATH>` 应替换为实际目录，并加引号作为一个参数传入。
 
 `preset copy` 和 `preset export` 都会拒绝作为输出的链接、特殊文件及链接子目录，即使指定
 `--force` 也不例外。请选择普通目录树作为输出位置。未指定 `--force` 时，已有普通文件会保留，
@@ -442,7 +397,7 @@ shine preset link ~/dotfiles/shine-presets --live
 ```
 
 live 模式下，普通 Shell/Bun 源文件内容在下一次调用时直接生效。声明了 `transforms` 的文件会在每次
-调用前原子渲染；渲染失败时该次调用会中止，不会继续运行旧输出。变更 `target`、`runtime`、
+调用前渲染；渲染失败时该次调用会中止，不会继续运行旧输出。变更 `target`、`runtime`、
 `transforms` 或 `env` 等入口元数据时，仍必须执行 `shine upgrade` 重建受管入口。要恢复默认行为，
 重新执行不带 `--live` 的 `shine preset link <PATH>`，或执行 `shine preset unlink`。
 
@@ -507,7 +462,7 @@ shine update --pull
 shine upgrade --pull
 ```
 
-Shine 会定位基础预设和当前 overlay 所在的 Git 仓库；两个来源属于同一仓库时只拉取一次，非 Git 来源会跳过。解析 Git 仓库根目录时会保留目录名中的空白，包括系统支持的末尾空格。`update --pull` 和 `upgrade --pull` 会在拉取后重新加载配置，因此仓库中更新的 `shine.config.toml` 也会在后续步骤生效。
+Shine 会定位基础预设和当前 overlay 所在的 Git 仓库；两个来源属于同一仓库时只拉取一次，非 Git 来源会跳过。`update --pull` 和 `upgrade --pull` 会在拉取后重新加载配置，因此仓库中更新的 `shine.config.toml` 也会在后续步骤生效。
 
 拉取前，所有待处理仓库都必须满足以下条件：
 
@@ -529,7 +484,7 @@ shine preset new sys
 
 已有文件时只有加上 `--force` 才会覆盖。类别格式属于预设作者接口，修改后先运行
 `shine preset validate . --format json`，再执行对应的隔离安装 `--dry-run`。Shell 安装 dry-run
-只解析计划中的命令入口，不会创建文件、链接、manifest、snapshot、渲染文件或 profile 修改。
+只预览命令入口，不安装或修改文件。
 
 ### 为单个 App 文件指定目标目录
 
@@ -640,8 +595,7 @@ eval = ["mise", "activate", "{shell}"]
 items = ["mise"]
 ```
 
-Detection 支持 `command`、`path`，以及由 command/path probes 组成的 `any`。包安装是固定的
-ensure-present 操作：Shine 负责 argv、提权、代理、超时、输出限制和安装后检测，但不会升级包。
+Detection 支持 `command`、`path`，以及由 command/path probes 组成的 `any`。包安装只确保软件存在，不升级已有安装。
 复杂 item 可使用 `[items.install] kind = "script", path = "install/<item>.sh"`；脚本只处理该
 item，并以普通 exit code 返回结果。每个 init item 都必须同时声明 `detect` 与 `install`，不会再回退到平台级 dispatcher。version 1 manifest 会在 detection 或 profile 写入前被拒绝；请参阅 [v2 迁移指南](sys-preset-v2-migration.md)。
 
