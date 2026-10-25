@@ -356,7 +356,9 @@ pub(super) async fn sys_receipt_modified<H: FileSystemObservationHost + SplitDns
                 domain: receipt.domain.clone(),
                 servers: receipt.servers.clone(),
                 resource: PathBuf::from(&receipt.resource),
-                content: Vec::new(),
+                // Windows returns the expected content for an exact NRPT match.
+                // Keep its ownership marker available to the check below.
+                content: split_dns_content_for_plan(receipt),
             };
             let observed = runtime.host().inspect_split_dns(&request).await?;
             state.bytes(

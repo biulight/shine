@@ -194,7 +194,18 @@ impl SplitDnsObservationHost for ObservationOnlyHost {
         &'a self,
         request: &'a SplitDnsRequest,
     ) -> Pin<Box<dyn Future<Output = Result<SplitDnsState>> + Send + 'a>> {
-        self.0.inspect_split_dns(request)
+        Box::pin(async move {
+            let observed = self.0.inspect_split_dns(request).await?;
+            if request.os_id == "windows" && observed.exists {
+                // Seed NRPT query JSON and use the real Windows projection, including
+                // returning request.content when the live rule exactly matches.
+                return crate::runtime::host::decode_windows_split_dns_state(
+                    request,
+                    &observed.content,
+                );
+            }
+            Ok(observed)
+        })
     }
 }
 

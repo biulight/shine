@@ -802,9 +802,10 @@ target = '$HOME/.config/managed.txt'
 
 #[tokio::test]
 async fn split_dns_plan_binds_receipt_and_live_ownership() {
-    let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+    for os_id in ["macos", "windows"] {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
-                "sys/macos/shine.toml",
+                format!("sys/{os_id}/shine.toml"),
                 br#"version = 2
 [[items]]
 id = 'split-dns'
@@ -821,106 +822,171 @@ servers_env = 'PRIVATE_DNS_SERVERS'
                 .to_vec(),
             )
             .build();
-    let mut runtime = runtime(snapshot);
-    runtime
-        .context_mut_for_test()
-        .env
-        .insert("PRIVATE_DNS_DOMAIN".to_string(), "corp.test".to_string());
-    runtime
-        .context_mut_for_test()
-        .env
-        .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.53".to_string());
-    let receipt = split_dns_receipt(&crate::runtime::SplitDnsDomainRequest {
-        os_id: "macos".to_string(),
-        item_id: "split-dns".to_string(),
-        domain: "corp.test".to_string(),
-        servers: "10.0.0.53".to_string(),
-        dry_run: true,
-    })
-    .unwrap();
-    let resource = PathBuf::from(&receipt.resource);
-    runtime
-        .host()
-        .put_file(&resource, split_dns_content_for_plan(&receipt));
-    runtime.host().put_file(
-        runtime.context().shine_dir.join("sys-manifest.toml"),
-        toml::to_string(&SysRunManifest {
-            schema_version: crate::runtime::SYS_MANIFEST_SCHEMA_VERSION,
-            entries: vec![SysRunEntry {
-                os_id: "macos".to_string(),
-                item_id: "split-dns".to_string(),
-                label: "Split DNS".to_string(),
-                status: crate::runtime::SysItemStatus::Installed,
-                detail: String::new(),
-                updated_at: "1".to_string(),
-                managed: true,
-                profile_enabled: false,
-                receipt: Some(SystemReceipt::SplitDns(receipt)),
-            }],
+        let base = runtime(snapshot);
+        let memory = base.host().clone();
+        let mut runtime = CoreRuntime::new(
+            ObservationOnlyHost(memory.clone()),
+            base.context().clone(),
+            base.presets().clone(),
+        );
+        runtime
+            .context_mut_for_test()
+            .env
+            .insert("PRIVATE_DNS_DOMAIN".to_string(), "corp.test".to_string());
+        runtime
+            .context_mut_for_test()
+            .env
+            .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.53".to_string());
+        let receipt = split_dns_receipt(&crate::runtime::SplitDnsDomainRequest {
+            os_id: os_id.to_string(),
+            item_id: "split-dns".to_string(),
+            domain: "corp.test".to_string(),
+            servers: "10.0.0.53".to_string(),
+            dry_run: true,
         })
-        .unwrap()
-        .into_bytes(),
-    );
-    let request = SysManagedPlanRequest {
-        operation: LifecycleOperation::Install,
-        os_id: "macos".to_string(),
-        target: Some("split-dns".to_string()),
-        input_versions: PlanningInputVersions::default(),
-    };
-    let current = runtime.plan_managed_sys(request.clone()).await.unwrap();
-    assert!(current.is_ready());
-    assert!(
-        current
-            .steps
-            .iter()
-            .any(|step| step.action == PlanActionV1::None)
-    );
+        .unwrap();
+        let resource = PathBuf::from(&receipt.resource);
+        let nrpt_rules = |servers: &[&str]| {
+            serde_json::json!({
+                "Rules": [{
+                    "Comment": "Managed by shine: split-dns:split-dns",
+                    "Namespace": [receipt.resource],
+                    "NameServers": servers,
+                }]
+            })
+        };
+        let current_content = if os_id == "windows" {
+            serde_json::to_vec(&nrpt_rules(&["10.0.0.53"])).unwrap()
+        } else {
+            split_dns_content_for_plan(&receipt)
+        };
+        memory.put_file(&resource, current_content);
+        memory.put_file(
+            runtime.context().shine_dir.join("sys-manifest.toml"),
+            toml::to_string(&SysRunManifest {
+                schema_version: crate::runtime::SYS_MANIFEST_SCHEMA_VERSION,
+                entries: vec![SysRunEntry {
+                    os_id: os_id.to_string(),
+                    item_id: "split-dns".to_string(),
+                    label: "Split DNS".to_string(),
+                    status: crate::runtime::SysItemStatus::Installed,
+                    detail: String::new(),
+                    updated_at: "1".to_string(),
+                    managed: true,
+                    profile_enabled: false,
+                    receipt: Some(SystemReceipt::SplitDns(receipt.clone())),
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = SysManagedPlanRequest {
+            operation: LifecycleOperation::Install,
+            os_id: os_id.to_string(),
+            target: Some("split-dns".to_string()),
+            input_versions: PlanningInputVersions::default(),
+        };
+        let current = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        assert!(current.is_ready());
+        assert!(
+            current
+                .steps
+                .iter()
+                .any(|step| step.action == PlanActionV1::None)
+        );
 
-    assert!(current.permissions.required.is_empty());
-    assert!(!current.author_capabilities.is_empty());
+        assert!(current.permissions.required.is_empty());
+        assert!(!current.author_capabilities.is_empty());
 
-    runtime
-        .context_mut_for_test()
-        .env
-        .insert("PRIVATE_DNS_SERVERS".into(), "10.0.0.54".into());
-    let update = runtime.plan_managed_sys(request.clone()).await.unwrap();
-    assert!(
-        update
-            .steps
-            .iter()
-            .any(|step| step.action == PlanActionV1::Update)
-    );
-    assert!(
-        update
-            .permissions
-            .required
-            .contains(&PermissionV1::Administrator)
-    );
-    assert!(
-        update
-            .permissions
-            .required
-            .iter()
-            .any(|p| matches!(p, PermissionV1::System { .. }))
-    );
-    assert_ne!(
-        current.fingerprint().unwrap(),
-        update.fingerprint().unwrap()
-    );
-    runtime
-        .context_mut_for_test()
-        .env
-        .insert("PRIVATE_DNS_SERVERS".into(), "10.0.0.53".into());
+        let upgrade = runtime
+            .plan_managed_sys(SysManagedPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert!(upgrade.is_converged_upgrade(), "{os_id}: {upgrade:?}");
+        let removal = runtime
+            .plan_managed_sys(SysManagedPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(removal.steps[0].action, PlanActionV1::Remove, "{os_id}");
 
-    runtime.host().put_file(&resource, b"foreign".to_vec());
-    let conflicted = runtime.plan_managed_sys(request).await.unwrap();
-    assert!(conflicted.steps.iter().any(|step| {
-        step.action == PlanActionV1::Preserve
-            && step
-                .diagnostic_codes
-                .contains(&"sys_resource_user_modified".to_string())
-    }));
-    assert_ne!(current.inputs.state, conflicted.inputs.state);
+        runtime
+            .context_mut_for_test()
+            .env
+            .insert("PRIVATE_DNS_SERVERS".into(), "10.0.0.54".into());
+        let update = runtime.plan_managed_sys(request.clone()).await.unwrap();
+        assert!(
+            update
+                .steps
+                .iter()
+                .any(|step| step.action == PlanActionV1::Update)
+        );
+        assert!(
+            update
+                .permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        assert!(
+            update
+                .permissions
+                .required
+                .iter()
+                .any(|p| matches!(p, PermissionV1::System { .. }))
+        );
+        assert_ne!(
+            current.fingerprint().unwrap(),
+            update.fingerprint().unwrap()
+        );
+        runtime
+            .context_mut_for_test()
+            .env
+            .insert("PRIVATE_DNS_SERVERS".into(), "10.0.0.53".into());
+
+        if os_id == "windows" {
+            // An owned rule with changed servers still needs reconciliation; a matching
+            // receipt alone cannot make the live resource current.
+            memory.put_file(
+                &resource,
+                serde_json::to_vec(&nrpt_rules(&["10.0.0.54"])).unwrap(),
+            );
+            let drifted = runtime.plan_managed_sys(request.clone()).await.unwrap();
+            assert_eq!(drifted.steps[0].action, PlanActionV1::Update);
+            assert_ne!(current.inputs.state, drifted.inputs.state);
+
+            let rule = nrpt_rules(&["10.0.0.53"])["Rules"][0].clone();
+            memory.put_file(
+                &resource,
+                serde_json::to_vec(&serde_json::json!({"Rules": [rule.clone(), rule]})).unwrap(),
+            );
+            let duplicate = runtime.plan_managed_sys(request.clone()).await.unwrap();
+            assert_eq!(duplicate.steps[0].action, PlanActionV1::Update);
+
+            memory.put_file(&resource, br#"{"Rules": []}"#.to_vec());
+            let missing = runtime.plan_managed_sys(request).await.unwrap();
+            assert_eq!(missing.steps[0].action, PlanActionV1::Update);
+        } else {
+            memory.put_file(&resource, b"foreign".to_vec());
+            let conflicted = runtime.plan_managed_sys(request).await.unwrap();
+            assert!(conflicted.steps.iter().any(|step| {
+                step.action == PlanActionV1::Preserve
+                    && step
+                        .diagnostic_codes
+                        .contains(&"sys_resource_user_modified".to_string())
+            }));
+            assert_ne!(current.inputs.state, conflicted.inputs.state);
+        }
+        assert!(memory.operations().iter().all(|operation| matches!(
+            operation,
+            HostOperation::Read(_) | HostOperation::InspectSplitDns { .. }
+        )));
+    }
 }
 
 #[tokio::test]

@@ -1,5 +1,23 @@
 # Lessons Learned
 
+## 2026-10-26 — Windows NRPT ownership probes need expected receipt content
+
+- **Symptom**: `update` showed only Shell updates, but aggregate `upgrade` also reported
+  `preserve sys/split-dns [sys_resource_user_modified]` and administrator permissions for an
+  unchanged Windows DNS rule.
+- **Cause**: the receipt ownership probe passed empty expected content. Windows observation returns
+  that content when exactly one marked NRPT rule matches the namespace and ordered servers;
+  the subsequent marker check therefore mistook a current rule for foreign content.
+- **Fix**: supply the receipt-derived content during ownership observation, as during desired-state
+  observation. Keep receipt-only `update` inspection separate from live upgrade planning.
+- **Coverage**: planner regressions reuse production NRPT JSON decoding for current targeted and
+  aggregate Plans, uninstall ownership, desired/live server changes, duplicate and missing rules;
+  retain foreign-file preservation and observation-only checks.
+- **Native validation**: Windows reproduced the installed binary's false preservation. With the
+  same live NRPT rule and isolated state, the fixed binary's targeted and aggregate upgrades both
+  returned `Nothing to upgrade.`; state bytes/timestamps, real config/manifest and NRPT rules stayed
+  unchanged. All three native split-DNS tests passed.
+
 ## 2026-10-25 — Cache hashes must encode boundaries, and unwrap limits must own stderr
 
 - **Symptom**: two valid TOML source layouts produced identical concatenated hash input; a cached

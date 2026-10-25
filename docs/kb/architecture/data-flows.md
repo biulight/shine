@@ -922,7 +922,7 @@ relocation without creating a duplicate manifest entry.
 
 Managed sys resources participate in the same flow. `shine update` compares the desired built-in
 resource receipt derived from the active env against `sys-manifest.toml`; `shine upgrade` then
-re-applies only recorded, profile-enabled managed resources and replaces the receipt after
+re-applies only recorded managed resources and replaces the receipt after
 convergence. Aggregate upgrade does not implicitly compose the Sys shell profile; use explicit
 `sys profile enable/disable` for that state. For split DNS,
 the receipt comparison includes the normalized domain, DNS servers, and platform resource path.
@@ -930,6 +930,11 @@ Update and sys-info output render those receipt differences field by field (`old
 user can inspect the pending system change before granting administrator access to upgrade.
 The managed-file driver compares only its desired destination and content hash with the recorded
 receipt and emits safe field labels rather than paths or content.
+
+Windows NRPT observation projects one exactly matching rule into the request's expected content;
+owned but mismatched rules return the ownership marker alone. Receipt ownership probes must supply
+the receipt-derived content too, rather than an empty payload that would erase the marker on an
+exact match. Current resources have no required operation permissions and remain converged.
 
 Managed apply/upgrade/uninstall loads the independently versioned `sys-manifest.toml` before
 resource, elevation, or composed-profile mutation. Read-only update uses the same typed receipt
