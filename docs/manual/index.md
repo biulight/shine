@@ -2,125 +2,89 @@
 title: Shine
 slug: /
 sidebar_position: 1
-description: Turn everyday scripts and configuration into personal tools you can change with confidence and recover if interrupted.
+description: Manage everyday tools and application settings, with sensitive information stored encrypted and used on demand.
 ---
 
 # Shine
 
-Turn the scripts and configuration you use every day into personal tools you can change with
-confidence and recover if interrupted.
+**Shine helps you manage everyday tools and application settings, with sensitive information stored encrypted and used on demand.**
 
-You may already sync those files between machines. But after they arrive, scripts still need to be
-added to `PATH`, application configuration still needs the right destination, and local values
-should not travel inside shared files. Updating everything by hand also makes it hard to know what
-will be overwritten. Personal configuration also ends up scattered across shell files, application
-directories, and system-specific paths, which makes it difficult to maintain, reuse, or share.
+Everyday tools and application settings are often scattered across different locations, making them
+harder to maintain over time and leaving you to set them up again on another computer. Shine helps
+you manage them in one place. It can also store passwords, access keys, and other sensitive
+information encrypted, then provide it on demand when a selected program runs.
 
-Shine brings your scripts, personal configuration, and their installation rules together in a
-**Preset**. Maintain and share the preset folder in one place; Shine installs each item where it
-belongs. Install only what you need, see what Shine is about to do, and remove it later when you no
-longer need it. If a file has changed or Shine cannot confirm that it owns it, Shine stops instead
-of deleting it.
+This manual applies to **Shine 2.7.0**. Use the version selector to find the 1.8.x manual.
+Before upgrading from 1.x, read the [upgrade guide](./guides/upgrade-to-2.md).
 
-**Make every step of personal automation visible—and leave a safe way back.**
+[![Shine overview: choose, preview, and install everyday tools and app settings; store sensitive information encrypted, decrypt it at runtime, and provide it to a program; reduce plaintext secrets in projects when using AI coding tools. Temporary-file cleanup is attempted after use, and programs can read secrets they receive.](/img/shine-overview-en.webp)](/img/shine-overview-en.webp)
 
-This manual applies to **Shine 2.7.0**. Use the version selector for the frozen 1.8.x manual.
+## Everyday tools and settings
 
-[![The three core values of Shine 2.0: repeatable deployment, one entry point for personal developer resources, and changes you can see before they happen and recover if interrupted.](/img/shine-core-values-v2-en.webp)](/img/shine-core-values-v2-en.webp)
+**You can use existing presets without writing scripts yourself.** A **Preset** groups tool scripts,
+application settings, and installation rules so you can select what you need and install it on
+other computers. Shine is a command-line tool, so you use it in a terminal. Applications or runtimes
+required by a preset must also be installed separately.
 
-## Why 2.0 feels safer
+Learn how to install and use commands in [shell presets](./guides/shell-presets.md).
 
-- **See what will happen before it starts.** Before an install, upgrade, or removal, Shine shows the
-  actions it plans to take and the access it needs. Nothing changes until you approve.
-- **Trust external code one Preset at a time.** If a personal Preset needs to run code, Shine asks
-  you to review that specific tool. Snapshot trust asks again after code changes; Preset authors can
-  explicitly trust continuing edits from one local development source.
-- **Pick up safely after an interruption.** If an operation stops halfway, Shine pauses later
-  changes and guides you through recovery instead of continuing blindly.
+You can also try [application presets](./guides/app-presets.md) for tools such as Ghostty, Surge,
+or Clash Verge Rev. They manage configuration; you install the applications separately. Shine backs
+up existing configuration it does not manage before replacing it. During uninstall, it checks the
+files and restores the backup only when removal is safe. By default, modified files and files it
+cannot confirm it manages are kept for you to review.
 
-Moving from 1.x or bringing your own Presets? Read [Upgrade from Shine
-1.x](./guides/upgrade-to-2.md) before you start.
+Before installing, updating, or uninstalling a preset, Shine shows the planned changes for your
+approval. For operations that support recovery, it provides guidance after an interruption;
+conflicts may still need manual handling.
 
-## What Shine helps you do
+## Use sensitive information on demand
 
-- **Use a script like any other command.** Install it once and call it by name from `PATH`.
-- **Keep personal configuration together.** Maintain it in one preset folder; Shine copies,
-  transforms, or merges each file where its application expects it.
-- **Keep each machine's values on that machine.** A preset declares the keys it needs; you provide
-  the values locally.
-- **Give encrypted credentials only to commands that need them.** Seal tokens and other sensitive
-  project values as GPG or age ciphertext, then decrypt them on demand for selected child processes.
-- **See first, then change.** Before an install, upgrade, or removal, Shine shows what it plans to do
-  and waits for your approval.
-- **Return to your original configuration.** If an App preset finds an existing
-  unmanaged file, Shine backs it up; safe uninstall restores it. Files changed after installation
-  are kept for review.
+Once encryption is configured, you can store passwords, service access keys, and sensitive files
+encrypted, then decrypt and provide them when a selected program runs. This reduces long-lived
+plaintext in working folders or across an entire terminal session. Give sensitive information only
+to programs you trust.
 
-## Try a built-in preset
+Programs that read files can use temporary decrypted copies. Shine starts the program after all
+selected files are ready and attempts to remove the files it created when the program ends.
+If a destination already exists, Shine stops rather than overwriting it. Files replaced during the
+run are kept, and cleanup failures are reported. Temporary files are plaintext while in use, so
+programs with sufficient permissions can read them. After force-killing Shine or losing power,
+inspect and remove any leftovers.
 
-Install the image helpers, resize a photo, and inspect what Shine added:
+## Let AI help you code, with fewer plaintext secrets in your project
 
-```bash
-shine list --available
-shine install shell/image-tools
-img-resize photo.jpg
-shine info shell/image-tools
-```
+After encrypting sensitive values and handling the original plaintext, an AI tool reading those
+encrypted files sees ciphertext. Without the corresponding decryption capability, it cannot directly
+obtain the original secrets. This reduces the risk of accidental exposure when scanning, copying,
+or committing project files.
 
-You can also browse ready-made configuration for tools such as Starship, Git, Vim, and Ghostty.
-Surge and Clash Verge Rev have their own guided setup in [application presets](./guides/app-presets.md).
+Importing configuration or encrypting it does not automatically delete the original `.env` files.
+Remove the original plaintext yourself, or move it somewhere the AI cannot read. `.gitignore`
+affects which files Git includes; it does not prevent AI tools from reading them. Private keys and
+access to decryption also need separate protection.
 
-## Build presets around your routines
+Programs that can decrypt or receive secrets can still read, print, or copy the plaintext. If an AI
+can invoke decryption tools, or modify and run a program that receives secrets, it may also access
+them. Shine does not provide sandbox isolation or guarantee prevention of every leak.
+See [protect secrets during AI-assisted development](./guides/agent-secret-safety.md) for setup and
+permission boundaries.
 
-A preset folder can arrive through any folder-sync tool, archive, network transfer, version-control
-checkout, or manual copy. Shine does not prescribe how you share it.
+## Explore what you need
 
-The built-in `image-tools` preset shows this pattern with reusable compression, resizing, and format
-conversion commands. Your own presets might package collision-aware batch renaming, spreadsheet
-cleanup, or document printing in the same way. Each command still needs its application or runtime
-on the machine. See [custom presets](./guides/custom-presets.md) for the mechanism and the complete
-image workflow.
-
-## Give credentials only to commands that need them
-
-Credentials do not have to remain in workspace files or be exported across an entire shell session.
-For a CLI that repeatedly reads a fixed variable, Shine can install a transparent command wrapper
-that resolves an encrypted value only when that command runs:
-
-```bash
-shine env proxy install gh --with GH_TOKEN
-gh pr list
-```
-
-The wrapper prefers encrypted `GH_TOKEN_SECRET`, injects the result only into its child, and does not
-export it back to the parent shell. For an occasional sensitive operation, use one-time
-`shine env run --with ... -- <command>` injection instead of keeping a wrapper enabled. See
-[manage environment variables and secrets](./guides/environment.md) to choose between the two.
-
-This also reduces the chance that plaintext secrets reach files, logs, patches, or AI agent context,
-but it is not a sandbox: the target command and its descendants can still read injected values. See
-[protect environment secrets when using AI agents](./guides/agent-secret-safety.md) for the complete
-workflow and security boundaries.
-
-## Use the same toolkit for more than files
-
-Save commands you repeat as [tasks](./guides/tasks-and-serve.md), carry selected values into an
-[SSH session](./guides/ssh-transfer.md), and decide exactly which remote workflow may receive a
-secret. Shine can also prepare selected parts of macOS, Ubuntu, or Windows, but it does not take over
-third-party tool versions; see [system initialization](./guides/system-init.md) for that boundary.
+- **Environment variables and encryption:** use `shine env` to manage variables and encrypted secrets, provide values to one command, or set up a wrapper for a frequently used command. An enabled wrapper also applies to that command's different subcommands. See [environment variables and secrets](./guides/environment.md).
+- **Project environments:** use `shine.workspace.toml` to declare configuration load order for environments such as development and production, along with encryption recipients. Share configuration and ciphertext after encryption; do not commit private keys, plaintext secrets, or personal override files. See [layered project environments](./guides/environment.md#use-layered-project-environments).
+- **Sensitive file groups:** organize signing certificates or service account files by purpose, with paths for ciphertext and temporary decrypted files. See [temporary secret files](./guides/environment.md#workspace-secret-files).
+- **Custom presets:** organize your own scripts and settings for reuse or sharing. Before using external presets, review the code they will run and authorize it through Shine. See [custom presets](./guides/custom-presets.md).
+- **Common tasks and remote operations:** [save repeated commands](./guides/tasks-and-serve.md), or use [SSH](./guides/ssh-transfer.md) to transfer files and choose which environment variables and secrets remote commands can use.
+- **System setup and appearance:** [initialize selected parts of a system](./guides/system-init.md) or [synchronize terminal themes](./guides/terminal-theme-sync.md). Shine does not manage third-party tool versions.
 
 ## Start here
 
-1. [Install Shine](./installation.md).
-2. [Complete your first preset installation](./quick-start.md).
-3. Browse the [built-in presets](./reference/built-in-presets.md) to see what you can use now.
-4. Continue with [shell presets](./guides/shell-presets.md),
-   [application presets](./guides/app-presets.md),
-   [environment variables and secrets](./guides/environment.md),
-   [system initialization](./guides/system-init.md),
-   [terminal theme synchronization](./guides/terminal-theme-sync.md),
-   [tasks and application artifacts](./guides/tasks-and-serve.md), or
-   [SSH sessions, secret brokering, and file transfer](./guides/ssh-transfer.md).
+First, [install Shine](./installation.md), then follow the [quick start](./quick-start.md) to install
+your first preset, or browse the [built-in presets](./reference/built-in-presets.md) to choose tools
+and settings you need. For encryption features, start with
+[environment variables and secrets](./guides/environment.md).
 
-If something is already failing, go directly to [Troubleshooting](./troubleshooting.md). Open the
-[command reference](./reference/commands.md) when you need every option.
+For help with a problem, see [Troubleshooting](./troubleshooting.md). To look up commands and options,
+use the [command reference](./reference/commands.md).
