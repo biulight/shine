@@ -25,7 +25,7 @@ To choose a destination or version:
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.7.0 sh install.sh
+SHINE_VERSION=2.7.1 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -39,7 +39,7 @@ the user `PATH`. To choose a destination or version:
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.7.0"; .\install.ps1
+$env:SHINE_VERSION = "2.7.1"; .\install.ps1
 ```
 
 ## Install with cargo-binstall
@@ -116,6 +116,13 @@ On Unix, installing or syncing to a protected location requests `sudo` authoriza
 Shine cannot elevate itself to upgrade when running from a protected directory. To use self-upgrade,
 install and run Shine from a user-writable directory. On Windows, installing or upgrading in a
 protected location requires a terminal with the necessary permissions.
+
+## Upgrade to Shine 2.7.1
+
+Shine 2.7.1 fixes environment-cache invalidation, hybrid key-decryption diagnostics, upgrade
+side effects and diff previews. Existing encrypted source files do not need to be resealed.
+Older caches are rebuilt, so the first environment command after upgrading may ask you to
+reauthorize decryption for each source. See [hybrid secrets](./guides/environment.md#share-a-payload-across-gpg-and-age-members).
 
 ## Upgrade to Shine 2.7
 

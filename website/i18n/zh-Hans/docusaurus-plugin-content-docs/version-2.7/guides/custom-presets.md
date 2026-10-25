@@ -138,6 +138,8 @@ Sys v1 dispatcher 请按 [v2 迁移指南](./sys-preset-v2-migration.md)操作�
 Git 管理的 overlay 为只读镜像。请在上游 checkout 中迁移并验证，提交、推送后，
 在各使用设备上运行 `shine preset pull`。
 
+若迁移提示文件混用 LF/CRLF 换行，请为该文件统一换行方式后重试。
+
 ## 说明能力和必需输入 {#声明权限}
 
 权限 schema v1/v2 表是可选的作者能力说明。App 在类别根部使用 `[permissions]`；Shell 的每个

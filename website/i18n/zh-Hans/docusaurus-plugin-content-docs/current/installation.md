@@ -23,7 +23,7 @@ shine --version
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=2.7.0 sh install.sh
+SHINE_VERSION=2.7.1 sh install.sh
 ```
 
 ## Windows PowerShell
@@ -36,7 +36,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "2.7.0"; .\install.ps1
+$env:SHINE_VERSION = "2.7.1"; .\install.ps1
 ```
 
 ## 使用 cargo-binstall 安装
@@ -110,6 +110,12 @@ shine self upgrade --channel preview
 Unix 上，安装或同步到受保护位置时会请求 `sudo` 授权。但从受保护目录运行的 Shine 无法自行
 提权升级；如需使用自升级，请安装并运行用户可写目录中的 Shine。Windows 在受保护位置安装
 或升级时，需使用具备相应权限的终端。
+
+## 升级到 Shine 2.7.1
+
+Shine 2.7.1 修复环境缓存失效判断、混合密钥解密诊断、升级副作用和差异预览。
+已有加密源文件无需重新封存。旧缓存会重新生成，因此升级后首次运行环境命令时，
+可能需要逐个重新授权源文件解密。详见[混合加密](./guides/environment.md#让-gpg-与-age-成员共享一份-payload)。
 
 ## 升级到 Shine 2.7
 

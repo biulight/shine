@@ -158,6 +158,8 @@ with JSON output also requires `--yes`. JSON reports do not include file content
 A Git-managed overlay is read-only. Migrate and validate its upstream checkout, commit and push
 the changes, then run `shine preset pull` on each consuming device.
 
+If migration reports mixed LF/CRLF line endings, choose one style for that file and retry.
+
 ## Describe capabilities and required inputs {#declare-permissions}
 
 Permission schema v1/v2 tables are optional author capability statements. App statements belong to

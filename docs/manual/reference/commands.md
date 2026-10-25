@@ -175,8 +175,10 @@ If an App category or file entry is removed from the active Preset, `update --ve
 do not remove files or installation records, even when the entire category is gone.
 
 `update` is read-only. `upgrade` displays the planned changes and asks for approval when there is
-an action; a fully unchanged run reports `Nothing to upgrade.` without confirmation. Use `--yes`
-only after reviewing the same scope. `--pull` first updates eligible Git-managed Preset sources.
+an action. When the full plan has no pending work or unresolved checks, it reports
+`Nothing to upgrade.` without confirmation, state writes or background checks. Unchanged command
+content alone is not enough: snapshot updates, profile repairs and stale entries may still need work.
+Use `--yes` only after reviewing the same scope. `--pull` first updates eligible Git-managed Preset sources.
 `--prune-stale` permits removal of unchanged managed entries no longer present in the Preset.
 `trust grant --development` keeps code edits from the displayed local source trusted while the
 target, capability, source directory, and source layer remain unchanged. This is long-term source
