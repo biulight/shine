@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import re
+import select
 import subprocess
 import sys
 import tempfile
@@ -51,6 +52,14 @@ if [ "$operation" = list ]; then
 fi
 if [ "$operation" = decrypt ]; then
  printf 'decrypt-%s\n' "$tool" >> "$TRACE"
+ if [ "$DIAGNOSTIC_HANDSHAKE" = 1 ]; then
+  printf 'SCAN_NOW\n' >&2
+  read acknowledgement
+ fi
+ if [ "$DIAGNOSTIC_BYTES" != 0 ]; then
+  /usr/bin/head -c "$DIAGNOSTIC_BYTES" /dev/zero | /usr/bin/tr '\000' D >&2
+ fi
+ if [ "$CASE" = diagnostic-fail ]; then exit 24; fi
  if [ "$CASE" = fail-decrypt ]; then exit 24; fi
  /bin/cat "$last"
  exit 0
@@ -78,11 +87,12 @@ printf '%s' "$input"
         tool = tools / name
         tool.write_text(script)
         tool.chmod(0o700)
-    (config / "config.toml").write_text(
+    base_config = (
         'schema_version = 2\nlast_cleared_schema_version = 2\nhybrid_decrypt_backend = "age"\nage_identity = '
         + json.dumps(str(identity))
         + "\n"
     )
+    (config / "config.toml").write_text(base_config)
     home = root / "home"
     home.mkdir()
     env = dict(
@@ -95,6 +105,10 @@ printf '%s' "$input"
         WORKSPACE=str(workspace),
         COUNTER=str(counter),
         CASE="",
+        DIAGNOSTIC_BYTES="0",
+        DIAGNOSTIC_HANDSHAKE="",
+        AGE_PLUGIN_PHONE_TRANSPORT="wifi",
+        AGE_PLUGIN_PHONE_MESSAGES="0",
     )
     env.pop("TOKEN", None)
     env.pop("SHINE_PRESETS", None)
@@ -113,7 +127,11 @@ printf '%s' "$input"
 
     def call(args, ok=True, **changes):
         result = subprocess.run(
-            [binary] + args, cwd=root, env=dict(env, **changes), capture_output=True
+            [binary] + args,
+            cwd=root,
+            env=dict(env, **changes),
+            capture_output=True,
+            timeout=20,
         )
         assert (result.returncode == 0) == ok, (args, result.stderr.decode())
         return result
@@ -357,13 +375,119 @@ printf '%s' "$input"
     assert trace.read_text() == ""
     source.write_text(sealed)
     # Exact decrypt stdout equals the underlying serialized secret payload, including its newline.
-    current = (config / "config.toml").read_text()
-    (config / "config.toml").write_text(
-        current.replace("[env]\n", "[env]\nTOKEN_SECRET=" + json.dumps(data) + "\n", 1)
-    )
-    result = call(["env", "secret", "decrypt", "TOKEN_SECRET"])
     expected = 'version = 1\n\n[values]\nTOKEN = "fixture secret"\n'.encode()
-    assert result.stdout == expected, repr(result.stdout)
+    decrypt_args = ["env", "secret", "decrypt", "TOKEN_SECRET"]
+    # Exercise both sparse initialization and an existing env table. Never rely
+    # on initialization having materialized an empty table before replacement.
+    for current in [base_config, base_config + '\n[env]\nKEEP="unchanged"\n']:
+        assignment = "TOKEN_SECRET=" + json.dumps(data) + "\n"
+        configured = (
+            current.replace("[env]\n", "[env]\n" + assignment, 1)
+            if "[env]\n" in current
+            else current + "\n[env]\n" + assignment
+        )
+        (config / "config.toml").write_text(configured)
+        result = call(decrypt_args)
+        assert result.stdout == expected, repr(result.stdout)
+        assert result.stderr == b""
+
+    # The audit's two TOML layouts have identical legacy hash input but different
+    # declarations. Test the real run/cache path for both hybrid and ordinary age.
+    first = root / "first.toml"
+    for backend, ciphertext, cache_file in [
+        ("hybrid", data, local_age_cache),
+        ("age", "age:" + base64.b64encode(expected).decode(), cache),
+    ]:
+        policy(backend, ["first.toml", "second.toml"])
+        x = "secret = {TOKEN = true}\n#"
+        y = "\n[payload]\ndata = " + json.dumps(ciphertext) + "\n"
+        first.write_text("#")
+        second.write_text(x + str(second) + y)
+        old_bytes = first.read_bytes() + str(second).encode() + second.read_bytes()
+        trace.write_text("")
+        assert call(run_args).stdout == b"fixture secret"
+        assert trace.read_text().splitlines() == ["decrypt-age", "encrypt-age"]
+        trace.write_text("")
+        assert call(run_args).stdout == b"fixture secret"
+        assert trace.read_text().splitlines() == ["decrypt-age"]
+
+        # Even a matching input/context cannot revive a version 1 cache.
+        cached = cache_file.read_text()
+        assert cached.startswith("version = 2\n")
+        cache_file.write_text(cached.replace("version = 2\n", "version = 1\n", 1))
+        trace.write_text("")
+        assert call(run_args).stdout == b"fixture secret"
+        assert trace.read_text().splitlines() == ["decrypt-age", "encrypt-age"]
+        cached = cache_file.read_bytes()
+
+        first.write_text("#" + str(second) + x)
+        second.write_text(y)
+        assert (
+            old_bytes == first.read_bytes() + str(second).encode() + second.read_bytes()
+        )
+        result = call(run_args, False)
+        assert result.stdout == b""  # Child must never run or receive old TOKEN.
+        assert b"secret key list does not match encrypted payload" in result.stderr
+        assert cache_file.read_bytes() == cached
+
+    # Identity plugins are presence checks here; age itself is the controlled tool.
+    for name in ["age-plugin-se", "age-plugin-phone"]:
+        plugin = tools / name
+        plugin.write_text("#!/bin/sh\nexit 0\n")
+        plugin.chmod(0o700)
+    for marker, transport, messages, visible in [
+        ("test identity", "wifi", "0", False),
+        ("AGE-PLUGIN-SE-1EXAMPLE", "wifi", "0", False),
+        ("AGE-PLUGIN-PHONE-1EXAMPLE", "wifi", "0", False),
+        ("AGE-PLUGIN-PHONE-1EXAMPLE", "qr", "0", True),
+        ("AGE-PLUGIN-PHONE-1EXAMPLE", "wifi", "1", True),
+    ]:
+        identity.write_text(marker)
+        options = dict(
+            AGE_PLUGIN_PHONE_TRANSPORT=transport, AGE_PLUGIN_PHONE_MESSAGES=messages
+        )
+        for count in [32, 65536]:
+            result = call(decrypt_args, DIAGNOSTIC_BYTES=str(count), **options)
+            assert result.stdout == expected
+            assert result.stderr == (b"D" * count if visible else b"")
+        result = call(
+            decrypt_args,
+            False,
+            CASE="diagnostic-fail",
+            DIAGNOSTIC_BYTES="32",
+            **options
+        )
+        assert result.stdout == b""
+        assert (b"D" * 32 in result.stderr) == visible
+        assert b"no other backend was attempted" in result.stderr
+        trace.write_text("")
+        result = call(decrypt_args, False, DIAGNOSTIC_BYTES="65537", **options)
+        assert result.stdout == b""
+        assert b"hybrid unwrap output exceeds limit" in result.stderr
+        assert result.stderr.count(b"D") <= (65536 if visible else 0)
+        assert trace.read_text().splitlines() == ["decrypt-age"]
+
+    # QR must be visible before age finishes or asks for input, not buffered until EOF.
+    process = subprocess.Popen(
+        [binary] + decrypt_args,
+        cwd=root,
+        env=dict(env, AGE_PLUGIN_PHONE_TRANSPORT="qr", DIAGNOSTIC_HANDSHAKE="1"),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert select.select([process.stderr], [], [], 10)[
+            0
+        ], "QR output was not streamed"
+        assert os.read(process.stderr.fileno(), 9) == b"SCAN_NOW\n"
+        stdout, stderr = process.communicate(b"continue\n", timeout=10)
+        assert process.returncode == 0 and stdout == expected and stderr == b""
+    finally:
+        if process.poll() is None:
+            process.stdin.close()
+            process.kill()
+        process.wait()
     print(
-        "PASS: encryption failure; workspace/source edit and removal; partial multi-file reporting; age-only/GPG-only local caches; personal preference; cache hit/miss and cancellation; malformed hybrid rejection; dry-run/default export boundaries; exact decrypt stdout"
+        "PASS: encryption failure; workspace/source edit and removal; partial multi-file reporting; age-only/GPG-only local caches; personal preference; cache hit/miss and cancellation; malformed hybrid rejection; dry-run/default export boundaries; sparse/existing env fixtures; exact decrypt stdout; snapshot boundary attacks and v1 cache rejection (hybrid/ordinary); bounded/redacted diagnostics and live QR"
     )

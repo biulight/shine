@@ -1635,6 +1635,12 @@ cache decryption cancellation never retries from sources. See [ADR 0085](../deci
 for local trust and cache boundaries, and [ADR 0084](../decisions/0084-hybrid-secret-envelope.md)
 for the unchanged envelope and sealing concurrency contract.
 
+Cache snapshot hashing now length-prefixes mode, workspace bytes and native paths, records source
+count and presence, and hashes present source contents with their lengths under the v2 domain.
+Both cache formats reject v1 entries before decryption. Hybrid unwrap pipes both tools' diagnostics;
+the reader discards them by default or forwards phone QR/opted-in messages live, always enforcing
+64 KiB and terminating/reaping on overflow. This does not change the hybrid wire format.
+
 ## One-operation external code consent
 
 Trusted human-facing lifecycle review may obtain one-time consent for exact external Preset code

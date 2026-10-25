@@ -153,15 +153,19 @@ pub(crate) async fn write_stdin_and_wait(
     }
 }
 
-/// Bounded, zeroizing output for data-key unwraps; never echo backend stderr.
-pub(crate) async fn read_key_output(mut child: tokio::process::Child) -> Result<String> {
+/// Bounded, zeroizing output for data-key unwraps. Only explicitly interactive
+/// phone diagnostics are forwarded, incrementally and under the same byte limit.
+pub(crate) async fn read_key_output(
+    mut child: tokio::process::Child,
+    terminal_diagnostics: bool,
+) -> Result<String> {
     use tokio::io::AsyncReadExt;
     use zeroize::Zeroizing;
     async fn bounded(
         reader: impl tokio::io::AsyncRead + Unpin,
         limit: usize,
     ) -> Result<Zeroizing<Vec<u8>>> {
-        let mut bytes = Zeroizing::new(Vec::new());
+        let mut bytes = Zeroizing::new(Vec::with_capacity(limit + 1));
         reader
             .take((limit + 1) as u64)
             .read_to_end(&mut bytes)
@@ -172,8 +176,22 @@ pub(crate) async fn read_key_output(mut child: tokio::process::Child) -> Result<
     let stdout = child.stdout.take().context("opening unwrap output")?;
     let stderr = child.stderr.take();
     let result = tokio::try_join!(bounded(stdout, 96), async {
-        if let Some(stderr) = stderr {
-            bounded(stderr, 65536).await?;
+        if let Some(mut stderr) = stderr {
+            let mut buffer = Zeroizing::new([0u8; 4096]);
+            let mut remaining = 65536;
+            loop {
+                let capacity = buffer.len().min(remaining + 1);
+                let count = stderr.read(&mut buffer[..capacity]).await?;
+                if count == 0 {
+                    break;
+                }
+                anyhow::ensure!(count <= remaining, "hybrid unwrap output exceeds limit");
+                remaining -= count;
+                if terminal_diagnostics {
+                    use std::io::Write;
+                    std::io::stderr().write_all(&buffer[..count])?;
+                }
+            }
         }
         Ok::<_, anyhow::Error>(())
     });
@@ -181,6 +199,7 @@ pub(crate) async fn read_key_output(mut child: tokio::process::Child) -> Result<
         Ok((bytes, ())) => bytes,
         Err(error) => {
             let _ = child.kill().await;
+            let _ = child.wait().await;
             return Err(error);
         }
     };
@@ -231,6 +250,37 @@ impl Drop for TempFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn key_output_overflow_kills_and_reaps_without_waiting_for_exit() {
+        for script in [
+            "head -c 97 /dev/zero; exec sleep 30",
+            "head -c 65537 /dev/zero >&2; exec sleep 30",
+        ] {
+            let child = tokio::process::Command::new("sh")
+                .args(["-c", script])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let pid = child.id().unwrap();
+            let error = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                read_key_output(child, false),
+            )
+            .await
+            .expect("key output overflow must not wait for backend exit")
+            .unwrap_err();
+            assert_eq!(error.to_string(), "hybrid unwrap output exceeds limit");
+            assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+        }
+    }
 
     #[cfg(unix)]
     #[tokio::test]

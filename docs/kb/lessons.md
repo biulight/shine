@@ -1,5 +1,20 @@
 # Lessons Learned
 
+## 2026-10-25 — Cache hashes must encode boundaries, and unwrap limits must own stderr
+
+- **Symptom**: two valid TOML source layouts produced identical concatenated hash input; a cached
+  run still released a secret whose declaration had become a comment, while a fresh run rejected
+  the payload/key mismatch. The outer encrypted cache context could not repair that ambiguity.
+- **Fix**: length-prefix snapshot fields, include source count and explicit presence tags, preserve
+  native path bytes, and invalidate both ordinary and hybrid-local v1 caches.
+- **Second boundary**: age key unwrap inherited stderr outside quiet phone mode, bypassing the
+  bounded reader. Pipe every key unwrap's stderr; discard by default and forward only interactive
+  phone messages incrementally under the same 64 KiB cap. Overflow kills and reaps the child.
+- **Regression**: CLI tests exercise both caches, removed declarations, legacy version rejection,
+  native/SE/phone diagnostics, exact limits, terminal failure and QR output before input/exit.
+  Config fixtures cover both absent and existing `[env]`; textual replacement alone is insufficient.
+- **Evidence**: [audit and fix validation](operations/hybrid-security-audit-2026-10-25.md).
+
 ## 2026-10-24 — Windows launcher roots must match their marker spelling
 
 - **Symptom**: the converged-upgrade CLI regression passed on macOS/Linux but failed on Windows

@@ -60,12 +60,8 @@ async fn decrypt_base64_age(
         );
     }
     let identity_plugins = inspect_identity_plugins(identities).await?;
-    let quiet_phone_progress = identity_plugins.required.contains(&"age-plugin-phone")
-        && !phone_terminal_output_enabled(&identity_plugins);
-    let multiple_phone_identities = identity_plugins.phone_identity_count > 1;
-
     preflight_age().await?;
-    for plugin in identity_plugins.required {
+    for plugin in &identity_plugins.required {
         ensure_identity_plugin(plugin)?;
     }
 
@@ -78,14 +74,7 @@ async fn decrypt_base64_age(
         bail!("decoded secret is empty");
     }
 
-    decrypt_age_file(
-        encrypted_file.path(),
-        identities,
-        quiet_phone_progress,
-        key,
-        multiple_phone_identities,
-    )
-    .await
+    decrypt_age_file(encrypted_file.path(), identities, key, &identity_plugins).await
 }
 
 pub(super) async fn encrypt_bytes(plaintext: &[u8], recipients: &[String]) -> Result<String> {
@@ -321,10 +310,12 @@ async fn inspect_identity_plugins(identities: &[PathBuf]) -> Result<IdentityPlug
 async fn decrypt_age_file(
     path: &Path,
     identities: &[PathBuf],
-    quiet_phone_progress: bool,
     key: bool,
-    multiple_phone_identities: bool,
+    identity_plugins: &IdentityPluginInspection,
 ) -> Result<String> {
+    let terminal_output = phone_terminal_output_enabled(identity_plugins);
+    let quiet_phone_progress =
+        identity_plugins.required.contains(&"age-plugin-phone") && !terminal_output;
     let mut command = Command::new("age");
     command.kill_on_drop(true).arg("-d");
     for identity in identities {
@@ -335,7 +326,7 @@ async fn decrypt_age_file(
     let output = command
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::piped())
-        .stderr(if quiet_phone_progress {
+        .stderr(if key || quiet_phone_progress {
             std::process::Stdio::piped()
         } else {
             std::process::Stdio::inherit()
@@ -345,8 +336,8 @@ async fn decrypt_age_file(
 
     if key {
         return contextualize_hybrid_key_error(
-            super::exec::read_key_output(output).await,
-            multiple_phone_identities,
+            super::exec::read_key_output(output, terminal_output).await,
+            identity_plugins.phone_identity_count > 1,
         );
     }
     let output = output

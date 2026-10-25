@@ -1347,6 +1347,14 @@ bugs. Check this list before changing the modules named in each entry.
 - **Hybrid local caches follow the locally selected backend.** Validate captured source
   structure before cache decryption, and bind source/policy snapshots, backend and workspace
   recipients inside the encrypted cache. Never reuse legacy caches or global recipient fallbacks.
+- **Environment cache hashes bind field boundaries.** Both ordinary and hybrid-local caches use
+  versioned, length-prefixed snapshot fields with source counts, explicit file-presence tags and
+  native path bytes. Moving content across path/source boundaries must invalidate the cache,
+  even when the old concatenation would have been identical. Reject prior cache versions.
+- **Hybrid unwrap diagnostics are bounded at the pipe.** Both tools pipe stderr with a 64 KiB
+  limit and a 96-byte stdout limit; overflow terminates and reaps the child. Discard diagnostics
+  by default. Only phone QR or explicitly enabled phone messages are forwarded live under that
+  same limit; do not silently inherit stderr or switch backends on overflow.
 - **Workspace project cache keys preserve native directory identity.** Hash the canonical native
   path encoding, including the fallback when canonicalization fails. UTF-8 project keys retain
   their existing bytes; lossy display aliases must never select another project's cache directory.

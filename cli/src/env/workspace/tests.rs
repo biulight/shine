@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn sha256_protocol_vectors_remain_stable() {
+fn snapshot_v2_protocol_vector() {
     let sources = vec![
         (
             PathBuf::from("base.toml"),
@@ -20,7 +20,63 @@ fn sha256_protocol_vectors_remain_stable() {
             "development",
             &sources
         ),
-        "sha256:5155d192b35915c41bf3f422c21f9dc0c06a0542f18bc597724e4fe5f9bfd815"
+        "sha256:1db304448b7e45fa04936d72a631608b8cf4d23a355cb21ab12748977e632f51"
+    );
+}
+
+#[test]
+fn snapshot_hash_binds_field_boundaries_presence_and_order() {
+    let workspace = Path::new("workspace.toml");
+    let captured = |text: &str| Some(Zeroizing::new(text.to_owned()));
+    let x = "secret = {TOKEN = true}\n#";
+    let y = "\n[payload]\ndata = 'ciphertext'\n";
+    let old = vec![
+        (PathBuf::from("first"), captured("#")),
+        (PathBuf::from("second"), captured(&format!("{x}second{y}"))),
+    ];
+    let new = vec![
+        (PathBuf::from("first"), captured(&format!("#second{x}"))),
+        (PathBuf::from("second"), captured(y)),
+    ];
+    // Both parse, but moving the boundary comments out the secret declaration.
+    for (path, contents) in old.iter().chain(&new) {
+        parse_source(path, contents.as_ref().unwrap()).unwrap();
+    }
+    let hash = |sources: &CapturedSources| snapshot_input_hash(workspace, "v2", "test", sources);
+    assert_ne!(hash(&old), hash(&new));
+    assert_ne!(
+        snapshot_input_hash(workspace, "bc", "a", &old),
+        snapshot_input_hash(workspace, "c", "ab", &old)
+    );
+    let mut reversed = old.clone();
+    reversed.reverse();
+    assert_ne!(hash(&old), hash(&reversed));
+    let missing = vec![(PathBuf::from("source"), None)];
+    assert_ne!(
+        hash(&missing),
+        hash(&vec![(PathBuf::from("source"), captured("<missing>"))])
+    );
+    assert_ne!(
+        hash(&missing),
+        hash(&vec![(PathBuf::from("source"), captured(""))])
+    );
+    assert_ne!(hash(&missing), hash(&vec![]));
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_hash_preserves_non_utf8_source_and_workspace_paths() {
+    use std::os::unix::ffi::OsStringExt;
+    let paths = [0xfe, 0xff].map(|byte| PathBuf::from(std::ffi::OsString::from_vec(vec![byte])));
+    assert_eq!(paths[0].to_string_lossy(), paths[1].to_string_lossy());
+    let source = |path: &Path| vec![(path.to_path_buf(), Some(Zeroizing::new(String::new())))];
+    assert_ne!(
+        snapshot_input_hash(Path::new("workspace"), "", "test", &source(&paths[0])),
+        snapshot_input_hash(Path::new("workspace"), "", "test", &source(&paths[1]))
+    );
+    assert_ne!(
+        snapshot_input_hash(&paths[0], "", "test", &source(Path::new("source"))),
+        snapshot_input_hash(&paths[1], "", "test", &source(Path::new("source")))
     );
 }
 

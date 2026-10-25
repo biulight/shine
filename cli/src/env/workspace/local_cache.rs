@@ -3,7 +3,7 @@
 use super::*;
 
 const LOCAL_CONFIG: &str = "shine.config.local.toml";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -299,7 +299,7 @@ mod tests {
         let context = cache_context("source-v1", BackendKind::Age, &recipients);
         assert_eq!(
             context,
-            "sha256:c3b0f15bd9bc983897edffeec6b83c633aa69a35e5319b37fac36a43084f6302"
+            "sha256:3229e468c477b77a6a6883919fe26cfa0ddc62ada0a1d37d030aa814a98ee913"
         );
         let plaintext = toml::to_string(&Payload {
             version: VERSION,

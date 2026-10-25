@@ -763,6 +763,15 @@ Shine may cache the merged environment in encrypted form, but does not save an u
 Backend authorization still applies each time. If decryption fails or you cancel authorization,
 the command stops.
 
+Changes to workspace inputs invalidate the cached environment. Older cache versions are
+rebuilt from the sources, which may require authorizing each source again on the first run
+after upgrading; existing encrypted source files do not need to be resealed.
+
+Hybrid key decryption suppresses backend diagnostics by default. Phone QR prompts and explicitly
+enabled phone messages remain visible as they arrive. Diagnostic output is limited to 64 KiB per
+key decryption, including these interactive messages; exceeding the limit stops the operation
+without trying another backend.
+
 For a personal project preference, create `shine.config.local.toml` alongside the
 selected `shine.workspace.toml` (also when using `--workspace`):
 
