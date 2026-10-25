@@ -340,6 +340,80 @@ not commit-SHA equality. These acceptance results apply to those recorded commit
 assets; later KB commits are outside the tag and the synchronized tree. No implementation repair
 was required, and unrelated working-tree files were preserved.
 
+## 2.7.1 formal release and main-sync acceptance (2026-10-25)
+
+The annotated `v2.7.1` tag and remote `release` branch at publication resolved to
+[`ce3fd4186dd6167e153f7fb99d298bd6afa07d02`](https://github.com/biulight/shine/commit/ce3fd4186dd6167e153f7fb99d298bd6afa07d02)
+(`chore(release): prepare v2.7.1`). The release covers `v2.7.0..v2.7.1`: compatible fixes to
+environment-cache binding and hybrid unwrap diagnostics, converged upgrades, Windows launcher
+ownership, text diffs and Preset migration. Both crate versions and the hand-written CHANGELOG
+were updated; English and Simplified Chinese guidance and existing 2.7 snapshots were synchronized.
+
+Local preparation passed `cargo check --workspace --target-dir target`, applicable pre-commit
+hooks (including all-feature workspace nextest and typos), documentation version and locale checks,
+typecheck, both locale builds, snapshot byte parity and `git diff --check`. Generated installation
+pages contained the 2.7.1 guidance. The site build retained non-failing Node localStorage and local
+Docusaurus update-check warnings. These are local checks, separate from the CI evidence below.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Preparation CI | Native Windows x86_64, Linux x86_64 and macOS arm64 tests and quality passed | [CI run](https://github.com/biulight/shine/actions/runs/40181003313) |
+| Preparation MSRV | Rust 1.90 workspace check passed | [MSRV run](https://github.com/biulight/shine/actions/runs/40181003290) |
+| Public documentation | Version checks, locale parity, typecheck, all-locale build, Pages and server deployment passed | [Docs run](https://github.com/biulight/shine/actions/runs/40181003296) |
+| Formal release | All 20 jobs passed: native tests, quality, MSRV, six asset builds, crate publication, GitHub Release, six cargo-binstall checks and sync PR creation | [Release run](https://github.com/biulight/shine/actions/runs/40181018049) |
+
+All four runs target the exact tagged commit and finished with `completed / success` on attempt 1.
+No implementation repair or release rerun was required. The
+[public v2.7.1 release](https://github.com/biulight/shine/releases/tag/v2.7.1) was confirmed as
+latest stable with `draft=false`, `prerelease=false`, six uploaded target archives and both
+`install.sh` / `install.ps1`. Independent crates.io API reads confirmed `shine-core` and `shine-cli`
+2.7.1 with `yanked=false`; publication also passed its
+[workflow job](https://github.com/biulight/shine/actions/runs/40181018049/job/121133038176).
+
+Cargo-binstall 1.12.7 verified the exact published crate version using only `crate-meta-data`:
+
+| Target | Verified scope | Evidence |
+| --- | --- | --- |
+| Linux x86_64 | Download/extraction, isolated install and native version execution | [Job](https://github.com/biulight/shine/actions/runs/40181018049/job/121134660312) |
+| Linux arm64 | Download/extraction only | [Job](https://github.com/biulight/shine/actions/runs/40181018049/job/121134660406) |
+| macOS arm64 | Download/extraction, isolated install and native version execution | [Job](https://github.com/biulight/shine/actions/runs/40181018049/job/121134660342) |
+| macOS x86_64 | Download/extraction only | [Job](https://github.com/biulight/shine/actions/runs/40181018049/job/121134660365) |
+| Windows x86_64 | Download/extraction, isolated install and native version execution | [Job](https://github.com/biulight/shine/actions/runs/40181018049/job/121134660320) |
+| Windows arm64 | Download/extraction only | [Job](https://github.com/biulight/shine/actions/runs/40181018049/job/121134660328) |
+
+Download-only results do not establish native runtime coverage. This acceptance did not repeat
+the independent archive-header and asset-digest inspection recorded for 2.7.0.
+An existing local `shine 2.7.0 (9787bd280 2026-10-25)` build, under a fresh temporary
+`SHINE_CONFIG_DIR`, ran `shine update --refresh-release`. Its first anonymous request hit GitHub
+HTTP 403 rate limiting and correctly reported an incomplete version check. A retry using the
+existing GitHub login through the supported `GH_TOKEN` environment variable exited successfully
+and detected `2.7.0 -> 2.7.1`. Credentials were neither printed nor persisted; no upgrade was run.
+This was release-discovery evidence from the local build, not an official 2.7.0 archive test.
+
+### PR #80 and post-merge checks
+
+The release workflow created [PR #80](https://github.com/biulight/shine/pull/80),
+`chore(release): merge v2.7.1 into main`, from the exact tagged commit. Its bot-triggered CI,
+MSRV and docs runs initially reported `action_required` with no jobs. After explicit user
+authorization, approving each run through `POST /repos/biulight/shine/actions/runs/{run_id}/approve`
+started the jobs. All three finished with `completed / success` on attempt 2; this was approval
+recovery, not a test-failure rerun, and required no code or workflow changes.
+
+| Sync check | Result | Evidence |
+| --- | --- | --- |
+| CI | Windows x86_64, Linux x86_64, macOS arm64 and quality passed | [CI run](https://github.com/biulight/shine/actions/runs/40182011692) |
+| MSRV | Rust 1.90 workspace check passed | [MSRV run](https://github.com/biulight/shine/actions/runs/40182011658) |
+| Documentation | Build passed; deployment jobs correctly skipped for the PR event | [Docs run](https://github.com/biulight/shine/actions/runs/40182011680) |
+| Post-merge MSRV | Passed on the resulting `main` merge commit, attempt 1 | [MSRV run](https://github.com/biulight/shine/actions/runs/40186982438) |
+
+After all PR checks passed, the head was revalidated and merged with an expected-head SHA guard as
+[`af05c1ab4d184df4ba3b2319939d94771b6b7531`](https://github.com/biulight/shine/commit/af05c1ab4d184df4ba3b2319939d94771b6b7531)
+at 18:59:08 Asia/Shanghai on October 25. Remote `main` at that merge commit and `v2.7.1` have the
+identical Git tree `e50dc70542aa7773a751a3a27d6184c2ed5ca3bc`, with no file differences; their commit
+SHAs differ. The post-merge run above is MSRV evidence, not another full native test run.
+This later KB-only record is outside the release tag and synchronized tree, and does not match
+the public-documentation deployment path filters. Unrelated working-tree files were preserved.
+
 ## Shell category diff output-order CI acceptance (2026-10-24)
 
 Accepted `release` commit:
