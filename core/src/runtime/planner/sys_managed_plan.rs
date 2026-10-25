@@ -27,7 +27,9 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
         let enabled = manifest
             .entries
             .iter()
-            .filter(|entry| entry.os_id == request.os_id && entry.managed && entry.profile_enabled)
+            // Managed-file/split-DNS receipts participate even without a Shell profile.
+            // Keep the same installed set as select_managed_sys at execution time.
+            .filter(|entry| entry.os_id == request.os_id && entry.managed)
             .map(|entry| entry.item_id.as_str())
             .collect::<BTreeSet<_>>();
         capture_manifest_selection(

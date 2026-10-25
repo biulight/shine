@@ -40,6 +40,13 @@ Sys v1 dispatchers remain blockers; released external executable App metadata re
 trust-review advisory. A managed Git overlay is diagnosed but remains read-only; its upstream
 checkout must be migrated explicitly.
 
+Rewritten candidates retain the original uniform LF/CRLF style and final-newline presence before
+validation and hashing; mixed LF/CRLF blocks rewrites until the author chooses a style. CRLF is
+normalized only on diff display copies with a notice, while bare CR and other controls stay escaped.
+Managed-overlay diffs are labeled upstream-only previews and excluded from automatic changes;
+the upstream changes must be committed and pushed to the configured remote branch before pulling
+on consumer devices. These display rules never alter report hashes, backups, or source rechecks.
+
 Before apply, the CLI rechecks every source hash and creates a complete owner-only backup set under
 the Shine private state directory, including a manifest with logical identity, hash, mode, and
 source layer. Only after every backup succeeds does it atomically replace or remove individual

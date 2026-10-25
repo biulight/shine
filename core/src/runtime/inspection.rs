@@ -85,6 +85,16 @@ pub struct ShellFileInspection {
     pub changes: Vec<InspectionChange>,
 }
 
+/// Local-only category snapshot differences, never part of a serialized frontend report.
+#[derive(Debug)]
+pub struct ShellSnapshotFileInspection {
+    pub relative_path: PathBuf,
+    pub current_content: Option<Vec<u8>>,
+    pub desired_content: Option<Vec<u8>>,
+    pub current_executable: Option<bool>,
+    pub desired_executable: Option<bool>,
+}
+
 /// Validated local journal observation. Raw journal content never leaves its owning domain.
 pub(crate) struct JournalInspection {
     pub operation_id: String,

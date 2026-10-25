@@ -87,11 +87,19 @@ pub(crate) fn app_info_file_from_inspection(
 
 pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfoFile>> {
     let runtime = crate::core_runtime::from_config(config).await?;
-    Ok(shine_core::frontend::FrontendService::new(runtime)
-        .inspect_shells()
-        .await
-        .map_err(shine_core::frontend::FrontendServiceError::into_source)?
-        .files
+    Ok(shell_info_files_from_inspections(
+        shine_core::frontend::FrontendService::new(runtime)
+            .inspect_shells()
+            .await
+            .map_err(shine_core::frontend::FrontendServiceError::into_source)?
+            .files,
+    ))
+}
+
+pub(super) fn shell_info_files_from_inspections(
+    inspections: Vec<shine_core::runtime::ShellFileInspection>,
+) -> Vec<ShellInfoFile> {
+    inspections
         .into_iter()
         .filter(|file| file.installed)
         .map(|file| ShellInfoFile {
@@ -108,7 +116,7 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
             attention_required: file.link_conflict || file.preset_missing,
             changes: file.changes,
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]

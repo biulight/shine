@@ -5,6 +5,35 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [2.7.1] — 2026-10-25
+
+### Bug Fixes
+
+- Invalidate environment caches when workspace input boundaries or source presence change,
+  preventing stale secret release after a declaration is removed. Older ordinary and hybrid-local
+  caches are rebuilt; the first run may require authorizing source decryption again. Existing
+  encrypted sources do not need to be resealed.
+- Bound hybrid key-decryption diagnostics for every backend. Suppress diagnostics by default while
+  preserving live phone QR prompts and explicitly enabled phone messages; stop on output overflow
+  without trying another backend.
+- Finish fully converged upgrades without confirmation, state writes, background checks or lifecycle
+  execution. Pending snapshot updates, profile repairs, stale entries, permissions and trust checks
+  still follow the normal review path; explicit `--pull` still synchronizes sources.
+- Recognize managed Windows Shell launchers under canonical drive and UNC paths without weakening
+  foreign-launcher protection.
+- Show complete Shell category snapshot differences, including helpers and metadata, once after the
+  category's command details. Preserve distinct source and rendered-output changes.
+- Keep text-diff lines separate around standalone carriage returns and missing final newlines.
+  Explain CRLF/LF-only changes without hiding terminal controls or changing underlying file bytes.
+- Preserve uniform line endings and final-newline presence during Preset metadata migration; reject
+  mixed LF/CRLF rewrites with guidance. Mark managed-overlay previews as read-only and direct authors
+  to migrate, commit and push the upstream checkout before pulling on consuming devices.
+
+### Docs
+
+- Simplify English and Simplified Chinese usage and secret-safety guidance, add 2.7.1 upgrade notes,
+  and refresh the existing 2.7 documentation snapshot with the released fixes.
+
 ## [2.7.0] — 2026-10-24
 
 ### Breaking Changes

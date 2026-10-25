@@ -201,6 +201,40 @@ pub(crate) async fn review_upgrade_plans(
     .await
 }
 
+/// Observe only. Non-converged requests still use the existing human review and
+/// fresh approval path; no reviewed request or approval leaves this fast path.
+pub(crate) async fn finish_converged_upgrade(
+    config: &Config,
+    requests: Vec<LifecyclePlanRequest>,
+    verbose: bool,
+) -> Result<bool> {
+    let service = crate::core_runtime::frontend_from_config(config).await?;
+    let mut planned = Vec::new();
+    for request in requests {
+        let report = service
+            .review(&request.service_request())
+            .await
+            .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
+        planned.push((request, report.plan));
+    }
+    if !planned.iter().all(|(_, plan)| plan.is_converged_upgrade()) {
+        return Ok(false);
+    }
+    if verbose {
+        crate::config::print_presets_note(config);
+        if crate::presentation::full_upgrade_plan() {
+            let config_digest = active_config_digest(config).await?;
+            for (_, plan) in &planned {
+                for line in render_plan_lines(plan, &config_digest)? {
+                    println!("{line}");
+                }
+            }
+        }
+    }
+    println!("{}", crate::colors::dim("Nothing to upgrade."));
+    Ok(true)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PlanRenderMode {
     Bootstrap,

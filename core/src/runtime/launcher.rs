@@ -714,6 +714,23 @@ fn has_bun_script_extension(path: &Path) -> bool {
 /// resolves under `managed_root`. Relative targets are resolved against `bin_dir`.
 /// Works even if the target file no longer exists.
 fn target_is_managed(target: &Path, managed_root: &Path, bin_dir: &Path) -> bool {
+    #[cfg(windows)]
+    let (target, managed_root, bin_dir) = {
+        // Windows shim markers use the native spelling without the verbatim
+        // prefix. Compare the root in that same spelling, retaining component
+        // boundaries and refusing a lossy path conversion.
+        let native = |path: &Path| {
+            path.to_str()
+                .map(super::path_text::strip_windows_verbatim_prefix)
+                .map(PathBuf::from)
+        };
+        let (Some(target), Some(managed_root), Some(bin_dir)) =
+            (native(target), native(managed_root), native(bin_dir))
+        else {
+            return false;
+        };
+        (target, managed_root, bin_dir)
+    };
     if target.is_absolute() {
         target.starts_with(managed_root)
     } else {

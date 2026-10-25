@@ -146,6 +146,46 @@ fn all_declared_release_expands_to_a_stable_explicit_list() {
 }
 
 #[test]
+fn policy_diff_retains_serialized_cr_values_without_normalizing_approval_inputs() {
+    let initial = plan_remote_enrollment(
+        &PolicyStore::default(),
+        "dev",
+        &snapshot(),
+        &["API_TOKEN".into()],
+        &["bun".into(), "test".into()],
+        None,
+    )
+    .unwrap();
+    let mut previous = initial.candidate;
+    previous.allow[0].argv = vec!["old\r\nargument\r".into()];
+    let mut candidate = previous.clone();
+    candidate.allow[0].argv = vec!["new\r\nargument\r".into()];
+    let plan = RemoteEnrollmentPlan {
+        name: previous.name.clone(),
+        candidate: candidate.clone(),
+        previous: Some(previous.clone()),
+    };
+    let old = toml::to_string_pretty(&previous).unwrap();
+    let new = toml::to_string_pretty(&candidate).unwrap();
+    let diff = plan.diff().unwrap().unwrap();
+    // Policy serialization remains the comparison boundary; it escapes CR as TOML data.
+    assert!(!old.contains('\r') && !new.contains('\r'));
+    assert_eq!(
+        diff,
+        similar::TextDiff::from_lines(&old, &new)
+            .unified_diff()
+            .to_string()
+    );
+    assert!(
+        diff.contains("-old\\r\n+new\\r\n argument\\r\"\"\""),
+        "{diff:?}"
+    );
+    assert!(!diff.contains("Line endings:"));
+    assert_eq!(plan.previous.as_ref(), Some(&previous));
+    assert_eq!(plan.candidate, candidate);
+}
+
+#[test]
 fn trusted_remote_update_replaces_one_allow_and_preserves_policy_identity() {
     let original = snapshot();
     let allow = allow_from_snapshot(

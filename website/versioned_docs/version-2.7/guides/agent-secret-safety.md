@@ -220,13 +220,11 @@ Do not commit environment files containing unsealed strings. Add personal overri
 
 ## Hybrid access boundaries
 
-Hybrid offers GPG or age access to one authenticated data payload. It is not two-person
-approval and does not combine both identity strengths. Any authorized private-key
-compromise can expose the secret. Changed, missing, replaced or spliced key wrappers
-fail format or integrity checks before release. The envelope does not authenticate
-its author or prevent replay of an entire old file.
+Hybrid encryption lets an authorized GPG or age recipient decrypt the same secrets. It does not
+require two-person approval or combine the strength of both identities. Compromise of either
+authorized private key can expose the data. Encryption alone does not prove who created a file
+or whether it is the latest version.
 
-Removing a recipient and resealing generates a fresh key and ciphertext. It does not
-revoke historical access, prevent authorized readers copying values, or rotate upstream
-credentials. Rotate exposed service credentials at their source. This new envelope
-protocol has not undergone an independent security audit.
+Removing a recipient and resealing does not revoke historical access, stop authorized readers
+copying values, or rotate service credentials. Rotate exposed credentials at their source.
+The hybrid encryption format has not undergone an independent security audit.

@@ -8,6 +8,8 @@ use crate::status::FileStatus;
 use crate::{apps, colors, path_display, shells};
 use anyhow::{Context, Result, bail};
 use resolve::InfoRef;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 pub(crate) async fn print_app_inspection_diff(
     config: &Config,
@@ -21,33 +23,106 @@ pub(crate) async fn print_app_inspection_diff(
 pub(crate) struct UpdateDiffs {
     app_files: Vec<collect::AppInfoFile>,
     shell_files: Vec<collect::ShellInfoFile>,
+    shell_frontend: shine_core::frontend::FrontendService<shine_core::runtime::RealHost>,
+}
+
+type ShellContent<'a> = (PathBuf, Option<&'a [u8]>, Option<&'a [u8]>);
+
+#[derive(Default)]
+pub(crate) struct ShellDiffState<'a> {
+    snapshots: BTreeMap<String, Vec<shine_core::runtime::ShellSnapshotFileInspection>>,
+    contents: BTreeSet<ShellContent<'a>>,
+}
+
+impl ShellDiffState<'_> {
+    pub(crate) fn print_snapshot(&self, category: &str) {
+        if let Some(files) = self.snapshots.get(category) {
+            render::print_shell_snapshot_diff(category, files);
+        }
+    }
 }
 
 impl UpdateDiffs {
     pub(crate) async fn collect(config: &Config, run_generators: bool) -> Result<Self> {
-        Ok(Self {
-            app_files: collect::collect_app_files(config, run_generators, Vec::new()).await?,
-            shell_files: collect::collect_shell_files(config).await?,
-        })
+        let app_files = collect::collect_app_files(config, run_generators, Vec::new()).await?;
+        Self::with_app_files(config, app_files).await
     }
 
     pub(crate) async fn collect_with_app_inspections(
         config: &Config,
         inspections: Vec<shine_core::runtime::AppFileInspection>,
     ) -> Result<Self> {
+        Self::with_app_files(
+            config,
+            collect::app_info_files_from_inspections(inspections),
+        )
+        .await
+    }
+
+    async fn with_app_files(config: &Config, app_files: Vec<collect::AppInfoFile>) -> Result<Self> {
+        let shell_frontend = crate::core_runtime::frontend_from_config(config).await?;
+        let inspections = shell_frontend
+            .inspect_shells()
+            .await
+            .map_err(shine_core::frontend::FrontendServiceError::into_source)?;
         Ok(Self {
-            app_files: collect::app_info_files_from_inspections(inspections),
-            shell_files: collect::collect_shell_files(config).await?,
+            app_files,
+            shell_files: collect::shell_info_files_from_inspections(inspections.files),
+            shell_frontend,
         })
     }
 
-    pub(crate) async fn print_shell_for_row(&self, config: &Config, label: &str) -> Result<()> {
+    pub(crate) async fn print_shell_for_row<'a>(
+        &'a self,
+        config: &Config,
+        label: &str,
+        state: &mut ShellDiffState<'a>,
+    ) -> Result<()> {
         for file in self.shell_files.iter().filter(|file| {
             file.status == "update available"
                 && format!("{}/{}", file.category.name, file.file.command_name) == label
         }) {
-            render::print_shell_update_diff(config, file).await?;
+            self.print_shell_update(config, file, state).await?;
         }
+        Ok(())
+    }
+
+    async fn print_shell_update<'a>(
+        &'a self,
+        config: &Config,
+        file: &'a collect::ShellInfoFile,
+        state: &mut ShellDiffState<'a>,
+    ) -> Result<()> {
+        let category = &file.category.name;
+        if !state.snapshots.contains_key(category) {
+            let files = self
+                .shell_frontend
+                .runtime()
+                .inspect_shell_snapshot_changes(category)
+                .await?;
+            state.snapshots.insert(category.clone(), files);
+        }
+        let files = &state.snapshots[category];
+        // Compare complete byte pairs, not truncated display text or hashes. Raw snapshots
+        // and transformed output remain separate whenever their evidence differs.
+        let content_note = if !crate::status::UpdateChange::includes_content(&file.changes) {
+            None
+        } else if files.iter().any(|raw| {
+            raw.relative_path == file.file.source_rel
+                && raw.current_content == file.current_content
+                && raw.desired_content == file.desired_content
+        }) {
+            Some("content diff: see category snapshot")
+        } else if !state.contents.insert((
+            render::shell_content_path(file),
+            file.current_content.as_deref(),
+            file.desired_content.as_deref(),
+        )) {
+            Some("content diff: already shown")
+        } else {
+            None
+        };
+        render::print_shell_update_diff(config, file, content_note).await?;
         Ok(())
     }
 
@@ -187,6 +262,7 @@ pub async fn handle_update_target(
         diffs.app_files = collect::collect_app_files(config, true, categories).await?;
     }
     let mut printed = false;
+    let mut shell_diff_state = ShellDiffState::default();
 
     for item in &refs {
         match item {
@@ -231,10 +307,13 @@ pub async fn handle_update_target(
                     print_update_separator(printed);
                     print_shell_update_row(file);
                     if !file.attention_required {
-                        render::print_shell_update_diff(config, file).await?;
+                        diffs
+                            .print_shell_update(config, file, &mut shell_diff_state)
+                            .await?;
                     }
                     printed = true;
                 }
+                shell_diff_state.print_snapshot(category);
             }
             InfoRef::ShellFile { category, command } => {
                 if let Some(file) = diffs.shell_files.iter().find(|file| {
@@ -244,8 +323,11 @@ pub async fn handle_update_target(
                 }) {
                     print_shell_update_row(file);
                     if !file.attention_required {
-                        render::print_shell_update_diff(config, file).await?;
+                        diffs
+                            .print_shell_update(config, file, &mut shell_diff_state)
+                            .await?;
                     }
+                    shell_diff_state.print_snapshot(category);
                     printed = true;
                 }
             }

@@ -171,17 +171,8 @@ Adding an existing policy name fails without replacing it. To update it, use `--
 the policy parameters again, including any project or remote-workspace constraints; see
 `shine env broker policy update --help`. Changed policies still require review and confirmation.
 
-Local `policy diff` and `policy update` show additions in green and deletions in red on supported
-terminals. Automatic colors respect `NO_COLOR`; redirected output is plain unless color is
-explicitly forced, for example with `FORCE_COLOR=1`. Diff displays escape control characters;
-stored policy values and matching rules are unchanged.
-
-`shine env broker policy list` shows one policy per line. Control characters in the SSH target or
-project are displayed as escapes, such as `\n` and `\t`. Use `shine env broker policy info <NAME>`
-for the policy's TOML representation; listing does not change stored values or matching rules.
-
-Concurrent policy changes preserve updates to other policies. If the target policy changes or is
-removed while confirmation is pending, the update fails and requires a fresh review.
+Use `shine env broker policy list` to browse policies and `shine env broker policy info <NAME>`
+to inspect one. If a policy changes while you are reviewing it, inspect the new version and retry.
 
 Without a local checkout, open an inspect session and run `describe` remotely. It displays workspace
 and source digests, mode, complete argv, and release keys and compares them with local policies:
@@ -225,12 +216,9 @@ shine env broker describe --mode development \
   --release-all-declared -- bun run build
 ```
 
-The policy must belong to the current SSH target, and any constrained remote workspace path must
-match. Confirmation shows the full TOML diff, including long lines, with control characters escaped
-and no color highlighting. Approval replaces only the matched allow entry and
-refreshes digests while preserving the policy name, project, remote-path constraint, and other
-entries. A concurrent modification after preview makes the write fail. This option does not reduce
-the trust risk of remote metadata.
+The policy must match the current SSH target and any constrained workspace path. Review the
+proposed changes locally before confirming. Updating from remote metadata still requires trusting
+that remote; prefer a verified local checkout when available.
 
 ## Connect to a Windows remote
 
@@ -270,7 +258,6 @@ is supplied; for an existing directory, `--force` merges into it. Use `--scp` to
 IPv6 literal SSH destinations use SCP for compatibility with system rsync. SCP may overwrite existing
 files even without `--force`, and Shine prints a warning. Its `--dry-run` shows resolved paths without
 copying files.
-Rsync progress uses the per-file `--progress` option, compatible with the system rsync on macOS.
 With rsync, quote paths containing spaces and wildcard patterns in the command you enter:
 
 ```bash
@@ -280,10 +267,6 @@ shine local upload './release notes.txt' '/tmp/release files'
 
 Spaces and shell punctuation remain part of the remote path; `*`, `?`, and bracket patterns still
 select matching remote files.
-When reconnecting through SCP, Shine translates SSH port, user, and control-socket options,
-preserves connection settings such as identity files and jump hosts, and omits terminal and
-forwarding flags from the original session.
-
 ## Upload from local to remote
 
 Still inside the remote shell:
@@ -299,11 +282,8 @@ destination, Shine places it in the remote current directory using the source na
 refuses file-to-directory or directory-to-file replacement. Preview resolved paths and overwrite
 behavior with `--dry-run`.
 
-SCP dry-run previews quote each path and escape control characters so spaces and line breaks
-remain distinguishable. This display does not change the paths used for transfer.
-Local transfer paths must be valid UTF-8. A `~` hint whose local home cannot be represented is
-rejected before transfer or preview; it never selects a replacement-character directory.
-Local hints expand only a leading `~`; `$VAR` and `${VAR}` remain literal filename text.
+Local transfer paths must be valid UTF-8. Local path hints expand only a leading `~`;
+`$VAR` and `${VAR}` remain literal filename text.
 
 ## Inspect connection state
 
@@ -311,14 +291,9 @@ Local hints expand only a leading `~`; `$VAR` and `${VAR}` remain literal filena
 shine local status
 ```
 
-The output includes session ID, reachability, protocol version, and the local default directory. A
-shell not entered through `shine ssh` reports the missing session variables.
-Connection/handshake and the subsequent status request each have a five-second timeout.
-An unreachable connection is reported on stdout with exit code 0; a failed status request
-(including authentication rejection or a response timeout) reports an error on stderr with exit code 1.
-These limits apply only to `local status`.
-Status fields and connection/rejection messages display terminal control characters as escapes;
-the session, authentication and connection paths retain their original values.
+Use the result to check whether the session is reachable and confirm the local default directory.
+If session variables are missing, reconnect with `shine ssh`. Connection or authentication failures
+require checking the SSH session before retrying a transfer.
 
 ### Hybrid secrets through the broker
 

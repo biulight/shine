@@ -23,9 +23,8 @@ shine list
 shine info proxy
 ```
 
-如果源脚本存在但命令入口缺失，`shine list` 不会把该命令作为独立生命周期资源列出；包含多个命令
-的类别仍可能以 partial 状态出现。先用 `shine info shell/<CATEGORY>` 查看命令级详情，再执行
-`shine shell install <CATEGORY> --replace-managed` 重建受管文件和入口。
+命令入口缺失时，先用 `shine info shell/<CATEGORY>` 检查详情。确认本地修改后，执行
+`shine shell install <CATEGORY> --replace-managed` 重建受管文件和命令入口。
 
 ## 应用配置显示为用户修改
 
@@ -105,7 +104,8 @@ shine sys uninstall <ITEM> --dry-run
 
 不要依赖计划文档推断可用项目；以当前版本 `shine sys list` 和 `shine sys info` 为准。
 
-Windows 或其它工具改写过的 PowerShell、bash 或 zsh profile 可能使用 CRLF 换行。系统 profile 合并会按内容匹配受管区块，不会仅因 CRLF/LF 差异反复重写文件。若旧版本已留下冲突标记，先手工处理冲突，再重新运行 `shine sys bootstrap --dry-run` 或对应 `upgrade`。
+若旧版本在 shell profile 中留下冲突标记，请先手动处理，再运行
+`shine sys bootstrap --dry-run` 或对应的 `upgrade`。
 
 ## 任务运行结果和手动执行不同
 

@@ -36,6 +36,282 @@ impl Drop for Fixture {
     }
 }
 
+// Include entries, link targets, file bytes and timestamps so creating a lock,
+// cache or journal, or rewriting an equal receipt, fails a read-only regression.
+type UpgradeTreeState = std::collections::BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime, u32)>;
+
+fn upgrade_tree_state(root: &std::path::Path) -> UpgradeTreeState {
+    fn visit(root: &std::path::Path, path: &std::path::Path, entries: &mut UpgradeTreeState) {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        let bytes = if metadata.is_symlink() {
+            fs::read_link(path)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
+        } else if metadata.is_file() {
+            fs::read(path).unwrap()
+        } else {
+            Vec::new()
+        };
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode()
+        };
+        #[cfg(not(unix))]
+        let mode = u32::from(metadata.permissions().readonly());
+        entries.insert(
+            path.strip_prefix(root).unwrap().to_path_buf(),
+            (bytes, metadata.modified().unwrap(), mode),
+        );
+        if metadata.is_dir() {
+            for entry in fs::read_dir(path).unwrap() {
+                visit(root, &entry.unwrap().path(), entries);
+            }
+        }
+    }
+    let mut entries = std::collections::BTreeMap::new();
+    visit(root, root, &mut entries);
+    entries
+}
+
+#[test]
+fn converged_upgrade_does_not_initialize_an_empty_configuration() {
+    let fixture = Fixture::new();
+    let before = upgrade_tree_state(&fixture.0);
+    for args in [
+        vec!["upgrade"],
+        vec!["upgrade", "--yes"],
+        vec!["upgrade", "--verbose", "--full-plan"],
+    ] {
+        let output = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("Nothing to upgrade."),
+            "{output:?}"
+        );
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(upgrade_tree_state(&fixture.0), before, "{args:?}");
+    }
+}
+
+#[test]
+fn converged_upgrade_is_read_only_for_all_domains_and_output_modes() {
+    let fixture = sys_output_fixture();
+    let state = fixture.0.join("state");
+    let app = state.join("presets/app/demo");
+    let shell = state.join("presets/shell/demo");
+    fs::create_dir_all(&app).unwrap();
+    fs::create_dir_all(&shell).unwrap();
+    fs::write(
+        app.join("shine.toml"),
+        "metadata_schema_version=2\ndest='~/.config/demo'\n[[files]]\nsource='config.txt'\n",
+    )
+    .unwrap();
+    fs::write(app.join("config.txt"), "static data\n").unwrap();
+    let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+    fs::write(
+        shell.join("shine.toml"),
+        format!("metadata_schema_version=2\n[[files]]\nsource='{script}'\ntarget='tool'\n"),
+    )
+    .unwrap();
+    fs::write(shell.join(script), "# Never executed\n").unwrap();
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    for args in [
+        vec!["app", "install", "demo", "--yes"],
+        vec!["trust", "grant", "shell/demo/tool", "--yes"],
+        vec!["shell", "install", "demo", "--yes"],
+        vec!["sys", "apply", "--yes", "--", "plain"],
+    ] {
+        let output = run(&args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+    }
+    // No-op planning must not depend on the advisory version gate or recreate
+    // any lifecycle lock that only an executing operation needs.
+    for lock in [
+        "app-lifecycle.lock",
+        "shell-lifecycle.lock",
+        "sys-lifecycle.lock",
+    ] {
+        let path = state.join(lock);
+        if path.exists() {
+            fs::remove_file(path).unwrap();
+        }
+    }
+    let mut next_patch = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+    next_patch.patch += 1;
+    fs::write(state.join("update-check.json"),serde_json::to_vec(&serde_json::json!({"latest_version":next_patch.to_string(),"checked_at_unix_secs":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()})).unwrap()).unwrap();
+    let before = upgrade_tree_state(&fixture.0);
+    for target in [
+        Some("app/demo/config.txt"),
+        Some("shell/demo/tool"),
+        Some("sys/plain"),
+        None,
+    ] {
+        for options in [
+            vec![],
+            vec!["--yes"],
+            vec!["--verbose"],
+            vec!["--verbose", "--full-plan"],
+        ] {
+            let mut args = vec!["upgrade"];
+            if let Some(target) = target {
+                args.push(target);
+            }
+            args.extend(options);
+            let output = run(&args);
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(text.contains("Nothing to upgrade."), "{args:?}: {output:?}");
+            assert!(
+                !text.contains("filesystem write")
+                    && !text.contains("filesystem remove")
+                    && !text.contains("Code boundaries"),
+                "{text}"
+            );
+            assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+            assert_eq!(upgrade_tree_state(&fixture.0), before, "{args:?}");
+        }
+    }
+    fs::remove_file(state.join("config.toml")).unwrap();
+    let before = upgrade_tree_state(&fixture.0);
+    let output = run(&["upgrade", "--yes"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("Nothing to upgrade."),
+        "{output:?}"
+    );
+    assert_eq!(upgrade_tree_state(&fixture.0), before);
+}
+
+#[test]
+fn snapshot_only_upgrade_still_requires_approval_and_preserves_trust() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let preset = state.join("presets/shell/demo");
+    fs::create_dir_all(&preset).unwrap();
+    let script = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+    let metadata = format!(
+        "metadata_schema_version=2\ndescription='old'\n[[files]]\nsource='{script}'\ntarget='tool'\n"
+    );
+    fs::write(preset.join("shine.toml"), &metadata).unwrap();
+    fs::write(preset.join(script), "# Never executed\n").unwrap();
+    fs::write(state.join("config.toml"), "schema_version=2\n").unwrap();
+    fs::write(state.join("update-check.json"), serde_json::to_vec(&serde_json::json!({
+        "latest_version": env!("CARGO_PKG_VERSION"),
+        "checked_at_unix_secs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+    })).unwrap()).unwrap();
+    let run = |args: &[&str]| {
+        fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    for args in [
+        vec!["trust", "grant", "shell/demo/tool", "--yes"],
+        vec!["shell", "install", "demo", "--yes"],
+    ] {
+        let output = run(&args);
+        assert!(output.status.success(), "{output:?}");
+    }
+    let trust = fs::read(state.join("trust.toml")).unwrap();
+    let receipt = fs::read(state.join("shell-manifest.toml")).unwrap();
+    fs::write(
+        preset.join("shine.toml"),
+        metadata.replace("'old'", "'new'"),
+    )
+    .unwrap();
+    let denied = run(&["upgrade", "demo"]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+    assert!(
+        String::from_utf8_lossy(&denied.stderr).contains("approval requires"),
+        "{denied:?}"
+    );
+    assert_eq!(
+        fs::read(state.join("installed/shell/demo/shine.toml")).unwrap(),
+        metadata.as_bytes()
+    );
+    assert_eq!(
+        fs::read(state.join("shell-manifest.toml")).unwrap(),
+        receipt
+    );
+    let applied = run(&["upgrade", "demo", "--yes"]);
+    assert!(applied.status.success(), "{applied:?}");
+    assert_eq!(fs::read(state.join("trust.toml")).unwrap(), trust);
+    let before = upgrade_tree_state(&fixture.0);
+    let noop = run(&["upgrade", "demo", "--verbose", "--full-plan"]);
+    assert!(noop.status.success(), "{noop:?}");
+    assert!(String::from_utf8_lossy(&noop.stdout).contains("Nothing to upgrade."));
+    assert_eq!(upgrade_tree_state(&fixture.0), before);
+    // Current delivery does not require re-enrolling trust merely to finish read-only.
+    let trust_permissions = fs::metadata(state.join("trust.toml"))
+        .unwrap()
+        .permissions();
+    fs::remove_file(state.join("trust.toml")).unwrap();
+    let before = upgrade_tree_state(&fixture.0);
+    let noop = run(&["upgrade", "demo"]);
+    assert!(noop.status.success(), "{noop:?}");
+    assert!(String::from_utf8_lossy(&noop.stdout).contains("Nothing to upgrade."));
+    assert_eq!(upgrade_tree_state(&fixture.0), before);
+    fs::write(state.join("trust.toml"), &trust).unwrap();
+    fs::set_permissions(state.join("trust.toml"), trust_permissions).unwrap();
+    // Profile-only drift is still work even when the category and launcher are current.
+    let profile = ["profile.sh", "profile.ps1", "config.fish"]
+        .map(|name| state.join("shell").join(name))
+        .into_iter()
+        .find(|path| path.is_file())
+        .unwrap();
+    let current_profile = fs::read(&profile).unwrap();
+    fs::write(&profile, "outdated profile\n").unwrap();
+    let receipt = fs::read(state.join("shell-manifest.toml")).unwrap();
+    let denied = run(&["upgrade", "demo"]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+    assert!(
+        String::from_utf8_lossy(&denied.stderr).contains("approval requires"),
+        "{denied:?}"
+    );
+    assert!(!String::from_utf8_lossy(&denied.stdout).contains("Nothing to upgrade."));
+    assert_eq!(fs::read(&profile).unwrap(), b"outdated profile\n");
+    assert_eq!(
+        fs::read(state.join("shell-manifest.toml")).unwrap(),
+        receipt
+    );
+    let repaired = run(&["upgrade", "demo", "--yes"]);
+    assert!(repaired.status.success(), "{repaired:?}");
+    assert_eq!(fs::read(&profile).unwrap(), current_profile);
+    assert_eq!(fs::read(state.join("trust.toml")).unwrap(), trust);
+    // Changed code still needs a matching grant with --yes; snapshot-only
+    // convergence cannot be used to bypass the external-code boundary.
+    fs::write(preset.join(script), "# Changed code\n").unwrap();
+    let blocked = run(&["upgrade", "demo", "--yes"]);
+    assert_eq!(blocked.status.code(), Some(1), "{blocked:?}");
+    assert!(
+        String::from_utf8_lossy(&blocked.stdout).contains("shell_external_code_not_allowed"),
+        "{blocked:?}"
+    );
+    assert!(!String::from_utf8_lossy(&blocked.stdout).contains("Nothing to upgrade."));
+    assert_eq!(
+        fs::read(state.join("installed/shell/demo").join(script)).unwrap(),
+        b"# Never executed\n"
+    );
+    assert_eq!(fs::read(state.join("trust.toml")).unwrap(), trust);
+}
+
 // These review outputs are small enough to drain after the child exits.
 #[cfg(unix)]
 fn output_with_terminal(
@@ -113,10 +389,11 @@ fn structured_env_migration_is_explicit_backup_first_and_idempotent() {
     let shell = root.join("shell/demo");
     fs::create_dir_all(&app).unwrap();
     fs::create_dir_all(&shell).unwrap();
-    let app_metadata = "metadata_schema_version=2\ndest='~/.demo'\n[artifact]\nscript='build.ts'\nruntime='bun'\nenv=['TOKEN=ALIAS']\n[permissions]\nschema_version=1\nenvironment=[{name='TOKEN',sensitivity='secret'}]\n[[files]]\nsource='config'\n";
-    let shell_metadata = "[[files]]\nsource='run.ts'\nruntime='bun'\nenv=['VALUE']\n[files.permissions]\nschema_version=1\nenvironment=[{name='VALUE',sensitivity='plain'}]\n";
-    fs::write(app.join("shine.toml"), app_metadata).unwrap();
-    fs::write(shell.join("shine.toml"), shell_metadata).unwrap();
+    let app_metadata = "metadata_schema_version=2\ndest='~/.demo'\n[artifact]\nscript='build.ts'\nruntime='bun'\nenv=['TOKEN=ALIAS']\n[permissions]\nschema_version=1\nenvironment=[{name='TOKEN',sensitivity='secret'}]\n[[files]]\nsource='config'\n".replace('\n', "\r\n");
+    let shell_metadata = "[[files]]\nsource='run.ts'\nruntime='bun'\nenv=['VALUE']\n[files.permissions]\nschema_version=1\nenvironment=[{name='VALUE',sensitivity='plain'}]\n".replace('\n', "\r\n");
+    let shell_metadata = shell_metadata.trim_end_matches("\r\n").to_string();
+    fs::write(app.join("shine.toml"), &app_metadata).unwrap();
+    fs::write(shell.join("shine.toml"), &shell_metadata).unwrap();
     fs::write(app.join("config"), "unchanged").unwrap();
     fs::write(app.join("build.ts"), "console.log(process.env.ALIAS);").unwrap();
     fs::write(shell.join("run.ts"), "console.log(process.env.VALUE);").unwrap();
@@ -194,6 +471,22 @@ fn structured_env_migration_is_explicit_backup_first_and_idempotent() {
     assert!(applied.status.success(), "{applied:?}");
     let result: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
     assert_eq!(result["summary"]["changes"], 2);
+    for file in result["files"].as_array().unwrap() {
+        let target = file["target"].as_str().unwrap();
+        let bytes = fs::read(root.join(target)).unwrap();
+        assert_eq!(
+            shine_core::digest::sha256_hex(&bytes),
+            file["candidate_sha256"]
+        );
+        assert!(bytes.windows(2).any(|pair| pair == b"\r\n"));
+        assert_eq!(bytes.ends_with(b"\r\n"), target.starts_with("app/"));
+        assert!(
+            !String::from_utf8(bytes)
+                .unwrap()
+                .replace("\r\n", "")
+                .contains('\n')
+        );
+    }
     let backup =
         f.0.join("state")
             .join(result["backup_set"].as_str().unwrap());
@@ -305,6 +598,106 @@ fn migration_diff_colors_follow_stdout_and_leave_json_and_sources_unchanged() {
         assert_eq!(
             fs::read_to_string(category.join("shine.toml")).unwrap(),
             original
+        );
+        assert!(!fixture.0.join("state").exists());
+    }
+}
+
+#[test]
+fn managed_overlay_migration_crlf_preview_is_read_only_and_explains_upstream_publication() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let shell = state.join("overlay/shell/demo");
+    fs::create_dir_all(&shell).unwrap();
+    fs::create_dir_all(state.join("presets")).unwrap();
+    let config = "schema_version=2\npresets_overlay_git='https://example.invalid/presets.git'\n";
+    let original = "# unchanged heading\r\n[[files]]\r\nsource='run.ts'\r\nruntime='bun'\r\nenv=['TOKEN']\r\n[files.permissions]\r\nschema_version=1\r\nenvironment=[{name='TOKEN',sensitivity='secret'}]\r\n";
+    fs::write(state.join("config.toml"), config).unwrap();
+    fs::write(shell.join("shine.toml"), original).unwrap();
+    fs::write(shell.join("run.ts"), "throw new Error('must not run');").unwrap();
+    for args in [
+        vec!["--dry-run"],
+        vec!["--yes"],
+        vec!["--dry-run", "--format", "json"],
+    ] {
+        let output = fixture
+            .command()
+            .env("NO_COLOR", "1")
+            .args(["preset", "migrate"])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        if args.contains(&"json") {
+            let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(report["summary"]["changes"], 0);
+            assert_eq!(report["summary"]["blockers"], 1);
+            assert!(report["files"].as_array().unwrap().is_empty());
+            assert_eq!(
+                report["diagnostics"][0]["code"],
+                "managed_overlay_read_only"
+            );
+            assert!(!text.contains("Preview only"));
+            assert!(!text.contains("--- a/"));
+        } else {
+            assert!(text.contains("0 automatic changes"), "{text}");
+            assert!(text.contains("Preview only: update the upstream checkout; this managed overlay will not be changed."), "{text}");
+            assert!(
+                text.contains(
+                    "Commit and push the upstream changes to the configured remote branch"
+                ),
+                "{text}"
+            );
+            assert!(text.contains("shine preset pull"));
+            assert!(text.contains("Line endings: CRLF (displayed as LF)."));
+            assert!(text.contains(" source='run.ts'\n"), "{text:?}");
+            assert!(!text.contains("-# unchanged heading"), "{text:?}");
+            assert!(!text.contains(r"\r"), "{text:?}");
+        }
+        assert_eq!(
+            fs::read(shell.join("shine.toml")).unwrap(),
+            original.as_bytes()
+        );
+        assert_eq!(
+            fs::read_to_string(state.join("config.toml")).unwrap(),
+            config
+        );
+        assert!(!state.join("preset-migration-backups").exists());
+        assert!(!state.join("trust.toml").exists());
+    }
+}
+
+#[test]
+fn mixed_line_ending_migration_fails_without_initialization_or_source_writes() {
+    let fixture = Fixture::new();
+    let root = fixture.0.join("presets");
+    let app = root.join("app/demo");
+    fs::create_dir_all(&app).unwrap();
+    let original = "# CRLF heading\r\ndest='~/.demo'\n";
+    fs::write(app.join("shine.toml"), original).unwrap();
+    for args in [
+        ["--dry-run", "--format", "json"],
+        ["--yes", "--format", "json"],
+    ] {
+        let output = fixture
+            .command()
+            .args(["preset", "migrate"])
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["summary"]["changes"], 0);
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "mixed_metadata_line_endings"
+        );
+        assert_eq!(
+            fs::read(app.join("shine.toml")).unwrap(),
+            original.as_bytes()
         );
         assert!(!fixture.0.join("state").exists());
     }
@@ -4555,6 +4948,44 @@ fn targeted_upgrade_keeps_category_scope_consent_and_summary_contracts() {
     );
     assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
 
+    // Stale-receipt pruning remains actionable independently of content updates.
+    fs::write(destination.join("demo/one.txt"), "v2").unwrap();
+    fs::write(presets.join("app/demo/one.txt"), "v2").unwrap();
+    let metadata_path = presets.join("app/demo/shine.toml");
+    let metadata = fs::read_to_string(&metadata_path).unwrap();
+    fs::write(
+        &metadata_path,
+        metadata.replace("[[files]]\nsource = 'two.txt'\n", ""),
+    )
+    .unwrap();
+    let denied = run(&["upgrade", "app/demo", "--prune-stale"]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("approval requires"));
+    assert!(!String::from_utf8_lossy(&denied.stdout).contains("Nothing to upgrade."));
+    assert_eq!(fs::read(destination.join("demo/two.txt")).unwrap(), b"v2");
+    assert_eq!(fs::read(state.join("app-manifest.toml")).unwrap(), receipt);
+    let pruned = run(&["upgrade", "app/demo", "--prune-stale", "--yes"]);
+    assert!(pruned.status.success(), "{pruned:?}");
+    assert!(!destination.join("demo/two.txt").exists());
+    assert_eq!(fs::read(destination.join("demo/one.txt")).unwrap(), b"v2");
+    assert_eq!(fs::read(destination.join("other/two.txt")).unwrap(), b"v1");
+    let receipt = fs::read(state.join("app-manifest.toml")).unwrap();
+    let manifest: shine_core::install::AppManifest =
+        toml::from_str(std::str::from_utf8(&receipt).unwrap()).unwrap();
+    let sources = manifest
+        .entries
+        .iter()
+        .map(|entry| entry.source.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(!sources.contains("app/demo/two.txt"));
+    assert!(sources.contains("app/demo/one.txt"));
+    assert!(sources.contains("app/other/two.txt"));
+    let before = upgrade_tree_state(&fixture.0);
+    let noop = run(&["upgrade", "app/demo", "--prune-stale"]);
+    assert!(noop.status.success(), "{noop:?}");
+    assert!(String::from_utf8_lossy(&noop.stdout).contains("Nothing to upgrade."));
+    assert_eq!(upgrade_tree_state(&fixture.0), before);
+
     for (args, error) in [
         (vec!["upgrade", "sys/", "--yes"], "invalid system target"),
         (
@@ -6338,7 +6769,7 @@ fn migration_preview_encodes_diff_without_changing_applied_metadata() {
     fs::create_dir_all(&app).unwrap();
     let original = format!(
         "# preserved\tcomment\r\ndest = '~/.demo'\r\npost_install = {{ command = 'shine', args = ['app', 'artifact', 'apply', {}] }}\r\n[artifact]\r\nscript = 'build.ts'\r\n",
-        toml::Value::String(category.into())
+        serde_json::to_string(category).unwrap()
     );
     fs::write(app.join("shine.toml"), &original).unwrap();
     fs::write(
@@ -6375,7 +6806,10 @@ fn migration_preview_encodes_diff_without_changing_applied_metadata() {
     let text = String::from_utf8(preview.stdout).unwrap();
     assert!(!text.contains(['\r', '\t', '\u{1b}']), "{text:?}");
     assert!(!text.contains("\nFORGED"), "{text:?}");
-    assert!(text.contains(r"# preserved\tcomment\r"), "{text:?}");
+    assert!(text.contains(r"# preserved\tcomment"), "{text:?}");
+    assert!(!text.contains(r"comment\r"), "{text:?}");
+    assert!(text.contains("Line endings: CRLF (displayed as LF)."));
+    assert!(text.contains(" # preserved\\tcomment\n"), "{text:?}");
     assert_eq!(
         text.lines()
             .filter(|line| line.starts_with("--- a/"))
@@ -6399,8 +6833,8 @@ fn migration_preview_encodes_diff_without_changing_applied_metadata() {
     );
     assert!(
         bytes
-            .windows(b"# preserved\tcomment\n".len())
-            .any(|w| w == b"# preserved\tcomment\n")
+            .windows(b"# preserved\tcomment\r\n".len())
+            .any(|w| w == b"# preserved\tcomment\r\n")
     );
     assert_eq!(
         fs::read_to_string(app.join("build.ts")).unwrap(),

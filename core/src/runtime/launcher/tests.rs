@@ -1,5 +1,85 @@
 use super::*;
 use crate::runtime::RealHost;
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_verbatim_roots_retain_launcher_ownership_and_foreign_pair_protection() {
+    use crate::runtime::{HostOperation, InMemoryHost};
+    use std::os::windows::ffi::OsStringExt;
+
+    for root in [
+        Path::new(r"\\?\C:\shine\installed\shell\demo"),
+        Path::new(r"\\?\UNC\server\share\shine\installed\shell\demo"),
+    ] {
+        let bin = root.parent().unwrap().join("bin");
+        let spec = bun_spec(&root.join("tool.ts"), "tool");
+        let resources = prepare_launcher_resources(&bin, &spec);
+        let host = InMemoryHost::new();
+        for resource in &resources {
+            apply_prepared_launcher_resource(&host, resource)
+                .await
+                .unwrap();
+        }
+        let before = host.operations().len();
+        let probe = probe_managed_command_with_host(&host, &bin, &spec.link_name, &[root.into()])
+            .await
+            .unwrap();
+        assert!(
+            probe.conflicts.is_empty(),
+            "{root:?}: {:?}",
+            probe.conflicts
+        );
+        assert!(
+            probe
+                .resources
+                .iter()
+                .map(|r| r.destination())
+                .eq(resources.iter().map(|r| r.destination()))
+        );
+        assert!(
+            host.operations()[before..]
+                .iter()
+                .all(|op| matches!(op, HostOperation::Read(_)))
+        );
+
+        let foreign = bun_spec(&root.with_file_name("demo-foreign").join("tool.ts"), "tool");
+        let foreign_resources = prepare_launcher_resources(&bin, &foreign);
+        // One foreign member must protect both Windows shim files, including
+        // when its marker's root shares the entire managed directory prefix.
+        for (resource, foreign_resource) in resources.iter().zip(&foreign_resources) {
+            apply_prepared_launcher_resource(&host, foreign_resource)
+                .await
+                .unwrap();
+            let before = host.operations().len();
+            let probe =
+                probe_managed_command_with_host(&host, &bin, &spec.link_name, &[root.into()])
+                    .await
+                    .unwrap();
+            assert!(probe.resources.is_empty());
+            assert_eq!(probe.conflicts, [resource.destination()]);
+            assert!(
+                host.operations()[before..]
+                    .iter()
+                    .all(|op| matches!(op, HostOperation::Read(_)))
+            );
+            apply_prepared_launcher_resource(&host, resource)
+                .await
+                .unwrap();
+        }
+    }
+    let root = PathBuf::from(std::ffi::OsString::from_wide(&[
+        b'C' as u16,
+        b':' as u16,
+        b'\\' as u16,
+        0xd800,
+    ]));
+    assert!(!target_is_managed(
+        Path::new("C:\\\u{fffd}\\tool.ts"),
+        &root,
+        Path::new(r"C:\bin")
+    ));
+}
+
 #[test]
 fn native_cmd_paths_preserve_apostrophes_and_legacy_reconstruction() {
     for source in [

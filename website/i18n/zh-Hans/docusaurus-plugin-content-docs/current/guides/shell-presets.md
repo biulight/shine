@@ -28,17 +28,11 @@ shine install shell/utils/shine-env-export
 类别 target 会启用当前平台可用的全部命令；只需要其中一个命令时，使用明确的
 `category/command` target。修改型命令不接受裸命令名，因为不同类别可能出现同名命令。
 
-生成的 Shell profile 会按字面值处理目录名称，包括空格、美元符号和反引号。主目录下的路径会保留可移植的 `$HOME` 引用。
-
 安装后需打开新终端或重新加载 shell profile。需要补全时运行：
 
 ```bash
 shine completions install
 ```
-
-Profile 结果中的路径会转义终端控制字符。若 shell 配置路径包含控制字符或无法表示为 UTF-8，
-激活提示会要求打开新 shell，不提供可复制的重新加载命令；生成的 profile 仍使用原始路径。
-普通路径继续显示带引号的重新加载命令。
 
 ## 修复安装
 
@@ -51,21 +45,14 @@ shine install shell/proxy --replace-managed
 
 `--replace-managed` 会覆盖 Shine 管理的对应内容。先用 `shine info shell/proxy --diff` 检查状态，避免把有意的本地修改当作损坏处理。
 
-批量操作遇到命令冲突时，修复提示会指出所属类别，模板生成的脚本也一样。冲突输出会转义命令名
-和路径中的控制字符。类别含控制字符时，提示会要求使用原类别参数，不提供可复制命令。
-删除或替换前，请先检查提示中的路径。
-
-切换预设来源后，可运行 `shine upgrade shell/<CATEGORY>` 更新已安装命令。Shine 会根据安装记录识别旧路径上的受管命令，再迁移到当前部署位置；不会因此接管无关命令文件。外部代码仍需按当前计划审阅和确认。
-
-在 Windows 上，从 CMD 启动原生 PowerShell 命令时，脚本路径中的单引号会被原样保留
-（例如用户名目录 `O'Connor`）。运行 `shine upgrade shell/<CATEGORY>` 更新已有启动器；
-原有安装记录仍可用于恢复。更新完成后，后续升级审阅会将未发生变化的启动器识别为最新状态。
+命令与已有文件冲突时，请先检查提示中的路径，再决定是否删除或替换。
+切换预设来源或更新 Shine 后，可运行 `shine upgrade shell/<CATEGORY>` 更新已安装命令。
+外部代码仍需审阅和授权。
 
 ## 安装、升级或卸载中断后怎么办 {#恢复中断的-shell-事务}
 
-同一配置目录中的 Shell 变更会依次执行，包括恢复和实时渲染。等待结束后，Shine 会重新校验
-已审阅的 Plan；若相关状态发生变化，需要重新审阅再重试。等待超过 30 秒会报错，不执行等待中的
-操作。其它类别的安装记录会保留。
+若另一项 Shell 操作仍在运行，请等待它结束。如果 Shine 提示已审阅的变更发生变化，
+请重新审阅 Plan 后再重试。
 
 如果 Shell 预设操作意外中断，Shine 可能会暂停后续修改操作，并提示先执行恢复：
 
@@ -92,22 +79,16 @@ shine shell uninstall utils/shine-env-export
 自动化必须传入 `--yes`，但 Plan 与安全检查仍会执行。`--dry-run` 是独立预览，不能与 `--yes`
 组合。
 
-每个安装或 source 的 Shell 入口都会作为未隔离代码交付。External 和 overlay command 在安装前都
-需要人工确认当前 Plan 或已有匹配的持久 grant，无论权限表缺失、为空、包含枚举项，
-还是使用兼容字段 `opaque_code = "unrestricted"`。作者能力说明仅供审阅，不是文件、网络或命令限制。
+Shell 命令以你的权限运行，并未被沙箱隔离。External 和 overlay 命令无论如何声明权限，
+都需要确认当前 Plan 或具有匹配的信任授权。操作被阻止时，请按提示运行 `shine trust inspect`
+和 `shine trust grant` 审阅。只有也信任该来源的后续修改时，才使用 `--development`。
 详见[自定义 Preset 能力说明](./custom-presets.md#声明权限)。
-本地开发期间，只有准备让所显示来源中的后续代码修改继续受信任时，才为 grant 添加
-`--development`。
-当生命周期 Plan 因缺少信任而被阻塞时，Shine 会报告精确到 command 的
-`shine trust inspect shell/<CATEGORY>/<COMMAND>` 和 `shine trust grant` 后续命令。
 
 Snapshot trust 与默认 snapshot 部署配合使用：Shine 把已审阅类别内容复制到受管目录，之后的来源
 修改只有经过显式审阅更新才进入已安装命令。`external_shell_mode = "live"` 必须使用 development
-trust，因为以后调用或 source 会读取可变的受信任来源。Snapshot trust 与 live 部署的组合会被阻塞，
-该规则同样覆盖 Bun launcher、Windows shim 和调用时 transform。
+trust，因为以后调用或 source 会读取可变的受信任来源。Snapshot trust 不能用于 live 部署。
 
-同一类别的已安装命令共享一个 snapshot 目录。更新替换共享代码时，安全 Plan 会列出选中的命令和
-所有受影响的已安装兄弟命令；每个受影响 external command 都必须由本次人工确认或匹配 grant 授权。
+更新共享文件可能影响同类别中的其他已安装命令。Plan 会列出所有受影响的命令供审阅；每个受影响 external command 都必须由本次人工确认或匹配 grant 授权。
 未安装兄弟不需要 grant，也不会被安装。升级 Shine 后会保留已有 live launcher，但 `list`/`info`
 会显示 `development trust required`，直到重新审阅。卸载和恢复无需先信任即将移除的代码。
 

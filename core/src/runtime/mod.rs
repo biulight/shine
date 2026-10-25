@@ -70,6 +70,7 @@ pub use host::{
 pub(crate) use inspection::JournalInspection;
 pub use inspection::{
     AppFileInspection, InspectionChange, InspectionFileStatus, ShellFileInspection,
+    ShellSnapshotFileInspection,
 };
 pub use launcher::{
     LinkConflict, LinkConflictKind, LinkReport, LinkSpec, UnlinkReport, command_path_for_name,

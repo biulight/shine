@@ -29,6 +29,13 @@ input snapshot hash, selected backend and recipient list form a length-delimited
 context hash. The hash is also inside the encrypted payload, so editing only outer
 metadata cannot relabel an old cache. Format/context/backend misses compile the
 captured sources; after cache decryption starts, failure/cancellation is terminal.
+
+The snapshot hash uses the `shine-env-input-v2` domain, length-prefixed fields, source count,
+explicit presence tags and native path bytes. Both ordinary and hybrid-local cache versions
+are 2, invalidating the earlier ambiguous concatenation format. Do not replace presence tags
+with a literal missing-file string or hash lossy display paths. See the
+[2026-10-25 audit](../operations/hybrid-security-audit-2026-10-25.md) for the boundary-movement regression.
+
 Encrypted payload parse errors omit plaintext diagnostics. Cache writes are private
 and atomic; failure warns but does not block successfully compiled execution.
 

@@ -148,15 +148,8 @@ shine env broker policy update \
 包括原有的 project 或远端 workspace 限制；详见 `shine env broker policy update --help`。
 策略发生变化时仍需审阅并确认。
 
-本机 `policy diff` 和 `policy update` 在支持颜色的终端以绿色显示新增、红色显示删除。
-自动颜色遵循 `NO_COLOR`；重定向输出为纯文本，除非通过 `FORCE_COLOR=1` 等方式显式强制颜色。
-diff 显示会转义控制字符，不改变存储的策略值或匹配规则。
-
-`shine env broker policy list` 每行显示一项策略。SSH target 或 project 中的控制字符以
-`\n`、`\t` 等转义形式显示。需要查看策略的 TOML 表示时，使用
-`shine env broker policy info <NAME>`；列表显示不会修改存储值或匹配规则。
-
-并发修改策略会保留对其他策略的更新。如果等待确认期间目标策略被修改或删除，更新会失败，需要重新审阅。
+使用 `shine env broker policy list` 查看策略列表，用 `shine env broker policy info <NAME>`
+查看某项策略。审阅期间策略发生变化时，请检查新版本后重试。
 
 若没有本机 checkout，可使用 inspect 会话查看候选描述。先在本机开启 inspect，再在远端项目目录运行 `describe`；该请求会显示 workspace、source 摘要、mode、完整 argv 与 release 键，并与本机策略比较：
 
@@ -197,7 +190,8 @@ shine env broker describe --mode development \
   --release-all-declared -- bun run build
 ```
 
-Shine 还会要求该策略属于当前 SSH target；若策略限定了远端 workspace 路径，本次报告也必须一致。确认界面会显示完整 TOML diff，保留长行、转义控制字符，不使用颜色高亮；批准后只替换命中的 allow 并刷新 workspace/source 摘要，保留策略名、project、远端路径约束及其它 allow。预览后策略若被其它进程修改，写入会失败，需重新检查。`--update-policy` 不会降低远端元数据的信任风险，优先使用可信本机 checkout 的 `policy diff` / `policy update`。
+策略必须匹配当前 SSH 目标及限定的工作区路径。确认前请在本机审阅拟议变更。
+从远端元数据更新策略仍需信任该远端；有已验证的本机 checkout 时，应优先使用它。
 
 ## 连接 Windows 远端
 
@@ -234,7 +228,6 @@ Shine 会在本机端重新发起系统 `rsync` 或 `scp` 传输；优先使用 
 需要跳过 `rsync` 探测并强制使用 `scp` 时，添加 `--scp`。
 SSH 目标直接使用 IPv6 地址时，为兼容系统 rsync，传输会使用 SCP。SCP 即使未指定 `--force`
 也可能覆盖已有文件，Shine 会显示警告；其 `--dry-run` 只显示解析后的路径，不复制文件。
-Rsync 使用逐文件显示进度的 `--progress` 选项，兼容 macOS 自带的系统 rsync。
 使用 rsync 时，在输入的命令中为含空格的路径和通配模式加引号：
 
 ```bash
@@ -243,9 +236,6 @@ shine local upload './release notes.txt' '/tmp/release files'
 ```
 
 空格和 shell 标点会保留为远端路径的一部分；`*`、`?` 和方括号模式仍可匹配远端文件。
-使用 SCP 重连时，Shine 会转换 SSH 的端口、用户名和控制 socket 选项，保留身份文件、跳板主机等
-连接设置，并跳过原会话的终端和端口转发选项。
-
 ## 从本机上传到远端
 
 仍然在远端 shell 中运行：
@@ -260,23 +250,17 @@ shine local upload ./site /tmp/site
 
 上传目录时，Shine 会拒绝把文件覆盖成目录或把目录覆盖成文件。先运行 `--dry-run` 可以确认解析后的两端路径和覆盖结果。
 
-SCP 的 dry-run 预览会为每个路径加引号，并转义控制字符，以便区分路径中的空格和换行。
-这种显示方式不会改变实际传输使用的路径。
-本机传输路径必须是有效 UTF-8。若 `~` 引用的本机 home 无法表示，传输和预览会在开始前拒绝，
-不会选中替换字符目录。本机路径提示只展开开头的 `~`；`$VAR` 和 `${VAR}` 保留为文件名文本。
+本机传输路径必须是有效 UTF-8。本机路径提示只展开开头的 `~`；`$VAR` 和 `${VAR}`
+保留为文件名文本。
 
 ## 查看连接状态
-
-状态字段及连接／拒绝消息中的终端控制字符显示为转义文本；会话、认证和连接路径保留原值。
 
 ```bash
 shine local status
 ```
 
-状态输出会显示会话 ID、连接是否可达、协议版本，以及本机端的默认目录。若当前 shell 不是通过 `shine ssh` 进入的，`shine local` 会提示缺少会话环境变量。
-连接/握手和随后的状态请求各有 5 秒超时。连接不可达时在 stdout 报告，退出码为 0；
-状态请求失败（包括认证拒绝或响应超时）时在 stderr 报错，退出码为 1。
-这些等待上限仅适用于 `local status`。
+用结果检查连接是否可达，并确认本机默认目录。若提示缺少会话变量，请用 `shine ssh` 重新连接。
+连接或认证失败时，请检查 SSH 会话后再重试传输。
 
 ### 通过 broker 读取混合秘密
 

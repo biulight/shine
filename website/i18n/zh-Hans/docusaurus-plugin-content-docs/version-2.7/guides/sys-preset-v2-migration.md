@@ -55,7 +55,7 @@ items = ["neovim"]
 
 - `detect` 告诉 Shine 如何检查软件是否已经存在；这里检查 `nvim` 命令。
 - `install` 告诉 Shine 如何安装缺失的软件；这里使用 Homebrew，实际安装前需确保 Homebrew 可用。
-- 固定 package provider 不需要空的 `permissions` 表；Shine 会从 typed metadata 推导操作身份。
+- 固定 package provider 不需要空的 `permissions` 表。
 - `[profiles.recommended]` 选择该配置组包含的安装项。保留原有配置组时，检查其中的 ID 仍然有效。
 
 Ubuntu 和 Windows 应使用对应的 `apt` 或 `winget` provider，并核对该包管理器中的实际包名；不要直接照搬 Homebrew 的包名。
@@ -64,8 +64,7 @@ Ubuntu 和 Windows 应使用对应的 `apt` 或 `winget` provider，并核对该
 
 如果一个安装项无法用包管理器完成，把旧脚本中属于它的逻辑移到 `install/<item>.sh` 或 `install/<item>.ps1`，并将该项的 `install` 改为 `kind = "script"`、`path = "install/<item>.sh"`（Windows 使用 `.ps1`）。
 
-脚本只负责这一个安装项，用普通退出码报告成功或失败，并保留对应的 `detect`。Core 会自动把它标为
-未隔离代码。只有在有助于审阅时才添加可选作者能力说明；环境输入和 Administrator 要求仍须显式配置。
+脚本只负责这一个安装项，用普通退出码报告成功或失败，并保留对应的 `detect`。脚本没有沙箱隔离。只有在有助于审阅时才添加可选作者能力说明；环境输入和 Administrator 要求仍须显式配置。
 具体字段见[能力说明](./custom-presets.md#声明权限)。
 
 全部安装项迁移完成后，移除旧的统一入口及旧状态输出、更新检查逻辑。第三方软件的更新交给其包管理器或上游工具，`shine sys bootstrap` 只负责确保软件已安装。

@@ -43,41 +43,9 @@ pub async fn handle_config_upgrade(
     };
 
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
-    let os_id = sys::detect_os_id().await?;
     let reviewed = crate::lifecycle_plan::review_upgrade_plans(
         config,
-        [
-            crate::lifecycle_plan::LifecyclePlanRequest::shell(
-                ShellPlanRequest {
-                    operation: LifecycleOperation::Upgrade,
-                    target: None,
-                    force: false,
-                    purge: false,
-                    input_versions: PlanningInputVersions::default(),
-                },
-                config,
-            ),
-            crate::lifecycle_plan::LifecyclePlanRequest::app(
-                AppPlanRequest {
-                    operation: LifecycleOperation::Upgrade,
-                    target: None,
-                    force: false,
-                    purge: false,
-                    prune_stale,
-                    input_versions: PlanningInputVersions::default(),
-                },
-                config,
-            ),
-            crate::lifecycle_plan::LifecyclePlanRequest::sys(
-                SysManagedPlanRequest {
-                    operation: LifecycleOperation::Upgrade,
-                    os_id,
-                    target: None,
-                    input_versions: PlanningInputVersions::default(),
-                },
-                config,
-            ),
-        ],
+        upgrade_plan_requests(config, None, prune_stale).await?,
         yes,
         verbose,
     )
@@ -164,6 +132,136 @@ pub async fn handle_config_upgrade(
     Ok(())
 }
 
+/// The early dispatch path observes the same target scope as execution, without
+/// initializing config or entering compatibility migration, trust or apply.
+pub(crate) async fn finish_converged_upgrade(
+    config: &Config,
+    target: Option<&str>,
+    prune_stale: bool,
+    verbose: bool,
+) -> Result<bool> {
+    let compatibility = crate::preset_migration::active_compatibility_plan(target).await?;
+    if crate::preset_migration::compatibility_required(&compatibility) {
+        return Ok(false);
+    }
+    crate::lifecycle_plan::finish_converged_upgrade(
+        config,
+        upgrade_plan_requests(config, target, prune_stale).await?,
+        verbose,
+    )
+    .await
+}
+
+async fn upgrade_plan_requests(
+    config: &Config,
+    target: Option<&str>,
+    prune_stale: bool,
+) -> Result<Vec<crate::lifecycle_plan::LifecyclePlanRequest>> {
+    use crate::lifecycle_plan::LifecyclePlanRequest;
+    if let Some(target) = target {
+        return Ok(vec![
+            target_upgrade_request(config, target, prune_stale).await?,
+        ]);
+    }
+    Ok(vec![
+        LifecyclePlanRequest::shell(
+            ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            },
+            config,
+        ),
+        LifecyclePlanRequest::app(
+            AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: false,
+                purge: false,
+                prune_stale,
+                input_versions: PlanningInputVersions::default(),
+            },
+            config,
+        ),
+        LifecyclePlanRequest::sys(
+            SysManagedPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                os_id: sys::detect_os_id().await?,
+                target: None,
+                input_versions: PlanningInputVersions::default(),
+            },
+            config,
+        ),
+    ])
+}
+
+async fn target_upgrade_request(
+    config: &Config,
+    target: &str,
+    prune_stale: bool,
+) -> Result<crate::lifecycle_plan::LifecyclePlanRequest> {
+    use crate::lifecycle_plan::LifecyclePlanRequest;
+    use crate::shim::{PresetKind, resolve_preset_kind};
+    if target.trim().is_empty() {
+        bail!("upgrade target must not be empty");
+    }
+    if let Some(item) = target.strip_prefix("sys/") {
+        if item.is_empty() || item.contains('/') {
+            bail!("invalid system target `{target}`; expected sys/<item>");
+        }
+        if prune_stale {
+            bail!("`--prune-stale` applies only to app targets");
+        }
+        return Ok(LifecyclePlanRequest::sys(
+            SysManagedPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                os_id: sys::detect_os_id().await?,
+                target: Some(item.to_string()),
+                input_versions: PlanningInputVersions::default(),
+            },
+            config,
+        ));
+    }
+    let normalized = if let Some(rest) = target.strip_prefix("app/") {
+        format!("app/{}", rest.split('/').next().unwrap_or_default())
+    } else if let Some(rest) = target.strip_prefix("shell/") {
+        format!("shell/{}", rest.split('/').next().unwrap_or_default())
+    } else {
+        target.to_string()
+    };
+    let (kind, category) = resolve_preset_kind(config, &normalized).await?;
+    Ok(match kind {
+        PresetKind::App => LifecyclePlanRequest::app(
+            AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some(category),
+                force: false,
+                purge: false,
+                prune_stale,
+                input_versions: PlanningInputVersions::default(),
+            },
+            config,
+        ),
+        PresetKind::Shell => {
+            if prune_stale {
+                bail!("`--prune-stale` applies only to app targets");
+            }
+            LifecyclePlanRequest::shell(
+                ShellPlanRequest {
+                    operation: LifecycleOperation::Upgrade,
+                    target: Some(category),
+                    force: false,
+                    purge: false,
+                    input_versions: PlanningInputVersions::default(),
+                },
+                config,
+            )
+        }
+    })
+}
+
 async fn handle_config_target_upgrade(
     config: &Config,
     target: &str,
@@ -171,12 +269,9 @@ async fn handle_config_target_upgrade(
     prune_stale: bool,
     yes: bool,
 ) -> Result<()> {
-    use crate::shim::{PresetKind, resolve_preset_kind};
-
     if target.trim().is_empty() {
         bail!("upgrade target must not be empty");
     }
-
     let mut sep = if verbose {
         println!(
             "{}",
@@ -191,71 +286,53 @@ async fn handle_config_target_upgrade(
         )))
     };
 
+    let request = target_upgrade_request(config, target, prune_stale).await?;
     let TargetUpgradeSummary {
         updated,
         user_modified,
         link_conflicts,
         failed,
         restart_hints,
-    } = if let Some(item) = target.strip_prefix("sys/") {
-        if item.is_empty() || item.contains('/') {
-            bail!("invalid system target `{target}`; expected sys/<item>");
-        }
-        if prune_stale {
-            bail!("`--prune-stale` applies only to app targets");
-        }
-        let (report, lifecycle) =
-            Box::pin(sys::handle_upgrade_managed_target_with_result_approved(
-                config,
-                Some(item),
-                verbose,
-                yes,
-                &mut sep,
-            ))
-            .await?;
-        TargetUpgradeSummary::from_sys(&report, &lifecycle)
-    } else {
-        let normalized = if let Some(rest) = target.strip_prefix("app/") {
-            let category = rest.split('/').next().unwrap_or_default();
-            format!("app/{category}")
-        } else if let Some(rest) = target.strip_prefix("shell/") {
-            let category = rest.split('/').next().unwrap_or_default();
-            format!("shell/{category}")
-        } else {
-            target.to_string()
-        };
-        let (kind, category) = resolve_preset_kind(config, &normalized).await?;
-        match kind {
-            PresetKind::App => {
-                let (report, lifecycle) =
-                    Box::pin(apps::handle_upgrade_installed_target_with_result_approved(
-                        config,
-                        Some(&category),
-                        prune_stale,
-                        verbose,
-                        yes,
-                        &mut sep,
-                    ))
-                    .await?;
-                TargetUpgradeSummary::from_app(report, &lifecycle)
-            }
-            PresetKind::Shell => {
-                if prune_stale {
-                    bail!("`--prune-stale` applies only to app targets");
-                }
-                let (report, lifecycle) = Box::pin(
-                    shells::handle_upgrade_installed_target_with_result_approved(
-                        config,
-                        Some(&category),
-                        verbose,
-                        yes,
-                        &mut sep,
-                    ),
-                )
+    } = match request {
+        crate::lifecycle_plan::LifecyclePlanRequest::Sys(request) => {
+            let (report, lifecycle) =
+                Box::pin(sys::handle_upgrade_managed_target_with_result_approved(
+                    config,
+                    request.target.as_deref(),
+                    verbose,
+                    yes,
+                    &mut sep,
+                ))
                 .await?;
-                TargetUpgradeSummary::from_shell(&report, &lifecycle)
-            }
+            TargetUpgradeSummary::from_sys(&report, &lifecycle)
         }
+        crate::lifecycle_plan::LifecyclePlanRequest::App(request) => {
+            let (report, lifecycle) =
+                Box::pin(apps::handle_upgrade_installed_target_with_result_approved(
+                    config,
+                    request.target.as_deref(),
+                    prune_stale,
+                    verbose,
+                    yes,
+                    &mut sep,
+                ))
+                .await?;
+            TargetUpgradeSummary::from_app(report, &lifecycle)
+        }
+        crate::lifecycle_plan::LifecyclePlanRequest::Shell(request) => {
+            let (report, lifecycle) = Box::pin(
+                shells::handle_upgrade_installed_target_with_result_approved(
+                    config,
+                    request.target.as_deref(),
+                    verbose,
+                    yes,
+                    &mut sep,
+                ),
+            )
+            .await?;
+            TargetUpgradeSummary::from_shell(&report, &lifecycle)
+        }
+        _ => unreachable!("target upgrade request is App, Shell or managed Sys"),
     };
 
     let summary = config_upgrade_summary_parts(updated, user_modified, link_conflicts, failed);

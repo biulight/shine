@@ -541,6 +541,21 @@ fn push_edit(
     edits: &mut Vec<PresetMigrationEdit>,
     diagnostics: &mut Vec<PresetMigrationDiagnosticV1>,
 ) {
+    let candidate = match candidate {
+        Some(bytes) => {
+            let Some(bytes) = preserve_metadata_line_endings(original, &bytes) else {
+                diagnostics.push(diagnostic(
+                    PresetMigrationSeverityV1::Blocker,
+                    "mixed_metadata_line_endings",
+                    logical.trim_end_matches("/shine.toml"),
+                    "metadata mixes LF and CRLF; choose one line-ending style before migration",
+                ));
+                return;
+            };
+            Some(bytes)
+        }
+        None => None,
+    };
     let Some(path) = snapshot
         .origin(logical)
         .and_then(|origin| origin.physical_path.clone())
@@ -561,6 +576,33 @@ fn push_edit(
         original: original.to_vec(),
         candidate,
     });
+}
+
+// toml_edit writes LF even for untouched CRLF lines. Restore the source's
+// uniform style before hashing/validation, without touching escaped TOML values.
+// Mixed input needs an explicit author choice rather than whole-file conversion.
+fn preserve_metadata_line_endings(original: &[u8], candidate: &[u8]) -> Option<Vec<u8>> {
+    let lf = original.iter().filter(|&&byte| byte == b'\n').count();
+    let crlf = original.windows(2).filter(|pair| *pair == b"\r\n").count();
+    if crlf > 0 && crlf != lf {
+        return None;
+    }
+    let ending: &[u8] = if crlf > 0 { b"\r\n" } else { b"\n" };
+    let mut bytes = Vec::with_capacity(candidate.len());
+    for line in candidate.split_inclusive(|&byte| byte == b'\n') {
+        if let Some(content) = line.strip_suffix(b"\n") {
+            bytes.extend_from_slice(content.strip_suffix(b"\r").unwrap_or(content));
+            bytes.extend_from_slice(ending);
+        } else {
+            bytes.extend_from_slice(line);
+        }
+    }
+    if original.ends_with(b"\n") && !bytes.ends_with(b"\n") {
+        bytes.extend_from_slice(ending);
+    } else if !original.ends_with(b"\n") && bytes.ends_with(ending) {
+        bytes.truncate(bytes.len() - ending.len());
+    }
+    Some(bytes)
 }
 
 fn metadata_schema_version(logical: &str, bytes: &[u8]) -> Option<u32> {
@@ -651,6 +693,102 @@ fn diagnostic_source_layer(snapshot: &PresetSnapshot, target: &str) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LEGACY_APP_ENV: &str = "# keep\tcomment\ndescription = \"\"\"first\nsecond\"\"\"\ndest = '~/.demo'\n[artifact]\nscript = 'run.ts'\nenv = ['TOKEN=ALIAS']\n[permissions]\nschema_version = 1\nenvironment = [{name = 'TOKEN', sensitivity = 'secret'}]\n";
+    const LEGACY_SHELL_ENV: &str = "# keep\tcomment\ndescription = \"\"\"first\nsecond\"\"\"\n[[files]]\nsource = 'run.ts'\nruntime = 'bun'\nenv = ['TOKEN=ALIAS']\n[files.permissions]\nschema_version = 1\nenvironment = [{name = 'TOKEN', sensitivity = 'secret'}]\n";
+
+    #[test]
+    fn metadata_migration_preserves_line_endings_final_newline_and_values() {
+        for (kind, metadata) in [("app", LEGACY_APP_ENV), ("shell", LEGACY_SHELL_ENV)] {
+            for ending in ["\n", "\r\n"] {
+                for final_newline in [false, true] {
+                    let original = metadata.replace('\n', ending);
+                    let original = if final_newline {
+                        original
+                    } else {
+                        original.strip_suffix(ending).unwrap().to_string()
+                    };
+                    let logical = format!("{kind}/demo/shine.toml");
+                    let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+                        .base_root(std::env::temp_dir())
+                        .file(&logical, original.as_bytes().to_vec())
+                        .file(format!("{kind}/demo/run.ts"), Vec::new())
+                        .build();
+                    let plan = plan_preset_migration(&snapshot, "test", None, None);
+                    assert_eq!(plan.report.summary.blockers, 0);
+                    assert_eq!(plan.edits.len(), 1);
+                    let candidate = plan.edits[0].candidate.as_deref().unwrap();
+                    assert_eq!(candidate.ends_with(b"\n"), final_newline);
+                    for (index, &byte) in candidate.iter().enumerate() {
+                        if byte == b'\n' {
+                            assert_eq!(
+                                index > 0 && candidate[index - 1] == b'\r',
+                                ending == "\r\n"
+                            );
+                        }
+                    }
+                    assert!(candidate.starts_with(format!("# keep\tcomment{ending}").as_bytes()));
+                    let value: toml::Value = toml::from_slice(candidate).unwrap();
+                    let source_value: toml::Value = toml::from_str(&original).unwrap();
+                    assert_eq!(value["description"], source_value["description"]);
+                    let env = if kind == "app" {
+                        &value["artifact"]["env"]
+                    } else {
+                        &value["files"][0]["env"]
+                    };
+                    assert_eq!(env[0]["source"].as_str(), Some("TOKEN"));
+                    assert_eq!(env[0]["target"].as_str(), Some("ALIAS"));
+                    assert_eq!(env[0]["sensitivity"].as_str(), Some("secret"));
+                    assert_eq!(
+                        plan.report.files[0].candidate_sha256,
+                        Some(sha256(candidate))
+                    );
+                    assert_eq!(plan.edits[0].original, original.as_bytes());
+                    let migrated = PresetSnapshot::builder(PresetSourceKind::External)
+                        .base_root(std::env::temp_dir())
+                        .file(&logical, candidate.to_vec())
+                        .file(format!("{kind}/demo/run.ts"), Vec::new())
+                        .build();
+                    let repeated = plan_preset_migration(&migrated, "test", None, None);
+                    assert_eq!(repeated.report.status, PresetMigrationStatusV1::Current);
+                    assert!(repeated.edits.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_line_endings_block_rewrites_but_not_current_metadata() {
+        for (kind, metadata) in [("app", LEGACY_APP_ENV), ("shell", LEGACY_SHELL_ENV)] {
+            let original = metadata.replacen('\n', "\r\n", 1);
+            let logical = format!("{kind}/demo/shine.toml");
+            let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+                .base_root(std::env::temp_dir())
+                .file(&logical, original.as_bytes().to_vec())
+                .file(format!("{kind}/demo/run.ts"), Vec::new())
+                .build();
+            let plan = plan_preset_migration(&snapshot, "test", None, None);
+            assert_eq!(plan.report.status, PresetMigrationStatusV1::Blocked);
+            assert_eq!(plan.report.summary.changes, 0);
+            assert_eq!(plan.report.summary.blockers, 1);
+            assert_eq!(
+                plan.report.diagnostics[0].code,
+                "mixed_metadata_line_endings"
+            );
+            assert!(plan.edits.is_empty());
+            assert_eq!(snapshot.get(&logical), Some(original.as_bytes()));
+        }
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root(std::env::temp_dir())
+            .file(
+                "app/demo/shine.toml",
+                b"metadata_schema_version=2\r\ndest='~/.demo'\n".to_vec(),
+            )
+            .build();
+        let plan = plan_preset_migration(&snapshot, "test", None, None);
+        assert_eq!(plan.report.status, PresetMigrationStatusV1::Current);
+        assert!(plan.report.diagnostics.is_empty());
+    }
 
     #[test]
     fn app_v1_static_metadata_is_migrated_without_touching_payload() {

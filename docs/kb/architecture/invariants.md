@@ -67,6 +67,15 @@ bugs. Check this list before changing the modules named in each entry.
   Preset note and Shell attention before App/Sys queries; later errors cannot erase that output.
   Diff reads stay at their original presentation boundary. Manual refresh and upgrade hints remain
   distinct, generator evaluation stays opt-in, and evaluation failures render before nonzero exit.
+  Detailed Shell update diffs compare the entire category snapshot against the captured effective
+  Preset, including overlay bytes, additions/removals and Unix executable intent, once per category.
+  Print that shared snapshot diff after every selected command row and its details in the category,
+  before the next category, including targeted, global and verbose update views. Detailed status
+  groups receipt-only siblings with their category too; a category diff cannot split its rows.
+  These local-only bytes stay out of public reports; links are never followed and failed detailed
+  observations cannot imply no differences. Command-content status remains separate.
+  Deduplicate only equal file paths and complete current/desired byte pairs; raw source and rendered
+  evidence stay distinct when they differ. Empty-file additions/removals retain their existence rows.
   Global failure labels, detailed status columns and recorded Sys change fields encode controls at
   rendering; widths use the escaped strings. Manual-refresh hints omit copyable commands when
   category/source operands contain controls, without changing the original selected refresh set.
@@ -96,6 +105,11 @@ bugs. Check this list before changing the modules named in each entry.
   verbose content keeps the existing lossy UTF-8 decoding and missing-final-newline behavior.
   Info diff file labels encode controls before unified-diff construction, so path newlines cannot
   become structural diff lines. Missing Shell script/snapshot notices also encode their paths.
+  CLI migration, Info/update and broker policy diffs share LF-only line construction and explicit
+  missing-final-LF markers; bare CR never splits or joins rendered change rows. Info/update display
+  uniform CRLF on LF copies with both styles identified and explicitly report EOL-only changes.
+  Mixed LF/CRLF retains individual terminators in the escaped diff. Raw content/status comparisons,
+  hashes and installation bytes remain exact; Sys merge semantics stay separate.
   Local broker policy diff/update share stdout-aware diff encoding
   and colors; serialized comparison data, default-No confirmation and locked policy revalidation
   remain unchanged. SSH enrollment retains its separate local-TTY rendering and approval boundary.
@@ -237,6 +251,15 @@ bugs. Check this list before changing the modules named in each entry.
   original scope. The
   complete Plan always binds approval (ADRs 0094, 0097, 0099). No display mode creates directory-wide
   access.
+- **Converged CLI upgrade is read-only.** Except for explicitly requested `--pull`, upgrade first
+  loads config read-only and observes the same canonical target requests through Core. Only a ready
+  Upgrade Plan with all `None` steps, no required permissions/code boundaries/analysis work, and no
+  exceptional diagnostics can finish without approval or prepare/apply. A skipped manual-refresh
+  notice alone is not work. Snapshot/cache transactions, preserve/block steps and unknown effects
+  retain the normal path. This decision is independent of terminal/rendering mode and `--yes`.
+  The fast path precedes config initialization, advisory workers and release-cache checks. Failed
+  preflight observations never claim convergence; the original route retains its diagnostics and
+  fresh review/approval/lock-time checks. It creates no approval or reusable reviewed handoff (ADR 0153).
 - **No-op capabilities are decided by Core, never hidden by the renderer.** Current App files
   and current managed Sys items do not contribute operation permissions. Their observations and
   author statements remain bound; generators, hooks, shared transactions, and blocked Sys items
@@ -281,20 +304,25 @@ bugs. Check this list before changing the modules named in each entry.
   redefine the App/Shell/Sys TOML grammar; runtime parsers plus `preset validate` remain authoritative.
 - **Preset source migration is reviewed, metadata-only, and backup-first.** `shine preset migrate`
   derives candidates from one immutable effective snapshot, preserves unchanged TOML formatting,
-  validates candidates authoritatively, renders diffs through a CLI-only side channel, and rechecks
-  source SHA-256 immediately before backup and apply. Its versioned report contains only logical
+  uniform LF/CRLF style and final-newline presence on rewritten metadata, validates candidates
+  authoritatively, renders diffs through a CLI-only side channel, and rechecks source SHA-256
+  immediately before backup and apply. Its versioned report contains only logical
   targets, source layers, actions, stable codes, schema versions, hashes, and summary counts—never
-  file content, diffs, private values, or physical checkout paths. Dry-run creates no directory or
-  file. Apply requires default-No review (or explicit `--yes`) and a complete owner-only backup set
+  file content, diffs, private values, or physical checkout paths. Mixed LF/CRLF blocks rewrites
+  until the author chooses a style. Dry-run creates no directory or file. Apply requires default-No
+  review (or explicit `--yes`) and a complete owner-only backup set
   with hash/mode manifest before the first atomic metadata replacement or removal. Payloads, scripts,
   environment values, runtime manifests, and trust grants are never migrated. Opaque-code
   permissions, broad network access, and Sys v1 dispatchers are never inferred. Managed Git overlays
-  are diagnostic-only; a source change, backup/write failure, refusal, or remaining blocker fails the
-  command even when independent safe edits have converged. Terminal summaries encode data before
-  wrapping; diff headers encode logical paths before diff construction and body rendering preserves
-  structural newlines while encoding CR/TAB/ESC. Migration and info share stdout-aware diff colors
-  after encoding, retaining existing forced-color overrides as well as `NO_COLOR` and ordinary
-  redirection detection. Display escapes and colors never enter candidates or JSON.
+  are diagnostic-only; their retained diffs are explicitly upstream-only previews, excluded from
+  automatic changes, with commit/push-before-pull guidance. A source change, backup/write failure,
+  refusal, or remaining blocker fails the command even when independent safe edits have converged.
+  Terminal summaries encode data before wrapping; diff headers encode logical paths before diff
+  construction and body rendering preserves
+  structural newlines while encoding CR/TAB/ESC. Migration displays paired CRLF as LF on
+  presentation copies with a notice; bare CR/TAB/ESC remain encoded. Migration and info share
+  stdout-aware diff colors after encoding, retaining existing forced-color overrides as well as
+  `NO_COLOR` and ordinary redirection detection. Display escapes and colors never enter candidates or JSON.
   Control-bearing remediation targets require original operands rather than escaped command aliases.
 - **Preset bundle bytes exclude host identity and author-only state.** `shine preset pack` uses one
   validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical
@@ -331,7 +359,7 @@ bugs. Check this list before changing the modules named in each entry.
   layer still match; Preset content cannot create that grant. Trust grant schemas older than v2 are
   inspection/revocation state only and require a new review before execution.
   Untargeted upgrade includes declarations only from installed App categories, installed Shell
-  commands, and enabled managed Sys items; merely available embedded, external, or overlay Presets
+  commands, and recorded managed Sys items; merely available embedded, external, or overlay Presets
   cannot contribute required permissions or trust blockers. A fully current Shell
   command contributes no command-local mutation permissions; shared cache, snapshot, rendered, or
   profile actions contribute only their own exact transaction permissions.
@@ -509,6 +537,9 @@ bugs. Check this list before changing the modules named in each entry.
   matching `# shine-target:`/`REM shine-target:` under the managed root** (Windows `.ps1`/`.cmd`
   shims and Unix `runtime = "bun"` launcher scripts); app
   uninstall is driven by `~/.shine/app-manifest.toml` entries only.
+  Windows compares roots in the same native spelling as shim markers, removing only the verbatim
+  prefix before component-wise containment. Non-Unicode paths fail closed; sibling directories
+  and a foreign member of a shim pair remain conflicts.
 - **Bun launchers are marked regular files, identified only by content, never by name.** A Unix
   `runtime = "bun"` command is a generated executable script (not a symlink); ownership and
   current-ness use production `launcher` Host probes and deterministic prepared resources, with
@@ -1316,6 +1347,14 @@ bugs. Check this list before changing the modules named in each entry.
 - **Hybrid local caches follow the locally selected backend.** Validate captured source
   structure before cache decryption, and bind source/policy snapshots, backend and workspace
   recipients inside the encrypted cache. Never reuse legacy caches or global recipient fallbacks.
+- **Environment cache hashes bind field boundaries.** Both ordinary and hybrid-local caches use
+  versioned, length-prefixed snapshot fields with source counts, explicit file-presence tags and
+  native path bytes. Moving content across path/source boundaries must invalidate the cache,
+  even when the old concatenation would have been identical. Reject prior cache versions.
+- **Hybrid unwrap diagnostics are bounded at the pipe.** Both tools pipe stderr with a 64 KiB
+  limit and a 96-byte stdout limit; overflow terminates and reaps the child. Discard diagnostics
+  by default. Only phone QR or explicitly enabled phone messages are forwarded live under that
+  same limit; do not silently inherit stderr or switch backends on overflow.
 - **Workspace project cache keys preserve native directory identity.** Hash the canonical native
   path encoding, including the fallback when canonicalization fails. UTF-8 project keys retain
   their existing bytes; lossy display aliases must never select another project's cache directory.

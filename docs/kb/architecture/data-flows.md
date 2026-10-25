@@ -87,6 +87,13 @@ bootstrap layouts, permissions, code boundaries and labels. Bootstrap retains it
 and distinct permission formatting; incomplete attribution falls back to the full detailed review.
 No rendering module creates approval or changes the reviewed Plan (ADR 0126).
 
+Before ordinary upgrade dispatch can initialize configuration or run advisory/release checks, a
+read-only load and Core review test complete upgrade convergence. Positive convergence prints the
+existing no-op result and stops without approval, preparation, locks, journals or execution. Full
+Plan rendering remains available. Work, blockers, preservation or failed observations fall through
+to the original upgrade route; it recaptures inputs and retains normal approval and apply-time
+validation. Explicit `--pull` retains its separate source synchronization behavior (ADR 0153).
+
 CLI review creates approval for one exact ready Plan. Apply deliberately follows:
 
 ```text
@@ -213,6 +220,17 @@ wording. Inspection and snapshot comparison accept only `FileSystemObservationHo
 operation lock or approval and execute no Preset code. See
 [ADR 0120](../decisions/0120-read-only-shell-inspection-phases.md).
 Receipt-only records are inspection data and never enter execution as reconstructed metadata.
+Detailed CLI updates retain that Shell runtime's captured effective Preset for an on-demand,
+observation-only category snapshot comparison. Local-only file details include raw added/removed
+bytes and Unix executable intent; they never enter serialized frontend reports. Each category
+diff prints once per invocation after that category's selected command rows/details and before
+the next category, including for a single-command target. Detailed status groups receipt-only
+siblings with their category before rendering. Snapshot reads still occur at the first updated
+command; only printing the captured category diff is deferred. Link/non-directory and
+read failures fail the detailed comparison rather than following links or claiming no change.
+Invocation-local diff state retains category observations and borrows command byte pairs to avoid
+repeating identical raw/command or shared-script diffs. Rendered changes remain independent of raw
+snapshot changes, including env-only updates. No displayed-text truncation or hash determines deduplication.
 The planner and inspection share the observation-only launcher probe with category, overlay, and
 receipt roots. CLI update separates conflicts/missing Presets from pending updates; detailed views
 keep the same status. Upgrade preserves absent-source commands and blocks shared snapshot
@@ -941,6 +959,13 @@ transforms, and manual-generator behavior stay identical to `shine info --diff` 
 operation. Target mode returns after the config check and does not perform the binary release check;
 managed sys resources keep their structured receipt differences instead.
 
+CLI text diffs use `output::unified_text_diff` for LF-only tokenization, safely encoded headers,
+complete hunks and explicit missing-final-LF markers. Info/update alone prepare uniform CRLF display
+copies and annotate each side's style, including EOL-only changes; mixed LF/CRLF stays byte-visible.
+Migration retains its own candidate-preserving display preparation. Local and SSH broker diffs
+still compare canonical TOML without display normalization, then use their existing stdout or
+local-TTY encoder. No display rule changes Core status, raw hashes or approval/recheck ordering.
+
 ## Generated app files
 
 An app `[[files]]` entry may declare
@@ -1609,6 +1634,12 @@ and workspace recipients inside the encrypted cache. Cache writes use only the s
 cache decryption cancellation never retries from sources. See [ADR 0085](../decisions/0085-local-hybrid-preferences-and-cache.md)
 for local trust and cache boundaries, and [ADR 0084](../decisions/0084-hybrid-secret-envelope.md)
 for the unchanged envelope and sealing concurrency contract.
+
+Cache snapshot hashing now length-prefixes mode, workspace bytes and native paths, records source
+count and presence, and hashes present source contents with their lengths under the v2 domain.
+Both cache formats reject v1 entries before decryption. Hybrid unwrap pipes both tools' diagnostics;
+the reader discards them by default or forwards phone QR/opted-in messages live, always enforcing
+64 KiB and terminating/reaping on overflow. This does not change the hybrid wire format.
 
 ## One-operation external code consent
 

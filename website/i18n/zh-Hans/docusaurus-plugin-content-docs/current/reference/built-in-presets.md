@@ -21,8 +21,7 @@ shine sys info split-dns
 
 本文依据 Shine 2.7.0 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
 
-下方平台能力清单由运行时使用的内置 App 目标路径和 Shell 文件 selector 自动生成。
-Conformance 测试会确保两个手册语言版本中的清单始终与 preset 元数据同步。
+下表列出各平台可用的内置预设。
 
 <!-- BEGIN GENERATED PRESET PLATFORM CAPABILITIES -->
 | Preset capability | macOS | Linux | Windows |
@@ -76,9 +75,8 @@ Conformance 测试会确保两个手册语言版本中的清单始终与 preset 
 
 ## App 预设
 
-大多数类别只安装配置文件。Surge 与 Clash Verge Rev 会有意多做一步：provider-specific
-artifact 脚本负责组装应用特有的 include/editor 文件，免去用户手工连接这些部分。通用 App
-生命周期仍只管理声明的文件，artifact 则是显式调用的类别专用能力。
+大多数预设安装配置文件。Surge 和 Clash Verge Rev 还提供显式 artifact 命令，将这些文件接入
+应用当前配置；请按各自指南完成设置。
 
 <div className="built-in-presets-app-table" aria-hidden="true" />
 

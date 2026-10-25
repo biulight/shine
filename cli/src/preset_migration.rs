@@ -63,7 +63,7 @@ pub async fn handle_migrate(
 
     if format == PresetReportFormat::Text {
         print_text(&plan, &snapshot, path.is_none());
-        print_diffs(&display_edits);
+        print_diffs(&display_edits, managed_overlay.as_deref());
     }
     if dry_run {
         if format == PresetReportFormat::Json {
@@ -288,7 +288,54 @@ mod tests {
         let output = migration_text(&plan, &snapshot, true);
         assert!(output.contains("upstream checkout"));
         assert!(output.contains("shine preset pull"));
+        assert!(
+            output.contains("Commit and push the upstream changes to the configured remote branch")
+        );
         assert!(!output.contains("Edit: /managed-overlay"));
+    }
+
+    #[test]
+    fn migration_diff_handles_crlf_without_hiding_controls_or_changing_bytes() {
+        let root = std::env::temp_dir().join("managed-overlay");
+        let mut edit = PresetMigrationEdit {
+            logical_path: "shell/demo\nFORGED/shine.toml".into(),
+            physical_path: root.join("shell/demo/shine.toml"),
+            source_layer: "overlay".into(),
+            operations: vec!["structure_env_declarations".into()],
+            original: b"same\r\nold\rtab\t\x1b\r\n".to_vec(),
+            candidate: Some(b"same\r\nnew\rtab\t\x1b\r\n".to_vec()),
+        };
+        let original = edit.original.clone();
+        let candidate = edit.candidate.clone();
+        let output = migration_diff(&edit, Some(&root));
+        assert!(output.contains(
+            "Preview only: update the upstream checkout; this managed overlay will not be changed."
+        ));
+        assert!(output.contains("Line endings: CRLF (displayed as LF)."));
+        assert!(output.contains(" same\n"), "{output:?}");
+        assert!(!output.contains("-same"), "{output:?}");
+        assert!(output.contains(r"-old\rtab\t\u{1b}"), "{output:?}");
+        assert!(output.contains(r"+new\rtab\t\u{1b}"), "{output:?}");
+        assert!(output.contains(r"--- a/shell/demo\nFORGED/shine.toml"));
+        assert!(!output.contains(['\r', '\t', '\u{1b}']));
+        assert!(!output.contains("\nFORGED"));
+        assert_eq!(edit.original, original);
+        assert_eq!(edit.candidate, candidate);
+        assert!(!migration_diff(&edit, None).contains("Preview only"));
+
+        // A standalone final CR must remain visible, including the missing-LF marker.
+        edit.original = b"old\r".to_vec();
+        edit.candidate = Some(b"new\r".to_vec());
+        let output = migration_diff(&edit, None);
+        assert!(
+            output.contains("-old\\r\n\\ No newline at end of file"),
+            "{output:?}"
+        );
+        assert!(
+            output.contains("+new\\r\n\\ No newline at end of file"),
+            "{output:?}"
+        );
+        assert!(!output.contains("Line endings:"));
     }
 
     #[test]
@@ -590,23 +637,27 @@ mod tests {
     async fn backup_refuses_a_source_changed_after_review() {
         let root = make_temp_dir("shine-preset-source-change").await;
         let source = root.join("shine.toml");
-        tokio::fs::write(&source, b"original").await.unwrap();
+        let original = b"original\r\n";
+        tokio::fs::write(&source, original).await.unwrap();
         let edit = PresetMigrationEdit {
             logical_path: "app/demo/shine.toml".to_string(),
             physical_path: source.clone(),
             source_layer: "external".to_string(),
             operations: vec!["test".to_string()],
-            original: b"original".to_vec(),
+            original: original.to_vec(),
             candidate: Some(b"candidate".to_vec()),
         };
-        tokio::fs::write(&source, b"changed").await.unwrap();
-
-        let sources = BTreeMap::from([(source.clone(), b"original".to_vec())]);
-        let error = create_backup_set(&root.join("state"), &[edit], &sources)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("changed after review"));
-        assert!(!root.join("state").exists());
+        let sources = BTreeMap::from([(source.clone(), original.to_vec())]);
+        for current in [b"changed\r\n".as_slice(), b"original\n".as_slice()] {
+            tokio::fs::write(&source, current).await.unwrap();
+            let error =
+                create_backup_set(&root.join("state"), std::slice::from_ref(&edit), &sources)
+                    .await
+                    .unwrap_err();
+            assert!(error.to_string().contains("changed after review"));
+            assert!(!root.join("state").exists());
+            assert_eq!(tokio::fs::read(&source).await.unwrap(), current);
+        }
 
         tokio::fs::remove_dir_all(root).await.unwrap();
     }

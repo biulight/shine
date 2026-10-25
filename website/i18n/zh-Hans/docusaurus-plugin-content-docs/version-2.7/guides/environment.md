@@ -32,20 +32,13 @@ shine env delete HTTP_PROXY_PORT
 `shine env set` 为当前机器保留不同默认值。
 
 `shine env list` 默认隐藏敏感值；`--reveal` 可取消脱敏，应只在安全终端中使用。
-列表中的换行、制表符、其他控制字符及反斜杠会转义显示，并按终端显示宽度截断。
-这些显示调整不会改变存储值或 `env get` 的输出。
 输出按 `builtin`、overlay、全局配置、全局 env 文件、项目配置、项目 env 文件分组，显示实际路径
 及当前项目根。`env explain KEY` 从低到高展示同一存储键的定义、胜出层和描述来源，默认隐藏
 所有值；`--reveal` 不会自动解密。显式注入仍先查找 `KEY_SECRET`，再查找 `KEY`；来源说明和
 写入输出会提示已有的密文键。
-list／explain 的路径及环境变量写入、代理启停回执会转义终端控制字符，存储路径保持原值。
-键名包含控制字符时，explain 会要求使用原键名，不生成可能指向另一种拼写的可复制命令。
-
 默认值只在运行时兜底，查询不会创建配置。保存显式值时，即使与内置值相同也会记录该项。
 
-配置 TOML 解析失败时，会报告文件或字段位置，不回显配置值或源码行。环境变量读写命令
-以退出码 1 结束；修正输入后重试。解析失败不会应用本次环境变量修改。工作区定义与个人
-`shine.config.local.toml` 偏好的 TOML 解析错误同样不回显文档内容。
+如果 Shine 报告 TOML 格式错误，请修正提示的文件或字段后重试。
 
 全局 `~/.shine/config.toml` 和项目 `shine.config.toml` 的 `[env]` 支持简写字符串，也支持
 同时记录值和说明：
@@ -88,13 +81,11 @@ shine env secret encrypt --from MY_TOKEN --set MY_TOKEN_SECRET --project --env-f
 应修改上游、使用手动维护目录，或选择本地覆盖层。上述三个写入入口的旧 `--force` 已停用，
 请求会失败且零写入，并提示准确的替代参数。
 
-写入预检在加密工具启动前完成。提交前会核对目标、配置来源和 `--from` 输入；期间发生变化
-则要求重试。Shine 对同一目标的最终核对和原子替换使用文件锁串行化。它不锁定外部编辑器
-或 Git 的所有操作。若提示“文件已保存，但有效状态核对失败”，命令返回失败，但文件已保存，
-请检查配置后重新查询；不要假定没有写入。
+环境变量写入期间请勿同时编辑配置。若提示文件发生变化，请检查后重试。
+若提示“文件已保存，但有效状态核对失败”，说明写入已发生；再次修改前，请重新查询该值。
 
-Unix 配置与 env 文件及其临时文件使用仅所有者可读写的 `0600` 权限。原子替换失败保留原文件，
-拒绝符号链接及特殊文件目标，保留注释、无关项和详细条目的说明。明文值仍然是明文。
+写入会保留注释和无关条目，拒绝符号链接及特殊文件。Unix 文件仅允许所有者访问，
+但未加密的值仍然是明文。
 
 不带 `[env]` 表头的全局、overlay 和项目 `shine.env.toml` 覆盖文件也支持这两种格式：
 
@@ -136,9 +127,7 @@ shine upgrade
 
 ## 使用 GPG 加密值
 
-Shine 在内部完成 GPG 和 age 密文的 Base64 编解码，这些操作无需外部 `base64` 命令。
-仍需安装所选的加密后端（`gpg` 或 `age`）及其身份所需的插件。已有 Shine 密文无需迁移。
-允许 Base64 换行和 ASCII 空白；缺失或错误 padding 等畸形编码会被拒绝。
+请安装所选加密后端（`gpg` 或 `age`）及其所需的身份插件。
 
 先确认本机的 `gpg` 可以使用对应公钥；私钥保存在 YubiKey 时，可参考
 [在 macOS 和 Windows 使用 YubiKey OpenPGP](https://blog.biulight.top/timeline/knowledge/yubikey-openpgp)完成接入。然后在
@@ -177,7 +166,7 @@ if ($LASTEXITCODE -eq 0) { Invoke-Expression $exportCode }
 
 PowerShell 导出会保留 Unicode 和多行值，包括原始换行符。
 安装 `utils` shell 预设后，也可以使用 `shine-env-export MY_TOKEN --as API_TOKEN`。
-环境变量无法表示含 NUL 的值。`env secret export` 会以退出码 1 拒绝该值，stdout 不输出导出代码；
+环境变量无法表示含 NUL 的值。`env secret export` 会拒绝该值；
 `env get` 和 `env secret decrypt` 仍保留原始输出。
 
 ## 使用 age identity
@@ -192,18 +181,12 @@ shine env secret identity init
 shine env secret identity list
 ```
 
-普通 identity 使用 `age-keygen`，默认写入 `~/.shine/age/identity.txt`。
-已有文件需要 `--force` 才能替换。强制替换会先在私有临时目录生成并检查新 identity，再替换旧文件；
-生成或检查失败时保留旧 identity。Unix 上，生成的 identity 文件使用仅所有者可读写的 `0600` 权限。
+普通 identity 默认写入 `~/.shine/age/identity.txt`。可用 `--output` 选择其他路径，
+再按命令提示将其加入 `age_identity` 或 `age_identities` 配置。TOML 中使用的路径必须为
+有效 UTF-8。`identity list` 显示已配置的身份路径和 recipient。
 
-自定义 `--output` 时，输出的 `age_identity` 配置提示使用绝对路径和 TOML 引用，
-因此切换目录后仍能找到该文件。提示本身不会修改配置。
-Unix 上，`--output` 保留原生文件名的字节。若绝对路径不是有效 UTF-8，Shine 会省略可复制的
-`age_identity` 赋值提示；要通过 TOML 配置该文件，请使用 UTF-8 路径。
-`identity list` 显示每个已配置 identity 的路径和 recipient。Unix 文件名中的字面反斜杠会
-原样保留；Windows 路径使用正斜杠显示。
-identity 列表及软件／Touch ID 生成结果行会转义路径和 recipient 中的终端控制字符。
-可复制的配置提示保留 TOML 引用格式，包括多行值。
+替换已有身份需要 `--force`。若仍需用旧身份解密历史数据，请先妥善备份。
+Unix 身份文件仅允许所有者访问。
 
 ### 在 macOS 上使用 Touch ID
 
@@ -265,10 +248,8 @@ shine state migrate --dry-run
 shine state migrate
 ```
 
-迁移只会把配置中的 `age1se...` 改为等价的 `age1tag...`，不会读取 identity 或解密 secret。
-它会一并检查全局配置、当前项目配置和最近的 workspace；dry-run 按文件报告转换数量，应用时
-保留数组顺序、注释和重复项，并在写入任何文件前校验全部旧 recipient。迁移后再次 seal，才会
-生成使用原生 tagged recipient 的新密文；已有密文不会改变，仍可照常解密。
+迁移将配置中的 `age1se...` 转为等价的 `age1tag...`，不会解密密钥。
+迁移后请重新封存，以使用新 recipient。已有密文保持不变，仍可解密。
 
 ### 为已有 workspace 密钥添加接收者
 
@@ -361,8 +342,7 @@ shine env secret identity init --phone --transport qr
 shine env secret identity init --phone --adb-serial SERIAL
 ```
 
-配对、硬件密钥、replay、locator、中断恢复和清理状态仍完全由 plugin 管理。完整指纹确认成功后，
-Shine 只会把公开 identity stub 路径加入当前用户的全局 `age_identities`。如果当前项目显式
+指纹确认成功后，Shine 会把身份路径加入当前用户的全局 `age_identities`。如果当前项目显式
 覆盖了 `age_identity` 或 `age_identities`，命令会在配对前退出，避免创建一个随后被项目忽略
 的 identity。对应的手工配置形式如下，请使用插件在当前平台上实际返回的绝对 identity 路径：
 
@@ -370,11 +350,8 @@ Shine 只会把公开 identity stub 路径加入当前用户的全局 `age_ident
 age_identities = ["/absolute/path/returned/by/plugin/identity.txt"]
 ```
 
-配置多个 phone identity stub 是有效用法：age 应把与当前密文不匹配但格式有效的 stub 视为
-普通未命中，并继续尝试下一个 identity。旧版 `age-plugin-phone` 可能反而在第一个不匹配的
-stub 处终止。如果 hybrid unwrap 只在配置多个 phone identity 时失败，可设置
-`AGE_PLUGIN_PHONE_MESSAGES=1` 确认插件诊断并升级插件。临时规避时只配置匹配的 identity
-路径即可；不要仅为了缩小这个列表而删除配对或恢复状态。
+如果仅在配置多个手机身份时解密失败，可设置 `AGE_PLUGIN_PHONE_MESSAGES=1` 查看诊断，
+并检查是否需要升级插件。临时规避时只配置匹配的身份路径；不要删除配对或恢复状态。
 
 这个快捷命令不会修改 `secret_backend`，也不会自动添加 recipient。plugin setup 如果中断，
 必须按照其文档使用 `age-plugin-phone setup --resume` 或 `age-plugin-phone setup --cleanup`；
@@ -421,8 +398,7 @@ unwrap request 前发现匹配的 listener；未发现时在 Windows 上选择 D
 在请求开始后自动重试其它路径。解密由手机保护的 secret（包括通过 `shine env run` 使用它）时，
 标准 age plugin 会为每次 file key 解包要求一次新的强生物验证。Developer USB 和 Wi-Fi 的 plugin 提示默认
 静默；设置 `AGE_PLUGIN_PHONE_MESSAGES=1` 可显式开启。QR 请求必须由手机扫描，因此仍会显示在终端中。
-`shine env secret decrypt` 成功时只写入解密值，同时屏蔽 age 客户端自身的等待提示，并且不会额外添加换行。
-Shell 主题仍可能主动把下一条 prompt 放到新行。对于需要保留的数据，绝不能只配置这个实验性手机
+对于需要保留的数据，绝不能只配置这个实验性手机
 recipient；恢复路径不能依赖同一部手机的 StrongBox 密钥、同一台电脑的 TPM/Secure Enclave 密钥或该 plugin 的本地状态。
 
 如果 AI Agent 会参与开发，先阅读[在 AI Agent 参与开发时保护环境密钥](./agent-secret-safety.md)，确认 identity 文件、Touch ID、手机授权提示和命令执行权限的安全边界。
@@ -484,7 +460,7 @@ Shine 会在 `~/.shine/bin/` 创建同名 shim，并记录当前 `PATH` 中找�
 shim 会保留安装时选定的绝对运行时目录，包括自定义 `--config-dir`。之后即使调用者的
 `SHINE_CONFIG_DIR` 不同，仍会使用安装时的目录；项目规则仍按调用时的工作目录发现。
 重新运行 `env proxy install` 可更新旧 shim，或将其安装到另一个运行时目录。
-代理安装要求运行时和目标路径为有效 UTF-8；无法表示的路径会在写入启动器、配置或回执之前被拒绝。
+代理安装要求配置目录和程序路径为有效 UTF-8。
 
 代理规则作用于整个命令，不能只匹配某个子命令。如果明确要代理 Cargo，应在不需要 token 时
 停止注入：
@@ -502,24 +478,15 @@ shine env proxy disable cargo
 启用期间，每个 Cargo 子命令及其后代进程都可能继承 token。`disable` 会保留 shim，只停止
 解密和注入，并直接转发到真实 Cargo。偶尔执行 yank 时，应优先采用上面的单次 `env run`。
 
-只代理你明确允许的裸命令名；命令名只能包含 ASCII 字母、数字、`-`、`_` 或 `.`。安装前请确认
-`~/.shine/bin/` 已在 `PATH` 的靠前位置，且目标命令不是另一个 Shine 代理。若同名入口已存在
-但并非 Shine 创建，安装会拒绝覆盖它。在 Windows 上，Shine 会在写入任何文件前检查整组启动器，
-包括 `.cmd` 和 `.ps1`；冲突文件或符号链接都会保留。查找真实命令时，会跳过实际指向 Shine bin 目录的 PATH 项，包括符号链接别名。在 Unix 上，修改代理规则也会保持配置文件
-仅所有者可读写的权限。
-在 Unix 上，查找目标命令也会跳过没有执行权限的文件，并接受指向可执行文件的符号链接，
-同时保留命令的原始调用名称。
-在 Windows 上，请使用不带可执行扩展名的命令，例如 `gh`，不要使用 `gh.exe`。
-安装会拒绝 `.exe`、`.com`、`.bat`、`.cmd` 和 `.ps1` 后缀（不区分大小写）。
-此前安装的带后缀名称仍可通过 `shine env proxy uninstall <COMMAND>` 清理。
-Shine 拒绝代理 `shine` 或 `shine.exe`（不区分大小写），以防止启动器递归调用自身。
-卸载会在修改规则或安装记录前检查整组启动器；发生归属冲突时，启动器和配置保持原样。
-如果卸载过程中启动器发生变化，Shine 会保留变化后的文件并报错。
+只代理你信任的命令，名称只能包含 ASCII 字母、数字、`-`、`_` 或 `.`。
+请将 `~/.shine/bin/` 放在 `PATH` 的靠前位置。目标必须是 Shine 命令目录之外的可执行程序，
+不能是另一个 Shine 代理或 Shine 自身。
 
-安装会在写入前校验规则文件、安装记录和整组启动器。写入失败时，Shine 会尝试恢复原文件
-内容和 Unix 权限，并移除新建文件。并发编辑会保留；回滚不完整时会明确报错。这一回滚处理
-可报告的写入失败，不涵盖进程突然终止。已捕获代理规则或代理安装记录的 TOML 解析错误不会回显文档内容；
-无效输入仍会在修改启动器、规则或安装记录前阻止操作。
+Windows 上请使用 `gh`，不要使用 `gh.exe`：安装会拒绝 `.exe`、`.com`、`.bat`、`.cmd` 和
+`.ps1` 后缀。此前安装的带后缀名称仍可用 `shine env proxy uninstall <COMMAND>` 移除。
+
+安装或卸载时，Shine 会保留发生冲突的文件。重试前请检查提示的冲突。
+操作失败或中断后，请检查代理和配置再继续使用，不要假定恢复已经完成。
 
 默认规则保存在全局 `~/.shine/config.toml`。在含有 `shine.config.toml` 的项目内加入
 `--project`，可将该命令的规则限定到项目；同一命令的项目规则会覆盖全局规则。
@@ -530,8 +497,6 @@ shine env proxy install gh --with GH_TOKEN --project
 shine env proxy list
 ```
 
-代理列表字段、安装目标提示和保存后警告的详情会转义终端控制字符；已保存的规则和实际程序目标保持原值。
-
 需要临时保留 shim、但禁止任何解密或注入时，可禁用规则。禁用后命令会直接转发给真实程序：
 
 ```bash
@@ -540,9 +505,8 @@ shine env proxy enable gh
 shine env proxy disable gh --project
 ```
 
-启用/禁用命令会分别显示已保存的配置文件和当前生效状态。不加 `--project` 时，即使在项目中
-也只修改全局规则，因此项目覆盖规则可能保持不同的状态。如果保存后的状态检查失败，Shine
-会警告规则已保存但无法确认生效状态；成功保存仍返回退出码 0。
+不加 `--project` 时，启用/禁用只修改全局规则，项目规则仍可覆盖它。
+如果提示规则已保存但无法确认生效状态，请检查配置并再次运行 `shine env proxy list`。
 
 不再需要代理时，移除 Shine 管理的 shim 及其用户级规则：
 
@@ -584,9 +548,7 @@ shine env workspace init --from-dotenv
 shine env workspace init --from-dotenv --mode development --mode production
 ```
 
-未使用 `--force` 时，预览显示 `Would create`，写入成功后显示 `Created`。
-使用 `--force` 时，消息说明会写入并在目标已存在时替换，不会声称所有目标都是新文件。
-`--dry-run` 始终不会写入或替换文件。
+`--dry-run` 只预览导入，不创建或替换文件。
 
 导入时可将明确知道的敏感键放进 `[secret]`，之后配置 recipient 并封存。未标记的值会作为明文导入；不要把实际凭据误当作普通配置提交。
 导入的 Secret 在封存前也仍是明文。Unix 上，生成的 workspace 与环境源文件使用仅所有者可读写的
@@ -622,13 +584,9 @@ shine env workspace export \
   --include-secrets
 ```
 
-这会把 secret 以明文写入文件。在 Unix 上，含 secret 的新输出文件权限为仅所有者可读写的 `0600`；无论使用什么平台，都应将它排除在版本控制之外。
-未指定 `--force` 时，已有目标（包括悬空符号链接）会被保留，即使它是在等待解密期间出现的。
-多个导出同时写入同一目标时，只允许一个成功。确认需要替换已有输出后，再添加 `--force`。
-`--dry-run` 只报告 mode、目标路径和最终生效的非机密变量数量，不显示值，也不写文件。
-即使指定 `--include-secrets`，预览也不会解密或统计机密；该选项仅在实际导出时生效。
-被机密覆盖的普通变量也不计入预览数量。预览、成功消息和目标已存在的错误提示会为目标路径
-加引号并转义展示：换行和制表符显示为 `\n` 和 `\t`。这只改变消息，实际目标路径和导出字节不变。
+这会将密钥以明文写入文件，请将输出排除在版本控制之外；Unix 上仅允许所有者读取。
+已有目标默认保留，只有添加 `--force` 才允许替换。`--dry-run` 预览目标和非机密变量，不打印值、
+不解密、不写文件，即使指定 `--include-secrets` 也一样。
 
 导出文件不含 Shine 元数据，也不依赖 Shine 运行。若要停用 Shine env，请逐个导出并验证所需 mode，将含 secret 的输出加入 `.gitignore`，移除 `shine env run` 包装，最后再自行归档或删除 `shine.workspace.toml` 与对应的 `*.shine.toml` 环境源。导出命令不会删除这些源文件。
 
@@ -690,18 +648,10 @@ shine env run --mode production -- bun run build
 
 `seal` 默认处理 workspace 引用的环境文件。可用 `shine env secret seal <FILE>` 只处理一个文件，
 或通过 `--workspace <FILE>` 指定其他 workspace；`-r/--recipient` 可临时覆盖接收者。
-普通 `seal` 的完成消息会将来源路径中的终端控制字符显示为转义文本。
 
 默认情况下，当前进程已经存在的环境变量优先于 workspace。设置
 `env.override_process_env = true` 后改由 workspace 值覆盖；显式 `--with` 始终具有最高
 优先级。
-
-策略和源均为单后端且配置了可用 recipient 时，`env run` 会在系统缓存目录按 mode
-使用所选后端保存加密缓存。
-workspace、源文件内容或文件顺序变化后缓存会自动重建；无需手工编译或删除缓存。
-非 UTF-8 项目目录不会与替换字符拼写的另一个目录共用缓存。
-缓存文档或解密后的内容格式损坏时，警告不会回显缓存值或文档内容；Shine 会从工作区源文件
-重新编译。缓存读写警告中的路径和错误文本会转义控制字符；子进程输出和退出码保持不变。
 
 个人覆盖文件应加入 `.gitignore`：
 
@@ -734,15 +684,15 @@ identity；重新封存需要两种加密工具及完整公钥名单。任意一
 混合 GPG 密钥封装排除本机选项文件与隐式额外收件人；group 和模糊用户 ID 会在解密已有
 秘密前被拒绝。
 
-工作区策略为 hybrid，或当前 mode 消费的源含混合 payload 时，`env run` 使用本机选定的
-GPG 或 age 后端保存加密编译缓存。建立缓存只需要该后端；收件人取工作区对应名单，
-不回退到全局名单。名单缺失时跳过缓存；缓存写入失败只警告，不阻止使用成功编译的环境运行。
+Shine 可能以加密形式缓存合并后的环境，但不会保存解锁会话；每次读取仍须遵循后端授权要求。
+解密失败或取消授权时，命令会停止。
 
-命中缓存后只解密一次合并结果。不设置 TTL，也不保存解锁状态：每次读取仍遵循后端的
-授权要求。工作区或源内容、源顺序、所选后端、收件人变化会使缓存失效。GPG 和 age 缓存
-分开保存，旧缓存不能替代 hybrid 源。畸形混合封装在缓存解密前失败；缓存解密开始后，
-失败或取消都会终止命令，不再重试解密源文件。导出不使用此缓存，默认省略秘密；
-`--include-secrets` 才释放秘密，dry-run 不解密秘密。
+工作区输入变化会使环境缓存失效。旧版本缓存会从源文件重新生成，升级后首次运行可能需要
+逐个重新授权源文件；已有加密源文件无需重新封存。
+
+混合密钥解密默认不显示后端诊断。手机 QR 提示和显式启用的手机消息仍会实时显示。
+每次密钥解密的诊断输出上限为 64 KiB，包括这些交互消息；超限会停止操作，不会尝试
+另一个后端。
 
 可在选定的 `shine.workspace.toml` 旁创建个人配置 `shine.config.local.toml`，
 使用 `--workspace` 时也以该工作区所在目录为准：
@@ -758,14 +708,10 @@ hybrid_decrypt_backend = "age"
 能够修改它的程序也能改变所选授权路径。SSH broker 请求不加载或传输此文件；实际解密
 机器仍使用自己的配置并执行原有释放检查。
 
-封存要求源文件为普通文件，拒绝符号链接；Unix 上还会拒绝具有多个硬链接的文件，避免
-原子替换后明文仍留在其他链接文件中。GPG 加密和解密显式使用标准输出，不受本机
-`output` 设置影响；加密输出为空时会报错，不会替换源文件。
-
-封存会锁定其他遵守协议的 Shine 封存进程，并在替换前复核工作区与源文件捕获字节。
-硬件批准期间编辑将终止当前文件；此前完成的文件保留，剩余文件不再处理。封存期间请勿
-编辑：不遵守锁的编辑器可能在最后复核到替换之间产生竞态。失败后明文待封存项可能仍在，
-Shine 不会声称已清除。`.shine-seal.lock` 锁文件可能保留，不含秘密；封存仍在进行时不要删除。
+封存只接受普通源文件，拒绝符号链接；Unix 上也拒绝具有多个硬链接的文件。
+封存期间，包括等待硬件授权时，请勿编辑工作区或源文件。失败时，之前的文件可能已更新，
+待封存明文也可能仍在。重试或提交前请检查提示的文件。封存仍在进行时不要删除
+`.shine-seal.lock`。
 
 ## 临时机密文件 {#workspace-secret-files}
 
@@ -820,7 +766,7 @@ shine env run --mode production --file-group android-signing --file-group servic
 `seal --file-group` 读取 `target` 并创建或更新 `source`，复用现有 GPG、age 和 hybrid 策略，
 包括 CLI 覆盖与 hybrid 收件人约束。默认保留明文。`--remove-plaintext` 会先解密并逐字节验证
 全部写入的密文，再开始删除明文，因此需要可用身份，并可能触发授权。删除前验证失败或取消时，
-保留全部原始明文。多文件写入和删除不是整体事务；失败会报告已完成项及剩余项。
+保留全部原始明文。多文件写入或删除中途失败时，之前的改动仍会保留；请检查报告的已完成项和剩余项。
 首版不提供仅从密文更新收件人的专用流程。
 
 如果希望长期保留解密后的普通文件，让工具直接使用而无需每次通过 Shine 启动，可将选中文件组
@@ -838,22 +784,15 @@ shine env workspace export --format files --mode production --file-group android
 
 成功导出的文件会持续保留，由你管理或删除。`env run --file-group` 会拒绝这些已有目标，
 不会接管或清理它们。导出失败或受控中断时，Shine 尝试移除本次创建的文件和空目录，保留被替换
-的对象，并报告清理失败及可能残留。多文件导出不是原子事务；强制杀死 Shine 或断电仍可能留下
-文件。不要将明文提交到 Git。
+的对象，并报告清理失败及可能残留。导出中断后可能有部分文件残留，尤其是在强制杀死 Shine 或断电后。不要将明文提交到 Git。
 
-`env run --file-group` 先解密全部选中文件，再准备目标；全部目标就绪后才启动命令，
-在成功、失败或受控中断后清理本次文件。已有目标不会被覆盖；被替换的目标会被保留并报告。
-如果子命令已删除目标文件或其父目录，该目标视为已完成清理；Shine 仍会清理其余映射，
-并保留子命令退出码。替换后的文件、目录和悬空链接仍会被保留并报告。
-在 Unix 上，子命令移除文件读取权限后，清理仍可删除身份未变的本次文件；不会为了清理而
-恢复权限或删除替换后的文件。使用手机 identity 的 age 解密会保留二维码授权提示，以及
-显式开启的终端消息；普通的已捕获后端诊断仍保持隐藏。
-`env run` 和文件导出的映射预览写入 stderr，子命令的 stdout 保持逐字节原样；dry-run 预览仍写入 stdout。
-映射预览会为每个路径加引号，并转义换行等控制字符，使一条映射保持在同一行；这些显示转义
-不会改变文件操作使用的实际路径。封存、删除明文、导出的结果路径及清理警告也会转义终端控制字符。
-Unix 新建明文文件为 `0600`、目录为 `0700`；Windows 要求文件系统支持当前用户私有 ACL。
-清理失败返回错误，子命令失败时保留其退出码。包装器在 Unix 管理进程组，在 Windows 使用
-Job Object。不要启动需要在被包装命令结束后继续运行的脱离后台任务；剩余受管子进程会被终止。
+`env run --file-group` 在全部选中文件解密并准备就绪后才启动命令，且不会覆盖已有目标。
+命令结束或正常中断后，Shine 会尝试删除本次创建的文件；运行期间被替换的文件会保留并报告。
+若出现清理警告，请检查是否仍有明文残留。
+
+临时文件仅允许当前用户访问；Windows 要求文件系统支持私有用户权限。
+命令输出仍可用于管道，失败会报错。不要启动需要在命令结束后继续使用这些文件的脱离后台任务；
+剩余受管子进程会被终止。
 
 `--dry-run` 只检查配置和元数据，不读取明文、不解密、不写文件、不启动命令，也无法验证密文
 完整性或私钥可用性。`--file-group` 分别与 `seal <FILE>`、`--no-workspace` 和

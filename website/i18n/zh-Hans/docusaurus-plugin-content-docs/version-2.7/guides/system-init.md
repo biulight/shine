@@ -24,11 +24,8 @@ shine sys bootstrap --dry-run
 
 `--dry-run` 会显示选择结果、provider/脚本调用，以及每个将持久加载的 item-owned shell 集成，但不执行变更。某些初始化项目需要管理员权限或额外环境变量，`shine sys info <ITEM>` 会列出要求。
 
-建议命令会在以 `-` 开头的 item ID 前添加 `--`；选项须放在该分隔符之前，例如
-`shine sys apply --dry-run -- -custom`。`sys info` 中的检测命令会保留参数所需的引号。
-项目名称中的控制字符会显示为 `\n` 等转义文本，使每条结果保持在一行内。
-
-缺失的 item 即将执行时，Shine 会先显示其 `sys/<ITEM>` 标识和名称，因此后续出现的授权或密码提示会明确对应当前正在安装的软件。
+项目 ID 以 `-` 开头时，将选项放在 `--` 前、名称放在其后，例如
+`shine sys apply --dry-run -- -custom`。
 
 ## 交互选择或应用 Profile
 
@@ -53,23 +50,11 @@ shine sys bootstrap --proxy --dry-run
 该参数只跳过提示，Plan 仍会展示并在执行前校验。`--dry-run` 是更早阶段的预览，不能与 `--yes`
 同时使用。
 
-安全 Plan 会先提示管理员权限、网络访问范围与 profile 恢复限制，再按选中的安装项展示推导权限。
-Profile 配置与公共运行时目录、清单写入分别列在独立区块。包管理器权限由元数据推导，因此固定
-provider 不需要空的作者能力表。多个安装项都需要同一权限时，会在各项下分别展示。
-`Permissions none required` 仅表示规划器未为该区块推导出所需权限，不是安全保证。
+批准前，请审阅 Plan 中的管理员权限、网络访问及恢复限制。使用 `--verbose` 查看路径和步骤详情。
+权限声明并非安全保证：自定义脚本和可执行 profile 内容以你的权限运行，没有沙箱隔离；
+外部代码需要审阅和授权。
 
-自定义脚本和可执行 profile item 会自动显示为未隔离代码。可选权限表属于未经验证的作者说明；
-`opaque_code = "unrestricted"` 与类别级 `permission_defaults` 仍兼容，但不会改变分类。环境输入与
-Administrator 要求仍是显式执行契约。External/overlay 代码还需对完整有效 `sys/<os>/` 快照建立
-target-scoped trust。
-
-每次脚本调用都从独立的 Preset 快照副本运行，并保留辅助文件的执行权限；并发调用不会替换该副本。
-安装器可以读取继承的前台终端输入；安装器结束、失败、超时或被取消后，Shine 会恢复终端控制权。
-取消正在运行的操作会终止其隔离的 Unix 进程组，包括子进程。
-
-默认输出缩短快照标识。添加 `--verbose`（例如 `shine sys bootstrap --preset recommended --verbose`）
-可查看完整文件路径、标识与诊断码。两种视图审阅的是同一个完整 Plan，对选中的操作仍只进行一次确认。
-`--verbose` 不改变更早阶段的 `--dry-run` 预览。
+安装器可能要求终端输入，请按当前项目的提示操作，等待结束后再开始另一项操作。
 
 Ubuntu 还提供 `minimal` profile，适合生产服务器：仅安装 Neovim、fzf、bat、eza 和 zoxide，不包含 shell 历史同步、提示符、Node.js 工具链或 Homebrew。运行前仍应先执行 `shine sys bootstrap --preset minimal --dry-run` 复核当前版本的实际步骤。
 
@@ -89,7 +74,6 @@ shine sys status
 
 这里展示每个条目最新保存的结果，包括 bootstrap 和 `shine sys apply` 等受管系统操作的记录。
 不同条目的记录可能来自不同次运行；此命令不会实时检查软件版本或系统配置。
-`sys info` 会转义已记录状态详情中的终端控制字符，保存的结果保持原值。
 
 ## 用软件自己的工具升级
 
@@ -146,9 +130,7 @@ shine sys recover --yes        # 非交互批准
 非 dry-run 的 managed 操作会显示绑定快照的 Plan，确认默认是 No。`--yes` 只跳过提示，不能
 跳过 Plan 展示、权限 blocker 或执行前复核。若项目需要管理员权限，会在 Plan 批准后另行请求。
 
-同一配置目录中的 Sys 变更会依次执行，包括 bootstrap、profile 变更和恢复。等待结束后，Shine
-会重新校验已审阅的 Plan；观察到的状态有变化时，需要重新审阅。等待超过 30 秒会报错，不执行
-等待中的操作，已完成操作的安装记录会保留。
+若另一项 Sys 操作仍在运行，请等待它结束。等待期间相关状态发生变化时，请重新审阅 Plan 后重试。
 
 受管操作中断后，后续 Sys 改动会停止并提示运行 `shine sys recover`。只有相关状态在中断后未发生
 变化时，恢复才会完成或回退原操作；它不会覆盖修改过的资源或无关的 Shell profile 内容。

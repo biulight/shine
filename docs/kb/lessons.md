@@ -1,5 +1,108 @@
 # Lessons Learned
 
+## 2026-10-25 — Cache hashes must encode boundaries, and unwrap limits must own stderr
+
+- **Symptom**: two valid TOML source layouts produced identical concatenated hash input; a cached
+  run still released a secret whose declaration had become a comment, while a fresh run rejected
+  the payload/key mismatch. The outer encrypted cache context could not repair that ambiguity.
+- **Fix**: length-prefix snapshot fields, include source count and explicit presence tags, preserve
+  native path bytes, and invalidate both ordinary and hybrid-local v1 caches.
+- **Second boundary**: age key unwrap inherited stderr outside quiet phone mode, bypassing the
+  bounded reader. Pipe every key unwrap's stderr; discard by default and forward only interactive
+  phone messages incrementally under the same 64 KiB cap. Overflow kills and reaps the child.
+- **Regression**: CLI tests exercise both caches, removed declarations, legacy version rejection,
+  native/SE/phone diagnostics, exact limits, terminal failure and QR output before input/exit.
+  Config fixtures cover both absent and existing `[env]`; textual replacement alone is insufficient.
+- **Evidence**: [audit and fix validation](operations/hybrid-security-audit-2026-10-25.md).
+
+## 2026-10-24 — Windows launcher roots must match their marker spelling
+
+- **Symptom**: the converged-upgrade CLI regression passed on macOS/Linux but failed on Windows
+  after canonicalizing its isolated root. The unchanged Shell Plan reported an ownership conflict.
+- **Cause**: Windows shim generation strips the `\\?\` prefix; ownership compared that marker
+  with a verbatim managed root using native `Path::starts_with`, so the same root failed to match.
+- **Fix**: strip only that prefix on Windows before component-wise containment, reject lossy path
+  conversion, and retain the original markers, source/receipt/trust identities and approval gates.
+- **Regression**: keep the real canonical-root CLI test. Windows-only observation tests cover drive
+  and UNC roots, sibling-prefix rejection, both foreign shim-pair positions and non-Unicode refusal.
+
+## 2026-10-24 — Converged upgrade must stop before execution authority
+
+- **Symptom**: a ready no-op Plan skipped the prompt but still created approval, prepared execution
+  and acquired lifecycle locks. Config initialization and advisory/cache work ran even earlier.
+- **Fix**: ordinary upgrade first reads config and canonical requests without initialization. Core
+  recognizes complete convergence before CLI approval; only this positive result exits early.
+- **Boundary**: compare all steps, permissions and code requirements, not changed command bytes or
+  filtered output. Preserve snapshot/cache work, user preservation, blockers, unknown diagnostics,
+  compatibility checks and the original fresh approval/lock-time checks. `--pull` stays explicit.
+- **Scope correction**: bulk Sys planning must select recorded managed items independently of
+  `profile_enabled`, matching execution. Otherwise a preserved or outdated managed file can disappear
+  from the preflight and falsely appear converged. Available-only items remain excluded.
+- **Regression**: empty-state and installed App/Shell/Sys/global process tests compare the complete
+  fixture tree, bytes and timestamps across output modes/`--yes`; snapshot-only work still prompts,
+  approved work applies and changed external code still fails without matching trust.
+- **Second review**: keep profile-only repair and stale-receipt pruning covered at the CLI boundary,
+  with refusal before writes, approved application, category isolation and read-only convergence
+  afterward. Current Shell delivery also remains read-only after removing its trust grant; allowed
+  analysis evidence alone cannot qualify an otherwise effect-free Plan as converged.
+
+## 2026-10-24 — Explain category snapshot updates beyond command content
+
+- **Symptom**: `update test --diff` reported `snapshot: installed layout -> active preset layout`
+  with `content: unchanged` after only `shine.toml` changed, without showing the metadata diff.
+- **Cause**: snapshot convergence compares every category file and Unix executable intent, while
+  detailed update rendering only diffed the command's content.
+- **Rule**: retain the Shell inspection runtime's effective source capture for local category-file
+  diffs, display shared changes once, and preserve targeted checks' default detail behavior.
+  Keep normal status reads, raw comparisons, trust, receipts, approval and execution unchanged.
+- **Coverage**: isolated targeted/global/verbose diffs cover overlay metadata, helpers, additions,
+  removals, empty/binary/large files and escaped paths/content with unchanged installed state.
+  Observation-only Host tests cover executable intent, invalid categories, links and read failures.
+- **Second review**: command-source edits duplicated their hunks in both command and category output;
+  shared scripts multiplied them again. Deduplicate by path and complete byte pairs, preserving raw
+  template versus rendered-output evidence and env-only changes. Empty-file existence changes need
+  their added/removed row without a contradictory `No content differences` note. Additional tests
+  cover aliases, transforms, missing roots, category isolation, mode gates and failed directory reads.
+- **Output order**: printing the shared category diff at its first command split the remaining
+  command rows in targeted, global and verbose updates. Keep the first-command observation/cache,
+  then print the snapshot after all selected rows/details in that category, before the next one.
+  Group receipt-only status siblings too. Process regressions pin category/command ordering,
+  single-command scope, unchanged categories and independent raw/rendered diffs.
+
+## 2026-10-24 — Share LF-only diff construction without sharing business comparisons
+
+- **Symptom**: App/Shell Info and update previews still replaced every line across CRLF/LF inputs.
+  A standalone CR split `similar::TextDiff::from_lines` tokens but did not supply a rendered LF,
+  joining deletion/addition rows and suppressing the missing-final-LF marker at bare-CR EOF.
+- **Fix**: all CLI text diffs share LF-only tokenization and complete hunk construction in
+  `output::unified_text_diff`. Info/update normalize uniform CRLF only on display copies, identify
+  both styles and report EOL-only changes explicitly; mixed LF/CRLF retains per-line evidence.
+- **Boundary**: keep raw status/hash/write semantics, migration candidate preservation, canonical
+  broker TOML and separate stdout/SSH-TTY encoding. Sys three-way merge remains independent.
+- **Coverage**: exact hunk/EOF/header/multiple-hunk/long-line cases, isolated App/Shell Info and
+  update paths with unchanged files/receipts/trust, canonical policy CR data, and existing rejection,
+  replay, contention, stale-preview and complete long-policy approval tests.
+
+## 2026-10-24 — Metadata migration preserves checkout line endings before review
+
+- **Symptom**: Windows migration previews replaced every metadata line and displayed `\r` on
+  removed lines. Managed-overlay diffs appeared beneath `0 automatic changes` without explaining
+  their scope, and the next-step hint omitted pushing upstream commits before consumer pulls.
+- **Cause**: Git checked out CRLF, `toml_edit` serialized LF, and exact line comparison correctly
+  detected the byte changes. Safe terminal escaping made the CR visible rather than causing it.
+- **Rule**: restore uniform LF/CRLF and final-newline presence on candidate bytes before validation
+  and hashing. Block mixed LF/CRLF rewrites until the author chooses a style. Normalize paired
+  CRLF only on display copies with a notice; split on LF so standalone CR remains escaped data,
+  including at EOF. Retain raw source/hash/backup checks and missing-newline markers.
+- **Coverage**: App/Shell conversion, semantic env mappings, multiline values, source hashes,
+  backup/apply/idempotence, mixed-input refusal, safe colored/plain previews, and managed-overlay
+  refusal remain independent. Overlay previews explicitly require upstream commit/push before pull.
+- **Native acceptance (2026-10-24)**: isolated Rust 1.96.0 builds of `af6c027c` plus the four-file
+  migration fix passed 49 targeted tests on Windows x86_64 and 50 on Linux x86_64 (30 migration
+  unit tests, 10 output tests, and 9/10 CLI tests respectively). An actual Windows managed-overlay
+  dry-run also retained the expected blocker while eliminating whole-file CRLF churn; metadata,
+  config and state-directory entries stayed unchanged. Existing checkouts were preserved.
+
 ## 2026-10-23 — Reduce diagnostic repetition without reducing evidence
 
 - **Evidence**: built-in lint produced 768 warnings across 18 categories; ordinary text repeated
@@ -3374,8 +3477,8 @@ When cutting a release, always diff against the latest stable `v*` tag
   preserve structural LF and display CR/TAB explicitly; they are not patch input.
 - **Regression**: snapshot compatibility reports and real CLI migration, generator, update/status
   and blocked lifecycle checks retain JSON/candidate hashes, redaction, exit codes and file bytes.
-  Migration's pre-existing CRLF normalization is checked through candidate hashes, not redefined by
-  display tests. Explicit artifacts retain inherited process I/O and their existing failure policy.
+  Candidate hashes bind the actual preserved LF/CRLF bytes; display copies alone normalize paired
+  CRLF with a notice. Explicit artifacts retain inherited process I/O and their existing failure policy.
 
 ## 2026-10-21 — Global list output has independent labels and remediation
 

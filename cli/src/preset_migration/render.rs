@@ -160,7 +160,10 @@ pub(super) fn migration_text(
     if needs_preset_pull {
         let _ = writeln!(output);
         let _ = writeln!(output, "  {}", crate::colors::cyan("Next:"));
-        let _ = writeln!(output, "    Commit the upstream changes, then run:");
+        let _ = writeln!(
+            output,
+            "    Commit and push the upstream changes to the configured remote branch, then run:"
+        );
         let _ = writeln!(output, "      shine preset pull");
     }
 
@@ -306,21 +309,43 @@ pub(super) fn diagnostic_category(target: &str) -> String {
     target.split('/').take(2).collect::<Vec<_>>().join("/")
 }
 
-pub(super) fn print_diffs(edits: &[PresetMigrationEdit]) {
+pub(super) fn print_diffs(edits: &[PresetMigrationEdit], managed_overlay: Option<&Path>) {
     for edit in edits {
-        let old = String::from_utf8_lossy(&edit.original);
-        let new = edit
-            .candidate
-            .as_deref()
-            .map(String::from_utf8_lossy)
-            .unwrap_or_default();
         println!();
-        let path = escape_controls(&edit.logical_path);
-        let diff = similar::TextDiff::from_lines(&old, &new)
-            .unified_diff()
-            .header(&format!("a/{path}"), &format!("b/{path}"))
-            .to_string();
-        print!("{}", crate::output::colorize_unified_diff(&diff));
+        print!("{}", migration_diff(edit, managed_overlay));
         println!();
     }
+}
+
+pub(super) fn migration_diff(edit: &PresetMigrationEdit, managed_overlay: Option<&Path>) -> String {
+    let mut output = String::new();
+    if managed_overlay.is_some_and(|root| edit.physical_path.starts_with(root)) {
+        let _ = writeln!(
+            output,
+            "Preview only: update the upstream checkout; this managed overlay will not be changed."
+        );
+    }
+    let old = String::from_utf8_lossy(&edit.original);
+    let new = edit
+        .candidate
+        .as_deref()
+        .map(String::from_utf8_lossy)
+        .unwrap_or_default();
+    if old.contains("\r\n") || new.contains("\r\n") {
+        let _ = writeln!(output, "Line endings: CRLF (displayed as LF).");
+    }
+    // Only presentation copies lose paired CRLF terminators. Bare CR and other
+    // controls still reach the shared safe renderer; candidate/hash bytes do not.
+    let old = old.replace("\r\n", "\n");
+    let new = new.replace("\r\n", "\n");
+    let unified = crate::output::unified_text_diff(
+        &old,
+        &new,
+        Some((
+            &format!("a/{}", edit.logical_path),
+            &format!("b/{}", edit.logical_path),
+        )),
+    );
+    output.push_str(&crate::output::colorize_unified_diff(&unified));
+    output
 }

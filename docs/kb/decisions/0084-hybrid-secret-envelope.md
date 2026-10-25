@@ -23,7 +23,10 @@ have their own memory lifecycle; Rust cannot erase their memory or OS pipe buffe
 The wrapped plaintext is the exact ASCII string `shine-hybrid-key-v1:` followed by
 canonical standard Base64 of nonce || key (56 bytes). Both length and nonce must
 match before constructing the cipher. The textual adapter never loses binary bytes. Unwrap stdout is bounded to 96 bytes,
-and captured diagnostics to 64 KiB; output overflow terminates the child. GPG unwrap
+and diagnostics to 64 KiB; output overflow terminates and reaps the child. Both unwrap
+adapters pipe stderr. Diagnostics are discarded by default; phone QR and explicitly enabled
+phone messages are forwarded incrementally under the same cap so interactive authorization
+can proceed. These intentional interactive messages are not redacted. GPG unwrap
 also uses `--no-options --output -` so local output-file options cannot persist a data key.
 The reproducible vector in `cli/src/secret/hybrid-vector.txt` uses key byte `07` repeated
 32 times, nonce byte `09` repeated 24 times, ASCII wrappers `gpg-wrapper` and `age-wrapper`,

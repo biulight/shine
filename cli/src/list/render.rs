@@ -190,7 +190,7 @@ pub(super) async fn update(
         missing_sources,
     } = inputs;
     let UpdateView {
-        update_shell,
+        mut update_shell,
         update_app,
         actionable_app,
         refresh_commands,
@@ -246,6 +246,7 @@ pub(super) async fn update(
     }
 
     let update_diffs = query::collect_diffs(config, app_inspections).await?;
+    let mut shell_diff_state = crate::info::ShellDiffState::default();
 
     if !update_shell.is_empty() {
         println!("{}", colors::bold("Shell Presets"));
@@ -256,20 +257,24 @@ pub(super) async fn update(
             .max()
             .unwrap_or(0);
 
-        for row in &update_shell {
-            let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(
-                &output::escape_controls(&row.label),
-            )));
-            println!(
-                "  {}  {}{}  {}",
-                row.symbol,
-                output::escape_controls(&row.label),
-                pad,
-                colors::status_label(row.status_text, row.status_sym),
-            );
-            update_diffs
-                .print_shell_for_row(config, &row.selector())
-                .await?;
+        update_shell.sort_by(|left, right| left.category.cmp(&right.category));
+        for rows in update_shell.chunk_by(|left, right| left.category == right.category) {
+            for row in rows {
+                let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(
+                    &output::escape_controls(&row.label),
+                )));
+                println!(
+                    "  {}  {}{}  {}",
+                    row.symbol,
+                    output::escape_controls(&row.label),
+                    pad,
+                    colors::status_label(row.status_text, row.status_sym),
+                );
+                update_diffs
+                    .print_shell_for_row(config, &row.selector(), &mut shell_diff_state)
+                    .await?;
+            }
+            shell_diff_state.print_snapshot(&rows[0].category);
         }
     }
 
@@ -390,7 +395,8 @@ pub(super) async fn status(
     } else {
         None
     };
-    let shell_statuses = if diff {
+    let mut shell_diff_state = crate::info::ShellDiffState::default();
+    let mut shell_statuses: Vec<_> = if diff {
         installed_shell
             .iter()
             .map(|row| ShellLifecycleStatus::from(*row))
@@ -435,33 +441,42 @@ pub(super) async fn status(
         }
         .unwrap_or(0);
 
-        for row in &shell_statuses {
-            let label = if diff {
-                &row.detail_label
-            } else {
-                &row.category
-            };
-            let label = output::escape_controls(label);
-            let pad = " ".repeat(label_width.saturating_sub(console::measure_text_width(&label)));
-            let run_hint = if row.status == ShellRowStatus::UpdateAvail {
-                format!("  {}", colors::dim("run `shine upgrade`"))
-            } else {
-                String::new()
-            };
-            println!(
-                "  {}  {}{}  {}{}",
-                colors::symbol(row.status.symbol()),
-                label,
-                pad,
-                colors::status_label(row.status_text, row.status.symbol()),
-                run_hint,
-            );
-            if diff
-                && row.status == ShellRowStatus::UpdateAvail
-                && let Some(diffs) = &update_diffs
-            {
-                diffs.print_shell_for_row(config, &row.selector).await?;
+        // Inspection appends receipt-only commands after active metadata. Keep those siblings
+        // with their category so its shared diff cannot split the detailed status rows.
+        shell_statuses.sort_by(|left, right| left.category.cmp(&right.category));
+        for rows in shell_statuses.chunk_by(|left, right| left.category == right.category) {
+            for row in rows {
+                let label = if diff {
+                    &row.detail_label
+                } else {
+                    &row.category
+                };
+                let label = output::escape_controls(label);
+                let pad =
+                    " ".repeat(label_width.saturating_sub(console::measure_text_width(&label)));
+                let run_hint = if row.status == ShellRowStatus::UpdateAvail {
+                    format!("  {}", colors::dim("run `shine upgrade`"))
+                } else {
+                    String::new()
+                };
+                println!(
+                    "  {}  {}{}  {}{}",
+                    colors::symbol(row.status.symbol()),
+                    label,
+                    pad,
+                    colors::status_label(row.status_text, row.status.symbol()),
+                    run_hint,
+                );
+                if diff
+                    && row.status == ShellRowStatus::UpdateAvail
+                    && let Some(diffs) = &update_diffs
+                {
+                    diffs
+                        .print_shell_for_row(config, &row.selector, &mut shell_diff_state)
+                        .await?;
+                }
             }
+            shell_diff_state.print_snapshot(&rows[0].category);
         }
     }
 

@@ -65,8 +65,7 @@ items and their IDs and convert them individually; do not replace the whole conf
 - `detect` tells Shine how to check whether software is present; here it checks the `nvim` command.
 - `install` tells Shine how to install missing software. This example uses Homebrew, which must be
   available before the actual installation.
-- A fixed package provider needs no empty `permissions` table. Shine derives its operation identity
-  from typed metadata.
+- A fixed package provider needs no empty `permissions` table.
 - `[profiles.recommended]` selects the items in that group. Check that IDs in existing groups still
   refer to valid items.
 
@@ -80,7 +79,7 @@ into `install/<item>.sh` or `install/<item>.ps1`. Change that item's `install` t
 `kind = "script"`, `path = "install/<item>.sh"` (use `.ps1` for Windows).
 
 The script handles only that item, reports success or failure with a normal exit code, and still
-needs a corresponding `detect`. Core automatically marks it as unisolated. Add optional author
+needs a corresponding `detect`. The script is not sandboxed. Add optional author
 capability statements only when they help review; keep environment inputs and Administrator
 requirements explicit. See [capability statements](./custom-presets.md#declare-permissions).
 

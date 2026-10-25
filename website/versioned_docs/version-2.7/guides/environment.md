@@ -33,24 +33,15 @@ The built-in image commands use `IMAGE_QUALITY=80`, `IMAGE_MAX_WIDTH=1920`, and
 `--height`, or keep different machine-local defaults with `shine env set`.
 
 `shine env list` hides sensitive values by default; use `--reveal` only in a trusted terminal.
-List cells escape line breaks, tabs, other control characters and backslashes, and truncate to
-terminal display width. These display changes do not alter stored values or `env get` output.
 It groups effective values by builtin, overlay, global config, global env file, project config,
 and project env file, with actual file paths and the current project root. `env explain KEY` shows
 that storage key's definitions from low to high, its winning layer and description source, hiding
 all values by default. `--reveal` never decrypts. Explicit injection still prefers `KEY_SECRET`
 over `KEY`; explain and write output point out an existing encrypted key.
-List/explain paths and env-write/proxy-toggle receipts escape terminal control characters while
-preserving stored paths. For control-bearing keys, explain requests the original key instead of
-printing a copyable command with a different spelling.
-
 Defaults are runtime fallbacks: queries create no configuration. Setting a value equal to a builtin
 still records an explicit entry.
 
-Configuration TOML parse errors report file or field context without printing configured values
-or source lines. Env reads and writes return exit code 1; correct the input and retry. A failed
-parse does not apply the requested env edit. Workspace definitions and personal
-`shine.config.local.toml` preferences also omit document contents from TOML parse errors.
+If Shine reports invalid TOML, correct the indicated file or field before retrying the edit.
 
 Global `~/.shine/config.toml` and project `shine.config.toml` support either a string or a value with
 a description:
@@ -95,15 +86,12 @@ It restores inheritance, never disables a variable, removes other layers, or als
 upstream, use a manual maintenance directory, or choose local overrides. These three write entries
 reject the retired `--force` without writing and suggest the correct replacement options.
 
-Write preflight runs before encryption tools. Before committing, Shine rechecks the target,
-configuration sources, and `--from` input; changes require a retry. A per-target file lock serializes
-Shine's final validation and atomic replacement. It does not lock every external editor or Git
-operation. An error saying the file was saved but effective-state verification failed means the
-write happened: inspect configuration and query again.
+Avoid editing configuration while an env write is in progress. If Shine reports a concurrent
+change, inspect the file and retry. A message saying the file was saved but its effective state
+could not be verified means the write happened; query the value again before making another edit.
 
-On Unix, configuration, env files, and temporary files use owner-only `0600` permissions. A failed
-atomic replacement preserves the original. Writes reject symlink and special-file targets and
-preserve comments, unrelated entries, and detailed descriptions. Plaintext remains plaintext.
+Writes preserve comments and unrelated entries, and reject symbolic links and special files.
+Unix files use owner-only permissions, but unencrypted values remain plaintext.
 
 Global, overlay, and project `shine.env.toml` files omit the `[env]` header and support both forms:
 
@@ -154,11 +142,7 @@ config; this does not recover deleted custom values.
 
 ## Encrypt values with GPG
 
-Shine handles Base64 encoding and decoding internally for both GPG and age secrets; no external
-`base64` command is required for these operations. Install the selected encryption backend (`gpg`
-or `age`) and any identity plugins it needs. Existing Shine ciphertext needs no migration.
-Wrapped Base64 and ASCII whitespace are accepted; malformed encoding, including missing or invalid
-padding, is rejected.
+Install the selected encryption backend (`gpg` or `age`) and any identity plugins it requires.
 
 First make sure local `gpg` can use the recipient public key. For a private key on YubiKey, see the
 Chinese guide
@@ -200,7 +184,7 @@ if ($LASTEXITCODE -eq 0) { Invoke-Expression $exportCode }
 PowerShell exports preserve Unicode and multiline values, including their original line endings.
 After installing the `utils` shell preset, `shine-env-export MY_TOKEN --as API_TOKEN` is equivalent.
 Values containing NUL cannot be represented in environment variables. `env secret export` rejects
-them with exit code 1 and no export code on stdout; `env get` and `env secret decrypt` retain raw output.
+them; `env get` and `env secret decrypt` can still return the original value.
 
 ## Use age identities
 
@@ -216,18 +200,12 @@ shine env secret identity init
 shine env secret identity list
 ```
 
-A normal identity uses `age-keygen` and defaults to `~/.shine/age/identity.txt`.
-For a custom `--output`, any printed `age_identity` configuration hint uses an absolute path and
-TOML quoting, so it remains usable from another directory. The hint does not modify your config.
-On Unix, `--output` keeps native filename bytes. If the absolute path is not valid UTF-8, Shine
-omits the copyable `age_identity` assignment; use a UTF-8 path to configure it in TOML.
-`identity list` shows each configured identity path and recipient. On Unix, literal backslashes in
-filenames are preserved; Windows paths are displayed with forward slashes.
-Identity lists and software/Touch ID generation result rows escape terminal control characters in
-paths and recipients. Copyable configuration hints retain TOML quoting, including multiline values.
-Existing files require `--force`. Forced replacement generates and checks the new identity in a
-private temporary directory before replacing the old file; generation or validation failure
-preserves the old identity. On Unix, the resulting identity file has owner-only `0600` permissions.
+A normal identity defaults to `~/.shine/age/identity.txt`. Use `--output` to choose another path,
+then add it to your `age_identity` or `age_identities` configuration as shown by the command.
+Paths used in TOML must be valid UTF-8. `identity list` shows configured identity paths and recipients.
+
+Replacing an existing identity requires `--force`. Keep a secure backup if you still need it to
+decrypt older data. Unix identity files are accessible only to their owner.
 
 ### Use Touch ID on macOS
 
@@ -292,12 +270,9 @@ shine state migrate --dry-run
 shine state migrate
 ```
 
-The migration updates configured `age1se...` values to equivalent `age1tag...` values without
-reading identities or decrypting secrets. It checks the global config, current project config, and
-nearest workspace together; dry-run reports per-file counts, and applying preserves array order,
-comments, and duplicates. All legacy recipients are validated before any file is written. Reseal
-afterward to write new ciphertext using the native tagged recipient. Existing ciphertext remains
-unchanged and decryptable as before.
+Migration converts configured `age1se...` recipients to equivalent `age1tag...` recipients without
+decrypting secrets. Reseal afterward to use the new recipients. Existing ciphertext remains
+unchanged and can still be decrypted.
 
 ### Add recipients to existing workspace secrets
 
@@ -327,7 +302,6 @@ Without a file argument, `seal` processes existing sources referenced by the wor
 configured modes, including `default_mode`. Use `shine env secret seal <FILE>` to process only one
 source. If sealing stops with an error, some files may already be updated; resolve the reported
 error and rerun it before sharing the result.
-Completed source paths in ordinary `seal` output display terminal control characters as escapes.
 
 Commit the updated workspace configuration together with the resealed shared source files. Each
 listed recipient can independently decrypt the new ciphertext; have new members verify access on
@@ -401,8 +375,7 @@ shine env secret identity init --phone --transport qr
 shine env secret identity init --phone --adb-serial SERIAL
 ```
 
-Shine leaves all pairing, hardware keys, replay, locator, interruption, and cleanup state under the plugin's
-ownership. After successful fingerprint confirmation, it adds only the public identity-stub path to
+After successful fingerprint confirmation, Shine adds the identity path to
 the current user's global `age_identities`. If the active project explicitly overrides
 `age_identity` or `age_identities`, the command stops before pairing instead of creating an identity
 that the project would ignore. A manual configuration has this shape (use the actual absolute
@@ -412,12 +385,9 @@ identity path returned by the plugin on your platform):
 age_identities = ["/absolute/path/returned/by/plugin/identity.txt"]
 ```
 
-Multiple phone identity stubs are valid: age must treat a valid stub that does not match the
-ciphertext as an ordinary miss and continue to the next configured identity. Older
-`age-plugin-phone` builds may instead stop at the first nonmatching stub. If hybrid unwrap fails
-only while several phone identities are configured, set `AGE_PLUGIN_PHONE_MESSAGES=1` to confirm
-the plugin diagnostic and upgrade the plugin. As a temporary workaround, configure only the
-matching identity path; do not delete pairing or recovery state merely to narrow this list.
+If decryption fails only when multiple phone identities are configured, enable diagnostics with
+`AGE_PLUGIN_PHONE_MESSAGES=1` and check whether the plugin needs upgrading. As a temporary
+workaround, configure only the matching identity path; do not delete pairing or recovery state.
 
 The shortcut does not change `secret_backend` and does not add recipients. Interrupted plugin setup
 must be handled with `age-plugin-phone setup --resume` or `age-plugin-phone setup --cleanup` as
@@ -470,10 +440,7 @@ otherwise selects Developer USB/ADB on Windows or QR on macOS; it does not race 
 Decrypting a phone-backed secret, including through `shine env run`, invokes the standard age
 plugin and must require a fresh strong biometric authorization for each file-key unwrap. Developer
 USB and Wi-Fi plugin guidance is quiet by default; set `AGE_PLUGIN_PHONE_MESSAGES=1` to opt into it.
-Explicit QR requests remain visible because the phone must scan them. A successful
-`shine env secret decrypt` writes only the decrypted value, suppresses the age client's own waiting
-diagnostic, and does not append a line ending. A shell theme may still place its next prompt on a
-fresh line. Never make the experimental phone recipient the only recipient for retained data; the
+Explicit QR requests remain visible because the phone must scan them. Never make the experimental phone recipient the only recipient for retained data; the
 recovery path must not depend on the same phone StrongBox keys, desktop TPM/Secure Enclave keys, or plugin state.
 
 If AI agents participate in development, read
@@ -540,8 +507,7 @@ The shim retains the absolute runtime directory selected during installation, in
 `--config-dir`. Later calls use that directory even when the caller's `SHINE_CONFIG_DIR` differs.
 Project rules still follow the caller's working directory. Re-run `env proxy install` to update an
 older shim or move it to another runtime directory.
-Proxy installation requires UTF-8 runtime and target paths; an unrepresentable path is rejected
-before launcher, configuration or receipt files are written.
+Proxy installation requires UTF-8 configuration and executable paths.
 
 An installed proxy is command-wide, not subcommand-specific. If you deliberately proxy Cargo,
 disable injection until it is needed:
@@ -560,29 +526,16 @@ While enabled, every Cargo subcommand and any descendant process may inherit the
 the rule retains the shim and forwards directly to the real Cargo without decrypting or injecting
 values. For an occasional yank, prefer the one-time `env run` form above.
 
-Proxy only an explicitly approved bare command name containing ASCII letters, numbers, `-`, `_`, or
-`.`. Make sure `~/.shine/bin/` is early in `PATH` and the target is not another Shine wrapper. Shine
-refuses to overwrite a same-name entry it does not own. On Windows, it checks the entire launcher
-set, including `.cmd` and `.ps1`, before writing any file. A conflicting file or symbolic link is
-preserved. PATH entries that resolve to the Shine bin directory, including symbolic-link aliases,
-are skipped when locating the real command. Proxy rule changes also retain owner-only configuration
-permissions on Unix.
-On Unix, target discovery also skips files without execute permission and follows executable
-symlinks without changing the command's invocation name.
-On Windows, pass a command name without an executable extension: use `gh`, not `gh.exe`.
-Installation rejects `.exe`, `.com`, `.bat`, `.cmd`, and `.ps1` suffixes, ignoring case. Previously
-installed suffixed names can still be removed with `shine env proxy uninstall <COMMAND>`.
-Shine refuses to proxy `shine` or `shine.exe` (case-insensitive) to prevent recursive launcher calls.
-Uninstall checks every launcher before changing rules or receipts; an ownership conflict leaves
-the launcher set and configuration unchanged.
-If a launcher changes while uninstall is running, Shine preserves the changed file and reports an error.
+Proxy only a command you trust, using a bare name containing ASCII letters, numbers, `-`, `_`, or
+`.`. Put `~/.shine/bin/` early in `PATH`. The target must be an executable outside Shine's command
+directory and cannot be another Shine wrapper or Shine itself.
 
-Installation validates the rule file, manifest, and complete launcher set before writing. If a
-write fails, Shine attempts to restore previous file contents and Unix permissions and removes new
-files. Concurrent edits are preserved; an incomplete rollback is reported explicitly. This rollback
-covers reported write failures, not abrupt process termination. TOML parse errors in captured
-proxy rules or the proxy manifest omit document contents; invalid input still blocks the
-operation before launcher, rule, or manifest changes.
+On Windows, use `gh`, not `gh.exe`: `.exe`, `.com`, `.bat`, `.cmd`, and `.ps1` suffixes are rejected.
+Previously installed suffixed names can still be removed with `shine env proxy uninstall <COMMAND>`.
+
+Shine preserves conflicting files during installation or removal. Inspect reported conflicts before
+retrying. If an operation fails or is interrupted, check the wrapper and configuration before using
+it again; do not assume recovery completed.
 
 Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
 `--project` to scope the rule; a project rule for the same command overrides the global one.
@@ -594,9 +547,6 @@ shine env proxy install gh --with GH_TOKEN --project
 shine env proxy list
 ```
 
-Proxy list fields, installation target notices, and post-save warning details escape terminal
-control characters without changing saved rules or executable targets.
-
 Disable injection temporarily while retaining the shim; the disabled wrapper directly forwards to
 the real program:
 
@@ -606,11 +556,9 @@ shine env proxy enable gh
 shine env proxy disable gh --project
 ```
 
-Enable/disable output identifies the configuration file that was saved and separately reports the
-current effective state. Without `--project`, the global rule changes even inside a project;
-a project override can therefore keep a different state. If the subsequent state check fails,
-Shine warns that the rule was saved but its effective state could not be verified; the successful
-save still returns exit code 0.
+Without `--project`, enable/disable changes the global rule even inside a project. A project rule
+can still override it. If Shine reports that the rule was saved but its effective state could not
+be verified, inspect the configuration and run `shine env proxy list` again.
 
 Remove the managed shim and user-level rule when no longer needed:
 
@@ -656,9 +604,7 @@ import. Import selected modes with repeatable `--mode`:
 shine env workspace init --from-dotenv --mode development --mode production
 ```
 
-Without `--force`, previews say `Would create` and successful writes say `Created`.
-With `--force`, messages describe writing with replacement if a target is present; they do not
-claim that every target is new. `--dry-run` never writes or replaces files.
+`--dry-run` previews the import without creating or replacing files.
 
 Mark known sensitive keys for `[secret]`, then configure recipients and seal. Unmarked values are
 imported as plaintext; never accidentally commit credentials as ordinary configuration.
@@ -705,16 +651,10 @@ shine env workspace export \
   --include-secrets
 ```
 
-This writes plaintext secrets. On Unix, a secret-bearing output is created with owner-only `0600`
-permissions; keep it out of version control on every platform. Without `--force`, existing outputs
-(including dangling symbolic links) are preserved, even if they appear while the export is waiting
-for decryption. Concurrent exports to the same destination allow only one to succeed. Add `--force`
-to replace an existing output. `--dry-run` reports the mode, destination, and effective non-secret
-variable count without printing values or writing the file. Secrets are not decrypted or counted,
-even with `--include-secrets`; that option is applied only during the actual export. A plain value
-overridden by a secret is excluded from the preview count. Destination paths in previews, success
-messages, and existing-output errors are quoted and display-escaped: newlines and tabs appear as
-`\n` and `\t`. This changes only the message; the actual destination and exported bytes are preserved.
+This writes plaintext secrets. Keep the output out of version control; on Unix, it is readable
+only by its owner. Existing destinations are preserved unless you add `--force` to replace them.
+`--dry-run` previews the destination and non-secret variables without printing values, decrypting
+secrets, or writing files, even when `--include-secrets` is present.
 
 The exported file has no Shine metadata or runtime dependency. To leave Shine env, export and test
 each required mode, add secret-bearing outputs to `.gitignore`, remove `shine env run` wrappers, and
@@ -787,15 +727,6 @@ Existing process variables override the workspace by default. With
 `env.override_process_env = true`, workspace values win. Explicit `--with` always has highest
 precedence.
 
-For single-backend policy and sources, usable recipients let `env run` store an encrypted,
-mode-specific cache with the selected backend in the system cache directory. It rebuilds automatically when workspace content, source content, or file
-order changes.
-A non-UTF-8 project directory keeps a separate cache from a different directory with its
-replacement-character spelling.
-If the cache document or decrypted cache is malformed, Shine warns without showing cached
-values or document contents and rebuilds from the workspace sources. Cache read/write warnings
-escape control characters in paths and error text; child output and exit status are preserved.
-
 Ignore personal overrides:
 
 ```gitignore
@@ -828,20 +759,18 @@ lists. Either group independently reads the same data ciphertext. Hybrid GPG wra
 excludes local option files and implicit extra recipients; groups and fuzzy user IDs
 are rejected before existing secrets are decrypted.
 
-For hybrid policy or a hybrid source consumed by the current mode, `env run` stores
-an encrypted compilation cache using the locally selected GPG or age backend. Only
-that backend is needed to create the cache. Recipients come from the workspace's
-corresponding list, never global recipients. An absent list skips caching; a cache
-write failure warns but does not prevent running successfully compiled values.
+Shine may cache the merged environment in encrypted form, but does not save an unlocked session.
+Backend authorization still applies each time. If decryption fails or you cancel authorization,
+the command stops.
 
-A cache hit decrypts the merged environment once. There is no TTL or saved unlock
-state: backend authorization still applies on every read. Workspace/source content,
-source order, selected backend, or recipients changing invalidates the cache. GPG
-and age caches are separate; legacy caches cannot substitute for hybrid sources.
-Malformed hybrid envelopes fail before cache decryption. Once cache decryption
-starts, failure or cancellation stops the command without retrying from sources.
-Export does not use this cache: it omits secrets unless `--include-secrets` is set,
-and dry-run never decrypts secrets.
+Changes to workspace inputs invalidate the cached environment. Older cache versions are
+rebuilt from the sources, which may require authorizing each source again on the first run
+after upgrading; existing encrypted source files do not need to be resealed.
+
+Hybrid key decryption suppresses backend diagnostics by default. Phone QR prompts and explicitly
+enabled phone messages remain visible as they arrive. Diagnostic output is limited to 64 KiB per
+key decryption, including these interactive messages; exceeding the limit stops the operation
+without trying another backend.
 
 For a personal project preference, create `shine.config.local.toml` alongside the
 selected `shine.workspace.toml` (also when using `--workspace`):
@@ -859,18 +788,11 @@ It is trusted local project configuration, so a program able to edit it can chan
 the chosen authorization path. SSH broker requests do not load or transmit this file;
 the decrypting broker machine retains its own configured choice and release checks.
 
-Sealing requires regular source files and rejects symbolic links; on Unix, it also rejects
-files with multiple hard links. This prevents atomic replacement from leaving plaintext in
-another linked file. GPG encryption and decryption explicitly use standard output regardless
-of local `output` settings; empty encryption output fails without replacing the source.
-
-Sealing locks out cooperating Shine sealers and rechecks captured workspace and source
-bytes before replacement. Edits during hardware approval abort the current file;
-earlier completed files remain completed and remaining files are not processed. Do
-not edit during sealing: editors ignoring the lock can race in the final comparison
-to replacement interval. Failed sealing may leave pending plaintext entries; Shine
-does not claim they were cleared. `.shine-seal.lock` files may remain, contain no
-secrets, and must not be deleted while a seal is active.
+Seal regular source files, not symbolic links or, on Unix, files with multiple hard links.
+Do not edit workspace or source files while sealing, including while approving hardware prompts.
+If sealing fails, earlier files may already be updated and pending plaintext may remain. Inspect
+the reported files before retrying or committing. Do not delete `.shine-seal.lock` while sealing
+is active.
 
 ## Temporary secret files {#workspace-secret-files}
 
@@ -929,8 +851,8 @@ shine env run --mode production --file-group android-signing --file-group servic
 and hybrid policies, including CLI overrides and hybrid recipient restrictions. By default it retains
 plaintext. `--remove-plaintext` decrypts and compares every written ciphertext before starting
 plaintext deletion, so it needs a usable identity and may prompt for authorization. Verification or
-cancellation before deletion retains all original plaintext. Multi-file writes and deletion are not
-one transaction; failures report completed and remaining files. There is no ciphertext-only
+cancellation before deletion retains all original plaintext. If writing or deleting several files fails partway through, earlier changes remain;
+inspect the reported completed and remaining files. There is no ciphertext-only
 recipient rotation workflow in this first version.
 
 To keep decrypted files for ordinary tools without wrapping each command in Shine, export the
@@ -950,28 +872,17 @@ files remain unchanged. The same path, Git exclusion, size, and private-permissi
 Successful exports remain on disk until you manage or remove them yourself. `env run --file-group`
 will refuse these existing targets and will not clean them up. If export fails or is interrupted,
 Shine attempts to remove files and empty directories created by that export, preserves replacements,
-and reports cleanup failures and possible leftovers. Multi-file export is not an atomic transaction;
-force-killing Shine or losing power can leave files behind. Do not commit the plaintext.
+and reports cleanup failures and possible leftovers. An interrupted export can leave some files behind, especially after force-killing Shine or losing power. Do not commit the plaintext.
 
-`env run --file-group` decrypts all selected files before preparing targets, starts the command
-only after every target is ready, and cleans up its files on success, failure, or controlled
-interruption. Existing targets are never overwritten. Replaced targets are retained and reported.
-If the child deletes a target or its parent directory, that target is already cleaned; Shine still
-cleans the remaining mappings and preserves the child's exit status. Replacement files, directories,
-and dangling links remain protected and reported.
-On Unix, cleanup can still remove an unchanged owned file after the child removes its read
-permission; it never restores permissions or deletes a replacement to make cleanup succeed.
-Phone-backed age decryption preserves QR authorization and explicitly enabled terminal messages;
-ordinary captured backend diagnostics remain hidden.
-`env run` and file export put mapping previews on stderr so the command's stdout remains byte-exact.
-Dry-run previews remain on stdout.
-Mapping previews quote each path and escape control characters such as newlines, keeping each
-mapping on one line. Seal, plaintext-removal and export result paths, and cleanup warnings also
-escape terminal controls. These display escapes do not change the paths used for file operations.
-New Unix files use `0600` and directories use `0700`; Windows requires a filesystem supporting
-private current-user ACLs. Cleanup failure returns an error; a failed child retains its exit code.
-The wrapper supervises its process group on Unix and a Job Object on Windows. Do not start detached
-background tasks that outlive the wrapped command; remaining scoped descendants are terminated.
+`env run --file-group` starts the command only after all selected files are decrypted and ready.
+It never overwrites existing targets. After the command ends or is interrupted normally, Shine
+attempts to remove the files it created; files replaced during the run are preserved and reported.
+Inspect any cleanup warnings for plaintext left behind.
+
+Temporary files are restricted to the current user. Windows requires a filesystem supporting
+private user permissions. Command output remains available for piping, and failures are reported.
+Do not start detached background tasks that need these files after the command ends; remaining
+managed child processes are terminated.
 
 `--dry-run` inspects configuration and metadata only: it does not read plaintext, decrypt, write
 files, or execute the command. It cannot verify ciphertext integrity or private-key availability.

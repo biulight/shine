@@ -92,7 +92,7 @@ const WORKSPACE_FILE: &str = "shine.workspace.toml";
 const WORKSPACE_FORMAT_VERSION: u32 = 2;
 const ENV_SOURCE_FORMAT_VERSION: u32 = 1;
 const SECRET_PAYLOAD_VERSION: u32 = 1;
-const CACHE_FORMAT_VERSION: u32 = 1;
+const CACHE_FORMAT_VERSION: u32 = 2;
 
 async fn find_workspace_optional(explicit: Option<&Path>) -> Result<Option<PathBuf>> {
     if let Some(path) = explicit {

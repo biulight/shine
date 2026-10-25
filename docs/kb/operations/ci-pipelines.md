@@ -258,8 +258,144 @@ conditional-compilation cleanup in native CI as well as the earlier isolated com
 These results apply to the accepted commit and supplement the earlier working-copy checks; they
 do not validate subsequent commits. Documentation deployment completed, but no `v2.7.0` tag or
 crate/binary release was created by this push. Tagged release builds, crate publication and
-cargo-binstall verification remain separate release gates. This internal KB-only update does not
-match the documentation workflow's path filters.
+cargo-binstall verification were separate release gates, subsequently completed in the
+[formal release acceptance below](#270-formal-release-and-main-sync-acceptance-2026-10-24).
+Internal KB-only updates do not match the documentation workflow's path filters.
+
+## 2.7.0 formal release and main-sync acceptance (2026-10-24)
+
+The annotated `v2.7.0` tag and remote `release` branch resolved to
+[`c7fe24c6e6d189c38525ae3985988477c035850f`](https://github.com/biulight/shine/commit/c7fe24c6e6d189c38525ae3985988477c035850f).
+The [formal release workflow](https://github.com/biulight/shine/actions/runs/39994310595)
+finished with `completed / success` on attempt 1: all 20 jobs passed, including six asset builds,
+crate publication, GitHub Release creation, six cargo-binstall checks, and sync PR creation.
+No repair commit or rerun was needed. Dates in this record use Asia/Shanghai; GitHub timestamps
+for these runs are on October 23 UTC.
+
+| Release gate | Result | Evidence |
+| --- | --- | --- |
+| Windows x86_64 | All-feature workspace nextest: 1,769 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/39994310595/job/120553737272) |
+| Linux x86_64 | All-feature workspace nextest: 2,032 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/39994310595/job/120553737327) |
+| macOS arm64 | All-feature workspace nextest: 2,034 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/39994310595/job/120553737291) |
+| Quality | Bun checks, formatting, compilation, authoring examples, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/39994310595/job/120553737333) |
+| MSRV | Rust 1.90.0 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/39994310595/job/120553736992) |
+| crates.io | `shine-core` and `shine-cli` 2.7.0 published | [Publish job](https://github.com/biulight/shine/actions/runs/39994310595/job/120556721172) |
+
+All three native nextest logs reported zero LEAK results. The
+[public v2.7.0 release](https://github.com/biulight/shine/releases/tag/v2.7.0) was confirmed as the
+latest stable release, with `draft=false`, `prerelease=false`, six target archives and both
+`install.sh` / `install.ps1`. Independent downloads of all eight assets matched the GitHub asset
+sizes and SHA-256 digests. Each archive contained exactly the expected regular `shine` or
+`shine.exe` binary; ELF, Mach-O or PE headers matched its advertised architecture.
+
+Cargo-binstall 1.12.7 used the published 2.7.0 crate metadata with
+`--strategies crate-meta-data`. All six targets passed download/extraction checks; three also
+installed into isolated runner directories and executed `shine --version`:
+
+| Published archive | cargo-binstall verification | Evidence |
+| --- | --- | --- |
+| `shine-v2.7.0-linux-x86_64.tar.gz` | Download, install and native execution passed | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832602) |
+| `shine-v2.7.0-linux-aarch64.tar.gz` | Download/extraction passed; no native execution | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832672) |
+| `shine-v2.7.0-darwin-aarch64.tar.gz` | Download, install and native execution passed | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832634) |
+| `shine-v2.7.0-darwin-x86_64.tar.gz` | Download/extraction passed; no native execution | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832641) |
+| `shine-v2.7.0-windows-x86_64.tar.gz` | Download, install and native execution passed | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832710) |
+| `shine-v2.7.0-windows-aarch64.tar.gz` | Download/extraction passed; no native execution | [Job](https://github.com/biulight/shine/actions/runs/39994310595/job/120561832762) |
+
+All three native cargo-binstall jobs printed `shine 2.7.0 (c7fe24c6e 2026-10-24)`.
+An independent local run of the downloaded macOS arm64 binary printed the same version under a
+fresh `SHINE_CONFIG_DIR`, without creating configuration. Download-only checks do not establish
+native runtime coverage for the other three targets.
+
+The official sparse-index records independently confirmed version 2.7.0 with `yanked=false`:
+
+| Crate | Published checksum |
+| --- | --- |
+| [shine-core](https://index.crates.io/sh/in/shine-core) | `dda8d11d5c88fd8f8da2e1d9e83d932a1993744f53be5970a43c1dac0600b231` |
+| [shine-cli](https://index.crates.io/sh/in/shine-cli) | `4cd665f7cb4beca14e5a0f9d09af643eefdbe9cf650b2647f78ef8ce91a265b2` |
+
+The published CLI depends on `shine-core ^2.7.0`. The public English and Simplified Chinese Pages
+sites returned HTTP 200 and exposed 2.7.0, Next and 1.8. An isolated official v2.6.0 macOS arm64
+binary running `shine update --refresh-release --verbose` exited successfully and detected
+`2.6.0 -> 2.7.0`; this checked release discovery without performing an upgrade.
+
+### PR #79 and post-merge checks
+
+The release workflow created [PR #79](https://github.com/biulight/shine/pull/79),
+`chore(release): merge v2.7.0 into main`, from the exact tagged commit. Its CI, MSRV and docs runs
+initially stopped at `action_required` with no jobs. After authorized approval, all three finished
+with `completed / success` on attempt 2; this was approval recovery, not a test-failure rerun.
+
+| Sync check | Result | Evidence |
+| --- | --- | --- |
+| CI | Windows 1,769/0, Linux 2,032/2 and macOS 2,034/2 passed/skipped; quality passed | [CI run](https://github.com/biulight/shine/actions/runs/39997363455) |
+| MSRV | Rust 1.90 workspace check passed | [MSRV run](https://github.com/biulight/shine/actions/runs/39997363433) |
+| Documentation | Typecheck, version checks, parity (21 files per locale) and both locale builds passed; deployment jobs correctly skipped for the PR event | [Docs run](https://github.com/biulight/shine/actions/runs/39997363469) |
+| Post-merge MSRV | Passed on the resulting `main` merge commit | [MSRV run](https://github.com/biulight/shine/actions/runs/39999602514) |
+
+After all PR checks passed and the head was revalidated, PR #79 was merged as
+[`343110270f5218bed4b88da97a1e108726bf811e`](https://github.com/biulight/shine/commit/343110270f5218bed4b88da97a1e108726bf811e).
+Remote `main` at that merge commit and `release` at `c7fe24c6e6d189c38525ae3985988477c035850f`
+had the identical Git tree `fd13613579966763937a88f9ffd4b321b3efbe3b`. This is content equality,
+not commit-SHA equality. These acceptance results apply to those recorded commits and published
+assets; later KB commits are outside the tag and the synchronized tree. No implementation repair
+was required, and unrelated working-tree files were preserved.
+
+## Shell category diff output-order CI acceptance (2026-10-24)
+
+Accepted `release` commit:
+[`20963601c01dd586b6af666a2d7b7213763000b7`](https://github.com/biulight/shine/commit/20963601c01dd586b6af666a2d7b7213763000b7)
+(`fix(cli): show category snapshot diffs after command details`). The remote `release` branch
+matched this SHA after the push. Targeted, global and verbose update views now print all selected
+command rows/details in a category before its shared snapshot diff, then continue to the next
+category. Detailed status keeps receipt-only siblings with their category. The commit includes
+ordering regressions and aligned English/Simplified Chinese manual and KB updates.
+
+The [CI run](https://github.com/biulight/shine/actions/runs/40089699152),
+[MSRV run](https://github.com/biulight/shine/actions/runs/40089699128), and
+[documentation run](https://github.com/biulight/shine/actions/runs/40089699133) all target that exact
+SHA and finished with `completed / success` on attempt 1. All eight jobs passed; no repair commit
+or workflow rerun was needed.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,792 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/40089699152/job/120859687405) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 2,054 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/40089699152/job/120859687400) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 2,056 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/40089699152/job/120859687421) |
+| Quality | Bun checks, formatting, compilation, Preset authoring example, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/40089699152/job/120859687279) |
+| MSRV | Rust 1.90 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/40089699128/job/120859686998) |
+| Documentation build | Typecheck, version checks, locale parity and all-locale build passed | [Build job](https://github.com/biulight/shine/actions/runs/40089699133/job/120859687185) |
+| GitHub Pages deployment | Succeeded | [Pages job](https://github.com/biulight/shine/actions/runs/40089699133/job/120859911060) |
+| Documentation server deployment | Succeeded | [Server job](https://github.com/biulight/shine/actions/runs/40089699133/job/120859911037) |
+
+All three native logs explicitly show
+`shell_snapshot_diffs_follow_all_selected_commands_in_each_category` passing and contain no LEAK
+results. Skipped cases are not counted as passed. These results validate the committed changes
+on native CI, separately from the earlier local checks; they do not establish a new crate or
+binary release. This later internal KB-only evidence update is outside the accepted commit and
+does not match `docs.yml`'s public-documentation path filters.
+
+### KB acceptance-record follow-up (2026-10-24)
+
+The subsequent KB-only `release` commit
+[`6e4bc5f4468297fd4477ed6e525f109bd9bdafb0`](https://github.com/biulight/shine/commit/6e4bc5f4468297fd4477ed6e525f109bd9bdafb0)
+(`docs(kb): record shell diff ordering CI acceptance`) records the preceding acceptance without
+changing production code. Its own [CI run](https://github.com/biulight/shine/actions/runs/40094163754)
+and [MSRV run](https://github.com/biulight/shine/actions/runs/40094163753) both target that exact SHA
+and finished with `completed / success` on attempt 1. All five jobs passed; no repair or rerun
+was needed.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Windows `x86_64-pc-windows-msvc` | All-feature workspace nextest: 1,792 passed, 0 skipped | [Windows job](https://github.com/biulight/shine/actions/runs/40094163754/job/120872836909) |
+| Linux `x86_64-unknown-linux-gnu` | All-feature workspace nextest: 2,054 passed, 2 skipped | [Linux job](https://github.com/biulight/shine/actions/runs/40094163754/job/120872836835) |
+| macOS `aarch64-apple-darwin` | All-feature workspace nextest: 2,056 passed, 2 skipped | [macOS job](https://github.com/biulight/shine/actions/runs/40094163754/job/120872836885) |
+| Quality | Bun checks, formatting, compilation, Preset authoring example, strict Clippy and security audit passed | [Quality job](https://github.com/biulight/shine/actions/runs/40094163754/job/120872836680) |
+| MSRV | Rust 1.90 `cargo check --locked --workspace` passed | [MSRV job](https://github.com/biulight/shine/actions/runs/40094163753/job/120872836760) |
+
+All three native logs show the output-order regression passing and no LEAK results. These are
+results for `6e4bc5f4`, distinct from the preceding implementation commit and this later evidence
+addition. No documentation workflow or deployment ran for the KB-only push because it did not
+match `docs.yml`'s public-documentation path filters.
 
 ## Documentation server deployment
 

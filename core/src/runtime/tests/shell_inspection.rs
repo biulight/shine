@@ -398,6 +398,213 @@ async fn shell_inspection_preserves_read_error_context_and_order() {
 }
 
 #[tokio::test]
+async fn shell_snapshot_diff_is_observation_only_and_rejects_links_and_read_failures() {
+    let original = installed_runtime(false).await;
+    let mut context = original.context().clone();
+    context.is_external_presets = true;
+    let snapshot = snapshot(PresetSourceKind::External, false);
+    let root = context.shine_dir.join("installed/shell/demo");
+    for (logical, bytes) in snapshot.files() {
+        original.host().put_file(
+            root.join(logical.strip_prefix("shell/demo/").unwrap()),
+            bytes.clone(),
+        );
+    }
+    // Same bytes, different executable intent; Windows ignores Unix executable flags.
+    original.host().put_file_with_mode(
+        root.join("run.ts"),
+        snapshot.get("shell/demo/run.ts").unwrap().to_vec(),
+        0o100755,
+    );
+    let reader = CoreRuntime::new(
+        ObservationHost::new(original.host().clone()),
+        context.clone(),
+        snapshot.clone(),
+    );
+    let diffs = reader.inspect_shell_snapshot_changes("demo").await.unwrap();
+    assert_eq!(diffs.len(), usize::from(cfg!(unix)));
+    if cfg!(unix) {
+        assert_eq!(diffs[0].relative_path, Path::new("run.ts"));
+        assert_eq!(diffs[0].current_content, diffs[0].desired_content);
+        assert_eq!(diffs[0].current_executable, Some(true));
+        assert_eq!(diffs[0].desired_executable, Some(false));
+    }
+    assert!(
+        reader
+            .inspect_shell_snapshot_changes("../outside")
+            .await
+            .is_err()
+    );
+    let mut denied = ObservationHost::new(original.host().clone());
+    denied.fail_read = Some((root.join("shine.toml"), 0));
+    let reader = CoreRuntime::new(denied, context.clone(), snapshot.clone());
+    assert_eq!(
+        reader
+            .inspect_shell_snapshot_changes("demo")
+            .await
+            .unwrap_err()
+            .to_string(),
+        "reading Shell snapshot diff file"
+    );
+    original
+        .host()
+        .symlink(&context.home_dir.join("private"), &root.join("link"))
+        .await
+        .unwrap();
+    let before = original.host().operations().len();
+    let reader = CoreRuntime::new(
+        ObservationHost::new(original.host().clone()),
+        context,
+        snapshot,
+    );
+    assert!(
+        reader
+            .inspect_shell_snapshot_changes("demo")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("symbolic link")
+    );
+    assert!(
+        !reader
+            .host()
+            .reads
+            .lock()
+            .unwrap()
+            .contains(&root.join("link"))
+    );
+    assert!(
+        original.host().operations()[before..]
+            .iter()
+            .all(|operation| matches!(operation, HostOperation::Read(_)))
+    );
+}
+
+#[tokio::test]
+async fn shell_snapshot_diff_keeps_category_scope_and_missing_root_and_mode_boundaries() {
+    let root = std::env::temp_dir().join("shine-snapshot-diff-memory");
+    let mut context = RuntimeContext::isolated(
+        root.join("home"),
+        root.join("state"),
+        root.join("presets"),
+        root.join("bin"),
+        RuntimePlatform::current(),
+    );
+    context.is_external_presets = true;
+    let snapshot = snapshot(PresetSourceKind::External, false);
+    let installed = context.shine_dir.join("installed/shell/demo");
+    let host = InMemoryHost::new();
+    let reader = CoreRuntime::new(
+        ObservationHost::new(host.clone()),
+        context.clone(),
+        snapshot.clone(),
+    );
+    let added = reader.inspect_shell_snapshot_changes("demo").await.unwrap();
+    assert_eq!(added.len(), snapshot.files().len());
+    assert!(
+        added
+            .iter()
+            .all(|file| file.current_content.is_none() && file.desired_content.is_some())
+    );
+    assert!(reader.host().reads.lock().unwrap().is_empty());
+    for (logical, bytes) in snapshot.files() {
+        host.put_file(
+            installed.join(logical.strip_prefix("shell/demo/").unwrap()),
+            bytes.clone(),
+        );
+    }
+    host.put_file(
+        context.shine_dir.join("installed/shell/other/private.txt"),
+        b"UNRELATED_PRIVATE".to_vec(),
+    );
+    host.put_file(
+        context.presets_dir.join("shell/demo/run.ts"),
+        b"CHANGED_AFTER_CAPTURE".to_vec(),
+    );
+    assert!(
+        reader
+            .inspect_shell_snapshot_changes("demo")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        reader
+            .host()
+            .reads
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|path| path.starts_with(&installed))
+    );
+    let before = host.operations().len();
+    for external in [false, true] {
+        let mut mode = context.clone();
+        mode.is_external_presets = external;
+        mode.external_shell_mode = if external {
+            ExternalShellMode::Live
+        } else {
+            ExternalShellMode::Snapshot
+        };
+        let reader = CoreRuntime::new(ObservationHost::new(host.clone()), mode, snapshot.clone());
+        assert!(
+            reader
+                .inspect_shell_snapshot_changes("demo")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(reader.host().reads.lock().unwrap().is_empty());
+    }
+    let malformed = PresetSnapshot::builder(PresetSourceKind::External)
+        .file(
+            "shell/../shine.toml",
+            b"[[files]]\nsource='run.ts'\nruntime='bun'\n".to_vec(),
+        )
+        .build();
+    let reader = CoreRuntime::new(
+        ObservationHost::new(host.clone()),
+        context.clone(),
+        malformed,
+    );
+    assert_eq!(
+        reader
+            .inspect_shell_snapshot_changes("..")
+            .await
+            .unwrap_err()
+            .to_string(),
+        "invalid Shell snapshot category"
+    );
+    assert!(reader.host().reads.lock().unwrap().is_empty());
+    assert_eq!(host.operations().len(), before);
+    let mut denied = ObservationHost::new(host.clone());
+    denied.fail_directory = Some(installed.clone());
+    let reader = CoreRuntime::new(denied, context.clone(), snapshot.clone());
+    assert_eq!(
+        reader
+            .inspect_shell_snapshot_changes("demo")
+            .await
+            .unwrap_err()
+            .to_string(),
+        "reading Shell snapshot diff tree"
+    );
+    let host = InMemoryHost::new();
+    host.symlink(&context.home_dir.join("private"), &installed)
+        .await
+        .unwrap();
+    let reader = CoreRuntime::new(ObservationHost::new(host), context, snapshot);
+    assert!(
+        reader
+            .inspect_shell_snapshot_changes("demo")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not a directory")
+    );
+    assert!(reader.host().reads.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn shell_inspection_snapshot_observation_failure_stays_a_pending_update() {
     let original = installed_runtime(false).await;
     let mut context = original.context().clone();

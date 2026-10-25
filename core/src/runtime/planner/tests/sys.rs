@@ -447,7 +447,7 @@ path = '$HOME/.tool/bin'
 }
 
 #[tokio::test]
-async fn bulk_managed_sys_upgrade_plans_only_profile_enabled_items() {
+async fn bulk_managed_sys_upgrade_plans_recorded_items_without_requiring_profiles() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
         .file(
             "sys/test/shine.toml",
@@ -470,11 +470,21 @@ permissions = { schema_version = 1 }
 [items.config]
 source = 'disabled.txt'
 target = '$HOME/.config/disabled.txt'
+[[items]]
+id = 'available'
+label = 'Unrecorded'
+mode = 'managed'
+driver = 'managed-file'
+permissions = { schema_version = 1 }
+[items.config]
+source = 'available.txt'
+target = '$HOME/.config/available.txt'
 "#
             .to_vec(),
         )
         .file("sys/test/enabled.txt", b"enabled".to_vec())
         .file("sys/test/disabled.txt", b"disabled".to_vec())
+        .file("sys/test/available.txt", b"available".to_vec())
         .build();
     let runtime = runtime(snapshot);
     let entry = |item_id: &str, profile_enabled: bool| SysRunEntry {
@@ -508,7 +518,9 @@ target = '$HOME/.config/disabled.txt'
         .await
         .unwrap();
     assert!(plan.steps.iter().any(|step| step.target == "sys/enabled"));
-    assert!(!plan.steps.iter().any(|step| step.target == "sys/disabled"));
+    assert!(plan.steps.iter().any(|step| step.target == "sys/disabled"));
+    assert!(!plan.steps.iter().any(|step| step.target == "sys/available"));
+    assert!(!plan.is_converged_upgrade());
 }
 
 #[tokio::test]

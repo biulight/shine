@@ -2,11 +2,11 @@ use super::collect::{AppInfoFile, ShellInfoFile};
 use crate::apps::{AppCategory, AppFile};
 use crate::colors;
 use crate::config::Config;
-use crate::output::{colorize_unified_diff, escape_controls};
+use crate::output::{colorize_unified_diff, escape_controls, unified_text_diff};
 use crate::path_display;
 use crate::status::{FileStatus, UpdateChange};
 use anyhow::{Context, Result};
-use similar::TextDiff;
+use std::borrow::Cow;
 use std::path::Path;
 
 pub(super) async fn print_app_file(
@@ -171,16 +171,76 @@ pub(crate) async fn print_app_expected_diff(config: &Config, item: &AppInfoFile)
     Ok(())
 }
 
-pub(super) async fn print_shell_update_diff(config: &Config, item: &ShellInfoFile) -> Result<()> {
+pub(super) async fn print_shell_update_diff(
+    config: &Config,
+    item: &ShellInfoFile,
+    content_note: Option<&str>,
+) -> Result<()> {
     print_update_changes(config, &item.changes);
     if UpdateChange::includes_content(&item.changes) {
-        let content_path = shell_content_path(item);
-        let diff_output = shell_diff_output(config, item, &content_path).await?;
-        print_block("Diff", &content_path, &diff_output);
+        if let Some(note) = content_note {
+            println!("     {}", colors::dim(note));
+        } else {
+            let content_path = shell_content_path(item);
+            let diff_output = shell_diff_output(config, item, &content_path).await?;
+            print_block("Diff", &content_path, &diff_output);
+        }
     } else if !item.changes.is_empty() {
         println!("     {}", colors::dim("content: unchanged"));
     }
     Ok(())
+}
+
+pub(super) fn print_shell_snapshot_diff(
+    category: &str,
+    files: &[shine_core::runtime::ShellSnapshotFileInspection],
+) {
+    if files.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "{}",
+        colors::bold(&escape_controls(&format!(
+            "Category snapshot: shell/{category}"
+        )))
+    );
+    for file in files {
+        let path = format!("shell/{category}/{}", file.relative_path.display());
+        let change = match (&file.current_content, &file.desired_content) {
+            (None, Some(_)) => "added",
+            (Some(_), None) => "removed",
+            _ => "changed",
+        };
+        println!(
+            "     {}",
+            colors::dim(&escape_controls(&format!("{path}: {change}")))
+        );
+        if file.current_executable != file.desired_executable {
+            let flag = |value: Option<bool>| {
+                value.map_or("absent", |flag| if flag { "true" } else { "false" })
+            };
+            println!(
+                "     executable: {} -> {}",
+                flag(file.current_executable),
+                flag(file.desired_executable)
+            );
+        }
+        let current = file.current_content.as_deref().unwrap_or_default();
+        let desired = file.desired_content.as_deref().unwrap_or_default();
+        // The added/removed row is the complete difference for an empty file.
+        if current != desired {
+            print!(
+                "{}",
+                render_diff_or_note(
+                    current,
+                    desired,
+                    &format!("installed: {path}"),
+                    &format!("expected: {path}"),
+                )
+            );
+        }
+    }
 }
 
 fn print_update_changes(config: &Config, changes: &[UpdateChange]) {
@@ -252,7 +312,7 @@ fn print_path_change(config: &Config, field: &str, from: &Path, to: &Path) {
     );
 }
 
-fn shell_content_path(item: &ShellInfoFile) -> std::path::PathBuf {
+pub(super) fn shell_content_path(item: &ShellInfoFile) -> std::path::PathBuf {
     item.link_target
         .as_ref()
         .filter(|target| target.starts_with(&item.rendered_path) || **target == item.rendered_path)
@@ -452,15 +512,51 @@ fn render_diff_or_note(
             expected.len()
         );
     };
-    let unified = TextDiff::from_lines(current_text, expected_text)
-        .unified_diff()
-        .context_radius(3)
-        .header(
-            &escape_controls(current_label),
-            &escape_controls(expected_label),
+    let current_style = line_ending_style(current_text);
+    let expected_style = line_ending_style(expected_text);
+    let mut output = String::new();
+    let (current_text, expected_text) = if [current_style, expected_style]
+        .contains(&"mixed LF/CRLF")
+    {
+        // Preserve individual terminators when a file mixes styles; a summary alone would hide
+        // changes to their positions. The shared renderer keeps CR visible as escaped content.
+        output.push_str(&format!(
+            "Line endings: current {current_style}, expected {expected_style} (preserved in diff).\n"
+        ));
+        (Cow::Borrowed(current_text), Cow::Borrowed(expected_text))
+    } else if [current_style, expected_style].contains(&"CRLF") {
+        output.push_str(&format!(
+            "Line endings: current {current_style}, expected {expected_style} (displayed as LF).\n"
+        ));
+        // Only presentation copies change. Raw comparisons, hashes and installation bytes stay exact.
+        (
+            Cow::Owned(current_text.replace("\r\n", "\n")),
+            Cow::Owned(expected_text.replace("\r\n", "\n")),
         )
-        .to_string();
-    colorize_unified_diff(&unified)
+    } else {
+        (Cow::Borrowed(current_text), Cow::Borrowed(expected_text))
+    };
+    if current_text == expected_text {
+        output.push_str("Only line endings differ.\n");
+    } else {
+        output.push_str(&colorize_unified_diff(&unified_text_diff(
+            &current_text,
+            &expected_text,
+            Some((current_label, expected_label)),
+        )));
+    }
+    output
+}
+
+fn line_ending_style(text: &str) -> &'static str {
+    let lf = text.matches('\n').count();
+    let crlf = text.matches("\r\n").count();
+    match (lf, crlf) {
+        (0, _) => "none",
+        (_, 0) => "LF",
+        _ if lf == crlf => "CRLF",
+        _ => "mixed LF/CRLF",
+    }
 }
 
 #[cfg(test)]
@@ -532,12 +628,60 @@ mod tests {
     }
 
     #[test]
-    fn diff_escapes_carriage_returns_without_changing_line_separators() {
-        let diff = colorize_unified_diff("-old\r\n+new\rcontent\n unchanged\r");
-        assert!(diff.contains("-old\\r"), "{diff:?}");
-        assert!(diff.contains("+new\\rcontent"), "{diff:?}");
-        assert!(diff.ends_with(" unchanged\\r"), "{diff:?}");
-        assert_eq!(diff.matches('\n').count(), 2);
+    fn diff_displays_uniform_crlf_without_churn_and_reports_eol_only_changes() {
+        for (current, expected, styles) in [
+            (
+                "head\r\nold\r\nend\r\n",
+                "head\nnew\nend\n",
+                "current CRLF, expected LF",
+            ),
+            (
+                "head\nold\nend\n",
+                "head\r\nnew\r\nend\r\n",
+                "current LF, expected CRLF",
+            ),
+            (
+                "head\r\nold\r\nend\r\n",
+                "head\r\nnew\r\nend\r\n",
+                "current CRLF, expected CRLF",
+            ),
+        ] {
+            let diff = render_diff_or_note(current.as_bytes(), expected.as_bytes(), "a", "b");
+            assert_eq!(
+                console::strip_ansi_codes(&diff),
+                format!(
+                    "Line endings: {styles} (displayed as LF).\n--- a\n+++ b\n@@ -1,3 +1,3 @@\n head\n-old\n+new\n end\n"
+                )
+            );
+        }
+        for (current, expected, styles) in [
+            ("same\r\n", "same\n", "current CRLF, expected LF"),
+            ("same\n", "same\r\n", "current LF, expected CRLF"),
+        ] {
+            assert_eq!(
+                render_diff_or_note(current.as_bytes(), expected.as_bytes(), "a", "b"),
+                format!("Line endings: {styles} (displayed as LF).\nOnly line endings differ.\n")
+            );
+        }
+    }
+
+    #[test]
+    fn diff_retains_mixed_terminator_positions_instead_of_hiding_them() {
+        let diff = render_diff_or_note(b"head\r\nend\n", b"head\nend\r\n", "a", "b");
+        assert_eq!(
+            console::strip_ansi_codes(&diff),
+            "Line endings: current mixed LF/CRLF, expected mixed LF/CRLF (preserved in diff).\n--- a\n+++ b\n@@ -1,2 +1,2 @@\n-head\\r\n-end\n+head\n+end\\r\n"
+        );
+        assert!(!diff.contains("Only line endings differ"));
+    }
+
+    #[test]
+    fn diff_keeps_bare_cr_within_lf_lines_and_reports_missing_final_lf() {
+        let diff = render_diff_or_note(b"head\r\nold\rtail\r", b"head\r\nnew\rtail\r", "a", "b");
+        assert_eq!(
+            console::strip_ansi_codes(&diff),
+            "Line endings: current CRLF, expected CRLF (displayed as LF).\n--- a\n+++ b\n@@ -1,2 +1,2 @@\n head\n-old\\rtail\\r\n\\ No newline at end of file\n+new\\rtail\\r\n\\ No newline at end of file\n"
+        );
         assert!(!diff.contains('\r'));
     }
 

@@ -25,10 +25,9 @@ shine list
 shine info proxy
 ```
 
-If a source script exists but its command entry is missing, `shine list` does not list that command
-as a separate lifecycle resource; a multi-command category may still appear as partial. Use
-`shine info shell/<CATEGORY>` for command-level details, then rebuild managed files and entries with
-`shine shell install <CATEGORY> --replace-managed`.
+If a command entry is missing, use `shine info shell/<CATEGORY>` to inspect it. Rebuild the
+managed files and command entries with `shine shell install <CATEGORY> --replace-managed` after
+reviewing any local changes.
 
 ## Application configuration is reported as user-modified
 
@@ -131,9 +130,7 @@ shine sys uninstall <ITEM> --dry-run
 Do not infer available items from planning documents. Use `shine sys list` and `shine sys info` from
 the installed version.
 
-PowerShell, bash, or zsh profiles rewritten by Windows or other tools may use CRLF line endings.
-System-profile merging matches managed blocks by content and does not repeatedly rewrite files only
-because CRLF and LF differ. If an older version left conflict markers, resolve them manually before
+If an older version left conflict markers in your shell profile, resolve them manually before
 rerunning `shine sys bootstrap --dry-run` or the relevant `upgrade`.
 
 ## A saved task behaves differently from the original command

@@ -5,12 +5,8 @@ sidebar_position: 2
 
 # 配置参考
 
-Shine 将全局运行时状态保存在 `~/.shine/`。首次需要配置时会创建 `~/.shine/config.toml`。
-配置与清单文件的替换（包括 Windows）不会在重命名暂存文件前删除旧文件；重命名失败时保留原文件。
-
-在 Unix 上，若 `SUDO_USER` 指定了发起 sudo 的用户，Shine 会通过系统账户数据库解析其主目录，
-包括 macOS 的 Directory Services。依赖主目录的配置和路径展开会使用该用户的主目录，而非
-sudo 设置的 root `HOME`。
+Shine 将全局配置和状态保存在 `~/.shine/`，需要时创建 `config.toml`。
+Unix 上，若 `SUDO_USER` 指明发起 sudo 的用户，主目录相对路径使用该用户的主目录。
 
 交互式生命周期 Plan 的人工确认可仅授权本次列出的外部代码，不保存 trust。自动化与 `--yes`
 必须已有 grant。Shell live 始终要求 Development trust；显式 `--run-generators` 检查也须已有 grant。
@@ -69,9 +65,6 @@ enabled = false
 
 phone recipient 不由 `state migrate` 自动转换。升级并验证插件和手机应用的 tag 支持后，用 `age-plugin-phone recipients -i <IDENTITY_STUB> --recipient-type tag` 导出，替换对应 `age_recipients` 值并重新 seal；保留独立恢复 recipient。
 
-命令读取格式损坏的 `trust.toml` 或 `ssh-secret-broker.toml` 时，TOML 解析错误会指出
-文件，不回显存储内容。解析失败不会自动修复或改写文件。
-
 ## 外部代码信任
 
 外部 App hook、generator、artifact、Sys 安装脚本、可执行 profile 内容，以及每个外部 Shell
@@ -90,10 +83,10 @@ shine trust grant app/example --development
 
 快照 Grant 只适用于已经审阅的 target、capability、来源层与完整有效类别快照。显式使用
 `--development` 建立的开发信任允许所显示本地来源中的代码继续修改，但 target、capability、
-来源目录/层必须保持不变。这是对未来来源内容的长期授权，不代表持续代码审阅。权限表是否存在不控制代码分类或 grant 资格。
+来源目录/层必须保持不变。这是对未来来源内容的长期授权，不代表持续代码审阅。
 Grant 不能替代每次操作前显示的 Plan。旧的 `allow_app_hooks` 和
 `allow_sys_code` 已被忽略，并会在下次保存配置时移除。
-`preset` target 可以批量审阅或授予当前激活快照，但保存时仍是各 target 独立的 grant；新增 target
+`preset` target 可批量审阅或授权当前生效的目标；新增 target
 或 capability 变化后仍须重新授权；开发信任还会在来源变化后失效。旧 schema v1 trust
 grant 仍可查看和撤销，但必须重新审阅。
 
@@ -154,22 +147,13 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 预设树内部的符号链接仍不参与快照。
 FIFO、套接字和设备等特殊条目会使快照捕获报错；Shine 不会将它们作为预设文件读取。
 
-使用外部 `presets_dir` 时，Shell 类别默认以 `snapshot` 模式复制到
-`~/.shine/installed/shell/` 后再运行。在 Unix 上，快照保留捕获时脚本和辅助文件的可执行标记，
-不复制所有者或特权权限位。仅执行权限变化（包括旧安装快照缺少可执行标记）也会出现在
-`shine update` 中，并由 `shine upgrade` 修复。修改来源文件后，先用 `shine update` 检查，再用
-`shine upgrade` 应用，便于审阅变化且与 app 配置的更新流程一致。仅在编写和调试预设时，才把
-`external_shell_mode` 设为 `live`：源文件内容会在下次调用时生效；但 `target`、`runtime`、
-`transforms` 和 `env` 等部署元数据变更仍须运行 `shine upgrade` 重新生成受管入口。Live 模式要求
-显式 development trust；snapshot trust 不能授权读取可变来源的 launcher。已有 live launcher 会
-保留，状态会把缺少 development trust 的目标标为需要审阅。
+外部 Shell 预设默认使用 `snapshot` 模式：修改来源后，需运行 `shine update` 和
+`shine upgrade` 才能应用。仅在开发时使用 `external_shell_mode = "live"`；该模式下来源修改
+会在下次调用时生效，必须授予 development trust。`target`、`runtime`、`transforms` 或 `env`
+变化后仍需运行 `shine upgrade` 更新已安装命令。
 
-升级 Shine 后，运行 `shine update` 检查，再用 `shine upgrade` 更新已有的带 transforms 的 Live
-Bun 命令。更新后的入口在渲染和读取声明的环境值时都使用安装目录对应的配置，即使调用者
-设置了不同的 `SHINE_CONFIG_DIR`。项目配置和 `shine.env.toml` 覆盖仍按调用者的工作目录生效。
-更新后的 PowerShell 入口会保留空参数和字面量 `--`，也支持 Windows PowerShell 5.1。
-此改动也覆盖未声明 `env` 的带 transforms 的 Live Bun 命令；无 transforms 的 Live 命令、
-Native/source 命令及 snapshot 命令保留现有启动方式。
+升级 Shine 后，请用 `shine upgrade` 更新已有 Live Bun 命令。使用 transforms 的命令沿用
+安装时选择的配置目录，项目覆盖仍取决于调用时的工作目录。
 
 Overlay 在选定的基础预设来源上按相同相对路径覆盖文件，不替代整棵目录。手动关联的
 `presets_overlay_dir` 与 `presets_overlay_git` 互斥；使用 `shine preset overlay link` 可避免同时配置。
@@ -255,7 +239,7 @@ data = "<由 Shine 管理的 GPG 密文>"
 ```
 
 `shine env secret seal` 会把 `[secret]` 中的待处理值合并进加密 payload，并将已封存项改为
-`true`。`shine env run` 按文件顺序合并 `[plain]` 和解密后的 secret；策略和源均为单后端且配置了可用 recipient 时，还会维护按 mode 区分的加密缓存。
+`true`。`shine env run` 按文件顺序合并 `[plain]` 和解密后的 secret。
 
 `shine env run --with KEY[=ALIAS]` 还可注入当前 Shine 配置 `[env]` 中的值。它优先读取
 `KEY_SECRET`，不存在时读取 `KEY`；显式注入值覆盖 workspace 和当前进程中的同名变量。
@@ -295,8 +279,7 @@ data = "<由 Shine 管理的 GPG 密文>"
 它只接受该字段，格式错误或未知字段会报错。它不改变单后端路由，也不授予秘密释放权限。
 SSH broker 不接受远端个人配置。全局 `secret_backend` 仍只接受 `gpg` 或 `age`。
 
-Hybrid 编译缓存使用最终选定的单后端及工作区对应收件人名单。配置变化会重新判定缓存
-有效性，不会自动切换到另一后端。详见[环境指南](../guides/environment.md)。
+配置步骤和授权要求见[环境指南](../guides/environment.md)。
 
 ## Workspace 文件组
 

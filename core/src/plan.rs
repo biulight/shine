@@ -528,6 +528,23 @@ impl PlanV1 {
                 .all(|step| step.action != PlanActionV1::Blocked)
     }
 
+    /// A fully converged upgrade needs neither approval nor an execution attempt.
+    /// Preserve steps and unknown diagnostics still need their normal handling.
+    pub fn is_converged_upgrade(&self) -> bool {
+        self.operation == PlanOperationV1::Upgrade
+            && self.is_ready()
+            && self.permissions.required.is_empty()
+            && self.code_boundaries.is_empty()
+            && self.code_analysis.is_empty()
+            && self.steps.iter().all(|step| {
+                step.action == PlanActionV1::None
+                    && step
+                        .diagnostic_codes
+                        .iter()
+                        .all(|code| code == "app_manual_refresh_required")
+            })
+    }
+
     pub fn fingerprint(&self) -> Result<PlanFingerprintV1, PlanApprovalError> {
         if self.schema_version != PLAN_SCHEMA_VERSION {
             return Err(PlanApprovalError::UnsupportedPlanSchema(
@@ -729,6 +746,97 @@ mod tests {
             &required,
             std::iter::empty::<String>(),
         )
+    }
+
+    #[test]
+    fn upgrade_convergence_requires_a_complete_effect_free_plan() {
+        let mut plan = ready_plan();
+        plan.operation = PlanOperationV1::Upgrade;
+        plan.steps = vec![PlanStepV1::new(
+            "shell/demo/tool",
+            None::<String>,
+            PlanActionV1::None,
+        )];
+        plan.permissions = PermissionResolutionV1::resolve(
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        assert!(plan.is_converged_upgrade());
+        let unchanged = plan.clone();
+        for action in [
+            PlanActionV1::Create,
+            PlanActionV1::Update,
+            PlanActionV1::Remove,
+            PlanActionV1::Execute,
+            PlanActionV1::Preserve,
+            PlanActionV1::Blocked,
+        ] {
+            plan = unchanged.clone();
+            plan.steps[0].action = action;
+            assert!(!plan.is_converged_upgrade(), "{action:?}");
+        }
+        plan = unchanged.clone();
+        plan.steps[0]
+            .diagnostic_codes
+            .push("app_manual_refresh_required".into());
+        assert!(plan.is_converged_upgrade());
+        plan.steps[0].diagnostic_codes.push("unknown_notice".into());
+        assert!(!plan.is_converged_upgrade());
+        plan = unchanged.clone();
+        let permission = PermissionSetV1::new([PermissionV1::Administrator]);
+        plan.permissions = PermissionResolutionV1::resolve(
+            permission.clone(),
+            &permission,
+            std::iter::empty::<String>(),
+        );
+        assert!(plan.is_ready());
+        assert!(!plan.is_converged_upgrade());
+        plan = unchanged.clone();
+        plan.permissions
+            .uncomputable_codes
+            .insert("unknown_effect".into());
+        assert!(!plan.is_converged_upgrade());
+        plan = unchanged.clone();
+        plan.permissions.missing_declarations = PermissionSetV1::new([PermissionV1::Administrator]);
+        assert!(!plan.is_converged_upgrade());
+        plan = unchanged.clone();
+        plan.operation = PlanOperationV1::Install;
+        assert!(!plan.is_converged_upgrade());
+        plan = unchanged.clone();
+        plan.schema_version += 1;
+        assert!(!plan.is_converged_upgrade());
+        plan = unchanged.clone();
+        plan.code_analysis.push(crate::analysis::Binding {
+            identity: "analysis-identity".into(),
+            scope: crate::analysis::Scope {
+                target: "app/demo".into(),
+                entry: "post-upgrade".into(),
+                script: Some("hook.ts".into()),
+                report: crate::analysis::Report {
+                    analyzer_version: crate::analysis::ANALYZER_VERSION.into(),
+                    schema_version: crate::analysis::SCHEMA_VERSION,
+                    rule_version: crate::analysis::RULE_VERSION,
+                    files: vec!["hook.ts".into()],
+                    diagnostics: vec![],
+                    allowed: true,
+                },
+            },
+        });
+        assert!(plan.is_ready());
+        assert!(!plan.is_converged_upgrade());
+        plan = unchanged;
+        plan.code_boundaries.push(CodeBoundaryV2 {
+            target: "shell/demo/tool".into(),
+            entry_kind: CodeEntryKindV2::ShellCommand,
+            timing: CodeTimingV2::DeliverForLater,
+            source: CodeSourceV2::ShineDistribution,
+            trust: CodeTrustStateV2::Distribution,
+            unisolated: true,
+            target_role: CodeTargetRoleV2::Selected,
+            shared_resource: None,
+        });
+        assert!(!plan.is_converged_upgrade());
     }
 
     #[test]

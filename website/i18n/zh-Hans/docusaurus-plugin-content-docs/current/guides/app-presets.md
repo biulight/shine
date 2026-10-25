@@ -5,7 +5,7 @@ sidebar_position: 2
 
 # 管理应用配置
 
-应用预设把配置文件安装到目标应用使用的位置，并通过 `~/.shine/app-manifest.toml` 记录受管文件。安装前遇到已有的非受管文件时，Shine 会先创建 `*.shine.bak` 备份。
+应用预设将配置安装到应用需要的位置。替换已有的非受管文件前，会先创建 `*.shine.bak` 备份。
 
 它们只管理配置文件，不安装、下载或启动对应应用。所有内置类别的目标路径、平台限制、权限与重启要求见[内置预设](../reference/built-in-presets.md#app-预设)。
 
@@ -18,7 +18,7 @@ shine app install starship --dry-run
 ```
 
 涉及系统目录的预设可能需要额外权限。先使用 `--dry-run` 确认目标路径和变更范围。
-预览摘要会分别统计将安装和跳过的文件，不会写入应用配置文件。
+预览不会写入应用配置文件。
 
 ## 安装与更新
 
@@ -31,16 +31,13 @@ shine upgrade
 
 `shine update` 比较当前安装结果与预设，只报告状态；`shine upgrade` 将受管 shell 和应用配置更新到当前预设内容。
 
-`Install incomplete` 摘要表示一个或多个文件安装失败，命令会以非零状态退出。
-导致安装提前中止的错误会直接报告，不输出该摘要。
-本次运行中已经成功安装的文件会保留；重试前先检查报告的结果。post-install hook 的警告仍不影响成功退出。
+安装失败时，部分文件可能已安装成功。重试前请检查报告的结果。
 
 重新安装类别时会保留安装后被修改的文件，包括受管 JSON 键。对于审阅过的 Plan 标为保留的文件，
 Shine 也会跳过其 generator。若要显式覆盖已修改的受管内容，先使用
 `shine app install starship --replace-managed --dry-run` 预览，再审阅 `shine app install starship --replace-managed`。
 
-使用同一配置目录的 App 改动会依次执行。等待结束后，Shine 会重新校验审阅过的 Plan；如果相关
-状态已经变化，需要审阅新 Plan 后重试。锁等待超过 30 秒会报错，等待中的操作不会执行改动。
+若另一项 App 操作仍在运行，请等待它结束。Shine 提示相关文件或设置发生变化时，请重新审阅 Plan。
 
 如果只需覆盖一个类别的受管文件：
 
@@ -81,18 +78,15 @@ install、upgrade、uninstall、generator refresh 和 artifact apply/remove 都�
 迁移目标路径时，旧受管文件必须未修改，新路径也必须空闲；任一位置发生变化，Shine 都会保持原状，
 留给用户检查。
 
-自动 generator 的目标路径在 upgrade 中迁移时，Plan 还会包含旧受管文件的移除、备份恢复，以及
-旧位置需要的管理员权限。审阅后备份发生变化会使审批失效。如果已记录的备份缺失、不是预期
-备份路径上的普通文件，或记录着备份但旧受管文件缺失，请先处理该状态再重试。生成式文件迁移
-仍不属于带事务日志的静态文件恢复流程。
+生成文件迁移到其他位置时，批准前请检查旧文件及其备份。备份缺失或变化可能需要手动修复；
+`shine app recover` 不支持恢复生成文件的位置迁移。
 
-`app uninstall --force` 会显式允许删除用户修改过的受管内容，执行前务必使用 `--dry-run` 预览。
-卸载默认清理内部缓存。指定类别时，会删除该类别的整个内部缓存，包括额外文件，但保留 App manifest；
-未指定类别时，会删除整棵内部 App 缓存树；仅当没有剩余安装记录时才删除 App manifest。
-受保护或卸载失败的条目会保留记录及已记录的备份，便于处理问题后重试；`--force` 仍需显式审批。
-预览说明将要移除的内容，执行仅报告实际完成的清理。外部预设源始终保留，受管目标和清单记录
-仍按正常卸载规则处理。`shine uninstall app/<category>` 使用相同的类别限定行为。
-`--purge` 已移除；旧命令请直接去掉该选项。缓存清理同样包含在待审批的 Plan 和 `--dry-run` 预览中。
+`app uninstall --force` 允许删除用户修改过的受管内容，务必先用 `--dry-run` 预览。
+卸载也会删除所选类别的整个 Shine 缓存，包括存放在其中的额外文件；未指定类别时，会清理全部
+App 缓存。外部预设来源会保留。请勿将个人文件存放在这些缓存中，并在批准前审阅删除范围。
+
+`shine uninstall app/<category>` 使用相同的类别限定行为。旧的 `--purge` 选项已移除。
+请处理受保护或卸载失败的项目后重试，不要手动删除安装记录或备份。
 
 upgrade 仅在获批命令包含 `--prune-stale` 时移除已从
 预设中删除且未被修改的受管条目；用户修改过的条目仍会保留。
@@ -126,15 +120,12 @@ shine app recover --yes
 
 ## 生成式文件与 Surge URI 订阅
 
-App 预设可以为 `[[files]]` 声明 generator，把命令的 UTF-8 stdout 作为该受管文件的预期内容。生成结果仍经过正常的变换、hash、manifest、用户修改保护和卸载流程，不应由脚本绕过 Shine 直接改写目标文件。
-
-Generator 的 stdout 上限为 8 MiB，stderr 上限为 64 KiB。Shine 在读取输出时检查限制，
-超限即终止并回收子进程；在 Unix 上也会终止它的进程组。超限输出不会安装为受管内容。
+`[[files]]` 的 generator 将预期文件内容写入 UTF-8 标准输出，由 Shine 应用变换并管理安装和
+卸载。脚本不得直接写入目标文件。stdout 上限为 8 MiB，stderr 上限为 64 KiB，超限会导致生成失败。
 
 生成器可分为自动和手动两类。普通 `list`、`info` 和 `update` 都不会运行它们；无法在不执行代码的
 情况下计算动态预期内容时，info/update 会醒目显示 `generator not evaluated`，不会声称已安装文件
-是最新状态。使用 `--run-generators` 可以显式执行所选 generator、在内存中应用 transform，并检查
-状态或最终 diff，而不会写入目标文件或 manifest：
+是最新状态。使用 `--run-generators` 可以显式执行所选 generator，检查生成结果的状态或差异，而不安装文件：
 
 ```bash
 shine app info surge --run-generators
@@ -168,19 +159,17 @@ shine app refresh <CATEGORY> <SOURCE_FILE>
 `--replace-managed` 的修复安装会运行已由 `when_env` 启用的生成器，不受 `auto` 设置影响。
 refresh 会显示并重新校验安全 Plan；自动化调用必须添加 `--yes`。
 
-外部预设或 overlay 的 generator 可由交互式生命周期 Plan 获得本次授权；自动化与
-`--run-generators` 检查则须先运行 `shine trust grant app/<CATEGORY>` 建立持久授权。Shine 只向它传入预设显式声明的 env 值及固定的
-`SHINE_APP_*` 路径变量，并限制执行时间和输出大小；仍应只运行自己审阅和信任的预设。
+外部预设或 overlay 的 generator 可通过交互式生命周期确认获得单次授权。
+自动化与 `--run-generators` 检查需要先审阅并运行 `shine trust grant app/<CATEGORY>`。
+生成器会收到声明的环境输入和固定 `SHINE_APP_*` 路径变量，并受执行时间、输出大小限制。
+请只运行你信任的预设。
 
-类别根部可选的 `[permissions]` 表包含未经验证的作者能力说明及受执行器约束的 env/admin 契约。
-Shine 已从 typed metadata 推导 hook command 和脚本路径，无需重复声明。其中不得写入 URL token、
-环境变量值、命令参数或密文。权限 schema v2 支持 `opaque_code = "unrestricted"`，但 Core 会
-独立地把每个实际触发的 hook、generator 和 artifact 标记为未隔离。这是审阅和信任 metadata，
-不是运行时沙箱。
+权限声明用于帮助审阅预设，不会对代码提供沙箱隔离。声明中不得包含密钥值或凭据。
+编写预设时请参阅[能力声明](./custom-presets.md#声明权限)。
 
 ### Surge URI 订阅
 
-内置 `surge` 预设可把 HTTPS Base64 URI 订阅转换为受管的代理文件。`subscription-proxies.conf` 读取 `SURGE_SUBSCRIPTION_URL`；`wget-cloud-proxies.conf` 读取 `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`，Shine 会把后者映射为 generator 内部的 `SURGE_SUBSCRIPTION_URL` 输入。此功能需要 Bun，支持兼容的 `ss://`、`vmess://` 和 `trojan://` 记录，其中 Trojan 支持 TCP 和 WebSocket transport；VLESS、不支持的 transport 或 security mode、插件、坏记录与重复项会被跳过，并只输出不含凭据的摘要。用户维护的 `local-proxies.conf` 不会被改写。
+内置 `surge` 预设可把 HTTPS Base64 URI 订阅转换为受管的代理文件。`subscription-proxies.conf` 读取 `SURGE_SUBSCRIPTION_URL`；`wget-cloud-proxies.conf` 读取 `W_GET_CLOUD_SURGE_SUBSCRIPTION_URL`。此功能需要 Bun，支持兼容的 `ss://`、`vmess://` 和 `trojan://` 记录，其中 Trojan 支持 TCP 和 WebSocket transport；VLESS、不支持的 transport 或 security mode、插件、坏记录与重复项会被跳过，并只输出不含凭据的摘要。用户维护的 `local-proxies.conf` 不会被改写。
 
 要定制 Surge 的本地代理、策略组或规则文件，先将完整内置预设复制到自己的局部 overlay：
 
@@ -226,10 +215,7 @@ Shine 不会隐式运行 artifact 命令。每次手动 apply/remove 都会显�
 `SHINE_CACHE_DIR`、`SHINE_STATE_DIR` 等固定路径变量。完整变量说明见
 [任务与应用构建产物](./tasks-and-serve.md)。
 
-Generator、脚本钩子、artifact 和 teardown 脚本均从临时捕获的类别副本运行。在 Unix 上，外部
-预设及 overlay 中的可执行辅助文件在副本中仍可执行，包括没有扩展名的文件。捕获后修改原始
-文件内容或权限不会影响本次调用。持久输出应写入 state 或 cache 路径；捕获的 source
-和 overlay 副本会在执行后删除。
+需要保留的脚本输出请写入 `SHINE_STATE_DIR` 或 `SHINE_CACHE_DIR`；临时源文件副本会在执行后删除。
 
 内置 `surge` app 预设会把 `local-proxies.conf`、`local-proxy-groups.conf`、`local-rules.conf` 和可选的订阅生成文件安装到 Surge Profiles 目录。设置 `[env]` 中的 `SURGE_PROFILE` 后，`shine app artifact apply surge` 使用内置 Bun artifact 幂等修补活动配置文件的 `[Proxy]`、`[Proxy Group]` 与 `[Rule]` `#!include` 行。Overlay 只需覆盖自己的策略文件，无需提供构建脚本。
 
@@ -319,8 +305,7 @@ shine trust grant app/<CATEGORY>
 shine trust grant app/<CATEGORY> --development
 ```
 
-`trust inspect` 只读，不会授予信任。它会合并展示共享同一代码、来源和作者说明范围的 capability，
-然后给出合适的下一步。Snapshot trust 会绑定完整有效 App 类别，包括辅助文件和数据文件。
+`trust inspect` 显示需要授权的内容，不会授予信任。Snapshot trust 会绑定完整有效 App 类别，包括辅助文件和数据文件。
 只有准备信任所显示本地来源中的后续代码修改时才使用 `--development`。
 授予信任前，先处理 Plan 显示的缺失环境输入或 Administrator 要求。若启用的 overlay
 中 `app/<CATEGORY>/shine.toml` 是覆盖内置 metadata 的旧版完整副本，应先删除或迁移该 metadata 文件；

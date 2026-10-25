@@ -19,11 +19,9 @@ eval "$(shine theme sync --quiet)"
 The first command only displays the shell `export` statements. The second applies them to the
 current shell. Shine never overwrites a `BAT_THEME` you set yourself.
 
-Shine checks an existing `SHINE_TERMINAL_THEME`, then terminal-provided `COLORFGBG`, and only then
-queries the background through OSC 11. If it cannot determine the appearance, it does not guess or
-write variables. An unresolved theme returns exit code 0. `--quiet` hides non-essential
-diagnostics only; configuration errors still appear on stderr and return exit code 1, with no
-export statements on stdout.
+Shine first uses `SHINE_TERMINAL_THEME` or `COLORFGBG` if set, then tries to detect the terminal
+background. If it cannot determine the theme, it leaves variables unchanged. `--quiet` hides
+non-essential messages but still reports configuration errors.
 
 ## Synchronize in a managed profile
 
@@ -51,6 +49,5 @@ eval "$(shine-theme-sync)"
 
 ## SSH sessions
 
-Before connecting, `shine ssh <HOST>` reads the local terminal appearance and injects it into the
-remote session. The remote terminal therefore does not need to answer an OSC 11 query, and tools such
-as `bat` can stay consistent with the local terminal.
+`shine ssh <HOST>` forwards the local terminal theme to the remote session, so tools such as `bat`
+can stay consistent with your local terminal.

@@ -131,7 +131,7 @@ async fn decrypt_gpg_file(path: &Path, key: bool, strict: bool) -> Result<String
         .with_context(|| "running gpg --decrypt")?;
 
     if key {
-        return super::exec::read_key_output(output).await;
+        return super::exec::read_key_output(output, false).await;
     }
     let output = output
         .wait_with_output()

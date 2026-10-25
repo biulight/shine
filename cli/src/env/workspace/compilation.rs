@@ -107,20 +107,25 @@ pub(super) fn snapshot_input_hash(
     mode: &str,
     sources: &CapturedSources,
 ) -> String {
-    let mut hash = Sha256::new();
-    hash.update(CACHE_FORMAT_VERSION.to_le_bytes());
-    hash.update(mode.as_bytes());
-    hash.update(workspace_bytes.as_bytes());
-    for (path, contents) in sources {
-        hash.update(path.to_string_lossy().as_bytes());
-        hash.update(
-            contents
-                .as_ref()
-                .map_or("<missing>", |text| text.as_str())
-                .as_bytes(),
-        );
+    fn field(hash: &mut Sha256, bytes: &[u8]) {
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
     }
-    hash.update(workspace_path.to_string_lossy().as_bytes());
+
+    let mut hash = Sha256::new();
+    hash.update(b"shine-env-input-v2\0");
+    hash.update(CACHE_FORMAT_VERSION.to_le_bytes());
+    field(&mut hash, mode.as_bytes());
+    field(&mut hash, workspace_bytes.as_bytes());
+    hash.update((sources.len() as u64).to_le_bytes());
+    for (path, contents) in sources {
+        field(&mut hash, path.as_os_str().as_encoded_bytes());
+        hash.update([u8::from(contents.is_some())]);
+        if let Some(contents) = contents {
+            field(&mut hash, contents.as_bytes());
+        }
+    }
+    field(&mut hash, workspace_path.as_os_str().as_encoded_bytes());
     format!(
         "sha256:{}",
         shine_core::digest::encode_sha256(&hash.finalize().into())
