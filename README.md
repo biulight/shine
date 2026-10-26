@@ -1,36 +1,33 @@
 # Shine
 
-Turn the scripts and configuration you use every day into personal tools you can install, update,
-and remove cleanly.
+**Shine helps you manage everyday script tools and application settings, with sensitive information
+stored encrypted and used on demand.**
 
-You may already sync those files between machines. But after they arrive, scripts still need to be
-added to `PATH`, application configuration still needs the right destination, and local values
-should not travel inside shared files. Updating everything by hand also makes it hard to know what
-will be overwritten. Personal configuration also ends up scattered across shell files, application
-directories, and system-specific paths, which makes it difficult to maintain, reuse, or share.
-
-Shine brings your scripts, personal configuration, and their installation rules together in a
-**Preset**. Maintain and share the preset folder in one place; Shine installs each item where it
-belongs. Install only what you need, see what changed before updating, and remove it later without
-deleting unrelated files.
-
-**Give personal automation a reviewable lifecycle.**
+Shine is a command-line tool. Use existing **Presets** without writing scripts yourself, or organize
+your own scripts and configuration for reuse. Required applications and runtimes must be installed
+separately.
 
 **Documentation:** [English](https://biulight.github.io/shine/) ·
 [简体中文](https://biulight.github.io/shine/zh-Hans/)
 
-[![The three core values of Shine: repeatable deployment, one entry point for personal developer resources, and a reviewable lifecycle for Shine-managed content.](website/static/img/shine-core-values-en.webp)](website/static/img/shine-core-values-en.webp)
+[![Shine overview: manage everyday script tools and app settings; store sensitive information encrypted and provide it to programs on demand; reduce plaintext secrets in projects when using AI coding tools.](website/static/img/shine-overview-en.webp)](website/static/img/shine-overview-en.webp)
 
 ## What Shine helps you do
 
-- **Use a script like any other command.** Install it once and call it by name from `PATH`.
-- **Keep personal configuration together.** Maintain it in one preset folder; Shine copies,
-  transforms, or merges each file where its application expects it.
-- **Keep each machine's values on that machine.** A preset declares the keys it needs; you provide
-  the values locally.
-- **Look before you update.** By default, inspect what changed first; Shine applies it only when you
-  choose to upgrade.
-- **Remove only what Shine installed.** Your source folder and unrelated files stay in place.
+- **Reuse scripts and settings.** Keep them together in presets, install what you need, and keep
+  each computer's own values local.
+- **Review changes before applying them.** Inspect changes before updating a preset. By default,
+  uninstall keeps modified files and files Shine cannot confirm it manages for you to review.
+- **Use sensitive information on demand.** Store passwords, access keys, and sensitive files
+  encrypted, then provide them when a selected program runs. See
+  [environment variables and secrets](https://biulight.github.io/shine/guides/environment).
+- **Reduce plaintext secrets during AI-assisted development.** After encrypting sensitive values
+  and handling the original plaintext, reduce the risk of accidental exposure when an AI scans,
+  copies, or commits project files. See
+  [protect secrets when using AI tools](https://biulight.github.io/shine/guides/agent-secret-safety).
+
+Programs that receive secrets or can decrypt them can still read the plaintext. Temporary-file
+cleanup can fail; check for leftovers after an interruption.
 
 ## Try what is already included
 
@@ -51,10 +48,9 @@ Follow the [quick start](https://biulight.github.io/shine/quick-start) for the c
 A preset folder can arrive through any folder-sync tool, archive, network transfer, version-control
 checkout, or manual copy. Shine does not prescribe how you share it.
 
-Your own presets might package batch renaming, image compression and resizing, spreadsheet cleanup,
-or document printing as reusable commands. These are ideas you can build, not bundled tools; each
-command still needs its application or runtime on the machine. Start with the [custom preset
-guide](https://biulight.github.io/shine/guides/custom-presets).
+Your own presets can turn repeated tasks such as batch renaming, spreadsheet cleanup, or document
+printing into reusable commands. Each command still needs its application or runtime on the machine.
+Start with the [custom preset guide](https://biulight.github.io/shine/guides/custom-presets).
 
 Shine can also prepare selected parts of macOS, Ubuntu, or Windows, but it does not take over
 third-party tool versions. See [system initialization](https://biulight.github.io/shine/guides/system-init)

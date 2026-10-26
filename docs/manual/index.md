@@ -2,14 +2,14 @@
 title: Shine
 slug: /
 sidebar_position: 1
-description: Manage everyday tools and application settings, with sensitive information stored encrypted and used on demand.
+description: Manage everyday script tools and application settings, with sensitive information stored encrypted and used on demand.
 ---
 
 # Shine
 
-**Shine helps you manage everyday tools and application settings, with sensitive information stored encrypted and used on demand.**
+**Shine helps you manage everyday script tools and application settings, with sensitive information stored encrypted and used on demand.**
 
-Everyday tools and application settings are often scattered across different locations, making them
+Everyday script tools and application settings are often scattered across different locations, making them
 harder to maintain over time and leaving you to set them up again on another computer. Shine helps
 you manage them in one place. It can also store passwords, access keys, and other sensitive
 information encrypted, then provide it on demand when a selected program runs.
@@ -17,9 +17,9 @@ information encrypted, then provide it on demand when a selected program runs.
 This manual applies to **Shine 2.7.0**. Use the version selector to find the 1.8.x manual.
 Before upgrading from 1.x, read the [upgrade guide](./guides/upgrade-to-2.md).
 
-[![Shine overview: choose, preview, and install everyday tools and app settings; store sensitive information encrypted, decrypt it at runtime, and provide it to a program; reduce plaintext secrets in projects when using AI coding tools. Temporary-file cleanup is attempted after use, and programs can read secrets they receive.](/img/shine-overview-en.webp)](/img/shine-overview-en.webp)
+[![Shine overview: choose, preview, and install everyday script tools and app settings; store sensitive information encrypted, decrypt it at runtime, and provide it to a program; reduce plaintext secrets in projects when using AI coding tools. Temporary-file cleanup is attempted after use, and programs can read secrets they receive.](/img/shine-overview-en.webp)](/img/shine-overview-en.webp)
 
-## Everyday tools and settings
+## Everyday script tools and settings
 
 **You can use existing presets without writing scripts yourself.** A **Preset** groups tool scripts,
 application settings, and installation rules so you can select what you need and install it on
