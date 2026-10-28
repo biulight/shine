@@ -381,11 +381,10 @@ fn has_unisolated_code(kind: &str, bytes: &[u8]) -> bool {
             .is_some_and(|manifest| {
                 manifest.items.iter().any(|item| {
                     matches!(item.install, Some(SysInstall::Script { .. }))
-                        || item.shell.iter().any(|integration| {
-                            !integration.eval_argv.is_empty()
-                                || integration.source.is_some()
-                                || integration.fragment.is_some()
-                        })
+                        || item
+                            .shell
+                            .iter()
+                            .any(|integration| integration.has_executable_code())
                 })
             }),
         _ => false,

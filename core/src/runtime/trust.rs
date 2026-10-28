@@ -175,11 +175,10 @@ impl<H> CoreRuntime<H> {
             )?);
         }
 
-        let executable_integration = item.shell.iter().any(|integration| {
-            !integration.eval_argv.is_empty()
-                || integration.source.is_some()
-                || integration.fragment.is_some()
-        });
+        let executable_integration = item
+            .shell
+            .iter()
+            .any(|integration| integration.has_executable_code());
         if (executable_integration || external_profile_base(self, os_id))
             && (any_external(self, category_paths.iter().copied())
                 || (executable_integration && self.context().is_external_presets))

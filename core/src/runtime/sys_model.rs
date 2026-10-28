@@ -134,6 +134,13 @@ pub struct SysShellIntegration {
     pub fragment: Option<String>,
 }
 
+impl SysShellIntegration {
+    /// Classify code only; callers retain selection and authorization checks.
+    pub(in crate::runtime) fn has_executable_code(&self) -> bool {
+        !self.eval_argv.is_empty() || self.source.is_some() || self.fragment.is_some()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum SysShellKind {

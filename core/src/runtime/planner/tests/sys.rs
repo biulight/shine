@@ -293,6 +293,114 @@ async fn sys_unrestricted_code_is_triggered_for_scripts_not_managed_resources() 
 }
 
 #[tokio::test]
+async fn sys_profile_code_classification_preserves_consumer_selection_boundaries() {
+    for (integration, executable, asset) in [
+        ("path = '$HOME/bin'", false, None),
+        ("env = { TOOL_MODE = 'plain' }", false, None),
+        ("aliases = { ll = 'ls' }", false, None),
+        ("eval = ['tool', 'init']", true, None),
+        ("source = 'profile/tool.sh'", true, Some("profile/tool.sh")),
+        (
+            "fragment = 'profile/tool.sh'",
+            true,
+            Some("profile/tool.sh"),
+        ),
+    ] {
+        let manifest = format!(
+            "version = 2\n[[items]]\nid = 'tool'\nlabel = 'Tool'\n\
+             detect = {{ kind = 'path', path = '$HOME/.tool-present' }}\n\
+             install = {{ kind = 'package', provider = 'apt', package = 'tool' }}\n\
+             [[items.shell]]\nshells = ['zsh']\nphase = 'post'\n{integration}\n"
+        );
+        let root = std::env::temp_dir().join("shine-profile-classification-presets");
+        let mut snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root(&root)
+            .file("sys/ubuntu/shine.toml", manifest.as_bytes().to_vec());
+        if let Some(asset) = asset {
+            snapshot = snapshot.file(format!("sys/ubuntu/{asset}"), b"# profile\n".to_vec());
+        }
+        let mut runtime = runtime(snapshot.build());
+        runtime.context_mut_for_test().is_external_presets = true;
+        runtime.context_mut_for_test().presets_dir = root.clone();
+        runtime
+            .host()
+            .put_file(runtime.context().home_dir.join(".tool-present"), Vec::new());
+
+        // Trust and review classify all declared integrations, including other shells.
+        let requirements = runtime
+            .external_code_requirements("sys/tool")
+            .await
+            .unwrap();
+        assert_eq!(
+            requirements.requirements.len(),
+            usize::from(executable),
+            "{integration}"
+        );
+        if executable {
+            assert_eq!(
+                requirements.requirements[0].capability,
+                TrustCapabilityV1::SysProfileCode
+            );
+        }
+        let plan = runtime
+            .plan_sys_profile(SysProfilePlanRequest {
+                os_id: "ubuntu".into(),
+                item_id: "tool".into(),
+                enabled: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(plan.is_ready(), !executable, "{integration}");
+        assert_eq!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::OpaqueCode {
+                    scope: OpaqueCodeScopeV1::Unrestricted,
+                }),
+            executable,
+            "{integration}"
+        );
+
+        // Composition keeps its enabled-item and matching-shell filters before the gate.
+        let loaded = runtime.load_sys_preset("ubuntu").await.unwrap();
+        let enabled = BTreeSet::from(["tool".to_string()]);
+        runtime
+            .preflight_composed_sys_profile("ubuntu", &loaded, &enabled, "bash")
+            .await
+            .unwrap();
+        runtime
+            .preflight_composed_sys_profile("ubuntu", &loaded, &BTreeSet::new(), "zsh")
+            .await
+            .unwrap();
+        let matching = runtime
+            .preflight_composed_sys_profile("ubuntu", &loaded, &enabled, "zsh")
+            .await;
+        assert_eq!(matching.is_err(), executable, "{integration}: {matching:?}");
+
+        // Packing classifies the full declaration without a runtime shell or enabled set.
+        runtime
+            .host()
+            .put_file(root.join("sys/ubuntu/shine.toml"), manifest.into_bytes());
+        if let Some(asset) = asset {
+            runtime
+                .host()
+                .put_file(root.join("sys/ubuntu").join(asset), b"# profile\n".to_vec());
+        }
+        let bundle =
+            crate::runtime::pack_preset_path(runtime.host(), &root, Path::new("sys/ubuntu")).await;
+        assert!(bundle.report.valid, "{integration}: {:?}", bundle.report);
+        assert_eq!(bundle.report.unisolated_code, executable, "{integration}");
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .iter()
+                .all(|op| matches!(op, HostOperation::Read(_)))
+        );
+    }
+}
+
+#[tokio::test]
 async fn sys_profile_plan_is_observation_only_and_rejects_changed_shell_state() {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
         .file(

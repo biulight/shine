@@ -1085,6 +1085,9 @@ bugs. Check this list before changing the modules named in each entry.
   declarative PATH/env/aliases are safe to inspect, but external or overlay bootstrap/managed scripts,
   guarded eval/source, fragments, and base profile code require human lifecycle consent or a matching
   `sys/<item>` grant.
+  `SysShellIntegration::has_executable_code` owns only eval/source/fragment classification for
+  trust, planning, composition and pack. Each consumer retains its selection and authorization
+  rules; classification never substitutes for a grant or fresh approval (ADR 0154).
   Read-only status paths must never execute sys code. Project config and Presets cannot authorize
   their own executable content.
 - **Manual generators never run from implicit status or upgrade paths.**

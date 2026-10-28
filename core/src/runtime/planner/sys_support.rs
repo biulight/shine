@@ -234,11 +234,9 @@ pub(super) fn sys_profile_code_blocked_for_enabled<H>(
 }
 
 pub(super) fn sys_item_has_executable_profile_code(item: &SysItem) -> bool {
-    item.shell.iter().any(|integration| {
-        !integration.eval_argv.is_empty()
-            || integration.source.is_some()
-            || integration.fragment.is_some()
-    })
+    item.shell
+        .iter()
+        .any(|integration| integration.has_executable_code())
 }
 
 pub(super) fn sys_profile_base_code_present<H>(runtime: &CoreRuntime<H>, os_id: &str) -> bool {
