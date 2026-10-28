@@ -65,7 +65,7 @@ jobs:
           path: website/build
       - name: Upload server deployment artifact
         if: github.event_name != 'pull_request' && vars.SERVER_DEPLOY_ENABLED == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docs-server
           path: website/build
@@ -103,7 +103,7 @@ jobs:
       SERVER_KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}
     steps:
       - name: Download server deployment artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: docs-server
           path: website-build
