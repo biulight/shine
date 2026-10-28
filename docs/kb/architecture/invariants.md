@@ -1254,7 +1254,9 @@ bugs. Check this list before changing the modules named in each entry.
   Git plaintext targets must be ignored and untracked in their own repository, including
   nested repositories. Compare the complete repository index using the same case/Unicode path
   keys, including deleted working files and aliases in parent directory names. Git discovery errors
-  fail closed; exit 128 alone never proves absence.
+  fail closed; exit 128 alone never proves absence. Confirm non-repository directories only with
+  a recognized ordinary or mount-boundary absence diagnostic, empty stdout and no ancestor `.git`
+  marker; mount-boundary detection must not hide broken repositories or other inspection errors.
   Run previews use stderr, preserving exact child stdout; dry-run previews use stdout.
   Preview paths are quoted with control characters escaped on one line. Seal/removal/export result
   paths and cleanup warnings encode controls only when rendered; child stdout remains raw.

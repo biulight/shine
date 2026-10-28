@@ -143,6 +143,26 @@ pub(super) fn verify_optional(
     }
 }
 
+fn git_reports_no_repository(stderr: &[u8]) -> bool {
+    let Ok(message) = std::str::from_utf8(stderr) else {
+        return false;
+    };
+    let message = message.trim();
+    if message == "fatal: not a git repository (or any of the parent directories): .git" {
+        return true;
+    }
+    // Git stops discovery at mount points by default. This is also confirmed absence,
+    // but only when the caller found no repository marker in any ancestor.
+    let mut lines = message.lines();
+    lines.next().is_some_and(|line| {
+        line.strip_prefix("fatal: not a git repository (or any parent up to mount point ")
+            .and_then(|path| path.strip_suffix(')'))
+            .is_some_and(|path| !path.is_empty())
+    }) && lines.next()
+        == Some("Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).")
+        && lines.next().is_none()
+}
+
 pub(super) fn check_git(root: &Path, target: &Path) -> Result<()> {
     // Targets may belong to a nested repository, and their parents may not exist yet.
     check_path(root, target)?;
@@ -177,8 +197,8 @@ pub(super) fn check_git(root: &Path, target: &Path) -> Result<()> {
         Ok(output)
             if !repository_marker
                 && output.status.code() == Some(128)
-                && String::from_utf8_lossy(&output.stderr).trim()
-                    == "fatal: not a git repository (or any of the parent directories): .git" =>
+                && output.stdout.is_empty()
+                && git_reports_no_repository(&output.stderr) =>
         {
             false
         }

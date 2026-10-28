@@ -1,5 +1,18 @@
 # Lessons Learned
 
+## 2026-10-28 — Git absence diagnostics differ at filesystem boundaries
+
+- **Symptom**: Ubuntu CI failed file-group seal/run/export and rollback tests with
+  `cannot inspect Git repository` in temporary directories outside a repository.
+- **Cause**: discovery accepted only Git's ordinary non-repository message. Git stops at mount
+  boundaries by default and emits a distinct two-line absence diagnostic on separate filesystems.
+- **Fix / rule**: recognize both complete diagnostics, still requiring exit 128, empty stdout and
+  no `.git` marker in any ancestor. Keep discovery scope unchanged and reject ambiguous failures.
+- **Coverage**: a controlled Git probe exercises mount-boundary absence through run/export,
+  including CRLF output, and rejects repository markers, unexpected status/stdout, incomplete or
+  extra diagnostics, configuration errors and unsafe-ownership errors before backend execution.
+- **Evidence**: [Ubuntu CI failure](https://github.com/biulight/shine/actions/runs/40670230278/job/122754825653).
+
 ## 2026-10-26 — Windows NRPT ownership probes need expected receipt content
 
 - **Symptom**: `update` showed only Shell updates, but aggregate `upgrade` also reported
