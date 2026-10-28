@@ -1044,6 +1044,18 @@
   rejected exports preserve absent/existing outputs even with force. Self-install reloads from a
   different cwd and syncs a replacement into the original installation.
 
+## 2026-10-28 — Template creation must enforce no-overwrite when opening the file
+
+- **Symptom**: `preset new` followed a dangling `shine.toml` symlink and created its unrelated
+  referent without `--force`; concurrent creators could both succeed and replace each other's bytes.
+- **Cause**: the shared synchronous template writer checked `Path::exists()` before unconditional
+  `std::fs::write`. The check followed links and did not reserve the destination.
+- **Fix**: use exclusive `create_new` for non-force creation, retain the existing conflict diagnostic,
+  and leave explicit force behavior unchanged. This preserves the public synchronous API; it is not
+  a new durable atomic-publication or crash-recovery contract.
+- **Coverage**: native dangling-link preservation, concurrent single-winner/exact-byte checks, and
+  all three real CLI template entry points. Existing create/refuse/force tests remain independent.
+
 ## 2026-10-15 — Git index aliases and import publication need final identity checks
 
 - **Symptoms**: file-group release accepted a case alias of a tracked deleted path, allowing

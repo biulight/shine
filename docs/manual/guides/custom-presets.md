@@ -548,7 +548,9 @@ shine preset new shell
 shine preset new sys
 ```
 
-Existing files require `--force`. Category metadata is a preset-author interface; after editing it,
+Existing files require `--force`. Without it, existing entries, including dangling symbolic links,
+are refused, and concurrent creations cannot overwrite each other.
+Category metadata is a preset-author interface; after editing it,
 first run `shine preset validate . --format json`, then use the relevant isolated installation
 `--dry-run` command. Shell install dry-run previews command entries without installing or modifying files.
 

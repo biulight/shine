@@ -1809,6 +1809,36 @@ fn preset_new_encodes_paths_preserving_template_and_force_policy() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn preset_new_rejects_dangling_metadata_links_for_every_kind() {
+    let fixture = Fixture::new();
+    for kind in ["app", "shell", "sys"] {
+        let work = fixture.0.join(kind);
+        fs::create_dir(&work).unwrap();
+        let path = work.join("shine.toml");
+        let referent = fixture.0.join(format!("{kind}-unrelated.toml"));
+        std::os::unix::fs::symlink(&referent, &path).unwrap();
+
+        let output = fixture
+            .command()
+            .current_dir(&work)
+            .args(["preset", "new", kind])
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(1), "{kind}: {output:?}");
+        assert!(output.stdout.is_empty(), "{kind}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("shine.toml already exists; use --force to overwrite"),
+            "{kind}: {output:?}"
+        );
+        assert_eq!(fs::read_link(&path).unwrap(), referent);
+        assert!(!referent.exists());
+    }
+}
+
 #[test]
 fn task_cwd_display_escapes_controls_while_child_output_and_exit_stay_raw() {
     let fixture = Fixture::new();
