@@ -19,8 +19,20 @@
 - **重审条件**：出现可定位的重复实现导致漏改，或真实需求反复要求同步修改同一业务规则时，
   先补充具体案例、受影响消费者、可消除的对应关系及保留现状的成本比较，再明确决定是否重启该候选。
   文件数、行数、结构相似或原型测试通过本身不构成重启理由。
-- **证据与授权**：本报告、规模账本和原型记录作为基线历史证据保留；后续章节中的建议与批次均属历史内容，
+- **证据与授权**：本报告、规模审视的统计口径和原型结论作为基线历史证据保留；后续章节中的建议与批次均属历史内容，
   不构成当前待办或实施授权。本轮没有将 Rust 重构落地；现有行为、公开 API、持久化格式与安全边界保持不变。
+
+## 证据的阅读与追溯
+
+结论、取舍、消费者边界和验证限制统一保存在下列对应章节；规模统计的方法与汇总见
+[规模审视](maintainability-audit-2026-10-27.md)。第一至四十七节的源码位置和历史比较对应审查基线，
+第四十八节单独记录关闭后的缺陷复核与修复提交；两者都不自动代表今天的实现或验证状态。
+复核历史行为时，应按所引提交查看源码，而非依赖旧行号。
+
+原 JSON 附件中的解释已合并到正文，不再维护第二份结论。逐文件行数、符号命中行号、临时探针
+哈希、调用次数和逐轮文档增删计数已移出当前 KB；它们没有持续使用的自动消费者，也不能独立重现
+临时原型。需要追查原始记录时，可查 Git 提交 `e73f1c7a52598606cf3eeecc1d53f743459f9e87` 下的
+`docs/kb/operations/evidence/2026-10-27-maintainability/`。本次文档整理没有重新运行历史试验。
 
 ## 历史候选摘要（全部冻结）
 
@@ -42,7 +54,6 @@
 | Shell rendered-file removal | `6ad6e25d` | `RemoveShellRenderedFile` 出现在 14 个生产文件 | 规划、权限、journal、执行重检、receipt marker 和恢复必需；prepared/action 的内部重复数据可调查；App 的显式非本域拒绝分支不算该资源实现 |
 | 新增一个 review 操作类别 | 当前十类操作 | `LifecyclePlanRequest` 出现在 18 个生产文件，Core 另有 `ReviewRequest` | CLI 请求构造与展示合理；类别有镜像，但 bootstrap 附加输入有独立 CLI 职责；实际收益见 B 验证 |
 
-[证据账本](evidence/2026-10-27-maintainability/architecture-review.json)记录引用文件和行号。
 这些数字是剔除测试后的精确符号引用计数，不是完整调用图，也不是必须编辑的文件数。
 例如 factory 用 constructor 名称构建 Action，某些 handler 不含 variant 名；反过来，外域拒绝分支只是在维持穷尽性。
 因此不能用“14 个文件”直接论证应当只有一个执行器。
@@ -206,7 +217,6 @@ prepared tests 甚至可以只把 CLI 影子中的 Sys Upgrade 改成 Install，
 ### 原型成本
 
 原型基于同一 HEAD，独立于 A；基线和原型使用不同 Cargo target。两边均经 mise 固定工具链。
-[结构化证据](evidence/2026-10-27-maintainability/request-identity-review.json)包含分项 diff 和验证边界。
 
 | 分项 | 增加 | 删除 | 净变化 |
 | --- | ---: | ---: | ---: |
@@ -261,7 +271,6 @@ prepared tests 甚至可以只把 CLI 影子中的 Sys Upgrade 改成 Install，
 ### 隔离原型 C1：只收敛 profile 文件记录
 
 基于同一 `bd651fd4` 建立独立基线和原型，未叠加 A/B；各自使用独立 Cargo target。
-[结构化证据](evidence/2026-10-27-maintainability/profile-contract-review.json)记录实际改动、对应关系及差分范围。
 
 仅修改已有三处，保留资源方法、阶段顺序及类型名称：
 
@@ -352,6 +361,9 @@ Action variant shape 检查继续保留。准备方法 106→101 行，执行方
 不按最初设想继续改造整个 `PreparedShellStep` 或统一全部 prepared-kind：为了去掉最后一份投影而引入借用生命周期、
 额外模型或全资源投影分派，没有现成收益证据。cache/cache removal 的两处双列表、另一处 zip 均保持原状，
 也没有删除四处 shape 检查；它们若继续调查需分别证明收益。snapshot 的多次观察尤其不能合并。
+历史定位：`c3bf48cc7df4872ecab707826aa9c7e3584351a8` 建立外层 step 配对，
+`9028fdd889016aa37af760c1d705b056e134c925` 保留局部准备边界，`25dcfb6d` 修正 cleanup/profile-only
+receipt 与恢复；C1 不撤回这些约束。
 ADR 0117 的外层配对和既有恢复修复继续保留；本轮不改现行 ADR、不落地 Rust。
 
 ## 六、没有采用的更大方案
@@ -386,7 +398,6 @@ ADR 0117 的外层配对和既有恢复修复继续保留；本轮不改现行 A
 
 初筛基于 `bd651fd4` 做源码与历史审阅；随后按用户要求，仅 D1 进入四消费者隔离验证，结果见下文。
 其他方向没有制作新原型。覆盖下列业务规则链，不宣称对每个文件完成逐行证明。
-[规则证据](evidence/2026-10-27-maintainability/rule-ownership-review.json)记录来源与核查边界。
 
 ### 结论与验证门槛
 
@@ -448,7 +459,6 @@ pack 的安装脚本或 profile 二者取 OR。方法只回答分类，绝不回
 
 #### 隔离验证结果与维护成本
 
-[四消费者证据](evidence/2026-10-27-maintainability/d1-consumer-contract-review.json)记录范围及前后比较。
 基线、原型均从同一 HEAD 归档，使用独立 Cargo target；未叠加 A/B/C1。
 原型只新增上述内部纯查询，并在 trust、sys_support、compose、pack 原位置调用它。
 无新类型、公开 API、授权缓存、策略参数；manifest 校验、来源判断、状态捕获、序列化及错误分支均未移动。
@@ -537,8 +547,6 @@ A/B/C1、D2 与原四批小改动继续暂缓，未提交、推送或发布。
 ## 九、从反复补修追查当前规则归属
 
 本节按最新要求只查源码、历史 diff、ADR 与既有测试断言，不修改或复制 Rust 实现。
-[历史与源码证据](evidence/2026-10-27-maintainability/change-coupling-review.json)固定在同一 `bd651fd4` 基线，
-记录 14 个相关提交及 19 个当前源码锚点；这些是审查样本数，不是事故数或收益指标。
 提交主题只用于找线索，实际判断区分生产规则、消费者接线、兼容版本失效、测试和文档。
 
 ### E1：共享了编码算法，却仍靠调用方维护展示输入契约
@@ -622,7 +630,6 @@ D1 继续保留候选，D2 与此前方案保持暂缓。生产和测试/支持�
 ## 十、E1 对比复核：明确契约能减少什么，不能减少什么
 
 **决定：保留当前设计，E1 暂缓，不进入原型。** 以下是基于源码和历史补丁的反事实设计分析，不是运行过的差分实验。
-新增结论与计数写入同一[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的 `e1_contract_comparison`。
 
 ### 比较基准和明确契约的具体含义
 
@@ -704,8 +711,7 @@ D1 继续保留候选，D2 与此前方案保持暂缓。生产和测试/支持�
 
 ## 十一、业务规则变更追踪：快照事实、平台选择与卸载清理
 
-本轮不再围绕展示输入，也不复用 A/B/C1 的结构减量理由。核对历史生产 diff 与当前消费者，
-记录在[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的 `business_rule_evolution_review`。
+本轮不再围绕展示输入，也不复用 A/B/C1 的结构减量理由。核对历史生产 diff 与当前消费者。
 **确有同一规则必须跨模块改的事实；尚没有足够证据支持一个新的实质重构原型。**
 
 ### 1. 快照的可执行意图：两个采集入口确实重复定义文件事实
@@ -796,7 +802,6 @@ recovery plan/apply 共用。消费者各自重新观察再调用共享检查，
 
 **结论：纯规则归一能减少重复定义，但尚不能证明总维护收益，保留两份 walker，不进入原型。**
 以下是源码和历史补丁的静态推演，没有新 Rust 实现、隔离副本、运行时 trace 或差分测试。
-具体边界与计数见既有[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的 `snapshot_fact_comparison`。
 
 ### 公平的最小方案：共享决策，不共享 Host 观察
 
@@ -938,9 +943,7 @@ import 的 dangling entry/并发赢家。Core 原语测试不能证明各消费�
 | Shell 升级选择与无操作 | `a3b8ad9f` 中 planner 权限范围与 Shell manifest 未变不写是不同规则；`bc47ebb6` 已让计划/执行缓存共同调用 `effective_shell_cache_logicals`；`6e98ac8b` 抽出 launcher probe | 升级目标、缓存文件、launcher 所有权和 CLI no-op 不是一个集合。当前 [plan.rs](../../../core/src/plan.rs) 已拥有 `is_converged_upgrade`；不能把“同属升级”当成重复规则并再抽统一协调层 |
 
 本轮最强证据仍是输出发布的重复接入遗漏；其剩余可收敛面是局部方式选择，而非跨模块反复演进的独立算法。
-结论限于上述样本，**不等于全库已没有值得重构的问题**。未证明新的净维护收益前保留当前职责划分。
-历史提交、当前源码和测试锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `recurrent_rule_review`；本轮未修改生产或测试代码，未执行 Rust 或原生平台验证。
+结论限于上述样本，**不等于全库已没有值得重构的问题**。未证明新的净维护收益前保留当前职责划分。本轮未修改生产或测试代码，未执行 Rust 或原生平台验证。
 
 
 ## 十四、尚未深入模块：把重复实现与历史共改分别核实
@@ -991,8 +994,7 @@ macOS nameserver 行、Ubuntu Resolve 段、Windows 合成 marker/resource/serve
 | Git 镜像 | `8573e454` 改为配置 URL/远端 HEAD；`e5d0107d` 增加精确 checkout 边界、环境清理与完整清扫；`163ddf75` 归一两处路径输出解码，均在 [git_pull.rs](../../../cli/src/git_pull.rs) | 后续修复集中在既有 owner；共享的 Git 命令与路径解码已承接规则。manual fast-forward 与 disposable mirror 权限不同，fetch 前后检查是重新观察；抽统一同步流程会增加模式并隐藏破坏性边界，不减少已证实的跨模块共改 |
 
 本轮只确认源码/历史事实，不以未找到证据断言将来不会扩散。保留各模块的正常、失败与平台边界测试；
-未执行 Rust 或原生平台测试，未改变现有行为/安全契约。可定位证据与正文比较记录在
-[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的 `remaining_modules_review`。
+未执行 Rust 或原生平台测试，未改变现有行为/安全契约。
 
 
 ## 十五、代理、任务、预设工具和 App 准入复核（2026-10-28）
@@ -1038,7 +1040,6 @@ macOS nameserver 行、Ubuntu Resolve 段、Windows 合成 marker/resource/serve
 共同 pretty-serialize/末尾 LF 外形不证明应该统一两个输入语义；本轮没有重审全部 JSON 事务历史。
 
 本节是有范围的源码/历史审查，不是全库无重复证明。没有执行新原型、Rust 测试、真实代理安装、预设代码或原生平台操作。
-关键提交与源码锚点收录于[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的 `rule_review_2026_10_28`。
 
 
 ## 十六、Profile、环境导出和权限判定（2026-10-28）
@@ -1075,8 +1076,7 @@ macOS nameserver 行、Ubuntu Resolve 段、Windows 合成 marker/resource/serve
 
 没有把小型重复包装、字符校验或相同字段新增算作新架构候选。上述判断来自当前源码与相关生产 diff，
 不是原生 shell/PowerShell/Git 执行验证，也不是全部历史无遗漏证明。
-生产与测试代码不变；提交和锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `profile_permission_review_2026_10_28`。
+生产与测试代码不变。
 
 
 ## 十七、信任目标、授权身份与作者工具输入（2026-10-28）
@@ -1131,9 +1131,7 @@ fixture 只接受精确目标，并用当前快照派生实际 requirement 和 g
 输入边界；共享路径小函数之外，尚未找到反复同步修改这些状态规则的证据。
 [ADR 0069](../decisions/0069-hypothetical-preset-authoring-plans.md) 的非可执行报告边界继续保留。
 
-生产与测试代码不变。历史测试仅用于确认修复意图与覆盖边界，不构成本轮原生 Windows 或授权/锁竞争运行证据。
-提交、当前源码锚点及局部成本比较见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `trust_authoring_review_2026_10_28`。这些结论只覆盖本节追溯的变更链，不声称全库已无其他架构问题。
+生产与测试代码不变。历史测试仅用于确认修复意图与覆盖边界，不构成本轮原生 Windows 或授权/锁竞争运行证据。这些结论只覆盖本节追溯的变更链，不声称全库已无其他架构问题。
 
 
 ## 十八、SSH 传输、退出与 broker 请求边界（2026-10-28）
@@ -1196,10 +1194,10 @@ Inspect/Enroll 不释放密钥的不同业务授权。TTY guard 已统一终端�
 
 保留独立入口断言：会话启动失败/非零退出清理、传输断连/取消/后代终止、SSH/SCP option 语义、
 IPv6 fallback 与 metadata-only dry-run、status 两阶段退出语义、broker nonce 拒绝及确认 guard 生命周期。
-生产与测试代码均未改变；上述测试只作契约证据，本轮没有重跑 Rust、原生平台、真实 SSH/TTY 或加密设备。
-提交和源码锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `ssh_boundary_review_2026_10_28`。结论限于这些已追溯链路，不宣称全库不存在其他维护问题。
+生产与测试代码均未改变；上述测试只作契约证据，本轮没有重跑 Rust、原生平台、真实 SSH/TTY 或加密设备。结论限于这些已追溯链路，不宣称全库不存在其他维护问题。
 
+历史定位补充：`5cfbeec9f6851fceb94bee239ebf3db42767ca71` 将 SSH handshake/routing、传输策略、
+argv 和 relay 分模块，保留既有规则与顺序；文件拆分本身不构成新的规则副本。
 
 ## 十九、配置字段、写入与运行时迁移（2026-10-28）
 
@@ -1271,7 +1269,6 @@ state 的计数与改写都调用它。`age_migration_count` 和 `migrate_age_re
 保留独立覆盖：项目继承且不物化、全局字段排除、identity 集合替换、陈旧快照并发拒绝、原始 schema patch、
 旧/当前 schema 的迁移与 dry-run、非法 recipient/table 在写前失败、HOME 按需展开与原始路径身份。
 源码和历史 diff 是本轮证据；没有执行迁移、密码工具或原生平台操作，没有改生产/测试代码。
-详见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的 `config_state_review_2026_10_28`。
 
 
 ## 二十、Host 与密钥工具的进程契约（2026-10-28）
@@ -1326,8 +1323,6 @@ state 的计数与改写都调用它。`age_migration_count` 和 `migrate_age_re
 结论不是“没有重复”，而是现有证据主要证明迁移/接入/所有权遗漏，尚未证明同一完整策略在当前两端反复
 同步演进。公共执行器能减少哪些未来修改、不能消除哪些接线，仍不足以核销接口和阅读跳转成本。
 没有运行 Rust、真实密码工具、PTY 或原生平台验证；历史测试只用于确认断言范围，生产与测试代码不变。
-提交、历史路径及当前源码锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `process_contract_review_2026_10_28`。
 
 
 ## 二十一、安装交付、二进制替换与卸载完成判定（2026-10-28）
@@ -1370,8 +1365,7 @@ App 的 receipt strategy/备份/force 影响与 Shell 的 launcher ownership/保
 保留的独立断言包括：资产名与平台 binary 名、缺失资产、相对安装目标持久化、同步缺失父目录、同路径
 安装拒绝与同步无操作、卸载保护/部分成功/dry-run 失败、App 策略提示和 Shell 外来 launcher 保留。
 本轮只阅读现有断言；没有运行安装器、Rust 测试、下载或原生平台验证。没有改生产/测试代码、制作原型、
-提交或推送。完整提交与当前源码锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `delivery_completion_review_2026_10_28`。结论限于本节路径，不据此宣称所有剩余模块都已深入审完。
+提交或推送。结论限于本节路径，不据此宣称所有剩余模块都已深入审完。
 
 
 ## 二十二、维护失效、旧服务边界与终端主题（2026-10-28）
@@ -1419,9 +1413,10 @@ Linux 无 unit 文件时清理已调用共享 native probe；macOS loaded/plist 
 
 保留独立覆盖：主题分片/总 deadline/真实 PTY 模式恢复；维护 scope/revision/lease、worker 与显式检查失效；
 服务缺失与查询失败、linked registration 拒绝、停止失败后保留注册供重试。上述仅为源码中已有断言范围，
-本轮没有运行终端、原生服务管理器或 Rust 测试，没有生产/测试修改和原型。提交、源码锚点见
-[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的 `maintenance_theme_review_2026_10_28`。
+本轮没有运行终端、原生服务管理器或 Rust 测试，没有生产/测试修改和原型。
 
+历史定位补充：`93241b82a63cd51809526d7916a929d20beb72f7` 让旧服务清理接入既有诊断编码，
+属于共享规则接入，不是服务匹配规则的再次演进。
 
 ## 二十三、JSON 所有权恢复与模板消费契约（2026-10-28）
 
@@ -1469,8 +1464,6 @@ installed 全缺是 None、部分缺仍有 hash、null 是存在的值；统一�
 保留独立断言：subset 字节/hash、absent/partial/null、恢复时保留当前无关键、receipt commit 后键归用户、
 两目的地恢复阻断；模板缺输入的安全 blocker、非 UTF-8 错误、失败不链接 raw 模板及观察时机。
 本轮仅源码/历史比较，未运行 Rust、真实安装或平台验证，生产/测试无改动，无原型、提交或推送。
-可定位提交、函数比较与源码锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `json_transform_review_2026_10_28`。
 
 
 ## 二十四、Frontend 清单补全、安全投影与事件（2026-10-28）
@@ -1514,9 +1507,7 @@ report/diagnostic 映射承担能力收窄，移除会暴露 local details/runti
 [ADR 0079](../decisions/0079-frontend-operation-state-and-events.md)。
 
 核对了缺来源/冲突、installed-only、bootstrap Recorded、未知 journal、恶意事件 payload 与原事件本地交付的
-现有断言；只确认源码覆盖范围，未运行测试。生产/测试无改动，没有原型、提交或推送。
-提交与源码锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的
-`frontend_projection_review_2026_10_28`；结论不代表其余未展开路径已完成逐行审查。
+现有断言；只确认源码覆盖范围，未运行测试。生产/测试无改动，没有原型、提交或推送。结论不代表其余未展开路径已完成逐行审查。
 
 
 ## 二十五、Workspace 明文所有权与 payload 解析（2026-10-28）
@@ -1555,8 +1546,6 @@ report/diagnostic 映射承担能力收窄，移除会暴露 local details/runti
 plain export 则不解密；合并消费流程必须加模式/授权参数，不能把不返回某键等同于无需验证该源。
 现有断言覆盖 malformed decrypted payload、外层文档错误、失败/取消清零、shadowed pending、旧 broker 响应、
 完整 key-set 与 reseal pending。此处只审查断言和源码，未执行密码工具、Rust 或平台测试，未修改生产/测试或制作原型。
-提交及源码锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的
-`workspace_payload_review_2026_10_28`。
 
 
 ## 二十六、Shell receipt 格式与 Bun 依赖准入（2026-10-28）
@@ -1598,8 +1587,6 @@ Shell 对非 Bun/部分缺 source 情况有默认分支，App 要求脚本存在
 保留独立覆盖：legacy/未知格式、native-cmd 配置约束、Live Bun 安装根、receipt reconstruction/Action validation、
 重复升级收敛，以及 embedded/overlay source 隔离、缺 package/lock、trustedDependencies 拒绝和 lock 改变。
 本轮只读源码与历史、核查现有断言，未执行 Bun、依赖下载、Rust 或原生平台测试；无生产/测试改动或原型。
-提交、迁移路径比较和锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的
-`receipt_bun_review_2026_10_28`。
 
 
 ## 二十七、分析器绑定、依赖识别与证据复用（2026-10-28）
@@ -1648,8 +1635,6 @@ Shell 对非 Bun/部分缺 source 情况有默认分支，App 要求脚本存在
 已有断言覆盖默认值/类型查询/解构写入、外部别名与局部同名变量、捕获前后替换 loader、依赖效果、
 规则结果与 Plan 可批准性，以及共享源码但不同声明/环境的独立结果。本轮核查源码断言，未重新运行这些测试；
 未执行预设、Bun、Rust 或原生平台验证。生产与测试无修改、无原型、提交或推送。
-完整提交、共改分类与源码锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的
-`analysis_identity_review_2026_10_28`。
 
 
 ## 二十八、Sys bootstrap 安装规则、权限与执行快照（2026-10-28）
@@ -1693,9 +1678,7 @@ provider argv/sudo/proxy 顺序与限额、平台拒绝；独立 invocation 保�
 参照 [ADR 0044](../decisions/0044-sys-bootstrap-uses-dedicated-security-plan.md)、
 [ADR 0100](../decisions/0100-sys-invocations-and-process-ownership.md)及
 [ADR 0128](../decisions/0128-bootstrap-launcher-completion-and-broker-boundaries.md)。
-现存小映射副本记录为事实；尚无反复跨模块修改及净维护收益的充分证据，不提出新原型。
-源码/历史锚点和映射比较见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的
-`bootstrap_policy_review_2026_10_28`。生产与测试代码零改动，未提交、推送。
+现存小映射副本记录为事实；尚无反复跨模块修改及净维护收益的充分证据，不提出新原型。生产与测试代码零改动，未提交、推送。
 
 
 ## 二十九、App refresh 选择、触发与完成边界（2026-10-28）
@@ -1745,8 +1728,7 @@ planner 先选择候选再读取 manifest，executor 先读取 manifest 再选�
 [ADR 0141](../decisions/0141-shared-refresh-literals-and-source-validation.md)。
 核查现有断言包括精确 owner/声明顺序、显式与批量选择、授权拒绝、单文件失败继续、最终 receipt 保存失败、
 锁等待期间 receipt/journal 变化及无隐式恢复。本轮只读代码和历史，没有运行 Rust、generator 或原生平台测试。
-生产与测试零修改，无原型、提交或推送。提交和锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `refresh_contract_review_2026_10_28`。
+生产与测试零修改，无原型、提交或推送。
 
 
 ## 三十、App/Sys 特权文件原语与锁持有范围（2026-10-28）
@@ -1794,8 +1776,7 @@ dry-run、普通/特权路由；共享 [暂停恢复探针](../../../core/src/ru
 期间竞争者不能进入，以及取消/恢复失败后的锁释放、备份保留和错误传播。最终字节断言不能替代这些时序断言，
 不以两个消费者都调用同一 helper 为由删除覆盖，也不新增测试框架。
 尚未确认当前存在反复同步修改且能通过合并显著降低维护成本的候选。生产/测试无改动，无原型、提交或推送；
-未执行 sudo、特权文件操作、Rust 测试或原生平台验证。源码/历史锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `privileged_boundary_review_2026_10_28`。
+未执行 sudo、特权文件操作、Rust 测试或原生平台验证。
 
 
 ## 三十一、密文格式准入与接收者预检（2026-10-28）
@@ -1841,8 +1822,7 @@ tag 路由和 age 版本/插件规则放在共同定义处。保留各入口明�
 [ADR 0110](../decisions/0110-workspace-secret-file-groups.md)。
 核查现有固定向量、逐字节篡改/截断、malformed-before-selection、接收者拒绝及二进制空值/非 UTF-8 的测试源码。
 真实 GPG/age interoperability 测试另有外部工具条件，本轮没有执行；也未操作密钥、手机或真实秘密。
-生产/测试无改动，无原型、提交、推送。源码、提交和精确文本比较记录见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `ciphertext_preflight_review_2026_10_28`。
+生产/测试无改动，无原型、提交、推送。
 
 
 ## 三十二、App 目的路径准入与冲突判定（2026-10-28）
@@ -1899,8 +1879,7 @@ portable relative 拒绝两种分隔符的 parent segment 和 Windows drive-rela
 [ADR 0132](../decisions/0132-production-app-destinations-and-shell-guidance.md)。核查现有 portable 拒绝矩阵、
 诊断先后、legacy parent-path planning、有效目的路径冲突与捕获 data-dir 的测试源码。后者经 `5239b4c2`
 移至 [builtin_presets/app.rs](../../../tests/builtin_presets/app.rs)，仍调用 Core。本轮未执行 Rust 或原生平台测试。
-没有生产/测试修改、原型、提交、推送；证据见[账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `destination_admission_review_2026_10_28`。
+没有生产/测试修改、原型、提交、推送。
 
 
 ## 三十三、命令目标身份、语法与操作选择（2026-10-28）
@@ -1944,8 +1923,7 @@ receipt、alias、操作范围、先后顺序与诊断差异，增加类型、�
 [ADR 0026](../decisions/0026-command-scoped-shell-installation.md)及 selector identity invariant。
 核查 [CLI 契约测试](../../../tests/cli_dispatch.rs)的 App/Shell 相邻空白类别、拒绝未批准操作、dry-run 不写、
 未选兄弟 receipt/文件保留，以及来源移除后的卸载；另核查 parser 和 info alias 歧义测试。没有运行 Rust/native
-测试、生产操作或新原型；生产/测试无修改，无提交/推送。源码与历史锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `target_contract_review_2026_10_28`。
+测试、生产操作或新原型；生产/测试无修改，无提交/推送。
 
 
 ## 三十四、Plan 路径身份、摘要协议与审批判定（2026-10-28）
@@ -1995,8 +1973,7 @@ PlanFingerprintV1 虽都存 32 字节，语义和公共类型边界不同，共�
 [ADR 0104](../decisions/0104-typed-planning-semantics-and-domain-phases.md)和
 [ADR 0142](../decisions/0142-shared-sha256-hex-encoding.md)。核查 fixed vectors、重复 label、canonical hex、
 typed intent/输入/权限变更失效及锁等待后新状态拒绝的测试源码；没有运行 Rust/native 测试或重新做完整安全审计。
-生产/测试无修改，无原型、提交或推送。历史与源码锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `plan_identity_review_2026_10_28`。
+生产/测试无修改，无原型、提交或推送。
 
 
 ## 三十五、配置与状态文档的解析错误边界（2026-10-28）
@@ -2044,8 +2021,7 @@ config_parse_error 除可见性外完全相同；相关路径历史中 b1b00fef�
 [ADR 0145](../decisions/0145-domain-owned-manifest-schema-normalization.md)的独立 reader 错误契约。
 核查 config 五层 syntax/type 失败、writer Display/Debug 链、workspace run/export、proxy/task/trust/broker malformed
 输入与 cache fallback 的测试源码；未运行 Rust/native 测试、真实配置操作或秘密解密。
-生产/测试零改动，无原型、提交、推送。源码与历史见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `document_error_review_2026_10_28`。
+生产/测试零改动，无原型、提交、推送。
 
 
 ## 三十六、CLI 初始化前分派与副作用豁免（2026-10-28）
@@ -2096,8 +2072,7 @@ env 业务实现，不恢复已暂停的小批删除或转发精简方向。
 [ADR 0108](../decisions/0108-scoped-maintenance-advisories.md)和
 [ADR 0153](../decisions/0153-read-only-converged-upgrade.md)。核查未初始化 env 查询、schema/invalid validation、
 空状态与各域 no-op upgrade、maintenance/recovery 豁免的测试源码；未运行 Rust/native 测试、网络版本检查或后台 worker。
-生产/测试零改动，无原型、提交、推送。历史和源码见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `startup_routing_review_2026_10_28`。
+生产/测试零改动，无原型、提交、推送。
 
 
 ## 三十七、Action IR 资源契约与领域 journal 准入（2026-10-28）
@@ -2146,8 +2121,7 @@ commit；[Shell](../../../core/src/runtime/shell_action_executor.rs) 保留 appl
 [ADR 0118](../decisions/0118-exhaustive-shell-action-dispatch.md)。核查资源 rollback/精确权限矩阵、App receipt
 缺失但未标记与已标记恢复、Shell 错误 marker/混合资源清理失败与重试、有效外域 Action 拒绝的测试源码；
 这些消费者断言不能被纯结构 validator 单测替代。本轮未运行 Rust/native 测试或真实恢复操作。
-生产/测试零改动，无原型、提交、推送。证据与可复查锚点见[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `action_admission_review_2026_10_28`；结论仅限上述准入链，不宣称全库没有其他修改扩散。
+生产/测试零改动，无原型、提交、推送。结论仅限上述准入链，不宣称全库没有其他修改扩散。
 
 
 ## 三十八、文件系统 Host 与内存模型的语义对应（2026-10-28）
@@ -2199,7 +2173,6 @@ mode 比较也不能仅按函数名归一：[App recovery](../../../core/src/run
 [Host invariants](../architecture/invariants.md)和 [data flows](../architecture/data-flows.md)。
 生产/测试零改动，无原型、提交、推送；只读源码、提交和现有测试，不运行 Rust/native 测试或真实 Host 操作。
 本节范围内未找到同一业务规则反复跨模块补修的证据，不代表所有文件系统边界已经穷尽。
-证据见[账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的 `filesystem_host_review_2026_10_28`。
 
 
 ## 三十九、Identity 初始化、插件交接与配置登记（2026-10-28）
@@ -2250,8 +2223,7 @@ phone 的 output 由插件分配；Shine 先拒绝项目 identity override，按
 配置失败保留 stub 与手工 TOML、预检拒绝前不配对的测试源码。受控脚本测试不等于真实 age/plugin/手机、TPM 或
 Secure Enclave 验证；本轮未运行任何这些测试或身份创建操作。参照
 [identity invariants](../architecture/invariants.md)与 [data flows](../architecture/data-flows.md)。
-生产/测试零改动，无原型、提交、推送。证据见[账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `identity_handoff_review_2026_10_28`；结论仅限本节交接链。
+生产/测试零改动，无原型、提交、推送。结论仅限本节交接链。
 
 
 ## 四十、全局 status/update 的状态聚合与统计单位（2026-10-28）
@@ -2302,8 +2274,7 @@ update 则必须用 lifecycle Pending 的 target 集合过滤，并分别保留�
 [ADR 0129](../decisions/0129-observation-only-inspection-and-cli-list-phases.md)及
 [list invariants](../architecture/invariants.md)。核查 Pending/手工刷新/冲突过滤、部分安装，以及 generator
 unknown/trust/failure 的类别与文件计数、真实用户修改分离的测试源码；未运行 Rust/Bun/原生测试或 generator。
-生产/测试零改动，无原型、提交、推送。证据见[账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `status_aggregation_review_2026_10_28`，不据此宣称其他状态消费者均无遗漏。
+生产/测试零改动，无原型、提交、推送。不据此宣称其他状态消费者均无遗漏。
 
 
 ## 四十一、构建输入、源码包边界与回归触发（2026-10-28）
@@ -2348,7 +2319,6 @@ CI 与 hook 仍分别写 workspace 命令，确有小范围命令文本对应；
 [构建及能力文档 invariants](../architecture/invariants.md)和 Cargo include lesson。
 核查 package 正反样例、hook 覆盖断言、文档缺席/更新开关与原生三平台 CI 配置；这不是本轮执行或 CI 通过证据。
 生产/测试零改动，无原型、提交、推送。只补审查文档；未运行 Cargo package/build、Rust/Bun 测试或发布。
-证据见[账本](evidence/2026-10-27-maintainability/change-coupling-review.json)的 `build_package_review_2026_10_28`。
 
 
 ## 四十二、内置 Clash/Surge 业务脚本与 Core 诊断交接（2026-10-28）
@@ -2398,8 +2368,7 @@ Core 的 [generator_failure_detail](../../../core/src/runtime/app/generator.rs)�
 [preset authoring](../preset-authoring.md)与 [invariants](../architecture/invariants.md)。
 核查任意 provider 名称/部分失败、先刷新后断连、bindings 改变零请求、Surge 逆向 include 与 symlink 拒绝、
 Core 不可信 stderr 拒绝的既有测试源码。受控 fetch/脚本断言不代表真实 Clash/Surge 或订阅服务验证；本轮未运行测试。
-Rust/TypeScript 生产与测试零改动，无原型、提交、推送。证据见[账本](evidence/2026-10-27-maintainability/change-coupling-review.json)
-的 `app_preset_rules_review_2026_10_28`；其余内置脚本不由本节推定已深入检查。
+Rust/TypeScript 生产与测试零改动，无原型、提交、推送。其余内置脚本不由本节推定已深入检查。
 
 
 ## 四十三、剩余项 1：内置 Shell 工具业务规则（2026-10-28）
@@ -2526,8 +2495,7 @@ Live Bun/launcher 已暂停方向不重开；记录上的“尚未完整逐路�
 本轮也不声称覆盖所有内置 profile fragment、所有原生 Shell/PowerShell 行为、所有历史提交或所有故障时序。
 后续深查应由具体未覆盖契约、真实补修或复现触发，而不是以新增章节数作为全库审查进度。
 
-所有生产、测试与支持文件保持不变；仅更新本报告及
-[证据账本](evidence/2026-10-27-maintainability/change-coupling-review.json)。未执行 presets、外部工具、网络安装或测试，
+所有生产、测试与支持文件保持不变；仅更新审查文档。未执行 presets、外部工具、网络安装或测试，
 无原型、提交、推送；不改变既有候选和暂缓决定。
 
 
