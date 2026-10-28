@@ -663,8 +663,7 @@ async fn managed_sys_manifest_failure_restores_file_and_receipt_on_explicit_reco
     assert_eq!(manifest.entries, vec![previous_entry]);
 }
 
-#[tokio::test]
-async fn split_dns_manifest_failure_removes_created_resource_on_explicit_recovery() {
+async fn interrupted_split_dns_install() -> (CoreRuntime<InMemoryHost>, PathBuf) {
     let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "sys/macos/shine.toml",
@@ -722,7 +721,12 @@ servers_env = 'PRIVATE_DNS_SERVERS'
     .unwrap();
     let resource = PathBuf::from(receipt.resource);
     assert!(runtime.host().read(&resource).await.is_ok());
+    (runtime, resource)
+}
 
+#[tokio::test]
+async fn split_dns_manifest_failure_removes_created_resource_on_explicit_recovery() {
+    let (runtime, resource) = interrupted_split_dns_install().await;
     let recovery_plan = runtime.plan_sys_operation_recovery().await.unwrap();
     assert_frontend_journal(&runtime, crate::frontend::CapabilityKindV1::Sys, true).await;
     assert!(recovery_plan.is_ready());
@@ -739,6 +743,105 @@ servers_env = 'PRIVATE_DNS_SERVERS'
             .entries
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn split_dns_recovery_checks_resource_bytes_for_unrecognized_os() {
+    let (runtime, resource) = interrupted_split_dns_install().await;
+    // Model an admitted journal, not a newly supported installation platform.
+    let journal_path = runtime
+        .context()
+        .shine_dir
+        .join("sys-operation-journal.toml");
+    let bytes = runtime.host().read(&journal_path).await.unwrap();
+    let mut journal: serde_json::Value = toml::from_slice(&bytes).unwrap();
+    let desired = &mut journal["action_ir"]["actions"][0]["kind"]["desired"];
+    desired["os_id"] = "unrecognized".into();
+    let content =
+        b"# Managed by shine: split-dns:split-dns\n[Resolve]\nDNS=10.0.0.53\nDomains=~corp.test\n";
+    desired["content_hash"] = crate::install::hash_content(content).into();
+    journal["receipt"]["desired"]["os_id"] = "unrecognized".into();
+    journal["receipt"]["desired"]["receipt"]["os_id"] = "unrecognized".into();
+    journal["receipt"]["desired"]["receipt"]["content_hash"] =
+        crate::install::hash_content(content).into();
+    let journal_bytes = toml::to_string(&journal).unwrap().into_bytes();
+    runtime
+        .host()
+        .put_file(&journal_path, journal_bytes.clone());
+    runtime.host().put_file(&resource, content.to_vec());
+
+    let plan = runtime.plan_sys_operation_recovery().await.unwrap();
+    assert!(plan.is_ready());
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    runtime
+        .host()
+        .put_file(&resource, b"user changed DNS".to_vec());
+    let blocked = runtime.plan_sys_operation_recovery().await.unwrap();
+    assert!(!blocked.is_ready());
+    assert!(
+        runtime
+            .recover_sys_operation_approved(&approval)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        runtime.host().read(&resource).await.unwrap(),
+        b"user changed DNS"
+    );
+    assert_eq!(
+        runtime.host().read(&journal_path).await.unwrap(),
+        journal_bytes
+    );
+
+    runtime.host().put_file(&resource, content.to_vec());
+    let plan = runtime.plan_sys_operation_recovery().await.unwrap();
+    let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+    runtime
+        .recover_sys_operation_approved(&approval)
+        .await
+        .unwrap();
+    assert!(runtime.host().read(&resource).await.is_err());
+    assert!(runtime.host().read(&journal_path).await.is_err());
+}
+
+#[tokio::test]
+async fn split_dns_unrecognized_receipt_observes_native_file_content() {
+    let root = std::env::temp_dir().join(format!("shine-dns-{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir(&root).await.unwrap();
+    let resource = root.join("resolver.conf");
+    let base = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+    let runtime = CoreRuntime::new(
+        crate::runtime::RealHost,
+        base.context().clone(),
+        base.presets().clone(),
+    );
+    let receipt = SystemReceipt::SplitDns(crate::runtime::SplitDnsReceipt {
+        version: 1,
+        os_id: "unrecognized".into(),
+        item_id: "split-dns".into(),
+        domain: "corp.test".into(),
+        servers: vec!["10.0.0.53".into()],
+        resource: resource.to_str().unwrap().into(),
+        content_hash: None,
+    });
+    for (bytes, modified) in [
+        (
+            b"# Managed by shine: split-dns:split-dns\n".as_slice(),
+            false,
+        ),
+        (b"user DNS configuration".as_slice(), true),
+    ] {
+        tokio::fs::write(&resource, bytes).await.unwrap();
+        let mut state = StateCapture::new("sys", LifecycleOperation::Uninstall).unwrap();
+        assert_eq!(
+            sys_receipt_modified(&runtime, &receipt, &mut state, "sys/split-dns")
+                .await
+                .unwrap(),
+            modified,
+        );
+        assert_eq!(tokio::fs::read(&resource).await.unwrap(), bytes);
+    }
+    tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
 #[tokio::test]
