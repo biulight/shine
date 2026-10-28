@@ -206,11 +206,8 @@ struct PreparedShellLauncherUpdateResource {
 }
 
 struct PreparedShellProfileFile {
-    destination: PathBuf,
-    rollback: PathBuf,
-    desired: Option<Vec<u8>>,
-    unix_mode: Option<u32>,
-    ownership: ShellProfileFileOwnershipV1,
+    contract: ShellProfileFileV1,
+    desired_bytes: Option<Vec<u8>>,
 }
 
 pub struct ShellOperationExecutionV1 {

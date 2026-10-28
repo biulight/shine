@@ -28,7 +28,7 @@ It complements — and never duplicates — the existing docs:
 - [`operations/ci-pipelines.md`](operations/ci-pipelines.md) — what each GitHub Actions workflow does
 - [`operations/troubleshooting.md`](operations/troubleshooting.md) — common failures and diagnosis
 - [`operations/maintainability-audit-2026-10-27.md`](operations/maintainability-audit-2026-10-27.md) — closed Rust maintenance audit; baseline evidence and frozen historical batches
-- [`operations/architecture-necessity-review-2026-10-27.md`](operations/architecture-necessity-review-2026-10-27.md) — closed review and historical evidence; subsequent split-DNS verification and authorized D1 implementation
+- [`operations/architecture-necessity-review-2026-10-27.md`](operations/architecture-necessity-review-2026-10-27.md) — closed review and historical evidence; subsequent split-DNS verification and authorized D1/C1 implementations
 - [`operations/env-configuration-validation.md`](operations/env-configuration-validation.md) — native Windows env layering, replacement and stable-binary downgrade evidence
 - [`lessons.md`](lessons.md) — dated symptom → root cause → rule entries mined from real bugs
 

@@ -18,9 +18,11 @@ async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_pre
             b"#!/bin/sh\necho paired-payload\n",
         ));
         let user_profile = runtime.context().shell_config_paths[0].clone();
-        runtime
-            .host()
-            .put_file(&user_profile, b"# user-owned profile\n".to_vec());
+        runtime.host().put_file_with_mode(
+            &user_profile,
+            b"# user-owned profile\n".to_vec(),
+            0o100640,
+        );
         let request = shell_install_request();
         let plan = runtime.plan_shells(request.clone()).await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
@@ -68,6 +70,20 @@ async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_pre
                 .collect::<Vec<_>>()
         );
         assert!(!String::from_utf8_lossy(&bytes).contains("paired-payload"));
+        if recorded_actions >= 2 {
+            for file in profile_files {
+                let desired = file.desired.as_ref().expect("installation writes profiles");
+                let actual = runtime.host().read(&file.destination).await.unwrap();
+                assert_eq!(crate::install::hash_content(&actual), desired.content_hash);
+                if let Some(mode) = desired.unix_mode {
+                    let actual = runtime.host().metadata(&file.destination).await.unwrap();
+                    assert_eq!(
+                        actual.unix_mode.map(|mode| mode & 0o7777),
+                        Some(mode & 0o7777)
+                    );
+                }
+            }
+        }
 
         let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
         let rendered = runtime
@@ -128,6 +144,15 @@ async fn mixed_shell_actions_keep_journal_order_and_recover_each_interrupted_pre
                 assert_eq!(
                     runtime.host().read(&file.destination).await.unwrap(),
                     b"# user-owned profile\n"
+                );
+                assert_eq!(
+                    runtime
+                        .host()
+                        .metadata(&file.destination)
+                        .await
+                        .unwrap()
+                        .unix_mode,
+                    Some(0o100640)
                 );
             } else {
                 assert!(file.previous.is_none());

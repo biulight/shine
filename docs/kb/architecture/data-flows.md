@@ -563,6 +563,9 @@ Transaction preparation retains each journal Action and its execution payload in
 `PreparedShellStep`. Apply projects the Action IR from those records, validates it and its exact
 permissions, publishes the journal, then executes the same records with the existing per-action
 progress saves. Payload bytes stay in memory; journal and recovery schemas are unchanged (ADR 0117).
+Within profile steps, each file record pairs the complete file contract with its private desired
+bytes. The journal clones those contracts; apply consumes the paired records without positional
+matching to the journal file list (ADR 0155).
 
 Journal admission, marker eligibility, commit and recovery dispatch share a private borrowed
 `ShellAction` view with exhaustive domain conversion. Commit checks all live resources and receipts

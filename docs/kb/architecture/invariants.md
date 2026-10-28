@@ -607,6 +607,10 @@ bugs. Check this list before changing the modules named in each entry.
   correspondence with independently appended vectors or positional truncating iteration. Pairing
   does not replace Action validation, permission checks, journal-before-effect ordering, per-action
   progress saves or fresh recovery approval (ADR 0117).
+  Within a profile step, each prepared file pairs its complete `ShellProfileFileV1` contract with
+  private desired bytes. Project journal contracts from those records and apply the records
+  directly; desired mode comes from the same contract identity. Bytes never enter the journal
+  (ADR 0155).
 - **App factory preserves per-resource admission.** The observation-only factory validates
   approval before Host reads, then tries JSON relocation, Copy relocation, JSON merge and Copy in
   that order. Relocation requires its exact typed Update step; ordinary Create/Update matching keeps
